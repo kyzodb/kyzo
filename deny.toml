@@ -1,0 +1,45 @@
+# cargo-deny configuration for KyzoDB.
+# Enforced in CI (see .github/workflows/ci.yml). Three roles:
+#   1. bans      — the base's C/C++ storage backends can never return, and the fjall
+#                  backend decision can only be re-opened by editing this file (an
+#                  explicit, reviewable act), never by silently swapping a dependency.
+#   2. licenses  — MPL-2.0-compatible allow-list.
+#   3. advisories — RustSec vulnerability scanning (the cargo-audit role).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "MPL-2.0",
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+]
+
+[bans]
+multiple-versions = "warn"
+deny = [
+  # The base's storage backends: removing these is the point of the fork (REFACTOR.md §1).
+  { crate = "cozorocks", reason = "CozoDB's C++ RocksDB bridge; its removal is the point of KyzoDB" },
+  { crate = "librocksdb-sys", reason = "RocksDB is C++; banned from the whole workspace" },
+  { crate = "rocksdb", reason = "RocksDB is C++; banned from the whole workspace" },
+  { crate = "sqlite3-src", reason = "SQLite is C; banned from the whole workspace" },
+  { crate = "libsqlite3-sys", reason = "SQLite is C; banned from the whole workspace" },
+  { crate = "rusqlite", reason = "SQLite is C; banned from the whole workspace" },
+  # The rejected pure-Rust backends: fjall is the decided KV backend (REFACTOR.md §2).
+  # Re-opening that decision means editing this file, visibly, not swapping a crate quietly.
+  { crate = "redb", reason = "single-writer B-tree; re-imposes the one-writer wall fjall was chosen to escape" },
+  { crate = "sled", reason = "stalled and unstable; rejected in the backend decision" },
+]
