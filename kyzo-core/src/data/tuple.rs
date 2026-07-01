@@ -1,0 +1,191 @@
+/*
+ * Copyright 2022, The Cozo Project Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original (MPL-2.0):
+ * decoding made fallible; RelationId and the kv-decoding helpers live here now.
+ */
+
+use miette::{Result, bail, miette};
+use std::cmp::Reverse;
+
+use crate::data::memcmp::{ENCODED_VLD_LEN, MemCmpEncoder};
+use crate::data::value::{DataValue, TERMINAL_VALIDITY, Validity, ValidityTs};
+
+pub type Tuple = Vec<DataValue>;
+
+pub(crate) trait TupleT {
+    fn encode_as_key(&self, prefix: RelationId) -> Vec<u8>;
+}
+
+impl<T> TupleT for T
+where
+    T: AsRef<[DataValue]>,
+{
+    fn encode_as_key(&self, prefix: RelationId) -> Vec<u8> {
+        let len = self.as_ref().len();
+        // 8-byte relation prefix + a rough 14 bytes per value.
+        let mut ret = Vec::with_capacity(8 + 14 * len);
+        ret.extend(prefix.raw_encode());
+        for val in self.as_ref().iter() {
+            ret.encode_datavalue(val);
+        }
+        ret
+    }
+}
+
+pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple> {
+    let Some(mut remaining) = key.get(ENCODED_KEY_MIN_LEN..) else {
+        bail!("corrupt tuple key: shorter than the relation-id prefix");
+    };
+    let mut ret = Vec::with_capacity(size_hint);
+    while !remaining.is_empty() {
+        let (val, next) = DataValue::decode_from_key(remaining)?;
+        ret.push(val);
+        remaining = next;
+    }
+    Ok(ret)
+}
+
+const DEFAULT_SIZE_HINT: usize = 16;
+
+/// Check if the tuple key passed in should be a valid return for a validity query.
+///
+/// Returns two elements: the first contains `Some(tuple)` if the key belongs
+/// in the result set and `None` otherwise; the second gives the next binary
+/// key to seek to, as an inclusive lower bound.
+///
+/// The validity occupies a fixed-width tail at the end of the key, so seek
+/// keys are computed by splicing bytes: the (potentially long) tuple prefix
+/// is never decoded or re-encoded on the skip paths — only an emitted hit
+/// pays for a full decode.
+pub fn check_key_for_validity(
+    key: &[u8],
+    valid_at: ValidityTs,
+    size_hint: Option<usize>,
+) -> Result<(Option<Tuple>, Vec<u8>)> {
+    if key.len() < ENCODED_KEY_MIN_LEN + ENCODED_VLD_LEN {
+        bail!("time-travel scan over a key too short to carry a validity");
+    }
+    let vld_off = key.len() - ENCODED_VLD_LEN;
+    let (vld_val, rest) = DataValue::decode_from_key(&key[vld_off..])?;
+    let DataValue::Validity(vld) = vld_val else {
+        bail!("time-travel scan over a key without a trailing validity");
+    };
+    if !rest.is_empty() {
+        bail!("time-travel scan over a key with trailing bytes after its validity");
+    }
+
+    let splice = |v: Validity| -> Vec<u8> {
+        let mut nxt = Vec::with_capacity(key.len());
+        nxt.extend_from_slice(&key[..vld_off]);
+        nxt.encode_datavalue(&DataValue::Validity(v));
+        nxt
+    };
+
+    if vld.timestamp < valid_at {
+        // Version is newer than the query time: seek to the newest version
+        // at or before `valid_at` for this same tuple.
+        Ok((
+            None,
+            splice(Validity {
+                timestamp: valid_at,
+                is_assert: Reverse(true),
+            }),
+        ))
+    } else if !vld.is_assert.0 {
+        // Retraction: this tuple does not exist at `valid_at`; skip past all
+        // of its remaining (older) versions.
+        Ok((None, splice(TERMINAL_VALIDITY)))
+    } else {
+        // Hit: emit it, then skip past this tuple's older versions.
+        let decoded = decode_tuple_from_key(key, size_hint.unwrap_or(DEFAULT_SIZE_HINT))?;
+        Ok((Some(decoded), splice(TERMINAL_VALIDITY)))
+    }
+}
+
+pub(crate) const ENCODED_KEY_MIN_LEN: usize = 8;
+
+/// Encode a tuple as a storage key under the given relation id. The public
+/// face of the key format for benchmarks and tooling; the engine uses the
+/// internal typed path.
+pub fn encode_tuple_key(relation_id: u64, tuple: &[DataValue]) -> Vec<u8> {
+    tuple.encode_as_key(RelationId::new(relation_id))
+}
+
+/// Decode a tuple from a key-value pair. Used by [`StoreTx`](crate::StoreTx)
+/// implementations and scans.
+#[inline]
+pub fn decode_tuple_from_kv(key: &[u8], val: &[u8], size_hint: Option<usize>) -> Result<Tuple> {
+    let mut tup = decode_tuple_from_key(key, size_hint.unwrap_or(DEFAULT_SIZE_HINT))?;
+    extend_tuple_from_v(&mut tup, val)?;
+    Ok(tup)
+}
+
+/// Extend a key-decoded tuple with the non-key columns stored in the value.
+pub fn extend_tuple_from_v(key: &mut Tuple, val: &[u8]) -> Result<()> {
+    if val.is_empty() {
+        return Ok(());
+    }
+    let Some(payload) = val.get(ENCODED_KEY_MIN_LEN..) else {
+        bail!("corrupt tuple value: shorter than its header");
+    };
+    let vals: Vec<DataValue> =
+        rmp_serde::from_slice(payload).map_err(|e| miette!("corrupt tuple value: {e}"))?;
+    key.extend(vals);
+    Ok(())
+}
+
+/// The stored-relation id: the first 8 bytes of every key.
+#[derive(
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Debug,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+    PartialOrd,
+    Ord,
+)]
+pub(crate) struct RelationId(pub(crate) u64);
+
+/// Relation ids occupy a 48-bit space (the upstream invariant: ids stay
+/// within 6 bytes even though the encoded prefix is 8), leaving headroom in
+/// the key prefix.
+const MAX_RELATION_ID: u64 = 1 << 48;
+
+impl RelationId {
+    pub(crate) fn new(u: u64) -> Self {
+        assert!(u <= MAX_RELATION_ID, "StoredRelId overflow: {u}");
+        Self(u)
+    }
+    #[allow(dead_code)] // used by the engine layers growing around the kernel
+    pub(crate) fn next(&self) -> Self {
+        Self::new(self.0 + 1)
+    }
+    #[allow(dead_code)] // used by the engine layers growing around the kernel
+    pub(crate) const SYSTEM: Self = Self(0);
+    #[allow(dead_code)] // used by the engine layers growing around the kernel
+    pub(crate) fn raw_encode(&self) -> [u8; 8] {
+        self.0.to_be_bytes()
+    }
+    #[allow(dead_code)] // used by the engine layers growing around the kernel
+    pub(crate) fn raw_decode(src: &[u8]) -> Result<Self> {
+        let Some(bytes) = src.get(0..8) else {
+            bail!("corrupt key: shorter than the relation-id prefix");
+        };
+        let u = u64::from_be_bytes(bytes.try_into().expect("length checked"));
+        // The overflow assert in `new()` guards the WRITE path; on the read
+        // path an out-of-range id is data corruption and must be an error,
+        // never a panic.
+        if u > MAX_RELATION_ID {
+            bail!("corrupt key: relation id out of range");
+        }
+        Ok(Self(u))
+    }
+}

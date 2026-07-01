@@ -1,0 +1,44 @@
+# Nightly benchmark run: records the kernel's performance envelope as build
+# artifacts. NOT a pass/fail gate — perf numbers inform decisions (see the
+# commit-ceiling contingency on the board); flapping thresholds would train
+# everyone to ignore red.
+
+name: Bench (nightly)
+
+on:
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Criterion benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check activation
+        id: check
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "active=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "active=false" >> "$GITHUB_OUTPUT"
+            echo "No Cargo workspace — bench armed but idle."
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.check.outputs.active == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.check.outputs.active == 'true'
+      - if: steps.check.outputs.active == 'true'
+        run: cargo bench -p kyzo --bench storage 2>&1 | tee bench-output.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.active == 'true'
+        with:
+          name: criterion-results
+          path: |
+            bench-output.txt
+            target/criterion
+          retention-days: 90

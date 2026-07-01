@@ -7,7 +7,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-files=$(git ls-files '*.rs')
+# -o (untracked included) is deliberate: new files are exactly the ones most
+# likely to be missing headers, and they must fail BEFORE they are committed.
+files=$(git ls-files -co --exclude-standard '*.rs')
 if [ -z "$files" ]; then
   echo "MPL header gate: no .rs files yet — armed but idle"
   exit 0
@@ -15,6 +17,8 @@ fi
 
 fail=0
 while IFS= read -r f; do
+  # Tracked-but-deleted files (staged removals) are not on disk to check.
+  [ -f "$f" ] || continue
   if ! head -n 12 "$f" | grep -q "Mozilla Public License"; then
     echo "FAIL missing MPL header: $f"
     fail=1

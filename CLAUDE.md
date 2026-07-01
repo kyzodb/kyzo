@@ -7,7 +7,7 @@ product and **`REFACTOR.md` for the full plan.**
 
 ## What we are doing right now
 
-A **big-bang re-architecture**, executed kernel-outward as stories tracked on the board:
+A **re-architecture executed kernel-outward**, as stories tracked on the board:
 
 - KyzoDB's storage is **`fjall`, a pure-Rust LSM key-value backend**, behind the existing
   `Storage`/`StoreTx` trait; the cozo base used RocksDB (C++, `cozorocks`) and SQLite (C).

@@ -13,6 +13,10 @@ if [ ! -f Cargo.toml ]; then
   exit 0
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "FAIL coverage gate: jq is not installed"
+  exit 1
+fi
 if ! cargo llvm-cov --version >/dev/null 2>&1; then
   echo "FAIL coverage gate: cargo-llvm-cov is not installed (CI must install it; locally: cargo install cargo-llvm-cov)"
   exit 1
@@ -27,7 +31,7 @@ if [ ! -f ci/coverage-baseline.txt ]; then
 fi
 
 baseline=$(cat ci/coverage-baseline.txt)
-ok=$(python3 -c "print(1 if float('${pct}') + 1e-9 >= float('${baseline}') else 0)")
+ok=$(awk -v p="$pct" -v b="$baseline" 'BEGIN { print (p + 1e-9 >= b) ? 1 : 0 }')
 if [ "$ok" != "1" ]; then
   echo "FAIL coverage gate: line coverage ${pct}% dropped below baseline ${baseline}%."
   exit 1

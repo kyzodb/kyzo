@@ -30,6 +30,10 @@ validity-in-key as-of scans (time travel); these are proven on `fjall` first, in
 memcomparable key encoding (`data/memcmp.rs`) stays; it is the load-bearing invariant and the reason a
 dumb ordered KV can serve relational, graph, vector, and text access paths uniformly.
 
+The bet on fjall's *storage* layer (the LSM) is unconditional; its *transaction* layer is the current
+choice with a measured contingency — owning the oracle ourselves if benchmarks show its commit ceiling
+binding (decision record and trigger live on the board, #4).
+
 ## 3. What "pure Rust" precisely means (verified, whole-workspace)
 
 - **`kyzo-core` (engine) and `kyzo-bin` (CLI/HTTP server) are genuinely pure Rust.** No C/C++ compiler in
@@ -52,15 +56,19 @@ dumb ordered KV can serve relational, graph, vector, and text access paths unifo
 
 ## 5. The one non-obvious addition
 
-KyzoDB's **backup/interchange format** is a **pure-Rust dump/restore** (serialize relations via the
-existing `rmp`/serde encoding, or a simple portable file); the cozo base used SQLite for this role.
+KyzoDB's **backup/interchange format** is a **pure-Rust dump/restore**: a length-prefixed portable
+file carrying the store's on-disk format version, restored atomically in chunks into an empty store.
+The cozo base used SQLite for this role.
 
 ## 6. The stories (tracked on the board)
 
 The build order is **kernel-outward**: the codebase grows from a proven storage kernel, and every file
 lands in its exact end-state form. Nothing arrives that is not in the target; there is never an old
-backend, a compatibility layer, or an interim state to remove later. The guardrails (`.claude/`) and the
-CI gates exist before any code, so every story lands inside the machine-checked envelope.
+backend, a compatibility layer, or an interim state to remove later. Copying from upstream is allowed,
+**blind copying is not**: every construct is interrogated — *is this the best way, does it even
+belong?* — and lands only as its best version, with the hard work done first, not deferred. The
+guardrails (`.claude/`) and the CI gates exist before any code, so every story lands inside the
+machine-checked envelope.
 
 - **Storage kernel (#2).** The smallest compiling unit that proves the fork's one real bet. The memcmp
   encoding and the minimal value/tuple types it encodes, the `Storage`/`StoreTx` trait in final form,
@@ -91,8 +99,5 @@ Dependency order is forced: #2 -> #3 -> #4 in sequence; bindings after #4; Go af
 
 ## 8. Backlog
 
-The storage/backend issues this refactor moots (RocksDB config, SQLite version/perf, sled, redb) were
-dropped. The surviving engine issues from the fork base (parser and data-value bugs, the UUID
-memcomparable-sortability issue, dependency hygiene, exposed private AST types, vector/FTS behaviour) are
-real post-green work and will be re-triaged as native KyzoDB issues once the migration is green. They are
-not part of the migration stories.
+Post-green re-triage of the fork base's surviving engine issues is tracked on the board (#18); the
+storage/backend issues this refactor moots were dropped.

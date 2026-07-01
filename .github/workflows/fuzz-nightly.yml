@@ -36,7 +36,12 @@ jobs:
           tool: cargo-fuzz
       - if: steps.check.outputs.active == 'true'
         run: |
-          for t in $(cargo fuzz list); do
+          targets=$(cargo fuzz list)
+          if [ -z "$targets" ]; then
+            echo "FAIL: fuzz/ exists but lists zero targets — a dead fuzz gate is a failure, not a pass."
+            exit 1
+          fi
+          for t in $targets; do
             echo "=== fuzz target: $t (15m deep)"
             cargo +nightly fuzz run "$t" -- -max_total_time=900
           done

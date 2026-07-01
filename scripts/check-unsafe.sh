@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Unsafe-code ratchet for the pure-Rust engine (kyzo-core + kyzo-bin). The language
-# bindings are exempt: unsafe FFI is what a binding is (see .claude/rules/ffi-bindings.md).
+# Unsafe-code gate for the pure-Rust engine (kyzo-core + kyzo-bin). The
+# language bindings are exempt: unsafe FFI is what a binding is (see
+# .claude/rules/ffi-bindings.md).
 #
-# Deterministic gate: the count of `unsafe` tokens in engine sources must not exceed
-# the recorded baseline (ci/unsafe-baseline.txt, first recorded, in a reviewed commit, when engine sources land. The count is crude (grep, so comments count too) but it compares
-# reviewed commit). The count is crude (grep, so comments count too) but it compares
-# like-to-like and needs no extra tooling; cargo-geiger runs in CI as an
-# informational report on top of this gate, not instead of it.
+# The guarantee is compiler-backed: every engine crate root must declare
+# #![forbid(unsafe_code)], which makes any unsafe block a COMPILE ERROR —
+# strictly stronger than source scanning, and immune to the word "unsafe"
+# appearing in comments or strings.
 #
 # Runnable locally: scripts/check-unsafe.sh [workspace-dir]
 set -euo pipefail
@@ -17,27 +17,20 @@ if [ ! -f Cargo.toml ]; then
   exit 0
 fi
 
-dirs=()
-for d in kyzo-core/src kyzo-bin/src; do
-  [ -d "$d" ] && dirs+=("$d")
+checked=""
+for root in kyzo-core/src/lib.rs kyzo-bin/src/main.rs; do
+  [ -f "$root" ] || continue
+  if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then
+    echo "FAIL unsafe gate: $root does not declare #![forbid(unsafe_code)]."
+    echo "The engine is 100% safe Rust by compiler guarantee; removing the forbid is a reviewed decision, not an edit."
+    exit 1
+  fi
+  checked="$checked $root"
 done
-if [ ${#dirs[@]} -eq 0 ]; then
-  echo "unsafe gate: workspace exists but no engine sources yet — armed but idle"
+
+if [ -z "$checked" ]; then
+  echo "unsafe gate: workspace exists but no engine crate roots yet — armed but idle"
   exit 0
 fi
 
-count=$(grep -r --include='*.rs' -c -E '\bunsafe\b' "${dirs[@]}" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
-
-if [ ! -f ci/unsafe-baseline.txt ]; then
-  echo "FAIL unsafe gate: engine sources exist but ci/unsafe-baseline.txt is missing."
-  echo "Record the baseline (current count: $count) in a reviewed commit."
-  exit 1
-fi
-
-baseline=$(cat ci/unsafe-baseline.txt)
-if [ "$count" -gt "$baseline" ]; then
-  echo "FAIL unsafe gate: 'unsafe' occurrences in the engine grew: $count > baseline $baseline."
-  echo "Growth requires an unsafe-invariants review and a deliberate, reviewed baseline bump."
-  exit 1
-fi
-echo "unsafe gate: clean ($count occurrences <= baseline $baseline; engine only, bindings exempt)"
+echo "unsafe gate: clean (#![forbid(unsafe_code)] enforced in:$checked)"

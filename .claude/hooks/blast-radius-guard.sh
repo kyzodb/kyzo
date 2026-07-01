@@ -11,8 +11,8 @@ file=$(jq -r '.tool_input.file_path // ""')
 
 msg=""
 case "$file" in
-  *kyzo-core/src/data/memcmp.rs)
-    msg="memcmp.rs is the ON-DISK key format: encoded byte order MUST equal semantic value order. Any change is a DB migration (see .claude/rules/memcmp.md) and needs a round-trip+ordering test plus a format-versioning discussion."
+  *kyzo-core/src/data/memcmp.rs | *kyzo-core/src/data/tuple.rs)
+    msg="memcmp.rs/tuple.rs are the ON-DISK key format: encoded byte order MUST equal semantic value order, and the key layout (relation prefix, fixed-width validity tail) is part of it. Any change is a DB migration (see .claude/rules/memcmp.md) and needs a round-trip+ordering test plus a format-version bump discussion."
     ;;
   *kyzo-core/src/storage/*)
     msg="storage/** implements the Storage/StoreTx contract for the single pure-Rust fjall backend: ordered scans, MVCC commit with conflict detection, validity-in-key time travel, and no C/C++ dependency. Preserve all four (see .claude/rules/storage.md)."

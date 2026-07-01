@@ -11,10 +11,12 @@ decision. This rule is about the contract the backend must honour.
 
 The contract:
 - **Ordered range scans** returning memcmp-ordered tuples (the memcmp encoding is why this works).
-- **MVCC-style commit** with write-write conflict detection (`commit()` fails on conflict; `for_update`).
+- **MVCC commit with conflict detection**: transactions are owned values over a consistent snapshot;
+  every read and range in a write transaction is conflict-tracked (SSI), and `commit()` fails —
+  discarding all changes — on conflict.
 - **Time travel = a validity stamp in the last key slot**: an as-of scan returns the newest version at or
-  before the query time. Preserve it; it is not optional.
-- **Pure Rust**: no C or C++ toolchain. Do not reintroduce one.
+  before the query time, by seeking, with guaranteed termination on any stored bytes. Not optional.
+- **Pure Rust**: no C or C++ toolchain. Do not reintroduce one. Zero `unsafe` in the kernel.
 
 The backup/interchange format is a pure-Rust dump/restore (the cozo base used SQLite for this role).
 
