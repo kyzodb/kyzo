@@ -1,6 +1,6 @@
 # KyzoDB Refactor Plan
 
-This is the plan of record for turning the CozoDB fork into KyzoDB. It is the "why" behind every slice
+This is the plan of record for turning the CozoDB fork into KyzoDB. It is the "why" behind every story
 on the board.
 
 ## 1. Why
@@ -26,7 +26,7 @@ KyzoDB is built on **`fjall`, a pure-Rust LSM key-value store**, implementing th
 is the pure-Rust LSM engine (RocksDB-shaped) that keeps it; `redb` is a single-writer copy-on-write
 B-tree that would re-impose SQLite's one-writer wall we are escaping, and `sled` is pure Rust but stalled
 and unstable. The trait needs ordered range scans, MVCC-style commit with conflict detection, and
-validity-in-key as-of scans (time travel); these are proven on `fjall` in the Cutover slice. The
+validity-in-key as-of scans (time travel); these are proven on `fjall` first, in the storage-kernel story, before anything depends on them. The
 memcomparable key encoding (`data/memcmp.rs`) stays; it is the load-bearing invariant and the reason a
 dumb ordered KV can serve relational, graph, vector, and text access paths uniformly.
 
@@ -55,32 +55,38 @@ dumb ordered KV can serve relational, graph, vector, and text access paths unifo
 KyzoDB's **backup/interchange format** is a **pure-Rust dump/restore** (serialize relations via the
 existing `rmp`/serde encoding, or a simple portable file); the cozo base used SQLite for this role.
 
-## 6. The slices (tracked on the board)
+## 6. The stories (tracked on the board)
 
-- **Slice 0 — `.claude/` control surface, first.** Author the guardrails aimed at the target state before
-  any code moves, so they watch the risky work instead of arriving after it. The FFI guardrails cover the
-  six language bindings; the skills are the ones this work needs.
-- **Slice 1 — Scaffold.** Copy pure-keeper files (logic unchanged, incl. the Slice-0 `.claude/`), add new
-  stub files, one uniform `cozo` to `kyzo` rename, preserve MPL headers. Will not compile yet.
-- **Slice 2 — Surgical files.** The files that change (`storage/mod.rs`, `lib.rs`) land already stripped
-  of the base's backends; wire **`fjall`** as the KV backend + the pure-Rust backup, update
-  dispatch/variants/features. The base's RocksDB/SQLite/`cozorocks` files are do-not-bring and never arrive.
-- **Slice 3 — Green.** Get `kyzo-core` + `kyzo-bin` to build and pass tests, pure Rust, time travel
-  verified. This is the gate every binding depends on.
-- **Slices 4-9 — bindings (in-workspace):** C, Python (PyPI), Java (Maven), Node (npm), Swift, WASM (npm).
+The build order is **kernel-outward**: the codebase grows from a proven storage kernel, and every file
+lands in its exact end-state form. Nothing arrives that is not in the target; there is never an old
+backend, a compatibility layer, or an interim state to remove later. The guardrails (`.claude/`) and the
+CI gates exist before any code, so every story lands inside the machine-checked envelope.
+
+- **Storage kernel (#2).** The smallest compiling unit that proves the fork's one real bet. The memcmp
+  encoding and the minimal value/tuple types it encodes, the `Storage`/`StoreTx` trait in final form,
+  the `fjall` backend (ordered scans, MVCC commit with conflict detection, validity-in-key as-of reads),
+  the pure-Rust backup, and contract tests for every property. Compiles and passes green on day one; the
+  CI gates activate on real code here.
+- **Engine (#3).** Parser, Datalog compiler pipeline, runtime (HNSW / MinHash-LSH / FTS as first-class
+  relational-algebra operators), and graph algorithms grow around the proven kernel — each file in final
+  `kyzo` form, MPL headers preserved.
+- **Product green (#4).** `kyzo-bin`, the full inherited test suite passing, and time travel verified
+  end-to-end at the query level. Coverage, fuzz, and tripwire gates activate. Every binding depends on
+  this gate.
+- **Bindings, in-workspace (#5-#10):** C, Python (PyPI), Java (Maven), Node (npm), Swift, WASM (npm).
   Each: rework FFI, rebrand, build, test, publish.
-- **Slices 10-13 — bindings (separate repos, forked):** Go (wraps C, needs Slice 4), Clojure (JVM, needs
-  Slice 6), Android, and the `pycozo` Python client (needs Slice 5).
+- **Bindings, separate repos (#11-#14):** Go (wraps the C ABI, needs #5), Clojure (JVM, needs #7),
+  Android (#13), and the Python client (needs #6).
 
-Dependency order is forced: Slice 0, then 1, 2, 3 in sequence; bindings after Slice 3; Go after 4,
-Clojure after 6, Python client after 5.
+Dependency order is forced: #2 -> #3 -> #4 in sequence; bindings after #4; Go after #5, Clojure after
+#7, the Python client after #6.
 
 ## 7. Principles (earned the hard way)
 
 - Verify every claim against a real build/test/run or the actual file. No conclusions from memory.
 - Never narrow scope to produce a clean number; whole-workspace, or say it is partial.
 - Bindings are committed, not deferrable. Name hard work; do not smuggle avoidance into recommendations.
-- One coherent target per slice; no interim split-brain.
+- One coherent target per story; no interim split-brain.
 - Nothing public or irreversible without an explicit go.
 
 ## 8. Backlog
@@ -89,4 +95,4 @@ The storage/backend issues this refactor moots (RocksDB config, SQLite version/p
 dropped. The surviving engine issues from the fork base (parser and data-value bugs, the UUID
 memcomparable-sortability issue, dependency hygiene, exposed private AST types, vector/FTS behaviour) are
 real post-green work and will be re-triaged as native KyzoDB issues once the migration is green. They are
-not part of the migration slices.
+not part of the migration stories.

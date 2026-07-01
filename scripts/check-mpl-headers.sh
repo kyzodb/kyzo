@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 
 files=$(git ls-files '*.rs')
 if [ -z "$files" ]; then
-  echo "MPL header gate: no .rs files yet — armed but idle (first bite: Slice 1)"
+  echo "MPL header gate: no .rs files yet — armed but idle"
   exit 0
 fi
 

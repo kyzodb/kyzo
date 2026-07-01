@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Coverage ratchet: workspace line coverage must not drop below the recorded baseline
-# (ci/coverage-baseline.txt, first recorded at Slice 3 green). Until a baseline exists
+# (ci/coverage-baseline.txt, recorded when the workspace first goes green). Until a baseline exists
 # the gate is REPORT-ONLY and says so loudly — there is no honest threshold before
 # working code exists. Requires cargo-llvm-cov (CI installs it).
 #
@@ -9,7 +9,7 @@ set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
 
 if [ ! -f Cargo.toml ]; then
-  echo "coverage gate: no Cargo workspace yet — armed but idle (first bite: Slice 3)"
+  echo "coverage gate: no Cargo workspace yet — armed but idle"
   exit 0
 fi
 
@@ -22,7 +22,7 @@ pct=$(cargo llvm-cov --workspace --summary-only --json 2>/dev/null | jq -r '.dat
 
 if [ ! -f ci/coverage-baseline.txt ]; then
   echo "coverage gate: REPORT-ONLY — workspace line coverage is ${pct}%."
-  echo "No baseline recorded yet; the baseline + ratchet activate at Slice 3 green (issue #15)."
+  echo "No baseline recorded yet; the baseline + ratchet activate when the workspace first goes green."
   exit 0
 fi
 

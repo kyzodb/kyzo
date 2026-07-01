@@ -224,7 +224,7 @@ runtime (a C ABI, or pyo3, jni, neon, swift-bridge, wasm-bindgen).
 KyzoDB is early, assembled from its CozoDB base as a pure-Rust engine: the core is built on `fjall`, a
 pure-Rust key-value backend, and does not carry the base's RocksDB (C++) or SQLite (C); the project and
 its language bindings are branded `kyzo`. The full plan is in [REFACTOR.md](REFACTOR.md), and the work is
-tracked slice by slice in the [issues](https://github.com/kyzodb/kyzo/issues) and on the org project board.
+tracked story by story in the [issues](https://github.com/kyzodb/kyzo/issues) and on the org project board.
 
 As a pre-1.0 project under active development, expect churn: there is no promise yet of syntax/API
 stability or storage compatibility.

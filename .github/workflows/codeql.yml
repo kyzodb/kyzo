@@ -1,9 +1,9 @@
-# SAST gate (issue #15, gate 7): CodeQL for Rust.
+# SAST gate: CodeQL for Rust.
 #
-# Honest caveat, recorded here as in the issue: CodeQL's Rust support is newer than its
+# Honest caveat: CodeQL Rust support is newer than its
 # C/JS analyzers. If it proves too immature in practice, the fallback is Semgrep with
-# Rust rules — and that decision gets recorded in issue #15, not made silently.
-# Activation: Slice 1 (needs Rust code to analyze); skips loudly until then.
+# Rust rules — and that decision is made visibly, not silently.
+# Activation: needs Rust code to analyze; skips loudly until then.
 
 name: CodeQL (SAST)
 
@@ -29,7 +29,7 @@ jobs:
         run: |
           [ -f Cargo.toml ] && w=true || w=false
           echo "has_workspace=$w" >> "$GITHUB_OUTPUT"
-          [ "$w" = true ] || echo "No Cargo.toml yet — SAST armed but idle (first bite: Slice 1, issue #15)."
+          [ "$w" = true ] || echo "No Cargo.toml yet — SAST armed but idle."
 
   analyze:
     name: CodeQL analyze (rust)

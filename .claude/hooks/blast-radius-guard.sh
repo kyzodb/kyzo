@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse guard for the on-disk-format blast-radius zones (see issue #1 / Slice 0).
+# PreToolUse guard for the on-disk-format blast-radius zones (see .claude/rules/memcmp.md and storage.md).
 # Reads the tool-call JSON from stdin, and if the edited file is in a guarded zone,
 # emits additionalContext warning the agent. Silent (exit 0, no output) otherwise.
 #

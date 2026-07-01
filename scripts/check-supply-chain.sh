@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Supply-chain gate: cargo vet. Idle before a workspace exists; once Cargo.toml lands,
-# an UNINITIALIZED cargo vet is a hard failure — the Slice 1 activation debt is
+# an UNINITIALIZED cargo vet is a hard failure — the activation debt is
 # enforced by the gate itself, not remembered by anyone. Requires cargo-vet
 # (CI installs it).
 #
@@ -9,13 +9,13 @@ set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
 
 if [ ! -f Cargo.toml ]; then
-  echo "supply-chain gate: no Cargo workspace yet — armed but idle (first bite: Slice 1)"
+  echo "supply-chain gate: no Cargo workspace yet — armed but idle"
   exit 0
 fi
 
 if [ ! -d supply-chain ]; then
   echo "FAIL supply-chain gate: workspace exists but cargo vet is not initialized."
-  echo "Run 'cargo vet init' and audit/exempt the dependency tree — owed at Slice 1 (issue #15)."
+  echo "Run 'cargo vet init' and audit/exempt the dependency tree."
   exit 1
 fi
 

@@ -1,5 +1,5 @@
-# Nightly deep fuzz (issue #15, gate 12): 15 min per target vs the 60s PR smoke run.
-# Targets (land at Slice 3): the memcmp codec (round-trip + ordering invariant) and the
+# Nightly deep fuzz: 15 min per target vs the 60s PR smoke run.
+# Targets: the memcmp codec (round-trip + ordering invariant) and the
 # KyzoScript parser — the two zones where corruption is silent.
 # Activation: skips loudly until fuzz/Cargo.toml exists.
 
@@ -26,7 +26,7 @@ jobs:
             echo "active=true" >> "$GITHUB_OUTPUT"
           else
             echo "active=false" >> "$GITHUB_OUTPUT"
-            echo "No fuzz targets yet — nightly fuzz armed but idle (first bite: Slice 3, issue #15)."
+            echo "No fuzz targets yet — nightly fuzz armed but idle."
           fi
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.check.outputs.active == 'true'

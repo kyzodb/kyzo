@@ -10,7 +10,7 @@ set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
 
 if [ ! -f Cargo.toml ]; then
-  echo "pure-Rust gate: no Cargo workspace yet — armed but idle (first bite: Slice 1)"
+  echo "pure-Rust gate: no Cargo workspace yet — armed but idle"
   exit 0
 fi
 

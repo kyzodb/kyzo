@@ -7,15 +7,15 @@ product and **`REFACTOR.md` for the full plan.**
 
 ## What we are doing right now
 
-A **big-bang re-architecture**, executed as numbered slices tracked on the board:
+A **big-bang re-architecture**, executed kernel-outward as stories tracked on the board:
 
 - KyzoDB's storage is **`fjall`, a pure-Rust LSM key-value backend**, behind the existing
   `Storage`/`StoreTx` trait; the cozo base used RocksDB (C++, `cozorocks`) and SQLite (C).
 - Rebrand `cozo` to `kyzo` across the workspace and every language binding.
 - Fork and re-home all the language bindings under KyzoDB.
 
-Work only from the board. Each slice issue is self-contained. Do not invent scope, and do not start work
-that isn't a slice without saying so.
+Work only from the board. Each story is self-contained. Do not invent scope, and do not start work
+that isn't a story without saying so.
 
 ## How we work (read this before doing anything)
 
@@ -32,10 +32,10 @@ maintainer does not read Rust, so these are the load-bearing safeguards.
   rebranded, built, tested, and published. Never re-frame this as "later" or "optional."
 - **Name the hard work.** Do not smuggle avoidance into a recommendation. If a step is hard or tedious,
   say it plainly and do it.
-- **One coherent target, no interim split-brain.** Align to the ideal end state in a slice; do not try to
+- **One coherent target, no interim split-brain.** Align to the ideal end state in a story; do not try to
   manage a half-migrated middle.
-- **A question is not a command.** Nothing irreversible or public (commits to `main`, pushes, org/repo
-  changes, published packages) happens without an explicit go. Draft and show; the maintainer publishes.
+- **A question is not a command.** Nothing irreversible or public (pushes, org/repo changes, published
+  packages) happens without an explicit go. Draft and show; the maintainer publishes.
 
 ## Guardrails (high blast radius, go slow, verify around changes)
 

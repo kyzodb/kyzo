@@ -1,17 +1,17 @@
-# KyzoDB CI gates (issue #15): machine-enforced purity AND security.
+# KyzoDB CI gates: machine-enforced purity AND security.
 #
 # This is the guardrail layer that depends on neither agent compliance nor maintainer
 # Rust literacy: a red X reads the same to everyone.
 #
-# Standing rules (issue #15):
+# Standing rules:
 #   - A gate is not "done" until it has a recorded pass-proof AND bite-proof
 #     (demonstrated failure on violating input).
-#   - No silent skips: the gate-summary job prints every gate's outcome; skipped jobs
-#     are activation-gated (see the activation map in issue #15) and say so.
+#   - No silent skips: the gate-summary job prints every gate outcome; skipped jobs
+#     are activation-gated on repo state (Cargo.toml, memcmp.rs, fuzz/) and say so.
 #
 # Activation: on a codeless repo the cargo-based gates are ARMED BUT IDLE and print so.
-# First bite: Slice 1 (Cargo.toml). Full bite: Slice 3 (green workspace). Binding
-# toolchain jobs (CPython/JVM/Node/Swift/wasm) are added as Slices 4-9 land.
+# Gates activate on repo state: most arm when the first Cargo.toml lands; coverage/fuzz/tripwire when their inputs exist. Binding
+# toolchain jobs (CPython/JVM/Node/Swift/wasm) are added as each binding lands.
 
 name: CI
 
@@ -41,7 +41,7 @@ jobs:
           echo "has_workspace=$w" >> "$GITHUB_OUTPUT"
           echo "has_memcmp=$m"    >> "$GITHUB_OUTPUT"
           echo "has_fuzz=$f"      >> "$GITHUB_OUTPUT"
-          echo "workspace=$w memcmp=$m fuzz=$f (skips below are activation-gated, see issue #15)"
+          echo "workspace=$w memcmp=$m fuzz=$f (skips below are activation-gated on repo state)"
 
   # ---------- A. Purity gates ----------
 
@@ -142,7 +142,7 @@ jobs:
 
   # SAST (CodeQL) runs in .github/workflows/codeql.yml — separate workflow because it
   # needs security-events write permission, which this workflow deliberately lacks.
-  # Dependabot config: .github/dependabot.yml (cargo ecosystem activates at Slice 1).
+  # Dependabot config: .github/dependabot.yml (cargo ecosystem activates when Cargo.toml lands).
 
   # ---------- C. Correctness depth ----------
 
@@ -171,7 +171,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Runs every test whose path mentions memcmp: round-trip encode/decode and
       # bytewise-order == value-order. The filter is verified against real test names
-      # when memcmp.rs lands (Slice 1) — if it matches nothing, this job must be fixed,
+      # when memcmp.rs lands — if it matches nothing, this job must be fixed,
       # not deleted.
       - run: |
           out=$(cargo test -p kyzo --release memcmp 2>&1) || { echo "$out"; exit 1; }
@@ -210,7 +210,7 @@ jobs:
         run: |
           summary="pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} coverage:${{ needs.coverage.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }}"
           echo "$summary" | tr ' ' '\n'
-          echo "'skipped' = activation-gated, displayed here on purpose (activation map: issue #15). Never hidden."
+          echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in
             *failure*|*cancelled*) echo "FAIL: at least one gate failed."; exit 1 ;;
           esac

@@ -3,7 +3,7 @@
 # bindings are exempt: unsafe FFI is what a binding is (see .claude/rules/ffi-bindings.md).
 #
 # Deterministic gate: the count of `unsafe` tokens in engine sources must not exceed
-# the recorded baseline (ci/unsafe-baseline.txt, first recorded at Slice 1 with a
+# the recorded baseline (ci/unsafe-baseline.txt, first recorded, in a reviewed commit, when engine sources land. The count is crude (grep, so comments count too) but it compares
 # reviewed commit). The count is crude (grep, so comments count too) but it compares
 # like-to-like and needs no extra tooling; cargo-geiger runs in CI as an
 # informational report on top of this gate, not instead of it.
@@ -13,7 +13,7 @@ set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
 
 if [ ! -f Cargo.toml ]; then
-  echo "unsafe gate: no Cargo workspace yet — armed but idle (first bite: Slice 1)"
+  echo "unsafe gate: no Cargo workspace yet — armed but idle"
   exit 0
 fi
 
@@ -30,7 +30,7 @@ count=$(grep -r --include='*.rs' -c -E '\bunsafe\b' "${dirs[@]}" 2>/dev/null | a
 
 if [ ! -f ci/unsafe-baseline.txt ]; then
   echo "FAIL unsafe gate: engine sources exist but ci/unsafe-baseline.txt is missing."
-  echo "Record the baseline (current count: $count) in a reviewed commit — owed at Slice 1 (issue #15)."
+  echo "Record the baseline (current count: $count) in a reviewed commit."
   exit 1
 fi
 
