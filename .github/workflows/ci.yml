@@ -1,14 +1,17 @@
-# KyzoDB CI purity gates (Slice 0.5).
+# KyzoDB CI gates (issue #15): machine-enforced purity AND security.
 #
-# These gates are the guardrail layer that depends on neither agent compliance nor
-# maintainer Rust literacy: a red X reads the same to everyone.
+# This is the guardrail layer that depends on neither agent compliance nor maintainer
+# Rust literacy: a red X reads the same to everyone.
 #
-# On a repo with no Cargo.toml the cargo-based jobs are ARMED BUT IDLE (they skip or
-# pass with an explicit "armed but idle" message). First real bite: Slice 1 (Cargo.toml
-# exists for the ban list); full bite: Slice 3 (whole-workspace build + test must be green).
+# Standing rules (issue #15):
+#   - A gate is not "done" until it has a recorded pass-proof AND bite-proof
+#     (demonstrated failure on violating input).
+#   - No silent skips: the gate-summary job prints every gate's outcome; skipped jobs
+#     are activation-gated (see the activation map in issue #15) and say so.
 #
-# Binding-specific toolchain jobs (CPython, JVM, Node, Swift, wasm) are added as each
-# binding slice (4-9) lands and become required checks. They are committed work.
+# Activation: on a codeless repo the cargo-based gates are ARMED BUT IDLE and print so.
+# First bite: Slice 1 (Cargo.toml). Full bite: Slice 3 (green workspace). Binding
+# toolchain jobs (CPython/JVM/Node/Swift/wasm) are added as Slices 4-9 land.
 
 name: CI
 
@@ -22,20 +25,25 @@ permissions:
 
 jobs:
   detect:
-    name: Detect workspace
+    name: Detect activation state
     runs-on: ubuntu-latest
     outputs:
       has_workspace: ${{ steps.check.outputs.has_workspace }}
+      has_memcmp: ${{ steps.check.outputs.has_memcmp }}
+      has_fuzz: ${{ steps.check.outputs.has_fuzz }}
     steps:
       - uses: actions/checkout@v4
       - id: check
         run: |
-          if [ -f Cargo.toml ]; then
-            echo "has_workspace=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_workspace=false" >> "$GITHUB_OUTPUT"
-            echo "No Cargo.toml yet — cargo gates armed but idle (first bite: Slice 1)."
-          fi
+          [ -f Cargo.toml ] && w=true || w=false
+          [ -f kyzo-core/src/data/memcmp.rs ] && m=true || m=false
+          [ -f fuzz/Cargo.toml ] && f=true || f=false
+          echo "has_workspace=$w" >> "$GITHUB_OUTPUT"
+          echo "has_memcmp=$m"    >> "$GITHUB_OUTPUT"
+          echo "has_fuzz=$f"      >> "$GITHUB_OUTPUT"
+          echo "workspace=$w memcmp=$m fuzz=$f (skips below are activation-gated, see issue #15)"
+
+  # ---------- A. Purity gates ----------
 
   pure-rust-gate:
     name: Pure-Rust gate (kyzo-core + kyzo-bin)
@@ -47,13 +55,6 @@ jobs:
         if: needs.detect.outputs.has_workspace == 'true'
       - run: scripts/check-pure-rust.sh
 
-  mpl-headers:
-    name: MPL header preservation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: scripts/check-mpl-headers.sh
-
   cargo-deny:
     name: cargo-deny (bans, licenses, advisories)
     runs-on: ubuntu-latest
@@ -64,6 +65,13 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans licenses advisories
+
+  mpl-headers:
+    name: MPL header preservation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check-mpl-headers.sh
 
   lint:
     name: fmt + clippy (whole workspace)
@@ -88,3 +96,122 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace --release
       - run: cargo test --workspace --release
+
+  # ---------- B. Security of our own code ----------
+
+  gitleaks:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run pinned gitleaks
+        # Binary is pinned by version + used directly (the gitleaks GitHub Action
+        # requires a license key for org repos; the MIT binary does not).
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks detect --source . --no-banner --redact
+
+  unsafe-audit:
+    name: Unsafe-code ratchet (engine only)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check-unsafe.sh
+      - name: cargo-geiger report (informational, non-gating)
+        continue-on-error: true
+        run: |
+          cargo install cargo-geiger --locked
+          cargo geiger --workspace || true
+
+  supply-chain:
+    name: Supply-chain vetting (cargo vet)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-vet
+      - run: scripts/check-supply-chain.sh
+
+  # SAST (CodeQL) runs in .github/workflows/codeql.yml — separate workflow because it
+  # needs security-events write permission, which this workflow deliberately lacks.
+  # Dependabot config: .github/dependabot.yml (cargo ecosystem activates at Slice 1).
+
+  # ---------- C. Correctness depth ----------
+
+  coverage:
+    name: Coverage ratchet (cargo-llvm-cov)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: scripts/check-coverage.sh
+
+  memcmp-invariant:
+    name: memcmp on-disk-format tripwire
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_memcmp == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Runs every test whose path mentions memcmp: round-trip encode/decode and
+      # bytewise-order == value-order. The filter is verified against real test names
+      # when memcmp.rs lands (Slice 1) — if it matches nothing, this job must be fixed,
+      # not deleted.
+      - run: |
+          out=$(cargo test -p kyzo --release memcmp 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          if echo "$out" | grep -q "running 0 tests"; then
+            echo "FAIL memcmp tripwire: the 'memcmp' test filter matched zero tests — fix the filter or the tests, do not delete the job."
+            exit 1
+          fi
+
+  fuzz-smoke:
+    name: Fuzz smoke (memcmp codec + parser, 60s/target)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_fuzz == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - run: |
+          for t in $(cargo fuzz list); do
+            echo "=== fuzz target: $t (60s smoke)"
+            cargo +nightly fuzz run "$t" -- -max_total_time=60
+          done
+
+  # ---------- No silent skips ----------
+
+  gate-summary:
+    name: Gate summary (no silent skips)
+    runs-on: ubuntu-latest
+    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, coverage, memcmp-invariant, fuzz-smoke]
+    if: always()
+    steps:
+      - name: Print every gate's outcome; fail if any gate failed
+        run: |
+          summary="pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} coverage:${{ needs.coverage.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }}"
+          echo "$summary" | tr ' ' '\n'
+          echo "'skipped' = activation-gated, displayed here on purpose (activation map: issue #15). Never hidden."
+          case "$summary" in
+            *failure*|*cancelled*) echo "FAIL: at least one gate failed."; exit 1 ;;
+          esac
+          echo "All executed gates passed."

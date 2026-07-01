@@ -4,9 +4,10 @@
 # fork (see REFACTOR.md §3). The six language bindings are intrinsically FFI and are
 # NOT checked here; their FFI crates are what a binding is.
 #
-# Runnable locally: scripts/check-pure-rust.sh
+# Runnable locally: scripts/check-pure-rust.sh [workspace-dir]
+# (the optional dir argument exists so bite-proof fixtures can be checked)
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "${1:-$(dirname "$0")/..}"
 
 if [ ! -f Cargo.toml ]; then
   echo "pure-Rust gate: no Cargo workspace yet — armed but idle (first bite: Slice 1)"

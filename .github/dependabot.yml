@@ -1,0 +1,16 @@
+# Dependabot (issue #15, gate 9): continuous dependency updates, so advisory coverage
+# is not point-in-time.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # ACTIVATE AT SLICE 1 — uncommenting is part of that slice's checklist (issue #15).
+  # A live cargo entry on a repo with no Cargo.toml shows a permanent error in the
+  # Dependabot tab, which reads as "broken" and trains everyone to ignore it.
+  # - package-ecosystem: "cargo"
+  #   directory: "/"
+  #   schedule:
+  #     interval: "weekly"

@@ -1,0 +1,42 @@
+# Nightly deep fuzz (issue #15, gate 12): 15 min per target vs the 60s PR smoke run.
+# Targets (land at Slice 3): the memcmp codec (round-trip + ordering invariant) and the
+# KyzoScript parser — the two zones where corruption is silent.
+# Activation: skips loudly until fuzz/Cargo.toml exists.
+
+name: Fuzz (nightly deep run)
+
+on:
+  schedule:
+    - cron: "7 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-deep:
+    name: Deep fuzz (15m/target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check activation
+        id: check
+        run: |
+          if [ -f fuzz/Cargo.toml ]; then
+            echo "active=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "active=false" >> "$GITHUB_OUTPUT"
+            echo "No fuzz targets yet — nightly fuzz armed but idle (first bite: Slice 3, issue #15)."
+          fi
+      - uses: dtolnay/rust-toolchain@nightly
+        if: steps.check.outputs.active == 'true'
+      - uses: taiki-e/install-action@v2
+        if: steps.check.outputs.active == 'true'
+        with:
+          tool: cargo-fuzz
+      - if: steps.check.outputs.active == 'true'
+        run: |
+          for t in $(cargo fuzz list); do
+            echo "=== fuzz target: $t (15m deep)"
+            cargo +nightly fuzz run "$t" -- -max_total_time=900
+          done
