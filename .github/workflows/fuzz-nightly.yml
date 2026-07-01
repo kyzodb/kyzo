@@ -18,7 +18,7 @@ jobs:
     name: Deep fuzz (15m/target)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check activation
         id: check
         run: |
