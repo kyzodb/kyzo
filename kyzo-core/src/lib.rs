@@ -27,6 +27,7 @@
 #![allow(clippy::mutable_key_type)]
 
 pub(crate) mod data;
+pub(crate) mod query;
 pub(crate) mod storage;
 
 pub use data::tuple::{Tuple, encode_tuple_key};
@@ -38,5 +39,6 @@ pub use storage::backup::{dump_storage, restore_storage};
 pub use storage::fjall::{
     FjallStorage, StorageOptions, StorageStats, new_fjall_storage, new_fjall_storage_with,
 };
+pub use storage::retry::retry_on_conflict;
 pub use storage::verify::{CorruptEntry, VerifyReport, verify_storage};
 pub use storage::{ConflictError, Storage, StoreTx};

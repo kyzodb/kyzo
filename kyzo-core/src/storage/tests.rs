@@ -1055,3 +1055,45 @@ fn verify_storage_reports_injected_corruption() {
     assert_eq!(report.corrupt.len(), 1);
     assert!(report.corrupt[0].error.contains("unknown type tag"));
 }
+
+/// Law 6 (concurrency liveness) through the retry helper: contended
+/// read-modify-write across threads completes exactly, with conflicts
+/// retried rather than surfaced.
+#[test]
+fn retry_on_conflict_reaches_completion_under_contention() {
+    use crate::storage::retry::retry_on_conflict;
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    {
+        let mut tx = db.transact(true).unwrap();
+        tx.put(b"n", b"0").unwrap();
+        tx.commit().unwrap();
+    }
+    const THREADS: usize = 4;
+    const OPS: usize = 20;
+    std::thread::scope(|s| {
+        for _ in 0..THREADS {
+            let db = db.clone();
+            s.spawn(move || {
+                for _ in 0..OPS {
+                    retry_on_conflict(1_000, || {
+                        let mut tx = db.transact(true)?;
+                        let cur: u64 = String::from_utf8(tx.get(b"n")?.unwrap())
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        tx.put(b"n", (cur + 1).to_string().as_bytes())?;
+                        tx.commit()
+                    })
+                    .unwrap();
+                }
+            });
+        }
+    });
+    let tx = db.transact(false).unwrap();
+    let total: u64 = String::from_utf8(tx.get(b"n").unwrap().unwrap())
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(total, (THREADS * OPS) as u64);
+}

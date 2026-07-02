@@ -41,6 +41,7 @@ use crate::data::value::ValidityTs;
 
 pub(crate) mod backup;
 pub(crate) mod fjall;
+pub(crate) mod retry;
 #[cfg(test)]
 mod tests;
 pub(crate) mod verify;

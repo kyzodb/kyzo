@@ -4,6 +4,8 @@
 
 # KyzoDB
 
+🚧 **WARNING! Fork/Refactor in Progress! See the [board](https://github.com/orgs/kyzodb/projects/1) for current status.** 🚧
+
 KyzoDB is a fork of [CozoDB](https://github.com/cozodb/cozo) by Ziyang Hu and the Cozo Project Authors,
 carried forward after upstream development went quiet. The original design and codebase are theirs, with
 thanks; KyzoDB continues from that foundation, and its MPL-2.0 license and every copyright notice are
@@ -30,14 +32,20 @@ those from one governed model rather than a fleet of separately synchronized sys
 
 ### Table of contents
 
-1. [Introduction](#introduction)
-2. [Retrieval in one query](#retrieval-in-one-query)
-3. [Query examples](#query-examples)
-4. [Using KyzoDB](#using-kyzodb)
-5. [Architecture](#architecture)
-6. [Status](#status)
-7. [Links](#links)
-8. [License](#license)
+- [KyzoDB](#kyzodb)
+    - [Table of contents](#table-of-contents)
+  - [Introduction](#introduction)
+    - [What does _embeddable_ mean here?](#what-does-embeddable-mean-here)
+    - [Why _graphs_?](#why-graphs)
+    - [Why _Datalog_?](#why-datalog)
+    - [Time travel](#time-travel)
+  - [Retrieval in one query](#retrieval-in-one-query)
+  - [Query examples](#query-examples)
+  - [Using KyzoDB](#using-kyzodb)
+  - [Architecture](#architecture)
+  - [Status](#status)
+  - [Links](#links)
+  - [License](#license)
 
 ## Introduction
 
