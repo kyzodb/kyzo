@@ -198,9 +198,12 @@ treats them as capabilities and engineers them deliberately:
 - **Budgeted execution.** Evaluation runs under an explicit budget of derivation ceilings and
   deadlines, and exceeding it yields a typed, deterministic refusal rather than a runaway query or a
   silent kill.
-- **Answers that show their work.** Provenance is being built into evaluation, not bolted on: a derived
-  fact can name the rule and premises that entailed it, recursively down to stored ground facts, and
-  the resulting proof is itself cheap to verify. "Why do you believe that" becomes a query.
+- **Answers that show their work.** Provenance is built into evaluation, not bolted on: a derived
+  fact names the rule and premises that entailed it, recursively down to stored ground facts, and the
+  resulting proof tree is verified by an independent checker that imports nothing from the evaluator.
+  "Why do you believe that" becomes a query. The boundaries are stated plainly: negation is
+  closed-world and not proof-checkable, and aggregations and built-in algorithms are admitted as
+  steps, not derived per row.
 
 There is one more reason to hold these lines, and it is economic. The cheaper the model calling the
 database, the less ambiguity it can absorb: a frontier model can paper over a vague error or an
@@ -257,7 +260,10 @@ The whole engine and server build as **pure Rust, with no C or C++ anywhere in t
 an aesthetic preference. It is one `cargo build` on any platform Rust supports, one compiler's memory
 model, one supply chain to audit, no vendored C++ submodule breaking on next year's compiler, and
 backups in a pure-Rust portable format. CI enforces it mechanically: a dependency that smuggles in a C
-compiler fails the build.
+compiler fails the build. And it is a practice, not a snapshot: when the time library's platform stack
+(an Apple C shim, Android's libc bindings, the windows-core family) was found in the dependency lock,
+it was migrated out in favor of pure-Rust replacements, with every behavior delta pinned as a
+permanent regression fixture.
 
 ## Proven, not promised
 
@@ -299,8 +305,23 @@ The rest of the machinery:
 - **A reference oracle** (`query/laws.rs`): an 1,800-line executable statement of stratified Datalog
   semantics, deliberately naive so it is obviously correct, compiled only into test builds. Its stated
   doctrine: *the oracle is judge, never production code.*
-- **The determinism law as a test.** The evaluator's test suite asserts byte-identity of answers and
-  refusals across thread counts today, not aspirationally.
+- **The determinism law as a campaign.** Thousands of seeded campaigns of generated programs
+  (recursion, negation, the aggregation lattices, thousands of facts), each evaluated at 1, 2, 4, and
+  8 threads under finite budgets: byte-identical answers, byte-identical witness tables,
+  byte-identical refusals. And the campaign proves it cannot pass vacuously: deliberately sabotaging
+  the engine's own negation handling makes half the seeds fail loudly, with pinned examples.
+- **Proofs checked by an outsider.** "Why do you believe that" is answered with an artifact, not a
+  log line. From a live run:
+
+      labeled[1,100] <- path[1,4], tag[4,100]
+        path[1,4] <- edge[1,2], path[2,4]
+          path[2,4] <- edge[2,3], path[3,4]
+            path[3,4] <- edge[3,4]   (ground)
+      checker verdict: Ok
+
+  That tree was reconstructed from the evaluator's own witnesses, then verified by an independent
+  checker that imports nothing from the evaluator: it re-derives every step from the rules and ground
+  facts alone, and rejects corrupted proofs.
 - **Deterministic simulation testing** (`storage/sim.rs`): a second implementation of the storage
   contract in which thread interleavings, injected faults, crashes, and power cuts are all a pure
   function of one `u64` seed. A failing campaign prints its seed; rerunning replays the failure
