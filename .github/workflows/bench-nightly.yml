@@ -18,7 +18,7 @@ jobs:
     name: Criterion benchmarks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check activation
         id: check
         run: |
@@ -34,7 +34,7 @@ jobs:
         if: steps.check.outputs.active == 'true'
       - if: steps.check.outputs.active == 'true'
         run: cargo bench -p kyzo --bench storage 2>&1 | tee bench-output.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.check.outputs.active == 'true'
         with:
           name: criterion-results
