@@ -1,12 +1,20 @@
-<img src="static/logo_k.png" width="200" height="175" alt="KyzoDB logo">
+<p align="center">
+  <img src="static/logo_k.png" width="160" alt="KyzoDB logo">
+</p>
 
-[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE.txt)
+<h1 align="center">KyzoDB</h1>
 
-# KyzoDB
+<p align="center"><em>One deterministic database for facts, graphs, vectors, text, and time.</em></p>
 
-🚧 **UNDER CONSTRUCTION: this README describes the target state of an in-flight rebuild. The
-[board](https://github.com/orgs/kyzodb/projects/1) is the live status; [Status](#status) below says
-what is proven today.** 🚧
+<p align="center">
+  <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-MPL--2.0-2F7E52" alt="License: MPL-2.0"></a>
+  <a href="https://github.com/kyzodb/kyzo/issues"><img src="https://img.shields.io/badge/board-stories-1E4D33" alt="Board"></a>
+</p>
+
+> [!WARNING]
+> **Under construction.** This README describes the target state of an in-flight rebuild. The
+> [board](https://github.com/orgs/kyzodb/projects/1) is the live status; [Status](#status) below says
+> what is proven today.
 
 If you are building a knowledge-heavy product today, you usually end up spreading one domain across
 five systems: Postgres for facts, a vector database for similarity, a graph store for relationships, a
@@ -33,24 +41,32 @@ transactional storage substrate. The product reason it matters is retrieval you 
 and inspect, from one database instead of five.
 
 ```mermaid
-flowchart LR
+%%{init: {'flowchart': {'curve': 'basis'}}}%%
+flowchart TB
     subgraph five["The usual stack: five copies of the truth"]
-        direction TB
-        A1([your product]) --> P[(facts)]
-        A1 --> V[(vectors)]
-        A1 --> G[(graph)]
-        A1 --> S[(text)]
-        A1 --> H[(history)]
-        P <-. sync .-> V
-        V <-. sync .-> G
-        G <-. sync .-> S
-        S <-. sync .-> H
+        direction LR
+        A1([your product]):::actor
+        A1 --> P[(facts)]:::store
+        A1 --> V[(vectors)]:::store
+        A1 --> G[(graph)]:::store
+        A1 --> S[(text)]:::store
+        A1 --> H[(history)]:::store
+        P -. sync .- V
+        V -. sync .- G
+        G -. sync .- S
+        S -. sync .- H
     end
     subgraph one["KyzoDB: one copy, one language, one transaction"]
-        direction TB
-        A2([your product]) -- one query --> K[("facts + graph + vectors<br/>+ text + history")]
+        direction LR
+        A2([your product]):::actor
+        A2 == one query ==> K[("facts · graph · vectors<br/>text · history")]:::kyzo
     end
-    five ==> one
+    five == collapses to ==> one
+    classDef actor fill:#2F7E52,stroke:#1E4D33,color:#FFFFFF
+    classDef store fill:#E8F0EB,stroke:#7FA08C,color:#17271F
+    classDef kyzo fill:#1E4D33,stroke:#2F7E52,stroke-width:2px,color:#FFFFFF
+    style five fill:transparent,stroke:#7FA08C,stroke-dasharray:5 5
+    style one fill:transparent,stroke:#2F7E52,stroke-width:2px
 ```
 
 ## Retrieval is one act
@@ -61,7 +77,7 @@ here, so they combine in a single query.
 Take documents that carry a title and a vector embedding, plus a relation recording which document
 cites which:
 
-```
+```prolog
 ?[id, title, emb] <- [
     ['graph-db',   'Graph databases',       [0.1,  0.9]],
     ['vec-search', 'Vector search',         [0.9,  0.1]],
@@ -76,14 +92,14 @@ cites which:
 
 Index the embeddings with HNSW:
 
-```
+```prolog
 ::hnsw create doc:emb {dim: 2, dtype: F32, fields: [emb], distance: L2, m: 50, ef_construction: 20}
 ```
 
 A nearest-neighbour search binds with `~` and unifies like any other relation. Joined straight to
 `cites`, one query performs semantic recall and then follows the relationships of whatever it finds:
 
-```
+```prolog
 ?[hit, title, cited] := ~doc:emb{id: hit, title | query: q, k: 2, ef: 20},
                         *cites{from: hit, to: cited},
                         q = vec([0.12, 0.88])
@@ -96,14 +112,14 @@ A nearest-neighbour search binds with `~` and unifies like any other relation. J
 
 Full-text and near-duplicate search take the same shape. A full-text index over the same titles:
 
-```
+```prolog
 ::fts create doc:text {extractor: title, tokenizer: Simple, filters: [Lowercase, Stemmer('English'), Stopwords('en')]}
 ```
 
 answers `~doc:text{id, title | query: 'graph', k: 5}`. A MinHash-LSH index for
 near-duplicates:
 
-```
+```prolog
 ::lsh create doc:lsh {extractor: title, tokenizer: NGram, n_gram: 3, target_threshold: 0.5}
 ```
 
@@ -125,7 +141,7 @@ recursive CTE is three lines that read top to bottom.
 Here `*route` is a relation of airport-to-airport routes, and `FRA` is Frankfurt. Every airport
 reachable from Frankfurt, by any number of stops, is three lines:
 
-```
+```prolog
 reachable[to] := *route{fr: 'FRA', to}
 reachable[to] := reachable[stop], *route{fr: stop, to}
 ?[count_unique(to)] := reachable[to]
@@ -139,7 +155,7 @@ For the recursions that graph analysis reaches for constantly, the engine ships 
 (PageRank, community detection, shortest paths, centralities, and more) as built-in rules over your
 relations, with no export to a graph runtime and back:
 
-```
+```prolog
 start[] <- [['FRA']]
 end[] <- [['YPO']]
 ?[src, dst, distance, path] <~ ShortestPathDijkstra(*route[], start[], end[])
@@ -199,19 +215,27 @@ idea: every retrieval modality, however exotic it looks at the query level, beco
 scan by the time it reaches storage.
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
-    Q["KyzoScript query"] --> C["compiled to relational algebra<br/>stratified, semi-naive, magic sets"]
-    C --> P1["relational<br/>scan"]
-    C --> P2["graph<br/>step"]
-    C --> P3["HNSW<br/>probe"]
-    C --> P4["FTS / LSH<br/>lookup"]
-    C --> P5["as-of<br/>read"]
+    Q(["KyzoScript query"]):::actor
+    C["relational algebra<br/>stratified · semi-naive · magic sets"]:::proc
+    Q --> C
+    C --> P1["relational<br/>scan"]:::proc
+    C --> P2["graph<br/>step"]:::proc
+    C --> P3["HNSW<br/>probe"]:::proc
+    C --> P4["FTS / LSH<br/>lookup"]:::proc
+    C --> P5["as-of<br/>read"]:::proc
     P1 --> MC
     P2 --> MC
     P3 --> MC
     P4 --> MC
     P5 --> MC
-    MC["memcomparable key encoding<br/>byte order = semantic order"] --> KV[("fjall<br/>ordered, transactional, pure-Rust LSM")]
+    MC["memcomparable key encoding<br/>byte order = semantic order"]:::law
+    MC ==> KV[("fjall<br/>ordered · transactional · pure-Rust LSM")]:::kyzo
+    classDef actor fill:#2F7E52,stroke:#1E4D33,color:#FFFFFF
+    classDef proc fill:#E8F0EB,stroke:#7FA08C,color:#17271F
+    classDef law fill:#E8F0EB,stroke:#2F7E52,stroke-width:2px,color:#17271F
+    classDef kyzo fill:#1E4D33,stroke:#2F7E52,stroke-width:2px,color:#FFFFFF
 ```
 
 **Storage.** A `Storage` trait defines an ordered key-value store with range scans, MVCC commit
@@ -251,13 +275,23 @@ The centerpiece of the enforcement is differential: the optimized engine is neve
 testimony.
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'basis'}}}%%
 flowchart LR
-    GEN["generated programs<br/>and workloads"] --> ENG["optimized engine<br/>semi-naive + magic sets"]
-    GEN --> ORC["reference oracle<br/>naive, obviously correct,<br/>test builds only"]
-    ENG --> CMP{"byte-identical<br/>answer sets?"}
+    GEN(["generated programs<br/>and workloads"]):::actor
+    ENG["optimized engine<br/>semi-naive · magic sets"]:::proc
+    ORC["reference oracle<br/>naive · obviously correct<br/>test builds only"]:::law
+    GEN --> ENG
+    GEN --> ORC
+    ENG --> CMP{"byte-identical<br/>answer sets?"}:::gate
     ORC --> CMP
-    CMP -- yes --> PASS["law holds"]
-    CMP -- no --> FAIL["defect found,<br/>pinned as a regression test forever"]
+    CMP == yes ==> PASS["law holds"]:::pass
+    CMP -- no --> FAIL["defect found, pinned as a<br/>regression test forever"]:::fail
+    classDef actor fill:#2F7E52,stroke:#1E4D33,color:#FFFFFF
+    classDef proc fill:#E8F0EB,stroke:#7FA08C,color:#17271F
+    classDef law fill:#E8F0EB,stroke:#2F7E52,stroke-width:2px,color:#17271F
+    classDef gate fill:#F3EFE2,stroke:#B08B2E,color:#17271F
+    classDef pass fill:#1E4D33,stroke:#2F7E52,color:#FFFFFF
+    classDef fail fill:#7A2E2E,stroke:#5A1E1E,color:#FFFFFF
 ```
 
 The rest of the machinery:
@@ -298,13 +332,13 @@ let result = db.run_default("?[reachable] := *route{fr: 'FRA', to: reachable}")?
 Swap `"mem"` for the persistent engine and a path when you want durability; run it client-server when
 you want shared access and more concurrency. To depend on it from a Rust project:
 
-```
+```toml
 kyzo = { git = "https://github.com/kyzodb/kyzo", package = "kyzo" }
 ```
 
 To build the workspace itself (stable Rust, nothing else):
 
-```
+```bash
 git clone https://github.com/kyzodb/kyzo
 cd kyzo
 cargo build -p kyzo --release
