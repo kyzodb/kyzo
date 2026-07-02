@@ -8,24 +8,30 @@
 [board](https://github.com/orgs/kyzodb/projects/1) is the live status; [Status](#status) below says
 what is proven today.** 🚧
 
-**KyzoDB is an embeddable, transactional, pure-Rust database in which relational queries, graph
-traversal, vector similarity, full-text search, near-duplicate detection, and point-in-time reads are
-one query, in one language, against one store.**
+If you are building a knowledge-heavy product today, you usually end up spreading one domain across
+five systems: Postgres for facts, a vector database for similarity, a graph store for relationships, a
+search engine for text, and some history layer bolted on. Now you have a second product to build, one
+no user asked for: keeping five copies of the truth synchronized, and explaining yourself when they
+disagree.
 
-Most stacks assemble retrieval out of separate parts: a relational store for facts, a graph database
-for relationships, a vector index for similarity, a search engine for text, and something extra for
-history. Each part brings its own query language, its own copy of the data, and the standing job of
-keeping the copies in sync. KyzoDB collapses the assembly. A vector search is a join. A graph traversal
-is recursion. A read at a past instant is a query parameter. They compose because underneath they are
-the same thing: relations over one ordered, transactional key-value store.
+KyzoDB collapses that into one embeddable, transactional database. Facts, relationships, semantic
+similarity, text, near-duplicates, and historical state answer together, in one language, in one
+transaction. A vector search is a join. A graph traversal is recursion. A read at a past instant is a
+query parameter.
+
+The point is not "vector search inside a database." Every database has vector search now. The point is
+that retrieval becomes composable and auditable: a semantic hit joins to structured facts, walks a
+graph, respects time, and can explain why the answer exists. And it does all of this deterministically;
+the same query over the same facts returns the same answer, and fails with the same refusal, every
+time, on every machine.
 
 > LLMs gave software the ability to think out loud. KyzoDB exists so that what such systems come to
 > know can be held: exactly, durably, explainably, and identically every time it's asked for. Not the
 > mind; the ground the mind stands on.
 
-That is the design brief, and it demands more than feature coverage. It demands an engine whose answers
-are reproducible, whose errors explain themselves, and whose derivations can show their work. The rest
-of this document demonstrates what that looks like.
+The technical reason this works: the engine reduces every access path to ordered scans over one
+transactional storage substrate. The product reason it matters: retrieval you can trust, reproduce, and
+inspect, from one database instead of five.
 
 ## Retrieval is one act
 
