@@ -8,7 +8,7 @@ credit is stated once, completely, and in a place built to hold it.
 ## The debt
 
 CozoDB is a rare piece of engineering: one declarative Datalog language over relational, graph, and
-vector data — with full-text search, MinHash-LSH near-duplicate detection, and as-of time travel — all
+vector data, with full-text search, MinHash-LSH near-duplicate detection, and as-of time travel, all
 composing because they rest on a single memcomparable, transactional key-value substrate. The insight
 that one ordered key-value store can serve all of those access paths uniformly, the Datalog dialect that
 exposes them as ordinary relations, the memcomparable row encoding, the stratified/semi-naive/magic-set
@@ -24,7 +24,7 @@ forked it and carried it forward. Fondly, and with thanks.
 - The architecture: a query engine over a `Storage`/`StoreTx` trait, with language wrappers around a
   Rust core.
 - The query language design (KyzoScript is a continuation of CozoScript) and its Datalog semantics.
-- The memcomparable key encoding — the load-bearing invariant of the whole system.
+- The memcomparable key encoding, the load-bearing invariant of the whole system.
 - The design of HNSW, FTS, and MinHash-LSH as first-class relational operators, including the vendored
   pure-Rust tokenizers.
 - Per-relation as-of time travel with validity in the key.
@@ -62,5 +62,5 @@ The full plan of record is [REFACTOR.md](REFACTOR.md); the work is tracked on th
 
 KyzoDB is an independent project. The CozoDB authors do not maintain, endorse, or answer for it. Bugs in
 KyzoDB are ours; the foundation it stands on is theirs. If KyzoDB is useful to you, the people who made
-it possible first are Ziyang Hu and the Cozo Project Authors — their project lives at
+it possible first are Ziyang Hu and the Cozo Project Authors; their project lives at
 [github.com/cozodb/cozo](https://github.com/cozodb/cozo) and [cozodb.org](https://www.cozodb.org).
