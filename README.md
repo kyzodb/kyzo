@@ -27,18 +27,16 @@ similarity, text, near-duplicates, and historical state answer together, in one 
 transaction. A vector search is a join. A graph traversal is recursion. A read at a past instant is a
 query parameter.
 
-The point is not vector search inside a database. Vector search is becoming table stakes. The point is
-that retrieval becomes composable and auditable: a semantic hit can join to structured facts, walk a
-graph, respect time, and explain why the answer exists. The same query over the same facts returns the
-same answer, and fails with the same refusal, every time.
+The point is not vector search inside a database; that is becoming table stakes. The point is that
+retrieval becomes composable and auditable: a semantic hit can join to structured facts, walk a graph,
+respect time, and explain why the answer exists. The same query over the same facts returns the same
+answer, and fails with the same refusal, every time. And none of this is taken on faith: the engine is
+tested against an executable definition of its own semantics, and when the two disagree, the engine is
+wrong. The bottom half of this document is about that.
 
 > LLMs gave software the ability to think out loud. KyzoDB exists so that what such systems come to
 > know can be held: exactly, durably, explainably, and identically every time it's asked for. Not the
 > mind; the ground the mind stands on.
-
-The technical reason this works is that every access path reduces to ordered reads over one
-transactional storage substrate. The product reason it matters is retrieval you can trust, reproduce,
-and inspect, from one database instead of five.
 
 ```mermaid
 %%{init: {'flowchart': {'curve': 'basis'}}}%%
@@ -51,10 +49,10 @@ flowchart TB
         A1 --> G[(graph)]:::store
         A1 --> S[(text)]:::store
         A1 --> H[(history)]:::store
-        P -. sync .- V
-        V -. sync .- G
-        G -. sync .- S
-        S -. sync .- H
+        P -. drift .- V
+        V -. drift .- G
+        G -. drift .- S
+        S -. drift .- H
     end
     subgraph one["KyzoDB: one copy, one language, one transaction"]
         direction LR
@@ -72,7 +70,9 @@ flowchart TB
 ## Retrieval is one act
 
 The retrieval paths a knowledge system usually spreads across five services are ordinary relations
-here, so they combine in a single query.
+here, so they combine in a single query. (The examples in this document show the rebuild's target
+surface; the [board](https://github.com/orgs/kyzodb/projects/1) tracks which paths run end-to-end
+today.)
 
 Take documents that carry a title and a vector embedding, plus a relation recording which document
 cites which:
@@ -127,6 +127,14 @@ answers `~doc:lsh{id | query: 'Graph databases', k: 5}`. In every case the searc
 you can join, filter, negate, and recurse over. Hybrid retrieval is a query, not a pipeline: there is
 no fan-out layer, no re-ranking glue service, and no copy of your data waiting to drift.
 
+The capability roadmap lands in this same shape, as relations, not sidecars: filter-aware vector
+traversal, sparse vectors, rank fusion across text and vector scores, dictionary tagging that finds
+every known entity in a document as a joinable relation, a geospatial index that encodes proximity
+into the same ordered substrate, and deterministic sketches for cardinality and quantiles. One
+admission test binds them all: a deterministic pure algorithm, composable with the query language,
+proven under the same laws as everything else. The
+[capabilities epic](https://github.com/kyzodb/kyzo/issues/51) tracks them.
+
 ## Recursion is native
 
 The query language is Datalog, in a dialect called **KyzoScript**. Datalog expresses everything
@@ -161,9 +169,9 @@ end[] <- [['YPO']]
 ?[src, dst, distance, path] <~ ShortestPathDijkstra(*route[], start[], end[])
 ```
 
-| src | dst | distance | path                                                      |
-|-----|-----|----------|-----------------------------------------------------------|
-| FRA | YPO | 4544.0   | `["FRA","YUL","YVO","YKQ","YMO","YFA","ZKE","YAT","YPO"]` |
+| src | dst | distance | path                              |
+|-----|-----|----------|-----------------------------------|
+| FRA | YPO | 4544.0   | `["FRA","YUL","YVO", ... ,"YPO"]` |
 
 And because vector and text search results are relations too, they feed these same recursions: a
 similarity hit can seed a graph traversal in the query that found it.
@@ -186,7 +194,8 @@ distinction is the difference between a memory and a cache.
 ## The engine keeps its word
 
 These are the properties that separate a component you build on from a component you babysit. KyzoDB
-treats them as capabilities and engineers them deliberately:
+treats them as capabilities and engineers them deliberately. How they are enforced is the subject of
+[Proven, not promised](#proven-not-promised) below; here is what they mean:
 
 - **Determinism as a law.** The same facts, the same query, and the same execution budget produce
   identical answers, and identical refusals, on every run, at any thread count, on any machine. This
@@ -267,8 +276,11 @@ permanent regression fixture.
 
 ## Proven, not promised
 
-A database earns the right to hold what a system knows by being hostile to its own bugs. This is not a
-methodology statement; the artifacts are in the tree now.
+A database earns the right to hold what a system knows by being hostile to its own bugs. In this
+project that hostility is a pipeline, not a methodology page: every change is built, then attacked by
+an adversarial review briefed to refute it, and seals into the tree only when the attack fails.
+Nothing below is exempt, including the tests themselves. The
+[board](https://github.com/orgs/kyzodb/projects/1) shows what has sealed.
 
 The query engine's front door (`kyzo-core/src/query/mod.rs`) opens with **seven numbered laws**, each
 documented with the mechanism that enforces it: answer correctness (optimized evaluation must equal the
@@ -305,11 +317,14 @@ The rest of the machinery:
 - **A reference oracle** (`query/laws.rs`): an 1,800-line executable statement of stratified Datalog
   semantics, deliberately naive so it is obviously correct, compiled only into test builds. Its stated
   doctrine: *the oracle is judge, never production code.*
-- **The determinism law as a campaign.** Thousands of seeded campaigns of generated programs
-  (recursion, negation, the aggregation lattices, thousands of facts), each evaluated at 1, 2, 4, and
-  8 threads under finite budgets: byte-identical answers, byte-identical witness tables,
-  byte-identical refusals. And the campaign proves it cannot pass vacuously: deliberately sabotaging
-  the engine's own negation handling makes half the seeds fail loudly, with pinned examples.
+- **The determinism law as a campaign.** Seeded campaigns of generated programs (deep recursion,
+  negation, the aggregation lattices, thousands of facts), each evaluated at 1, 2, 4, and 8 threads
+  under finite budgets: byte-identical answers, byte-identical witness tables, byte-identical
+  refusals. The campaign is then run *twice*: once by its author, and again by its hostile reviewer
+  with fresh seeds on a base the author never touched. It proves it cannot pass vacuously twice
+  over: sabotaging the engine's own negation handling makes the seeds fail loudly, and the
+  generator's programs are measured to demand real fixpoint work (nearly all require multiple
+  evaluation epochs), so the campaign cannot pass on toy queries.
 - **Proofs checked by an outsider.** "Why do you believe that" is answered with an artifact, not a
   log line. From a live run:
 
@@ -321,13 +336,24 @@ The rest of the machinery:
 
   That tree was reconstructed from the evaluator's own witnesses, then verified by an independent
   checker that imports nothing from the evaluator: it re-derives every step from the rules and ground
-  facts alone, and rejects corrupted proofs.
+  facts alone. The checker is attacked in its own right: it rejects corrupted proofs, and a cyclic
+  proof is structurally impossible, not merely untested.
 - **Deterministic simulation testing** (`storage/sim.rs`): a second implementation of the storage
   contract in which thread interleavings, injected faults, crashes, and power cuts are all a pure
   function of one `u64` seed. A failing campaign prints its seed; rerunning replays the failure
   exactly.
-- **Mutation testing** proves the test suites bite: a guarantee whose tests survive deliberate sabotage
-  of the code under test is not a guarantee.
+- **Mutation testing** proves the test suites bite: a guarantee whose tests survive deliberate
+  sabotage of the code under test is not a guarantee. This bar treats "correct by luck" as a defect:
+  when a mutant once survived the suite by unpinning a provenance guarantee that happened to hold,
+  the killer test was written and adopted before the change was allowed to seal.
+- **Hostile review as the gate.** No change lands on the strength of its author's report. Reviewers
+  re-derive pinned fixtures independently and run their own campaigns against bases the author never
+  touched. One such sweep, ten thousand records wide, caught a one-microsecond rounding difference
+  headed for the time-travel key encoding; the resolution restored exact behavior rather than
+  documenting the drift. The running scoreboard is its own argument: across every completed pass,
+  the reviews have refuted zero engine semantics, and what they catch instead, over and over, are
+  the two quieter rots no green suite reports: tests that do not bite, and reports that claim more
+  than their evidence.
 - **Generative fuzzing** of the parser and query language assumes a caller that is brilliant,
   adversarial, and unbounded: the engine must never panic, and every refusal must name its reason and
   its span.
@@ -393,8 +419,10 @@ Three properties already in the engine make that topology cheap and honest:
   not a deployment.
 - **Graphs are portable.** The pure-Rust dump/restore format gives every instance an interchange shape:
   a graph can move hosts, fork for an experiment, or archive as a single artifact.
-- **Replicas are provably interchangeable.** Determinism means two instances holding the same facts
-  answer identically, which is the property federation architectures usually have to assume on faith.
+- **Replicas are provably interchangeable.** Two instances that ingest the same facts in the same
+  order answer byte-identically. The claim is stated that precisely because it is tested, not
+  assumed: replication here is replay of an ordered log, and determinism is what makes the replay
+  provably equivalent. Federation architectures usually have to take that property on faith.
 
 Query composition across graphs is direction, not shipped capability, and the line of ownership is
 drawn now: the *meaning* of a cross-graph query belongs to this engine, in the open. How graphs are
@@ -408,12 +436,13 @@ one vendor's fabric is not federated, it is captured.
 
 ## Status
 
-KyzoDB is early and mid-rebuild, and this README describes the target the work is converging on:
-capability by capability, story by story, each landing only after adversarial review. The storage
-kernel (fjall backend, memcomparable encoding, pure-Rust backup, contract tests) is proven and green;
-the engine is being stood up around it; the bindings follow. The plan of record is
-[REFACTOR.md](REFACTOR.md), and the live state is always the
-[board](https://github.com/kyzodb/kyzo/issues).
+KyzoDB is early, mid-rebuild, and moving fast. The storage kernel (fjall backend, memcomparable
+encoding, pure-Rust backup, contract tests) is proven and green. The engine is being stood up whole
+around it as a continuous pipeline of construction, adversarial review, and sealing; the bindings
+follow. This README describes the target the work is converging on, and the discipline is that the
+document never gets ahead of the tree: what a section claims as tested is tested, and the
+[board](https://github.com/kyzodb/kyzo/issues) is always the live truth. The plan of record is
+[REFACTOR.md](REFACTOR.md).
 
 As a pre-1.0 project under active development, expect churn: no promise yet of syntax/API stability or
 storage compatibility.
