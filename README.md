@@ -163,6 +163,10 @@ The capability is per-relation because history has a cost, and you should only p
 it. Under the hood, validity is encoded in the storage key itself, so an as-of read is an ordinary
 ordered scan, not a reconstruction.
 
+Retraction is revision, not erasure: what a system believed, when it came to believe it, and when it
+stopped believing it all remain queryable. For software that accumulates knowledge over time, that
+distinction is the difference between a memory and a cache.
+
 ## The engine keeps its word
 
 These are the properties that separate a component you build on from a component you babysit. KyzoDB
@@ -181,6 +185,12 @@ treats them as capabilities and engineers them deliberately:
 - **Answers that show their work.** Provenance is being built into evaluation, not bolted on: a derived
   fact can name the rule and premises that entailed it, recursively down to stored ground facts, and
   the resulting proof is itself cheap to verify. "Why do you believe that" becomes a query.
+
+There is one more reason to hold these lines, and it is economic. The cheaper the model calling the
+database, the less ambiguity it can absorb: a frontier model can paper over a vague error or an
+inconsistent answer, a small one cannot. Typed refusals, deterministic results, and computable
+provenance are the feedback interface that lets modest models work reliably. A database that is never
+ambiguous is what makes the intelligence above it affordable.
 
 ## One substrate, no ballast
 
@@ -312,6 +322,34 @@ own that. It is not a distributed OLTP system; it scales like the excellent embe
 like a cluster. And if all you need is a key-value cache or a single denormalized table, this is more
 machine than the job requires. KyzoDB is for the case where one body of knowledge must answer as facts,
 as a graph, as similarity, as text, and as history, consistently and in one place.
+
+## Many small graphs
+
+Which raises the fair question: what happens when the knowledge outgrows one place? KyzoDB's answer to
+scale is not a bigger database; it is more of them. Real knowledge does not arrive as one mega-graph.
+It arrives as domains: this team's ontology, that product's catalog, one agent's accumulated history,
+each with its own governance, its own consistency needs, and its own blast radius. The deployment model
+this engine is built toward is a graph of many small graphs: instances small enough to be owned and
+audited, composed above rather than fused below.
+
+Three properties already in the engine make that topology cheap and honest:
+
+- **Instances are nearly free.** An embedded database with no server means a graph costs a file handle,
+  not a deployment.
+- **Graphs are portable.** The pure-Rust dump/restore format gives every instance an interchange shape:
+  a graph can move hosts, fork for an experiment, or archive as a single artifact.
+- **Replicas are provably interchangeable.** Determinism means two instances holding the same facts
+  answer identically, which is the property federation architectures usually have to assume on faith.
+
+Query composition across graphs is direction, not shipped capability, and the line of ownership is
+drawn now: the *meaning* of a cross-graph query belongs to this engine, in the open. How graphs are
+addressed, how answers compose, what determinism and provenance guarantee when a derivation crosses a
+graph boundary: these are engine semantics, and they will be specified, law-tested, and documented here
+the same way the seven engine laws are, as stories on the
+[board](https://github.com/kyzodb/kyzo/issues). Fabrics that discover, route, and operate fleets of
+graphs can then be built by anyone, on any transport, against semantics that are public and provable.
+An open protocol is what makes a federated graph trustworthy; a graph you can only interpret through
+one vendor's fabric is not federated, it is captured.
 
 ## Status
 
