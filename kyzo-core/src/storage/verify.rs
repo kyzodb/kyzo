@@ -18,7 +18,7 @@
 use miette::Result;
 
 use crate::data::tuple::{decode_tuple_from_key, extend_tuple_from_v};
-use crate::storage::{Storage, StoreTx};
+use crate::storage::{ReadTx, Storage};
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption
 /// without itself growing unboundedly on a badly damaged store.
@@ -70,7 +70,7 @@ fn hex_prefix(bytes: &[u8]) -> String {
 /// Read-only, snapshot-consistent, and total: corrupt pairs are recorded and
 /// the walk continues — one bad page must not hide the rest of the damage.
 pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
-    let tx = db.transact(false)?;
+    let tx = db.read_tx()?;
     let mut report = VerifyReport::default();
     let mut prev_key: Option<Vec<u8>> = None;
 

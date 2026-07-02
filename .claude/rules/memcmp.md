@@ -14,11 +14,18 @@ serve relational, graph, vector, and text access paths uniformly.
 - `ra.rs::prefix_join` and every range scan depend on this ordering. Break it and joins return wrong rows
   **with no error**.
 - Hard constraints:
-  - Type tags are globally ordered (`NULL_TAG=0x01` … `BOT_TAG=0xFF`) and define cross-type ordering:
-    never reorder or reuse a tag.
+  - Type tags are globally ordered (`NULL_TAG=0x01` … `BOT_TAG=0xFF`) and mirror the `DataValue`
+    enum's declaration order exactly — one source of truth for cross-type ordering, enforced by the
+    pairwise order-embedding law. Never reorder or reuse a tag; never reorder the enum.
   - Numbers are BigEndian. Ints and floats share one sortable space via `EXACT_INT_BOUND` +
     `IS_FLOAT`/sign-flip: preserve it exactly.
 - "UUIDs are not lexicographically sortable" is a *design property* of this encoding, not a hotfix.
 
-**A change here requires:** a round-trip encode/decode + ordering test, and an explicit
-format-versioning / migration discussion.
+The invariant is executable law: `storage/tests.rs` holds the round-trip and order-embedding property
+tests (corpus + generative + byte-flip corruption). `EncodedKey` (tuple.rs) is the typed written form —
+only encoders construct it; the key layout (relation prefix, fixed-width validity tail) lives on that
+type, not as scattered offsets.
+
+**A change here requires:** the law tests passing (round-trip, order embedding, never-panic on corrupt
+bytes), and a `FormatVersion::CURRENT` bump with migration discussion — stores and dumps are stamped
+and refuse mismatched versions.

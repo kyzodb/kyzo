@@ -13,6 +13,10 @@ verify:
 - Magic-sets rewriting changes only demand, never result semantics.
 - Semi-naive evaluation still reaches the same fixpoint as naive, and recursion terminates.
 - The change carries a Datalog-level (query-result) test, not just a unit test.
+- Anything touching evaluation is proven by differential run against the naive oracle
+  (`query/laws.rs::naive_eval`); the refusal corpus (`unstratifiable_corpus`) is still refused.
+- Typestate is preserved: no pipeline stage accepts an input type whose checks its constructor did not
+  prove; no invariant moves down the enforcement ladder (compiler > constructor > test).
 
 Return findings ranked by severity with `file:line` anchors and a concrete query that would break. If
 clean, say so plainly. Do not modify code.

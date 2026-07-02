@@ -20,6 +20,11 @@
 //! - **Validity-in-key as-of scans** — a seek loop: each step opens a fresh
 //!   range at the seek key computed by `check_key_for_validity`, touching one
 //!   stored version per distinct tuple in the common case.
+//!
+//! The transaction species are distinct types: [`FjallReadTx`] cannot write
+//! by construction, and committing a [`FjallWriteTx`] consumes it — writing
+//! through a reader and committing twice are not errors, they are programs
+//! that do not compile.
 
 use std::ops::Bound;
 use std::path::Path;
@@ -32,7 +37,7 @@ use miette::{Result, bail, miette};
 
 use crate::data::tuple::{Tuple, check_key_for_validity, extend_tuple_from_v};
 use crate::data::value::ValidityTs;
-use crate::storage::{ConflictError, FORMAT_VERSION, Storage, StoreTx};
+use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
 const KEYSPACE_NAME: &str = "kyzo";
 const META_KEYSPACE_NAME: &str = "kyzo_meta";
@@ -91,14 +96,17 @@ pub fn new_fjall_storage_with(
         .map_err(|e| miette!("reading format version: {e}"))?
     {
         None => meta
-            .insert(FORMAT_VERSION_KEY, FORMAT_VERSION)
+            .insert(FORMAT_VERSION_KEY, FormatVersion::CURRENT.as_bytes())
             .map_err(|e| miette!("stamping format version: {e}"))?,
-        Some(v) if v.as_ref() == FORMAT_VERSION => {}
-        Some(v) => bail!(
-            "on-disk format version mismatch: store is v{}, this build reads v{}",
-            String::from_utf8_lossy(v.as_ref()),
-            String::from_utf8_lossy(FORMAT_VERSION),
-        ),
+        Some(v) => {
+            let found = FormatVersion::parse(v.as_ref())?;
+            if found != FormatVersion::CURRENT {
+                bail!(
+                    "on-disk format version mismatch: store is {found}, this build reads {}",
+                    FormatVersion::CURRENT,
+                );
+            }
+        }
     }
     let ks = db
         .keyspace(KEYSPACE_NAME, KeyspaceCreateOptions::default)
@@ -119,28 +127,28 @@ pub struct FjallStorage {
 }
 
 impl Storage for FjallStorage {
-    type Tx = FjallTx;
+    type ReadTx = FjallReadTx;
+    type WriteTx = FjallWriteTx;
 
     fn storage_kind(&self) -> &'static str {
         "fjall"
     }
 
-    fn transact(&self, write: bool) -> Result<Self::Tx> {
-        Ok(if write {
-            FjallTx::Writer {
-                tx: Some(Box::new(
-                    self.db
-                        .write_tx()
-                        .map_err(|e| miette!("fjall write tx: {e}"))?,
-                )),
-                ks: self.ks.clone(),
-                db: self.db.clone(),
-            }
-        } else {
-            FjallTx::Reader {
-                snap: self.db.read_tx(),
-                ks: self.ks.clone(),
-            }
+    fn read_tx(&self) -> Result<FjallReadTx> {
+        Ok(FjallReadTx {
+            snap: self.db.read_tx(),
+            ks: self.ks.clone(),
+        })
+    }
+
+    fn write_tx(&self) -> Result<FjallWriteTx> {
+        Ok(FjallWriteTx {
+            tx: self
+                .db
+                .write_tx()
+                .map_err(|e| miette!("fjall write tx: {e}"))?,
+            ks: self.ks.clone(),
+            db: self.db.clone(),
         })
     }
 
@@ -197,103 +205,134 @@ impl FjallStorage {
     }
 }
 
-/// A fjall transaction: a consistent snapshot for readers, an optimistic
-/// (SSI) write transaction for writers.
-pub enum FjallTx {
-    Reader {
-        snap: Snapshot,
-        ks: OptimisticTxKeyspace,
-    },
-    Writer {
-        tx: Option<Box<OptimisticWriteTx>>,
-        ks: OptimisticTxKeyspace,
-        db: OptimisticTxDatabase,
-    },
+/// A read transaction: one consistent snapshot. Writing through it is not an
+/// error path — the operations do not exist on this type.
+pub struct FjallReadTx {
+    snap: Snapshot,
+    ks: OptimisticTxKeyspace,
 }
 
-impl FjallTx {
-    fn writer_mut(&mut self) -> Result<(&mut OptimisticWriteTx, &OptimisticTxKeyspace)> {
-        match self {
-            FjallTx::Reader { .. } => bail!("write in read transaction"),
-            FjallTx::Writer { tx, ks, .. } => Ok((
-                tx.as_mut()
-                    .ok_or_else(|| miette!("transaction already committed"))?,
-                ks,
-            )),
+/// A write transaction: a consistent snapshot plus a conflict-tracked write
+/// set. Reads see the transaction's own writes; `commit` consumes the value,
+/// so a committed transaction cannot be touched again by construction.
+pub struct FjallWriteTx {
+    tx: OptimisticWriteTx,
+    ks: OptimisticTxKeyspace,
+    db: OptimisticTxDatabase,
+}
+
+/// Both fjall read views (`Snapshot`, `OptimisticWriteTx`) speak `Readable`;
+/// every read-side operation is written once against that.
+fn raw_range<'a, R: Readable>(
+    reader: &'a R,
+    ks: &'a OptimisticTxKeyspace,
+    lower: &[u8],
+    upper: &[u8],
+) -> impl Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a {
+    // fjall clones bounds internally; borrowing here avoids two Vec
+    // allocations per call on the skip scan's hottest path.
+    let bounds: (Bound<&[u8]>, Bound<&[u8]>) = (Bound::Included(lower), Bound::Excluded(upper));
+    reader.range::<&[u8], _>(ks, bounds).map(|guard| {
+        let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
+        Ok((k.to_vec(), v.to_vec()))
+    })
+}
+
+fn read_get<R: Readable>(
+    reader: &R,
+    ks: &OptimisticTxKeyspace,
+    key: &[u8],
+) -> Result<Option<Vec<u8>>> {
+    Ok(reader
+        .get(ks, key)
+        .map_err(|e| miette!("fjall read: {e}"))?
+        .map(|v| v.to_vec()))
+}
+
+fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -> Result<bool> {
+    reader
+        .contains_key(ks, key)
+        .map_err(|e| miette!("fjall read: {e}"))
+}
+
+fn read_total_scan<'a, R: Readable>(
+    reader: &'a R,
+    ks: &'a OptimisticTxKeyspace,
+) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    Box::new(reader.iter(ks).map(|guard| {
+        let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
+        Ok((k.to_vec(), v.to_vec()))
+    }))
+}
+
+macro_rules! impl_read_tx {
+    ($ty:ty, $reader:ident) => {
+        impl ReadTx for $ty {
+            fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+                read_get(&self.$reader, &self.ks, key)
+            }
+
+            fn exists(&self, key: &[u8]) -> Result<bool> {
+                read_exists(&self.$reader, &self.ks, key)
+            }
+
+            fn range_scan<'a>(
+                &'a self,
+                lower: &[u8],
+                upper: &[u8],
+            ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+                Box::new(raw_range(&self.$reader, &self.ks, lower, upper))
+            }
+
+            fn range_skip_scan_tuple<'a>(
+                &'a self,
+                lower: &[u8],
+                upper: &[u8],
+                valid_at: ValidityTs,
+            ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+                Box::new(SkipIterator {
+                    reader: &self.$reader,
+                    ks: &self.ks,
+                    upper: upper.to_vec(),
+                    valid_at,
+                    next_bound: lower.to_vec(),
+                })
+            }
+
+            fn total_scan<'a>(
+                &'a self,
+            ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+                read_total_scan(&self.$reader, &self.ks)
+            }
         }
-    }
-
-    fn raw_range<'a>(
-        &'a self,
-        lower: &[u8],
-        upper: &[u8],
-    ) -> Result<impl Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-        // fjall clones bounds internally; borrowing here avoids two Vec
-        // allocations per call on the skip scan's hottest path.
-        let bounds: (Bound<&[u8]>, Bound<&[u8]>) = (Bound::Included(lower), Bound::Excluded(upper));
-        let iter = match self {
-            FjallTx::Reader { snap, ks } => snap.range::<&[u8], _>(ks, bounds),
-            FjallTx::Writer { tx, ks, .. } => tx
-                .as_ref()
-                .ok_or_else(|| miette!("transaction already committed"))?
-                .range::<&[u8], _>(ks, bounds),
-        };
-        Ok(iter.map(|guard| {
-            let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-            Ok((k.to_vec(), v.to_vec()))
-        }))
-    }
+    };
 }
 
-impl StoreTx for FjallTx {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let res = match self {
-            FjallTx::Reader { snap, ks } => snap.get(ks, key),
-            FjallTx::Writer { tx, ks, .. } => tx
-                .as_ref()
-                .ok_or_else(|| miette!("transaction already committed"))?
-                .get(ks, key),
-        };
-        Ok(res
-            .map_err(|e| miette!("fjall read: {e}"))?
-            .map(|v| v.to_vec()))
-    }
+impl_read_tx!(FjallReadTx, snap);
+impl_read_tx!(FjallWriteTx, tx);
 
-    fn exists(&self, key: &[u8]) -> Result<bool> {
-        let res = match self {
-            FjallTx::Reader { snap, ks } => snap.contains_key(ks, key),
-            FjallTx::Writer { tx, ks, .. } => tx
-                .as_ref()
-                .ok_or_else(|| miette!("transaction already committed"))?
-                .contains_key(ks, key),
-        };
-        res.map_err(|e| miette!("fjall read: {e}"))
-    }
-
+impl WriteTx for FjallWriteTx {
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        let (tx, ks) = self.writer_mut()?;
-        tx.insert(ks, key, val);
+        self.tx.insert(&self.ks, key, val);
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        let (tx, ks) = self.writer_mut()?;
-        tx.remove(ks, key);
+        self.tx.remove(&self.ks, key);
         Ok(())
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
         // Everything visible to this transaction in the range dies: snapshot
-        // data and the transaction's own writes alike. Chunked with a resuming cursor, so
-        // scratch memory is bounded and no pass re-walks the tombstones of
-        // previous passes (a naive rescan-from-lower is quadratic in range
-        // size). The write set itself necessarily holds one tombstone per
-        // deleted key until commit.
+        // data and the transaction's own writes alike. Chunked with a
+        // resuming cursor, so scratch memory is bounded and no pass re-walks
+        // the tombstones of previous passes (a naive rescan-from-lower is
+        // quadratic in range size). The write set itself necessarily holds
+        // one tombstone per deleted key until commit.
         const CHUNK: usize = 1024;
         let mut cursor = lower.to_vec();
         loop {
-            let keys: Vec<Vec<u8>> = self
-                .raw_range(&cursor, upper)?
+            let keys: Vec<Vec<u8>> = raw_range(&self.tx, &self.ks, &cursor, upper)
                 .map(|kv| kv.map(|(k, _)| k))
                 .take(CHUNK)
                 .collect::<Result<_>>()?;
@@ -306,9 +345,8 @@ impl StoreTx for FjallTx {
                 succ
             };
             let full_chunk = keys.len() == CHUNK;
-            let (tx, ks) = self.writer_mut()?;
             for k in keys {
-                tx.remove(ks, k);
+                self.tx.remove(&self.ks, k);
             }
             if !full_chunk {
                 return Ok(());
@@ -316,85 +354,32 @@ impl StoreTx for FjallTx {
         }
     }
 
-    fn commit(&mut self) -> Result<()> {
-        match self {
-            FjallTx::Reader { .. } => Ok(()),
-            FjallTx::Writer { tx, .. } => {
-                let tx = tx
-                    .take()
-                    .ok_or_else(|| miette!("transaction already committed"))?;
-                match tx.commit().map_err(|e| miette!("fjall commit: {e}"))? {
-                    Ok(()) => Ok(()),
-                    Err(Conflict) => Err(ConflictError.into()),
-                }
-            }
+    fn commit(self) -> Result<()> {
+        match self.tx.commit().map_err(|e| miette!("fjall commit: {e}"))? {
+            Ok(()) => Ok(()),
+            Err(Conflict) => Err(ConflictError.into()),
         }
     }
 
-    fn commit_durable(&mut self) -> Result<()> {
+    fn commit_durable(self) -> Result<()> {
+        let db = self.db.clone();
         self.commit()?;
-        match self {
-            FjallTx::Reader { .. } => Ok(()),
-            FjallTx::Writer { db, .. } => db
-                .persist(fjall::PersistMode::SyncAll)
-                .map_err(|e| miette!("fjall sync: {e}")),
-        }
-    }
-
-    fn range_scan<'a>(
-        &'a self,
-        lower: &[u8],
-        upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-        match self.raw_range(lower, upper) {
-            Ok(iter) => Box::new(iter),
-            Err(e) => Box::new(std::iter::once(Err(e))),
-        }
-    }
-
-    fn range_skip_scan_tuple<'a>(
-        &'a self,
-        lower: &[u8],
-        upper: &[u8],
-        valid_at: ValidityTs,
-    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(FjallSkipIterator {
-            tx: self,
-            upper: upper.to_vec(),
-            valid_at,
-            next_bound: lower.to_vec(),
-        })
-    }
-
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-        let iter = match self {
-            FjallTx::Reader { snap, ks } => snap.iter(ks),
-            FjallTx::Writer { tx, ks, .. } => match tx.as_ref() {
-                Some(tx) => tx.iter(ks),
-                None => {
-                    return Box::new(std::iter::once(Err(miette!(
-                        "transaction already committed"
-                    ))));
-                }
-            },
-        };
-        Box::new(iter.map(|guard| {
-            let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-            Ok((k.to_vec(), v.to_vec()))
-        }))
+        db.persist(fjall::PersistMode::SyncAll)
+            .map_err(|e| miette!("fjall sync: {e}"))
     }
 }
 
 /// Validity-aware skip scan: seek to the next candidate key, decide with
 /// `check_key_for_validity`, re-seek at the bound it returns.
-struct FjallSkipIterator<'a> {
-    tx: &'a FjallTx,
+struct SkipIterator<'a, R: Readable> {
+    reader: &'a R,
+    ks: &'a OptimisticTxKeyspace,
     upper: Vec<u8>,
     valid_at: ValidityTs,
     next_bound: Vec<u8>,
 }
 
-impl Iterator for FjallSkipIterator<'_> {
+impl<R: Readable> Iterator for SkipIterator<'_, R> {
     type Item = Result<Tuple>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -402,10 +387,7 @@ impl Iterator for FjallSkipIterator<'_> {
             if self.next_bound.as_slice() >= self.upper.as_slice() {
                 return None;
             }
-            let mut range = match self.tx.raw_range(&self.next_bound, &self.upper) {
-                Ok(r) => r,
-                Err(e) => return Some(Err(e)),
-            };
+            let mut range = raw_range(self.reader, self.ks, &self.next_bound, &self.upper);
             let (k, v) = match range.next() {
                 None => return None,
                 Some(Err(e)) => return Some(Err(e)),

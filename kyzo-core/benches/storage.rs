@@ -26,15 +26,16 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kyzo::{
-    DataValue, Storage, StoreTx, Validity, ValidityTs, encode_tuple_key, new_fjall_storage,
+    DataValue, EncodedKey, ReadTx, Storage, Validity, ValidityTs, WriteTx, encode_tuple_key,
+    new_fjall_storage,
 };
 use std::cmp::Reverse;
 
-fn key(i: u64) -> Vec<u8> {
+fn key(i: u64) -> EncodedKey {
     encode_tuple_key(7, &[DataValue::from(i as i64)])
 }
 
-fn vld_key(name: i64, ts: i64, assert: bool) -> Vec<u8> {
+fn vld_key(name: i64, ts: i64, assert: bool) -> EncodedKey {
     encode_tuple_key(
         9,
         &[
@@ -50,7 +51,7 @@ fn vld_key(name: i64, ts: i64, assert: bool) -> Vec<u8> {
 fn ops(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     for i in 0..10_000u64 {
         tx.put(&key(i), b"value").unwrap();
     }
@@ -58,18 +59,18 @@ fn ops(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("ops");
     g.bench_function("get_hit", |b| {
-        let tx = db.transact(false).unwrap();
+        let tx = db.read_tx().unwrap();
         let k = key(5_000);
         b.iter(|| black_box(tx.get(black_box(&k)).unwrap()))
     });
     g.bench_function("get_miss", |b| {
-        let tx = db.transact(false).unwrap();
+        let tx = db.read_tx().unwrap();
         let k = key(999_999);
         b.iter(|| black_box(tx.get(black_box(&k)).unwrap()))
     });
     g.bench_function("put_1k_commit", |b| {
         b.iter(|| {
-            let mut tx = db.transact(true).unwrap();
+            let mut tx = db.write_tx().unwrap();
             for i in 0..1_000u64 {
                 tx.put(&key(100_000 + i), b"value").unwrap();
             }
@@ -82,7 +83,7 @@ fn ops(c: &mut Criterion) {
 fn scan_tracking_overhead(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     for i in 0..10_000u64 {
         tx.put(&key(i), b"value").unwrap();
     }
@@ -91,7 +92,7 @@ fn scan_tracking_overhead(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("scan_tracking_overhead");
     g.bench_function("read_tx_scan_10k", |b| {
-        let tx = db.transact(false).unwrap();
+        let tx = db.read_tx().unwrap();
         b.iter(|| {
             black_box(tx.range_scan(&lo, &hi).fold(0usize, |n, r| {
                 r.unwrap();
@@ -103,7 +104,7 @@ fn scan_tracking_overhead(c: &mut Criterion) {
         // Fresh write tx per iteration: read marks accumulate per tx, and an
         // honest number includes that cost.
         b.iter(|| {
-            let tx = db.transact(true).unwrap();
+            let tx = db.write_tx().unwrap();
             black_box(tx.range_scan(&lo, &hi).fold(0usize, |n, r| {
                 r.unwrap();
                 n + 1
@@ -138,7 +139,7 @@ fn commit_parallel(c: &mut Criterion) {
                                 let db = db.clone();
                                 s.spawn(move || {
                                     for i in 0..per {
-                                        let mut tx = db.transact(true).unwrap();
+                                        let mut tx = db.write_tx().unwrap();
                                         tx.put(&key((t * per + i) as u64), b"v").unwrap();
                                         tx.commit().unwrap();
                                     }
@@ -162,7 +163,7 @@ fn asof(c: &mut Criterion) {
     {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         for name in 0..tuples {
             for ts in 1..=versions {
                 tx.put(&vld_key(name, ts, true), b"").unwrap();
@@ -175,7 +176,7 @@ fn asof(c: &mut Criterion) {
 
         let mut g = c.benchmark_group(format!("asof_{label}"));
         g.bench_function("seek_skip_scan", |b| {
-            let tx = db.transact(false).unwrap();
+            let tx = db.read_tx().unwrap();
             b.iter(|| {
                 black_box(tx.range_skip_scan_tuple(&lo, &hi, at).fold(0usize, |n, r| {
                     r.unwrap();
@@ -185,7 +186,7 @@ fn asof(c: &mut Criterion) {
         });
         g.bench_function("naive_scan_filter", |b| {
             // The obviously-correct oracle: walk all versions, keep newest <= at.
-            let tx = db.transact(false).unwrap();
+            let tx = db.read_tx().unwrap();
             let cutoff = versions / 2;
             b.iter(|| {
                 let mut newest: std::collections::BTreeMap<i64, (i64, bool)> = Default::default();

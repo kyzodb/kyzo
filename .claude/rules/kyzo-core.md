@@ -9,7 +9,7 @@ paths:
 - `data/` — value model, **memcmp.rs** (on-disk key encoding), tuple layout
 - `parse/` — pest grammar → `InputProgram` (the language is KyzoScript)
 - `query/` — the Datalog compiler (see the query rule)
-- `storage/` — the `Storage`/`StoreTx` trait + the single pure-Rust KV backend (see the storage rule)
+- `storage/` — the `Storage`/`ReadTx`/`WriteTx` species + the single pure-Rust KV backend (see the storage rule)
 - `runtime/` — `db.rs` entrypoint; hnsw/minhash_lsh/fts operators; transactions
 - `fts/`, `fixed_rule/` — full-text search; built-in graph algorithms
 
@@ -24,3 +24,6 @@ paths:
   ("parse, don't validate"), immutable values transformed by consumption, and typestate for pipelines
   (a stage's output type is proof its checks passed; illegal states are unrepresentable). Push every
   law as far up the enforcement ladder as it can go: compiler > constructor > test.
+- **The type graph is the world model** (crate docs in `src/lib.rs` are its artifact): every new or
+  reshaped type is minted against the whole ontology — one name per concept, one concept per name —
+  never against the convenience of a single file.

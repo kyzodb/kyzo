@@ -32,11 +32,11 @@ use std::collections::BTreeMap;
 use proptest::prelude::*;
 
 use crate::data::memcmp::MemCmpEncoder;
-use crate::data::tuple::{RelationId, Tuple, TupleT};
+use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
 use crate::data::value::{DataValue, JsonData, Num, Validity, ValidityTs, Vector};
 use crate::storage::backup::{dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
-use crate::storage::{Storage, StoreTx};
+use crate::storage::{ReadTx, Storage, WriteTx};
 
 // ---------- encoding laws ----------
 
@@ -123,8 +123,15 @@ fn corpus() -> Vec<DataValue> {
         }),
         DataValue::Bot,
     ];
-    // Nested collections.
-    c.push(DataValue::List(vec![c[40].clone(), c[38].clone()]));
+    // Nested collections — bound by name so corpus insertions can't silently
+    // change which values get nested.
+    let nested_set = DataValue::Set(
+        [DataValue::Num(Num::Int(1)), DataValue::Num(Num::Int(2))]
+            .into_iter()
+            .collect(),
+    );
+    let nested_list = DataValue::List(vec![DataValue::Num(Num::Int(1))]);
+    c.push(DataValue::List(vec![nested_set, nested_list]));
     c
 }
 
@@ -234,7 +241,7 @@ fn kv_contract_matches_model() {
     // A deterministic mixed workload: puts, overwrites, deletes, a range
     // delete, across three commits.
     for round in 0u32..3 {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         for i in 0..40u32 {
             let n = (i * 7 + round * 13) % 50;
             let k = format!("k{n:03}").into_bytes();
@@ -260,7 +267,7 @@ fn kv_contract_matches_model() {
         tx.commit().unwrap();
     }
 
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     let got: Vec<_> = tx.total_scan().map(|r| r.unwrap()).collect();
     let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     assert_eq!(got, want, "store diverged from the model oracle");
@@ -285,12 +292,12 @@ fn mvcc_conflict_and_discard() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"counter", b"0").unwrap();
         tx.commit().unwrap();
     }
-    let mut tx1 = db.transact(true).unwrap();
-    let mut tx2 = db.transact(true).unwrap();
+    let mut tx1 = db.write_tx().unwrap();
+    let mut tx2 = db.write_tx().unwrap();
     assert_eq!(tx1.get(b"counter").unwrap(), Some(b"0".to_vec()));
     assert_eq!(tx2.get(b"counter").unwrap(), Some(b"0".to_vec()));
     tx1.put(b"counter", b"1").unwrap();
@@ -300,7 +307,7 @@ fn mvcc_conflict_and_discard() {
         tx2.commit().is_err(),
         "second writer read a concurrently-modified key and must abort"
     );
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     assert_eq!(
         tx.get(b"counter").unwrap(),
         Some(b"1".to_vec()),
@@ -312,9 +319,9 @@ fn mvcc_conflict_and_discard() {
 fn read_your_own_writes_and_snapshot_isolation() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let reader_before = db.transact(false).unwrap();
+    let reader_before = db.read_tx().unwrap();
 
-    let mut w = db.transact(true).unwrap();
+    let mut w = db.write_tx().unwrap();
     w.put(b"x", b"1").unwrap();
     assert_eq!(w.get(b"x").unwrap(), Some(b"1".to_vec()), "RYOW");
     assert!(w.exists(b"x").unwrap());
@@ -323,7 +330,7 @@ fn read_your_own_writes_and_snapshot_isolation() {
     // A snapshot opened before the write never sees it.
     assert_eq!(reader_before.get(b"x").unwrap(), None, "snapshot isolation");
     // A snapshot opened after does.
-    let reader_after = db.transact(false).unwrap();
+    let reader_after = db.read_tx().unwrap();
     assert_eq!(reader_after.get(b"x").unwrap(), Some(b"1".to_vec()));
 }
 
@@ -332,18 +339,18 @@ fn del_range_kills_own_writes_too() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"k1", b"1").unwrap();
         tx.put(b"k2", b"2").unwrap();
         tx.commit().unwrap();
     }
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     tx.put(b"k3", b"3").unwrap();
     tx.put(b"z-outside", b"stays").unwrap();
     tx.del_range(b"k0", b"k9").unwrap();
     tx.commit().unwrap();
 
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     assert_eq!(tx.get(b"k1").unwrap(), None);
     assert_eq!(tx.get(b"k2").unwrap(), None);
     assert_eq!(tx.get(b"k3").unwrap(), None, "own writes in range die too");
@@ -352,7 +359,7 @@ fn del_range_kills_own_writes_too() {
 
 // ---------- time travel: seek-based scan vs naive oracle ----------
 
-fn vld_key(rel: RelationId, name: &str, ts: i64, assert: bool) -> Vec<u8> {
+fn vld_key(rel: RelationId, name: &str, ts: i64, assert: bool) -> EncodedKey {
     let tuple: Tuple = vec![
         DataValue::Str(name.into()),
         DataValue::Validity(Validity {
@@ -404,7 +411,7 @@ fn time_travel_matches_naive_oracle() {
     let rel = RelationId::new(7);
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     for (name, ts, assert) in history {
         tx.put(&vld_key(rel, name, *ts, *assert), b"").unwrap();
     }
@@ -412,7 +419,7 @@ fn time_travel_matches_naive_oracle() {
 
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().raw_encode().to_vec();
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
             .range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(at)))
@@ -443,11 +450,11 @@ fn time_travel_sees_own_writes() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(&vld_key(rel, "a", 1, true), b"").unwrap();
         tx.commit().unwrap();
     }
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     tx.put(&vld_key(rel, "b", 2, true), b"").unwrap();
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().raw_encode().to_vec();
@@ -468,7 +475,7 @@ fn time_travel_sees_own_writes() {
 fn backup_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let src = new_fjall_storage(dir.path().join("src")).unwrap();
-    let mut tx = src.transact(true).unwrap();
+    let mut tx = src.write_tx().unwrap();
     for i in 0..100u32 {
         tx.put(
             format!("key-{i:04}").as_bytes(),
@@ -483,9 +490,9 @@ fn backup_round_trip() {
     let dst = new_fjall_storage(dir.path().join("dst")).unwrap();
     restore_storage(&dst, &dump).unwrap();
 
-    let ta = src.transact(false).unwrap();
+    let ta = src.read_tx().unwrap();
     let a: Vec<_> = ta.total_scan().map(|r| r.unwrap()).collect();
-    let tb = dst.transact(false).unwrap();
+    let tb = dst.read_tx().unwrap();
     let b: Vec<_> = tb.total_scan().map(|r| r.unwrap()).collect();
     assert_eq!(a.len(), 100);
     assert_eq!(a, b, "restored store must equal the source");
@@ -500,12 +507,12 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
     let rel = RelationId::new(7);
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     tx.put(&vld_key(rel, "a", 1, true), b"").unwrap();
     tx.put(&vld_key(rel, "z", i64::MIN, false), b"").unwrap();
     tx.commit().unwrap();
 
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     let got: Vec<String> = tx
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
@@ -526,11 +533,11 @@ fn skip_scan_hit_at_min_ts_terminates() {
     let rel = RelationId::new(7);
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     tx.put(&vld_key(rel, "a", i64::MIN, true), b"").unwrap();
     tx.commit().unwrap();
 
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     let got: Vec<Tuple> = tx
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
@@ -593,14 +600,14 @@ fn format_version_stamp_and_mismatch() {
     let path = dir.path().join("db");
     {
         let db = new_fjall_storage(&path).unwrap();
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"k", b"v").unwrap();
         tx.commit().unwrap();
     }
     // Reopen: same version, must succeed and see the data.
     {
         let db = new_fjall_storage(&path).unwrap();
-        let tx = db.transact(false).unwrap();
+        let tx = db.read_tx().unwrap();
         assert_eq!(tx.get(b"k").unwrap(), Some(b"v".to_vec()));
     }
     // Tamper the version stamp, reopen must fail loudly.
@@ -635,19 +642,19 @@ fn crash_consistency_process_abort() {
         let db = new_fjall_storage(&dir).unwrap();
         // First key: committed WITHOUT sync — tests the Buffer durability
         // claim itself (commit alone must survive a process crash).
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"committed", b"survives").unwrap();
         tx.commit().unwrap();
         // Second key: committed and fsynced.
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"synced", b"survives-power-cut-too").unwrap();
         tx.commit().unwrap();
         db.sync().unwrap();
         // Third key: the per-transaction durable commit.
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"durable", b"per-tx-fsync").unwrap();
         tx.commit_durable().unwrap();
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"uncommitted", b"must-vanish").unwrap();
         // No commit. Die hard: no destructors, no flushes.
         std::process::abort();
@@ -671,7 +678,7 @@ fn crash_consistency_process_abort() {
     );
 
     let db = new_fjall_storage(dir.path().join("db")).unwrap();
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     assert_eq!(
         tx.get(b"committed").unwrap(),
         Some(b"survives".to_vec()),
@@ -700,14 +707,14 @@ fn crash_consistency_process_abort() {
 fn restore_refuses_nonempty_target() {
     let dir = tempfile::tempdir().unwrap();
     let src = new_fjall_storage(dir.path().join("src")).unwrap();
-    let mut tx = src.transact(true).unwrap();
+    let mut tx = src.write_tx().unwrap();
     tx.put(b"a", b"1").unwrap();
     tx.commit().unwrap();
     let dump = dir.path().join("d.kyzo");
     dump_storage(&src, &dump).unwrap();
 
     let dst = new_fjall_storage(dir.path().join("dst")).unwrap();
-    let mut tx = dst.transact(true).unwrap();
+    let mut tx = dst.write_tx().unwrap();
     tx.put(b"existing", b"data").unwrap();
     tx.commit().unwrap();
     assert!(
@@ -717,7 +724,7 @@ fn restore_refuses_nonempty_target() {
     // A fresh store takes it fine.
     let fresh = new_fjall_storage(dir.path().join("fresh")).unwrap();
     restore_storage(&fresh, &dump).unwrap();
-    let tx = fresh.transact(false).unwrap();
+    let tx = fresh.read_tx().unwrap();
     assert_eq!(tx.get(b"a").unwrap(), Some(b"1".to_vec()));
 }
 
@@ -735,7 +742,7 @@ fn batch_put_crosses_chunk_boundary() {
         ))
     });
     db.batch_put(Box::new(iter)).unwrap();
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     assert_eq!(tx.range_count(b"k", b"l").unwrap(), n as usize);
     assert_eq!(tx.get(b"k00039999").unwrap(), Some(b"v39999".to_vec()));
 }
@@ -755,7 +762,7 @@ fn concurrent_writers_across_threads() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"counter", b"0").unwrap();
         tx.commit().unwrap();
     }
@@ -768,7 +775,7 @@ fn concurrent_writers_across_threads() {
             s.spawn(move || {
                 // Disjoint writes: must never conflict.
                 for i in 0..OPS {
-                    let mut tx = db.transact(true).unwrap();
+                    let mut tx = db.write_tx().unwrap();
                     tx.put(format!("t{t}-k{i}").as_bytes(), b"x").unwrap();
                     tx.commit()
                         .unwrap_or_else(|e| panic!("disjoint writers must not conflict: {e}"));
@@ -776,7 +783,7 @@ fn concurrent_writers_across_threads() {
                 // Contended increments: retry on conflict until applied.
                 for _ in 0..OPS {
                     loop {
-                        let mut tx = db.transact(true).unwrap();
+                        let mut tx = db.write_tx().unwrap();
                         let cur: u64 = String::from_utf8(tx.get(b"counter").unwrap().unwrap())
                             .unwrap()
                             .parse()
@@ -792,7 +799,7 @@ fn concurrent_writers_across_threads() {
         }
     });
 
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     let total: u64 = String::from_utf8(tx.get(b"counter").unwrap().unwrap())
         .unwrap()
         .parse()
@@ -816,7 +823,8 @@ fn concurrent_writers_across_threads() {
 fn concurrency_bounds_are_compiler_checked() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<crate::storage::fjall::FjallStorage>();
-    assert_send_sync::<crate::storage::fjall::FjallTx>();
+    assert_send_sync::<crate::storage::fjall::FjallReadTx>();
+    assert_send_sync::<crate::storage::fjall::FjallWriteTx>();
 }
 
 // ---------- value-side decoding laws ----------
@@ -854,11 +862,11 @@ fn del_range_chunk_boundaries() {
         let db = new_fjall_storage(dir.path()).unwrap();
         let iter = (0..n).map(|i| Ok((format!("k{i:08}").into_bytes(), b"v".to_vec())));
         db.batch_put(Box::new(iter)).unwrap();
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"z-survivor", b"x").unwrap();
         tx.del_range(b"k", b"l").unwrap();
         tx.commit().unwrap();
-        let tx = db.transact(false).unwrap();
+        let tx = db.read_tx().unwrap();
         assert_eq!(tx.range_count(b"k", b"l").unwrap(), 0, "n={n}: all deleted");
         assert!(
             tx.exists(b"z-survivor").unwrap(),
@@ -874,10 +882,10 @@ fn del_range_chunk_boundaries() {
 fn range_reads_get_phantom_protection() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx1 = db.transact(true).unwrap();
+    let mut tx1 = db.write_tx().unwrap();
     let seen: usize = tx1.range_scan(b"r", b"s").count();
     assert_eq!(seen, 0);
-    let mut tx2 = db.transact(true).unwrap();
+    let mut tx2 = db.write_tx().unwrap();
     tx2.put(b"r-phantom", b"x").unwrap();
     tx2.commit().unwrap();
     tx1.put(b"elsewhere", b"y").unwrap();
@@ -896,7 +904,7 @@ fn live_iterator_is_snapshot_stable() {
     let iter = (0..100u32).map(|i| Ok((format!("k{i:04}").into_bytes(), b"v".to_vec())));
     db.batch_put(Box::new(iter)).unwrap();
 
-    let reader = db.transact(false).unwrap();
+    let reader = db.read_tx().unwrap();
     let mut scan = reader.total_scan();
     let mut count = 0;
     for _ in 0..50 {
@@ -904,7 +912,7 @@ fn live_iterator_is_snapshot_stable() {
         count += 1;
     }
     // A writer lands 100 more keys mid-scan.
-    let mut w = db.transact(true).unwrap();
+    let mut w = db.write_tx().unwrap();
     for i in 100..200u32 {
         w.put(format!("k{i:04}").as_bytes(), b"v").unwrap();
     }
@@ -930,7 +938,7 @@ fn backup_edge_cases() {
     dump_storage(&empty, &dump).unwrap();
     let fresh = new_fjall_storage(dir.path().join("fresh")).unwrap();
     restore_storage(&fresh, &dump).unwrap();
-    let tx = fresh.transact(false).unwrap();
+    let tx = fresh.read_tx().unwrap();
     assert!(tx.total_scan().next().is_none());
 
     // Huge length prefix: error, not an allocation abort.
@@ -961,7 +969,7 @@ fn backup_edge_cases() {
 fn degenerate_ranges_pinned() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let mut tx = db.transact(true).unwrap();
+    let mut tx = db.write_tx().unwrap();
     tx.put(b"m", b"1").unwrap();
     assert_eq!(
         tx.range_scan(b"z", b"a").count(),
@@ -971,7 +979,7 @@ fn degenerate_ranges_pinned() {
     assert_eq!(tx.range_scan(b"m", b"m").count(), 0, "empty range is empty");
     tx.del_range(b"z", b"a").unwrap();
     tx.commit().unwrap();
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     assert!(tx.exists(b"m").unwrap());
 }
 
@@ -991,12 +999,12 @@ fn conflict_is_typed_and_options_and_stats_work() {
     )
     .unwrap();
     {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"k", b"0").unwrap();
         tx.commit().unwrap();
     }
-    let mut tx1 = db.transact(true).unwrap();
-    let mut tx2 = db.transact(true).unwrap();
+    let mut tx1 = db.write_tx().unwrap();
+    let mut tx2 = db.write_tx().unwrap();
     let _ = tx1.get(b"k").unwrap();
     let _ = tx2.get(b"k").unwrap();
     tx1.put(b"k", b"1").unwrap();
@@ -1025,7 +1033,7 @@ fn verify_storage_reports_injected_corruption() {
     let path = dir.path().join("db");
     {
         let db = new_fjall_storage(&path).unwrap();
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         for i in 0..50i64 {
             let k = encode_tuple_key(7, &[DataValue::Num(Num::Int(i))]);
             tx.put(&k, b"").unwrap();
@@ -1065,7 +1073,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
-        let mut tx = db.transact(true).unwrap();
+        let mut tx = db.write_tx().unwrap();
         tx.put(b"n", b"0").unwrap();
         tx.commit().unwrap();
     }
@@ -1077,7 +1085,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
             s.spawn(move || {
                 for _ in 0..OPS {
                     retry_on_conflict(1_000, || {
-                        let mut tx = db.transact(true)?;
+                        let mut tx = db.write_tx()?;
                         let cur: u64 = String::from_utf8(tx.get(b"n")?.unwrap())
                             .unwrap()
                             .parse()
@@ -1090,10 +1098,24 @@ fn retry_on_conflict_reaches_completion_under_contention() {
             });
         }
     });
-    let tx = db.transact(false).unwrap();
+    let tx = db.read_tx().unwrap();
     let total: u64 = String::from_utf8(tx.get(b"n").unwrap().unwrap())
         .unwrap()
         .parse()
         .unwrap();
     assert_eq!(total, (THREADS * OPS) as u64);
+}
+
+/// Format-version stamps accept only canonical spellings: "01" and "+1"
+/// parse numerically but are bytes no version of this code ever wrote.
+#[test]
+fn format_version_rejects_noncanonical_stamps() {
+    use crate::storage::FormatVersion;
+    assert_eq!(FormatVersion::parse(b"1").unwrap(), FormatVersion::CURRENT);
+    for bad in [&b"01"[..], b"+1", b" 1", b"1 ", b""] {
+        assert!(
+            FormatVersion::parse(bad).is_err(),
+            "must reject non-canonical stamp {bad:?}"
+        );
+    }
 }

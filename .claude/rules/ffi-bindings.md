@@ -20,6 +20,9 @@ toolchain:
 - `kyzo-lib-wasm` — `wasm-bindgen`
 
 - None of these are covered by the core CI. A green core build says nothing about them.
+- The boundary is typed on both sides: kernel/engine errors are typed values (retryable conflict,
+  fatal corruption, resource limits) and each binding maps them to the host language's native error
+  types — never to strings a caller must parse.
 - Unsafe/FFI changes need an explicit invariant review: ownership and lifetimes across the boundary,
   null / UB, and foreign-error-to-`Result` translation.
 

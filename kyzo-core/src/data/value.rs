@@ -106,7 +106,9 @@ impl PartialOrd for RegexWrapper {
     }
 }
 
-/// Timestamp part of validity
+/// The temporal coordinate of a validity claim: microseconds since epoch,
+/// wrapped in `Reverse` so newer moments sort first among a fact's versions
+/// — which is what lets an as-of seek land on the newest eligible version.
 #[derive(
     Copy,
     Clone,
@@ -121,7 +123,9 @@ impl PartialOrd for RegexWrapper {
 )]
 pub struct ValidityTs(pub Reverse<i64>);
 
-/// Validity for time travel
+/// A time-stamped existence claim — the last slot of a versioned fact's key.
+/// Assertion states the fact exists from this moment; retraction is a
+/// first-class assertion of absence, not a deletion.
 #[derive(
     Copy,
     Clone,
@@ -164,6 +168,7 @@ pub fn current_validity() -> ValidityTs {
     ValidityTs(Reverse(ts_micros))
 }
 
+#[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
 pub(crate) const MAX_VALIDITY_TS: ValidityTs = ValidityTs(Reverse(i64::MAX));
 pub(crate) const TERMINAL_VALIDITY: Validity = Validity {
     timestamp: ValidityTs(Reverse(i64::MIN)),
@@ -178,7 +183,10 @@ pub enum VecElementType {
     F64,
 }
 
-/// A Value in the database
+/// The atom of meaning: every datum in the system is one of these thirteen
+/// kinds. Totally ordered — and the declaration order below IS the
+/// cross-type order, mirrored exactly by the on-disk tag bytes (see
+/// `data/memcmp.rs`); reordering variants is a format migration.
 #[derive(
     Clone, PartialEq, Eq, PartialOrd, Ord, serde_derive::Deserialize, serde_derive::Serialize, Hash,
 )]
@@ -363,12 +371,14 @@ impl Vector {
             Vector::F64(v) => v.is_empty(),
         }
     }
+    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn el_type(&self) -> VecElementType {
         match self {
             Vector::F32(_) => VecElementType::F32,
             Vector::F64(_) => VecElementType::F64,
         }
     }
+    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn get_hash(&self) -> impl AsRef<[u8]> {
         let mut hasher = Sha256::new();
         match self {
@@ -718,6 +728,7 @@ impl DataValue {
             _ => None,
         }
     }
+    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn get_non_neg_int(&self) -> Option<u64> {
         match self {
             DataValue::Num(n) => n
@@ -740,9 +751,11 @@ impl DataValue {
             _ => None,
         }
     }
+    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn uuid(uuid: Uuid) -> Self {
         Self::Uuid(UuidWrapper(uuid))
     }
+    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn get_uuid(&self) -> Option<Uuid> {
         match self {
             DataValue::Uuid(UuidWrapper(uuid)) => Some(*uuid),
@@ -752,4 +765,5 @@ impl DataValue {
     }
 }
 
+#[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
 pub(crate) const LARGEST_UTF_CHAR: char = '\u{10ffff}';

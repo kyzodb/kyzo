@@ -15,6 +15,7 @@ Gate high-blast-radius changes on the right reviewer before finalizing.
 | `query/**` (Datalog engine) | `query-semantics-reviewer` |
 | any `kyzo-lib-*` binding or `unsafe` | `unsafe-ffi-reviewer` |
 | build/clippy/test output to interpret | `cargo-diagnostics-triager` |
+| any diff minting or reshaping a public type | check it against the world model (`kyzo-core/src/lib.rs` crate docs): one name per concept, one concept per name, constructors prove invariants, nothing descends the enforcement ladder |
 
 ## Steps
 1. Identify which zones the diff touches (`git diff --stat`).

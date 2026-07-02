@@ -23,12 +23,15 @@ toolchain.
    verbatim**; add ours alongside, never overwrite.
 4. **Build with the binding's own toolchain** (CPython, JVM, Node, Swift, wasm target). Quote the real
    build output; the core CI does not cover this.
-5. **Test** with the binding's own test harness, and exercise at least one real query round-trip through
+5. **Translate typed errors, never strings**: the kernel's typed errors (`ConflictError` = retryable,
+   corruption = fatal, limit-exceeded = resource) map to the language's native exception/error types so
+   host code can branch on them; string-matching across an FFI boundary is a defect.
+6. **Test** with the binding's own test harness, and exercise at least one real query round-trip through
    the FFI boundary.
-6. **Unsafe-invariants review is gating**: dispatch the `unsafe-ffi-reviewer` agent on the diff
+7. **Unsafe-invariants review is gating**: dispatch the `unsafe-ffi-reviewer` agent on the diff
    (ownership/lifetimes across the boundary, null/UB, foreign-error-to-`Result` translation) and resolve
    or consciously accept every finding.
-7. **Draft the publish, do not publish.** Package artifacts and release steps are prepared and shown;
+8. **Draft the publish, do not publish.** Package artifacts and release steps are prepared and shown;
    publishing to PyPI/Maven/npm/etc. waits for an explicit go from the maintainer.
 
 ## Anti-avoidance

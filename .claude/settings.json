@@ -5,6 +5,21 @@
     "sessionUrl": false
   },
   "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(cargo-deny:*)",
+      "Bash(cargo-vet:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(rustup:*)",
+      "Bash(shellcheck:*)",
+      "Bash(python3:*)",
+      "Bash(jq:*)",
+      "Bash(scripts/*)",
+      "Bash(.claude/hooks/*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

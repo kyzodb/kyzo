@@ -27,6 +27,12 @@ Every claim about the code is backed by evidence produced in this session, or it
     cargo build --workspace              # whole-workspace (the honest scope)
     cargo tree  -p kyzo -e normal,build  # dependency-graph claims (incl. build deps)
 
+## Exit codes, not pipe output
+A command piped into grep/tail reports the LAST pipe stage's exit code: `cargo clippy | tail` looks
+green while clippy failed. Check the command's own exit code explicitly (e.g. `${pipestatus[1]}`) for
+every gating claim. A green that is not exit-code-verified is not a green — this exact failure has
+already produced a false commit on this project.
+
 ## Reporting
 
 - Quote the actual command and its result (or the failing tail of it). Never summarize a failure as a

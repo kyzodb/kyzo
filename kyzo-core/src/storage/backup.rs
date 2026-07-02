@@ -22,7 +22,7 @@ use std::path::Path;
 
 use miette::{IntoDiagnostic, Result, bail, miette};
 
-use crate::storage::{FORMAT_VERSION, Storage, StoreTx};
+use crate::storage::{FormatVersion, ReadTx, Storage};
 
 const MAGIC: &[u8; 8] = b"KYZODMP1";
 
@@ -33,10 +33,11 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     w.write_all(MAGIC).into_diagnostic()?;
     // The dump carries the store's on-disk format version: a dump of one
     // format can never silently restore into a store of another.
-    w.write_all(&(FORMAT_VERSION.len() as u64).to_be_bytes())
+    let version = FormatVersion::CURRENT.as_bytes();
+    w.write_all(&(version.len() as u64).to_be_bytes())
         .into_diagnostic()?;
-    w.write_all(FORMAT_VERSION).into_diagnostic()?;
-    let tx = db.transact(false)?;
+    w.write_all(&version).into_diagnostic()?;
+    let tx = db.read_tx()?;
     for pair in tx.total_scan() {
         let (k, v) = pair?;
         w.write_all(&(k.len() as u64).to_be_bytes())
@@ -60,7 +61,7 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
 /// is fsynced before this returns.
 pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     {
-        let tx = db.transact(false)?;
+        let tx = db.read_tx()?;
         if tx.total_scan().next().is_some() {
             bail!("restore target is not empty: restore only into a fresh store");
         }
@@ -75,11 +76,11 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     let Some((version, _)) = read_len_prefixed(&mut r)? else {
         bail!("truncated dump: missing format version");
     };
-    if version != FORMAT_VERSION {
+    let found = FormatVersion::parse(&version)?;
+    if found != FormatVersion::CURRENT {
         bail!(
-            "dump format version mismatch: dump is v{}, this build reads v{}",
-            String::from_utf8_lossy(&version),
-            String::from_utf8_lossy(FORMAT_VERSION),
+            "dump format version mismatch: dump is {found}, this build reads {}",
+            FormatVersion::CURRENT,
         );
     }
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());

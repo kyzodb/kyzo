@@ -13,6 +13,9 @@ first. For the given diff, verify:
 - Ownership/lifetime correctness across the Rust to foreign boundary (`kyzo-lib-*`): no use-after-free,
   double-free, or dangling pointer passed across.
 - Foreign errors/exceptions are translated to `Result`, not swallowed or turned into UB.
+- Outbound errors stay typed: kernel/engine typed errors (retryable ConflictError, fatal corruption,
+  resource limits) map to the host language's native error types — flag any binding that flattens them
+  to strings a caller must parse.
 - Reminder: the bindings are NOT in core CI, and each needs its own toolchain to build.
 
 Return findings ranked by severity with `file:line` anchors and a concrete UB/leak scenario for each. If
