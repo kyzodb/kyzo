@@ -19,19 +19,39 @@ similarity, text, near-duplicates, and historical state answer together, in one 
 transaction. A vector search is a join. A graph traversal is recursion. A read at a past instant is a
 query parameter.
 
-The point is not "vector search inside a database." Every database has vector search now. The point is
-that retrieval becomes composable and auditable: a semantic hit joins to structured facts, walks a
-graph, respects time, and can explain why the answer exists. And it does all of this deterministically;
-the same query over the same facts returns the same answer, and fails with the same refusal, every
-time, on every machine.
+The point is not vector search inside a database. Vector search is becoming table stakes. The point is
+that retrieval becomes composable and auditable: a semantic hit can join to structured facts, walk a
+graph, respect time, and explain why the answer exists. The same query over the same facts returns the
+same answer, and fails with the same refusal, every time.
 
 > LLMs gave software the ability to think out loud. KyzoDB exists so that what such systems come to
 > know can be held: exactly, durably, explainably, and identically every time it's asked for. Not the
 > mind; the ground the mind stands on.
 
-The technical reason this works: the engine reduces every access path to ordered scans over one
-transactional storage substrate. The product reason it matters: retrieval you can trust, reproduce, and
-inspect, from one database instead of five.
+The technical reason this works is that every access path reduces to ordered reads over one
+transactional storage substrate. The product reason it matters is retrieval you can trust, reproduce,
+and inspect, from one database instead of five.
+
+```mermaid
+flowchart LR
+    subgraph five["The usual stack: five copies of the truth"]
+        direction TB
+        A1([your product]) --> P[(facts)]
+        A1 --> V[(vectors)]
+        A1 --> G[(graph)]
+        A1 --> S[(text)]
+        A1 --> H[(history)]
+        P <-. sync .-> V
+        V <-. sync .-> G
+        G <-. sync .-> S
+        S <-. sync .-> H
+    end
+    subgraph one["KyzoDB: one copy, one language, one transaction"]
+        direction TB
+        A2([your product]) -- one query --> K[("facts + graph + vectors<br/>+ text + history")]
+    end
+    five ==> one
+```
 
 ## Retrieval is one act
 
@@ -64,7 +84,7 @@ A nearest-neighbour search binds with `~` and unifies like any other relation. J
 `cites`, one query performs semantic recall and then follows the relationships of whatever it finds:
 
 ```
-?[hit, title, cited] := ~doc:emb{id: hit, title | query: q, k: 2, ef: 20, bind_distance: dist},
+?[hit, title, cited] := ~doc:emb{id: hit, title | query: q, k: 2, ef: 20},
                         *cites{from: hit, to: cited},
                         q = vec([0.12, 0.88])
 ```
@@ -80,7 +100,7 @@ Full-text and near-duplicate search take the same shape. A full-text index over 
 ::fts create doc:text {extractor: title, tokenizer: Simple, filters: [Lowercase, Stemmer('English'), Stopwords('en')]}
 ```
 
-answers `~doc:text{id, title | query: 'graph', k: 5, bind_score: s}`. A MinHash-LSH index for
+answers `~doc:text{id, title | query: 'graph', k: 5}`. A MinHash-LSH index for
 near-duplicates:
 
 ```
@@ -97,6 +117,10 @@ The query language is Datalog, in a dialect called **KyzoScript**. Datalog expre
 relational algebra can, and it makes recursion a first-class, composable construct rather than SQL's
 bolted-on `WITH RECURSIVE`. Rules compose like functions: you build a query piece by piece, and
 decomposition costs nothing.
+
+On the learning curve, honestly: if you can write a SQL join, the rule form below is a day's
+acclimation, and the payoff arrives the first time a query that would have been an eleven-line
+recursive CTE is three lines that read top to bottom.
 
 Here `*route` is a relation of airport-to-airport routes, and `FRA` is Frankfurt. Every airport
 reachable from Frankfurt, by any number of stops, is three lines:
@@ -145,8 +169,9 @@ These are the properties that separate a component you build on from a component
 treats them as capabilities and engineers them deliberately:
 
 - **Determinism as a law.** The same facts, the same query, and the same execution budget produce
-  identical answers, and identical refusals, on every run, at any thread count, on any machine. Not
-  "usually": it is a stated invariant with a test suite whose job is to break it.
+  identical answers, and identical refusals, on every run, at any thread count, on any machine. This
+  is what makes a retrieval layer testable: fixture data and a query assert an exact answer in CI
+  forever, and a production incident replays exactly.
 - **Refusals that explain themselves.** Where the query is wrong, the engine answers with a typed error
   naming the reason and pointing at the exact span of the script: never a panic, never a shrug. An
   error message is an interface, and increasingly its reader is a program.
@@ -159,7 +184,25 @@ treats them as capabilities and engineers them deliberately:
 
 ## One substrate, no ballast
 
-The architecture is three layers, each calling only into the one below.
+The architecture is three layers, each calling only into the one below. The whole system rests on one
+idea: every retrieval modality, however exotic it looks at the query level, becomes an ordered range
+scan by the time it reaches storage.
+
+```mermaid
+flowchart TD
+    Q["KyzoScript query"] --> C["compiled to relational algebra<br/>stratified, semi-naive, magic sets"]
+    C --> P1["relational<br/>scan"]
+    C --> P2["graph<br/>step"]
+    C --> P3["HNSW<br/>probe"]
+    C --> P4["FTS / LSH<br/>lookup"]
+    C --> P5["as-of<br/>read"]
+    P1 --> MC
+    P2 --> MC
+    P3 --> MC
+    P4 --> MC
+    P5 --> MC
+    MC["memcomparable key encoding<br/>byte order = semantic order"] --> KV[("fjall<br/>ordered, transactional, pure-Rust LSM")]
+```
 
 **Storage.** A `Storage` trait defines an ordered key-value store with range scans, MVCC commit
 semantics, and validity-in-key as-of reads. The implementation is [`fjall`](https://github.com/fjall-rs/fjall),
@@ -184,27 +227,72 @@ compiler fails the build.
 
 ## Proven, not promised
 
-A database earns the right to hold what a system knows by being hostile to its own bugs. KyzoDB's
-development runs on that discipline:
+A database earns the right to hold what a system knows by being hostile to its own bugs. This is not a
+methodology statement; the artifacts are in the tree now.
 
-- **A differential oracle**, an independent, sealed implementation of the query semantics, judges the
-  engine's answers on generated workloads, so correctness is checked against an adversary, not against
-  the implementation's opinion of itself.
+The query engine's front door (`kyzo-core/src/query/mod.rs`) opens with **seven numbered laws**, each
+documented with the mechanism that enforces it: answer correctness (optimized evaluation must equal the
+naive fixpoint of the logic program), stratification safety (unsound programs are refused, never
+mis-answered), termination, rule safety, total input handling (no query text and no stored bytes may
+panic the process), concurrency liveness, and operator coherence (an index search is a relation, full
+stop).
+
+The centerpiece of the enforcement is differential: the optimized engine is never trusted on its own
+testimony.
+
+```mermaid
+flowchart LR
+    GEN["generated programs<br/>and workloads"] --> ENG["optimized engine<br/>semi-naive + magic sets"]
+    GEN --> ORC["reference oracle<br/>naive, obviously correct,<br/>test builds only"]
+    ENG --> CMP{"byte-identical<br/>answer sets?"}
+    ORC --> CMP
+    CMP -- yes --> PASS["law holds"]
+    CMP -- no --> FAIL["defect found,<br/>pinned as a regression test forever"]
+```
+
+The rest of the machinery:
+
+- **A reference oracle** (`query/laws.rs`): an 1,800-line executable statement of stratified Datalog
+  semantics, deliberately naive so it is obviously correct, compiled only into test builds. Its stated
+  doctrine: *the oracle is judge, never production code.*
+- **The determinism law as a test.** The evaluator's test suite asserts byte-identity of answers and
+  refusals across thread counts today, not aspirationally.
+- **Deterministic simulation testing** (`storage/sim.rs`): a second implementation of the storage
+  contract in which thread interleavings, injected faults, crashes, and power cuts are all a pure
+  function of one `u64` seed. A failing campaign prints its seed; rerunning replays the failure
+  exactly.
 - **Mutation testing** proves the test suites bite: a guarantee whose tests survive deliberate sabotage
   of the code under test is not a guarantee.
-- **Deterministic simulation testing** at the storage seam injects faults, spurious conflicts, and
-  adversarial schedules under reproducible seeds, then replays any failure exactly.
-- **Generative fuzzing** of the query language assumes a caller that is brilliant, adversarial, and
-  unbounded: the engine must never panic, and every refusal must name its reason.
-- Dozens of defects inherited from the fork base, including silent-wrong-answer bugs in recursive
-  evaluation, have been found this way, fixed, and pinned with regression tests.
+- **Generative fuzzing** of the parser and query language assumes a caller that is brilliant,
+  adversarial, and unbounded: the engine must never panic, and every refusal must name its reason and
+  its span.
+- **A defect ledger.** Dozens of defects inherited from the fork base, including silent-wrong-answer
+  bugs in recursive evaluation, were found by these instruments, fixed, and pinned with regression
+  tests rather than carried forward.
 
 Performance numbers will be published the same way: with methodology, hardware, seeds, and the losing
 runs, against the standard public yardsticks for each capability. Receipts, or it didn't happen.
 
 ## Using KyzoDB
 
-KyzoDB is a Rust workspace on stable Rust.
+It runs embedded: in your process, like SQLite, no server and no setup. Open a database and query it in
+two lines:
+
+```rust
+use kyzo::DbInstance;
+
+let db = DbInstance::new("mem", "", Default::default())?;
+let result = db.run_default("?[reachable] := *route{fr: 'FRA', to: reachable}")?;
+```
+
+Swap `"mem"` for the persistent engine and a path when you want durability; run it client-server when
+you want shared access and more concurrency. To depend on it from a Rust project:
+
+```
+kyzo = { git = "https://github.com/kyzodb/kyzo", package = "kyzo" }
+```
+
+To build the workspace itself (stable Rust, nothing else):
 
 ```
 git clone https://github.com/kyzodb/kyzo
@@ -213,16 +301,17 @@ cargo build -p kyzo --release
 cargo test  -p kyzo --release
 ```
 
-To depend on it from a Rust project:
+Language bindings (C, Python, Java, Node, Swift, WASM, with Go, Clojure, and Android in separate repos)
+are being ported and published under KyzoDB; the [issues](https://github.com/kyzodb/kyzo/issues) track
+each one.
 
-```
-kyzo = { git = "https://github.com/kyzodb/kyzo", package = "kyzo" }
-```
+## What KyzoDB is not
 
-It runs embedded (in your process, like SQLite, no server and no setup) and client-server when you
-want shared access and more concurrency. Language bindings (C, Python, Java, Node, Swift, WASM, with
-Go, Clojure, and Android in separate repos) are being ported and published under KyzoDB; the
-[issues](https://github.com/kyzodb/kyzo/issues) track each one.
+Boundaries, stated plainly. KyzoDB is not where you put petabyte-scale analytics; columnar warehouses
+own that. It is not a distributed OLTP system; it scales like the excellent embedded engines do, not
+like a cluster. And if all you need is a key-value cache or a single denormalized table, this is more
+machine than the job requires. KyzoDB is for the case where one body of knowledge must answer as facts,
+as a graph, as similarity, as text, and as history, consistently and in one place.
 
 ## Status
 
