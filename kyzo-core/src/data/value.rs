@@ -154,7 +154,10 @@ impl From<(i64, bool)> for Validity {
 }
 
 /// The current time as a validity timestamp (microseconds since epoch).
-pub fn current_validity() -> ValidityTs {
+///
+/// A host clock before 1970 is an error, not an abort — the same policy the
+/// builtin `now()` applies (one clock, one policy).
+pub fn current_validity() -> miette::Result<ValidityTs> {
     #[cfg(target_arch = "wasm32")]
     compile_error!(
         "the wasm validity clock (js Date) lands with the wasm binding; \
@@ -163,12 +166,11 @@ pub fn current_validity() -> ValidityTs {
     let now = std::time::SystemTime::now();
     let ts_micros = now
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before 1970")
+        .map_err(|_| miette::miette!("host clock reports a time before 1970"))?
         .as_micros() as i64;
-    ValidityTs(Reverse(ts_micros))
+    Ok(ValidityTs(Reverse(ts_micros)))
 }
 
-#[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
 pub(crate) const MAX_VALIDITY_TS: ValidityTs = ValidityTs(Reverse(i64::MAX));
 pub(crate) const TERMINAL_VALIDITY: Validity = Validity {
     timestamp: ValidityTs(Reverse(i64::MIN)),
@@ -371,14 +373,12 @@ impl Vector {
             Vector::F64(v) => v.is_empty(),
         }
     }
-    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn el_type(&self) -> VecElementType {
         match self {
             Vector::F32(_) => VecElementType::F32,
             Vector::F64(_) => VecElementType::F64,
         }
     }
-    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn get_hash(&self) -> impl AsRef<[u8]> {
         let mut hasher = Sha256::new();
         match self {
@@ -728,7 +728,6 @@ impl DataValue {
             _ => None,
         }
     }
-    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn get_non_neg_int(&self) -> Option<u64> {
         match self {
             DataValue::Num(n) => n
@@ -751,11 +750,9 @@ impl DataValue {
             _ => None,
         }
     }
-    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn uuid(uuid: Uuid) -> Self {
         Self::Uuid(UuidWrapper(uuid))
     }
-    #[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
     pub(crate) fn get_uuid(&self) -> Option<Uuid> {
         match self {
             DataValue::Uuid(UuidWrapper(uuid)) => Some(*uuid),
@@ -765,5 +762,4 @@ impl DataValue {
     }
 }
 
-#[expect(dead_code)] // engine-era: rustc flags this line the moment the engine uses it
 pub(crate) const LARGEST_UTF_CHAR: char = '\u{10ffff}';

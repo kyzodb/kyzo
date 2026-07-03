@@ -1,0 +1,1664 @@
+/*
+ * Copyright 2022, The Cozo Project Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
+ * (MPL-2.0): the stratum walk runs over the landed tier's execution-ordered
+ * strata in *reverse* (the original stored strata already reversed and
+ * walked them front to back — the same logical direction, entry stratum
+ * first; see `magic_sets_rewrite` for why demand analysis must flow that
+ * way), and the collected output is un-reversed exactly once before minting
+ * [`StratifiedMagicProgram`]; the adornment phase returns a local
+ * [`AdornedProgram`] keyed by [`AdornedHead`] (Muggle or Magic *by type*),
+ * which turns the original's "at this point, rule_head must be Muggle or
+ * Magic, the remaining options are impossible" comment into structure; the
+ * entry exemption is structural (`SymbolKind::Entry`), not a seeded
+ * dummy-span `?` symbol; `disable_magic_rewrite` lives once on the tier,
+ * not copied into every stratum; the map-lookup and `mut_rules` `unwrap`s
+ * are typed internal errors; the `rule_idx`/`sup_idx` narrowing to `u16` is
+ * checked (silent wrap-around would merge distinct supplementary relations
+ * — extra join tuples, i.e. changed *results*, not just changed demand);
+ * time travel on a stored relation with no key columns is refused instead
+ * of panicking (`keys.last().unwrap()`); the transaction-facing schema
+ * lookups sit behind the [`StoredRelationSchemaSource`] seam (the mirror of
+ * `BodyNormalizer` in `data/program.rs` — the runtime's session transaction
+ * implements it when it lands); the index-search atom arms (HNSW/FTS/LSH)
+ * land with the index tier, which owns those `MagicAtom` variants;
+ * adornments are `Vec<bool>` (no `smallvec` dependency); the
+ * `exempt_aggr_rules_for_magic_sets` walk is re-homed from
+ * `NormalFormProgram` onto [`NormalFormStratum`], which is what the landed
+ * stratified tier stores. `InvalidTimeTravelScanning` and
+ * `NamedFieldNotFound` are declared here, their first port-order user; the
+ * original homed them in `query/ra.rs` and `query/logical.rs`, which should
+ * import them from here (or re-home them) when those files land.
+ */
+
+//! The magic-sets rewrite: demand-driven evaluation as a program transform.
+//!
+//! A bottom-up Datalog evaluator computes *every* fact of every rule, even
+//! when the query needs three of them. Magic sets fixes this by rewriting
+//! the program so that binding patterns flow from the entry downward: each
+//! demanded rule is *adorned* with which argument positions arrive bound
+//! ([`MagicSymbol::Magic`]), an *input* relation ([`MagicSymbol::Input`])
+//! carries the demanded binding tuples into it, and *supplementary*
+//! relations ([`MagicSymbol::Sup`]) carry the partial joins between body
+//! atoms so demand can be forwarded mid-rule (sideways information
+//! passing). Rules nobody demands are dropped.
+//!
+//! **The law this file lives under** (`query/mod.rs`, law 1 via the rule in
+//! `.claude/rules/query.md`): the rewrite may change only *demand* — which
+//! facts get computed — never *result semantics*. The rewritten program
+//! must produce exactly the same answer relation as the naive evaluation of
+//! the original; every deviation is a wrong-answers bug, not a performance
+//! bug. The differential harness against the naive oracle (`query/laws.rs`)
+//! is the standing enforcement; the tests here pin the transformation's
+//! structure rule by rule.
+//!
+//! The transformation is *visible internally and invisible at the
+//! boundary*: inside the engine, [`MagicSymbol`]'s variants carry the
+//! demand analysis in the type itself (a name proves which role its store
+//! plays), while at the public boundary a query's answers are indifferent
+//! to whether the rewrite ran at all (`::set_options` can disable it
+//! wholesale, and exempt rules pass through untouched as
+//! [`MagicSymbol::Muggle`]).
+//!
+//! Exemptions — rules the rewrite must not touch:
+//! - the **entry** (`?`): its store *is* the answer relation, read by the
+//!   runtime under its unadorned name;
+//! - **aggregating rules**: adornment restricts which tuples a rule
+//!   derives, and an aggregate over a restricted subset is a different
+//!   value, not a lazier computation of the same one;
+//! - **everything**, when the query says `:disable_magic_rewrite true`;
+//! - **cross-stratum producers**: a rule consumed from a later-executing
+//!   stratum was already referenced there under its Muggle name (adornment
+//!   never crosses a stratum boundary), so its definition must stay Muggle
+//!   — and must not be dropped as undemanded.
+
+use std::collections::BTreeSet;
+use std::collections::btree_map::Entry;
+use std::mem;
+
+use miette::{Diagnostic, Result, bail, ensure};
+use thiserror::Error;
+
+use crate::data::program::{
+    Adornment, FixedRuleApply, FixedRuleArg, MagicAtom, MagicFixedRuleApply, MagicFixedRuleRuleArg,
+    MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
+    MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum,
+    StratifiedMagicProgram, StratifiedNormalFormProgram,
+};
+use crate::data::relation::{ColType, NullableColType, StoredRelationMetadata};
+use crate::data::span::SourceSpan;
+use crate::data::symb::{Symbol, SymbolKind};
+
+// ─────────────────────────────────────────────────────────────────────────
+// SEAM: the catalog (runtime tier, not yet ported).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// The magic tier's seam to the runtime's catalog, mirroring what
+/// `BodyNormalizer` (`data/program.rs`) does for normalization: the CozoDB
+/// original's adornment phase took the session transaction because
+/// fixed-rule arguments naming *stored* relations need their declared
+/// schemas — to refuse time travel over a relation whose last key column is
+/// not `Validity`, and to resolve named-field bindings to positional ones.
+/// Those lookups are the only transaction-facing part of this file; when
+/// the runtime tier lands, its session transaction implements this trait.
+pub(crate) trait StoredRelationSchemaSource {
+    /// The declared schema of the stored relation `name`, or an error if no
+    /// such relation exists (the implementation owns that diagnostic).
+    fn stored_relation_schema(
+        &self,
+        name: &Symbol,
+        span: SourceSpan,
+    ) -> Result<StoredRelationMetadata>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Errors
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Time travel (`@ timestamp`) demanded of a stored relation whose last key
+/// column is not of type `Validity` — including a relation with no key
+/// columns at all (the original panicked on that shape).
+#[derive(Debug, Error, Diagnostic)]
+#[error("Invalid time travel on relation {0}")]
+#[diagnostic(code(eval::invalid_time_travel))]
+#[diagnostic(help(
+    "Time travel scanning requires the last key column of the relation to be of type 'Validity'"
+))]
+pub(crate) struct InvalidTimeTravelScanning(pub(crate) String, #[label] pub(crate) SourceSpan);
+
+/// A named-field binding on a stored relation names a field the relation
+/// does not have.
+#[derive(Debug, Error, Diagnostic)]
+#[error("stored relation '{0}' does not have field '{1}'")]
+#[diagnostic(code(eval::named_field_not_found))]
+pub(crate) struct NamedFieldNotFound(
+    pub(crate) String,
+    pub(crate) String,
+    #[label] pub(crate) SourceSpan,
+);
+
+/// An invariant the rewrite maintains internally was found broken. Returned
+/// (never panicked) on the paths whose impossibility is proven elsewhere,
+/// so corruption of that proof surfaces as a bug report instead of an
+/// abort — and, worse here than anywhere, instead of silently *changed
+/// demand*, which the law forbids to ever become changed answers.
+#[derive(Debug, Diagnostic, Error)]
+#[error("Magic-sets rewrite invariant violated: {0}")]
+#[diagnostic(code(compiler::magic_invariant))]
+#[diagnostic(help("This is a bug. Please report it."))]
+struct MagicInvariantError(&'static str);
+
+// ─────────────────────────────────────────────────────────────────────────
+// The adorned intermediate: Muggle or Magic, by type
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A rule head as the adornment phase mints it: unadorned (`Muggle`) or
+/// demand-adorned (`Magic`) — nothing else. The original kept these as
+/// [`MagicSymbol`]s and asserted "the remaining options are impossible" in
+/// a comment inside the rewrite; here the `Input` and `Sup` roles cannot
+/// exist before the rewrite phase because only [`magic_rewrite_ruleset`]
+/// mints those names. The match in the rewrite is total, not trusted.
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+enum AdornedHead {
+    Muggle { inner: Symbol },
+    Magic { inner: Symbol, adornment: Adornment },
+}
+
+impl AdornedHead {
+    fn as_plain_symbol(&self) -> &Symbol {
+        match self {
+            AdornedHead::Muggle { inner } | AdornedHead::Magic { inner, .. } => inner,
+        }
+    }
+
+    fn adornment(&self) -> &[bool] {
+        match self {
+            AdornedHead::Muggle { .. } => &[],
+            AdornedHead::Magic { adornment, .. } => adornment,
+        }
+    }
+
+    fn has_bound_adornment(&self) -> bool {
+        self.adornment().iter().any(|b| *b)
+    }
+
+    fn to_magic_symbol(&self) -> MagicSymbol {
+        match self {
+            AdornedHead::Muggle { inner } => MagicSymbol::Muggle {
+                inner: inner.clone(),
+            },
+            AdornedHead::Magic { inner, adornment } => MagicSymbol::Magic {
+                inner: inner.clone(),
+                adornment: adornment.clone(),
+            },
+        }
+    }
+}
+
+/// One stratum between the two phases: adorned, not yet rewritten. A local
+/// intermediate — it never leaves this file, which is what keeps the
+/// Muggle-or-Magic proof airtight.
+#[derive(Debug, Default)]
+struct AdornedProgram {
+    prog: std::collections::BTreeMap<AdornedHead, MagicRulesOrFixed>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 0: the stratum walk
+// ─────────────────────────────────────────────────────────────────────────
+
+impl StratifiedNormalFormProgram {
+    /// The magic-sets rewrite: adorn and rewrite each stratum, minting the
+    /// magic tier. Demand changes; result semantics may not.
+    ///
+    /// ## Why the walk runs *against* execution order
+    ///
+    /// Demand flows from consumers to producers. Within a stratum the
+    /// adornment phase handles that itself (the pending-adornment loop),
+    /// but *across* strata the rewrite never adorns: a reference to a rule
+    /// defined in another stratum is always Muggle, because the demand
+    /// ("input") relations synthesized by the rewrite feed evaluation
+    /// within one stratum's fixpoint only. So every rule consumed across a
+    /// stratum boundary must be **exempt** in the stratum that defines it —
+    /// otherwise its definition would either be specialized away from the
+    /// Muggle name its consumers already reference, or (if nothing in its
+    /// own stratum references it) dropped entirely as undemanded. Consumers
+    /// execute *after* producers; therefore the walk must visit consumers
+    /// *first*, accumulating each stratum's cross-stratum dependencies into
+    /// `exempt_rules` before reaching the strata that define them. Over the
+    /// landed execution-ordered tier that is a reverse walk, and the
+    /// collected output is reversed back exactly once, here. (The CozoDB
+    /// original stored strata in reverse execution order and walked them
+    /// front to back — the identical logical direction; `compile.rs`'s
+    /// `.rev()` was its un-reversal, and has no descendant here.)
+    ///
+    /// An inverted walk does not crash: it silently drops or specializes
+    /// cross-stratum producers, which evaluation then resolves to empty
+    /// stores — wrong answers. The direction is pinned by
+    /// `cross_stratum_consumers_keep_producers_unrewritten` in the tests.
+    pub(crate) fn magic_sets_rewrite(
+        self,
+        schemas: &impl StoredRelationSchemaSource,
+    ) -> Result<StratifiedMagicProgram> {
+        let (strata, disable_magic_rewrite) = self.into_parts();
+        let mut exempt_rules: BTreeSet<Symbol> = BTreeSet::new();
+        let mut rewritten_reversed: Vec<MagicProgram> = Vec::with_capacity(strata.len());
+        for stratum in strata.into_iter().rev() {
+            stratum.collect_magic_exemptions(disable_magic_rewrite, &mut exempt_rules);
+            let cross_stratum_deps = stratum.cross_stratum_dependencies();
+            let adorned = stratum.adorn(&exempt_rules, schemas)?;
+            rewritten_reversed.push(adorned.magic_rewrite()?);
+            exempt_rules.extend(cross_stratum_deps);
+        }
+        rewritten_reversed.reverse();
+        // The constructor is the proof that the entry survived the rewrite
+        // unadorned, in the final stratum.
+        StratifiedMagicProgram::from_execution_order(rewritten_reversed)
+    }
+}
+
+impl NormalFormStratum {
+    /// Add this stratum's exempt rules to `exempt_rules`: every rule when
+    /// the rewrite is disabled for the query, else every inline rule with
+    /// an aggregation anywhere in its head. (The entry needs no entry here:
+    /// its exemption is structural, by [`SymbolKind::Entry`], in
+    /// [`NormalFormStratum::adorn`].) Port of the original's
+    /// `exempt_aggr_rules_for_magic_sets`, re-homed onto the stratum;
+    /// `disable_magic_rewrite` arrives as a parameter because the landed
+    /// tier carries it once, not copied into every stratum.
+    fn collect_magic_exemptions(
+        &self,
+        disable_magic_rewrite: bool,
+        exempt_rules: &mut BTreeSet<Symbol>,
+    ) {
+        for (name, rule_set) in self.rules.iter() {
+            if disable_magic_rewrite {
+                exempt_rules.insert(name.clone());
+                continue;
+            }
+            match rule_set {
+                NormalFormRulesOrFixed::Rules { rules: rule_set } => {
+                    'outer: for rule in rule_set.iter() {
+                        for aggr in rule.aggr.iter() {
+                            if aggr.is_some() {
+                                exempt_rules.insert(name.clone());
+                                continue 'outer;
+                            }
+                        }
+                    }
+                }
+                NormalFormRulesOrFixed::Fixed { fixed: _ } => {}
+            }
+        }
+    }
+
+    /// The rule names this stratum applies but does not define — its
+    /// dependencies in earlier-executing strata (the original's
+    /// `get_downstream_rules`, named for its walk order). In-memory
+    /// arguments of fixed rules are included unconditionally: stratification
+    /// always puts a fixed rule's inputs in strictly earlier strata.
+    fn cross_stratum_dependencies(&self) -> BTreeSet<Symbol> {
+        let own_rules: BTreeSet<_> = self.rules.keys().collect();
+        let mut dependencies: BTreeSet<Symbol> = BTreeSet::new();
+        for rules in self.rules.values() {
+            match rules {
+                NormalFormRulesOrFixed::Rules { rules } => {
+                    for rule in rules {
+                        for atom in rule.body.iter() {
+                            match atom {
+                                NormalFormAtom::Rule(r_app)
+                                | NormalFormAtom::NegatedRule(r_app)
+                                    if !own_rules.contains(&r_app.name) =>
+                                {
+                                    dependencies.insert(r_app.name.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                NormalFormRulesOrFixed::Fixed { fixed } => {
+                    for rel in fixed.rule_args.iter() {
+                        if let FixedRuleArg::InMem { name, .. } = rel {
+                            dependencies.insert(name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        dependencies
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 1: adornment
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Adorn one stratum: propagate binding patterns from the rules *not*
+    /// subject to rewrite (the entry and the exempt rules, which pass
+    /// through as Muggle) into the rules that are, minting one
+    /// [`AdornedHead::Magic`] definition per demanded adornment. Rules
+    /// subject to rewrite that nobody demands are dropped — that is the
+    /// demand pruning, and it is only sound because cross-stratum consumers
+    /// have already exempted everything they reference.
+    fn adorn(
+        &self,
+        exempt_rules: &BTreeSet<Symbol>,
+        schemas: &impl StoredRelationSchemaSource,
+    ) -> Result<AdornedProgram> {
+        let rules_to_rewrite: BTreeSet<_> = self
+            .rules
+            .keys()
+            // The entry's exemption is structural: `?` is the answer
+            // relation, read by the runtime under its unadorned name. (The
+            // original seeded the exempt set with a dummy-span `?` symbol.)
+            .filter(|k| k.kind() != SymbolKind::Entry && !exempt_rules.contains(*k))
+            .cloned()
+            .collect();
+
+        let mut pending_adornment: Vec<AdornedHead> = vec![];
+        let mut adorned_prog = AdornedProgram::default();
+
+        // Processing starts with the rules NOT subject to rewrite: they
+        // keep their Muggle names, and their bodies seed the demand.
+        for (rule_name, rules) in &self.rules {
+            if rules_to_rewrite.contains(rule_name) {
+                continue;
+            }
+            match rules {
+                NormalFormRulesOrFixed::Fixed { fixed } => {
+                    adorned_prog.prog.insert(
+                        AdornedHead::Muggle {
+                            inner: rule_name.clone(),
+                        },
+                        MagicRulesOrFixed::Fixed {
+                            fixed: adorn_fixed_rule_apply(fixed, schemas)?,
+                        },
+                    );
+                }
+                NormalFormRulesOrFixed::Rules { rules } => {
+                    let mut adorned_rules = Vec::with_capacity(rules.len());
+                    for rule in rules {
+                        let adorned_rule =
+                            rule.adorn(&mut pending_adornment, &rules_to_rewrite, BTreeSet::new());
+                        adorned_rules.push(adorned_rule);
+                    }
+                    adorned_prog.prog.insert(
+                        AdornedHead::Muggle {
+                            inner: rule_name.clone(),
+                        },
+                        MagicRulesOrFixed::Rules {
+                            rules: adorned_rules,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Then every demanded adornment, transitively: adorning a rule's
+        // bodies can demand further adornments of its callees.
+        while let Some(head) = pending_adornment.pop() {
+            if adorned_prog.prog.contains_key(&head) {
+                continue;
+            }
+            let original_rules = match self.rules.get(head.as_plain_symbol()) {
+                Some(NormalFormRulesOrFixed::Rules { rules }) => rules,
+                // Adornments are only ever demanded of names in
+                // `rules_to_rewrite` — inline-rule keys of this stratum.
+                // (The original unwrapped both lookups.)
+                Some(NormalFormRulesOrFixed::Fixed { .. }) => bail!(MagicInvariantError(
+                    "an adornment was demanded of a fixed rule"
+                )),
+                None => bail!(MagicInvariantError(
+                    "an adornment was demanded of a rule not in its stratum"
+                )),
+            };
+            let adornment = head.adornment();
+            let mut adorned_rules = Vec::with_capacity(original_rules.len());
+            for rule in original_rules {
+                // Inside an adorned rule, the bound head positions arrive
+                // bound: they are what the input relation carries in.
+                let seen_bindings = rule
+                    .head
+                    .iter()
+                    .zip(adornment.iter())
+                    .filter_map(|(kw, bound)| if *bound { Some(kw.clone()) } else { None })
+                    .collect();
+                let adorned_rule =
+                    rule.adorn(&mut pending_adornment, &rules_to_rewrite, seen_bindings);
+                adorned_rules.push(adorned_rule);
+            }
+            adorned_prog.prog.insert(
+                head,
+                MagicRulesOrFixed::Rules {
+                    rules: adorned_rules,
+                },
+            );
+        }
+        Ok(adorned_prog)
+    }
+}
+
+/// Adorn a fixed-rule application: in-memory arguments get their Muggle
+/// names (fixed rules always consume *complete* input relations — demand
+/// cannot restrict an opaque algorithm's input); stored arguments have
+/// their time-travel legality checked and named-field bindings resolved to
+/// positional ones against the declared schema, via the seam.
+fn adorn_fixed_rule_apply(
+    fixed: &FixedRuleApply,
+    schemas: &impl StoredRelationSchemaSource,
+) -> Result<MagicFixedRuleApply> {
+    let mut rule_args = Vec::with_capacity(fixed.rule_args.len());
+    for r in fixed.rule_args.iter() {
+        rule_args.push(match r {
+            FixedRuleArg::InMem {
+                name,
+                bindings,
+                span,
+            } => MagicFixedRuleRuleArg::InMem {
+                name: MagicSymbol::Muggle {
+                    inner: name.clone(),
+                },
+                bindings: bindings.clone(),
+                span: *span,
+            },
+            FixedRuleArg::Stored {
+                name,
+                bindings,
+                span,
+                valid_at,
+            } => {
+                if valid_at.is_some() {
+                    let metadata = schemas.stored_relation_schema(name, *span)?;
+                    ensure_validity_keyed(&metadata, name, *span)?;
+                }
+                MagicFixedRuleRuleArg::Stored {
+                    name: name.clone(),
+                    bindings: bindings.clone(),
+                    valid_at: *valid_at,
+                    span: *span,
+                }
+            }
+            FixedRuleArg::NamedStored {
+                name,
+                bindings,
+                valid_at,
+                span,
+            } => {
+                let metadata = schemas.stored_relation_schema(name, *span)?;
+                if valid_at.is_some() {
+                    ensure_validity_keyed(&metadata, name, *span)?;
+                }
+                let fields: BTreeSet<_> = metadata
+                    .keys
+                    .iter()
+                    .chain(metadata.non_keys.iter())
+                    .map(|col| &col.name)
+                    .collect();
+                for k in bindings.keys() {
+                    ensure!(
+                        fields.contains(&k),
+                        NamedFieldNotFound(name.to_string(), k.to_string(), *span)
+                    );
+                }
+                let new_bindings = metadata
+                    .keys
+                    .iter()
+                    .chain(metadata.non_keys.iter())
+                    .enumerate()
+                    .map(|(i, col)| match bindings.get(&col.name) {
+                        // Unbound columns get positional filler names;
+                        // digit-leading names cannot collide with user
+                        // bindings (not valid identifiers in the grammar).
+                        None => Symbol::new(format!("{i}"), SourceSpan::default()),
+                        Some(k) => k.clone(),
+                    })
+                    .collect();
+                MagicFixedRuleRuleArg::Stored {
+                    name: name.clone(),
+                    bindings: new_bindings,
+                    valid_at: *valid_at,
+                    span: *span,
+                }
+            }
+        });
+    }
+    Ok(MagicFixedRuleApply {
+        span: fixed.span,
+        fixed_handle: fixed.fixed_handle.clone(),
+        fixed_impl: fixed.fixed_impl.clone(),
+        rule_args,
+        options: fixed.options.clone(),
+        arity: fixed.arity,
+    })
+}
+
+/// Refuse time travel unless the relation's last key column is exactly
+/// non-nullable `Validity`. A relation with no key columns fails too — the
+/// original called `keys.last().unwrap()` there.
+fn ensure_validity_keyed(
+    metadata: &StoredRelationMetadata,
+    name: &Symbol,
+    span: SourceSpan,
+) -> Result<()> {
+    let validity_keyed = metadata.keys.last().is_some_and(|col| {
+        col.typing
+            == NullableColType {
+                coltype: ColType::Validity,
+                nullable: false,
+            }
+    });
+    if !validity_keyed {
+        bail!(InvalidTimeTravelScanning(name.to_string(), span));
+    }
+    Ok(())
+}
+
+impl NormalFormInlineRule {
+    /// Adorn one rule: walk its (already well-ordered) body left to right,
+    /// tracking which bindings are bound so far; each application of a
+    /// rewritable rule is renamed to the Magic name for the binding pattern
+    /// at its position, and that adornment is pushed as pending demand.
+    fn adorn(
+        &self,
+        pending: &mut Vec<AdornedHead>,
+        rules_to_rewrite: &BTreeSet<Symbol>,
+        mut seen_bindings: BTreeSet<Symbol>,
+    ) -> MagicInlineRule {
+        let mut ret_body = Vec::with_capacity(self.body.len());
+
+        for atom in &self.body {
+            let new_atom = atom.adorn(pending, &mut seen_bindings, rules_to_rewrite);
+            ret_body.push(new_atom);
+        }
+        MagicInlineRule {
+            head: self.head.clone(),
+            aggr: self.aggr.clone(),
+            body: ret_body,
+        }
+    }
+}
+
+impl NormalFormAtom {
+    /// Adorn one atom. Everything except rule applications passes through,
+    /// contributing its bindings; an application of a rewritable rule is
+    /// adorned with, per argument position, whether the binding is already
+    /// seen (bound) or introduced here (free).
+    fn adorn(
+        &self,
+        pending: &mut Vec<AdornedHead>,
+        seen_bindings: &mut BTreeSet<Symbol>,
+        rules_to_rewrite: &BTreeSet<Symbol>,
+    ) -> MagicAtom {
+        match self {
+            NormalFormAtom::Relation(v) => {
+                let v = MagicRelationApplyAtom {
+                    name: v.name.clone(),
+                    args: v.args.clone(),
+                    valid_at: v.valid_at,
+                    span: v.span,
+                };
+                for arg in v.args.iter() {
+                    if !seen_bindings.contains(arg) {
+                        seen_bindings.insert(arg.clone());
+                    }
+                }
+                MagicAtom::Relation(v)
+            }
+            NormalFormAtom::Search(sa) => {
+                for b in sa.own_bindings.iter() {
+                    if !seen_bindings.contains(b) {
+                        seen_bindings.insert(b.clone());
+                    }
+                }
+                MagicAtom::Search(sa.clone())
+            }
+            NormalFormAtom::Predicate(p) => {
+                // A predicate cannot introduce new bindings.
+                MagicAtom::Predicate(p.clone())
+            }
+            NormalFormAtom::Rule(rule) => {
+                if rules_to_rewrite.contains(&rule.name) {
+                    let mut adornment: Adornment = Vec::with_capacity(rule.args.len());
+                    for arg in rule.args.iter() {
+                        // Bound iff already seen. A binding repeated within
+                        // this same application adorns its later positions
+                        // bound — faithful to the original.
+                        adornment.push(!seen_bindings.insert(arg.clone()));
+                    }
+                    pending.push(AdornedHead::Magic {
+                        inner: rule.name.clone(),
+                        adornment: adornment.clone(),
+                    });
+
+                    MagicAtom::Rule(MagicRuleApplyAtom {
+                        name: MagicSymbol::Magic {
+                            inner: rule.name.clone(),
+                            adornment,
+                        },
+                        args: rule.args.clone(),
+                        span: rule.span,
+                    })
+                } else {
+                    // Deliberately does NOT extend `seen_bindings`, faithful
+                    // to the original: bindings introduced by an exempt
+                    // application count as *free* in later adornments. That
+                    // only widens demand (a freer adornment computes more),
+                    // which the law permits; treating them as bound would be
+                    // a demand-shape change to make deliberately, against
+                    // the oracle, not silently in a port.
+                    MagicAtom::Rule(MagicRuleApplyAtom {
+                        name: MagicSymbol::Muggle {
+                            inner: rule.name.clone(),
+                        },
+                        args: rule.args.clone(),
+                        span: rule.span,
+                    })
+                }
+            }
+            NormalFormAtom::NegatedRule(nr) => MagicAtom::NegatedRule(MagicRuleApplyAtom {
+                // Negated applications are never adorned: negation needs
+                // the complete relation to subtract from.
+                name: MagicSymbol::Muggle {
+                    inner: nr.name.clone(),
+                },
+                args: nr.args.clone(),
+                span: nr.span,
+            }),
+            NormalFormAtom::NegatedRelation(nv) => {
+                MagicAtom::NegatedRelation(MagicRelationApplyAtom {
+                    name: nv.name.clone(),
+                    args: nv.args.clone(),
+                    valid_at: nv.valid_at,
+                    span: nv.span,
+                })
+            }
+            NormalFormAtom::Unification(u) => {
+                seen_bindings.insert(u.binding.clone());
+                MagicAtom::Unification(u.clone())
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 2: the rewrite proper
+// ─────────────────────────────────────────────────────────────────────────
+
+impl AdornedProgram {
+    /// Rewrite one adorned stratum: every inline rule set is run through
+    /// sup-rule synthesis; fixed-rule applications pass through under their
+    /// (always Muggle) names.
+    fn magic_rewrite(self) -> Result<MagicProgram> {
+        let mut ret_prog = MagicProgram::default();
+        for (rule_head, ruleset) in self.prog {
+            match ruleset {
+                MagicRulesOrFixed::Rules { rules: ruleset } => {
+                    magic_rewrite_ruleset(rule_head, ruleset, &mut ret_prog)?;
+                }
+                MagicRulesOrFixed::Fixed { fixed } => {
+                    ret_prog.prog.insert(
+                        rule_head.to_magic_symbol(),
+                        MagicRulesOrFixed::Fixed { fixed },
+                    );
+                }
+            }
+        }
+        Ok(ret_prog)
+    }
+}
+
+/// Append one rule under `key`, creating the rule set if absent. Replaces
+/// the original's `entry().or_default().mut_rules().unwrap()`: the key
+/// roles are disjoint by construction (`Sup`/`Input` names are minted only
+/// here, and one name is never both rules and fixed), so a collision with a
+/// fixed rule is a rewrite bug, reported as such.
+fn push_magic_rule(
+    ret_prog: &mut MagicProgram,
+    key: MagicSymbol,
+    rule: MagicInlineRule,
+) -> Result<()> {
+    match ret_prog.prog.entry(key) {
+        Entry::Vacant(e) => {
+            e.insert(MagicRulesOrFixed::Rules { rules: vec![rule] });
+        }
+        Entry::Occupied(mut o) => match o.get_mut().mut_rules() {
+            Some(rules) => rules.push(rule),
+            None => bail!(MagicInvariantError(
+                "a rewrite-synthesized rule collided with a fixed rule"
+            )),
+        },
+    }
+    Ok(())
+}
+
+/// Rewrite one rule set (sideways information passing): for a head with
+/// bound positions, seed the body with the input relation's demand tuples;
+/// at each application of an adorned rule inside the body, cut the atoms
+/// collected so far into a supplementary rule, and feed its projection onto
+/// the callee's bound positions into the callee's input relation.
+///
+/// `rule_head` is Muggle or Magic *by type* — the `Input` and `Sup` roles
+/// are minted only by this function, after adornment, so they cannot occur
+/// as heads of an [`AdornedProgram`].
+fn magic_rewrite_ruleset(
+    rule_head: AdornedHead,
+    ruleset: Vec<MagicInlineRule>,
+    ret_prog: &mut MagicProgram,
+) -> Result<()> {
+    let rule_name = rule_head.as_plain_symbol().clone();
+    let adornment: Adornment = rule_head.adornment().to_vec();
+    let head_span = rule_name.span;
+    let out_head = rule_head.to_magic_symbol();
+
+    // Can only be true if the head is Magic and not all positions are free.
+    let rule_has_bound_args = rule_head.has_bound_adornment();
+
+    for (rule_idx, rule) in ruleset.into_iter().enumerate() {
+        // Checked, not `as`: a silent wrap would merge distinct sup
+        // relations across rules — extra join tuples, changed answers.
+        let rule_idx = u16::try_from(rule_idx)
+            .map_err(|_| MagicInvariantError("more than u16::MAX rules in one rule set"))?;
+        let mut sup_idx: u16 = 0;
+        let mut make_sup_kw = || -> Result<MagicSymbol> {
+            let ret = MagicSymbol::Sup {
+                inner: rule_name.clone(),
+                adornment: adornment.clone(),
+                rule_idx,
+                sup_idx,
+            };
+            sup_idx = sup_idx.checked_add(1).ok_or(MagicInvariantError(
+                "more than u16::MAX supplementary rules in one rule",
+            ))?;
+            Ok(ret)
+        };
+        let mut collected_atoms = vec![];
+        let mut seen_bindings: BTreeSet<Symbol> = BTreeSet::new();
+
+        // SIP from the input rule, if the head has any bound positions:
+        // sup₀ carries the demanded tuples in from the input relation.
+        if rule_has_bound_args {
+            let sup_kw = make_sup_kw()?;
+
+            let sup_args: Vec<Symbol> = rule
+                .head
+                .iter()
+                .zip(adornment.iter())
+                .filter_map(
+                    |(arg, is_bound)| {
+                        if *is_bound { Some(arg.clone()) } else { None }
+                    },
+                )
+                .collect();
+            let sup_aggr = vec![None; sup_args.len()];
+            let sup_body = vec![MagicAtom::Rule(MagicRuleApplyAtom {
+                name: MagicSymbol::Input {
+                    inner: rule_name.clone(),
+                    adornment: adornment.clone(),
+                },
+                args: sup_args.clone(),
+                span: head_span,
+            })];
+
+            push_magic_rule(
+                ret_prog,
+                sup_kw.clone(),
+                MagicInlineRule {
+                    head: sup_args.clone(),
+                    aggr: sup_aggr,
+                    body: sup_body,
+                },
+            )?;
+
+            seen_bindings.extend(sup_args.iter().cloned());
+
+            collected_atoms.push(MagicAtom::Rule(MagicRuleApplyAtom {
+                name: sup_kw,
+                args: sup_args,
+                span: head_span,
+            }))
+        }
+        for atom in rule.body {
+            match atom {
+                a @ (MagicAtom::Predicate(_)
+                | MagicAtom::NegatedRule(_)
+                | MagicAtom::NegatedRelation(_)) => {
+                    collected_atoms.push(a);
+                }
+                MagicAtom::Search(sa) => {
+                    seen_bindings.extend(sa.own_bindings.iter().cloned());
+                    collected_atoms.push(MagicAtom::Search(sa));
+                }
+                MagicAtom::Relation(v) => {
+                    seen_bindings.extend(v.args.iter().cloned());
+                    collected_atoms.push(MagicAtom::Relation(v));
+                }
+                // SEAM: the index-search atoms (HNSW/FTS/LSH) land with the
+                // index tier; their arms extend `seen_bindings` with all of
+                // the search's bindings and pass through, like Relation.
+                MagicAtom::Unification(u) => {
+                    seen_bindings.insert(u.binding.clone());
+                    collected_atoms.push(MagicAtom::Unification(u));
+                }
+                MagicAtom::Rule(r_app) => {
+                    if r_app.name.has_bound_adornment() {
+                        // A bound adornment is minted only on Magic names,
+                        // so this application demands input. Cut the atoms
+                        // so far into a sup rule…
+                        let sup_kw = make_sup_kw()?;
+                        let args: Vec<Symbol> = seen_bindings.iter().cloned().collect();
+                        let mut sup_rule_atoms = vec![];
+                        mem::swap(&mut sup_rule_atoms, &mut collected_atoms);
+
+                        // …add the sup rule to the program (this cleared
+                        // all collected atoms)…
+                        push_magic_rule(
+                            ret_prog,
+                            sup_kw.clone(),
+                            MagicInlineRule {
+                                head: args.clone(),
+                                aggr: vec![None; args.len()],
+                                body: sup_rule_atoms,
+                            },
+                        )?;
+
+                        // …continue the body from the sup rule's output…
+                        let sup_rule_app = MagicAtom::Rule(MagicRuleApplyAtom {
+                            name: sup_kw,
+                            args,
+                            span: head_span,
+                        });
+                        collected_atoms.push(sup_rule_app.clone());
+
+                        // …and feed its projection onto the callee's bound
+                        // positions into the callee's input relation.
+                        let inp_kw = MagicSymbol::Input {
+                            inner: r_app.name.as_plain_symbol().clone(),
+                            adornment: r_app.name.magic_adornment().to_vec(),
+                        };
+                        let inp_args: Vec<Symbol> = r_app
+                            .args
+                            .iter()
+                            .zip(r_app.name.magic_adornment())
+                            .filter_map(
+                                |(kw, is_bound)| {
+                                    if *is_bound { Some(kw.clone()) } else { None }
+                                },
+                            )
+                            .collect();
+                        let inp_aggr = vec![None; inp_args.len()];
+                        push_magic_rule(
+                            ret_prog,
+                            inp_kw,
+                            MagicInlineRule {
+                                head: inp_args,
+                                aggr: inp_aggr,
+                                body: vec![sup_rule_app],
+                            },
+                        )?;
+                    }
+                    seen_bindings.extend(r_app.args.iter().cloned());
+                    collected_atoms.push(MagicAtom::Rule(r_app));
+                }
+            }
+        }
+
+        // The rewritten rule itself: head and aggregations untouched (the
+        // law — the rewrite may reshape bodies, never what a rule returns).
+        push_magic_rule(
+            ret_prog,
+            out_head.clone(),
+            MagicInlineRule {
+                head: rule.head,
+                aggr: rule.aggr,
+                body: collected_atoms,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use miette::miette;
+    use smartstring::{LazyCompact, SmartString};
+
+    use super::*;
+    use crate::data::aggr::parse_aggr;
+    use crate::data::expr::Expr;
+    use crate::data::program::{
+        FixedRule, FixedRuleHandle, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom,
+        Unification,
+    };
+    use crate::data::relation::ColumnDef;
+    use crate::data::value::DataValue;
+
+    // ── construction helpers ────────────────────────────────────────────
+
+    fn sym(name: &str) -> Symbol {
+        Symbol::new(name, SourceSpan(0, 0))
+    }
+
+    fn rule_app(name: &str, args: &[&str]) -> NormalFormAtom {
+        NormalFormAtom::Rule(NormalFormRuleApplyAtom {
+            name: sym(name),
+            args: args.iter().map(|a| sym(a)).collect(),
+            span: SourceSpan(0, 0),
+        })
+    }
+
+    fn stored_app(name: &str, args: &[&str]) -> NormalFormAtom {
+        NormalFormAtom::Relation(NormalFormRelationApplyAtom {
+            name: sym(name),
+            args: args.iter().map(|a| sym(a)).collect(),
+            valid_at: None,
+            span: SourceSpan(0, 0),
+        })
+    }
+
+    fn unify_const(binding: &str, val: i64) -> NormalFormAtom {
+        NormalFormAtom::Unification(Unification {
+            binding: sym(binding),
+            expr: Expr::Const {
+                val: DataValue::from(val),
+                span: SourceSpan(0, 0),
+            },
+            one_many_unif: false,
+            span: SourceSpan(0, 0),
+        })
+    }
+
+    fn unify_var(binding: &str, var: &str) -> NormalFormAtom {
+        NormalFormAtom::Unification(Unification {
+            binding: sym(binding),
+            expr: Expr::Binding {
+                var: sym(var),
+                tuple_pos: None,
+            },
+            one_many_unif: false,
+            span: SourceSpan(0, 0),
+        })
+    }
+
+    fn nf_rule(head: &[&str], body: Vec<NormalFormAtom>) -> NormalFormInlineRule {
+        NormalFormInlineRule {
+            head: head.iter().map(|h| sym(h)).collect(),
+            aggr: head.iter().map(|_| None).collect(),
+            body,
+        }
+    }
+
+    fn stratum(defs: Vec<(&str, Vec<NormalFormInlineRule>)>) -> NormalFormStratum {
+        let mut stratum = NormalFormStratum::default();
+        for (name, rules) in defs {
+            let key = if name == "?" {
+                Symbol::prog_entry(SourceSpan(0, 1))
+            } else {
+                sym(name)
+            };
+            stratum
+                .rules
+                .insert(key, NormalFormRulesOrFixed::Rules { rules });
+        }
+        stratum
+    }
+
+    /// Mint the stratified tier from strata given in EXECUTION order (the
+    /// tier constructor takes the stratifier's reversed order).
+    fn stratified(
+        exec_order: Vec<NormalFormStratum>,
+        disable_magic_rewrite: bool,
+    ) -> StratifiedNormalFormProgram {
+        let mut reversed = exec_order;
+        reversed.reverse();
+        StratifiedNormalFormProgram::from_reverse_execution_order(reversed, disable_magic_rewrite)
+            .expect("test strata are well-formed")
+    }
+
+    /// No stored relations exist: any schema lookup is a test failure.
+    struct NoSchemas;
+    impl StoredRelationSchemaSource for NoSchemas {
+        fn stored_relation_schema(
+            &self,
+            name: &Symbol,
+            _span: SourceSpan,
+        ) -> Result<StoredRelationMetadata> {
+            Err(miette!("test unexpectedly looked up schema of '{name}'"))
+        }
+    }
+
+    /// Every relation has the same fixed schema.
+    struct FixedSchema(StoredRelationMetadata);
+    impl StoredRelationSchemaSource for FixedSchema {
+        fn stored_relation_schema(
+            &self,
+            _name: &Symbol,
+            _span: SourceSpan,
+        ) -> Result<StoredRelationMetadata> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn column(name: &str, coltype: ColType) -> ColumnDef {
+        ColumnDef {
+            name: SmartString::from(name),
+            typing: NullableColType {
+                coltype,
+                nullable: false,
+            },
+            default_gen: None,
+        }
+    }
+
+    // ── inspection helpers ──────────────────────────────────────────────
+
+    /// The stratum's store names, in their debug rendering (`r`, `r|Mbf`,
+    /// `r|Ibf`, `r|S.0.1bf`) — the same rendering the engine logs.
+    fn key_names(stratum: &MagicProgram) -> BTreeSet<String> {
+        stratum.prog.keys().map(|k| format!("{k:?}")).collect()
+    }
+
+    fn rules_of<'a>(stratum: &'a MagicProgram, key: &str) -> &'a [MagicInlineRule] {
+        match stratum
+            .prog
+            .iter()
+            .find(|(k, _)| format!("{k:?}") == key)
+            .unwrap_or_else(|| panic!("store '{key}' not found"))
+            .1
+        {
+            MagicRulesOrFixed::Rules { rules } => rules,
+            MagicRulesOrFixed::Fixed { .. } => panic!("store '{key}' is a fixed rule"),
+        }
+    }
+
+    fn atom_names(rule: &MagicInlineRule) -> Vec<String> {
+        rule.body
+            .iter()
+            .map(|atom| match atom {
+                MagicAtom::Rule(r) => format!("rule {:?}", r.name),
+                MagicAtom::Relation(r) => format!("stored {}", r.name),
+                MagicAtom::Predicate(_) => "predicate".to_string(),
+                MagicAtom::NegatedRule(r) => format!("not rule {:?}", r.name),
+                MagicAtom::NegatedRelation(r) => format!("not stored {}", r.name),
+                MagicAtom::Unification(u) => format!("unify {}", u.binding),
+                MagicAtom::Search(sa) => format!("search {:?}", sa.cfg),
+            })
+            .collect()
+    }
+
+    fn head_names(rule: &MagicInlineRule) -> Vec<&str> {
+        rule.head.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    // ── the tests ───────────────────────────────────────────────────────
+
+    /// Port of the original's `strange_case` (upstream `magic.rs`), which
+    /// ran through `DbInstance`:
+    ///
+    /// ```text
+    /// x[A] := A = 1
+    /// y[A, A] := A = 1
+    /// y[A, B] := A = 0, B = 1, x[B]
+    /// ?[C] := y[A, _], y[C, A]
+    /// :disable_magic_rewrite true    => rows [[0], [1]]
+    /// ```
+    ///
+    /// Until the runtime tier lands, the port is structural: with the
+    /// rewrite disabled every rule is exempt, so the magic tier must be the
+    /// identity image of the program — all names Muggle, every body
+    /// preserved atom for atom, no Input/Sup/Magic stores anywhere. The
+    /// end-to-end row assertion re-lands with `DbInstance`, and the
+    /// naive-oracle differential covers the answer itself.
+    #[test]
+    fn strange_case_with_disabled_rewrite_is_identity() {
+        // Normal form of the program above (head dedup makes y's first rule
+        // `y[A, ***0] := A = 1, ***0 = A`; `_` becomes an ignored binding).
+        let make_strata = || {
+            vec![stratum(vec![
+                ("x", vec![nf_rule(&["A"], vec![unify_const("A", 1)])]),
+                (
+                    "y",
+                    vec![
+                        nf_rule(
+                            &["A", "***0"],
+                            vec![unify_const("A", 1), unify_var("***0", "A")],
+                        ),
+                        nf_rule(
+                            &["A", "B"],
+                            vec![
+                                unify_const("A", 0),
+                                unify_const("B", 1),
+                                rule_app("x", &["B"]),
+                            ],
+                        ),
+                    ],
+                ),
+                (
+                    "?",
+                    vec![nf_rule(
+                        &["C"],
+                        vec![rule_app("y", &["A", "~1"]), rule_app("y", &["C", "A"])],
+                    )],
+                ),
+            ])]
+        };
+
+        let rewritten = stratified(make_strata(), true)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        assert_eq!(rewritten.strata().len(), 1);
+        let out = &rewritten.strata()[0];
+        assert_eq!(
+            key_names(out),
+            BTreeSet::from(["x".to_string(), "y".to_string(), "?".to_string()]),
+            "disabled rewrite must leave every name Muggle and add nothing"
+        );
+        // Bodies are preserved atom for atom.
+        assert_eq!(atom_names(&rules_of(out, "?")[0]), vec!["rule y", "rule y"]);
+        assert_eq!(
+            atom_names(&rules_of(out, "y")[1]),
+            vec!["unify A", "unify B", "rule x"]
+        );
+
+        // Contrast, proving the flag is load-bearing: the same program with
+        // the rewrite enabled does adorn (`y[C, A]` sees A bound).
+        let rewritten = stratified(make_strata(), false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        let names = key_names(&rewritten.strata()[0]);
+        assert!(
+            names.iter().any(|n| n.starts_with("y|M")),
+            "enabled rewrite adorns y; got {names:?}"
+        );
+    }
+
+    /// The demand rewrite on a bound transitive closure, checkable by hand:
+    ///
+    /// ```text
+    /// tc[a, b] := *e[a, b]
+    /// tc[a, b] := *e[a, c], tc[c, b]
+    /// ?[b]     := s = 1, tc[s, b]
+    /// ```
+    ///
+    /// Semantics-preservation argument (the full differential equivalence
+    /// runs against the naive oracle once the pipeline is joined up):
+    /// unfolding the sup chain of the rewritten recursive rule gives
+    /// `tc|Mbf[a, b] :- tc|Ibf[a], *e[a, c], tc|Mbf[c, b]` — the original
+    /// rule guarded by the demand relation — and the demand relation is
+    /// seeded from the entry's constant (`s = 1`) and closed under
+    /// `demanded(a), e(a, c) ⇒ demanded(c)`. By induction over derivation
+    /// height, `tc|Mbf` is exactly `tc` restricted to demanded first
+    /// arguments, the entry's first argument is demanded, and the entry
+    /// reads only `tc|Mbf[s, …]` with `s` demanded — so `?` derives exactly
+    /// the rows the unrewritten program derives, from fewer facts.
+    #[test]
+    fn bound_entry_transitive_closure_rewrites_demand_only() {
+        let strata = vec![stratum(vec![
+            (
+                "tc",
+                vec![
+                    nf_rule(&["a", "b"], vec![stored_app("e", &["a", "b"])]),
+                    nf_rule(
+                        &["a", "b"],
+                        vec![stored_app("e", &["a", "c"]), rule_app("tc", &["c", "b"])],
+                    ),
+                ],
+            ),
+            (
+                "?",
+                vec![nf_rule(
+                    &["b"],
+                    vec![unify_const("s", 1), rule_app("tc", &["s", "b"])],
+                )],
+            ),
+        ])];
+
+        let rewritten = stratified(strata, false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        assert_eq!(rewritten.strata().len(), 1);
+        let out = &rewritten.strata()[0];
+
+        assert_eq!(
+            key_names(out),
+            BTreeSet::from([
+                "?".to_string(),          // the entry, Muggle, always
+                "?|S.0.0".to_string(),    // entry's partial join up to tc[s, b]
+                "tc|Mbf".to_string(),     // tc adorned bound-free
+                "tc|Ibf".to_string(),     // the demand feeding tc|Mbf
+                "tc|S.0.0bf".to_string(), // base rule: demand seed
+                "tc|S.1.0bf".to_string(), // recursive rule: demand seed
+                "tc|S.1.1bf".to_string(), // recursive rule: join demand ⋈ e
+            ]),
+        );
+
+        // The unadorned tc is gone: that is the demand pruning, and it is
+        // the ONLY kind of change the law allows.
+        assert!(!key_names(out).contains("tc"));
+
+        // Heads and aggregations of the rewritten rules are untouched.
+        let tc_rules = rules_of(out, "tc|Mbf");
+        assert_eq!(tc_rules.len(), 2);
+        for rule in tc_rules {
+            assert_eq!(head_names(rule), vec!["a", "b"]);
+            assert!(rule.aggr.iter().all(Option::is_none));
+        }
+
+        // Base rule: sup₀ (the demand) then the original stored scan.
+        assert_eq!(
+            atom_names(&tc_rules[0]),
+            vec!["rule tc|S.0.0bf", "stored e"]
+        );
+        // Recursive rule: sup₁ (demand ⋈ e) then the original recursive
+        // application, now adorned.
+        assert_eq!(
+            atom_names(&tc_rules[1]),
+            vec!["rule tc|S.1.1bf", "rule tc|Mbf"]
+        );
+        // sup₁.₁ carries the partial join: sup₁.₀ then e.
+        assert_eq!(
+            atom_names(&rules_of(out, "tc|S.1.1bf")[0]),
+            vec!["rule tc|S.1.0bf", "stored e"]
+        );
+
+        // The demand relation is fed from exactly two places: the entry's
+        // bound argument and the recursive call's bound argument.
+        let inputs = rules_of(out, "tc|Ibf");
+        assert_eq!(inputs.len(), 2);
+        for rule in inputs {
+            assert_eq!(rule.head.len(), 1, "adornment bf has one bound slot");
+        }
+        let input_bodies: BTreeSet<_> = inputs.iter().flat_map(atom_names).collect();
+        assert_eq!(
+            input_bodies,
+            BTreeSet::from(["rule ?|S.0.0".to_string(), "rule tc|S.1.1bf".to_string()])
+        );
+
+        // The entry stays Muggle with its head untouched, reading tc|Mbf.
+        let entry_rules = rules_of(out, "?");
+        assert_eq!(head_names(&entry_rules[0]), vec!["b"]);
+        assert_eq!(
+            atom_names(&entry_rules[0]),
+            vec!["rule ?|S.0.0", "rule tc|Mbf"]
+        );
+    }
+
+    /// Exemption: the entry. Even with an empty exempt set the entry is
+    /// never rewritten — structurally, by `SymbolKind::Entry`, not via a
+    /// seeded `?` symbol.
+    #[test]
+    fn entry_is_always_exempt() {
+        let strata = vec![stratum(vec![
+            ("r", vec![nf_rule(&["x"], vec![stored_app("e", &["x"])])]),
+            ("?", vec![nf_rule(&["x"], vec![rule_app("r", &["x"])])]),
+        ])];
+        let rewritten = stratified(strata, false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        let out = &rewritten.strata()[0];
+        let names = key_names(out);
+        assert!(names.contains("?"), "entry must survive as Muggle");
+        assert!(
+            !names.iter().any(|n| n.starts_with("?|")),
+            "entry must never be adorned; got {names:?}"
+        );
+        // An all-free application still mints an adorned (Magic) name for
+        // the callee — with no bound position, no Input/Sup appears.
+        assert!(names.contains("r|Mf"));
+        assert!(!names.iter().any(|n| n.starts_with("r|I")));
+    }
+
+    /// Exemption: aggregating rules. A rule with an aggregation anywhere in
+    /// its head stays Muggle even when applied with bound arguments —
+    /// an aggregate over a demand-restricted subset would be a different
+    /// value, which the law forbids.
+    #[test]
+    fn aggregation_rules_are_exempt() {
+        let count = parse_aggr("count").expect("count exists");
+        let mut agg_rule = nf_rule(&["a", "n"], vec![stored_app("e", &["a", "n"])]);
+        agg_rule.aggr[1] = Some((count, vec![]));
+
+        let strata = vec![stratum(vec![
+            ("agg", vec![agg_rule]),
+            (
+                "?",
+                vec![nf_rule(
+                    &["x"],
+                    vec![unify_const("v", 1), rule_app("agg", &["v", "x"])],
+                )],
+            ),
+        ])];
+        let rewritten = stratified(strata, false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        let out = &rewritten.strata()[0];
+        let names = key_names(out);
+        assert!(names.contains("agg"), "aggregating rule stays Muggle");
+        assert!(
+            !names.iter().any(|n| n.starts_with("agg|")),
+            "no adorned/input/sup form of an aggregating rule; got {names:?}"
+        );
+        // The entry references it under the Muggle name, and the entry body
+        // is left whole (no sup cut without a bound-adorned application).
+        assert_eq!(
+            atom_names(&rules_of(out, "?")[0]),
+            vec!["unify v", "rule agg"]
+        );
+        // The aggregation itself is untouched.
+        assert!(rules_of(out, "agg")[0].aggr[1].is_some());
+    }
+
+    /// Exemption: `:disable_magic_rewrite`. The flag lives once on the tier
+    /// (not per stratum) and must exempt every rule in every stratum.
+    #[test]
+    fn disable_magic_rewrite_exempts_every_stratum() {
+        let strata = vec![
+            stratum(vec![(
+                "r",
+                vec![nf_rule(&["a", "b"], vec![stored_app("e", &["a", "b"])])],
+            )]),
+            stratum(vec![(
+                "?",
+                vec![nf_rule(
+                    &["x"],
+                    vec![unify_const("v", 1), rule_app("r", &["v", "x"])],
+                )],
+            )]),
+        ];
+        let rewritten = stratified(strata, true)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        assert_eq!(rewritten.strata().len(), 2);
+        assert_eq!(
+            key_names(&rewritten.strata()[0]),
+            BTreeSet::from(["r".to_string()])
+        );
+        assert_eq!(
+            key_names(&rewritten.strata()[1]),
+            BTreeSet::from(["?".to_string()])
+        );
+    }
+
+    /// Exemption: cross-stratum producers — and with it, the direction of
+    /// the stratum walk. `r` is defined in the first-executing stratum and
+    /// consumed (with a bound argument) only from the entry stratum. The
+    /// walk must visit the entry stratum first so that `r` is exempt by the
+    /// time its own stratum is adorned; a walk in execution order would
+    /// find `r` unreferenced-and-rewritable and DROP its definition, and
+    /// evaluation would then read an empty store — silently wrong answers.
+    /// This test is the standing regression for an inverted walk.
+    #[test]
+    fn cross_stratum_consumers_keep_producers_unrewritten() {
+        let strata = vec![
+            stratum(vec![(
+                "r",
+                vec![nf_rule(&["a", "b"], vec![stored_app("e", &["a", "b"])])],
+            )]),
+            stratum(vec![(
+                "?",
+                vec![nf_rule(
+                    &["x"],
+                    vec![unify_const("v", 1), rule_app("r", &["v", "x"])],
+                )],
+            )]),
+        ];
+        let rewritten = stratified(strata, false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        assert_eq!(rewritten.strata().len(), 2);
+
+        // Producer stratum: r survives, Muggle, body intact.
+        let producer = &rewritten.strata()[0];
+        assert_eq!(key_names(producer), BTreeSet::from(["r".to_string()]));
+        assert_eq!(atom_names(&rules_of(producer, "r")[0]), vec!["stored e"]);
+
+        // Entry stratum: the reference is Muggle too — consistent names on
+        // both sides of the boundary, and no demand machinery anywhere.
+        let consumer = &rewritten.strata()[1];
+        assert_eq!(key_names(consumer), BTreeSet::from(["?".to_string()]));
+        assert_eq!(
+            atom_names(&rules_of(consumer, "?")[0]),
+            vec!["unify v", "rule r"]
+        );
+    }
+
+    /// Adornment correctness on a mixed application: `r[v, y, w]` with `v`
+    /// and `w` bound by unifications and `y` free must adorn as `bfb`, and
+    /// the input relation must carry exactly the bound positions.
+    #[test]
+    fn adornment_marks_bound_and_free_positions() {
+        let strata = vec![stratum(vec![
+            (
+                "r",
+                vec![nf_rule(
+                    &["a", "b", "c"],
+                    vec![stored_app("e", &["a", "b", "c"])],
+                )],
+            ),
+            (
+                "?",
+                vec![nf_rule(
+                    &["y"],
+                    vec![
+                        unify_const("v", 1),
+                        unify_const("w", 2),
+                        rule_app("r", &["v", "y", "w"]),
+                    ],
+                )],
+            ),
+        ])];
+        let rewritten = stratified(strata, false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        let out = &rewritten.strata()[0];
+        let names = key_names(out);
+        assert!(names.contains("r|Mbfb"), "got {names:?}");
+        assert!(names.contains("r|Ibfb"), "got {names:?}");
+
+        // The input relation carries the bound positions, in order: v, w.
+        let input_rules = rules_of(out, "r|Ibfb");
+        assert_eq!(input_rules.len(), 1);
+        assert_eq!(head_names(&input_rules[0]), vec!["v", "w"]);
+
+        // Inside r|Mbfb, the bound head slots (a, c) arrive via sup₀ from
+        // the input relation, and the free slot does not.
+        let sup0 = rules_of(out, "r|S.0.0bfb");
+        assert_eq!(head_names(&sup0[0]), vec!["a", "c"]);
+        assert_eq!(atom_names(&sup0[0]), vec!["rule r|Ibfb"]);
+    }
+
+    /// Repeated-variable adornment, pinned exactly — deliberately preserved
+    /// upstream behavior (see the oddity note in `NormalFormAtom::adorn`):
+    /// in `r[v, y, y]` with `v` bound by a unification, the FIRST `y`
+    /// adorns free (it is new), but the SECOND `y` adorns BOUND, because
+    /// `seen_bindings.insert` already admitted the first occurrence within
+    /// the same application. So the adornment is `bfb`, not `bff`. Any
+    /// change to this (e.g. adorning all occurrences of a
+    /// newly-introduced binding free) is a demand-shape change to make
+    /// deliberately, against the naive oracle — never silently in a port.
+    #[test]
+    fn repeated_variable_adorns_later_positions_bound() {
+        let strata = vec![stratum(vec![
+            (
+                "r",
+                vec![nf_rule(
+                    &["a", "b", "c"],
+                    vec![stored_app("e", &["a", "b", "c"])],
+                )],
+            ),
+            (
+                "?",
+                vec![nf_rule(
+                    &["y"],
+                    vec![unify_const("v", 1), rule_app("r", &["v", "y", "y"])],
+                )],
+            ),
+        ])];
+        let rewritten = stratified(strata, false)
+            .magic_sets_rewrite(&NoSchemas)
+            .expect("rewrite succeeds");
+        let out = &rewritten.strata()[0];
+
+        // The exact adornment vector: bound, free, bound (true = bound).
+        let adornments: Vec<Adornment> = out
+            .prog
+            .keys()
+            .filter_map(|k| match k {
+                MagicSymbol::Magic { inner, adornment } if inner.name.as_str() == "r" => {
+                    Some(adornment.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            adornments,
+            vec![vec![true, false, true]],
+            "repeated y must adorn its second position bound; got {:?}",
+            key_names(out)
+        );
+        // The demand relation carries exactly the bound slots, in order:
+        // v and the (repeated) y.
+        assert_eq!(head_names(&rules_of(out, "r|Ibfb")[0]), vec!["v", "y"]);
+    }
+
+    /// The seam: named-field bindings on a stored fixed-rule argument
+    /// resolve to positional bindings against the declared schema, with
+    /// digit-named fillers for unbound columns; unknown fields are refused.
+    #[test]
+    fn named_stored_fixed_rule_args_resolve_positionally() {
+        struct NoRule;
+        impl FixedRule for NoRule {
+            fn arity(
+                &self,
+                _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _rule_head: &[Symbol],
+                _span: SourceSpan,
+            ) -> Result<usize> {
+                Ok(1)
+            }
+            fn run(
+                &self,
+                _payload: crate::fixed_rule::FixedRulePayload<'_>,
+                _out: &mut crate::fixed_rule::FixedRuleOutput,
+                _cancel: crate::fixed_rule::CancelFlag,
+            ) -> Result<()> {
+                unreachable!("test stub: never run")
+            }
+        }
+        let schema = FixedSchema(StoredRelationMetadata {
+            keys: vec![column("a", ColType::Int), column("b", ColType::Int)],
+            non_keys: vec![column("c", ColType::Int)],
+        });
+        let apply = |bindings: &[(&str, &str)]| FixedRuleApply {
+            fixed_handle: FixedRuleHandle {
+                name: sym("pagerank"),
+            },
+            rule_args: vec![FixedRuleArg::NamedStored {
+                name: sym("edges"),
+                bindings: bindings
+                    .iter()
+                    .map(|(k, v)| (SmartString::from(*k), sym(v)))
+                    .collect(),
+                valid_at: None,
+                span: SourceSpan(0, 0),
+            }],
+            options: Arc::new(BTreeMap::new()),
+            head: vec![],
+            arity: 1,
+            span: SourceSpan(0, 0),
+            fixed_impl: Arc::new(NoRule),
+        };
+
+        let adorned =
+            adorn_fixed_rule_apply(&apply(&[("b", "x"), ("c", "y")]), &schema).expect("resolves");
+        match &adorned.rule_args[0] {
+            MagicFixedRuleRuleArg::Stored { bindings, .. } => {
+                let names: Vec<_> = bindings.iter().map(|s| s.name.as_str()).collect();
+                assert_eq!(names, vec!["0", "x", "y"]);
+            }
+            other => panic!("expected a stored arg, got {other:?}"),
+        }
+
+        let err = adorn_fixed_rule_apply(&apply(&[("nope", "x")]), &schema)
+            .expect_err("unknown field must be refused");
+        assert!(
+            err.to_string().contains("does not have field"),
+            "got: {err}"
+        );
+    }
+
+    /// The seam: time travel is refused unless the last key column is
+    /// non-nullable `Validity` — including the keyless-relation shape the
+    /// original panicked on.
+    #[test]
+    fn time_travel_requires_a_validity_keyed_relation() {
+        use std::cmp::Reverse;
+
+        use crate::data::value::ValidityTs;
+
+        struct NoRule;
+        impl FixedRule for NoRule {
+            fn arity(
+                &self,
+                _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
+                _rule_head: &[Symbol],
+                _span: SourceSpan,
+            ) -> Result<usize> {
+                Ok(1)
+            }
+            fn run(
+                &self,
+                _payload: crate::fixed_rule::FixedRulePayload<'_>,
+                _out: &mut crate::fixed_rule::FixedRuleOutput,
+                _cancel: crate::fixed_rule::CancelFlag,
+            ) -> Result<()> {
+                unreachable!("test stub: never run")
+            }
+        }
+        let apply = FixedRuleApply {
+            fixed_handle: FixedRuleHandle {
+                name: sym("pagerank"),
+            },
+            rule_args: vec![FixedRuleArg::Stored {
+                name: sym("edges"),
+                bindings: vec![sym("x")],
+                valid_at: Some(ValidityTs(Reverse(0))),
+                span: SourceSpan(0, 0),
+            }],
+            options: Arc::new(BTreeMap::new()),
+            head: vec![],
+            arity: 1,
+            span: SourceSpan(0, 0),
+            fixed_impl: Arc::new(NoRule),
+        };
+
+        let validity_keyed = FixedSchema(StoredRelationMetadata {
+            keys: vec![column("a", ColType::Int), column("at", ColType::Validity)],
+            non_keys: vec![],
+        });
+        adorn_fixed_rule_apply(&apply, &validity_keyed).expect("validity-keyed is accepted");
+
+        let plain = FixedSchema(StoredRelationMetadata {
+            keys: vec![column("a", ColType::Int)],
+            non_keys: vec![],
+        });
+        let err = adorn_fixed_rule_apply(&apply, &plain).expect_err("must refuse");
+        assert!(err.to_string().contains("time travel"), "got: {err}");
+
+        let keyless = FixedSchema(StoredRelationMetadata {
+            keys: vec![],
+            non_keys: vec![column("a", ColType::Int)],
+        });
+        let err = adorn_fixed_rule_apply(&apply, &keyless)
+            .expect_err("keyless relation must refuse, not panic");
+        assert!(err.to_string().contains("time travel"), "got: {err}");
+    }
+}

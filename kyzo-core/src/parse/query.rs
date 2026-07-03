@@ -1,0 +1,1249 @@
+/*
+ * Copyright 2022, The Cozo Project Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
+ * (MPL-2.0): `parse_query` collects the whole rule map — synthesizing the
+ * constant entry for a body-less `:create` — BEFORE calling
+ * `InputProgram::new` exactly once (the original built a bare struct and
+ * injected the synthetic `?` afterwards; KyzoDB's constructor refuses
+ * entry-less programs). The original's first `make_empty_const_rule` site
+ * was dead code (it tested `out_opts.store_relation` before anything set
+ * it) and has no descendant. Fixed-rule named-relation arguments strip the
+ * `*` sigil their grammar rule actually carries (the original stripped `:`
+ * and panicked on every `rule(*rel{…})` argument). Grammar-shape `unwrap`s
+ * and `unreachable!`s go through the typed-accessor layer. The parse-time
+ * surface of the `Constant` fixed rule lives here behind a seam until the
+ * fixed-rule tier lands. `parse_aggr` returns `Aggregation` by value
+ * (`Copy`); fixed-rule implementations are `Arc<dyn FixedRule>`.
+ */
+
+//! Parsing one query: rules, options, and the proofs that bind them.
+//!
+//! This is where a query's map of definitions is assembled and where
+//! [`InputProgram::new`] is called — **exactly once, after the map is
+//! complete** — so "every program has an entry" is proven at construction,
+//! never patched up afterwards. Along the way: rule-head consistency across
+//! multiple definitions, option constancy (`:limit 1+1` is folded, `:limit
+//! x` is refused), aggregation and fixed-rule resolution, and validity
+//! specs (`@ 'NOW'`) evaluated against the query's one clock reading.
+
+use std::cmp::Reverse;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+
+use itertools::Itertools;
+use miette::{Diagnostic, LabeledSpan, Report, Result, bail, ensure};
+use pest::Parser;
+use smartstring::{LazyCompact, SmartString};
+use thiserror::Error;
+
+use crate::data::aggr::{Aggregation, parse_aggr};
+use crate::data::expr::Expr;
+use crate::data::functions::str2vld;
+use crate::data::program::{
+    FixedRule, FixedRuleApply, FixedRuleArg, FixedRuleHandle, InputAtom, InputInlineRule,
+    InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
+    InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
+    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Unification,
+};
+use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use crate::data::span::SourceSpan;
+use crate::data::symb::{Symbol, SymbolKind};
+use crate::data::value::{DataValue, MAX_VALIDITY_TS, ValidityTs};
+use crate::parse::expr::build_expr;
+use crate::parse::schema::parse_schema;
+use crate::parse::{
+    ExtractSpan, IntoChildren, Pair, Pairs, Rule, ScriptParser, strip_sigil, unexpected,
+};
+
+// The fixed-rule tier has landed: the `Constant` parse-time surface that
+// lived here behind a seam re-homed to `fixed_rule/utilities/constant.rs`
+// (and grew its `run`), `FixedRuleNotFoundError` to `fixed_rule/mod.rs`.
+use crate::fixed_rule::FixedRuleNotFoundError;
+use crate::fixed_rule::utilities::Constant;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Option errors
+// ─────────────────────────────────────────────────────────────────────────
+
+#[derive(Error, Diagnostic, Debug)]
+#[error("Query option {0} is not constant")]
+#[diagnostic(code(parser::option_not_constant))]
+struct OptionNotConstantError(&'static str, #[label] SourceSpan, #[related] [Report; 1]);
+
+#[derive(Error, Diagnostic, Debug)]
+#[error("Query option {0} requires a non-negative integer")]
+#[diagnostic(code(parser::option_not_non_neg))]
+struct OptionNotNonNegIntError(&'static str, #[label] SourceSpan);
+
+#[derive(Error, Diagnostic, Debug)]
+#[error("Query option {0} requires a positive integer")]
+#[diagnostic(code(parser::option_not_pos))]
+struct OptionNotPosIntError(&'static str, #[label] SourceSpan);
+
+#[derive(Error, Diagnostic, Debug)]
+#[error("Query option {0} requires a boolean")]
+#[diagnostic(code(parser::option_not_bool))]
+struct OptionNotBoolError(&'static str, #[label] SourceSpan);
+
+#[derive(Debug)]
+struct MultipleRuleDefinitionError(String, Vec<SourceSpan>);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Multiple query output assertions defined")]
+#[diagnostic(code(parser::multiple_out_assert))]
+struct DuplicateQueryAssertion(#[label] SourceSpan);
+
+impl Error for MultipleRuleDefinitionError {}
+
+impl Display for MultipleRuleDefinitionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The rule '{0}' cannot have multiple definitions since it contains non-Horn clauses",
+            self.0
+        )
+    }
+}
+
+impl Diagnostic for MultipleRuleDefinitionError {
+    fn code<'a>(&'a self) -> Option<Box<dyn Display + 'a>> {
+        Some(Box::new("parser::mult_rule_def"))
+    }
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
+        Some(Box::new(
+            self.1.iter().map(|s| LabeledSpan::new_with_span(None, s)),
+        ))
+    }
+}
+
+/// The union of the symbols' spans; `fallback` for an empty slice (the
+/// original `unwrap`ped the first element instead).
+fn merge_spans(symbs: &[Symbol], fallback: SourceSpan) -> SourceSpan {
+    symbs
+        .iter()
+        .map(|s| s.span)
+        .reduce(SourceSpan::merge)
+        .unwrap_or(fallback)
+}
+
+pub(crate) fn parse_query(
+    src: Pairs<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+    cur_vld: ValidityTs,
+) -> Result<InputProgram> {
+    let mut progs: BTreeMap<Symbol, InputInlineRulesOrFixed> = Default::default();
+    let mut out_opts: QueryOutOptions = Default::default();
+    let mut disable_magic_rewrite = false;
+
+    let mut stored_relation = None;
+    let mut returning_mutation = ReturnMutation::NotReturning;
+
+    for pair in src {
+        match pair.as_rule() {
+            Rule::rule => {
+                let (name, rule) = parse_rule(pair, param_pool, cur_vld)?;
+
+                match progs.entry(name) {
+                    Entry::Vacant(e) => {
+                        e.insert(InputInlineRulesOrFixed::Rules { rules: vec![rule] });
+                    }
+                    Entry::Occupied(mut e) => {
+                        let key = e.key().to_string();
+                        match e.get_mut() {
+                            InputInlineRulesOrFixed::Rules { rules: rs } => {
+                                #[derive(Debug, Error, Diagnostic)]
+                                #[error("Rule {0} has multiple definitions with conflicting heads")]
+                                #[diagnostic(code(parser::head_aggr_mismatch))]
+                                #[diagnostic(help(
+                                    "The arity of each rule head must match. In addition, any aggregation \
+                            applied must be the same."
+                                ))]
+                                struct RuleHeadMismatch(
+                                    String,
+                                    #[label] SourceSpan,
+                                    #[label] SourceSpan,
+                                );
+                                // Non-empty by construction: every `Rules`
+                                // entry is created with one rule and only
+                                // ever appended to.
+                                if let Some(prev) = rs.first() {
+                                    ensure!(prev.aggr == rule.aggr, {
+                                        RuleHeadMismatch(
+                                            key,
+                                            merge_spans(&prev.head, prev.span),
+                                            merge_spans(&rule.head, rule.span),
+                                        )
+                                    });
+                                }
+                                rs.push(rule);
+                            }
+                            InputInlineRulesOrFixed::Fixed { fixed } => {
+                                let fixed_span = fixed.span;
+                                bail!(MultipleRuleDefinitionError(
+                                    e.key().name.to_string(),
+                                    vec![rule.span, fixed_span]
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            Rule::fixed_rule => {
+                let rule_span = pair.extract_span();
+                let (name, apply) = parse_fixed_rule(pair, param_pool, fixed_rules, cur_vld)?;
+
+                match progs.entry(name) {
+                    Entry::Vacant(e) => {
+                        e.insert(InputInlineRulesOrFixed::Fixed { fixed: apply });
+                    }
+                    Entry::Occupied(e) => {
+                        let found_name = e.key().name.to_string();
+                        let mut found_span = match e.get() {
+                            InputInlineRulesOrFixed::Rules { rules } => {
+                                rules.iter().map(|r| r.span).collect_vec()
+                            }
+                            InputInlineRulesOrFixed::Fixed { fixed } => vec![fixed.span],
+                        };
+                        found_span.push(rule_span);
+                        bail!(MultipleRuleDefinitionError(found_name, found_span));
+                    }
+                }
+            }
+            Rule::const_rule => {
+                let span = pair.extract_span();
+                let mut src = pair.children();
+                let (name, mut head, aggr) =
+                    parse_rule_head(src.expect("the const rule's head")?, param_pool)?;
+
+                if let Some(found) = progs.get(&name) {
+                    let mut found_span = match found {
+                        InputInlineRulesOrFixed::Rules { rules } => {
+                            rules.iter().map(|r| r.span).collect_vec()
+                        }
+                        InputInlineRulesOrFixed::Fixed { fixed } => {
+                            vec![fixed.span]
+                        }
+                    };
+                    found_span.push(span);
+                    bail!(MultipleRuleDefinitionError(
+                        name.name.to_string(),
+                        found_span
+                    ));
+                }
+
+                #[derive(Debug, Error, Diagnostic)]
+                #[error("Constant rules cannot have aggregation application")]
+                #[diagnostic(code(parser::aggr_in_const_rule))]
+                struct AggrInConstRuleError(#[label] SourceSpan);
+
+                for (a, v) in aggr.iter().zip(head.iter()) {
+                    ensure!(a.is_none(), AggrInConstRuleError(v.span));
+                }
+                let data_part = src.expect("the const rule's data expression")?;
+                let data_part_str = data_part.as_str();
+                let data = build_expr(data_part.clone(), param_pool)?;
+                let mut options = BTreeMap::new();
+                options.insert(SmartString::from("data"), data);
+                let handle = FixedRuleHandle {
+                    name: Symbol::new("Constant", span),
+                };
+                let fixed_impl = Constant;
+                fixed_impl.init_options(&mut options, span)?;
+                let arity = fixed_impl.arity(&options, &head, span)?;
+
+                ensure!(arity != 0, EmptyRowForConstRule(span));
+                ensure!(
+                    head.is_empty() || arity == head.len(),
+                    FixedRuleHeadArityMismatch(arity, head.len(), span)
+                );
+                if head.is_empty()
+                    && name.kind() == SymbolKind::Entry
+                    && let Ok(datalist) = ScriptParser::parse(Rule::param_list, data_part_str)
+                    && let Ok(datalist) =
+                        crate::parse::single(datalist, "the parsed param_list", Rule::param_list)
+                {
+                    for s in datalist.into_inner() {
+                        if s.as_rule() == Rule::param {
+                            head.push(Symbol::new(strip_sigil(&s, '$')?, Default::default()));
+                        }
+                    }
+                }
+                progs.insert(
+                    name,
+                    InputInlineRulesOrFixed::Fixed {
+                        fixed: FixedRuleApply {
+                            fixed_handle: handle,
+                            rule_args: vec![],
+                            options: Arc::new(options),
+                            head,
+                            arity,
+                            span,
+                            fixed_impl: Arc::new(Constant),
+                        },
+                    },
+                );
+            }
+            Rule::timeout_option => {
+                let pair = pair.children().expect("the timeout expression")?;
+                let span = pair.extract_span();
+                let timeout = build_expr(pair, param_pool)?
+                    .eval_to_const()
+                    .map_err(|err| OptionNotConstantError("timeout", span, [err]))?
+                    .get_float()
+                    .ok_or(OptionNotNonNegIntError("timeout", span))?;
+                if timeout > 0. {
+                    out_opts.timeout = Some(timeout);
+                } else {
+                    out_opts.timeout = None;
+                }
+            }
+            Rule::sleep_option => {
+                #[cfg(target_arch = "wasm32")]
+                bail!(":sleep is not supported under WASM");
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let pair = pair.children().expect("the sleep expression")?;
+                    let span = pair.extract_span();
+                    let sleep = build_expr(pair, param_pool)?
+                        .eval_to_const()
+                        .map_err(|err| OptionNotConstantError("sleep", span, [err]))?
+                        .get_float()
+                        .ok_or(OptionNotNonNegIntError("sleep", span))?;
+                    ensure!(sleep > 0., OptionNotPosIntError("sleep", span));
+                    out_opts.sleep = Some(sleep);
+                }
+            }
+            Rule::limit_option => {
+                let pair = pair.children().expect("the limit expression")?;
+                let span = pair.extract_span();
+                let limit = build_expr(pair, param_pool)?
+                    .eval_to_const()
+                    .map_err(|err| OptionNotConstantError("limit", span, [err]))?
+                    .get_non_neg_int()
+                    .ok_or(OptionNotNonNegIntError("limit", span))?;
+                out_opts.limit = Some(limit as usize);
+            }
+            Rule::offset_option => {
+                let pair = pair.children().expect("the offset expression")?;
+                let span = pair.extract_span();
+                let offset = build_expr(pair, param_pool)?
+                    .eval_to_const()
+                    .map_err(|err| OptionNotConstantError("offset", span, [err]))?
+                    .get_non_neg_int()
+                    .ok_or(OptionNotNonNegIntError("offset", span))?;
+                out_opts.offset = Some(offset as usize);
+            }
+            Rule::sort_option => {
+                for part in pair.into_inner() {
+                    let mut var = "";
+                    let mut dir = SortDir::Asc;
+                    let mut span = part.extract_span();
+                    for a in part.into_inner() {
+                        match a.as_rule() {
+                            Rule::out_arg => {
+                                var = a.as_str();
+                                span = a.extract_span();
+                            }
+                            Rule::sort_asc => dir = SortDir::Asc,
+                            Rule::sort_desc => dir = SortDir::Dsc,
+                            _ => return Err(unexpected("a sort direction or key", &a)),
+                        }
+                    }
+                    out_opts.sorters.push((Symbol::new(var, span), dir));
+                }
+            }
+            Rule::returning_option => {
+                returning_mutation = ReturnMutation::Returning;
+            }
+            Rule::relation_option => {
+                let span = pair.extract_span();
+                let mut args = pair.children();
+                let op_p = args.expect("the relation operation")?;
+                let op = match op_p.as_rule() {
+                    Rule::relation_create => RelationOp::Create,
+                    Rule::relation_replace => RelationOp::Replace,
+                    Rule::relation_put => RelationOp::Put,
+                    Rule::relation_insert => RelationOp::Insert,
+                    Rule::relation_update => RelationOp::Update,
+                    Rule::relation_rm => RelationOp::Rm,
+                    Rule::relation_delete => RelationOp::Delete,
+                    Rule::relation_ensure => RelationOp::Ensure,
+                    Rule::relation_ensure_not => RelationOp::EnsureNot,
+                    _ => return Err(unexpected("a relation operation", &op_p)),
+                };
+
+                let name_p = args.expect("the output relation's name")?;
+                let name = Symbol::new(name_p.as_str(), name_p.extract_span());
+                match args.next() {
+                    None => stored_relation = Some(StagedRelation::Unnamed { name, span, op }),
+                    Some(schema_p) => {
+                        let (mut metadata, mut key_bindings, mut dep_bindings) =
+                            parse_schema(schema_p)?;
+                        if !matches!(op, RelationOp::Create | RelationOp::Replace) {
+                            key_bindings.extend(dep_bindings);
+                            dep_bindings = vec![];
+                            metadata.keys.extend(metadata.non_keys);
+                            metadata.non_keys = vec![];
+                        }
+                        stored_relation = Some(StagedRelation::WithSchema {
+                            handle: InputRelationHandle {
+                                name,
+                                metadata,
+                                key_bindings,
+                                dep_bindings,
+                                span,
+                            },
+                            op,
+                        })
+                    }
+                }
+            }
+            Rule::assert_none_option => {
+                ensure!(
+                    out_opts.assertion.is_none(),
+                    DuplicateQueryAssertion(pair.extract_span())
+                );
+                out_opts.assertion = Some(QueryAssertion::AssertNone(pair.extract_span()))
+            }
+            Rule::assert_some_option => {
+                ensure!(
+                    out_opts.assertion.is_none(),
+                    DuplicateQueryAssertion(pair.extract_span())
+                );
+                out_opts.assertion = Some(QueryAssertion::AssertSome(pair.extract_span()))
+            }
+            Rule::disable_magic_rewrite_option => {
+                let pair = pair.children().expect("the option's boolean expression")?;
+                let span = pair.extract_span();
+                let val = build_expr(pair, param_pool)?
+                    .eval_to_const()
+                    .map_err(|err| OptionNotConstantError("disable_magic_rewrite", span, [err]))?
+                    .get_bool()
+                    .ok_or(OptionNotBoolError("disable_magic_rewrite", span))?;
+                disable_magic_rewrite = val;
+            }
+            Rule::EOI => break,
+            _ => return Err(unexpected("a rule or query option", &pair)),
+        }
+    }
+
+    // A body-less `:create` gets its synthetic constant entry HERE, while
+    // the rule map is still open — `InputProgram::new` (below, called
+    // exactly once) refuses entry-less programs. The CozoDB original built
+    // a bare `InputProgram{}` first and injected the `?` afterwards
+    // (`make_empty_const_rule`); its earlier injection site was dead code —
+    // it tested `out_opts.store_relation` before anything had set it — so
+    // this one synthesis point is the whole behavior. Binding order (deps
+    // before keys) is the original's live site, preserved; only the arity
+    // matters, since the data is empty.
+    if progs.is_empty()
+        && let Some(StagedRelation::WithSchema { handle, op }) = &stored_relation
+        && *op == RelationOp::Create
+    {
+        let mut bindings = handle.dep_bindings.clone();
+        bindings.extend_from_slice(&handle.key_bindings);
+        insert_empty_const_entry(&mut progs, &bindings, handle.span);
+    }
+
+    // The one construction: proves the program has an entry and no rule
+    // set is empty. Every use of `prog` below rides on that proof.
+    let mut prog = InputProgram::new(progs, out_opts, disable_magic_rewrite)?;
+
+    match stored_relation {
+        None => {}
+        Some(StagedRelation::Unnamed { name, span, op }) => {
+            let head = prog.get_entry_out_head()?;
+            for symb in &head {
+                symb.ensure_valid_field()?;
+            }
+
+            let metadata = StoredRelationMetadata {
+                keys: head
+                    .iter()
+                    .map(|s| ColumnDef {
+                        name: s.name.clone(),
+                        typing: NullableColType {
+                            coltype: ColType::Any,
+                            nullable: true,
+                        },
+                        default_gen: None,
+                    })
+                    .collect(),
+                non_keys: vec![],
+            };
+
+            let handle = InputRelationHandle {
+                name,
+                metadata,
+                key_bindings: head,
+                dep_bindings: vec![],
+                span,
+            };
+            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation))
+        }
+        Some(StagedRelation::WithSchema { handle, op }) => {
+            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation))
+        }
+    }
+
+    if !prog.out_opts().sorters.is_empty() {
+        #[derive(Debug, Error, Diagnostic)]
+        #[error("Sort key '{0}' not found")]
+        #[diagnostic(code(parser::sort_key_not_found))]
+        struct SortKeyNotFound(String, #[label] SourceSpan);
+
+        let head_args = prog.get_entry_out_head()?;
+
+        for (sorter, _) in &prog.out_opts().sorters {
+            ensure!(
+                head_args.contains(sorter),
+                SortKeyNotFound(sorter.to_string(), sorter.span)
+            )
+        }
+    }
+
+    #[derive(Debug, Error, Diagnostic)]
+    #[error("Input relation '{0}' has no keys")]
+    #[diagnostic(code(parser::relation_has_no_keys))]
+    struct RelationHasNoKeys(String, #[label] SourceSpan);
+
+    let empty_mutation_head = match &prog.out_opts().store_relation {
+        None => false,
+        Some((handle, _, _)) if handle.key_bindings.is_empty() => {
+            if handle.dep_bindings.is_empty() {
+                true
+            } else {
+                bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
+            }
+        }
+        Some(_) => false,
+    };
+
+    if empty_mutation_head {
+        let head_args = prog.get_entry_out_head()?;
+        // `empty_mutation_head` is only true when `store_relation` matched
+        // `Some` just above; if that proof is ever broken this is a no-op,
+        // not an abort (the original had `else { unreachable!() }`).
+        if let Some((handle, _, _)) = &mut prog.out_opts_mut().store_relation {
+            if head_args.is_empty() {
+                bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
+            }
+            handle.key_bindings = head_args.clone();
+            handle.metadata.keys = head_args
+                .iter()
+                .map(|s| ColumnDef {
+                    name: s.name.clone(),
+                    typing: NullableColType {
+                        coltype: ColType::Any,
+                        nullable: true,
+                    },
+                    default_gen: None,
+                })
+                .collect();
+        }
+    }
+
+    Ok(prog)
+}
+
+/// A `:create`/`:put`/… clause as staged during the option loop, before the
+/// program exists to hang it on. (The original used
+/// `Either<(Symbol, SourceSpan, RelationOp), (InputRelationHandle, RelationOp)>`.)
+enum StagedRelation {
+    /// `:put name` — no schema given; columns come from the entry head.
+    Unnamed {
+        name: Symbol,
+        span: SourceSpan,
+        op: RelationOp,
+    },
+    /// `:create name {…}` — schema written out.
+    WithSchema {
+        handle: InputRelationHandle,
+        op: RelationOp,
+    },
+}
+
+fn parse_rule(
+    src: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+) -> Result<(Symbol, InputInlineRule)> {
+    let span = src.extract_span();
+    let mut src = src.children();
+    let head = src.expect("the rule head")?;
+    let head_span = head.extract_span();
+    let (name, head, aggr) = parse_rule_head(head, param_pool)?;
+
+    #[derive(Debug, Error, Diagnostic)]
+    #[error("Horn-clause rule cannot have empty rule head")]
+    #[diagnostic(code(parser::empty_horn_rule_head))]
+    struct EmptyRuleHead(#[label] SourceSpan);
+
+    ensure!(!head.is_empty(), EmptyRuleHead(head_span));
+    let body = src.expect("the rule body")?;
+    let mut body_clauses = vec![];
+    let mut ignored_counter = 0;
+    for atom_src in body.into_inner() {
+        body_clauses.push(parse_disjunction(
+            atom_src,
+            param_pool,
+            cur_vld,
+            &mut ignored_counter,
+        )?)
+    }
+
+    Ok((
+        name,
+        InputInlineRule {
+            head,
+            aggr,
+            body: body_clauses,
+            span,
+        },
+    ))
+}
+
+fn parse_disjunction(
+    pair: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+    ignored_counter: &mut u32,
+) -> Result<InputAtom> {
+    let span = pair.extract_span();
+    let mut res: Vec<_> = pair
+        .into_inner()
+        .filter_map(|v| match v.as_rule() {
+            Rule::or_op => None,
+            _ => Some(parse_atom(v, param_pool, cur_vld, ignored_counter)),
+        })
+        .try_collect()?;
+    Ok(if res.len() == 1 {
+        // In bounds: length checked to be exactly 1.
+        res.remove(0)
+    } else {
+        InputAtom::Disjunction { inner: res, span }
+    })
+}
+
+fn parse_atom(
+    src: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+    ignored_counter: &mut u32,
+) -> Result<InputAtom> {
+    Ok(match src.as_rule() {
+        Rule::rule_body => {
+            let span = src.extract_span();
+            let grouped: Vec<_> = src
+                .into_inner()
+                .map(|v| parse_disjunction(v, param_pool, cur_vld, ignored_counter))
+                .try_collect()?;
+            InputAtom::Conjunction {
+                inner: grouped,
+                span,
+            }
+        }
+        Rule::disjunction => parse_disjunction(src, param_pool, cur_vld, ignored_counter)?,
+        Rule::negation => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            src.expect("the `not` operator")?;
+            let inner = parse_atom(
+                src.expect("the negated atom")?,
+                param_pool,
+                cur_vld,
+                ignored_counter,
+            )?;
+            InputAtom::Negation {
+                inner: inner.into(),
+                span,
+            }
+        }
+        Rule::expr => {
+            let expr = build_expr(src, param_pool)?;
+            InputAtom::Predicate { inner: expr }
+        }
+        Rule::unify => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            let var = src.expect("the binding")?;
+            let symb = unify_binding_symbol(&var, ignored_counter);
+            let expr = build_expr(src.expect("the unified expression")?, param_pool)?;
+            InputAtom::Unification {
+                inner: Unification {
+                    binding: symb,
+                    expr,
+                    one_many_unif: false,
+                    span,
+                },
+            }
+        }
+        Rule::unify_multi => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            let var = src.expect("the binding")?;
+            let symb = unify_binding_symbol(&var, ignored_counter);
+            src.expect("the `in` operator")?;
+            let expr = build_expr(src.expect("the unified expression")?, param_pool)?;
+            InputAtom::Unification {
+                inner: Unification {
+                    binding: symb,
+                    expr,
+                    one_many_unif: true,
+                    span,
+                },
+            }
+        }
+        Rule::rule_apply => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            let name = src.expect("the applied rule's name")?;
+            let args: Vec<_> = src
+                .expect("the argument list")?
+                .into_inner()
+                .map(|v| build_expr(v, param_pool))
+                .try_collect()?;
+            InputAtom::Rule {
+                inner: InputRuleApplyAtom {
+                    name: Symbol::new(name.as_str(), name.extract_span()),
+                    args,
+                    span,
+                },
+            }
+        }
+        Rule::relation_apply => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            let name = src.expect("the applied relation's name")?;
+            let args: Vec<_> = src
+                .expect("the argument list")?
+                .into_inner()
+                .map(|v| build_expr(v, param_pool))
+                .try_collect()?;
+            let valid_at = parse_validity_clause(src.next(), param_pool, cur_vld)?;
+            InputAtom::Relation {
+                inner: InputRelationApplyAtom {
+                    name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
+                    args,
+                    valid_at,
+                    span,
+                },
+            }
+        }
+        Rule::search_apply => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            let name_p = src.expect("the `relation:index` head")?;
+            let name_segs = name_p.as_str().split(':').collect_vec();
+
+            #[derive(Debug, Error, Diagnostic)]
+            #[error("Search head must be of the form `relation_name:index_name`")]
+            #[diagnostic(code(parser::invalid_search_head))]
+            struct InvalidSearchHead(#[label] SourceSpan);
+
+            ensure!(
+                name_segs.len() == 2,
+                InvalidSearchHead(name_p.extract_span())
+            );
+            let relation = Symbol::new(name_segs[0], name_p.extract_span());
+            let index = Symbol::new(name_segs[1], name_p.extract_span());
+            let bindings: BTreeMap<SmartString<LazyCompact>, Expr> = src
+                .expect("the named bindings")?
+                .into_inner()
+                .map(|arg| extract_named_apply_arg(arg, param_pool))
+                .try_collect()?;
+            let parameters: BTreeMap<SmartString<LazyCompact>, Expr> = src
+                .map(|arg| extract_named_apply_arg(arg, param_pool))
+                .try_collect()?;
+
+            let opts = SearchInput {
+                relation,
+                index,
+                bindings,
+                span,
+                parameters,
+            };
+
+            InputAtom::Search { inner: opts }
+        }
+        Rule::relation_named_apply => {
+            let span = src.extract_span();
+            let mut src = src.children();
+            let name_p = src.expect("the applied relation's name")?;
+            let name = Symbol::new(strip_sigil(&name_p, '*')?, name_p.extract_span());
+            let args = src
+                .expect("the named arguments")?
+                .into_inner()
+                .map(|arg| extract_named_apply_arg(arg, param_pool))
+                .try_collect()?;
+            let valid_at = parse_validity_clause(src.next(), param_pool, cur_vld)?;
+            InputAtom::NamedFieldRelation {
+                inner: InputNamedFieldRelationApplyAtom {
+                    name,
+                    args,
+                    span,
+                    valid_at,
+                },
+            }
+        }
+        _ => return Err(unexpected("a body atom", &src)),
+    })
+}
+
+/// The binding of a unification, with `_` (bind-nothing) replaced by a
+/// fresh generated name so each occurrence stays independent.
+fn unify_binding_symbol(var: &Pair<'_>, ignored_counter: &mut u32) -> Symbol {
+    let symb = Symbol::new(var.as_str(), var.extract_span());
+    if symb.kind() == SymbolKind::Ignored {
+        // `*^*n` is `*`-prefixed: SymbolKind::Generated, so it can never
+        // collide with a user-written name.
+        let fresh = Symbol::new(format!("*^*{ignored_counter}"), symb.span);
+        *ignored_counter += 1;
+        fresh
+    } else {
+        symb
+    }
+}
+
+/// An optional trailing `@ expr` validity clause.
+fn parse_validity_clause(
+    clause: Option<Pair<'_>>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+) -> Result<Option<ValidityTs>> {
+    match clause {
+        None => Ok(None),
+        Some(vld_clause) => {
+            let vld_expr = build_expr(
+                vld_clause.children().expect("the validity expression")?,
+                param_pool,
+            )?;
+            Ok(Some(expr2vld_spec(vld_expr, cur_vld)?))
+        }
+    }
+}
+
+fn extract_named_apply_arg(
+    pair: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+) -> Result<(SmartString<LazyCompact>, Expr)> {
+    let mut inner = pair.children();
+    let name_p = inner.expect("the field name")?;
+    let name = SmartString::from(name_p.as_str());
+    let arg = match inner.next() {
+        Some(a) => build_expr(a, param_pool)?,
+        None => Expr::Binding {
+            var: Symbol::new(name.clone(), name_p.extract_span()),
+            tuple_pos: None,
+        },
+    };
+    Ok((name, arg))
+}
+
+fn parse_rule_head(
+    src: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+) -> Result<(
+    Symbol,
+    Vec<Symbol>,
+    Vec<Option<(Aggregation, Vec<DataValue>)>>,
+)> {
+    let mut src = src.children();
+    let name = src.expect("the rule's name")?;
+    let mut args = vec![];
+    let mut aggrs = vec![];
+    for p in src {
+        let (arg, aggr) = parse_rule_head_arg(p, param_pool)?;
+        args.push(arg);
+        aggrs.push(aggr);
+    }
+    Ok((Symbol::new(name.as_str(), name.extract_span()), args, aggrs))
+}
+
+#[derive(Error, Diagnostic, Debug)]
+#[diagnostic(code(parser::aggr_not_found))]
+#[error("Aggregation '{0}' not found")]
+struct AggrNotFound(String, #[label] SourceSpan);
+
+fn parse_rule_head_arg(
+    src: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+) -> Result<(Symbol, Option<(Aggregation, Vec<DataValue>)>)> {
+    let src = src.children().expect("the head argument")?;
+    Ok(match src.as_rule() {
+        Rule::var => (Symbol::new(src.as_str(), src.extract_span()), None),
+        Rule::aggr_arg => {
+            let mut inner = src.children();
+            let aggr_p = inner.expect("the aggregation's name")?;
+            let aggr_name = aggr_p.as_str();
+            let var = inner.expect("the aggregated binding")?;
+            let args: Vec<_> = inner
+                .map(|v| -> Result<DataValue> { build_expr(v, param_pool)?.eval_to_const() })
+                .try_collect()?;
+            (
+                Symbol::new(var.as_str(), var.extract_span()),
+                Some((
+                    parse_aggr(aggr_name).ok_or_else(|| {
+                        AggrNotFound(aggr_name.to_string(), aggr_p.extract_span())
+                    })?,
+                    args,
+                )),
+            )
+        }
+        _ => return Err(unexpected("a head argument", &src)),
+    })
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("bad specification of validity")]
+#[diagnostic(code(parser::bad_validity_spec))]
+struct BadValiditySpecification(#[label] SourceSpan);
+
+fn parse_fixed_rule(
+    src: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+    cur_vld: ValidityTs,
+) -> Result<(Symbol, FixedRuleApply)> {
+    let mut src = src.children();
+    let (out_symbol, head, aggr) =
+        parse_rule_head(src.expect("the fixed rule's head")?, param_pool)?;
+
+    #[derive(Debug, Error, Diagnostic)]
+    #[error("fixed rule cannot be combined with aggregation")]
+    #[diagnostic(code(parser::fixed_aggr_conflict))]
+    struct AggrInFixedError(#[label] SourceSpan);
+
+    #[derive(Debug, Error, Diagnostic)]
+    #[error("fixed rule cannot have duplicate bindings")]
+    #[diagnostic(code(parser::duplicate_bindings_for_fixed_rule))]
+    struct DuplicateBindingError(#[label] SourceSpan);
+
+    for (a, v) in aggr.iter().zip(head.iter()) {
+        ensure!(a.is_none(), AggrInFixedError(v.span))
+    }
+
+    let mut seen_bindings = BTreeSet::new();
+    let mut binding_gen_id = 0;
+
+    let name_pair = src.expect("the invoked rule's name")?;
+    let fixed_name = &name_pair.as_str();
+    let mut rule_args: Vec<FixedRuleArg> = vec![];
+    let mut options: BTreeMap<SmartString<LazyCompact>, Expr> = Default::default();
+    let args_list = src.expect("the argument list")?;
+    let args_list_span = args_list.extract_span();
+
+    for nxt in args_list.into_inner() {
+        match nxt.as_rule() {
+            Rule::fixed_rel => {
+                let inner = nxt.children().expect("the relation argument")?;
+                let span = inner.extract_span();
+                match inner.as_rule() {
+                    Rule::fixed_rule_rel => {
+                        let mut els = inner.children();
+                        let name = els.expect("the rule name")?;
+                        let mut bindings = Vec::with_capacity(els.size_hint().1.unwrap_or(4));
+                        for v in els {
+                            let s = v.as_str();
+                            if s == "_" {
+                                let symb =
+                                    Symbol::new(format!("*_*{binding_gen_id}"), v.extract_span());
+                                binding_gen_id += 1;
+                                bindings.push(symb);
+                            } else {
+                                if !seen_bindings.insert(s) {
+                                    bail!(DuplicateBindingError(v.extract_span()))
+                                }
+                                let symb = Symbol::new(s, v.extract_span());
+                                bindings.push(symb);
+                            }
+                        }
+                        rule_args.push(FixedRuleArg::InMem {
+                            name: Symbol::new(name.as_str(), name.extract_span()),
+                            bindings,
+                            span,
+                        })
+                    }
+                    Rule::fixed_relation_rel => {
+                        let mut els = inner.children();
+                        let name = els.expect("the relation name")?;
+                        let mut bindings = vec![];
+                        let mut valid_at = None;
+                        for v in els {
+                            match v.as_rule() {
+                                Rule::var => {
+                                    let s = v.as_str();
+                                    if s == "_" {
+                                        let symb = Symbol::new(
+                                            format!("*_*{binding_gen_id}"),
+                                            v.extract_span(),
+                                        );
+                                        binding_gen_id += 1;
+                                        bindings.push(symb);
+                                    } else {
+                                        if !seen_bindings.insert(s) {
+                                            bail!(DuplicateBindingError(v.extract_span()))
+                                        }
+                                        bindings.push(Symbol::new(v.as_str(), v.extract_span()))
+                                    }
+                                }
+                                Rule::validity_clause => {
+                                    let vld_inner =
+                                        v.children().expect("the validity expression")?;
+                                    let vld_expr = build_expr(vld_inner, param_pool)?;
+                                    valid_at = Some(expr2vld_spec(vld_expr, cur_vld)?)
+                                }
+                                _ => {
+                                    return Err(unexpected("a binding or validity clause", &v));
+                                }
+                            }
+                        }
+                        rule_args.push(FixedRuleArg::Stored {
+                            name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
+                            bindings,
+                            valid_at,
+                            span,
+                        })
+                    }
+                    Rule::fixed_named_relation_rel => {
+                        let mut els = inner.children();
+                        let name = els.expect("the relation name")?;
+                        let mut bindings = BTreeMap::new();
+                        let mut valid_at = None;
+                        for p in els {
+                            match p.as_rule() {
+                                Rule::fixed_named_relation_arg_pair => {
+                                    let mut vs = p.children();
+                                    let kp = vs.expect("the field name")?;
+                                    let k = SmartString::from(kp.as_str());
+                                    let v = match vs.next() {
+                                        Some(vp) => {
+                                            if !seen_bindings.insert(vp.as_str()) {
+                                                bail!(DuplicateBindingError(vp.extract_span()))
+                                            }
+                                            Symbol::new(vp.as_str(), vp.extract_span())
+                                        }
+                                        None => {
+                                            if !seen_bindings.insert(kp.as_str()) {
+                                                bail!(DuplicateBindingError(kp.extract_span()))
+                                            }
+                                            Symbol::new(k.clone(), kp.extract_span())
+                                        }
+                                    };
+                                    bindings.insert(k, v);
+                                }
+                                Rule::validity_clause => {
+                                    let vld_inner =
+                                        p.children().expect("the validity expression")?;
+                                    let vld_expr = build_expr(vld_inner, param_pool)?;
+                                    valid_at = Some(expr2vld_spec(vld_expr, cur_vld)?)
+                                }
+                                _ => {
+                                    return Err(unexpected("a field pair or validity clause", &p));
+                                }
+                            }
+                        }
+
+                        rule_args.push(FixedRuleArg::NamedStored {
+                            // The `*` sigil, matching `relation_ident` in
+                            // the grammar. The CozoDB original stripped `:`
+                            // here and panicked on every named-relation
+                            // fixed-rule argument.
+                            name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
+                            bindings,
+                            valid_at,
+                            span,
+                        })
+                    }
+                    _ => return Err(unexpected("a fixed-rule relation argument", &inner)),
+                }
+            }
+            Rule::fixed_opt_pair => {
+                let [name, val] = nxt
+                    .children()
+                    .expect_n(["the option's name", "the option's value"])?;
+                let val = build_expr(val, param_pool)?;
+                options.insert(SmartString::from(name.as_str()), val);
+            }
+            _ => return Err(unexpected("a fixed-rule argument", &nxt)),
+        }
+    }
+
+    let fixed = FixedRuleHandle {
+        name: Symbol::new(*fixed_name, name_pair.extract_span()),
+    };
+
+    let fixed_impl = fixed_rules
+        .get(&fixed.name as &str)
+        .ok_or_else(|| FixedRuleNotFoundError(fixed.name.to_string(), name_pair.extract_span()))?;
+    fixed_impl.init_options(&mut options, args_list_span)?;
+    let arity = fixed_impl.arity(&options, &head, name_pair.extract_span())?;
+
+    ensure!(
+        head.is_empty() || arity == head.len(),
+        FixedRuleHeadArityMismatch(arity, head.len(), args_list_span)
+    );
+
+    Ok((
+        out_symbol,
+        FixedRuleApply {
+            fixed_handle: fixed,
+            rule_args,
+            options: Arc::new(options),
+            head,
+            arity,
+            span: args_list_span,
+            fixed_impl: fixed_impl.clone(),
+        },
+    ))
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Fixed rule head arity mismatch")]
+#[diagnostic(code(parser::fixed_rule_head_arity_mismatch))]
+#[diagnostic(help("Expected arity: {0}, number of arguments given: {1}"))]
+struct FixedRuleHeadArityMismatch(usize, usize, #[label] SourceSpan);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Encountered empty row for constant rule")]
+#[diagnostic(code(parser::const_rule_empty_row))]
+struct EmptyRowForConstRule(#[label] SourceSpan);
+
+/// The synthetic entry of a body-less `:create`: a `Constant` rule with no
+/// rows, headed by the declared columns. Inserted into the still-open rule
+/// map — this must run before `InputProgram::new`, which refuses entry-less
+/// programs.
+fn insert_empty_const_entry(
+    progs: &mut BTreeMap<Symbol, InputInlineRulesOrFixed>,
+    bindings: &[Symbol],
+    span: SourceSpan,
+) {
+    let entry_symbol = Symbol::prog_entry(span);
+    let mut options = BTreeMap::new();
+    options.insert(
+        SmartString::from("data"),
+        Expr::Const {
+            val: DataValue::List(vec![]),
+            span,
+        },
+    );
+    progs.insert(
+        entry_symbol,
+        InputInlineRulesOrFixed::Fixed {
+            fixed: FixedRuleApply {
+                fixed_handle: FixedRuleHandle {
+                    name: Symbol::new("Constant", span),
+                },
+                rule_args: vec![],
+                options: Arc::new(options),
+                head: bindings.to_vec(),
+                arity: bindings.len(),
+                span,
+                fixed_impl: Arc::new(Constant),
+            },
+        },
+    );
+}
+
+fn expr2vld_spec(expr: Expr, cur_vld: ValidityTs) -> Result<ValidityTs> {
+    let vld_span = expr.span();
+    match expr.eval_to_const()? {
+        DataValue::Num(n) => {
+            let microseconds = n.get_int().ok_or(BadValiditySpecification(vld_span))?;
+            Ok(ValidityTs(Reverse(microseconds)))
+        }
+        DataValue::Str(s) => match &s as &str {
+            "NOW" => Ok(cur_vld),
+            "END" => Ok(MAX_VALIDITY_TS),
+            s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(vld_span))?),
+        },
+        _ => {
+            bail!(BadValiditySpecification(vld_span))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Reverse;
+
+    use super::*;
+    use crate::parse::parse_script;
+
+    fn vld() -> ValidityTs {
+        ValidityTs(Reverse(0))
+    }
+
+    fn parse_single(src: &str) -> Result<InputProgram> {
+        parse_script(src, &Default::default(), &Default::default(), vld())?.get_single_program()
+    }
+
+    /// THE LANDMINE: a body-less `:create` must parse. The constant `?`
+    /// entry is synthesized into the rule map BEFORE `InputProgram::new`
+    /// runs, because the constructor refuses entry-less programs (the
+    /// CozoDB original injected it after building a bare struct).
+    #[test]
+    fn bodyless_create_synthesizes_the_entry() {
+        let prog = parse_single(":create t {k: Int => v}").unwrap();
+        assert_eq!(prog.get_entry_arity().unwrap(), 2);
+        match prog.entry() {
+            InputInlineRulesOrFixed::Fixed { fixed } => {
+                assert_eq!(&fixed.fixed_handle.name as &str, "Constant");
+                assert_eq!(fixed.arity, 2);
+            }
+            other => panic!("expected a synthesized Constant entry, got {other:?}"),
+        }
+        // And the staged relation landed in the options.
+        let (handle, op, _) = prog.out_opts().store_relation.as_ref().unwrap();
+        assert_eq!(&handle.name as &str, "t");
+        assert_eq!(*op, RelationOp::Create);
+    }
+
+    /// A body-less `:create` without a schema has no columns to synthesize
+    /// an entry from: it is the same no-entry error any entry-less program
+    /// gets, raised at the single `InputProgram::new` construction site.
+    #[test]
+    fn bodyless_create_without_schema_is_no_entry() {
+        let err = parse_single(":create t").unwrap_err();
+        assert!(err.to_string().contains("entry"), "got: {err}");
+    }
+
+    /// A body-less `:put` (not `:create`) gets no synthesized entry either.
+    #[test]
+    fn bodyless_put_is_no_entry() {
+        assert!(parse_single(":put t {k => v}").is_err());
+    }
+
+    /// A const rule (`<-`) parses into a Constant fixed application.
+    #[test]
+    fn const_rule_parses() {
+        let prog = parse_single("?[a, b] <- [[1, 2], [3, 4]]").unwrap();
+        assert_eq!(prog.get_entry_arity().unwrap(), 2);
+    }
+
+    /// Aggregations in rule heads resolve by value (`Aggregation` is Copy).
+    #[test]
+    fn aggregations_resolve() {
+        let prog = parse_single("?[count(a)] := a in [1, 2, 3]").unwrap();
+        assert_eq!(prog.get_entry_arity().unwrap(), 1);
+        let head = prog.get_entry_out_head().unwrap();
+        assert_eq!(&head[0] as &str, "count(a)");
+    }
+
+    /// An unknown aggregation is a spanned error.
+    #[test]
+    fn unknown_aggregation_errors() {
+        assert!(parse_single("?[frobnicate(a)] := a in [1, 2]").is_err());
+    }
+}

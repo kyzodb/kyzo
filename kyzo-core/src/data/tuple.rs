@@ -94,16 +94,23 @@ pub fn encode_tuple_key(relation_id: u64, tuple: &[DataValue]) -> EncodedKey {
 
 /// Parse a claimed key into its tuple. Fallible: the bytes may be corrupt.
 pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple> {
+    let mut ret = Vec::with_capacity(size_hint);
+    decode_key_into(key, &mut ret)?;
+    Ok(ret)
+}
+
+/// As [`decode_tuple_from_key`], but appending into a caller-owned buffer —
+/// the batched scan's allocation-free row decode.
+pub fn decode_key_into(key: &[u8], out: &mut Vec<DataValue>) -> Result<()> {
     let Some(mut remaining) = key.get(EncodedKey::RELATION_PREFIX_LEN..) else {
         bail!("corrupt tuple key: shorter than the relation-id prefix");
     };
-    let mut ret = Vec::with_capacity(size_hint);
     while !remaining.is_empty() {
         let (val, next) = DataValue::decode_from_key(remaining)?;
-        ret.push(val);
+        out.push(val);
         remaining = next;
     }
-    Ok(ret)
+    Ok(())
 }
 
 const DEFAULT_SIZE_HINT: usize = 16;
@@ -182,6 +189,12 @@ pub fn decode_tuple_from_kv(key: &[u8], val: &[u8], size_hint: Option<usize>) ->
 }
 
 /// Extend a key-decoded tuple with the non-key columns stored in the value.
+///
+/// MEASURED (vectorization camp 2): a streaming `DeserializeSeed` that
+/// appended into the existing buffer — saving this function's intermediate
+/// `Vec` — made decode-heavy workloads 3x SLOWER (join3 41ms -> 150ms);
+/// `rmp_serde::from_slice`'s monolithic path is faster than element-at-a-time
+/// seeded deserialization despite the extra allocation. Keep the Vec.
 pub fn extend_tuple_from_v(key: &mut Tuple, val: &[u8]) -> Result<()> {
     if val.is_empty() {
         return Ok(());

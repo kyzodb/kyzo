@@ -13,8 +13,19 @@
 //! - **Ordered range scans** — fjall keyspaces are LSM trees iterated in raw
 //!   byte order, which under the memcmp encoding equals semantic value order.
 //! - **MVCC commit with conflict detection** — fjall's optimistic (SSI)
-//!   transactions track every read and range; `commit()` surfaces `Conflict`
-//!   as an error and abandons the write set.
+//!   transactions track every read and range; at commit the oracle validates
+//!   the READ set against transactions committed after this one's snapshot
+//!   and surfaces `Conflict` as an error, abandoning the write set. fjall's
+//!   own oracle validates reads only, so [`WriteTx::put`] and
+//!   [`WriteTx::del`] additionally mark the written key READ (contract v2:
+//!   writes are validated too — see `storage/mod.rs`, "Contract history"),
+//!   which puts every written key on the validated surface and makes a
+//!   write-write race abort its second committer. The marking read is a
+//!   `contains_key` issued AFTER the write, so it resolves in the
+//!   transaction's own memtable — no disk I/O — while still registering in
+//!   the conflict manager. A commit with an empty write set returns before
+//!   the oracle runs — it never aborts and certifies nothing about what was
+//!   read.
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
 //! - **Validity-in-key as-of scans** — a seek loop: each step opens a fresh
@@ -221,6 +232,26 @@ pub struct FjallWriteTx {
     db: OptimisticTxDatabase,
 }
 
+impl FjallWriteTx {
+    /// Contract v2 (write-set validation): put every written key on the
+    /// commit-time conflict surface. fjall's `insert`/`remove` register the
+    /// key only as a conflict SOURCE (something that aborts *others*); the
+    /// oracle validates a transaction's READ set alone. The only public path
+    /// into fjall's read tracking is an actual read, so issue a
+    /// `contains_key` for the key just written: it resolves against the
+    /// transaction's own memtable — the key was written a moment ago, value
+    /// or tombstone alike — so it costs no disk I/O, and the side effect is
+    /// exactly the `mark_read` that makes the oracle abort this commit if a
+    /// concurrent transaction committed a write to the same key. Mutating
+    /// this call away breaks `write_write_race_aborts_second_committer`.
+    fn mark_written_key_validated(&mut self, key: &[u8]) -> Result<()> {
+        self.tx
+            .contains_key(&self.ks, key)
+            .map_err(|e| miette!("fjall read: {e}"))?;
+        Ok(())
+    }
+}
+
 /// Both fjall read views (`Snapshot`, `OptimisticWriteTx`) speak `Readable`;
 /// every read-side operation is written once against that.
 fn raw_range<'a, R: Readable>(
@@ -229,13 +260,29 @@ fn raw_range<'a, R: Readable>(
     lower: &[u8],
     upper: &[u8],
 ) -> impl Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a {
+    // Degenerate-bounds guard, at the single choke point every range scan,
+    // skip scan, and del_range pass through. The contract says `[lower,
+    // upper)` with `lower >= upper` is simply EMPTY — but the bounds must
+    // never reach fjall: a write transaction records the requested bounds
+    // verbatim in its conflict manager and replays them through
+    // `BTreeSet::range` at COMMIT time, which panics on an inverted range —
+    // inside the commit oracle, while holding the global write-serialize
+    // lock, poisoning the whole store for every later transaction. An
+    // inverted range is answered here (empty, nothing tracked) and fjall
+    // never sees it. Skipping the read tracking is sound: an empty range
+    // has no phantoms to protect against.
+    let bounds_valid = lower < upper;
     // fjall clones bounds internally; borrowing here avoids two Vec
     // allocations per call on the skip scan's hottest path.
     let bounds: (Bound<&[u8]>, Bound<&[u8]>) = (Bound::Included(lower), Bound::Excluded(upper));
-    reader.range::<&[u8], _>(ks, bounds).map(|guard| {
-        let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-        Ok((k.to_vec(), v.to_vec()))
-    })
+    bounds_valid
+        .then(|| reader.range::<&[u8], _>(ks, bounds))
+        .into_iter()
+        .flatten()
+        .map(|guard| {
+            let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
+            Ok((k.to_vec(), v.to_vec()))
+        })
 }
 
 fn read_get<R: Readable>(
@@ -314,12 +361,12 @@ impl_read_tx!(FjallWriteTx, tx);
 impl WriteTx for FjallWriteTx {
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.tx.insert(&self.ks, key, val);
-        Ok(())
+        self.mark_written_key_validated(key)
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
         self.tx.remove(&self.ks, key);
-        Ok(())
+        self.mark_written_key_validated(key)
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
