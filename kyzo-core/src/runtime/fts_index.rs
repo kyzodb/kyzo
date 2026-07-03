@@ -593,12 +593,21 @@ pub(crate) struct FtsSearchParams {
 /// Full-text search. Returns matching base-relation rows, highest score
 /// first, each optionally extended by its score (a trailing `Float`).
 ///
-/// # Filter semantics — `k` counts matching rows
+/// # Filter semantics: `k` counts rows that pass the filter
 ///
-/// When `filter_code` is present the score-based truncation is deferred until
-/// after the filter runs, so `k` bounds the number of rows that pass the
-/// filter (mirroring the CozoDB original). With no filter, results are
-/// truncated to `k` by score before the base rows are fetched.
+/// A filtered search returns exactly `min(k, M)` rows, where `M` is the
+/// number of query-matching documents whose base rows pass the filter —
+/// the same result-set guarantee as the HNSW operator
+/// (`hnsw::hnsw_knn`'s filter semantics), and for the same reason: a
+/// search node's output
+/// joins and negates like any relation, so a silently short result would
+/// be a wrong answer, not a ranking artifact. Here the guarantee needs no
+/// fallback: the scored candidate set is the COMPLETE evaluation of the
+/// query AST over the posting lists, so deferring the `k`-truncation
+/// until after the per-row filter is exact by construction. The cost is
+/// that a selective filter fetches base rows down the score order until
+/// `k` pass. With no filter, results are truncated to `k` by score before
+/// any base row is fetched.
 ///
 /// `n_total` is [`fts_total_docs`] when `score_kind` is `TfIdf`, else `0`.
 #[allow(clippy::too_many_arguments)]

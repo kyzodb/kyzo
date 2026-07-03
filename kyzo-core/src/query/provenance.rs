@@ -33,6 +33,7 @@
 
 #![cfg(test)]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::ControlFlow;
@@ -238,7 +239,7 @@ impl RuleBody for ModelBody {
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         delta_from: Option<&MagicSymbol>,
         want_premises: bool,
-        f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+        f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
         let mut ordered: Vec<&Literal> = self.body.iter().filter(|l| !l.negated).collect();
         ordered.extend(self.body.iter().filter(|l| l.negated));
@@ -278,7 +279,7 @@ impl RuleBody for ModelBody {
             } else {
                 Premises::NotRequested
             };
-            if f(head, arg)?.is_break() {
+            if f(Cow::Owned(head), arg)?.is_break() {
                 return Ok(());
             }
         }
@@ -318,7 +319,7 @@ impl RuleBody for UnattributedBody {
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         delta_from: Option<&MagicSymbol>,
         want_premises: bool,
-        f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+        f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
         self.0
             .for_each_derivation(stores, delta_from, want_premises, f)

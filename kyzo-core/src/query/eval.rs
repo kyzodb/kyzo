@@ -173,6 +173,7 @@
 //!   clock, so timeout-less budgets are wasm-safe; the wasm binding must
 //!   not set `with_timeout` until a clock shim lands there.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
@@ -587,6 +588,14 @@ pub(crate) enum PremiseSource {
 ///   reads that store's *delta* instead of its total (matching the
 ///   original's `delta_rule` threading). `None` reads totals only.
 ///   Negated occurrences always read totals.
+/// - The callback **consumes a slice**: each derived row crosses the seam
+///   as `Cow<[DataValue]>`, so a producer whose rows live in a batch
+///   buffer passes `Cow::Borrowed` and mints nothing — the consumer
+///   dedups/filters on the slice and materializes ownership
+///   (`into_owned`) only for rows it actually admits. A producer that
+///   already owns the row passes `Cow::Owned`, and admission moves it
+///   without a copy. Re-derived and rejected rows — the bulk of every
+///   recursive fixpoint — therefore allocate nothing on either path.
 /// - The callback returns `ControlFlow::Break` to stop iteration early
 ///   (limiter early-return) — the implementation must stop and return
 ///   `Ok(())`. Errors from the callback (budget interrupts) propagate.
@@ -603,7 +612,7 @@ pub(crate) trait RuleBody: Send + Sync {
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         delta_from: Option<&MagicSymbol>,
         want_premises: bool,
-        f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+        f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()>;
 
     /// The in-memory rule stores this body reads, with multiplicity. The
@@ -1384,7 +1393,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         premise_nodes.push((src.clone(), row));
                     }
                     graph.derivations.push(Derivation {
-                        head: (PremiseSource::Rule(name.clone()), head),
+                        head: (PremiseSource::Rule(name.clone()), head.into_owned()),
                         label: rule_n,
                         weight,
                         premises: premise_nodes,
@@ -1428,7 +1437,10 @@ fn initial_plain_eval<R: RuleBody>(
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
             ticker.tick(out.len())?;
             if should_check_limit {
+                // Dedup on the slice; ownership is materialized only for
+                // rows that are genuinely new (the slice-consuming seam).
                 if !out.exists(&item) {
+                    let item = item.into_owned();
                     if recording {
                         note_pending(&mut pending, item.clone(), rule_n, &premises);
                     }
@@ -1442,7 +1454,12 @@ fn initial_plain_eval<R: RuleBody>(
                         return Ok(ControlFlow::Break(()));
                     }
                 }
-            } else {
+            } else if !out.exists(&item) {
+                // Same dedup-before-mint; `note_pending` is first-writer-wins
+                // (`or_insert_with`), so skipping re-derivations changes no
+                // witness. A re-inserted key would only rewrite `false` over
+                // `false` — nothing observable.
+                let item = item.into_owned();
                 if recording {
                     note_pending(&mut pending, item.clone(), rule_n, &premises);
                 }
@@ -1496,38 +1513,45 @@ fn incremental_plain_eval<R: RuleBody>(
         // A `Cell` because `handle` lives across the per-delta iterations
         // while the flag is read between them.
         let hit_limit = std::cell::Cell::new(false);
-        let mut handle = |item: Tuple, premises: Premises<'_>| -> Result<ControlFlow<()>> {
-            ticker.tick(out.len())?;
-            if prev_store.exists(&item) {
-                // Re-derived: already in the total, invisible to the next
-                // epoch — this is what terminates the fixpoint.
-                return Ok(ControlFlow::Continue(()));
-            }
-            if should_check_limit {
-                // Deviations D1/D2: dedup within the epoch before counting,
-                // and record skip flags only here, on the entry rule.
-                if !out.exists(&item) {
+        let mut handle =
+            |item: Cow<'_, [DataValue]>, premises: Premises<'_>| -> Result<ControlFlow<()>> {
+                ticker.tick(out.len())?;
+                if prev_store.exists(&item) {
+                    // Re-derived: already in the total, invisible to the next
+                    // epoch — this is what terminates the fixpoint. The probe
+                    // runs on the slice, so this dominant case mints nothing.
+                    return Ok(ControlFlow::Continue(()));
+                }
+                if should_check_limit {
+                    // Deviations D1/D2: dedup within the epoch before counting,
+                    // and record skip flags only here, on the entry rule.
+                    if !out.exists(&item) {
+                        let item = item.into_owned();
+                        if recording {
+                            note_pending(&mut pending, item.clone(), rule_n, &premises);
+                        }
+                        if limiter.should_skip_next() {
+                            out.put_with_skip(item);
+                        } else {
+                            out.put(item);
+                        }
+                        if limiter.incr_and_should_stop() {
+                            hit_limit.set(true);
+                            return Ok(ControlFlow::Break(()));
+                        }
+                    }
+                } else if !out.exists(&item) {
+                    // Same dedup-before-mint as the initial epoch: first-writer
+                    // `note_pending` and a `false`-over-`false` re-insert make
+                    // skipping intra-epoch re-derivations unobservable.
+                    let item = item.into_owned();
                     if recording {
                         note_pending(&mut pending, item.clone(), rule_n, &premises);
                     }
-                    if limiter.should_skip_next() {
-                        out.put_with_skip(item);
-                    } else {
-                        out.put(item);
-                    }
-                    if limiter.incr_and_should_stop() {
-                        hit_limit.set(true);
-                        return Ok(ControlFlow::Break(()));
-                    }
+                    out.put(item);
                 }
-            } else {
-                if recording {
-                    note_pending(&mut pending, item.clone(), rule_n, &premises);
-                }
-                out.put(item);
-            }
-            Ok(ControlFlow::Continue(()))
-        };
+                Ok(ControlFlow::Continue(()))
+            };
 
         if need_complete_run {
             body.for_each_derivation(stores, None, recording, &mut handle)?;
@@ -1580,7 +1604,7 @@ fn initial_meet_eval<R: RuleBody>(
                     &premises,
                 );
             }
-            out.meet_put(item)?;
+            out.meet_put(&item)?;
             Ok(ControlFlow::Continue(()))
         })?;
         budget.check_interrupt()?;
@@ -1598,7 +1622,7 @@ fn initial_meet_eval<R: RuleBody>(
             })
             .collect::<Result<_>>()?;
         // No pending entry: the identity row's witness is `None` by design.
-        out.meet_put(identity)?;
+        out.meet_put(&identity)?;
     }
     Ok((false, out.wrap(), pending))
 }
@@ -1648,21 +1672,24 @@ fn incremental_meet_eval<R: RuleBody>(
         if !dependencies_changed {
             continue;
         }
-        let mut handle = |item: Tuple, premises: Premises<'_>| -> Result<ControlFlow<()>> {
-            if recording {
-                note_pending(
-                    &mut pending,
-                    project_positions(&item, key_positions),
-                    rule_n,
-                    &premises,
-                );
-            }
-            if out.meet_put_admission_faithful(item, total_meet)? {
-                effective += 1;
-            }
-            ticker.tick(effective as usize)?;
-            Ok(ControlFlow::Continue(()))
-        };
+        let mut handle =
+            |item: Cow<'_, [DataValue]>, premises: Premises<'_>| -> Result<ControlFlow<()>> {
+                if recording {
+                    note_pending(
+                        &mut pending,
+                        project_positions(&item, key_positions),
+                        rule_n,
+                        &premises,
+                    );
+                }
+                // The meet stores are slice consumers end to end: no derived
+                // row is ever minted on this path, owned or not.
+                if out.meet_put_admission_faithful(&item, total_meet)? {
+                    effective += 1;
+                }
+                ticker.tick(effective as usize)?;
+                Ok(ControlFlow::Continue(()))
+            };
         if need_complete_run {
             body.for_each_derivation(stores, None, recording, &mut handle)?;
             budget.check_interrupt()?;
@@ -1986,7 +2013,7 @@ mod tests {
             idx: usize,
             bound: &Bindings,
             premises: &mut Vec<Tuple>,
-            f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+            f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<ControlFlow<()>> {
             if idx == ordered.len() {
                 let head = ground(&self.head, bound);
@@ -1995,7 +2022,7 @@ mod tests {
                 } else {
                     Premises::NotRequested
                 };
-                return f(head, arg);
+                return f(Cow::Owned(head), arg);
             }
             let l = ordered[idx];
             if l.negated {
@@ -2050,7 +2077,7 @@ mod tests {
             stores: &BTreeMap<MagicSymbol, EpochStore>,
             delta_from: Option<&MagicSymbol>,
             want_premises: bool,
-            f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+            f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
             let mut ordered: Vec<&Literal> = self.body.iter().filter(|l| !l.negated).collect();
             ordered.extend(self.body.iter().filter(|l| l.negated));
@@ -3527,12 +3554,12 @@ mod tests {
             _stores: &BTreeMap<MagicSymbol, EpochStore>,
             _delta_from: Option<&MagicSymbol>,
             _want_premises: bool,
-            f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+            f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
             for i in 0..self.a {
                 for j in 0..self.b {
                     self.emitted.fetch_add(1, Ordering::Relaxed);
-                    if f(vec![v(i), v(j)], Premises::NotRequested)?.is_break() {
+                    if f(Cow::Owned(vec![v(i), v(j)]), Premises::NotRequested)?.is_break() {
                         return Ok(());
                     }
                 }
@@ -3862,15 +3889,15 @@ mod tests {
             _stores: &BTreeMap<MagicSymbol, EpochStore>,
             _delta_from: Option<&MagicSymbol>,
             _want_premises: bool,
-            f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+            f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
             for i in 0..self.distinct {
-                if f(vec![v(i), v(0)], Premises::NotRequested)?.is_break() {
+                if f(Cow::Owned(vec![v(i), v(0)]), Premises::NotRequested)?.is_break() {
                     return Ok(());
                 }
             }
             for _ in 0..self.dups {
-                if f(vec![v(0), v(0)], Premises::NotRequested)?.is_break() {
+                if f(Cow::Owned(vec![v(0), v(0)]), Premises::NotRequested)?.is_break() {
                     return Ok(());
                 }
             }
@@ -4068,14 +4095,14 @@ mod tests {
                 _stores: &BTreeMap<MagicSymbol, EpochStore>,
                 _delta_from: Option<&MagicSymbol>,
                 _want_premises: bool,
-                f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+                f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
             ) -> Result<()> {
                 for i in 0..1_000_000i64 {
                     if i == 10 {
                         self.kill.store(true, Ordering::Relaxed);
                     }
                     self.emitted.fetch_add(1, Ordering::Relaxed);
-                    if f(vec![v(i)], Premises::NotRequested)?.is_break() {
+                    if f(Cow::Owned(vec![v(i)]), Premises::NotRequested)?.is_break() {
                         return Ok(());
                     }
                 }
@@ -4783,10 +4810,10 @@ mod tests {
                 _stores: &BTreeMap<MagicSymbol, EpochStore>,
                 delta_from: Option<&MagicSymbol>,
                 _want_premises: bool,
-                f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+                f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
             ) -> Result<()> {
                 if delta_from.is_none() {
-                    let _ = f(vec![v(1)], Premises::NotRequested)?;
+                    let _ = f(Cow::Owned(vec![v(1)]), Premises::NotRequested)?;
                 }
                 Ok(())
             }

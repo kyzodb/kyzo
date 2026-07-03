@@ -630,8 +630,17 @@ pub(crate) fn lsh_put<T: WriteTx>(
 pub(crate) struct LshSearchParams {
     /// Truncate the candidate set to at most `k` rows. UNRANKED but
     /// CONSISTENT: the `k` kept are the SMALLEST `k` by base key — the same
-    /// subset whether or not a filter is present — not similarity-ordered. See
-    /// the module docs.
+    /// subset whether or not a filter is present — not similarity-ordered.
+    ///
+    /// Unranked truncation is a decision, not a leftover. Banding
+    /// guarantees a collision PROBABILITY, not an ordering; ranking the
+    /// cut by estimated Jaccard would silently drop true near-duplicates
+    /// on the noise of a signature estimate while dressing the result as
+    /// a ranking the structure cannot honor. Smallest-k-by-key keeps the
+    /// operator's contract honest (a candidate SET with a deterministic,
+    /// filter-invariant bound), and ranking stays where the engine can do
+    /// it exactly: the relational tier, where candidates join like any
+    /// relation and an explicit similarity expression orders them.
     pub(crate) k: Option<usize>,
 }
 

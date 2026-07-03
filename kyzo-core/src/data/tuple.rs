@@ -190,7 +190,7 @@ pub fn decode_tuple_from_kv(key: &[u8], val: &[u8], size_hint: Option<usize>) ->
 
 /// Extend a key-decoded tuple with the non-key columns stored in the value.
 ///
-/// MEASURED (vectorization camp 2): a streaming `DeserializeSeed` that
+/// MEASURED: a streaming `DeserializeSeed` that
 /// appended into the existing buffer — saving this function's intermediate
 /// `Vec` — made decode-heavy workloads 3x SLOWER (join3 41ms -> 150ms);
 /// `rmp_serde::from_slice`'s monolithic path is faster than element-at-a-time

@@ -154,32 +154,33 @@ pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
 /// The target number of rows per [`Batch`] on the vectorized path. Chosen
 /// large enough to amortize per-batch dynamic dispatch and buffer setup,
-/// small enough that a batch stays L2-resident. A power of two so the
-/// eventual columnar SIMD path can rely on it. See `vectorized-ra-design.md`.
+/// small enough that a batch stays L2-resident. A power of two so a future
+/// columnar SIMD path could rely on it.
 pub(crate) const BATCH_ROWS: usize = 1024;
 
 /// A run of rows flowing through the vectorized (batched) execution path.
 ///
-/// **Row-major for the first camp.** The batch holds whole [`Tuple`]s rather
-/// than per-column `Vec<DataValue>` arrays. This is a deliberate,
-/// measured choice (see the design doc): the substrate is positional tuples,
-/// the predicate/unification VM (`eval_bytecode`) reads a `&[DataValue]`
-/// row, and the store scan already yields split key/value row views — a
-/// row-batch amortizes the per-row costs a profile actually shows (boxed
-/// iterator dispatch, allocation churn, bounds re-derivation) without
-/// rewriting the value VM or the memcmp substrate. A columnar `Batch` is a
-/// later camp, gated on the profile justifying it.
+/// **Row-major, flattened.** Every row's values sit end to end in one
+/// `values` buffer, with `offsets` marking row boundaries ([`Batch::row`],
+/// [`Batch::push_with`]) — not whole [`Tuple`]s, and not per-column
+/// `Vec<DataValue>` arrays. Row-major matches the substrate: the engine's
+/// currency is the positional tuple, the predicate/unification VM
+/// (`eval_bytecode`) reads one `&[DataValue]` row at a time, and the batched
+/// scan (`BatchScanFilter`) decodes raw key/value bytes straight into the
+/// flattened buffer, so a scanned row never exists as its own `Tuple`. A
+/// columnar layout remains possible if a future profile justifies it; row-
+/// major is what serves the VM and the scan as they exist today.
 ///
 /// **Order is load-bearing.** A batch is an order-preserving window over the
-/// operator's tuple stream: `rows` are in exactly the order the iterator
-/// path would emit them. The determinism law (canonical output order) rides
-/// on this — batching must never reorder observable results.
+/// operator's tuple stream: [`Batch::iter_rows`] yields rows in exactly the
+/// order the iterator path would emit them. The determinism law (canonical
+/// output order) rides on this — batching must never reorder observable
+/// results.
 pub(crate) struct Batch {
     /// Every row's values, flattened end to end: two allocations per BATCH
-    /// instead of one `Vec` per row. This is the scan-decode vectorization
-    /// the first camp's profile named — the per-row `Tuple` mint at the
-    /// leaves was the dominant fixpoint cost, and the batched scan now
-    /// decodes straight into this buffer.
+    /// instead of one `Vec` per row. The batched scan decodes raw key/value
+    /// bytes straight into this buffer, so a scanned row never exists as
+    /// its own `Tuple`.
     values: Vec<DataValue>,
     /// Row end offsets into `values`: row `i` is `offsets[i-1]..offsets[i]`
     /// (row 0 starts at 0).
@@ -255,9 +256,11 @@ impl Batch {
         self.values.extend(row);
         self.offsets.push(self.values.len());
     }
-    /// Consume the batch into owned rows, in stream order. This is the seam
-    /// where the batched path rejoins the row-oriented eval callback — the
-    /// ONE place a per-row `Tuple` is minted, and only for admitted rows.
+    /// Consume the batch into owned rows, in stream order. Used only at
+    /// the RA-internal seams where a batched operator feeds a row-oriented
+    /// one (general join, unification); each call mints one `Tuple` per
+    /// row. The eval boundary instead consumes rows as borrowed slices
+    /// ([`Self::iter_rows`]) and mints only on admission.
     pub(crate) fn into_rows(self) -> Vec<Tuple> {
         let mut out = Vec::with_capacity(self.offsets.len());
         let mut values = self.values.into_iter();
@@ -303,19 +306,10 @@ impl Iterator for BatchChunker<'_> {
     }
 }
 
-/// The batched **scan** (+ leaf filter) source. Accumulates up to
-/// `BATCH_ROWS` *surviving* rows from a raw store iterator, applying the
-/// leaf's pushed-down predicates inline against **one reused eval stack**.
-///
-/// This is where the first camp's amortization lives: the iterator path
-/// pays a boxed `filter_map_ok` closure and a `flatten_err` per row and
-/// re-borrows the stack through a captured closure; here the predicate loop
-/// and the stack are a plain owned struct, monomorphized per source type,
-/// with no per-row dynamic dispatch. Order is the store iterator's order,
-/// unchanged — batching only regroups.
-/// The in-memory sibling of [`BatchScanFilter`]: temp-store rows arrive as
-/// owned tuples (they live in the epoch stores, not on disk), so they are
-/// flattened into the batch and filtered in place.
+/// The in-memory sibling of [`BatchScanFilter`]: temp-store rows arrive
+/// already as owned [`Tuple`]s (they live in the epoch stores, not on
+/// disk), so they are flattened into the batch and filtered in place
+/// against one reused eval stack, with no per-row dynamic dispatch.
 struct BatchTupleFilter<I> {
     inner: I,
     filters: Vec<(Vec<Bytecode>, SourceSpan)>,
@@ -356,6 +350,14 @@ impl<I: Iterator<Item = Result<Tuple>>> Iterator for BatchTupleFilter<I> {
     }
 }
 
+/// The batched **scan** (+ leaf filter) source. Accumulates up to
+/// `BATCH_ROWS` *surviving* rows from a raw store iterator, applying the
+/// leaf's pushed-down predicates inline against **one reused eval stack**.
+/// The iterator path pays a boxed `filter_map_ok` closure and a
+/// `flatten_err` per row and re-borrows the stack through a captured
+/// closure; here the predicate loop and the stack are a plain owned struct,
+/// monomorphized per source type, with no per-row dynamic dispatch. Order
+/// is the store iterator's order, unchanged — batching only regroups.
 struct BatchScanFilter<I> {
     /// The RAW key/value byte stream: rows decode straight into the
     /// flattened batch, so no per-row `Tuple` is ever minted on this path.
@@ -1009,15 +1011,21 @@ impl RelAlgebra {
     /// Iterate the whole tree lazily as a stream of [`Batch`]es — the
     /// vectorized execution path. Same three-argument seam as [`iter`], same
     /// observable stream (identical rows in identical order); the batch is
-    /// an execution-internal grouping that never escapes to the semi-naive
-    /// loop (`CompiledRuleBody::for_each_derivation` flattens it back).
+    /// an execution-internal grouping. `CompiledRuleBody::for_each_derivation`
+    /// (`query/compile.rs`) hands each batch row to the eval callback as a
+    /// `Cow::Borrowed` slice into the batch's flattened buffer — no
+    /// flattening back into owned tuples, and no row is minted unless eval
+    /// admits it.
     ///
-    /// The default for every operator is [`BatchChunker`] over its `iter`
-    /// stream — correct-but-unamortized. Operators that own a native batched
-    /// implementation (the scan→filter→project pipeline of the first camp)
-    /// override this to skip the tuple-at-a-time round trip. Batched and
-    /// unbatched nodes compose freely because both currencies are just
-    /// windows over the same ordered tuple stream.
+    /// `TempStoreRA`, `StoredRA`, `FilteredRA`, `ReorderRA`, and `InnerJoin`
+    /// (for its unit-left case only, see [`InnerJoin::iter_batched`]) own a
+    /// native batched implementation and override this method to skip the
+    /// tuple-at-a-time round trip. Every other operator — `InlineFixedRA`,
+    /// `NegJoin`, `UnificationRA`, `StoredWithValidityRA`, a general
+    /// (non-unit) `InnerJoin`, `SearchRA` — inherits the default below:
+    /// [`BatchChunker`] over its `iter` stream, correct but unamortized.
+    /// Batched and unbatched nodes compose freely because both currencies
+    /// are just windows over the same ordered tuple stream.
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
@@ -1030,12 +1038,13 @@ impl RelAlgebra {
             RelAlgebra::TempStore(r) => r.iter_batched(delta_rule, stores),
             RelAlgebra::Stored(v) => v.iter_batched(tx),
             // Join is batched only for the unit-left case (the scan seed);
-            // a general join chunks the iterator join (later camp).
+            // a general join falls back to chunking the iterator join,
+            // correct but unamortized (see InnerJoin::iter_batched).
             RelAlgebra::Join(j) => j.iter_batched(tx, delta_rule, stores),
             // Every other operator inherits the correct default: chunk its
-            // existing tuple stream. Negation, unification and the
-            // fixed/time-travel scans stay tuple-at-a-time for now (later
-            // camps); they still compose on the batched path via the chunker.
+            // existing tuple stream. Negation, unification, and the
+            // fixed/time-travel scans stay tuple-at-a-time; they still
+            // compose on the batched path via the chunker.
             other => Ok(Box::new(BatchChunker {
                 inner: other.iter(tx, delta_rule, stores)?,
             })),
@@ -1759,7 +1768,7 @@ impl StoredRA {
     /// Batched form of [`iter`](Self::iter): the same on-disk range, same
     /// pushed-down filters, same memcmp order — but fed RAW bytes and
     /// decoded straight into the flattened batch, so the scan mints no
-    /// per-row `Tuple` (the first camp's named target).
+    /// per-row `Tuple`.
     fn iter_batched<'a>(&'a self, tx: &'a impl ReadTx) -> Result<BatchIter<'a>> {
         Ok(Box::new(BatchScanFilter {
             inner: self.storage.scan_all_raw(tx),
@@ -2527,20 +2536,20 @@ impl InnerJoin {
         }
     }
 
-    /// Batched form of [`iter`](Self::iter), covering the first camp's one
-    /// case: a **unit-left join**. Every rule body is seeded with the `unit`
+    /// Batched form of [`iter`](Self::iter), covering one case natively: a
+    /// **unit-left join**. Every rule body is seeded with the `unit`
     /// relation (one empty row, no columns) and atoms are folded on by
     /// joining, so a single-relation scan compiles to `Join(unit, scan)`.
     /// With an empty left the join has no keys and its output is exactly the
     /// right relation's rows (each extended by the empty tuple), minus any
     /// eliminated columns — identical rows in identical order to the
     /// iterator path's `prefix_join` over the single unit row. Delegating to
-    /// `right.iter_batched` is what lets the scan→filter→project pipeline run
+    /// `right.iter_batched` is what lets a scan→filter→project chain run
     /// fully batched (otherwise the scan sits under this join and the
     /// default chunker would re-run the iterator scan).
     ///
-    /// A general (non-unit) join is a later camp: fall back to chunking the
-    /// iterator join, which is correct but unamortized.
+    /// A general (non-unit) join falls back to chunking the iterator join —
+    /// correct but unamortized.
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
@@ -3079,12 +3088,14 @@ mod tests {
     /// `InnerJoin::iter_batched`'s unit-left fast path must NOT fire for a
     /// data-bearing singleton Fixed left: `is_unit` requires empty bindings,
     /// not just a single row. Today the compiler only ever seeds `unit`, so
-    /// no compiled plan can reach this shape — but the constant-rule wiring
-    /// (db.rs, later story) will mint data-bearing Fixed nodes, and the
-    /// mutation campaign showed the bindings check is otherwise untested
-    /// (mutant K4 survived every compiled-plan differential). This pins the
-    /// guard at the RA level: Join(singleton Fixed, spread-unify) must be
-    /// identical on both paths, i.e. a real join, not a right passthrough.
+    /// no compiled plan reaches this shape through the current compiler —
+    /// but `InlineFixedRA` already supports data-bearing rows and nothing in
+    /// its type rules out a non-unit Fixed left, so the guard must hold
+    /// independent of what constructs the plan. The mutation campaign showed
+    /// the bindings check is otherwise untested (mutant K4 survived every
+    /// compiled-plan differential). This pins the guard at the RA level:
+    /// Join(singleton Fixed, spread-unify) must be identical on both paths,
+    /// i.e. a real join, not a right passthrough.
     #[test]
     fn batched_join_singleton_fixed_left_is_not_unit() {
         let dir = tempfile::tempdir().unwrap();

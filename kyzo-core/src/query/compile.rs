@@ -117,6 +117,7 @@
 //! [`bind_for_eval`], which binds a transaction and yields the
 //! `EvalProgram` that `query/eval.rs::stratified_evaluate` runs.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
@@ -132,7 +133,6 @@ use crate::data::program::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::query::eval::{
     ContainedRuleMultiplicity, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
@@ -832,9 +832,11 @@ pub(crate) struct CompiledRuleBody<'a, T> {
 /// observationally identical (same tuples, same order); the choice is a
 /// performance knob threaded from `bind_for_eval`. This is the single seam
 /// where the tuple-at-a-time iterator tree and the batched (vectorized)
-/// pipeline coexist: `for_each_derivation` picks one and flattens the batch
-/// stream back to the row-oriented callback, so nothing above it — the
-/// semi-naive loop, the admission barrier, the budget — sees a difference.
+/// pipeline coexist: `for_each_derivation` picks one and hands each row to
+/// the slice-consuming callback — borrowed straight out of the batch
+/// buffer on the batched path, owned on the iterator path — so nothing
+/// above it (the semi-naive loop, the admission barrier, the budget) sees
+/// a difference, and no batch row is minted unless eval admits it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExecMode {
     /// The classic `RelAlgebra::iter` tuple stream.
@@ -850,12 +852,12 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         delta_from: Option<&MagicSymbol>,
         _want_premises: bool,
-        f: &mut dyn FnMut(Tuple, Premises<'_>) -> Result<ControlFlow<()>>,
+        f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
         match self.mode {
             ExecMode::Iterator => {
                 for tuple in self.plan.relation.iter(self.tx, delta_from, stores)? {
-                    if f(tuple?, Premises::NotRequested)?.is_break() {
+                    if f(Cow::Owned(tuple?), Premises::NotRequested)?.is_break() {
                         return Ok(());
                     }
                 }
@@ -866,8 +868,12 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
                     .relation
                     .iter_batched(self.tx, delta_from, stores)?
                 {
-                    for tuple in batch?.into_rows() {
-                        if f(tuple, Premises::NotRequested)?.is_break() {
+                    // Rows cross the seam as borrowed slices into the
+                    // batch's flattened buffer: eval dedups and filters on
+                    // the slice and mints an owned row only on admission.
+                    let batch = batch?;
+                    for row in batch.iter_rows() {
+                        if f(Cow::Borrowed(row), Premises::NotRequested)?.is_break() {
                             return Ok(());
                         }
                     }
@@ -962,6 +968,7 @@ mod tests {
         StoreLifetimes, Unification,
     };
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use crate::data::tuple::Tuple;
     use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
     use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
     use crate::runtime::relation::{create_relation, set_access_level};
@@ -2542,7 +2549,7 @@ mod tests {
                 };
                 let mut seen: Vec<Tuple> = Vec::new();
                 body.for_each_derivation(&stores, None, false, &mut |t, _| {
-                    seen.push(t);
+                    seen.push(t.into_owned());
                     Ok(ControlFlow::Continue(()))
                 })
                 .expect("derives");

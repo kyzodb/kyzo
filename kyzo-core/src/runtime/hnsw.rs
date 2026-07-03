@@ -1578,23 +1578,23 @@ pub(crate) struct HnswKnnParams {
 /// (`Str`), matched list index (`Int` or `Null`), distance (`Float`), and
 /// the matched vector.
 ///
-/// # Filter semantics — READ THIS: fewer than `k` results under a filter
+/// # Filter semantics: exact `min(k, M)`
 ///
-/// The `filter` is applied AFTER graph traversal (post-filtering), exactly
-/// as in the CozoDB original: the graph walk collects up to `ef`
-/// candidates by pure distance, and the filter then discards non-matching
-/// candidates. **A filtered search can therefore return FEWER than `k`
-/// rows even when `k` matching rows exist in the index** — the matches may
-/// simply lie outside the `ef` nearest candidates the walk visited.
-/// Raising `ef` widens the candidate pool at proportional cost. This is a
-/// result-set semantic, not just a performance note; production users must
-/// plan for short result sets under selective filters.
-///
-/// The recorded fix path (ratified ceiling, story #3's Qdrant-informed
-/// roadmap; bench-gated, deliberately NOT in these bones): filter-aware
-/// graph traversal plus cardinality-based strategy selection — estimate
-/// the filter's selectivity and, below a threshold, skip the graph and
-/// scan. The filter being a Datalog predicate makes the estimate possible.
+/// A filtered search returns exactly `min(k, M)` rows, nearest first,
+/// where `M` is the number of index rows satisfying the filter (and the
+/// `radius`, when set) — never fewer. The filter routes to a
+/// cardinality-based plan ([`select_strategy`]): a selective filter takes
+/// the exact O(N) scan; otherwise a filter-aware graph walk runs with a
+/// widened beam, and when the walk under-delivers (its beam can starve on
+/// a hostile distribution) the exact scan repairs the result. The
+/// fallback is load-bearing, not an optimization: it is what upgrades
+/// "post-filter a distance-only candidate pool" — which silently returns
+/// fewer than `k` even when `k` matches exist — into a result-set
+/// guarantee the relational tier can count on (a search node's output
+/// joins and negates like any relation, so a silently short result would
+/// be a wrong ANSWER, not a recall miss). `hnsw_filter_harness` proves
+/// the guarantee: fallback-disabled runs under-deliver, production runs
+/// return exact `min(k, M)`, byte-deterministically.
 ///
 /// `radius` uses the metric's own units — for `L2` the SQUARED Euclidean
 /// distance. A NaN distance cannot occur (see [`IndexVec`]); the
