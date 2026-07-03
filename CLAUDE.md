@@ -1,88 +1,90 @@
 # CLAUDE.md — KyzoDB
 
-KyzoDB is a **pure-Rust fork of [CozoDB](https://github.com/cozodb/cozo)**: one declarative query
-language (Datalog/KyzoScript) over relational, graph, and vector data, with full-text, MinHash-LSH, and
-as-of time travel on one memcomparable, transactional key-value substrate. See `README.md` for the
-product and **`REFACTOR.md` for the full plan.**
+Pure-Rust fork of [CozoDB](https://github.com/cozodb/cozo): one Datalog (KyzoScript) over
+relational, graph, vector, and full-text data, with time travel, on one memcomparable transactional
+KV substrate (`fjall`). `README.md` is the product; `REFACTOR.md` is the plan.
 
-## What we are doing right now
+## The prime directive
 
-A **re-architecture executed kernel-outward**, as stories tracked on the board:
+Build the greatest possible engine. Effort, size, and tedium are not inputs to any decision — you
+do not weigh them, mention them, or let them shape a design. Upstream cozo is a dead reference,
+never a justification. There are no deployed stores: no compatibility, no legacy decode paths, no
+migration gentleness. When two designs compete, the better engine wins, even if it means rework.
 
-- KyzoDB's storage is **`fjall`, a pure-Rust LSM key-value backend**, behind the existing
-  `Storage`/`StoreTx` trait; the cozo base used RocksDB (C++, `cozorocks`) and SQLite (C).
-- Rebrand `cozo` to `kyzo` across the workspace and every language binding.
-- Fork and re-home all the language bindings under KyzoDB.
+## Anti-deferral (your known failure modes — obey these mechanically)
 
-Work only from the board. Each story is self-contained. Do not invent scope, and do not start work
-that isn't a story without saying so.
+- **Hardest work first.** Doing ripe work before hard work is deferral in costume.
+- **No deferral without a named technical blocker.** "Residual," "follow-up," "later," "out of
+  scope," "next camp," and effort-sizing are the words you use when you are avoiding work. If you
+  write one, either name the concrete technical blocker or do the work now.
+- **Fix, don't report.** Every bug found gets fixed immediately by you, landed, and re-verified.
+  The maintainer hears about bugs in past tense.
+- **No options menus.** Decide by the prime directive and execute. Present choices only when the
+  decision is genuinely the maintainer's (public/irreversible acts, product rulings).
+- **Don't document absence — build the thing.** A comment saying something doesn't exist is not
+  work product.
+- **Name the hard work plainly, then do it.** Never smuggle avoidance into a recommendation.
 
-## The board is shared with kyzo-bench
+## How we work
 
-The board (org project **KyzoDB Migration**, `gh project item-list 1 --owner kyzodb`) carries this
-repo's migration stories **and** the benchmark/demo stories (label `trials`, issues #22–#28 and
-#35–#38) that execute in **[`kyzodb/kyzo-bench`](https://github.com/kyzodb/kyzo-bench)**, the public
-proving ground (usually checked out as a sibling, `../kyzo-bench`). The split: comparative
-benchmarks and demos, with their foreign toolchains and opponent engines, live there so this repo's
-pure-Rust invariant stays machine-enforceable; the self-referential trials (determinism campaign,
-crash matrix, fuzzing ledger, proof audit; #29–#34) are tests and scheduled campaigns **here**. If a
-bench rig exposes an engine defect, the fix is engine work in this repo, filed as an issue here.
+- **Work from the board** (org project KyzoDB Migration, `gh project item-list 1 --owner kyzodb`).
+  One story at a time, self-contained; no invented scope without saying so. Keep board status true.
+- **One tree, one branch.** All work happens in the real tree on the current branch. No rsync
+  copies, no agent worktrees, no parallel patch stacks: isolation defers integration conflicts,
+  it does not prevent them.
+- **Verify, never assert.** Every claim about code, compilation, tests, or dependencies is backed
+  by a real `cargo build`/`cargo test`/run or by reading the file. No conclusions from memory.
+- **Never narrow scope to manufacture a clean answer.** Whole-workspace, or say it's partial.
+- **One coherent end state.** Align each story to the ideal target; never manage a half-migrated
+  middle.
+- **Hold the world model.** Read each new message against everything already decided. Do not
+  reshape the plan around the latest sentence; standing decisions stay until revoked.
+- **A question is not a command.** Nothing public or irreversible (pushes to new surfaces,
+  org/repo changes, publishing packages, posting to external projects) without an explicit go.
+- **Adversarial verification.** Land nothing on the author's word — including your own. Validate
+  with the suite, the oracle differentials, and mutation where a guarantee is new. Re-verify the
+  final bytes: a delivered patch once shipped a live mutant its author's green report missed.
+- **Memory caps on every cargo run**: `(ulimit -v 12582912 && timeout 1800 cargo ...)`; mutants
+  `(ulimit -v 8388608 && timeout 600 ...)`. Two machines have been OOM-killed without them.
+- **Benchmarks are instruments, never gates.** Measure before and after; publish the losing runs;
+  a regression the instrument catches is a finding to fix, not to hide.
 
-## How we work (read this before doing anything)
+## kyzo-bench (the sibling lane)
 
-These rules exist because the failure modes below have already cost real trust on this project. The
-maintainer does not read Rust, so these are the load-bearing safeguards.
+Comparative benchmarks and demos, with their foreign toolchains and opponent engines, live in
+[`kyzodb/kyzo-bench`](https://github.com/kyzodb/kyzo-bench) (sibling checkout, `../kyzo-bench`) so
+this repo's pure-Rust invariant stays machine-enforceable. Story #67 is that lane's brief. The
+self-referential trials (determinism campaign, crash matrix, fuzzing ledger, proof audit) are tests
+here. A bench-exposed engine defect becomes an issue in this repo and gets fixed here.
 
-- **Verify, never assert.** Every claim about the code, the dependency graph, what compiles, or what a
-  change does must be backed by a real `cargo build` / `cargo test` / run, or by reading the actual file.
-  No conclusions from memory. If you cannot verify it, say so.
-- **Never narrow scope to manufacture a clean answer.** Analyzing only `cozo-core` and quietly excluding
-  the bindings to produce a tidy "100% Rust" number is sabotage. Whole-workspace or say it's partial.
-- **The bindings are committed work, not deferrable.** All six in-workspace bindings (C, Python, Java,
-  Node, Swift, WASM) and the separate-repo ones (Go, Clojure, Android, the Python client) get ported,
-  rebranded, built, tested, and published. Never re-frame this as "later" or "optional."
-- **Name the hard work.** Do not smuggle avoidance into a recommendation. If a step is hard or tedious,
-  say it plainly and do it.
-- **One coherent target, no interim split-brain.** Align to the ideal end state in a story; do not try to
-  manage a half-migrated middle.
-- **A question is not a command.** Nothing irreversible or public (pushes, org/repo changes, published
-  packages) happens without an explicit go. Draft and show; the maintainer publishes.
-- **Hold the world model; don't chase the last message.** A new message is read against everything
-  already decided, not as a reset. The recurring failure: reflexively reshaping the plan around the
-  latest sentence and abandoning standing decisions nobody revoked.
-- **Hardest work first, always.** Sequencing ripe work ahead of hard work is deferral wearing a
-  schedule's costume. Work leaves a story only with a named hard technical blocker.
-- **Nothing lands without a hostile review.** Drafted-by-agent and written-by-center code alike is
-  contested until an adversarial reviewer briefed to refute has attacked it; fixes of findings get
-  their own pass. Test suites prove their guarantees by mutation, not by passing.
+## Guardrails (high blast radius — verify around every change)
 
-## Guardrails (high blast radius, go slow, verify around changes)
+- **memcmp key encoding** (`data/memcmp.rs`): bytewise key order equals semantic value order. It is
+  the on-disk format; any change is a format migration with round-trip + ordering tests before and
+  after, and a FormatVersion decision.
+- **Storage contract**: ordered range scans, SSI over reads and writes, consuming commits,
+  validity-in-key time travel. Sealed; changes get a contract-history entry.
+- **Query semantics**: the naive oracle (`query/laws.rs`) is judge. Any eval change runs the
+  differentials; the refusal corpus stays refused; stratification and termination get an explicit
+  argument.
+- **Pure Rust**: no C/C++ compiler anywhere in the `kyzo-core`/`kyzo-bin` build. FFI lives only in
+  the bindings (C ABI, pyo3, jni, neon, swift-bridge, wasm-bindgen), each an unsafe zone.
+- **The bindings are committed work.** All six in-workspace plus Go, Clojure, Android, and the
+  Python client get ported, rebranded, built, tested, published. Never reframe as optional.
+- **The core is isolated**: everything depends on `kyzo-core`; it depends on nothing of ours. That
+  ordering is the dependency graph, not permission to skip bindings.
 
-- **memcomparable key encoding** (`data/memcmp.rs`): the load-bearing invariant is that bytewise order of
-  encoded keys equals semantic value order. It is the on-disk format. Any change is a data-format
-  migration: demand a round-trip + ordering test before and after.
-- **Storage KV backend + time travel**: the backend must give ordered range scans, MVCC commit
-  semantics, and validity-in-key as-of scans. Time travel is not free per relation; preserve it.
-- **FFI is in the bindings, not the engine.** The unsafe FFI surface is the six language bindings (a C
-  ABI, pyo3, jni, neon, swift-bridge, wasm-bindgen); the engine and bin are pure Rust. Treat every binding
-  as an unsafe/foreign-toolchain zone.
-- **Pure-Rust invariant, stated precisely.** `kyzo-core` and `kyzo-bin` have no C/C++ compiler in their
-  build. The bindings are intrinsically FFI and need their host toolchain (Python/JVM/Node/Swift/wasm);
-  that is what a binding is, and it is not something to "eliminate."
-- **The core is isolated.** Everything depends on `kyzo-core`; it depends on none of them. So core + bin
-  can reach green before any binding. That is forced by the dependency graph, not a license to skip
-  bindings.
-
-## Build and test
+## Build, test, gate
 
     cargo build -p kyzo --release
     cargo test  -p kyzo --release
 
-The default build is the pure-Rust KV backend. There is no submodule and no C/C++ toolchain for core/bin.
+A seal requires: full suite green, `cargo clippy --release --all-targets -- -D warnings` clean in
+both feature configs, `cargo fmt --check` clean.
 
 ## Licensing and attribution
 
-- MPL-2.0. **Preserve every CozoDB copyright header and all attribution verbatim**; add ours alongside,
-  never overwrite theirs.
-- KyzoDB is a fork of CozoDB. Credit the original authors; never imply they endorse or maintain KyzoDB.
+- MPL-2.0. Preserve every CozoDB copyright header and all attribution verbatim; add ours alongside,
+  never overwrite. Credit the original authors; never imply endorsement.
 - Incorporated contributor fixes keep their original git authorship.
+- Qdrant-derived design work keeps its Apache-2.0 attribution verbatim.
