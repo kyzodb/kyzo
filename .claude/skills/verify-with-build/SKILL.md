@@ -33,6 +33,17 @@ green while clippy failed. Check the command's own exit code explicitly (e.g. `$
 every gating claim. A green that is not exit-code-verified is not a green — this exact failure has
 already produced a false commit on this project.
 
+## A passing suite proves nothing about itself
+- **Mutation-proof the tests**: a test suite's guarantee is demonstrated by
+  breaking the code it claims to protect and watching it fail — then
+  reverting. A green suite that also stays green under the bug is the bug.
+  (Proven here twice: an under-reporting meet op and a set-intersection
+  computing union both sailed through a "complete" law suite.)
+- **Laws pin lawfulness; only value oracles pin the operation.** Property
+  tests (idempotent, associative, round-trips) admit whole families of
+  wrong implementations that are also lawful. Every operation needs at
+  least one concrete input→output assertion.
+
 ## Reporting
 
 - Quote the actual command and its result (or the failing tail of it). Never summarize a failure as a

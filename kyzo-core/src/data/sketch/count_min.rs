@@ -1,0 +1,371 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+//! Count-Min: frequency estimation whose merge is a monoid, not a lattice.
+//!
+//! A Count-Min sketch is a `depth × width` table of counters. An element is
+//! hashed once per row (seeded [`super::xxh64`] over the value's canonical
+//! encoding, one pinned seed per row); each hash picks a column, and adding
+//! the element increments that row's counter. The estimated frequency of a
+//! value is the *minimum* of its `depth` counters — every counter is an
+//! overestimate (collisions only add), so the smallest is the tightest.
+//!
+//! With `width = ⌈e/ε⌉` and `depth = ⌈ln(1/δ)⌉`, the estimate never
+//! underestimates and, with probability at least `1 − δ`, overestimates the
+//! true count by at most `ε · N`, where `N` is the total count inserted.
+//!
+//! ## Why the merge is a monoid but NOT a meet
+//!
+//! [`CountMinSketch::merge`] adds the two tables element-wise. Addition is
+//! commutative and associative, with the all-zero table as identity — a
+//! commutative monoid — so merging shards is order-independent and exact.
+//! But addition is **not idempotent**: `merge(a, a)` doubles every counter.
+//! A meet aggregation folds a row's contribution into the accumulator and
+//! must be safe to fold *again* (recursion re-derives rows), so a non-
+//! idempotent fold would silently double-count at every fixpoint step.
+//! Count-Min is therefore a **normal aggregation only**, never a meet — the
+//! same reason `bit_xor` is normal-only in `data/aggr.rs`. The
+//! non-idempotence is pinned by a test, so no future change can quietly
+//! promote it to a meet.
+//!
+//! (A *max*-merge variant — take the element-wise maximum — would be a
+//! genuine semilattice, but it estimates the peak per-shard frequency, not
+//! the total, which is a different question. It is documented here and
+//! deliberately not implemented, rather than blurring the two.)
+//!
+//! Counters are `u64` and the merge is integer addition, so the sketch is
+//! exact-to-the-bit deterministic: same input multiset ⇒ same table.
+
+use std::io::Write;
+
+use miette::{Result, bail, ensure};
+
+use crate::data::value::DataValue;
+
+/// One pinned hash seed per row. The sketch uses the first `depth` of these,
+/// so `depth` is capped at their count. Fixed as part of the sketch format.
+const ROW_SEEDS: [u64; 8] = [
+    0x0000_0000_0000_0001,
+    0x9E37_79B9_7F4A_7C15,
+    0xD1B5_4A32_D192_ED03,
+    0xA0761D6478BD642F_u64,
+    0xE7037ED1A0B428DB_u64,
+    0x8EBC6AF09C88C6E3_u64,
+    0x5893_5FD7_D75E_2A5B,
+    0x2545_F491_4F6C_DD1D,
+];
+
+/// Default dimensions: `width = 2048`, `depth = 5`. Gives `ε ≈ e/2048 ≈
+/// 0.00133` and `δ = e^-5 ≈ 0.0067`. Pinned as part of the sketch format.
+pub(crate) const DEFAULT_WIDTH: usize = 2048;
+pub(crate) const DEFAULT_DEPTH: usize = 5;
+
+/// A byte tag leading the serialized form; bump on any layout change.
+const FORMAT_TAG: u8 = 0x01;
+
+/// A Count-Min sketch: `depth` rows of `width` `u64` counters, row-major.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct CountMinSketch {
+    width: usize,
+    depth: usize,
+    counters: Vec<u64>,
+}
+
+impl CountMinSketch {
+    /// An empty sketch of the given dimensions — the identity element of
+    /// [`Self::merge`]. `width` must be positive and `depth` in
+    /// `1..=ROW_SEEDS.len()`.
+    pub(crate) fn new(width: usize, depth: usize) -> Result<Self> {
+        ensure!(width > 0, "Count-Min width must be positive");
+        ensure!(
+            (1..=ROW_SEEDS.len()).contains(&depth),
+            "Count-Min depth must be in 1..={}, got {depth}",
+            ROW_SEEDS.len()
+        );
+        Ok(Self {
+            width,
+            depth,
+            counters: vec![0u64; width * depth],
+        })
+    }
+
+    /// An empty sketch at the default dimensions.
+    pub(crate) fn default_dims() -> Self {
+        Self::new(DEFAULT_WIDTH, DEFAULT_DEPTH).expect("default dims are valid")
+    }
+
+    /// The column a value maps to in a given row.
+    #[inline]
+    fn column(&self, value: &DataValue, row: usize) -> usize {
+        (super::hash_value(value, ROW_SEEDS[row]) % self.width as u64) as usize
+    }
+
+    /// Add `count` occurrences of `value`.
+    pub(crate) fn add(&mut self, value: &DataValue, count: u64) {
+        for row in 0..self.depth {
+            let col = self.column(value, row);
+            let cell = &mut self.counters[row * self.width + col];
+            *cell = cell.saturating_add(count);
+        }
+    }
+
+    /// The estimated frequency of `value`: the minimum of its row counters.
+    /// A pure function of the table bytes.
+    // Query-side API: exercised by the tests here and consumed by the query
+    // tier (a `count_min_query(sketch, value)` scalar function) on landing.
+    #[allow(dead_code)]
+    pub(crate) fn estimate(&self, value: &DataValue) -> u64 {
+        (0..self.depth)
+            .map(|row| {
+                let col = self.column(value, row);
+                self.counters[row * self.width + col]
+            })
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Merge `other` into `self` by element-wise addition — the monoid
+    /// operation. Sketches must share dimensions. Returns whether any
+    /// counter changed (for uniformity with the meet contract, though
+    /// Count-Min is not exposed as a meet).
+    // Shard-merge API: exercised by tests; consumed when partitioned
+    // sketch-building lands.
+    #[allow(dead_code)]
+    pub(crate) fn merge(&mut self, other: &CountMinSketch) -> Result<bool> {
+        ensure!(
+            self.width == other.width && self.depth == other.depth,
+            "cannot merge Count-Min sketches of {}x{} and {}x{}",
+            self.depth,
+            self.width,
+            other.depth,
+            other.width
+        );
+        let mut changed = false;
+        for (l, r) in self.counters.iter_mut().zip(other.counters.iter()) {
+            if *r != 0 {
+                *l = l.saturating_add(*r);
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Serialize to the portable stored form: `[FORMAT_TAG, depth,
+    /// width(8 LE), counters(8 LE each)...]`. The little-endian counter
+    /// encoding makes the bytes identical on every platform.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + 8 + self.counters.len() * 8);
+        out.write_all(&[FORMAT_TAG, self.depth as u8]).unwrap();
+        out.write_all(&(self.width as u64).to_le_bytes()).unwrap();
+        for c in &self.counters {
+            out.write_all(&c.to_le_bytes()).unwrap();
+        }
+        out
+    }
+
+    /// Parse the stored form, validating tag, dimensions, and length.
+    // Read-side API: exercised by tests; consumed when a stored sketch is
+    // decoded for querying by the runtime tier.
+    #[allow(dead_code)]
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let [tag, depth, w0, w1, w2, w3, w4, w5, w6, w7, rest @ ..] = bytes else {
+            bail!("Count-Min bytes too short: {} bytes", bytes.len());
+        };
+        ensure!(*tag == FORMAT_TAG, "unknown Count-Min format tag {tag:#x}");
+        let depth = *depth as usize;
+        ensure!(
+            (1..=ROW_SEEDS.len()).contains(&depth),
+            "Count-Min depth out of range: {depth}"
+        );
+        let width = u64::from_le_bytes([*w0, *w1, *w2, *w3, *w4, *w5, *w6, *w7]) as usize;
+        ensure!(width > 0, "Count-Min width must be positive");
+        ensure!(
+            rest.len() == width * depth * 8,
+            "Count-Min counter length {} does not match {depth}x{width}",
+            rest.len()
+        );
+        let counters = rest
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        Ok(Self {
+            width,
+            depth,
+            counters,
+        })
+    }
+
+    /// The sketch as a `DataValue::Bytes`.
+    pub(crate) fn to_value(&self) -> DataValue {
+        DataValue::Bytes(self.to_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn val(i: i64) -> DataValue {
+        DataValue::from(i)
+    }
+
+    /// A seeded Zipf-ish stream: element `i` appears `weight(i)` times, for a
+    /// spread of frequencies to test the overestimate bound against.
+    fn build(distinct: i64, dims: (usize, usize)) -> (CountMinSketch, BTreeMap<i64, u64>, u64) {
+        let mut cms = CountMinSketch::new(dims.0, dims.1).unwrap();
+        let mut exact = BTreeMap::new();
+        let mut total = 0u64;
+        for i in 0..distinct {
+            let w = 1 + (i as u64 * 2654435761 % 37);
+            cms.add(&val(i), w);
+            *exact.entry(i).or_insert(0) += w;
+            total += w;
+        }
+        (cms, exact, total)
+    }
+
+    /// ACCURACY vs EXACT: the estimate never underestimates, and the number
+    /// of items whose overestimate exceeds `ε·N` stays within the `δ`
+    /// failure probability. Dimensions and stream are pinned.
+    #[test]
+    fn overestimate_bound_holds() {
+        let (width, depth) = (2048usize, 5usize);
+        let (cms, exact, total) = build(5_000, (width, depth));
+        let epsilon = std::f64::consts::E / width as f64;
+        let delta = (-(depth as f64)).exp();
+        let bound = (epsilon * total as f64).ceil() as u64;
+
+        let mut violations = 0usize;
+        for (&item, &true_count) in &exact {
+            let est = cms.estimate(&val(item));
+            assert!(
+                est >= true_count,
+                "item {item}: underestimate {est} < {true_count}"
+            );
+            if est > true_count + bound {
+                violations += 1;
+            }
+        }
+        // With probability >= 1-delta each item is within the bound; over
+        // `exact.len()` items the expected violations are <= delta*len.
+        let allowed = (delta * exact.len() as f64).ceil() as usize + 1;
+        assert!(
+            violations <= allowed,
+            "{violations} items exceeded the eps*N bound (allowed {allowed})"
+        );
+    }
+
+    /// MONOID LAWS for the merge: commutative, associative, identity. Merge
+    /// then estimate must equal summing the streams.
+    #[test]
+    fn merge_is_a_commutative_monoid() {
+        let a = build(300, (256, 4)).0;
+        let b = build(300, (256, 4)).0;
+        // shift b's stream so it differs
+        let mut b2 = CountMinSketch::new(256, 4).unwrap();
+        for i in 1000..1300 {
+            b2.add(&val(i), 3);
+        }
+        let c = b2;
+
+        // Identity.
+        let mut ai = a.clone();
+        ai.merge(&CountMinSketch::new(256, 4).unwrap()).unwrap();
+        assert_eq!(ai, a, "merge(a, empty) != a");
+
+        // Commutative.
+        let mut ab = a.clone();
+        ab.merge(&b).unwrap();
+        let mut ba = b.clone();
+        ba.merge(&a).unwrap();
+        assert_eq!(ab, ba, "merge not commutative");
+
+        // Associative.
+        let mut lhs = a.clone();
+        lhs.merge(&b).unwrap();
+        lhs.merge(&c).unwrap();
+        let mut bc = b.clone();
+        bc.merge(&c).unwrap();
+        let mut rhs = a.clone();
+        rhs.merge(&bc).unwrap();
+        assert_eq!(lhs, rhs, "merge not associative");
+    }
+
+    /// NOT A MEET: the merge is deliberately not idempotent — `merge(a, a)`
+    /// doubles every counter — which is exactly why Count-Min is a normal
+    /// aggregation and must never be registered as a meet. Pinning this
+    /// stops a future refactor from silently promoting it.
+    #[test]
+    fn merge_is_not_idempotent() {
+        let a = build(100, (128, 3)).0;
+        let mut aa = a.clone();
+        aa.merge(&a).unwrap();
+        assert_ne!(aa, a, "merge(a, a) == a: Count-Min must not be idempotent");
+        // Concretely, the counter for a present item doubles.
+        assert_eq!(aa.estimate(&val(0)), 2 * a.estimate(&val(0)));
+    }
+
+    /// Merging shard sketches equals sketching the concatenated stream —
+    /// the property that makes Count-Min useful across partitions.
+    #[test]
+    fn merge_equals_concatenated_stream() {
+        let mut left = CountMinSketch::new(512, 4).unwrap();
+        let mut right = CountMinSketch::new(512, 4).unwrap();
+        let mut whole = CountMinSketch::new(512, 4).unwrap();
+        for i in 0..500i64 {
+            left.add(&val(i % 50), 1);
+            whole.add(&val(i % 50), 1);
+        }
+        for i in 0..500i64 {
+            right.add(&val(i % 70), 2);
+            whole.add(&val(i % 70), 2);
+        }
+        left.merge(&right).unwrap();
+        assert_eq!(left, whole, "merged shards != whole-stream sketch");
+    }
+
+    /// BYTE IDENTITY across fold orders: counter add is order-free, so the
+    /// same multiset in any order gives byte-identical tables.
+    #[test]
+    fn byte_identical_across_fold_orders() {
+        let mut asc = CountMinSketch::new(256, 4).unwrap();
+        for i in 0..1000i64 {
+            asc.add(&val(i % 123), 1);
+        }
+        let mut desc = CountMinSketch::new(256, 4).unwrap();
+        for i in (0..1000i64).rev() {
+            desc.add(&val(i % 123), 1);
+        }
+        assert_eq!(asc.to_bytes(), desc.to_bytes());
+    }
+
+    /// Round-trip through the stored form, and reject corruption.
+    #[test]
+    fn serialization_round_trips_and_rejects_corruption() {
+        let (cms, _, _) = build(400, (128, 3));
+        assert_eq!(CountMinSketch::from_bytes(&cms.to_bytes()).unwrap(), cms);
+        assert!(CountMinSketch::from_bytes(&[]).is_err());
+        assert!(CountMinSketch::from_bytes(&[0x02, 3, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        let mut short = cms.to_bytes();
+        short.pop();
+        assert!(CountMinSketch::from_bytes(&short).is_err());
+    }
+
+    /// PINNED-LITERAL fingerprint for a fixed input: hash-seed or layout
+    /// drift fails loudly.
+    #[test]
+    fn pinned_sketch_fingerprint() {
+        let mut cms = CountMinSketch::new(2048, 5).unwrap();
+        for i in 0..1000i64 {
+            cms.add(&val(i), 1);
+        }
+        let fingerprint = super::super::xxh64(&cms.to_bytes(), 0);
+        assert_eq!(fingerprint, 0xE5D9_8A0C_6AF2_5EB1);
+    }
+}

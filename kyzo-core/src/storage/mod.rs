@@ -22,13 +22,31 @@
 //!
 //! ## Concurrency economics, stated plainly
 //!
-//! - **Isolation is full SSI** — every read and range in a write transaction
-//!   is conflict-tracked. This is *stricter* than the CozoDB base (snapshot
-//!   reads with write-write conflicts only), which permitted write skew and
-//!   phantom anomalies; KyzoDB does not. The cost: read-heavy write
-//!   transactions conflict more often. Conflicts are typed
-//!   ([`ConflictError`]) and retryable — retry loops are the engine's job
-//!   (see [`retry`]).
+//! - **Isolation is SSI, and READS AND WRITES are the conflict surface** —
+//!   every read, range, and written key in a write transaction is
+//!   conflict-tracked, and commit aborts if anything this transaction READ
+//!   (a point read or a scanned range) or WROTE (a `put` or `del` key) was
+//!   modified by a transaction committed after this one's snapshot. A
+//!   write-write race is therefore first-committer-wins: the second
+//!   committer aborts with the typed conflict and reruns on a fresh
+//!   snapshot. A commit with an empty write set still never aborts — it
+//!   certifies nothing about its reads. Unlike the CozoDB base (snapshot
+//!   reads with write-write conflicts only), write skew and phantoms are
+//!   aborted too — provided the transaction reads what it depends on. The
+//!   cost: write transactions conflict more often, including same-key
+//!   races that last-writer-wins would have merged silently. Conflicts are
+//!   typed ([`ConflictError`]) and retryable — retry loops are the
+//!   engine's job (see [`retry`]).
+//! - **Engine implication: uniqueness is enforced by the write itself.**
+//!   Because written keys are validated, insert-if-absent / uniqueness
+//!   races on the same key abort the losing racer even when it never read
+//!   the key — a blind `put` cannot silently swallow a concurrent insert.
+//!   Reading inside the transaction is still how logic *observes* current
+//!   state; write validation guarantees the race is detected, not that the
+//!   old value was seen.
+//! - **Bulk import is outside the conflict surface.** [`Storage::batch_put`]
+//!   requires exclusive access by precondition and applies its writes
+//!   blind; it is a restore/import side door, not a transaction.
 //! - **Transaction preparation is parallel; commit application is serial.**
 //!   fjall's oracle validates and applies commits one at a time under a
 //!   global lock. Reads, scans, and computation run genuinely concurrently
@@ -39,6 +57,23 @@
 //! - **As-of scans inside write transactions** mark conservatively coarse
 //!   read ranges (one per seek step); prefer read transactions for
 //!   time-travel queries unless the write genuinely depends on them.
+//!
+//! ## Contract history (this contract is SEALED; changes are recorded here)
+//!
+//! - **v2 — write sets are validated at commit (story #3 ruling).** As first
+//!   sealed, the contract validated READS only: a blind write-write race
+//!   (neither side read the key) committed both sides, serialized as
+//!   last-writer-wins. That is serializable — it is an anomaly only when
+//!   logic depended on the old value, which requires a read, and reads were
+//!   validated — but it made uniqueness patterns depend on caller
+//!   discipline ("uniqueness needs a read") instead of on the contract. The
+//!   maintainer ruled that discipline-shaped guarantee an open weakness;
+//!   commit now validates written keys exactly like read keys, and the
+//!   write-write race aborts its second committer with the typed,
+//!   retryable [`ConflictError`]. For the record: FoundationDB- and
+//!   badger-class optimistic oracles validate reads only (blind writes are
+//!   a deliberate throughput feature there); PostgreSQL SSI and
+//!   TiKV/Percolator abort write-write races. KyzoDB sides with the latter.
 
 use std::fmt;
 
@@ -50,7 +85,22 @@ use crate::data::value::ValidityTs;
 
 pub(crate) mod backup;
 pub(crate) mod fjall;
+// The cold Merkle state root over the ordered keyspace, driven by the
+// `::merkle_root` sys-op dispatcher in runtime/db.rs; not every helper has
+// a lib caller yet, so the remainder is allowed rather than expected dead.
+#[allow(dead_code)]
+pub(crate) mod merkle;
 pub(crate) mod retry;
+// With `bench-internals` on (and test off), sim.rs compiles into the lib so
+// `bench_api` can build mem-backend workloads on `SimStorage`; the module's
+// DST-only helpers (scheduler, crash/powercut doubles) are then legitimately
+// unused - allow that in exactly that configuration so `clippy -D warnings`
+// holds for the feature config too.
+#[cfg(any(test, feature = "bench-internals"))]
+#[cfg_attr(all(feature = "bench-internals", not(test)), allow(dead_code))]
+pub(crate) mod sim;
+#[allow(dead_code)]
+pub(crate) mod temp;
 #[cfg(test)]
 mod tests;
 pub(crate) mod verify;
@@ -95,7 +145,12 @@ impl fmt::Display for FormatVersion {
 }
 
 /// A transaction commit failed because a concurrently committed transaction
-/// modified something this one read or wrote.
+/// modified something this one READ (a point read or a scanned range) or
+/// WROTE (a `put` or `del` key).
+///
+/// Reads and writes are the conflict surface: a write-write race aborts its
+/// second committer (first-committer-wins). A commit with an empty write set
+/// still never aborts.
 ///
 /// **Retryable**: rerun the whole transaction. This is a typed error so the
 /// engine can distinguish it programmatically (via `Report::downcast_ref`)
@@ -107,7 +162,8 @@ pub struct ConflictError;
 impl fmt::Display for ConflictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "transaction conflict: a key or range this transaction read or wrote \
-         was modified concurrently; the transaction was aborted, rerun it"
+         was modified by a concurrent commit; the transaction was aborted, \
+         rerun it"
             .fmt(f)
     }
 }
@@ -120,8 +176,21 @@ mod sealed {
     /// sealed — external crates read the contract, they do not implement it.
     pub trait Sealed {}
     impl Sealed for super::fjall::FjallStorage {}
+    impl Sealed for super::temp::TempTx {}
     impl Sealed for super::fjall::FjallReadTx {}
     impl Sealed for super::fjall::FjallWriteTx {}
+    // The deterministic simulator (`storage/sim.rs`) is admitted under
+    // `cfg(test)` only: the seal exists to keep FOREIGN backends from
+    // implementing the contract, and the simulator is not a second backend —
+    // it is the contract's own test double, compiled solely into the test
+    // harness and never into the shipped library. "One backend by decree"
+    // still holds for everything that ships.
+    #[cfg(any(test, feature = "bench-internals"))]
+    impl Sealed for super::sim::SimStorage {}
+    #[cfg(any(test, feature = "bench-internals"))]
+    impl Sealed for super::sim::SimReadTx {}
+    #[cfg(any(test, feature = "bench-internals"))]
+    impl Sealed for super::sim::SimWriteTx {}
 }
 
 /// A storage engine: hands out transactions and supports bulk import.
@@ -178,7 +247,14 @@ pub trait ReadTx: sealed::Sealed + Sync {
 
     /// Scan a range in ascending byte order (which, under the memcmp
     /// encoding, is ascending semantic order). `lower` is inclusive, `upper`
-    /// exclusive.
+    /// exclusive; a degenerate range (`lower >= upper`) is EMPTY — never an
+    /// error, never a panic.
+    ///
+    /// Conflict tracking (in a write transaction): the WHOLE requested
+    /// range counts as read the moment the scan is opened, even if the
+    /// iterator is dropped early — the conservative choice, and the one
+    /// phantom protection needs. Reads served from the transaction's own
+    /// write set still count as tracked reads.
     fn range_scan<'a>(
         &'a self,
         lower: &[u8],
@@ -225,18 +301,37 @@ pub trait ReadTx: sealed::Sealed + Sync {
 /// commit.
 ///
 /// MVCC semantics: `commit` must fail with [`ConflictError`] — discarding
-/// all of the transaction's changes — if any key or range this transaction
-/// read or wrote was modified concurrently by a committed transaction.
+/// all of the transaction's changes — if anything this transaction READ (a
+/// point read or a scanned range) or WROTE (a `put` or `del` key) was
+/// modified concurrently by a committed transaction. Reads and writes are
+/// the conflict surface (contract v2 — see the module docs' history): a
+/// write-write race aborts its second committer, first-committer-wins. A
+/// commit with an empty write set never aborts — a read-only `WriteTx`
+/// commit certifies nothing.
+///
+/// Consequence for engine code: insert-if-absent / uniqueness races on a
+/// key are detected by the write itself — the losing racer aborts with the
+/// typed conflict even if it never read the key. Logic that depends on the
+/// key's current VALUE must still read it inside the transaction.
 pub trait WriteTx: ReadTx {
-    /// Set a key to a value, overwriting any existing value.
+    /// Set a key to a value, overwriting any existing value. The key joins
+    /// the conflict surface: a concurrent committed write to it aborts this
+    /// transaction's commit.
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()>;
 
-    /// Delete a key.
+    /// Delete a key. The key joins the conflict surface exactly as in
+    /// [`put`](Self::put).
     fn del(&mut self, key: &[u8]) -> Result<()>;
 
     /// Delete every key in `[lower, upper)` visible to this transaction —
     /// both snapshot data and the transaction's own writes. After commit, no
     /// key in the range that was visible to this transaction survives.
+    ///
+    /// The range counts toward conflict detection like any read: a
+    /// concurrent commit into it conflicts this transaction. Degenerate
+    /// bounds (`lower >= upper`) denote the empty interval: they delete
+    /// nothing and track nothing — a caller wanting "this interval stays
+    /// empty" protection must pass forward bounds.
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()>;
 
     /// Commit, consuming the transaction: there is no committed-but-alive
@@ -249,6 +344,12 @@ pub trait WriteTx: ReadTx {
     /// Commit and fsync before returning: the transaction survives a power
     /// cut, not just a process crash. Costs an fsync; the engine chooses per
     /// transaction where that price is worth paying.
+    ///
+    /// Failure semantics: if the commit applies but the fsync then fails,
+    /// the transaction IS committed — visible, process-crash durable, not
+    /// yet power-cut durable. The error reports the durability shortfall,
+    /// not a rollback; callers needing all-or-nothing durability must treat
+    /// it accordingly.
     fn commit_durable(self) -> Result<()>
     where
         Self: Sized;

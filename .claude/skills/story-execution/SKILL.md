@@ -15,6 +15,10 @@ means the world model is lost. Appearance is the enemy; reality is the only clie
 
 ## Steps
 1. **Move the story to In Progress** on the board before any work starts.
+   Sequence the work **hardest-first**: before ordering tasks, ask "is this
+   dependency order or comfort order?" — the hardest item startable now
+   comes first. Picking ripe work before hard work is the drift that killed
+   the original plans twice.
 2. **Read the story and `REFACTOR.md`.** Do the story's stated scope and nothing else. Do not invent
    scope; do not start non-story work without saying so.
 3. **One coherent target, max energy.** Every file lands in its exact end-state form. Never land
@@ -32,10 +36,27 @@ means the world model is lost. Appearance is the enemy; reality is the only clie
    enforcement ladder: **compiler > constructor > test**; never let one descend.
 5. **Verify, never assert.** Back every claim about the code or a change with a real `cargo build` /
    `cargo test` / run, or by reading the file. No conclusions from memory.
-6. **Do not narrow scope to look done.** Whole-workspace, or say it is partial. Bindings are committed
+6. **Commits seal, they don't checkpoint.** Nothing commits until its
+   hostile pass has cleared AND its findings are fixed — one commit per
+   sealed unit. Crash protection for uncommitted work is scratchpad drafts
+   and verify-tree copies, never premature commits: a commit that precedes
+   its review puts unsealed work in history wearing a sealed commit's
+   clothes.
+7. **No landing without a hostile review.** Nothing is "done" — agent-drafted
+   or center-written alike — until an adversarial reviewer briefed to REFUTE
+   has attacked it and its findings are fixed; fixes-of-findings get their
+   own hostile pass (fixes are where regressions hide). An agent's
+   self-verification covers mechanical claims only; semantic claims are
+   contested territory until attacked. The center's code gets the same
+   suspicion — the reviewers have caught it repeatedly.
+8. **Deferral is sabotage unless blocked.** Work may leave the current story
+   only with a named hard technical blocker (a true dependency, not
+   difficulty, size, or tidiness). "Queued with reasons" and "follow-up
+   story" are this project's number-one smuggling route for avoidance.
+9. **Do not narrow scope to look done.** Whole-workspace, or say it is partial. Bindings are committed
    work, not deferrable; name hard work plainly instead of smuggling avoidance into a recommendation.
-7. **Honor the DoD.** A story is done only when its Definition of Done is met and verified.
-8. **Nothing public without a go.** Pushes and published packages wait for an explicit go from the
+10. **Honor the DoD.** A story is done only when its Definition of Done is met and verified.
+11. **Nothing public without a go.** Pushes and published packages wait for an explicit go from the
    maintainer.
 
 ## Dependency order

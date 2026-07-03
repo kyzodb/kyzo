@@ -12,6 +12,19 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # fxhash is unmaintained (advisory-class: unmaintained, not a vulnerability).
+  # It is reached only through the deliberate jieba-rs =0.7.0 purity pin (the
+  # FTS tokenizer tier; see kyzo-core/Cargo.toml). Accepted knowingly; the
+  # revisit — pure-Rust jieba alternatives — is recorded on issue #18.
+  "RUSTSEC-2025-0057",
+  # bincode 1.x is unmaintained (same advisory class, not a vulnerability).
+  # It is a build-dependency of fast2s 0.3.1 (the FTS tier's pure-Rust
+  # traditional→simplified Chinese converter); 0.3.1 is the latest fast2s
+  # and no version drops it. Accepted with the same revisit as fxhash:
+  # issue #18's dependency-hygiene triage of the FTS tokenizer tier.
+  "RUSTSEC-2025-0141",
+]
 
 [licenses]
 version = 2
@@ -25,6 +38,7 @@ allow = [
   "Unicode-3.0", # unicode-ident
   "0BSD",        # varint-rs (fjall dep) — public-domain-equivalent
   "BSL-1.0",     # xxhash-rust (fjall dep) — permissive, MPL-compatible
+  "BSD-2-Clause", # cedarwood (jieba-rs's double-array trie) — permissive, MPL-compatible
 ]
 
 [bans]

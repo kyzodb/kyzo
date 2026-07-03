@@ -17,6 +17,17 @@ A **re-architecture executed kernel-outward**, as stories tracked on the board:
 Work only from the board. Each story is self-contained. Do not invent scope, and do not start work
 that isn't a story without saying so.
 
+## The board is shared with kyzo-bench
+
+The board (org project **KyzoDB Migration**, `gh project item-list 1 --owner kyzodb`) carries this
+repo's migration stories **and** the benchmark/demo stories (label `trials`, issues #22–#28 and
+#35–#38) that execute in **[`kyzodb/kyzo-bench`](https://github.com/kyzodb/kyzo-bench)**, the public
+proving ground (usually checked out as a sibling, `../kyzo-bench`). The split: comparative
+benchmarks and demos, with their foreign toolchains and opponent engines, live there so this repo's
+pure-Rust invariant stays machine-enforceable; the self-referential trials (determinism campaign,
+crash matrix, fuzzing ledger, proof audit; #29–#34) are tests and scheduled campaigns **here**. If a
+bench rig exposes an engine defect, the fix is engine work in this repo, filed as an issue here.
+
 ## How we work (read this before doing anything)
 
 These rules exist because the failure modes below have already cost real trust on this project. The
@@ -36,6 +47,14 @@ maintainer does not read Rust, so these are the load-bearing safeguards.
   manage a half-migrated middle.
 - **A question is not a command.** Nothing irreversible or public (pushes, org/repo changes, published
   packages) happens without an explicit go. Draft and show; the maintainer publishes.
+- **Hold the world model; don't chase the last message.** A new message is read against everything
+  already decided, not as a reset. The recurring failure: reflexively reshaping the plan around the
+  latest sentence and abandoning standing decisions nobody revoked.
+- **Hardest work first, always.** Sequencing ripe work ahead of hard work is deferral wearing a
+  schedule's costume. Work leaves a story only with a named hard technical blocker.
+- **Nothing lands without a hostile review.** Drafted-by-agent and written-by-center code alike is
+  contested until an adversarial reviewer briefed to refute has attacked it; fixes of findings get
+  their own pass. Test suites prove their guarantees by mutation, not by passing.
 
 ## Guardrails (high blast radius, go slow, verify around changes)
 

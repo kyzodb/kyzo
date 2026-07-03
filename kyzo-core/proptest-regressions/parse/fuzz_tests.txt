@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cc9abfa77a53b36c6766388009d137c33aff1c4dc4e992d8901182900c0a310e # shrinks to base = "::hnsw create r:i {}", donor = "?[] := 0", ops = [FlipBracket(Index(0), Index(12297829382473044814))]
+cc 25bf32ce0aaf0ccf101b5190dbfd09540f7f899f3d1aea98e3308b335273659f # shrinks to src = "%if _cond %break %else %if _cond { ::hnsw create r:i {} } as _res %else { ?[] := not not *_tmp{ @ '2020-01-01T00:00:00Z'}; } as _q %end %end"
+cc 7e145366e85db944d398b854eed06a86b48a37fd219c22680b0daa4b25126ed0 # shrinks to src = "r[a] := a in 0xdead_beef"
+cc cd931c28d63b54d8b09f3dedb656b1d0fb7b292e6b97abbedd7dd6763b4e1f8b # shrinks to src = "?[] <- [0]"
+cc cb17f679b924f54d8ba5d1aa0db1f1ec3523f6e43e0b28e56342f70ac473f0e4 # shrinks to base = "?[score, a] <- [0xdead_beef]\n?[xs] := 变量 = length(true)\n?[shortest(_hidden)] <~ BreadthFirstSearch()", donor = "?[] <- 123456789012345678901234567890", ops = [Splice(Index(6500281245021461046), Index(2427203167593362055))]
