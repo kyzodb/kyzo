@@ -1772,13 +1772,13 @@ pub(crate) fn hnsw_knn(
 // Qdrant's connectivity backstop for the selective regime is extra payload-aware
 // graph edges; KyzoDB's `HnswRow::Edge` is metric-only, so this engine instead
 // routes through the FULL graph (never disconnecting) and leans on the exact
-// scan fallback for the k-guarantee — see `hnsw-filter-design.md` §R.
+// scan fallback for the k-guarantee (see `hnsw_knn`'s filter-semantics doc).
 //
 // SEPARATION: these paths own their own `(distance, encoded-key)` total-ordered
 // accumulator and never touch `hnsw_knn`'s unfiltered result-ordering tail.
 // ---------------------------------------------------------------------------
 
-/// Sample size for the selectivity estimator (§3). Small and fixed: the
+/// Sample size for the selectivity estimator. Small and fixed: the
 /// estimator is a performance device, never a correctness device (the scan
 /// fallback holds regardless), so a coarse estimate is acceptable.
 const HNSW_SAMPLE_SIZE: usize = 256;
@@ -1808,7 +1808,7 @@ enum SearchPlan {
 
 /// One ranked result, ordered by `(distance, encoded-key)` — a TOTAL order, so
 /// the k-truncation boundary is deterministic even among equal distances
-/// (design §5.3; the same tie-break the operator tier imposes on the unfiltered
+/// (the same tie-break the operator tier imposes on the unfiltered
 /// path). `key` is the memcmp encoding of the entry's layer-0 node key.
 struct Ranked {
     dist: OrderedFloat<f64>,
@@ -1999,7 +1999,7 @@ fn layer0_nodes<'a>(
 /// REAL per-query distance, so `dist`-referencing filters estimate correctly.
 ///
 /// The estimate only picks WHICH strategy runs first; the k-guarantee is upheld
-/// by the exact scan fallback regardless (design §4), so a coarse or biased
+/// by the exact scan fallback regardless, so a coarse or biased
 /// estimate can never produce a wrong result count.
 #[allow(clippy::too_many_arguments)]
 fn select_strategy(
@@ -2226,7 +2226,7 @@ fn graph_filtered(
 /// The filter-aware search entry point: estimate selectivity, run the chosen
 /// strategy, and — for the graph strategies — fall back to an exact scan if the
 /// walk under-delivered, so the count guarantee (`min(k, M)`) holds at every
-/// selectivity (design §4). Returns nearest-first, `(distance, key)`-total-
+/// selectivity. Returns nearest-first, `(distance, key)`-total-
 /// ordered rows.
 #[allow(clippy::too_many_arguments)] // mirrors hnsw_knn's own surface
 fn hnsw_knn_filtered(
