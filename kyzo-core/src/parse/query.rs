@@ -334,7 +334,17 @@ pub(crate) fn parse_query(
             }
             Rule::sleep_option => {
                 #[cfg(target_arch = "wasm32")]
-                bail!(":sleep is not supported under WASM");
+                {
+                    #[derive(Debug, Error, Diagnostic)]
+                    #[error("`:sleep` is not supported under WASM")]
+                    #[diagnostic(code(parser::sleep_unsupported_wasm))]
+                    #[diagnostic(help(
+                        "a WASM build has no thread to block on: drop the `:sleep` option \
+                         from this script, or don't run it under wasm32"
+                    ))]
+                    struct SleepUnsupportedOnWasm(#[label] SourceSpan);
+                    bail!(SleepUnsupportedOnWasm(pair.extract_span()));
+                }
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
