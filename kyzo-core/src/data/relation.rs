@@ -480,6 +480,9 @@ impl NullableColType {
                 DataValue::Validity(vld) => {
                     json!([vld.timestamp.0, vld.is_assert.0])
                 }
+                DataValue::Interval(iv) => {
+                    json!([iv.start(), iv.end()])
+                }
                 DataValue::Bot => {
                     json!(null)
                 }

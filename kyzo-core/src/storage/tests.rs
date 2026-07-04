@@ -26,7 +26,7 @@
 //! time-travel scan is checked against a naive full-scan reference
 //! implementation of the as-of semantics.
 
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
@@ -36,7 +36,7 @@ use crate::data::bitemporal::ClaimPolarity;
 use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
-use crate::data::value::{AsOf, DataValue, JsonData, Num, Validity, ValidityTs, Vector};
+use crate::data::value::{AsOf, DataValue, Interval, JsonData, Num, Validity, ValidityTs, Vector};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -132,6 +132,20 @@ fn corpus() -> Vec<DataValue> {
             timestamp: ValidityTs(Reverse(41)),
             is_assert: Reverse(true),
         }),
+        // Intervals: the i64::MIN/MAX boundaries, adjacent pairs (meets: end
+        // of one equals start of the next), an overlapping pair, and an
+        // open-ended interval (end == i64::MAX, the plain-max-tick "END"
+        // convention — see `Interval`'s doc comment).
+        DataValue::Interval(Interval::new(i64::MIN, i64::MIN + 1).unwrap()),
+        DataValue::Interval(Interval::new(-100, -1).unwrap()),
+        DataValue::Interval(Interval::new(-1, 0).unwrap()),
+        DataValue::Interval(Interval::new(0, 1).unwrap()),
+        DataValue::Interval(Interval::new(0, 10).unwrap()),
+        DataValue::Interval(Interval::new(5, 15).unwrap()), // overlaps [0,10)
+        DataValue::Interval(Interval::new(10, 20).unwrap()), // meets [0,10)
+        DataValue::Interval(Interval::new(0, 20).unwrap()), // contains [5,15)
+        DataValue::Interval(Interval::new(100, i64::MAX).unwrap()), // open-ended
+        DataValue::Interval(Interval::new(i64::MAX - 1, i64::MAX).unwrap()),
         DataValue::Bot,
     ];
     // Nested collections — bound by name so corpus insertions can't silently
@@ -207,6 +221,20 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
             timestamp: ValidityTs(Reverse(ts)),
             is_assert: Reverse(a),
         })),
+        // Two arbitrary i64s, ordered into a valid (non-empty) interval: on
+        // a tie there is no valid interval, so that draw is filtered out
+        // rather than coerced (coercing start==end would hide the very
+        // degenerate case `Interval::new` exists to refuse).
+        (any::<i64>(), any::<i64>()).prop_filter_map("valid interval", |(a, b)| {
+            let (start, end) = match a.cmp(&b) {
+                Ordering::Less => (a, b),
+                Ordering::Greater => (b, a),
+                Ordering::Equal => return None,
+            };
+            Some(DataValue::Interval(
+                Interval::new(start, end).expect("start < end"),
+            ))
+        }),
         Just(DataValue::Bot),
     ];
     leaf.prop_recursive(3, 24, 4, |inner| {
@@ -241,6 +269,45 @@ proptest! {
     #[test]
     fn law3_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
         let _ = DataValue::decode_from_key(&bytes);
+    }
+
+    /// Targeted arm of law 2 for `Interval`: two arbitrary uniformly-random
+    /// intervals almost never share a boundary (`arb_value`'s two draws are
+    /// independent over the full `i64` range), so that generic generator has
+    /// no power against a comparison that drops one field while the other
+    /// happens to tie — exactly the shape of a "compare only `start`" or
+    /// "compare only `end`" bug. This arm forces the shared boundary: same
+    /// `start`, two different `end`s (and separately, same `end`, two
+    /// different `start`s), so a dropped-field comparator collapses a real
+    /// `Less`/`Greater` into a wrong `Equal` on almost every draw.
+    #[test]
+    fn law2_order_embedding_shared_boundary_generative(
+        start in any::<i64>(),
+        end in any::<i64>(),
+        delta in 1i64..=1_000_000,
+    ) {
+        // Guard against overflow at the extremes rather than wrapping into a
+        // false failure: skip draws where `end`/`start` sit within `delta`
+        // of i64's bounds.
+        prop_assume!(end.checked_add(delta).is_some());
+        prop_assume!(start.checked_sub(delta).is_some());
+        prop_assume!(end > start);
+
+        let same_start_short = DataValue::Interval(Interval::new(start, end).unwrap());
+        let same_start_long = DataValue::Interval(Interval::new(start, end + delta).unwrap());
+        prop_assert_eq!(
+            same_start_short.cmp(&same_start_long),
+            encode(&same_start_short).cmp(&encode(&same_start_long)),
+            "same-start pair order disagreement: {:?} vs {:?}", same_start_short, same_start_long
+        );
+
+        let same_end_early = DataValue::Interval(Interval::new(start - delta, end).unwrap());
+        let same_end_late = DataValue::Interval(Interval::new(start, end).unwrap());
+        prop_assert_eq!(
+            same_end_early.cmp(&same_end_late),
+            encode(&same_end_early).cmp(&encode(&same_end_late)),
+            "same-end pair order disagreement: {:?} vs {:?}", same_end_early, same_end_late
+        );
     }
 }
 
@@ -1560,10 +1627,10 @@ fn retry_on_conflict_reaches_completion_under_contention() {
 #[test]
 fn format_version_rejects_noncanonical_stamps() {
     use crate::storage::FormatVersion;
-    assert_eq!(FormatVersion::parse(b"3").unwrap(), FormatVersion::CURRENT);
+    assert_eq!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);
     // An older stamp still parses (so the mismatch refusal can NAME it) —
     // it is simply not CURRENT.
-    assert_ne!(FormatVersion::parse(b"2").unwrap(), FormatVersion::CURRENT);
+    assert_ne!(FormatVersion::parse(b"3").unwrap(), FormatVersion::CURRENT);
     for bad in [&b"01"[..], b"+1", b" 1", b"1 ", b""] {
         assert!(
             FormatVersion::parse(bad).is_err(),

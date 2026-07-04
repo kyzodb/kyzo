@@ -50,13 +50,18 @@
 //! than reimplementing any of them.
 //!
 //! `DataValue`'s two directions are not exact inverses — `Bytes`, `Uuid`,
-//! `Regex`, `Set`, `Vec`, `Validity`, and `Bot` are store-internal
+//! `Regex`, `Set`, `Vec`, `Validity`, `Interval`, and `Bot` are store-internal
 //! representations with no plain-JSON input convention, the same asymmetry
 //! the CozoDB original had (a base64 string or a UUID's string form come
 //! out; only `Null`/`Bool`/`Num`/`Str`/`List`/`Json` go back in as those
 //! variants). [`DataValue::from`] is total either direction: JSON has no
 //! shape it can't become *some* `DataValue`, and every `DataValue` variant
-//! has a defined JSON rendering.
+//! has a defined JSON rendering. `Interval` renders as `[start, end]`, the
+//! same two-element-array convention `Validity` uses — a JSON reader gets
+//! the two ticks back, but decoding a two-element JSON array never
+//! reconstructs an `Interval` (it becomes a plain `List`, exactly as a
+//! `[timestamp, is_assert]` array becomes a `List` rather than a
+//! `Validity`).
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -138,6 +143,7 @@ impl From<&DataValue> for JsonValue {
                 Vector::F64(a) => json!(a.iter().copied().collect::<Vec<f64>>()),
             },
             DataValue::Validity(v) => json!([v.timestamp.0.0, v.is_assert.0]),
+            DataValue::Interval(iv) => json!([iv.start(), iv.end()]),
             DataValue::Json(j) => j.0.clone(),
             // Unreachable in a correct query result (see the port note
             // above); `Null` keeps this a total function rather than a
@@ -304,6 +310,21 @@ mod tests {
     #[test]
     fn bot_renders_as_null_never_panics() {
         assert_eq!(JsonValue::from(&DataValue::Bot), JsonValue::Null);
+    }
+
+    #[test]
+    fn interval_renders_as_start_end_array_one_way() {
+        use crate::data::value::Interval;
+        let iv = Interval::new(5, 15).unwrap();
+        let rendered = JsonValue::from(&DataValue::Interval(iv));
+        assert_eq!(rendered, json!([5, 15]));
+        // One-way, like `Validity`: decoding the same two-element array
+        // back through `DataValue::from` produces a plain `List`, never an
+        // `Interval` — there is no plain-JSON input convention for it.
+        assert_eq!(
+            DataValue::from(rendered),
+            DataValue::List(vec![DataValue::from(5), DataValue::from(15)])
+        );
     }
 
     #[test]

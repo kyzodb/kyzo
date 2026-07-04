@@ -44,7 +44,7 @@ use miette::{Result, bail, miette};
 use regex::Regex;
 
 use crate::data::value::{
-    DataValue, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs, Vector,
+    DataValue, Interval, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs, Vector,
 };
 
 // Tags in `DataValue` declaration order: the single source of cross-type order.
@@ -62,6 +62,12 @@ const SET_TAG: u8 = 0x0A;
 const VEC_TAG: u8 = 0x0B;
 const JSON_TAG: u8 = 0x0C;
 const VLD_TAG: u8 = 0x0D;
+// Appended after VLD_TAG (story #62): the value-side interval tag, taking
+// the next free byte in the ordered tag space. Additive on an empty install
+// base — no existing tag moved — but it IS a format-identity change (bytes
+// tagged 0x0E now decode as a value type that didn't exist before), so
+// `FormatVersion::CURRENT` bumps 3 -> 4 alongside it (see `storage/mod.rs`).
+const INTERVAL_TAG: u8 = 0x0E;
 const BOT_TAG: u8 = 0xFF;
 
 /// An encoded `Validity` is always exactly this many bytes (tag + flipped
@@ -168,6 +174,18 @@ pub(crate) trait MemCmpEncoder: Write {
                 self.write_u8(VLD_TAG).unwrap();
                 self.write_u64::<BigEndian>(ts_flipped).unwrap();
                 self.write_u8(!vld.is_assert.0 as u8).unwrap();
+            }
+            DataValue::Interval(iv) => {
+                // Plain ascending order, UNFLIPPED (unlike Validity above):
+                // an interval is an ordinary value, not a key-tail seek
+                // coordinate. `start` first makes it dominate the
+                // comparison, matching `Interval`'s derived `Ord` — the
+                // encoding is exactly two order-encoded i64s in field order.
+                self.write_u8(INTERVAL_TAG).unwrap();
+                self.write_u64::<BigEndian>(order_encode_i64(iv.start()))
+                    .unwrap();
+                self.write_u64::<BigEndian>(order_encode_i64(iv.end()))
+                    .unwrap();
             }
             DataValue::Bot => self.write_u8(BOT_TAG).unwrap(),
         }
@@ -498,6 +516,16 @@ impl DataValue {
                     }),
                     rest,
                 )
+            }
+            INTERVAL_TAG => {
+                let (start_bytes, rest) = take(remaining, 8, "interval start")?;
+                let start = order_decode_i64(BigEndian::read_u64(start_bytes));
+                let (end_bytes, rest) = take(rest, 8, "interval end")?;
+                let end = order_decode_i64(BigEndian::read_u64(end_bytes));
+                let iv = Interval::new(start, end).map_err(|_| {
+                    miette!("corrupt memcmp key: invalid interval [{start}, {end})")
+                })?;
+                (DataValue::Interval(iv), rest)
             }
             BOT_TAG => (DataValue::Bot, remaining),
             t => bail!("corrupt memcmp key: unknown type tag {t:#x}"),

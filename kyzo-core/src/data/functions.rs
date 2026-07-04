@@ -53,7 +53,7 @@ use uuid::v1::Timestamp;
 
 use crate::data::expr::Op;
 use crate::data::value::{
-    DataValue, JsonData, JsonValue, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
+    DataValue, Interval, JsonData, JsonValue, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
     VecElementType, Vector,
 };
 
@@ -306,6 +306,9 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
         DataValue::Json(j) => j.0.clone(),
         DataValue::Validity(vld) => {
             json!([vld.timestamp.0, vld.is_assert.0])
+        }
+        DataValue::Interval(iv) => {
+            json!([iv.start(), iv.end()])
         }
         DataValue::Bot => {
             json!(null)
@@ -1993,6 +1996,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Set(s) => !s.is_empty(),
         DataValue::Vec(_) => true,
         DataValue::Validity(vld) => vld.is_assert.0,
+        DataValue::Interval(_) => true,
         DataValue::Bot => false,
         DataValue::Json(json) => match &json.0 {
             Value::Null => false,
@@ -2019,6 +2023,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Set(s) => i64::from(!s.is_empty()),
         DataValue::Vec(_) => 1,
         DataValue::Validity(vld) => i64::from(vld.is_assert.0),
+        DataValue::Interval(_) => 1,
         DataValue::Bot => 0,
         DataValue::Json(json) => match &json.0 {
             Value::Null => 0,
@@ -2752,4 +2757,103 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
         timestamp: ValidityTs(Reverse(ts)),
         is_assert: Reverse(is_assert),
     }))
+}
+
+/// Extracts both arguments as `Interval`s for a two-interval predicate op, or
+/// a typed error naming which argument was wrong — never a panic.
+fn two_intervals<'a>(op: &str, args: &'a [DataValue]) -> Result<(&'a Interval, &'a Interval)> {
+    let a = args[0].get_interval().ok_or_else(|| {
+        miette!(
+            "'{op}' expects an interval as its first argument, got {:?}",
+            args[0]
+        )
+    })?;
+    let b = args[1].get_interval().ok_or_else(|| {
+        miette!(
+            "'{op}' expects an interval as its second argument, got {:?}",
+            args[1]
+        )
+    })?;
+    Ok((a, b))
+}
+
+define_op!(OP_MAKE_INTERVAL, 2, false, true);
+pub(crate) fn op_make_interval(args: &[DataValue]) -> Result<DataValue> {
+    let start = args[0].get_int().ok_or_else(|| {
+        miette!(
+            "'make_interval' expects an integer start, got {:?}",
+            args[0]
+        )
+    })?;
+    let end = args[1]
+        .get_int()
+        .ok_or_else(|| miette!("'make_interval' expects an integer end, got {:?}", args[1]))?;
+    Ok(DataValue::Interval(Interval::new(start, end)?))
+}
+
+define_op!(OP_INTERVAL_START, 1, false, true);
+pub(crate) fn op_interval_start(args: &[DataValue]) -> Result<DataValue> {
+    let iv = args[0]
+        .get_interval()
+        .ok_or_else(|| miette!("'interval_start' expects an interval, got {:?}", args[0]))?;
+    Ok(DataValue::from(iv.start()))
+}
+
+define_op!(OP_INTERVAL_END, 1, false, true);
+pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
+    let iv = args[0]
+        .get_interval()
+        .ok_or_else(|| miette!("'interval_end' expects an interval, got {:?}", args[0]))?;
+    Ok(DataValue::from(iv.end()))
+}
+
+// Allen's relations: six primitives + `intersects`, the workhorse. Equality
+// is already covered by the generic `eq`/`neq` ops (`Interval` derives
+// `PartialEq`/`Eq`), so it gets no dedicated op here. The five inverse
+// relations (after, met_by, overlapped_by, started_by, contains,
+// finished_by) likewise get no separate op: every primitive below is
+// asymmetric in its two arguments, so the inverse is the same op with the
+// call-site argument order swapped (`interval_before(b, a)` reads as "a is
+// after b"). One op per relation, not twelve.
+
+define_op!(OP_INTERVAL_BEFORE, 2, false, true);
+pub(crate) fn op_interval_before(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_before", args)?;
+    Ok(DataValue::from(a.before(b)))
+}
+
+define_op!(OP_INTERVAL_MEETS, 2, false, true);
+pub(crate) fn op_interval_meets(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_meets", args)?;
+    Ok(DataValue::from(a.meets(b)))
+}
+
+define_op!(OP_INTERVAL_OVERLAPS, 2, false, true);
+pub(crate) fn op_interval_overlaps(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_overlaps", args)?;
+    Ok(DataValue::from(a.overlaps(b)))
+}
+
+define_op!(OP_INTERVAL_STARTS, 2, false, true);
+pub(crate) fn op_interval_starts(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_starts", args)?;
+    Ok(DataValue::from(a.starts(b)))
+}
+
+define_op!(OP_INTERVAL_DURING, 2, false, true);
+pub(crate) fn op_interval_during(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_during", args)?;
+    Ok(DataValue::from(a.during(b)))
+}
+
+define_op!(OP_INTERVAL_FINISHES, 2, false, true);
+pub(crate) fn op_interval_finishes(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_finishes", args)?;
+    Ok(DataValue::from(a.finishes(b)))
+}
+
+define_op!(OP_INTERVAL_INTERSECTS, 2, false, true);
+pub(crate) fn op_interval_intersects(args: &[DataValue]) -> Result<DataValue> {
+    let (a, b) = two_intervals("interval_intersects", args)?;
+    Ok(DataValue::from(a.intersects(b)))
 }

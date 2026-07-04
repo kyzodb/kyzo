@@ -204,6 +204,141 @@ pub(crate) const TERMINAL_VALIDITY: Validity = Validity {
     is_assert: Reverse(false),
 };
 
+/// A first-class half-open interval `[start, end)` over microsecond ticks —
+/// a read-time VALUE (story #62's derived-interval algebra), not the on-disk
+/// `Validity` key-tail. The two types are deliberately kept apart: `Validity`
+/// is `Reverse`-flipped so newer versions seek first among a fact's key
+/// prefix; `Interval` orders ascending `(start, end)`, the plain intuitive
+/// order for a value that gets compared, sorted, and put in a `List` like
+/// any other `DataValue`.
+///
+/// Design decisions (ratified in issue #62's consolidated design ruling):
+///
+/// - **Closed-open, `end` exclusive.** An instant is `[v, v+1)`.
+/// - **`end <= start` is refused** by [`Interval::new`], never a panic.
+///   Empty (`end == start`) intervals are refused along with inverted ones:
+///   derived interval output is defined as maximal constant runs, which are
+///   never empty by construction, and no prior system in the survey
+///   (SQL:2011, Postgres range types, XTDB, Datomic) permits a stored
+///   zero-width fact. Refusing here keeps "an `Interval` value exists" mean
+///   "some instant is in it," an invariant of the type instead of a
+///   convention every consumer must re-check.
+/// - **Open-ended intervals use `i64::MAX` as a plain `end` value, not a
+///   distinguished sentinel representation.** This matches `MAX_VALIDITY_TS`
+///   (`ValidityTs(Reverse(i64::MAX))`) and `data_value_to_vld_spec`'s `"END"`
+///   spelling (`functions.rs`), both of which already treat `i64::MAX` as
+///   "no upper bound" without a wrapper variant or an exclusive/inclusive
+///   special case. Giving `Interval` a second, distinct representation of
+///   the same idea would be a new special case where the codebase already
+///   has one uniform spelling; every predicate below is therefore ordinary
+///   integer comparison, with no `if end == MAX` branch anywhere. The corner
+///   this convention would otherwise leave open — the single instant
+///   `i64::MAX` itself technically excluded by a `[.., i64::MAX)` interval —
+///   is closed by ruling, not by assumption: `@ 'END'` writes at that exact
+///   valid instant are REFUSED (the terminal tick is reserved; issue #62
+///   comment 4882951801), enforced on the write path outside this file. The
+///   open-end convention here is sound *because* that instant is
+///   unwritable, not because it was assumed unreachable.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, serde_derive::Serialize)]
+pub struct Interval {
+    /// Inclusive lower bound, in microseconds since the epoch.
+    start: i64,
+    /// Exclusive upper bound, in microseconds since the epoch.
+    end: i64,
+}
+
+/// Deserialize is hand-written, NOT derived: a derived impl lives in this
+/// same module, so it would see `start`/`end` as ordinary fields and build
+/// an `Interval` by direct field assignment — bypassing [`Interval::new`]
+/// and its `end > start` invariant entirely. Every wire-format decode
+/// (`fact_payload.rs`'s msgpack `FIELD_OTHER` island, `tuple.rs`'s legacy
+/// `rmp_serde` path) recurses into `DataValue`'s derived `Deserialize`,
+/// which bottoms out here — so this is the one seam that must re-validate,
+/// exactly like the memcmp key path's `Interval::new` call in
+/// `memcmp.rs::decode_from_key`. A shadow struct carries the raw fields
+/// through serde's machinery so the constructor sees them as untrusted
+/// input, not a preexisting invariant to trust.
+impl<'de> Deserialize<'de> for Interval {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(serde_derive::Deserialize)]
+        struct IntervalShadow {
+            start: i64,
+            end: i64,
+        }
+        let IntervalShadow { start, end } = IntervalShadow::deserialize(deserializer)?;
+        Interval::new(start, end).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Interval {
+    /// Smart constructor: refuses `end <= start` (both the inverted and the
+    /// empty case) as a typed error, never a panic.
+    pub(crate) fn new(start: i64, end: i64) -> miette::Result<Self> {
+        if end <= start {
+            miette::bail!(
+                "interval end ({end}) must be strictly after start ({start}); \
+                 zero-width and inverted intervals are refused by construction"
+            );
+        }
+        Ok(Self { start, end })
+    }
+
+    pub(crate) fn start(&self) -> i64 {
+        self.start
+    }
+
+    pub(crate) fn end(&self) -> i64 {
+        self.end
+    }
+
+    /// Allen's `before`: `self` ends strictly before `other` starts (a gap
+    /// between them). The inverse (`after`) is `other.before(self)` — Allen
+    /// relations don't each get a same-arity mirror op; swap the call-site
+    /// argument order instead (documented once here for all six).
+    pub(crate) fn before(&self, other: &Self) -> bool {
+        self.end < other.start
+    }
+
+    /// Allen's `meets`: `self` ends exactly where `other` starts, with no
+    /// gap and no overlap — closed-open semantics make this unambiguous
+    /// (there is exactly one instant, `self.end`, that decides it).
+    pub(crate) fn meets(&self, other: &Self) -> bool {
+        self.end == other.start
+    }
+
+    /// Allen's `overlaps`: `self` starts first, and the two genuinely
+    /// overlap without either containing the other.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        self.start < other.start && self.end > other.start && self.end < other.end
+    }
+
+    /// Allen's `starts`: same start, `self` ends first (a strict prefix).
+    pub(crate) fn starts(&self, other: &Self) -> bool {
+        self.start == other.start && self.end < other.end
+    }
+
+    /// Allen's `during`: `self` is strictly contained within `other`.
+    pub(crate) fn during(&self, other: &Self) -> bool {
+        self.start > other.start && self.end < other.end
+    }
+
+    /// Allen's `finishes`: same end, `self` starts later (a strict suffix).
+    pub(crate) fn finishes(&self, other: &Self) -> bool {
+        self.end == other.end && self.start > other.start
+    }
+
+    /// The workhorse predicate: do the two intervals share any instant.
+    /// Equivalent to `!(self.before(other) || other.before(self) ||
+    /// self.meets(other) || other.meets(self))`, but stated directly as the
+    /// standard half-open overlap test.
+    pub(crate) fn intersects(&self, other: &Self) -> bool {
+        self.start < other.end && other.start < self.end
+    }
+}
+
 #[derive(
     Debug, Copy, Clone, Eq, PartialEq, Hash, serde_derive::Deserialize, serde_derive::Serialize,
 )]
@@ -245,6 +380,9 @@ pub enum DataValue {
     Json(JsonData),
     /// validity,
     Validity(Validity),
+    /// a first-class half-open interval value; see [`Interval`]'s doc
+    /// comment for the empty/END-sentinel design decisions
+    Interval(Interval),
     /// bottom type, used internally only
     Bot,
 }
@@ -749,6 +887,7 @@ impl Display for DataValue {
                 .field("timestamp", &v.timestamp.0)
                 .field("is_assert", &v.is_assert.0)
                 .finish(),
+            DataValue::Interval(iv) => write!(f, "make_interval({}, {})", iv.start(), iv.end()),
             DataValue::Vec(a) => match a {
                 Vector::F32(a) => {
                     write!(f, "vec({:?})", a.to_vec())
@@ -829,6 +968,13 @@ impl DataValue {
             _ => None,
         }
     }
+    /// Returns the interval if this one is.
+    pub(crate) fn get_interval(&self) -> Option<&Interval> {
+        match self {
+            DataValue::Interval(iv) => Some(iv),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) const LARGEST_UTF_CHAR: char = '\u{10ffff}';
@@ -874,5 +1020,47 @@ mod num_get_int_tests {
         assert_eq!(Num::Float(42.0).get_int(), Some(42));
         assert_eq!(Num::Float(42.5).get_int(), None);
         assert_eq!(Num::Int(-7).get_int(), Some(-7));
+    }
+}
+
+#[cfg(test)]
+mod interval_deserialize_tests {
+    use super::Interval;
+
+    /// Hostile-review finding on story #62 chunk 2: a derived `Deserialize`
+    /// on `Interval` lives in this module, so it sees `start`/`end` as
+    /// ordinary fields and would build the struct by direct assignment —
+    /// bypassing `Interval::new`'s `end > start` invariant. This is the
+    /// reviewer's exact probe (`Interval { start: 100, end: 5 }`), taken to
+    /// the wire level: a plain `(i64, i64)` tuple serializes byte-identically
+    /// to a positional 2-field struct in msgpack, so this is what those
+    /// bytes look like on disk without ever constructing the illegal value
+    /// in Rust.
+    #[test]
+    fn valid_interval_round_trips_through_rmp_serde() {
+        let iv = Interval::new(5, 15).unwrap();
+        let bytes = rmp_serde::to_vec(&iv).unwrap();
+        let back: Interval = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back, iv);
+    }
+
+    #[test]
+    fn backwards_interval_bytes_refuse_never_construct() {
+        let bad_bytes = rmp_serde::to_vec(&(100i64, 5i64)).unwrap();
+        let result: Result<Interval, _> = rmp_serde::from_slice(&bad_bytes);
+        assert!(
+            result.is_err(),
+            "backwards interval bytes must be refused, never constructed"
+        );
+    }
+
+    #[test]
+    fn empty_interval_bytes_refuse_never_construct() {
+        let bad_bytes = rmp_serde::to_vec(&(5i64, 5i64)).unwrap();
+        let result: Result<Interval, _> = rmp_serde::from_slice(&bad_bytes);
+        assert!(
+            result.is_err(),
+            "empty interval bytes must be refused, never constructed"
+        );
     }
 }

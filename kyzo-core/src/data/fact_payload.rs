@@ -264,4 +264,70 @@ mod tests {
             "island trailing bytes must refuse"
         );
     }
+
+    /// Hostile-review finding on story #62 chunk 2: `Interval` derived
+    /// `Deserialize` on private fields, so the msgpack `FIELD_OTHER` island
+    /// (this function's decode path — the same one `runtime::mutate`'s
+    /// `ColType::Any` columns write through) could construct a backwards
+    /// interval by direct field assignment, bypassing `Interval::new`
+    /// entirely. Fixed by a hand-written `Deserialize` that routes through
+    /// the constructor; this test is the reviewer's own probe
+    /// (`Interval { start: 100, end: 5 }`) translated to the wire-byte
+    /// level, since the fixed type no longer has a way to construct that
+    /// value directly to serialize it.
+    ///
+    /// The bytes are hand-rolled with `serialize_newtype_variant` (what
+    /// `DataValue`'s derive generates for a one-field tuple variant) rather
+    /// than spliced from a real encoding, so this never constructs the
+    /// illegal `Interval` in Rust at any point — only its on-the-wire shape.
+    #[test]
+    fn field_other_refuses_backwards_interval_bytes_never_panics() {
+        use crate::data::value::Interval;
+        use serde::Serializer as _;
+
+        // `Interval` is declared right before `Bot`, after `Validity`, in
+        // `DataValue`'s variant list (`data/value.rs`) — variant index 12.
+        const INTERVAL_VARIANT_INDEX: u32 = 12;
+
+        let encode_as_interval_variant = |start: i64, end: i64| -> Vec<u8> {
+            let mut bytes = vec![FIELD_OTHER];
+            let mut ser = rmp_serde::Serializer::new(&mut bytes);
+            ser.serialize_newtype_variant(
+                "DataValue",
+                INTERVAL_VARIANT_INDEX,
+                "Interval",
+                &(start, end),
+            )
+            .unwrap();
+            bytes
+        };
+
+        // Sanity check first: the hand-rolled encoding of a VALID interval
+        // must decode identically to constructing it directly — this
+        // proves the manual encoding below exercises the real `DataValue`
+        // wire shape, not a shape that merely happens to also error.
+        let valid_bytes = encode_as_interval_variant(5, 15);
+        assert_eq!(
+            decode_fact_field(&valid_bytes, 0).unwrap(),
+            DataValue::Interval(Interval::new(5, 15).unwrap()),
+            "hand-rolled encoding must match the real derive's wire shape"
+        );
+
+        // The probe: start=100, end=5 — refused by `Interval::new`, and
+        // must stay refused reaching in through the wire format instead.
+        let backwards_bytes = encode_as_interval_variant(100, 5);
+        let err = decode_fact_field(&backwards_bytes, 0)
+            .expect_err("backwards interval bytes must be refused, never constructed");
+        assert!(
+            err.to_string().contains("field 0"),
+            "typed field-decode error, got: {err}"
+        );
+
+        // Empty (start == end) is refused the same way.
+        let empty_bytes = encode_as_interval_variant(7, 7);
+        assert!(
+            decode_fact_field(&empty_bytes, 0).is_err(),
+            "empty interval bytes must be refused, never constructed"
+        );
+    }
 }

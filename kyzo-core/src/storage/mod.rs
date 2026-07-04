@@ -201,7 +201,19 @@ impl FormatVersion {
     /// row is one O(1) slice and scalar fields are fixed-width slots the
     /// columnar engine gathers without a parser. One format per version —
     /// an older store refuses to open, it is never migrated in place.
-    pub const CURRENT: FormatVersion = FormatVersion(3);
+    ///
+    /// v4 (story #62) adds ONE new memcmp tag — the first-class `Interval`
+    /// `DataValue` (`data/memcmp.rs::INTERVAL_TAG`) — with every existing
+    /// tag, field layout, and key shape untouched. Decision: bump anyway,
+    /// not skip. `FormatVersion` exists so a mismatched decoder never
+    /// silently misinterprets bytes; a v3 decoder handed a key containing
+    /// `INTERVAL_TAG` doesn't know that byte, and rejects it as corruption
+    /// rather than reading a value — exactly the failure mode this stamp
+    /// exists to turn into a refuse-to-open at the door instead. "No
+    /// deployed stores" (there are none yet) makes the bump free, not
+    /// optional: the decodable tag space is part of the format's identity
+    /// same as the tags already in it.
+    pub const CURRENT: FormatVersion = FormatVersion(4);
 
     /// The stored representation: ASCII decimal.
     pub fn as_bytes(self) -> Vec<u8> {
