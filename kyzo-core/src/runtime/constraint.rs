@@ -54,11 +54,15 @@
 //! materializes once wall-clock passes that timestamp is **not** caught at
 //! commit — there is no later transaction to re-check it. This is the flip
 //! side of the design's explicit non-goal: v1 constraints do **not** reach
-//! across history (`deny … @T` over validity scans is itself a typed compile
-//! refusal, `NegationOverTimeTravelError`). A constraint that must hold across
-//! time must be written with explicit `@` validity qualifiers in its body;
-//! the natural now-scoped FK/CHECK shape guards the present instant only. This
-//! boundary is stated, not silently assumed.
+//! across history on their own — `deny … @T` over a validity scan now
+//! compiles and evaluates (story #86 closed the engine's negation-over-
+//! time-travel gap), so a body MAY name a fixed historical coordinate, but
+//! the constraint is still checked only once, at creation and at THIS
+//! session's `cur_vld`, never re-run at other instants automatically. A
+//! constraint that must hold across time must be written with explicit `@`
+//! validity qualifiers in its body; the natural now-scoped FK/CHECK shape
+//! guards the present instant only. This boundary is stated, not silently
+//! assumed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
