@@ -284,3 +284,9 @@ pub mod bench_api;
 // never touches the normal public surface.
 #[cfg(feature = "fuzz-internals")]
 pub mod fuzz_api;
+
+// A one-function façade over the crate-internal parse tier, for kyzo-lsp's
+// diagnostics-on-type (story #92). Unlike `bench_api`/`fuzz_api`, this is
+// always compiled: live diagnostics are a first-class product surface, not
+// a dev-tooling concern behind a feature flag.
+pub mod lsp_api;

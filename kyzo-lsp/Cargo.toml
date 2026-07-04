@@ -1,0 +1,30 @@
+[package]
+name = "kyzo-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "KyzoScript Language Server: designed diagnostics (story #73), live in the editor"
+
+[[bin]]
+name = "kyzo-lsp"
+path = "src/main.rs"
+
+[dependencies]
+kyzo = { path = "../kyzo-core" }
+# The LSP wire protocol's types (Diagnostic, Range, Position, the request/
+# notification param shapes) -- the same crate rust-analyzer itself uses.
+# Pure Rust, serde-based; no runtime attached, so the server loop below is
+# hand-rolled rather than pulled from a framework: diagnostics-on-type is
+# synchronous, fast, single-document-at-a-time work, and stdio framing is
+# ~30 lines on its own (Content-Length header + JSON body) -- not enough
+# surface to justify tower-lsp's async-trait service machinery for a first
+# cut whose only hard requirement is diagnostics live end to end.
+lsp-types = "0.97"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Aligned to kyzo-core's miette major version so the tree carries one copy
+# (the same posture kyzo-bin's Cargo.toml already takes).
+miette = "7"
