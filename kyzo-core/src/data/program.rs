@@ -467,6 +467,30 @@ struct TierInvariantError(&'static str);
 // Input tier
 // ─────────────────────────────────────────────────────────────────────────
 
+/// One comment, captured verbatim from source text by `parse::
+/// scan_comments` — delimiters included (`#...` or `/* ... */`), so a
+/// consumer (the formatter) never re-synthesizes comment syntax, only
+/// places the text back where it was attached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Comment {
+    pub(crate) text: String,
+    pub(crate) span: SourceSpan,
+}
+
+/// The comments attached to one position in the program: every comment
+/// immediately preceding it, each on its own source line with nothing but
+/// other leading comments between it and the position (`leading`, in
+/// source order), and every comment sharing the position's own last
+/// source line, after it (`trailing`, in source order). Attached once, by
+/// `InputProgram::attach_comment_trivia`, right after a program is fully
+/// parsed — never recomputed by a consumer, so there is exactly one place
+/// that decides what "leading" and "trailing" mean.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Trivia {
+    pub(crate) leading: Vec<Comment>,
+    pub(crate) trailing: Vec<Comment>,
+}
+
 /// One parsed inline rule: head bindings (with optional aggregations,
 /// index-aligned with the head), and a body of sugared [`InputAtom`]s.
 #[derive(Debug, Clone)]
@@ -475,6 +499,7 @@ pub(crate) struct InputInlineRule {
     pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
     pub(crate) body: Vec<InputAtom>,
     pub(crate) span: SourceSpan,
+    pub(crate) trivia: Trivia,
 }
 
 /// What a name is defined as in a program: a set of inline rules, or a
@@ -512,6 +537,7 @@ pub(crate) struct FixedRuleApply {
     pub(crate) arity: usize,
     pub(crate) span: SourceSpan,
     pub(crate) fixed_impl: Arc<dyn FixedRule>,
+    pub(crate) trivia: Trivia,
 }
 
 impl FixedRuleApply {
@@ -867,6 +893,60 @@ pub(crate) struct InputProgram {
     /// proof this type carries.
     out_opts: QueryOutOptions,
     disable_magic_rewrite: bool,
+    /// Comments with no rule clause to attach to on the relevant side —
+    /// the overflow `attach_comment_trivia` falls back to, not the common
+    /// case: a comment before the textually-first rule clause instead
+    /// becomes THAT clause's own `Trivia::leading` (there is always at
+    /// least one clause to attach to — the entry is mandatory — so
+    /// `leading_trivia` is reachable only by a future caller of
+    /// `attach_comment_trivia` on a program with zero clauses, which
+    /// `InputProgram::new` itself never produces). `trailing_trivia` is
+    /// the one that matters in practice: every comment after the last
+    /// rule clause in the source, not sharing its line. Filled by
+    /// [`Self::attach_comment_trivia`]; empty (the default) until then.
+    pub(crate) leading_trivia: Vec<Comment>,
+    pub(crate) trailing_trivia: Vec<Comment>,
+}
+
+/// Every rule clause in `ruleset` (one per [`InputInlineRule`] if it's a
+/// plain ruleset, the one [`FixedRuleApply`] if it's a fixed rule), pushed
+/// onto `anchors` as its own span paired with a mutable handle to where
+/// its trivia lives. A free function, not a method, so it can be called
+/// once for `InputProgram::entry` and once per `InputProgram::rules`
+/// value without holding two overlapping mutable borrows of `self`.
+fn collect_trivia_anchors<'a>(
+    ruleset: &'a mut InputInlineRulesOrFixed,
+    anchors: &mut Vec<(usize, &'a mut Trivia)>,
+) {
+    match ruleset {
+        InputInlineRulesOrFixed::Rules { rules } => {
+            for rule in rules {
+                anchors.push((rule.span.0, &mut rule.trivia));
+            }
+        }
+        InputInlineRulesOrFixed::Fixed { fixed } => {
+            anchors.push((fixed.span.0, &mut fixed.trivia));
+        }
+    }
+}
+
+/// Does `offset` share its source line with real content already written
+/// before it — scanning backward from `offset` over spaces/tabs only, the
+/// first other byte found decides it: a newline means `offset` opens a
+/// fresh line (`false`); anything else means there's content on this same
+/// line before it (`true`); running off the start of `src` with nothing
+/// but spaces/tabs behind `offset` also means `false` (nothing precedes it
+/// on any line). This is the one fact [`InputProgram::attach_comment_
+/// trivia`] actually needs and a clause's span end cannot reliably give it
+/// (see that method's own doc for why).
+fn shares_a_line_with_preceding_content(src: &str, offset: usize) -> bool {
+    matches!(
+        src[..offset.min(src.len())]
+            .bytes()
+            .rev()
+            .find(|&b| b != b' ' && b != b'\t'),
+        Some(b) if b != b'\n'
+    )
 }
 
 impl InputProgram {
@@ -905,7 +985,77 @@ impl InputProgram {
             rules: prog,
             out_opts,
             disable_magic_rewrite,
+            leading_trivia: Vec::new(),
+            trailing_trivia: Vec::new(),
         })
+    }
+
+    /// Attach every comment `parse::scan_comments` found in the same
+    /// source text this program was parsed from — the one place "leading"
+    /// and "trailing" are decided. `comments` must already be in source
+    /// order (as `scan_comments` produces them).
+    ///
+    /// A comment attaches as *trailing* to the nearest rule clause whose
+    /// span ends at or before it, if nothing but whitespace and the
+    /// comment itself sits on that same source line (checked directly
+    /// against `src`, which is why this takes it rather than working from
+    /// spans alone). Otherwise it attaches as *leading* to the nearest
+    /// clause whose span starts after it. A comment with no clause on the
+    /// relevant side becomes whole-program `trailing_trivia`/
+    /// `leading_trivia` instead.
+    ///
+    /// Every rule clause across the whole program — every [`InputInlineRule`]
+    /// in every ruleset, the entry included, plus every [`FixedRuleApply`] —
+    /// is a possible anchor; clauses are collected once and sorted by
+    /// source position, since `rules`' `BTreeMap` key order is alphabetical
+    /// by name, not the order they were written in.
+    pub(crate) fn attach_comment_trivia(&mut self, src: &str, comments: Vec<Comment>) {
+        if comments.is_empty() {
+            return;
+        }
+        // Anchors are ordered and looked up by their START only, never
+        // their end: `rule`/`const_rule`/`fixed_rule` all end in an
+        // optional trailing `";"?`, and pest reports a sequence's span as
+        // reaching to wherever it finished PROBING for a trailing optional
+        // element that then didn't match -- which, across a silently-
+        // skipped same-line comment, is past that comment, not before it.
+        // (Verified directly: a two-rule pest grammar ending `~ ";"?`
+        // reproduces a rule span that swallows a same-line trailing
+        // comment whole.) A clause's start position has no such quirk.
+        let mut anchors: Vec<(usize, &mut Trivia)> = Vec::new();
+        collect_trivia_anchors(&mut self.entry, &mut anchors);
+        for ruleset in self.rules.values_mut() {
+            collect_trivia_anchors(ruleset, &mut anchors);
+        }
+        anchors.sort_by_key(|(start, _)| *start);
+
+        for comment in comments {
+            if shares_a_line_with_preceding_content(src, comment.span.0) {
+                // Trailing: the nearest clause whose content starts this
+                // same line (the largest start at or before the comment).
+                if let Some(idx) = anchors
+                    .iter()
+                    .rposition(|(start, _)| *start <= comment.span.0)
+                {
+                    anchors[idx].1.trailing.push(comment);
+                    continue;
+                }
+                // No clause precedes it at all (comment shares a line with
+                // something that isn't a rule clause, e.g. a query
+                // option): whole-program trailing is the honest fallback.
+                self.trailing_trivia.push(comment);
+                continue;
+            }
+            // Leading: the nearest clause whose content starts after this
+            // comment's own line.
+            match anchors
+                .iter()
+                .position(|(start, _)| *start > comment.span.0)
+            {
+                Some(idx) => anchors[idx].1.leading.push(comment),
+                None => self.trailing_trivia.push(comment),
+            }
+        }
     }
 
     /// The entry rule's name (`?`) with its real source span.
@@ -1837,6 +1987,7 @@ mod tests {
             aggr: head.iter().map(|_| None).collect(),
             body: vec![],
             span: SourceSpan(0, 0),
+            trivia: Trivia::default(),
         }
     }
 
@@ -1913,6 +2064,7 @@ mod tests {
                 aggr: vec![None, Some((min, vec![]))],
                 body: vec![],
                 span: SourceSpan(0, 0),
+                trivia: Trivia::default(),
             }]),
         );
         let p = InputProgram::new(prog, QueryOutOptions::default(), false).expect("valid program");

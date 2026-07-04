@@ -70,7 +70,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
-use crate::data::program::{FixedRule, InputProgram};
+use crate::data::program::{Comment, FixedRule, InputProgram};
 use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, ValidityTs};
@@ -824,6 +824,151 @@ pub(crate) struct NestingTooDeep {
     pub(crate) span: SourceSpan,
 }
 
+/// Skip a raw string body: opener `"` at `b[i]`, `sigils` leading
+/// underscores already seen (`sigils >= 1` — story #93 narrowed
+/// `raw_string`'s fence to `"_"+`, so a raw string always has at least
+/// one); the terminator is a `"` followed by that many underscores
+/// (mirrors the atomic `raw_string` rule, `PEEK` included), with no escape
+/// awareness — a raw string's whole point is that `\` has no special
+/// meaning inside it. Returns the index just past the token (or the end:
+/// an unterminated string is pest's error to report). Shared by
+/// [`reject_excessive_nesting`] and [`scan_comments`] — both need the
+/// identical answer to "where does this string end", and a second copy
+/// could silently drift from this one the way `reject_excessive_nesting`'s
+/// own `"` handling once drifted from story #93's grammar fix.
+fn skip_raw_string(b: &[u8], mut i: usize, sigils: usize) -> usize {
+    i += 1;
+    while i < b.len() {
+        if b[i] == b'"'
+            && b.get(i + 1..i + 1 + sigils)
+                .is_some_and(|tail| tail.iter().all(|&c| c == b'_'))
+        {
+            return i + 1 + sigils;
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// Skip a fenceless double-quoted string body: opener `"` at `b[i]`,
+/// terminated by an UNESCAPED `"` — `quoted_string`'s real semantics since
+/// story #93 fixed `raw_string`'s fence to require at least one
+/// underscore (a bare `"..."` is `quoted_string`, escape-aware, not a
+/// 0-fence raw string any more). Shared for the same reason as
+/// [`skip_raw_string`].
+fn skip_quoted_string(b: &[u8], mut i: usize) -> usize {
+    i += 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'"' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    b.len()
+}
+
+/// Every comment in `src`, in source order, with its own span and literal
+/// text (delimiters included — `#...` or `/* ... */` — so a consumer never
+/// re-synthesizes comment syntax). A second, independent walk of the raw
+/// text, not the pest tree: `kyzoscript.pest`'s `COMMENT` stays silent.
+/// Un-silencing it was the obvious-looking alternative and was rejected
+/// after a real check, not on suspicion — a two-rule pest experiment
+/// confirmed that a non-silent `COMMENT` becomes a visible child of
+/// *every* surrounding rule wherever pest's implicit WHITESPACE/COMMENT
+/// insertion fires, which would inject a stray pair into the middle of
+/// every existing `.into_inner()`/[`GrammarChildren`] consumer across the
+/// whole parse tier — the opposite of "capturing comments must not change
+/// parse semantics." Reusing [`skip_raw_string`]/[`skip_quoted_string`]
+/// (not a fresh reimplementation) is what keeps this scan and
+/// `reject_excessive_nesting`'s agreeing about where a string ends by
+/// construction, the same property story #93's fallout fix restored.
+pub(crate) fn scan_comments(src: &str) -> Vec<Comment> {
+    let b = src.as_bytes();
+    let n = b.len();
+    let mut i = 0;
+    let mut out = Vec::new();
+    let mut prev_wordish = false;
+    while i < n {
+        match b[i] {
+            b'#' => {
+                let start = i;
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                out.push(Comment {
+                    text: src[start..i].to_string(),
+                    span: SourceSpan(start, i - start),
+                });
+                prev_wordish = false;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let start = i;
+                let mut depth = 1usize;
+                i += 2;
+                while i < n && depth > 0 {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                out.push(Comment {
+                    text: src[start..i].to_string(),
+                    span: SourceSpan(start, i - start),
+                });
+                prev_wordish = false;
+            }
+            b'\'' => {
+                i += 1;
+                while i < n {
+                    match b[i] {
+                        b'\\' => i += 2,
+                        b'\'' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                prev_wordish = false;
+            }
+            b'"' => {
+                i = skip_quoted_string(b, i);
+                prev_wordish = false;
+            }
+            b'_' if !prev_wordish => {
+                let start = i;
+                while i < n && b[i] == b'_' {
+                    i += 1;
+                }
+                if i < n && b[i] == b'"' {
+                    i = skip_raw_string(b, i, i - start);
+                    prev_wordish = false;
+                } else {
+                    prev_wordish = true;
+                }
+            }
+            byte => {
+                // Same `wordish` test `reject_excessive_nesting` uses (any
+                // non-ASCII byte over-approximates XID_CONTINUE), stepping
+                // one whole UTF-8 char rather than one raw byte so a
+                // multi-byte character's continuation bytes are never
+                // revisited as fresh structure.
+                let len = src[i..].chars().next().map_or(1, char::len_utf8);
+                prev_wordish =
+                    byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'$' || byte >= 0x80;
+                i += len;
+            }
+        }
+    }
+    out
+}
+
 /// The pre-parse structural scan: one pass over the raw text, counting —
 /// not parsing — the nesting the recursive parse would have to follow.
 /// Counted against [`NESTING_CEILING`], jointly: bracket depth, `%if`/
@@ -857,48 +1002,6 @@ pub(crate) fn reject_excessive_nesting(src: &str) -> Result<(), NestingTooDeep> 
     fn span_at(src: &str, i: usize) -> SourceSpan {
         let len = src[i..].chars().next().map_or(0, char::len_utf8);
         SourceSpan(i, len)
-    }
-    /// Skip a raw string body: opener `"` at `b[i]`, `sigils` leading
-    /// underscores already seen (`sigils >= 1` — story #93 narrowed
-    /// `raw_string`'s fence to `"_"+`, so a raw string always has at least
-    /// one); the terminator is a `"` followed by that many underscores
-    /// (mirrors the atomic `raw_string` rule, `PEEK` included), with no
-    /// escape awareness — a raw string's whole point is that `\` has no
-    /// special meaning inside it. Returns the index just past the token
-    /// (or the end: an unterminated string is pest's error to report).
-    fn skip_raw_string(b: &[u8], mut i: usize, sigils: usize) -> usize {
-        i += 1;
-        while i < b.len() {
-            if b[i] == b'"'
-                && b.get(i + 1..i + 1 + sigils)
-                    .is_some_and(|tail| tail.iter().all(|&c| c == b'_'))
-            {
-                return i + 1 + sigils;
-            }
-            i += 1;
-        }
-        b.len()
-    }
-    /// Skip a fenceless double-quoted string body: opener `"` at `b[i]`,
-    /// terminated by an UNESCAPED `"` — `quoted_string`'s real semantics
-    /// since story #93 fixed `raw_string`'s fence to require at least one
-    /// underscore (a bare `"..."` is `quoted_string`, escape-aware, not a
-    /// 0-fence raw string any more). Before that fix this scan correctly
-    /// used [`skip_raw_string`]'s no-escapes rule here, because the
-    /// grammar's own bug made that the true terminator; #93 changed what
-    /// the grammar does, so this must change with it, or the scan and the
-    /// grammar disagree about where a string ends — exactly the property
-    /// this whole scan exists to never let happen.
-    fn skip_quoted_string(b: &[u8], mut i: usize) -> usize {
-        i += 1;
-        while i < b.len() {
-            match b[i] {
-                b'\\' => i += 2,
-                b'"' => return i + 1,
-                _ => i += 1,
-            }
-        }
-        b.len()
     }
     /// Does the word `word` start at `b[i]`, as a whole token?
     fn word_at(b: &[u8], i: usize, word: &[u8]) -> bool {
@@ -1139,7 +1242,13 @@ pub fn parse_script(
     )?;
     Ok(match parsed.as_rule() {
         Rule::query_script => {
-            let q = parse_query(parsed.into_inner(), param_pool, fixed_rules, cur_vld)?;
+            let mut q = parse_query(parsed.into_inner(), param_pool, fixed_rules, cur_vld)?;
+            // Comments never entered the grammar's own tree (`COMMENT`
+            // stays silent — see `scan_comments`'s doc), so attaching them
+            // is a wholly separate pass over the same source text, run
+            // only now that every rule clause's final span exists to
+            // attach against.
+            q.attach_comment_trivia(src, scan_comments(src));
             Script::Single(Box::new(q))
         }
         Rule::imperative_script => {
@@ -1163,6 +1272,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::data::program::{InputInlineRule, InputInlineRulesOrFixed};
     use crate::data::symb::Symbol;
 
     fn vld() -> ValidityTs {
@@ -1766,5 +1876,160 @@ mod tests {
             let err = parse(src).expect_err("must fail to parse");
             println!("=== {src:?} ===\n{err:?}\n");
         }
+    }
+
+    // ── Comment trivia (story #30) ──────────────────────────────────────
+
+    fn parse_program(src: &str) -> InputProgram {
+        match parse(src).unwrap_or_else(|e| panic!("{src}: {e:?}")) {
+            Script::Single(prog) => *prog,
+            other => panic!("expected a query script, got {other:?}"),
+        }
+    }
+
+    fn entry_rule(prog: &InputProgram) -> &InputInlineRule {
+        match prog.entry() {
+            InputInlineRulesOrFixed::Rules { rules } => {
+                rules.first().expect("entry has at least one clause")
+            }
+            InputInlineRulesOrFixed::Fixed { .. } => {
+                panic!("entry is a fixed rule, not a Horn rule")
+            }
+        }
+    }
+
+    fn comment_texts(comments: &[crate::data::program::Comment]) -> Vec<&str> {
+        comments.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    /// A comment on its own line, immediately before a rule, is that
+    /// rule's leading trivia.
+    #[test]
+    fn leading_comment_attaches_to_the_next_rule() {
+        let prog = parse_program("# a leading comment\n?[x] := x = 1");
+        assert_eq!(
+            comment_texts(&entry_rule(&prog).trivia.leading),
+            vec!["# a leading comment"]
+        );
+        assert!(entry_rule(&prog).trivia.trailing.is_empty());
+        assert!(prog.leading_trivia.is_empty());
+        assert!(prog.trailing_trivia.is_empty());
+    }
+
+    /// Several consecutive leading comments all attach, in source order.
+    #[test]
+    fn multiple_leading_comments_attach_in_order() {
+        let prog = parse_program("# first\n# second\n/* third */\n?[x] := x = 1");
+        assert_eq!(
+            comment_texts(&entry_rule(&prog).trivia.leading),
+            vec!["# first", "# second", "/* third */"]
+        );
+    }
+
+    /// A comment sharing the rule's own last source line is trailing, not
+    /// leading of whatever comes next.
+    #[test]
+    fn trailing_comment_shares_the_rule_s_own_line() {
+        let prog = parse_program("?[x] := x = 1 # trailing");
+        assert!(entry_rule(&prog).trivia.leading.is_empty());
+        assert_eq!(
+            comment_texts(&entry_rule(&prog).trivia.trailing),
+            vec!["# trailing"]
+        );
+    }
+
+    /// Two rules, two independent comments: each attaches to the clause it
+    /// actually neighbors, not both to the entry (the map's alphabetical
+    /// key order must not matter -- source position does).
+    #[test]
+    fn each_rule_gets_its_own_neighboring_comments() {
+        let prog = parse_program(
+            "# leads helper\nhelper[x] := x = 1 # trails helper\n# leads entry\n?[x] := helper[x]",
+        );
+        let helper = match prog.rules().get(&Symbol::new("helper", SourceSpan(0, 0))) {
+            Some(InputInlineRulesOrFixed::Rules { rules }) => &rules[0],
+            other => panic!("expected helper as a Horn rule, got {other:?}"),
+        };
+        assert_eq!(
+            comment_texts(&helper.trivia.leading),
+            vec!["# leads helper"]
+        );
+        assert_eq!(
+            comment_texts(&helper.trivia.trailing),
+            vec!["# trails helper"]
+        );
+        assert_eq!(
+            comment_texts(&entry_rule(&prog).trivia.leading),
+            vec!["# leads entry"]
+        );
+    }
+
+    /// A comment after the last rule, not sharing its line, is
+    /// whole-program trailing trivia -- nothing else to attach it to.
+    #[test]
+    fn trailing_program_comment_after_the_last_rule() {
+        let prog = parse_program("?[x] := x = 1\n# a footer comment");
+        assert!(entry_rule(&prog).trivia.trailing.is_empty());
+        assert_eq!(
+            comment_texts(&prog.trailing_trivia),
+            vec!["# a footer comment"]
+        );
+    }
+
+    /// A `#`/`/*` inside a string or another comment is content, not a
+    /// second comment -- `scan_comments` must agree with the real grammar
+    /// about where a string/comment ends, same as `reject_excessive_
+    /// nesting` (and for the same reason: they share the exact skip
+    /// functions).
+    #[test]
+    fn comments_do_not_start_inside_strings_or_other_comments() {
+        let prog = parse_program(r#"?[x] := x = "a # not a comment" /* a /* nested */ block */"#);
+        assert!(entry_rule(&prog).trivia.leading.is_empty());
+        assert_eq!(
+            comment_texts(&entry_rule(&prog).trivia.trailing),
+            vec!["/* a /* nested */ block */"]
+        );
+    }
+
+    /// The guardrail team-lead named explicitly: a comment must not change
+    /// what a script evaluates to. Same query, with and without comments
+    /// sprinkled through it (leading, trailing, and mid-body-adjacent),
+    /// must parse to an `InputProgram` whose evaluated meaning -- checked
+    /// here via the formatter's own canonical text, which prints straight
+    /// from the AST's semantic fields and never touches trivia -- is
+    /// byte-identical either way.
+    #[test]
+    fn comments_do_not_change_a_program_s_meaning() {
+        let bare = "reachable[to] := *route{fr: 'FRA', to}\n\
+             reachable[to] := reachable[stop], *route{fr: stop, to}\n\
+             ?[to] := reachable[to]";
+        let commented = "# a header\n\
+             reachable[to] := *route{fr: 'FRA', to} # base case\n\
+             # recursive case\n\
+             reachable[to] := reachable[stop], *route{fr: stop, to}\n\
+             ?[to] := reachable[to] # entry\n\
+             # a footer";
+        let bare_prog = parse_program(bare);
+        let commented_prog = parse_program(commented);
+        assert_eq!(
+            crate::format::format_program(&bare_prog),
+            crate::format::format_program(&commented_prog),
+            "a comment must not change the program's canonical (meaning-only) text"
+        );
+        // And the comments really did attach somewhere, not silently drop.
+        assert!(
+            !commented_prog.leading_trivia.is_empty() || {
+                match commented_prog.rules().values().next() {
+                    Some(InputInlineRulesOrFixed::Rules { rules }) => {
+                        !rules[0].trivia.leading.is_empty()
+                    }
+                    _ => false,
+                }
+            }
+        );
+        assert_eq!(
+            comment_texts(&commented_prog.trailing_trivia),
+            vec!["# a footer"]
+        );
     }
 }

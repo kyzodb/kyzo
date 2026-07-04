@@ -505,7 +505,7 @@ mod tests {
     use crate::data::program::{
         BodyNormalizer, FixedRule, FixedRuleApply, FixedRuleHandle, InputAtom, InputInlineRule,
         InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, NormalFormRuleApplyAtom,
-        QueryOutOptions,
+        QueryOutOptions, Trivia,
     };
     use crate::data::symb::SymbolKind;
     use crate::data::value::DataValue;
@@ -643,6 +643,7 @@ mod tests {
                 aggr,
                 body,
                 span: SourceSpan(0, 0),
+                trivia: Trivia::default(),
             };
             match self
                 .prog
@@ -676,6 +677,7 @@ mod tests {
                 arity: 1,
                 span: SourceSpan(0, 0),
                 fixed_impl: Arc::new(StubFixedRule),
+                trivia: Trivia::default(),
             };
             let prev = self
                 .prog

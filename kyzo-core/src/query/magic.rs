@@ -1123,7 +1123,7 @@ mod tests {
     use crate::data::aggr::parse_aggr;
     use crate::data::expr::Expr;
     use crate::data::program::{
-        FixedRule, FixedRuleHandle, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom,
+        FixedRule, FixedRuleHandle, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom, Trivia,
         Unification,
     };
     use crate::data::relation::ColumnDef;
@@ -1765,6 +1765,7 @@ mod tests {
             arity: 1,
             span: SourceSpan(0, 0),
             fixed_impl: Arc::new(NoRule),
+            trivia: Trivia::default(),
         };
 
         let adorned =
@@ -1828,6 +1829,7 @@ mod tests {
             arity: 1,
             span: SourceSpan(0, 0),
             fixed_impl: Arc::new(NoRule),
+            trivia: Trivia::default(),
         };
 
         // Every facts relation time-travels in the one universal format:

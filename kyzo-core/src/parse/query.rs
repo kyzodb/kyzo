@@ -50,8 +50,8 @@ use crate::data::program::{
     DeltaAxis, FixedRule, FixedRuleApply, FixedRuleArg, FixedRuleHandle, InputAtom,
     InputInlineRule, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
     InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
-    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Unification, ValidityClause,
-    WriteValidity,
+    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Trivia, Unification,
+    ValidityClause, WriteValidity,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -314,6 +314,7 @@ pub(crate) fn parse_query(
                             arity,
                             span,
                             fixed_impl: Arc::new(Constant),
+                            trivia: Trivia::default(),
                         },
                     },
                 );
@@ -815,6 +816,9 @@ fn parse_rule(
             aggr,
             body: body_clauses,
             span,
+            // Filled by `InputProgram::attach_comment_trivia`, once the
+            // whole program (and thus every clause's final span) exists.
+            trivia: Trivia::default(),
         },
     ))
 }
@@ -1460,6 +1464,7 @@ fn parse_fixed_rule(
             arity,
             span: args_list_span,
             fixed_impl: fixed_impl.clone(),
+            trivia: Trivia::default(),
         },
     ))
 }
@@ -1510,6 +1515,7 @@ fn insert_empty_const_entry(
                 arity: bindings.len(),
                 span,
                 fixed_impl: Arc::new(Constant),
+                trivia: Trivia::default(),
             },
         },
     );

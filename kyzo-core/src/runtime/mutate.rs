@@ -59,7 +59,7 @@ use thiserror::Error;
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::expr::Expr;
 use crate::data::program::{
-    FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp,
+    FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp, Trivia,
     WriteValidity,
 };
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
@@ -1295,6 +1295,7 @@ pub(crate) fn make_const_rule(
                 arity: bindings_arity,
                 span: SourceSpan::default(),
                 fixed_impl,
+                trivia: Trivia::default(),
             },
         },
     );
