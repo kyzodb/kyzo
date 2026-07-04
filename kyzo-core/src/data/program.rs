@@ -940,6 +940,14 @@ impl InputProgram {
         &mut self.out_opts
     }
 
+    /// Whether `:disable_magic_rewrite true` was set on this query. A
+    /// formatter/renderer reads this to know whether the option needs
+    /// re-emitting; [`NormalFormProgram::disable_magic_rewrite`] carries
+    /// the same fact forward past normalization.
+    pub(crate) fn disable_magic_rewrite(&self) -> bool {
+        self.disable_magic_rewrite
+    }
+
     /// The stored relation this query needs a write lock on, if any:
     /// its output relation, unless that is a temporary.
     pub(crate) fn needs_write_lock(&self) -> Option<SmartString<LazyCompact>> {

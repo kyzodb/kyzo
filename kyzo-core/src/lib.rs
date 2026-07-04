@@ -226,6 +226,11 @@
 
 pub(crate) mod data;
 pub(crate) mod engines;
+// The formatter's consumer (kyzo-lsp's format-on-save/format-document
+// request, story #92) lands later. Same dead-code posture as `parse`:
+// exercised in-file by its own property-test suite, dead in the lib build.
+#[allow(dead_code)]
+pub(crate) mod format;
 // The fixed-rule tier's consumer (the runtime evaluator, which drives
 // `run` and merges the output stores) lands later. Same dead-code posture
 // as `parse`: partially exercised by in-file tests, dead in the lib build.
