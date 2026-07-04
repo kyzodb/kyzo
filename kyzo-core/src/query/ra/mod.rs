@@ -27,13 +27,16 @@
  *   store or a stored-relation scan is *unrepresentable*, and
  *   [`RelAlgebra::neg_join`] is the total constructor that refuses the
  *   rest.
- * - **Negation over a time-travel scan is a typed refusal.** The original
+ * - **Negation over a time-travel scan now computes.** The original
  *   compiled `not *rel{..} @ t` into a `NegJoin` whose right side was
  *   `StoredWithValidity` — a shape its own iterator dispatched to
- *   `unreachable!()`, i.e. a user-reachable abort. Until the operator tier
- *   implements a skip-scan negation, the shape is refused at plan
- *   construction ([`NegationOverTimeTravelError`]) — loud, typed, and at
- *   compile time rather than mid-query.
+ *   `unreachable!()`, i.e. a user-reachable abort. Story #3 closed the
+ *   abort with a typed, compile-time refusal (`NegationOverTimeTravelError`)
+ *   until the operator tier grew a skip-scan negation; story #86 built
+ *   that operator (`NegRight::StoredWithValidity`, plus the same
+ *   materialized-anti-join treatment for `@spans`/`@delta`'s
+ *   `NegRight::Spans`/`NegRight::Delta`) and deleted the refusal — nothing
+ *   is left to refuse.
  * - **"Every referenced rule has a store" is a typed invariant.** The
  *   original `unwrap`ped `stores.get(..)` at three scan sites; here the
  *   lookup is [`epoch_store_of`], returning [`PlanInvariantError`] — the
@@ -247,19 +250,6 @@ impl Iterator for BatchFilter<'_> {
     help("This is a bug. Please report it.")
 )]
 pub(crate) struct PlanInvariantError(pub(crate) &'static str);
-
-/// Negating a time-travel scan (`not *rel{..} @ t`) is refused, typed, at
-/// plan construction. The original compiled the shape and then aborted in
-/// the negation join's dispatch (`unreachable!()`) — a user-reachable
-/// panic. A skip-scan negation is implementable; it lands with the
-/// operator tier if wanted (SEAM), and until then the refusal is loud.
-#[derive(Debug, Error, Diagnostic)]
-#[error("negation over a time-travel scan of stored relation '{0}' is not supported")]
-#[diagnostic(
-    code(compile::neg_time_travel),
-    help("bind the historical rows in a positive rule first, then negate that rule")
-)]
-pub(crate) struct NegationOverTimeTravelError(pub(crate) String, #[label] pub(crate) SourceSpan);
 
 /// A row decoded from a stored relation was shorter than a column the plan
 /// needs to read from it. `decode_tuple_from_kv`'s arity is only a capacity
@@ -718,10 +708,12 @@ impl RelAlgebra {
     }
 
     /// Anti-join constructor: the total function from a general right side
-    /// to the narrower [`NegRight`]. A rule-store or stored-relation scan
-    /// is accepted; a time-travel scan is a typed *user-facing* refusal
-    /// (see [`NegationOverTimeTravelError`]); anything else is a typed
-    /// invariant error (the compiler never builds it).
+    /// to the narrower [`NegRight`]. A rule-store scan, a current-state
+    /// stored-relation scan, or any of the three time-travel shapes
+    /// (as-of, `@spans`, `@delta`/`@delta_sys`) are all accepted — story
+    /// #86 closed `NegationOverTimeTravelError`, the last refusal here,
+    /// once the operator tier grew a serving strategy for each; anything
+    /// else is a typed invariant error (the compiler never builds it).
     pub(crate) fn neg_join(
         self,
         right: RelAlgebra,
@@ -732,28 +724,9 @@ impl RelAlgebra {
         let right = match right {
             RelAlgebra::TempStore(r) => NegRight::TempStore(r),
             RelAlgebra::Stored(r) => NegRight::Stored(r),
-            RelAlgebra::StoredWithValidity(v) => {
-                bail!(NegationOverTimeTravelError(
-                    v.storage.name.to_string(),
-                    span
-                ))
-            }
-            // Same refusal, same reason: a derived-interval or diff scan
-            // is exactly as time-travel-flavored as a plain as-of scan —
-            // "not *rel{..} @spans iv" or "not *rel{..} @delta(a,b) sgn"
-            // has no well-defined skip-scan negation either.
-            RelAlgebra::Spans(v) => {
-                bail!(NegationOverTimeTravelError(
-                    v.storage.name.to_string(),
-                    span
-                ))
-            }
-            RelAlgebra::Delta(v) => {
-                bail!(NegationOverTimeTravelError(
-                    v.storage.name.to_string(),
-                    span
-                ))
-            }
+            RelAlgebra::StoredWithValidity(v) => NegRight::StoredWithValidity(v),
+            RelAlgebra::Spans(v) => NegRight::Spans(v),
+            RelAlgebra::Delta(v) => NegRight::Delta(v),
             _ => bail!(PlanInvariantError(
                 "the right side of a negation must be a rule or stored-relation scan"
             )),
@@ -1413,8 +1386,10 @@ mod tests {
             .unwrap_err();
         assert!(err.downcast_ref::<PlanInvariantError>().is_some());
 
-        // …and a time-travel scan as negation RHS is the USER-facing typed
-        // refusal (upstream compiled it, then aborted mid-query).
+        // …and a time-travel scan as negation RHS now CONSTRUCTS (story
+        // #86 lifted `NegationOverTimeTravelError`, upstream's abort site
+        // for this exact shape): it becomes `NegRight::StoredWithValidity`,
+        // not a refusal.
         let vld_scan = RelAlgebra::relation(
             vec![sym("k"), sym("at")],
             handle,
@@ -1422,13 +1397,13 @@ mod tests {
             Some(ValidityClause::At(AsOf::current(ValidityTs(Reverse(0))))),
         )
         .unwrap();
-        let err = RelAlgebra::unit(sp())
+        let neg = RelAlgebra::unit(sp())
             .neg_join(vld_scan, vec![], vec![], sp())
-            .unwrap_err();
-        assert!(
-            err.downcast_ref::<NegationOverTimeTravelError>().is_some(),
-            "expected NegationOverTimeTravelError, got {err:?}"
-        );
+            .unwrap();
+        assert!(matches!(
+            neg,
+            RelAlgebra::NegJoin(ref b) if matches!(b.right, NegRight::StoredWithValidity(_))
+        ));
     }
 
     fn entry() -> MagicSymbol {

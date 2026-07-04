@@ -119,6 +119,11 @@ use crate::data::tuple::{Tuple, decode_tuple_from_kv};
 use crate::data::value::{AsOf, ValidityTs};
 
 pub(crate) mod backup;
+// The backend-agnostic conformance kit (story #79): a reusable law/DST/
+// differential battery exercised through the public `Storage`/`WriteTx`
+// surface, never a fjall-specific test file.
+#[cfg(test)]
+mod conformance;
 pub(crate) mod fjall;
 // The cold Merkle state root over the ordered keyspace, driven by the
 // `::merkle_root` sys-op dispatcher in runtime/db.rs; not every helper has

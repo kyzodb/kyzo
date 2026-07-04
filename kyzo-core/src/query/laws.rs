@@ -70,18 +70,22 @@
 //! ## The time-travel negation lift
 //!
 //! Story #62 first reproduced, then LIFTED, the engine's
-//! `NegationOverTimeTravelError` (`query/ra/mod.rs:260`) — here, in the
-//! oracle, which is why the shape below is legal and not in the refusal
-//! corpus.
+//! `NegationOverTimeTravelError` — here, in the oracle, which is why the
+//! shape below is legal and not in the refusal corpus. Story #86 then
+//! closed the matching engine-side gap: `RelAlgebra::neg_join`
+//! (`query/ra/mod.rs`) now serves a `StoredWithValidity` (as-of) right-hand
+//! side through the same skip-scan primitives the positive as-of join
+//! already used (`NegRight::StoredWithValidity`, `query/ra/neg.rs`), and
+//! `@spans`/`@delta` right-hand sides by materializing the derived
+//! relation the positive read already computes (`NegRight::Spans`/
+//! `NegRight::Delta`). `NegationOverTimeTravelError` no longer exists —
+//! there is nothing left in this family for it to refuse.
 //!
-//! The engine's refusal is an *operator-implementation* gap, not a
-//! semantic one: `RelAlgebra::neg_join` (`query/ra/mod.rs`) refuses a
-//! `StoredWithValidity` (time-travel scan) right-hand side because its
-//! anti-join iterator has no skip-scan negation built yet — its own doc
-//! says so ("until the operator tier implements a skip-scan negation, the
-//! shape is refused… loud, typed, and at compile time"). Nothing about the
-//! SEMANTICS is in question there; it is a missing operator, scheduled
-//! (SEAM, db tier) for whenever it lands.
+//! The engine's former refusal was always an *operator-implementation*
+//! gap, not a semantic one — its own doc said so ("until the operator tier
+//! implements a skip-scan negation, the shape is refused… loud, typed, and
+//! at compile time"). Nothing about the SEMANTICS was ever in question
+//! there.
 //!
 //! The oracle has no such gap, and the argument that it never will is
 //! structural, not incidental: a negated [`Literal`]'s `as_of` is a

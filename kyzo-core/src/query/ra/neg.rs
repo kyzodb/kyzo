@@ -16,7 +16,10 @@
 // NegJoin: anti-join
 // ─────────────────────────────────────────────────────────────────────────
 
-use super::{RelAlgebra, epoch_store_of};
+use super::{
+    DeltaRA, Joiner, RelAlgebra, SpansRA, StoredRA, StoredRowTooShortError, StoredWithValidityRA,
+    TempStoreRA, epoch_store_of,
+};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -25,23 +28,28 @@ use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
-use crate::query::ra::StoredRowTooShortError;
 use crate::query::ra::join::{get_eliminate_indices, join_is_prefix};
-use crate::query::ra::{Joiner, StoredRA, TempStoreRA};
 use crate::storage::ReadTx;
 use itertools::Itertools;
 use miette::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-/// The permitted right sides of a negation: a rule-store scan or a
-/// stored-relation scan. Everything else is refused at construction by
-/// [`RelAlgebra::neg_join`] — this type is the constructor proof that the
-/// original's `unreachable!()` dispatch arms cannot be reached.
+/// The permitted right sides of a negation: a rule-store scan, a
+/// stored-relation scan at the current state, or one of the three
+/// time-travel shapes (as-of, `@spans`, `@delta`/`@delta_sys`) — story #86
+/// closed the last of these against `NegationOverTimeTravelError`, which no
+/// longer exists: every shape a negated relation atom can compile to now
+/// has a serving [`NegJoin`] strategy. This type remains the constructor
+/// proof that nothing outside the enum can reach the negation dispatch
+/// below (the original's `unreachable!()` arms stay unreachable).
 #[derive(Debug)]
 pub(crate) enum NegRight {
     TempStore(TempStoreRA),
     Stored(StoredRA),
+    StoredWithValidity(StoredWithValidityRA),
+    Spans(SpansRA),
+    Delta(DeltaRA),
 }
 
 impl NegRight {
@@ -49,6 +57,9 @@ impl NegRight {
         match self {
             NegRight::TempStore(r) => &r.bindings,
             NegRight::Stored(r) => &r.bindings,
+            NegRight::StoredWithValidity(r) => &r.bindings,
+            NegRight::Spans(r) => &r.bindings,
+            NegRight::Delta(r) => &r.bindings,
         }
     }
 }
@@ -99,18 +110,33 @@ impl NegJoin {
                     "stored_neg_mat_join"
                 }
             }
+            NegRight::StoredWithValidity(_) => {
+                if join_is_prefix(&join_indices.1) {
+                    "asof_neg_prefix_join"
+                } else {
+                    "asof_neg_mat_join"
+                }
+            }
+            // No prefix probe exists for a derived scan yet (pushdown into
+            // `@spans`/`@delta` is chunk 4's posting-index work — the
+            // module doc on `RelAlgebra::filter`'s matching arm says the
+            // same): the anti-join always materializes the whole right
+            // side.
+            NegRight::Spans(_) => "spans_neg_mat_join",
+            NegRight::Delta(_) => "delta_neg_mat_join",
         })
     }
 }
 
 impl NegJoin {
     /// The anti-join, batch-native: a filter over the left batch stream.
-    /// Per left row (a slice into the batch — no `Tuple` minted) one of
-    /// four probes answers "does any right row match?": a prefix scan or a
-    /// materialized join-column set, against a rule store or a stored
-    /// relation. Survivors are written once into the output batch, with
-    /// this node's eliminations applied. Negation always reads right-side
-    /// TOTALS, never deltas.
+    /// Per left row (a slice into the batch — no `Tuple` minted) one probe
+    /// per [`NegRight`] variant answers "does any right row match?": a
+    /// prefix scan or a materialized join-column set, against a rule
+    /// store, a current-state stored relation, an as-of skip-scan, or a
+    /// materialized `@spans`/`@delta` derivation. Survivors are written
+    /// once into the output batch, with this node's eliminations applied.
+    /// Negation always reads right-side TOTALS, never deltas.
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
@@ -214,6 +240,112 @@ impl NegJoin {
                         Ok(right_join_vals.contains(&left_join_vals))
                     })
                 }
+            }
+            // The skip-scan anti-join (story #86): identical in shape to
+            // `NegRight::Stored` just above, reading through the SAME
+            // as-of skip-scan primitives (`skip_scan_prefix_projected`/
+            // `skip_scan_all`) `StoredWithValidityRA::prefix_join_batched`
+            // already uses for the POSITIVE join — so the "never skips a
+            // tuple whose absence it is asserting" proof this operator
+            // owes is inherited, not reargued: those primitives already
+            // enumerate every matching row at the coordinate for the
+            // positive join (proven by the chunk-2 as-of differentials),
+            // and a "does at least one match exist" probe can only be as
+            // sound as full enumeration would be — it stops at the first
+            // hit instead of collecting every hit, which is strictly less
+            // work over the same, already-proven stream.
+            NegRight::StoredWithValidity(v) => {
+                if join_is_prefix(&right_join_indices) {
+                    let lji = left_join_indices;
+                    let rji = right_join_indices;
+                    Box::new(move |row: &[DataValue]| {
+                        'outer: for found in v.storage.skip_scan_prefix_projected(
+                            tx,
+                            row,
+                            &left_to_prefix_indices,
+                            v.as_of,
+                        ) {
+                            let found = found?;
+                            for (l, r) in lji.iter().zip(rji.iter()) {
+                                let found_val = found.get(*r).ok_or_else(|| {
+                                    StoredRowTooShortError(
+                                        v.storage.name.to_string(),
+                                        *r,
+                                        found.len(),
+                                        v.span,
+                                    )
+                                })?;
+                                if row[*l] != *found_val {
+                                    continue 'outer;
+                                }
+                            }
+                            return Ok(true);
+                        }
+                        Ok(false)
+                    })
+                } else {
+                    let mut right_join_vals = BTreeSet::new();
+                    for tuple in v.storage.skip_scan_all(tx, v.as_of) {
+                        let tuple = tuple?;
+                        let to_join: Box<[DataValue]> = right_join_indices
+                            .iter()
+                            .map(|i| tuple[*i].clone())
+                            .collect();
+                        right_join_vals.insert(to_join);
+                    }
+                    let lji = left_join_indices;
+                    Box::new(move |row: &[DataValue]| {
+                        let left_join_vals: Box<[DataValue]> =
+                            lji.iter().map(|i| row[*i].clone()).collect();
+                        Ok(right_join_vals.contains(&left_join_vals))
+                    })
+                }
+            }
+            // `@spans`/`@delta` right sides: no prefix-probe primitive
+            // exists for either yet (same chunk-4 gap `RelAlgebra::filter`
+            // already lives with), so the anti-join always materializes
+            // the derived relation whole — one pass through the same
+            // production sweep/set-difference the POSITIVE read uses
+            // (`SpansRA`/`DeltaRA::iter_batched`), projected onto the join
+            // columns into a set. Soundness is the positive scan's own:
+            // this probe can only be wrong if the materialization missed a
+            // row the positive read would have produced, and nothing here
+            // reads differently from that shared `iter_batched`.
+            NegRight::Spans(v) => {
+                let mut right_join_vals = BTreeSet::new();
+                for batch in v.iter_batched(tx)? {
+                    let batch = batch?;
+                    for i in 0..batch.len() {
+                        let row = batch.row(i);
+                        let to_join: Box<[DataValue]> =
+                            right_join_indices.iter().map(|i| row[*i].clone()).collect();
+                        right_join_vals.insert(to_join);
+                    }
+                }
+                let lji = left_join_indices;
+                Box::new(move |row: &[DataValue]| {
+                    let left_join_vals: Box<[DataValue]> =
+                        lji.iter().map(|i| row[*i].clone()).collect();
+                    Ok(right_join_vals.contains(&left_join_vals))
+                })
+            }
+            NegRight::Delta(v) => {
+                let mut right_join_vals = BTreeSet::new();
+                for batch in v.iter_batched(tx)? {
+                    let batch = batch?;
+                    for i in 0..batch.len() {
+                        let row = batch.row(i);
+                        let to_join: Box<[DataValue]> =
+                            right_join_indices.iter().map(|i| row[*i].clone()).collect();
+                        right_join_vals.insert(to_join);
+                    }
+                }
+                let lji = left_join_indices;
+                Box::new(move |row: &[DataValue]| {
+                    let left_join_vals: Box<[DataValue]> =
+                        lji.iter().map(|i| row[*i].clone()).collect();
+                    Ok(right_join_vals.contains(&left_join_vals))
+                })
             }
         };
 

@@ -731,11 +731,11 @@ pub(crate) fn compile_magic_rule_body(
                 }
 
                 // Same short-circuit as the positive arm: a temporal
-                // clause always scans the base relation (and, either way,
-                // `neg_join` below refuses a `Spans`/`Delta` right side
-                // exactly like an as-of scan — negation over a
-                // time-travel-flavored read has no well-defined skip-scan
-                // form).
+                // clause always scans the base relation directly — an
+                // index mirrors only the current-state keyspace, never a
+                // `Spans`/`Delta` derivation, negated or not (unrelated to
+                // `neg_join` below, which serves all three time-travel
+                // shapes as a negation right side since story #86).
                 let chosen_index = match &rel_app.validity {
                     Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
                     _ => store.choose_index(&join_indices, rel_app.validity.is_some()),

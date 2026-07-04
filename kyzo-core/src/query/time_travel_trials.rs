@@ -58,7 +58,7 @@ use crate::query::compile::{
 };
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::laws;
-use crate::query::ra::{NegationOverTimeTravelError, RelAlgebra};
+use crate::query::ra::RelAlgebra;
 use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
@@ -223,13 +223,6 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
     )
     .expect("evaluates");
     outcome.store.all_iter().map(|t| t.into_tuple()).collect()
-}
-
-/// Compile-and-run, but surface the compile error instead of unwrapping —
-/// for pinning typed refusals.
-fn compile_err(db: &FjallStorage, prog: StratifiedMagicProgram) -> miette::Report {
-    let rtx = db.read_tx().expect("read tx");
-    stratified_magic_compile(&rtx, prog).expect_err("expected a compile-time refusal")
 }
 
 type Tuple = Vec<DataValue>;
@@ -1166,36 +1159,114 @@ fn asof_run_is_byte_identical_across_threads() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-// Task 5 — the refusal boundary around validity scans.
+// Task 5 — negation over validity scans (story #86: the skip-scan anti-join).
 // ═════════════════════════════════════════════════════════════════════════
 
-/// Negation over a time-travel scan is a typed refusal at COMPILE time
-/// (`NegationOverTimeTravelError`), not a silent wrong answer or a mid-query
-/// abort.
+/// `?[k0,val] := *candidates{k0,val}, not *hist{k0,val}@AT` — the full-key
+/// join, which compiles to `NegRight::StoredWithValidity`'s PREFIX-probe
+/// branch (both `k0`, the real storage key, and `val`, a non-key payload
+/// column, are already bound by the candidates atom, so
+/// `join_is_prefix` sees a leading run `[0, 1]`). The candidate domain is
+/// every `(key, val)` pair the generated history ever asserted, plus one
+/// sentinel pair no history ever contains — rich enough that both
+/// "present at AT" (negated out) and "absent at AT" (survives) rows occur.
+/// Expected is computed independently: candidates minus [`naive_asof`]'s
+/// own present set, never by re-deriving the engine's own answer.
 #[test]
-fn negation_over_validity_scan_refuses() {
+fn negation_over_asof_matches_the_independent_complement_generatively() {
+    let mut cases = 0usize;
+    for seed in 0..300u64 {
+        let mut rng = BridgeRng::new(0x9E6A5F_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 4);
+        let n_events = rng.range(1, 15) as usize;
+        let hist = gen_versions(&mut rng, n_keys, n_events);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        write_history(&db, "neg_hist", 1, &["val"], &hist);
+
+        let mut candidates: BTreeSet<(i64, i64)> = hist
+            .iter()
+            .filter(|ver| ver.assert)
+            .map(|ver| (ver.key[0], ver.vals[0].get_int().unwrap()))
+            .collect();
+        candidates.insert((n_keys, 99));
+        let candidate_rows: Vec<Vec<i64>> =
+            candidates.iter().map(|&(k, val)| vec![k, val]).collect();
+        stored_plain(&db, "neg_candidates", 2, &candidate_rows);
+
+        let (k0, val) = (sym("k0"), sym("val"));
+        for at in interesting_instants(&hist) {
+            let prog = program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[k0.clone(), val.clone()],
+                    vec![
+                        rel_atom_at("neg_candidates", &[k0.clone(), val.clone()], None),
+                        neg_rel_atom_at("neg_hist", &[k0.clone(), val.clone()], Some(at)),
+                    ],
+                )],
+            )]]);
+            let got = compile_and_run(&db, prog);
+            let present = naive_asof(&hist, at);
+            let want: BTreeSet<Tuple> = candidates
+                .iter()
+                .map(|&(k, val)| vec![v(k), v(val)])
+                .filter(|row| !present.contains(row))
+                .collect();
+            assert_eq!(got, want, "seed {seed} at {at}: hist={hist:?}");
+            cases += 1;
+        }
+    }
+    assert!(
+        cases >= 300,
+        "expected a rich negation-over-as-of campaign, ran {cases}"
+    );
+}
+
+/// The MATERIALIZED (non-prefix) branch: negating on `val` alone, with
+/// `k0` left fresh (unjoined) on the negated side, so `right_join_indices`
+/// is `[1]` — not a leading run of `hist`'s own columns — and
+/// `NegRight::StoredWithValidity` must fall back to
+/// `skip_scan_all`-then-set-membership instead of a prefix probe.
+#[test]
+fn negation_over_asof_non_prefix_join_matches_independent_complement() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    write_history(&db, "hist", 1, &["val"], &[ver(&[1], 10, true, &[s("a")])]);
-    write_history(&db, "base", 1, &["val"], &[ver(&[1], 10, true, &[s("b")])]);
+    // Key 1's fact (value 100) is retracted at t=20 — chosen so that
+    // querying at t=10 (BEFORE the retraction) and reading CURRENT state
+    // (t=20+) disagree on whether 100 is present at all, discriminating
+    // this branch from a same-shaped current-state probe.
+    let hist = vec![
+        ver(&[1], 10, true, &[v(100)]),
+        ver(&[2], 10, true, &[v(200)]),
+        ver(&[1], 20, false, &[]),
+    ];
+    write_history(&db, "nonprefix_hist", 1, &["val"], &hist);
+    stored_plain(
+        &db,
+        "nonprefix_candidates",
+        1,
+        &[vec![100], vec![200], vec![999]],
+    );
 
-    let (k0, val) = (sym("k0"), sym("val"));
-    // ?[k0] := *base{k0,at,val}@T, not *hist{k0,at,val}@T
+    let (dummy, val) = (sym("dummy"), sym("val"));
+    // ?[val] := *nonprefix_candidates{val}, not *nonprefix_hist{dummy,val}@10
     let prog = program_of(vec![vec![(
         entry_symbol(),
         vec![plain_rule(
-            std::slice::from_ref(&k0),
+            std::slice::from_ref(&val),
             vec![
-                rel_atom_at("base", &[k0.clone(), val.clone()], Some(20)),
-                neg_rel_atom_at("hist", &[k0.clone(), val.clone()], Some(20)),
+                rel_atom_at("nonprefix_candidates", std::slice::from_ref(&val), None),
+                neg_rel_atom_at("nonprefix_hist", &[dummy, val.clone()], Some(10)),
             ],
         )],
     )]]);
-    let err = compile_err(&db, prog);
-    assert!(
-        err.downcast_ref::<NegationOverTimeTravelError>().is_some(),
-        "expected NegationOverTimeTravelError, got: {err:?}"
-    );
+    let got = compile_and_run(&db, prog);
+    // At t=10, both 100 and 200 are present (the retraction has not
+    // happened yet), so both are negated out; 999 is present nowhere, at
+    // any instant.
+    assert_eq!(got, BTreeSet::from([vec![v(999)]]));
 }
 
 /// Fixed rules reading stored relations (validity-keyed or not) are a seam:
@@ -2175,74 +2246,206 @@ fn delta_sys_keyword_requires_a_boundary_not_just_a_prefix_match() {
     assert!(!err.to_string().is_empty());
 }
 
-#[test]
-fn negation_over_spans_refuses_like_negation_over_time_travel() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
-    write_history_multi_tx(
-        &db,
-        "sp_neg",
-        1,
-        &["val"],
-        &[ver(&[1], 10, true, &[v(100)])],
-    );
+/// `not *rel{args...} @spans iv` as a `MagicAtom` — [`spans_atom`]'s
+/// negated twin (story #86: no longer a refusal).
+fn neg_spans_atom(name: &str, args: &[Symbol], sys: Option<i64>, iv: Symbol) -> MagicAtom {
+    MagicAtom::NegatedRelation(MagicRelationApplyAtom {
+        name: sym(name),
+        args: args.to_vec(),
+        validity: Some(ValidityClause::Spans {
+            sys: sys.map(vts).unwrap_or(MAX_VALIDITY_TS),
+            var: iv,
+        }),
+        span: sp(),
+    })
+}
 
-    let (k0, val, iv) = (sym("k0"), sym("val"), sym("iv"));
-    let prog = program_of(vec![vec![(
-        entry_symbol(),
-        vec![plain_rule(
-            std::slice::from_ref(&k0),
-            vec![MagicAtom::NegatedRelation(MagicRelationApplyAtom {
-                name: sym("sp_neg"),
-                args: vec![k0.clone(), val.clone()],
-                validity: Some(ValidityClause::Spans {
-                    sys: MAX_VALIDITY_TS,
-                    var: iv.clone(),
-                }),
-                span: sp(),
-            })],
-        )],
-    )]]);
-    let err = compile_err(&db, prog);
+/// `not *rel{args...} @delta(from, to) sgn` as a `MagicAtom` —
+/// [`delta_atom`]'s negated twin (story #86).
+fn neg_delta_atom(
+    name: &str,
+    args: &[Symbol],
+    axis: DeltaAxis,
+    from: i64,
+    to: i64,
+    sgn: Symbol,
+) -> MagicAtom {
+    MagicAtom::NegatedRelation(MagicRelationApplyAtom {
+        name: sym(name),
+        args: args.to_vec(),
+        validity: Some(ValidityClause::Delta {
+            axis,
+            from: vts(from),
+            to: vts(to),
+            var: sgn,
+        }),
+        span: sp(),
+    })
+}
+
+/// Negating `@spans` now computes (story #86: `NegRight::Spans`), through
+/// the SAME materialized-scan primitive the positive read uses
+/// (`SpansRA::iter_batched`). `iv` is left unjoined in the negated atom (a
+/// fresh var, discarded like any right-only column never selected as a
+/// join key), so the negation asks "does `(k0,val)` govern SOME interval",
+/// independently checked by projecting `oracle_spans`'s own rows onto
+/// `(k0,val)` and set-differencing against a candidate domain.
+#[test]
+fn negation_over_spans_matches_the_independent_complement_generatively() {
+    let mut cases = 0usize;
+    for seed in 0..150u64 {
+        let mut rng = BridgeRng::new(0xB16_5FA5_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 4);
+        let n_events = rng.range(1, 15) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let sys_stamps = write_history_multi_tx(&db, "neg_spans_src", 1, &["val"], &versions);
+        let events = events_of(&versions, &sys_stamps);
+        let keys = distinct_keys(&versions);
+
+        let (k0, val, iv) = (sym("k0"), sym("val"), sym("iv"));
+        for (variant, fixed_sys) in [None, Some(sys_stamps[sys_stamps.len() / 2])]
+            .into_iter()
+            .enumerate()
+        {
+            let positive = oracle_spans(&events, &keys, fixed_sys.unwrap_or(i64::MAX));
+            let present_pairs: BTreeSet<(i64, i64)> = positive
+                .iter()
+                .map(|row| (row[0].get_int().unwrap(), row[1].get_int().unwrap()))
+                .collect();
+            let mut candidates = present_pairs.clone();
+            candidates.insert((n_keys, 99));
+            let candidate_rows: Vec<Vec<i64>> =
+                candidates.iter().map(|&(k, val)| vec![k, val]).collect();
+            // A fresh relation name per variant: candidates get re-derived
+            // every iteration (they depend on `fixed_sys`), and a name
+            // cannot be created twice in the same `db`.
+            let candidates_name = format!("neg_spans_candidates_{variant}");
+            stored_plain(&db, &candidates_name, 2, &candidate_rows);
+
+            let prog = program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[k0.clone(), val.clone()],
+                    vec![
+                        rel_atom_at(&candidates_name, &[k0.clone(), val.clone()], None),
+                        neg_spans_atom(
+                            "neg_spans_src",
+                            &[k0.clone(), val.clone()],
+                            fixed_sys,
+                            iv.clone(),
+                        ),
+                    ],
+                )],
+            )]]);
+            let got = compile_and_run(&db, prog);
+            let want: BTreeSet<Tuple> = candidates
+                .iter()
+                .map(|&(k, val)| vec![v(k), v(val)])
+                .filter(|row| !present_pairs.contains(&(k0_of(row), val_of(row))))
+                .collect();
+            assert_eq!(
+                got, want,
+                "seed {seed} fixed_sys={fixed_sys:?}: versions={versions:?}"
+            );
+            cases += 1;
+        }
+    }
     assert!(
-        err.downcast_ref::<NegationOverTimeTravelError>().is_some(),
-        "expected NegationOverTimeTravelError, got {err:?}"
+        cases >= 150,
+        "expected a rich negation-over-spans campaign, ran {cases}"
     );
 }
 
+/// Negating `@delta` now computes (story #86: `NegRight::Delta`), through
+/// the same materialized set-difference the positive `DeltaRA` uses. `sgn`
+/// is left unjoined, so the negation asks "does `(k0,val)` appear as EITHER
+/// sign in the diff" — checked against `oracle_delta`'s own rows projected
+/// onto `(k0,val)`.
 #[test]
-fn negation_over_delta_refuses_like_negation_over_time_travel() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = new_fjall_storage(dir.path()).unwrap();
-    write_history_multi_tx(
-        &db,
-        "delta_neg",
-        1,
-        &["val"],
-        &[ver(&[1], 10, true, &[v(100)])],
-    );
+fn negation_over_delta_matches_the_independent_complement_generatively() {
+    let mut cases = 0usize;
+    for seed in 0..150u64 {
+        let mut rng = BridgeRng::new(0xDE17ADBADu64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 4);
+        let n_events = rng.range(1, 15) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
 
-    let (k0, val, sgn) = (sym("k0"), sym("val"), sym("sgn"));
-    let prog = program_of(vec![vec![(
-        entry_symbol(),
-        vec![plain_rule(
-            std::slice::from_ref(&k0),
-            vec![MagicAtom::NegatedRelation(MagicRelationApplyAtom {
-                name: sym("delta_neg"),
-                args: vec![k0.clone(), val.clone()],
-                validity: Some(ValidityClause::Delta {
-                    axis: DeltaAxis::Valid,
-                    from: vts(0),
-                    to: vts(20),
-                    var: sgn.clone(),
-                }),
-                span: sp(),
-            })],
-        )],
-    )]]);
-    let err = compile_err(&db, prog);
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let sys_stamps = write_history_multi_tx(&db, "neg_delta_src", 1, &["val"], &versions);
+        let events = events_of(&versions, &sys_stamps);
+
+        let (k0, val, sgn) = (sym("k0"), sym("val"), sym("sgn"));
+        for (variant, (valid_at, valid_to)) in [(-1i64, 9i64), (0, 5), (3, 3), (9, -1)]
+            .into_iter()
+            .enumerate()
+        {
+            let positive = oracle_delta(
+                &events,
+                laws::AsOf {
+                    valid: valid_at,
+                    sys: i64::MAX,
+                },
+                laws::AsOf {
+                    valid: valid_to,
+                    sys: i64::MAX,
+                },
+            );
+            let present_pairs: BTreeSet<(i64, i64)> = positive
+                .iter()
+                .map(|row| (row[0].get_int().unwrap(), row[1].get_int().unwrap()))
+                .collect();
+            let mut candidates = present_pairs.clone();
+            candidates.insert((n_keys, 99));
+            let candidate_rows: Vec<Vec<i64>> =
+                candidates.iter().map(|&(k, val)| vec![k, val]).collect();
+            // A fresh relation name per variant — see the spans campaign's
+            // matching comment above `candidates_name`.
+            let candidates_name = format!("neg_delta_candidates_{variant}");
+            stored_plain(&db, &candidates_name, 2, &candidate_rows);
+
+            let prog = program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[k0.clone(), val.clone()],
+                    vec![
+                        rel_atom_at(&candidates_name, &[k0.clone(), val.clone()], None),
+                        neg_delta_atom(
+                            "neg_delta_src",
+                            &[k0.clone(), val.clone()],
+                            DeltaAxis::Valid,
+                            valid_at,
+                            valid_to,
+                            sgn.clone(),
+                        ),
+                    ],
+                )],
+            )]]);
+            let got = compile_and_run(&db, prog);
+            let want: BTreeSet<Tuple> = candidates
+                .iter()
+                .map(|&(k, val)| vec![v(k), v(val)])
+                .filter(|row| !present_pairs.contains(&(k0_of(row), val_of(row))))
+                .collect();
+            assert_eq!(
+                got, want,
+                "seed {seed} valid axis {valid_at}->{valid_to}: versions={versions:?}"
+            );
+            cases += 1;
+        }
+    }
     assert!(
-        err.downcast_ref::<NegationOverTimeTravelError>().is_some(),
-        "expected NegationOverTimeTravelError, got {err:?}"
+        cases >= 150,
+        "expected a rich negation-over-delta campaign, ran {cases}"
     );
+}
+
+fn k0_of(row: &[DataValue]) -> i64 {
+    row[0].get_int().unwrap()
+}
+fn val_of(row: &[DataValue]) -> i64 {
+    row[1].get_int().unwrap()
 }
