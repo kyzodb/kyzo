@@ -103,16 +103,21 @@ pub(crate) fn eliminate_from_tuple(mut ret: Tuple, eliminate_indices: &BTreeSet<
 /// on the iterator path, but the joined row is never materialized as its
 /// own `Tuple` — only the columns that survive elimination are ever copied,
 /// and they go directly into the output batch.
-pub(crate) fn push_joined_row<'r>(
+///
+/// `right` yields OWNED values (story #77 chunk 2: a `TupleInIter` over a
+/// byte-backed regular store has nothing to reference — decoding produces
+/// a value, not a borrow — so every caller now hands over values it
+/// already owns or has decoded, never a borrow to reclone here).
+pub(crate) fn push_joined_row(
     batch: &mut Batch,
     left: &[DataValue],
-    right: impl Iterator<Item = &'r DataValue>,
+    right: impl Iterator<Item = DataValue>,
     eliminate_indices: &BTreeSet<usize>,
 ) -> Result<()> {
     batch.push_with(|buf| {
         if eliminate_indices.is_empty() {
             buf.extend_from_slice(left);
-            buf.extend(right.cloned());
+            buf.extend(right);
         } else {
             for (i, v) in left.iter().enumerate() {
                 if !eliminate_indices.contains(&i) {
@@ -122,7 +127,7 @@ pub(crate) fn push_joined_row<'r>(
             let base = left.len();
             for (j, v) in right.enumerate() {
                 if !eliminate_indices.contains(&(base + j)) {
-                    buf.push(v.clone());
+                    buf.push(v);
                 }
             }
         }
@@ -238,7 +243,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                             && let Err(e) = push_joined_row(
                                 &mut out,
                                 left_row,
-                                found.iter(),
+                                found.iter().cloned(),
                                 &self.eliminate_indices,
                             )
                         {
@@ -663,7 +668,7 @@ impl MaterializedBatchJoin<'_> {
                 push_joined_row(
                     &mut out,
                     left,
-                    self.right_invert_indices.iter().map(|i| &stored[*i]),
+                    self.right_invert_indices.iter().map(|i| stored[*i].clone()),
                     &self.eliminate_indices,
                 )?;
                 self.run_idx += 1;

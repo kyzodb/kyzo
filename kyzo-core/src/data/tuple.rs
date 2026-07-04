@@ -189,16 +189,12 @@ pub fn encode_tuple_key(relation_id: u64, tuple: &[DataValue]) -> EncodedKey {
 /// next begins, never ambiguously) is exactly what a concatenation bug would
 /// violate.
 ///
-/// Landed ahead of its consumer, same as [`RelationId::next`]/`SYSTEM`/
-/// `raw_decode` above: story #77 lands in ordered chunks (chunk 1 is this
-/// codec, proven in isolation), and the fixpoint-state conversion that
-/// consumes it (`query/temp_store.rs`'s `RegularTempStore`/`MeetAggrStore`,
-/// `query/levels.rs`'s `NormalLevel`, and `TupleInIter`'s reference-returning
-/// shape, which a byte-backed store cannot keep — every one of its ~80
-/// call sites across `query/ra/*.rs` would need to move in the same burst)
-/// is chunk 2, not bundled here to avoid a half-converted signature change
-/// landing mid-flight.
-#[allow(dead_code)] // chunk 2's consumer, not yet landed
+/// Story #77 chunk 2 (`query/temp_store.rs`'s `RegularTempStore`,
+/// `query/levels.rs`'s `NormalLevel`) is the first consumer: a regular
+/// rule's admission bookkeeping keys on this instead of `Tuple`. The meet
+/// path (`MeetAggrStore`/`MeetLevel`) stays `DataValue`-shaped — its fold
+/// needs mutable typed values, so bytes buy nothing there — deferred
+/// further, not bundled here.
 pub(crate) fn encode_tuple_bare(tuple: &[DataValue]) -> Vec<u8> {
     let mut ret = Vec::with_capacity(14 * tuple.len());
     for val in tuple {
@@ -210,7 +206,6 @@ pub(crate) fn encode_tuple_bare(tuple: &[DataValue]) -> Vec<u8> {
 /// The inverse of [`encode_tuple_bare`]: self-delimiting, so every column is
 /// recovered without a stored width or count — corrupt bytes are a typed
 /// error, never a panic, matching [`decode_tuple_from_key`]'s discipline.
-#[allow(dead_code)] // chunk 2's consumer, not yet landed
 pub(crate) fn decode_tuple_bare(bytes: &[u8]) -> Result<Tuple> {
     let mut out = Vec::with_capacity(bytes.len() / 8 + 1);
     let mut remaining = bytes;
@@ -220,6 +215,22 @@ pub(crate) fn decode_tuple_bare(bytes: &[u8]) -> Result<Tuple> {
         remaining = next;
     }
     Ok(out)
+}
+
+/// The byte length of the first `n` self-delimiting values in a bare
+/// encoding (`None` if fewer than `n` are present) — a byte-backed prefix
+/// probe's boundary finder: `bytes[..bare_prefix_len(bytes, n)?]` is the
+/// bare encoding of `bytes`'s own first `n` columns, comparable directly
+/// against another `n`-column bare encoding by the same order-embedding
+/// law `encode_tuple_bare` proves for whole tuples (a prefix of a tuple is
+/// a tuple).
+pub(crate) fn bare_prefix_len(bytes: &[u8], n: usize) -> Option<usize> {
+    let mut remaining = bytes;
+    for _ in 0..n {
+        let (_, next) = DataValue::decode_from_key(remaining).ok()?;
+        remaining = next;
+    }
+    Some(bytes.len() - remaining.len())
 }
 
 /// Parse a claimed key into its tuple. Fallible: the bytes may be corrupt.
@@ -645,5 +656,33 @@ mod tests {
             let bytes: Vec<u8> = (0..len).map(|_| next_byte()).collect();
             let _ = decode_tuple_bare(&bytes);
         }
+    }
+
+    /// [`bare_prefix_len`]'s load-bearing law: the byte range it returns for
+    /// a row's first `n` columns is byte-identical to bare-encoding just
+    /// those `n` columns on their own — the exact property `NormalLevel`'s
+    /// prefix probe (`query/levels.rs`) depends on to compare a stored row's
+    /// leading columns without decoding them.
+    #[test]
+    fn bare_prefix_len_matches_a_standalone_prefix_encoding() {
+        let row = vec![
+            DataValue::from(1i64),
+            DataValue::from("middle"),
+            DataValue::List(vec![DataValue::from(2i64)]),
+            DataValue::Bot,
+        ];
+        let encoded = encode_tuple_bare(&row);
+        for n in 0..=row.len() {
+            let boundary = bare_prefix_len(&encoded, n).unwrap();
+            let standalone = encode_tuple_bare(&row[..n]);
+            assert_eq!(
+                &encoded[..boundary],
+                standalone.as_slice(),
+                "n={n}: prefix boundary bytes diverged from a standalone encoding"
+            );
+        }
+        // Asking for more columns than the row has is a clean `None`, not a
+        // truncated/garbage boundary.
+        assert!(bare_prefix_len(&encoded, row.len() + 1).is_none());
     }
 }

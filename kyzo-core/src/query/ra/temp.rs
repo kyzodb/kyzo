@@ -288,7 +288,7 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                                 && let Err(e) = push_joined_row(
                                     &mut out,
                                     left_row,
-                                    found_tuple.iter(),
+                                    found_tuple.into_iter(),
                                     &self.eliminate_indices,
                                 )
                             {
