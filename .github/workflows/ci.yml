@@ -215,6 +215,59 @@ jobs:
             cargo +nightly fuzz run "$t" --target x86_64-unknown-linux-gnu -- -max_total_time=60
           done
 
+  # ---------- D. Determinism across axes (story #30) ----------
+  #
+  # The engine's own in-process campaigns (kyzo-core/src/query/trials.rs,
+  # time_travel_trials.rs) already prove cross-thread determinism inside one
+  # test binary; these two jobs cover what only a second machine can prove:
+  # the same seeded workload (kyzo-core/examples/determinism_digest.rs, run
+  # via scripts/determinism-campaign.sh) reduces to the SAME digest on a
+  # completely different CPU architecture. x86_64 records; aarch64 checks
+  # against the recording and fails loudly on any divergence — a real
+  # cross-architecture nondeterminism finding, never silenced here.
+
+  determinism-campaign-x86_64:
+    name: Determinism campaign (x86_64 digest, story #30)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/determinism-campaign.sh determinism-digest-x86_64.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: determinism-digest-x86_64
+          path: determinism-digest-x86_64.txt
+          retention-days: 90
+
+  determinism-campaign-aarch64:
+    name: Determinism campaign (aarch64 cross-check, story #30)
+    # GitHub-hosted arm64 runner: the in-repo leg of the architecture axis.
+    # The Raspberry Pi replay (issue #36) is the remaining external leg —
+    # real hardware this workflow cannot reach.
+    runs-on: ubuntu-24.04-arm
+    needs: [detect, determinism-campaign-x86_64]
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The full suite, on aarch64, never core-only — same law as build-test.
+      - run: cargo build --workspace --release
+      - run: cargo test --workspace --release
+      - uses: actions/download-artifact@v7
+        with:
+          name: determinism-digest-x86_64
+      - run: |
+          scripts/determinism-campaign.sh determinism-digest-aarch64.txt determinism-digest-x86_64.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: determinism-digest-aarch64
+          path: determinism-digest-aarch64.txt
+          retention-days: 90
+
   resonance-gate:
     name: Resonance gate (ontology invariants, story #81)
     runs-on: ubuntu-latest
@@ -239,12 +292,12 @@ jobs:
   gate-summary:
     name: Gate summary (no silent skips)
     runs-on: ubuntu-latest
-    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, coverage, memcmp-invariant, fuzz-smoke, resonance-gate]
+    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, coverage, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate]
     if: always()
     steps:
       - name: Print every gate's outcome; fail if any gate failed
         run: |
-          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} coverage:${{ needs.coverage.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} resonance-gate:${{ needs.resonance-gate.result }}"
+          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} coverage:${{ needs.coverage.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }}"
           echo "$summary" | tr ' ' '\n'
           echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in
