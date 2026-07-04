@@ -124,6 +124,14 @@ pub(crate) mod backup;
 // surface, never a fjall-specific test file.
 #[cfg(test)]
 mod conformance;
+// The real-filesystem crash matrix (story #31 phase 2): a real FjallStorage
+// driven through kyzo-crashfs's FUSE fault injector, judged against
+// SimStorage crashed at the analogous logical point. A separate mechanism
+// from `conformance` above on purpose: that kit's fault path is in-process
+// DST over the trait seam; this one exercises fjall's OWN on-disk recovery
+// code through real write()/fsync() syscalls.
+#[cfg(test)]
+mod crash_matrix;
 pub(crate) mod fjall;
 // The cold Merkle state root over the ordered keyspace, driven by the
 // `::merkle_root` sys-op dispatcher in runtime/db.rs; not every helper has
