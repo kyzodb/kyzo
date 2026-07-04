@@ -59,6 +59,7 @@ use crate::query::compile::{
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::laws;
 use crate::query::ra::RelAlgebra;
+use crate::query::ra::temporal;
 use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
@@ -1932,6 +1933,69 @@ fn delta_composition_law_holds_through_the_real_engine() {
             assert_eq!(
                 composed, ac,
                 "seed {seed} a={a} b={b} c={c}: diff(a,c) != diff(a,b)⊕diff(b,c)"
+            );
+        }
+    }
+}
+
+/// Story #77: `query/ra/temporal.rs`'s PRODUCTION `SignedFact`/`compose` —
+/// not just the oracle's, which the test above already closes — proven
+/// against real engine output. Before this story `compose` was "proven as
+/// an oracle law but wired into zero production code"; this is the
+/// production copy's own differential, independently written from the
+/// oracle's (never sharing a bug through shared code) and checked the same
+/// way: three real `DeltaRA` evaluations, composed by the PRODUCTION
+/// function, must equal the direct evaluation.
+#[test]
+fn production_compose_matches_the_composition_law_on_real_engine_output() {
+    for seed in 0..80u64 {
+        let mut rng = BridgeRng::new(0xC0DE_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 3);
+        let n_events = rng.range(2, 12) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        write_history_multi_tx(&db, "prod_compose_src", 1, &["val"], &versions);
+
+        let (k0, val, sgn) = (sym("k0"), sym("val"), sym("sgn"));
+        let run_delta = |from: i64, to: i64| -> BTreeSet<Tuple> {
+            let prog = program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[k0.clone(), val.clone(), sgn.clone()],
+                    vec![delta_atom(
+                        "prod_compose_src",
+                        &[k0.clone(), val.clone()],
+                        DeltaAxis::Valid,
+                        from,
+                        to,
+                        sgn.clone(),
+                    )],
+                )],
+            )]]);
+            compile_and_run(&db, prog)
+        };
+        let to_signed = |rows: BTreeSet<Tuple>| -> BTreeSet<temporal::SignedFact> {
+            rows.into_iter()
+                .map(|mut row| {
+                    let sgn = row.pop().expect("row carries a sign column");
+                    match sgn.get_int() {
+                        Some(1) => temporal::SignedFact::Plus(row),
+                        Some(-1) => temporal::SignedFact::Minus(row),
+                        other => panic!("unexpected sign column: {other:?}"),
+                    }
+                })
+                .collect()
+        };
+        for (a, b, c) in [(-1, 3, 9), (0, 0, 5), (2, 2, 2), (-1, 9, -1)] {
+            let ab = to_signed(run_delta(a, b));
+            let bc = to_signed(run_delta(b, c));
+            let ac = to_signed(run_delta(a, c));
+            let composed = temporal::compose(&ab, &bc);
+            assert_eq!(
+                composed, ac,
+                "seed {seed} a={a} b={b} c={c}: production compose diverged from diff(a,c)"
             );
         }
     }

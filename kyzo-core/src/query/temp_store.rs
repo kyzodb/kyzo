@@ -356,11 +356,17 @@ pub(crate) struct MeetAggrStore {
     /// onto the aggregated positions, in head order). The fold/delta
     /// authority, iterated in canonical group-key order at the merge
     /// barrier so admissions stay schedule-independent. The VALUES stay
-    /// `DataValue`-typed: `MeetAggrObj::update` folds through real typed
-    /// operations (set union/intersection, bitwise and/or, tropical
-    /// min-cost) that have no byte-level analog — folding is decode-bound
-    /// no matter the storage representation, so only the key (pure
-    /// comparison, never computed on) gets the byte treatment.
+    /// `DataValue`-typed — not because every meet kind NEEDS typed
+    /// computation: byte-backing wins where a value is only ever COMPARED
+    /// (the key, and — since memcomparable order embeds value order — the
+    /// order-based `min`/`max` folds too), and loses nothing where it is.
+    /// `set union/intersection`, `bitand/bitor`, and tropical `min-cost`
+    /// genuinely need decode to compute (no byte-level union or bitwise
+    /// op exists), so SOME meet kinds have no byte path regardless. Given
+    /// that, one typed value representation serving every kind uniformly
+    /// beats a bytes-for-min/max-only special case for a fold that is not
+    /// this store's hot path (the hot path is the key comparison, already
+    /// byte-native) — a marginal win traded for less code, not a wall.
     pub(crate) by_group: BTreeMap<Box<[u8]>, Tuple>,
     /// The current logical head tuples — each the [`MeetLayout::interleave`]
     /// of a group key with its folded values — kept in canonical head-tuple
@@ -571,12 +577,15 @@ impl TempStore {}
 /// ([`RegularTempStore`]/`NormalLevel`'s whole row, `MeetAggrStore`/
 /// `MeetLevel`'s group-key projection, `query/levels.rs`) — pure
 /// comparison data, never computed on, so the footprint cut applies to
-/// both. Meet's FOLDED VALUES stay `DataValue`-typed: `MeetAggrObj::update`
-/// folds through real typed operations (set union/intersection, bitwise
-/// and/or, tropical min-cost) that have no byte-level analog, so that half
-/// is decode-bound regardless of storage representation. One enum keeps
-/// every consumer (`AdmissionSink`, the RA join probes, the provenance/
-/// trials iteration surfaces) working over ONE type regardless of which
+/// both. Meet's FOLDED VALUES stay `DataValue`-typed uniformly across
+/// every meet kind — see [`MeetAggrStore`]'s doc for the precise
+/// reasoning (byte-backing wins on comparison, not computation; `min`/
+/// `max` could go either way since memcomparable order embeds value
+/// order, but one typed representation for every kind beats a
+/// bytes-for-order-only special case on a fold that isn't this store's
+/// hot path). One enum keeps every consumer (`AdmissionSink`, the RA join
+/// probes, the provenance/trials iteration surfaces) working over ONE
+/// type regardless of which
 /// store produced the row and which layout (suffix or interleaved) it
 /// used. The consequence: `get`/`into_tuple`/iteration now return OWNED
 /// `DataValue`s, never `&'a DataValue` — a byte-backed key has nothing to

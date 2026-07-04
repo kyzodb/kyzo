@@ -65,8 +65,25 @@
 //! the full-snapshot fallback below, with identical output — nothing
 //! about `DeltaRA`'s bindings, `from`/`to` coordinates, or its place in
 //! the `RelAlgebra` tree needs to change.
-
-use std::collections::BTreeSet;
+//!
+//! ## The signed-fact currency (story #77)
+//!
+//! [`SignedFact`]/[`compose`] are the PRODUCTION twin of `query/laws.rs`'s
+//! oracle-only `SignedFact`/`compose` — the Z-set patch algebra (signed
+//! multiplicity with cancellation) `laws.rs` proved as an executable law
+//! was, until this story, wired into zero production code: [`DeltaRA`]
+//! computed the same two-set difference but tagged its output with a bare
+//! `DataValue::Num` sign column, never through a real typed currency. This
+//! is a currency change ONLY, not an algorithm change: `iter_batched`
+//! below still resolves two full snapshots and differences them (the
+//! naive-by-ruling algorithm this module's doc names above, whose
+//! acceleration is #62 chunk 4's scope, not this story's) — it just
+//! carries its intermediate result as `SignedFact`s instead of
+//! pre-flattened rows, so `compose` is now a real, callable, tested
+//! production primitive future composition work (#62 chunk 4's
+//! acceleration seam, #61's standing-query patch application) can build
+//! on instead of reinventing.
+use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Result, bail, miette};
 
@@ -80,6 +97,58 @@ use crate::data::value::{AsOf, DataValue, Interval};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
+
+/// A signed fact: present in the later snapshot only (`Plus`) or the
+/// earlier only (`Minus`) — the production twin of `query/laws.rs`'s
+/// oracle-only `SignedFact`. `Ord` is derived in variant-then-payload
+/// order, matching the oracle type exactly, so a `BTreeSet<SignedFact>`
+/// here and one built from `laws::SignedFact` sort identically.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SignedFact {
+    Plus(Tuple),
+    Minus(Tuple),
+}
+
+impl SignedFact {
+    fn tuple(&self) -> &Tuple {
+        match self {
+            SignedFact::Plus(t) | SignedFact::Minus(t) => t,
+        }
+    }
+}
+
+/// Patch composition with cancellation: tally each tuple's net polarity
+/// (`Plus` = +1, `Minus` = -1) across both patches; a tuple whose net is
+/// zero cancels out of the result entirely (e.g. a payload that changes
+/// and changes back within the composed window). Byte-for-byte the same
+/// tally-and-cancel shape as `query/laws.rs::compose` (the executable form
+/// of the compositionality law `diff(a,c) == diff(a,b) ⊕ diff(b,c)`,
+/// proven there and differentialed against this production copy in
+/// `query/time_travel_trials.rs`), independently written so the two never
+/// share a bug through shared code.
+pub(crate) fn compose(
+    first: &BTreeSet<SignedFact>,
+    second: &BTreeSet<SignedFact>,
+) -> BTreeSet<SignedFact> {
+    let mut tally: BTreeMap<&Tuple, i32> = BTreeMap::new();
+    for patch in [first, second] {
+        for fact in patch {
+            let delta = match fact {
+                SignedFact::Plus(_) => 1,
+                SignedFact::Minus(_) => -1,
+            };
+            *tally.entry(fact.tuple()).or_insert(0) += delta;
+        }
+    }
+    tally
+        .into_iter()
+        .filter_map(|(t, net)| match net {
+            0 => None,
+            n if n > 0 => Some(SignedFact::Plus(t.clone())),
+            _ => Some(SignedFact::Minus(t.clone())),
+        })
+        .collect()
+}
 
 /// Interval derivation: `*rel{k, v} @spans iv[, sys]` — one output row per
 /// (fact, maximal equal-payload run) along the VALID axis at the fixed
@@ -399,11 +468,12 @@ impl DeltaRA {
     /// Naive by design (per the ruling — the O(changes) posting-index
     /// acceleration is chunk 4): resolve both endpoints as full snapshots
     /// through the existing as-of scan, and set-difference them. `from`
-    /// governs `-1` rows (present there, gone at `to`); `to` governs `+1`
-    /// rows (absent there, present at `to`) — a payload change is
-    /// therefore both a `-1` (old payload) and a `+1` (new payload) row
-    /// at the same key, never a "modified" kind, matching
-    /// `laws::SignedFact`.
+    /// governs `Minus` facts (present there, gone at `to`); `to` governs
+    /// `Plus` facts (absent there, present at `to`) — a payload change is
+    /// therefore both a `Minus` (old payload) and a `Plus` (new payload)
+    /// fact at the same key, never a "modified" kind — the exact
+    /// `SignedFact` shape this module's doc names, computed here through
+    /// the production type rather than a bare sign column built ad hoc.
     pub(crate) fn iter_batched<'a>(&'a self, tx: &'a impl ReadTx) -> Result<BatchIter<'a>> {
         let mut from_set: BTreeSet<Tuple> = BTreeSet::new();
         for t in self.storage.skip_scan_all(tx, self.from) {
@@ -413,17 +483,24 @@ impl DeltaRA {
         for t in self.storage.skip_scan_all(tx, self.to) {
             to_set.insert(t?);
         }
-        let mut rows: Vec<Tuple> = Vec::new();
+        let mut patch: BTreeSet<SignedFact> = BTreeSet::new();
         for t in from_set.difference(&to_set) {
-            let mut row = t.clone();
-            row.push(DataValue::from(SIGN_MINUS));
-            rows.push(row);
+            patch.insert(SignedFact::Minus(t.clone()));
         }
         for t in to_set.difference(&from_set) {
-            let mut row = t.clone();
-            row.push(DataValue::from(SIGN_PLUS));
-            rows.push(row);
+            patch.insert(SignedFact::Plus(t.clone()));
         }
+        let mut rows: Vec<Tuple> = patch
+            .into_iter()
+            .map(|fact| {
+                let (sign, mut row) = match fact {
+                    SignedFact::Plus(t) => (SIGN_PLUS, t),
+                    SignedFact::Minus(t) => (SIGN_MINUS, t),
+                };
+                row.push(DataValue::from(sign));
+                row
+            })
+            .collect();
         // Canonical, deterministic output order (the determinism law):
         // every row is sorted by its full content, sign column included.
         rows.sort();
