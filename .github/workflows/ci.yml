@@ -142,7 +142,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-vet
+          # Pinned: the trusted-publisher entries in supply-chain/audits.toml need
+          # cargo-vet >= 0.10; an unpinned install resolved to an older binary once
+          # and failed the TOML parse ("missing field user-id").
+          tool: cargo-vet@0.10.2
       - run: scripts/check-supply-chain.sh
 
   # SAST (CodeQL) runs in .github/workflows/codeql.yml — separate workflow because it
@@ -207,7 +210,9 @@ jobs:
           fi
           for t in $targets; do
             echo "=== fuzz target: $t (60s smoke)"
-            cargo +nightly fuzz run "$t" -- -max_total_time=60
+            # Explicit gnu target: cargo-fuzz once auto-selected musl on the runner,
+            # and ASAN is incompatible with statically linked libc.
+            cargo +nightly fuzz run "$t" --target x86_64-unknown-linux-gnu -- -max_total_time=60
           done
 
   # ---------- No silent skips ----------
