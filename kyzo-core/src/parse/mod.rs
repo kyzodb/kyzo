@@ -859,10 +859,13 @@ pub(crate) fn reject_excessive_nesting(src: &str) -> Result<(), NestingTooDeep> 
         SourceSpan(i, len)
     }
     /// Skip a raw string body: opener `"` at `b[i]`, `sigils` leading
-    /// underscores already seen; the terminator is a `"` followed by that
-    /// many underscores (mirrors the atomic `raw_string` rule, `PEEK`
-    /// included). Returns the index just past the token (or the end: an
-    /// unterminated string is pest's error to report).
+    /// underscores already seen (`sigils >= 1` — story #93 narrowed
+    /// `raw_string`'s fence to `"_"+`, so a raw string always has at least
+    /// one); the terminator is a `"` followed by that many underscores
+    /// (mirrors the atomic `raw_string` rule, `PEEK` included), with no
+    /// escape awareness — a raw string's whole point is that `\` has no
+    /// special meaning inside it. Returns the index just past the token
+    /// (or the end: an unterminated string is pest's error to report).
     fn skip_raw_string(b: &[u8], mut i: usize, sigils: usize) -> usize {
         i += 1;
         while i < b.len() {
@@ -873,6 +876,27 @@ pub(crate) fn reject_excessive_nesting(src: &str) -> Result<(), NestingTooDeep> 
                 return i + 1 + sigils;
             }
             i += 1;
+        }
+        b.len()
+    }
+    /// Skip a fenceless double-quoted string body: opener `"` at `b[i]`,
+    /// terminated by an UNESCAPED `"` — `quoted_string`'s real semantics
+    /// since story #93 fixed `raw_string`'s fence to require at least one
+    /// underscore (a bare `"..."` is `quoted_string`, escape-aware, not a
+    /// 0-fence raw string any more). Before that fix this scan correctly
+    /// used [`skip_raw_string`]'s no-escapes rule here, because the
+    /// grammar's own bug made that the true terminator; #93 changed what
+    /// the grammar does, so this must change with it, or the scan and the
+    /// grammar disagree about where a string ends — exactly the property
+    /// this whole scan exists to never let happen.
+    fn skip_quoted_string(b: &[u8], mut i: usize) -> usize {
+        i += 1;
+        while i < b.len() {
+            match b[i] {
+                b'\\' => i += 2,
+                b'"' => return i + 1,
+                _ => i += 1,
+            }
         }
         b.len()
     }
@@ -954,9 +978,10 @@ pub(crate) fn reject_excessive_nesting(src: &str) -> Result<(), NestingTooDeep> 
                 }
             }
             b'"' => {
-                // Double-quoted string: raw (`raw_string` wins the ordered
-                // choice), terminated by the bare quote.
-                i = skip_raw_string(b, i, 0);
+                // Fenceless double-quoted string: `quoted_string` (story
+                // #93 — `raw_string`'s fence is `"_"+`, so a bare `"` can
+                // no longer be a 0-fence raw string), escape-aware.
+                i = skip_quoted_string(b, i);
                 prev_wordish = false;
             }
             b'_' if !prev_wordish => {
@@ -1523,6 +1548,18 @@ mod tests {
             ("raw", format!("?[x] := x = ___\"{deep}\"___")),
             ("line comment", format!("?[x] := x = 1 # {deep}")),
             ("block comment", format!("?[x] := x = 1 /* {deep} */")),
+            // Story #93 widened `raw_string`'s fence to `"_"+`, making a
+            // fenceless `"..."` `quoted_string` (escape-aware) instead of a
+            // 0-fence raw string. The scan's own view of where such a
+            // string ends must track that: an escaped quote followed by
+            // deep bracket-shaped text is still all inside ONE string, not
+            // real nesting (regression: the scan used to treat the
+            // escaped quote as the terminator, mis-reading the trailing
+            // brackets as real structure and refusing this valid script).
+            (
+                "double-quoted with an escaped quote before deep brackets",
+                format!("?[x] := x = \"a\\\" {deep}{}\"", ")".repeat(1000)),
+            ),
         ] {
             parse(&src).unwrap_or_else(|e| panic!("{what}: {e:?}"));
         }
@@ -1531,6 +1568,13 @@ mod tests {
         assert_nesting_refusal(
             "brackets after a quote-bearing raw string",
             format!("?[x] := x = ___\"a\"b\"___ ; {}", "[".repeat(300)),
+        );
+        // The escape-aware double-quoted counterpart: the escaped quote
+        // does NOT hide the string's real end from the scan either --
+        // brackets after the real closing quote still count as structure.
+        assert_nesting_refusal(
+            "brackets after an escaped-quote double-quoted string",
+            format!("?[x] := x = \"a\\\"b\" ; {}", "[".repeat(300)),
         );
     }
 
