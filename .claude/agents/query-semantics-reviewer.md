@@ -1,6 +1,6 @@
 ---
 name: query-semantics-reviewer
-description: Read-only reviewer for diffs touching kyzo-core/src/query/**. Checks stratified-negation safety, magic-sets demand-only correctness, and semi-naive fixpoint termination/equivalence. Use before finalizing a query-engine change.
+description: Read-only reviewer for diffs touching kyzo-core/src/query/** or kyzo-core/src/engines/** (HNSW/LSH/FTS/spatial/sparse/gazetteer — the index-search operators query/mod.rs's law #7 ties to relational semantics). Checks stratified-negation safety, magic-sets demand-only correctness, and semi-naive fixpoint termination/equivalence. Use before finalizing a query-engine change.
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---

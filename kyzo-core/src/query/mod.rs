@@ -115,12 +115,15 @@ pub(crate) mod magic;
 // keep it live but not every item, so a plain `allow` covers the remainder
 // — the same pattern as the `parse` module in lib.rs.
 #[allow(dead_code)]
+pub(crate) mod batch_ops;
+pub(crate) mod levels;
+#[allow(dead_code)]
 pub(crate) mod normalize;
 #[allow(dead_code)]
 pub(crate) mod search;
 #[allow(dead_code)]
 pub(crate) mod sort;
 #[allow(dead_code)]
-pub(crate) mod stored;
-#[allow(dead_code)]
 pub(crate) mod stratify;
+pub(crate) mod temp_store;
+pub(crate) mod vm;

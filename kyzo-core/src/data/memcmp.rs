@@ -56,8 +56,8 @@ const VLD_TAG: u8 = 0x0D;
 const BOT_TAG: u8 = 0xFF;
 
 /// An encoded `Validity` is always exactly this many bytes (tag + flipped
-/// timestamp + assert flag); `check_key_for_validity` splices seek keys on
-/// this fixed width.
+/// timestamp + assert flag); `check_key_for_bitemporal` splices seek keys
+/// on this fixed width, two slots per fact key.
 pub(crate) const ENCODED_VLD_LEN: usize = 10;
 
 const VEC_F32: u8 = 0x01;

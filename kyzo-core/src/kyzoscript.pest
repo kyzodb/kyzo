@@ -138,7 +138,7 @@ fixed_relation_rel = {relation_ident ~ "[" ~ (var ~ ("," ~ var)* ~ ","?)? ~ vali
 fixed_named_relation_rel = {relation_ident ~ "{" ~ (fixed_named_relation_arg_pair ~ ("," ~ fixed_named_relation_arg_pair)* ~ ","?)? ~ validity_clause? ~ "}"} // [SEQ] over fixed_named_relation_arg_pair
 fixed_named_relation_arg_pair = {ident ~ (":" ~ ident)?}
 
-validity_clause = {"@" ~ expr}
+validity_clause = {"@" ~ expr ~ ("," ~ expr)?}
 
 rule_body = {(disjunction ~ ("," ~ disjunction)* ~ ","?)?} // [SEQ] over disjunction
 rule_apply = {underscore_ident ~ "[" ~ apply_args ~ "]"}

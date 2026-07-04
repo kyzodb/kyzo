@@ -28,9 +28,10 @@
 //!   read.
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
-//! - **Validity-in-key as-of scans** — a seek loop: each step opens a fresh
-//!   range at the seek key computed by `check_key_for_validity`, touching one
-//!   stored version per distinct tuple in the common case.
+//! - **Bitemporal as-of scans** — a seek loop: each step opens a fresh
+//!   range at the seek key computed by `check_key_for_bitemporal` (the
+//!   row's polarity peeked from its value), touching one stored version
+//!   per distinct fact in the common case.
 //!
 //! The transaction species are distinct types: [`FjallReadTx`] cannot write
 //! by construction, and committing a [`FjallWriteTx`] consumes it — writing
@@ -46,13 +47,23 @@ use fjall::{
 };
 use miette::{Result, bail, miette};
 
-use crate::data::tuple::{Tuple, check_key_for_validity, extend_tuple_from_v};
-use crate::data::value::ValidityTs;
-use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+use crate::data::bitemporal::{
+    check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
+};
+use crate::data::tuple::Tuple;
+use crate::data::value::{AsOf, ValidityTs};
+use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
 
 const KEYSPACE_NAME: &str = "kyzo";
 const META_KEYSPACE_NAME: &str = "kyzo_meta";
 const FORMAT_VERSION_KEY: &[u8] = b"format_version";
+/// Meta-keyspace key holding the system clock's crash-recovery floor: the
+/// highest stamp ever minted by this store, persisted non-transactionally
+/// at each mint. On open the clock is seeded with `max(now, watermark)`,
+/// so stamps stay monotone across restarts even under backward wall-clock
+/// skew. A watermark ahead of the last COMMITTED stamp (an aborted
+/// transaction's mint) is harmless: floors only need to be high enough.
+const SYSTEM_CLOCK_WATERMARK_KEY: &[u8] = b"system_clock_watermark";
 
 /// Resource configuration for a fjall store. A database engine does not get
 /// to inherit invisible defaults: the knobs that govern memory and
@@ -122,7 +133,27 @@ pub fn new_fjall_storage_with(
     let ks = db
         .keyspace(KEYSPACE_NAME, KeyspaceCreateOptions::default)
         .map_err(|e| miette!("opening fjall keyspace: {e}"))?;
-    Ok(FjallStorage { db, ks })
+    let now = crate::data::value::current_validity()?.0.0;
+    let watermark = match meta
+        .get(SYSTEM_CLOCK_WATERMARK_KEY)
+        .map_err(|e| miette!("reading system clock watermark: {e}"))?
+    {
+        None => i64::MIN,
+        Some(v) => {
+            let bytes: [u8; 8] = v
+                .as_ref()
+                .try_into()
+                .map_err(|_| miette!("corrupt system clock watermark"))?;
+            i64::from_be_bytes(bytes)
+        }
+    };
+    Ok(FjallStorage {
+        db,
+        ks,
+        meta,
+        clock: std::sync::Arc::new(SystemClock::new(now.max(watermark))),
+        watermark_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+    })
 }
 
 /// The fjall storage engine.
@@ -135,6 +166,42 @@ pub fn new_fjall_storage_with(
 pub struct FjallStorage {
     db: OptimisticTxDatabase,
     ks: OptimisticTxKeyspace,
+    meta: OptimisticTxKeyspace,
+    clock: std::sync::Arc<SystemClock>,
+    /// Serializes {mint, watermark persist} pairs. Without it the
+    /// PERSISTED floor can regress: fjall resolves the watermark key by
+    /// internal commit order, which is decoupled from mint order, so a
+    /// smaller stamp's insert landing last would leave the on-disk floor
+    /// below a stamp already used — and a crash then lets the reopened
+    /// clock re-mint it (hostile-review finding). Held only around the
+    /// mint+insert pair; snapshots and commits never take it.
+    watermark_lock: std::sync::Arc<std::sync::Mutex<()>>,
+}
+
+impl FjallStorage {
+    /// Mint this transaction's system stamp. Takes the OPEN SNAPSHOT by
+    /// reference: the signature is the enforcement — a stamp cannot be
+    /// minted before the snapshot it must follow exists, so the
+    /// snapshot-then-mint ordering `write_tx` relies on is
+    /// unrepresentable to violate (the reproducer catches wide
+    /// reorderings; this catches every one at compile time). Persists
+    /// the crash-recovery watermark as a side effect — a floor, not a
+    /// record.
+    fn stamp_after_snapshot(&self, _snapshot: &OptimisticWriteTx) -> Result<ValidityTs> {
+        // One guard around mint AND persist: inserts land in mint order,
+        // so the newest persisted watermark is always the largest minted
+        // stamp (see `watermark_lock`).
+        let _guard = self
+            .watermark_lock
+            .lock()
+            .map_err(|_| miette!("watermark lock poisoned"))?;
+        let now = crate::data::value::current_validity()?.0.0;
+        let stamp = self.clock.stamp(now);
+        self.meta
+            .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.0.0.to_be_bytes())
+            .map_err(|e| miette!("persisting system clock watermark: {e}"))?;
+        Ok(stamp)
+    }
 }
 
 impl Storage for FjallStorage {
@@ -145,6 +212,24 @@ impl Storage for FjallStorage {
         "fjall"
     }
 
+    fn clock_floor(&self) -> Result<ValidityTs> {
+        Ok(ValidityTs(std::cmp::Reverse(self.clock.floor())))
+    }
+
+    fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
+        let _guard = self
+            .watermark_lock
+            .lock()
+            .map_err(|_| miette!("watermark lock poisoned"))?;
+        self.clock.raise_floor(floor.0.0);
+        // Persist the CLOCK's floor, not the argument: raise_floor is a
+        // max, so a stale (lower) argument must not regress the disk.
+        self.meta
+            .insert(SYSTEM_CLOCK_WATERMARK_KEY, self.clock.floor().to_be_bytes())
+            .map_err(|e| miette!("persisting system clock watermark: {e}"))?;
+        Ok(())
+    }
+
     fn read_tx(&self) -> Result<FjallReadTx> {
         Ok(FjallReadTx {
             snap: self.db.read_tx(),
@@ -153,13 +238,31 @@ impl Storage for FjallStorage {
     }
 
     fn write_tx(&self) -> Result<FjallWriteTx> {
+        // SNAPSHOT FIRST, MINT SECOND — that ordering alone carries THE
+        // serialization invariant (contract v3): if this transaction can
+        // read another's write, its stamp strictly exceeds that writer's.
+        // Proof: fjall's own `write_tx()` takes its commit oracle's lock
+        // while opening the snapshot, so a writer is visible here only if
+        // its commit fully preceded this snapshot; that writer minted its
+        // stamp before its commit, hence before this snapshot, hence
+        // before this mint — and the clock is strictly monotone. Minting
+        // BEFORE the snapshot broke this (a rival could mint later and
+        // commit sooner, and our write landed at a smaller stamp than a
+        // write we read — shadowed forever, a lost update with zero
+        // conflicts; pinned by
+        // `concurrent_increments_lose_nothing_at_the_storage_layer`).
+        // The watermark persists non-transactionally — a floor, not a
+        // record.
+        let tx = self
+            .db
+            .write_tx()
+            .map_err(|e| miette!("fjall write tx: {e}"))?;
+        let stamp = self.stamp_after_snapshot(&tx)?;
         Ok(FjallWriteTx {
-            tx: self
-                .db
-                .write_tx()
-                .map_err(|e| miette!("fjall write tx: {e}"))?,
+            tx,
             ks: self.ks.clone(),
             db: self.db.clone(),
+            stamp,
         })
     }
 
@@ -167,10 +270,35 @@ impl Storage for FjallStorage {
         &'a self,
         data: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
     ) -> Result<()> {
+        // Bulk import is OUTSIDE the stamp/SSI conflict surface: rows keep
+        // the stamps they carry and no transaction machinery runs. The
+        // precondition making that sound — a fresh, otherwise-idle store —
+        // is refused here, not just documented: importing into a store
+        // holding data is the one shape under which an unstamped import
+        // could race a live minting writer.
+        {
+            // The probe's upper bound must clear every real key. Every key
+            // begins with an 8-byte relation id capped at MAX_RELATION_ID,
+            // so its first byte stays below 0xFF — proven at compile time
+            // so a future id-cap bump cannot silently turn a full store
+            // invisible to this check.
+            const {
+                assert!(
+                    crate::data::tuple::MAX_RELATION_ID < (0xff_u64 << 56),
+                    "emptiness probe bound must exceed every relation-id prefix"
+                );
+            }
+            let probe = self.db.read_tx();
+            if raw_range(&probe, &self.ks, &[], &[0xff; 9])
+                .next()
+                .is_some()
+            {
+                bail!("bulk import target is not empty: import only into a fresh store");
+            }
+        }
         // Atomic chunks: each chunk is one transaction committed as a unit,
         // so an interrupted import leaves a clean prefix of the input rather
-        // than a torn write, with bounded memory. Conflicts are impossible
-        // under the exclusive-access precondition.
+        // than a torn write, with bounded memory.
         const CHUNK: usize = 32_768;
         let mut data = data.peekable();
         while data.peek().is_some() {
@@ -230,6 +358,7 @@ pub struct FjallWriteTx {
     tx: OptimisticWriteTx,
     ks: OptimisticTxKeyspace,
     db: OptimisticTxDatabase,
+    stamp: ValidityTs,
 }
 
 impl FjallWriteTx {
@@ -335,13 +464,13 @@ macro_rules! impl_read_tx {
                 &'a self,
                 lower: &[u8],
                 upper: &[u8],
-                valid_at: ValidityTs,
+                as_of: AsOf,
             ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
                 Box::new(SkipIterator {
                     reader: &self.$reader,
                     ks: &self.ks,
                     upper: upper.to_vec(),
-                    valid_at,
+                    as_of,
                     next_bound: lower.to_vec(),
                 })
             }
@@ -359,6 +488,10 @@ impl_read_tx!(FjallReadTx, snap);
 impl_read_tx!(FjallWriteTx, tx);
 
 impl WriteTx for FjallWriteTx {
+    fn system_stamp(&self) -> ValidityTs {
+        self.stamp
+    }
+
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.tx.insert(&self.ks, key, val);
         self.mark_written_key_validated(key)
@@ -416,13 +549,16 @@ impl WriteTx for FjallWriteTx {
     }
 }
 
-/// Validity-aware skip scan: seek to the next candidate key, decide with
-/// `check_key_for_validity`, re-seek at the bound it returns.
+/// Bitemporal skip scan: seek to the next candidate key, peek the row's
+/// polarity from its value, decide with `check_key_for_bitemporal`,
+/// re-seek at the bound it returns. A corrupt key or value is surfaced as
+/// `Err` WITHOUT advancing (the contract's rule): every subsequent poll
+/// re-yields it, so the scan cannot step over bytes it could not judge.
 struct SkipIterator<'a, R: Readable> {
     reader: &'a R,
     ks: &'a OptimisticTxKeyspace,
     upper: Vec<u8>,
-    valid_at: ValidityTs,
+    as_of: AsOf,
     next_bound: Vec<u8>,
 }
 
@@ -441,17 +577,21 @@ impl<R: Readable> Iterator for SkipIterator<'_, R> {
                 Some(Ok(kv)) => kv,
             };
             drop(range);
-            let (ret, nxt_bound) = match check_key_for_validity(&k, self.valid_at, None) {
+            let polarity = match claim_polarity_of_value(&v) {
+                Ok(p) => p,
+                Err(e) => return Some(Err(e)),
+            };
+            let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, self.as_of, None) {
                 Ok(pair) => pair,
                 Err(e) => return Some(Err(e)),
             };
             // Termination guarantee: the seek bound must advance STRICTLY
-            // past the key just examined, whatever the stored bytes contain.
-            // A stored retraction at ts == i64::MIN collides with the
-            // TERMINAL_VALIDITY sentinel and would otherwise re-seek to the
-            // same key forever; hostile keys must not be able to livelock a
-            // scan either. The byte-successor of k (k ++ 0x00) is the
-            // smallest key strictly greater than k.
+            // past the key just examined, whatever the stored bytes
+            // contain. Every bound the kernel returns for a parseable key
+            // already advances strictly (its slot flags are pinned, so no
+            // stored key can equal a TERMINAL splice); the byte-successor
+            // of k (k ++ 0x00, the smallest key strictly greater) is
+            // belt-and-braces against bytes no argument anticipated.
             self.next_bound = if nxt_bound.as_slice() > k.as_slice() {
                 nxt_bound
             } else {
@@ -460,7 +600,7 @@ impl<R: Readable> Iterator for SkipIterator<'_, R> {
                 succ
             };
             if let Some(mut tup) = ret {
-                if let Err(e) = extend_tuple_from_v(&mut tup, &v) {
+                if let Err(e) = extend_tuple_from_bitemporal_v(&mut tup, &v) {
                     return Some(Err(e));
                 }
                 return Some(Ok(tup));

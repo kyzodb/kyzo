@@ -74,6 +74,41 @@
 //!   badger-class optimistic oracles validate reads only (blind writes are
 //!   a deliberate throughput feature there); PostgreSQL SSI and
 //!   TiKV/Percolator abort write-write races. KyzoDB sides with the latter.
+//! - **v3 — time travel is bitemporal (story #69 ruling: mandatory
+//!   bitemporality, one format with no past).** The single-axis skip scan
+//!   (newest version at or before one validity) is replaced by the
+//!   two-axis [`ReadTx::range_skip_scan_tuple`]: every versioned key ends
+//!   with a valid-instant slot and a system-version slot (flags pinned;
+//!   `check_key_for_bitemporal` refuses flag-bearing slots), and a row's
+//!   polarity — assert / retract / erase — lives in its VALUE, so one
+//!   valid instant has exactly one system lineage and contradictory
+//!   lineages at an instant are unrepresentable. System timestamps are
+//!   minted per write transaction from the storage's monotone clock
+//!   (`max(now_µs, last + 1)`), STRICTLY AFTER the transaction's snapshot
+//!   is open (in fjall the mint takes the open snapshot as an argument,
+//!   so the reverse order is unrepresentable; the sim mints and snapshots
+//!   under one state lock). Why the order is load-bearing: the invariant
+//!   is that READS-FROM ORDER AGREES WITH STAMP ORDER — if a transaction
+//!   can read another's write, its stamp strictly exceeds that writer's.
+//!   Proof from the order alone: a writer is visible in my snapshot only
+//!   if its commit preceded my snapshot (the backend's own snapshot
+//!   machinery is atomic with respect to commits); that writer minted
+//!   before it committed, hence before my snapshot, hence before my
+//!   mint — and the clock is strictly monotone. Minting BEFORE the
+//!   snapshot broke this (a rival could mint later yet commit sooner and
+//!   be read, and our write landed at a smaller stamp than a write we
+//!   read — shadowed forever, a lost update with zero conflicts; found
+//!   live and pinned by
+//!   `concurrent_increments_lose_nothing_at_the_storage_layer`).
+//!   Anti-dependencies and same-fact races abort one side (the
+//!   current-state probe's tracked range read). Every committed history
+//!   is therefore serializable in stamp order, and an as-of cut at any
+//!   system time is a genuine serial-order prefix — with one named
+//!   exception: `batch_put` (bulk import) is OUTSIDE this surface — it
+//!   preserves imported stamps and mints nothing, which is sound only
+//!   into a fresh store, so both backends REFUSE a non-empty target, and
+//!   restore raises the target's clock floor to the dump's before
+//!   importing (a target can never re-mint an imported instant).
 
 use std::fmt;
 
@@ -81,7 +116,7 @@ use itertools::Itertools;
 use miette::{Result, bail, miette};
 
 use crate::data::tuple::{Tuple, decode_tuple_from_kv};
-use crate::data::value::ValidityTs;
+use crate::data::value::{AsOf, ValidityTs};
 
 pub(crate) mod backup;
 pub(crate) mod fjall;
@@ -105,6 +140,51 @@ pub(crate) mod temp;
 mod tests;
 pub(crate) mod verify;
 
+/// The storage's monotone system clock: mints each write transaction's
+/// system timestamp as `max(now_µs, last + 1)`, so stamps never repeat
+/// and never regress within a process, whatever the wall clock does.
+/// Cross-restart monotonicity is the opener's job: seed the clock with a
+/// floor at least as high as any stamp the store already contains (the
+/// fjall backend persists a watermark in its meta keyspace; the
+/// deterministic backends use logical time and need no floor).
+pub(crate) struct SystemClock(std::sync::atomic::AtomicI64);
+
+impl SystemClock {
+    /// A clock that will never mint at or below `floor`.
+    pub(crate) fn new(floor: i64) -> Self {
+        SystemClock(std::sync::atomic::AtomicI64::new(floor))
+    }
+
+    /// Mint the next stamp: strictly greater than every stamp minted
+    /// before it, and equal to the wall clock whenever the wall clock is
+    /// ahead.
+    pub(crate) fn stamp(&self, now_micros: i64) -> ValidityTs {
+        use std::sync::atomic::Ordering;
+        let mut last = self.0.load(Ordering::Relaxed);
+        loop {
+            let next = now_micros.max(last + 1);
+            match self
+                .0
+                .compare_exchange_weak(last, next, Ordering::AcqRel, Ordering::Relaxed)
+            {
+                Ok(_) => return ValidityTs(std::cmp::Reverse(next)),
+                Err(observed) => last = observed,
+            }
+        }
+    }
+
+    /// The current floor: every future mint is strictly above this.
+    pub(crate) fn floor(&self) -> i64 {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Raise the floor (never lowers it). Restore uses this so stamps in
+    /// imported history can never be minted again by the target store.
+    pub(crate) fn raise_floor(&self, to: i64) {
+        self.0.fetch_max(to, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 /// The version of the on-disk memcmp/tuple encoding. Stamped into every
 /// store and every dump file; a mismatch refuses to open rather than read
 /// garbage. Any change to the encoding is a migration and must bump
@@ -113,8 +193,15 @@ pub(crate) mod verify;
 pub struct FormatVersion(u16);
 
 impl FormatVersion {
-    /// The format this build reads and writes.
-    pub const CURRENT: FormatVersion = FormatVersion(1);
+    /// The format this build reads and writes. v3 is the bitemporal
+    /// format with self-describing fact values: two pinned time slots in
+    /// every fact key, polarity in the value, `keyspace_kind` in the
+    /// catalog row, and fact payloads as count + offset table + tagged
+    /// fields (`data/tuple.rs::encode_fact_payload`) so any field of any
+    /// row is one O(1) slice and scalar fields are fixed-width slots the
+    /// columnar engine gathers without a parser. One format per version —
+    /// an older store refuses to open, it is never migrated in place.
+    pub const CURRENT: FormatVersion = FormatVersion(3);
 
     /// The stored representation: ASCII decimal.
     pub fn as_bytes(self) -> Vec<u8> {
@@ -220,6 +307,16 @@ pub trait Storage: Send + Sync + Clone + sealed::Sealed {
     /// runs. Used by restore/import paths. Implementations must apply the
     /// data in atomic chunks, so that an interrupted import leaves a clean
     /// prefix of the input, never a torn write.
+    /// The system clock's current floor: every stamp this store will
+    /// ever mint is strictly above it. A dump carries this so a restore
+    /// can guarantee the target never re-mints a stamp that already
+    /// appears in imported history.
+    fn clock_floor(&self) -> Result<ValidityTs>;
+
+    /// Raise the system clock's floor (never lowers it). Restore calls
+    /// this with the dump's floor before importing rows.
+    fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()>;
+
     fn batch_put<'a>(
         &'a self,
         data: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
@@ -273,17 +370,27 @@ pub trait ReadTx: sealed::Sealed + Sync {
         )
     }
 
-    /// Time-travel scan: among keys differing only in their trailing validity
-    /// (the last key slot), yield only the newest version at or before
-    /// `valid_at`, and only if that version is assertive. Implementations
-    /// must seek rather than iterate over skipped versions.
+    /// Bitemporal as-of scan: among keys differing only in their two
+    /// trailing time slots (valid instant outer, system version inner —
+    /// [`EncodedKey::BITEMPORAL_TAIL_LEN`](crate::data::tuple::EncodedKey)),
+    /// resolve each fact to what the record said at the [`AsOf`]
+    /// coordinate, and yield only facts whose governing
+    /// row asserts them. A row's polarity (assert / retract / erase) is
+    /// read from its VALUE (`claim_polarity_of_value`); the resolution
+    /// rule and seek algebra are `check_key_for_bitemporal`'s.
+    /// Implementations must seek rather than iterate over skipped
+    /// versions, and must surface a corrupt key as an `Err` WITHOUT
+    /// advancing — every subsequent poll re-yields the error, so a scan
+    /// cannot silently step over bytes it could not judge (engine callers
+    /// stop at the first `Err`).
     ///
-    /// Time travel is a mandatory part of the KyzoDB storage contract.
+    /// Two-axis time travel is a mandatory part of the KyzoDB storage
+    /// contract.
     fn range_skip_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
         upper: &[u8],
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
     /// Count the keys in `[lower, upper)`.
@@ -314,6 +421,15 @@ pub trait ReadTx: sealed::Sealed + Sync {
 /// typed conflict even if it never read the key. Logic that depends on the
 /// key's current VALUE must still read it inside the transaction.
 pub trait WriteTx: ReadTx {
+    /// This transaction's SYSTEM timestamp: the instant its writes join
+    /// recorded history, minted once from the storage's monotone clock
+    /// (`max(now_µs, last + 1)`) when the transaction — and therefore its
+    /// snapshot — was created. Every bitemporal row this transaction
+    /// writes carries this stamp in its system slot. See the contract
+    /// history's v3 entry for why snapshot-creation stamping makes every
+    /// as-of system cut a genuine serial-order prefix under SSI.
+    fn system_stamp(&self) -> ValidityTs;
+
     /// Set a key to a value, overwriting any existing value. The key joins
     /// the conflict surface: a concurrent committed write to it aborts this
     /// transaction's commit.

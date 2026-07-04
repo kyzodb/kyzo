@@ -201,18 +201,23 @@ similarity hit can seed a graph traversal in the query that found it.
 
 ## Time is a query parameter
 
-Relations can opt in to history. For a relation with time travel enabled, writes never destroy: an
-update supersedes, a deletion retracts, and the previous state remains addressable. Any query can then
-be evaluated *as of* a past instant (what did we know on Tuesday?) as a parameter of the read, not an
-archaeology project over change-data-capture logs.
+Every relation is bitemporal — not as an option, but as the format. Writes never destroy: an
+update supersedes, a deletion retracts, and a correction revises the record without erasing what it
+used to say. Two time axes ride in every stored fact: *valid time* (when the fact holds in the
+world) and *system time* (when the record came to say so). Any query can then be evaluated *as of*
+either or both — `@ instant` asks what currently-believed facts held at an instant; `@ system,
+instant` asks what the record itself said at a past moment about that instant. "What did we know on
+Tuesday?" is a parameter of the read, not an archaeology project over change-data-capture logs.
 
-The capability is per-relation because history has a cost, and you should only pay it where you want
-it. Under the hood, validity is encoded in the storage key itself, so an as-of read is an ordinary
-ordered scan, not a reconstruction.
+Under the hood, both timestamps live in the storage key itself, so an as-of read is an ordinary
+seek-based ordered scan, not a reconstruction — and it composes: joins, recursion, negation, and
+aggregation all evaluate at a coordinate, and plain indexes carry the same coordinates as their base
+rows, so an as-of read through an index answers exactly like the base.
 
-Retraction is revision, not erasure: what a system believed, when it came to believe it, and when it
-stopped believing it all remain queryable. For software that accumulates knowledge over time, that
-distinction is the difference between a memory and a cache.
+Retraction is revision, not erasure: what a system believed, when it came to believe it, when it
+stopped believing it, and when the record itself was corrected all remain queryable. For software
+that accumulates knowledge over time, that distinction is the difference between a memory and a
+cache.
 
 ## The engine keeps its word
 

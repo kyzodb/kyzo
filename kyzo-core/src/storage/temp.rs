@@ -80,8 +80,11 @@ use std::ops::Bound;
 
 use miette::Result;
 
-use crate::data::tuple::{Tuple, check_key_for_validity, extend_tuple_from_v};
-use crate::data::value::ValidityTs;
+use crate::data::bitemporal::{
+    check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
+};
+use crate::data::tuple::Tuple;
+use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::{ReadTx, WriteTx};
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -89,9 +92,26 @@ use crate::storage::{ReadTx, WriteTx};
 /// session's private state, so reads are trivially consistent, writes are
 /// immediate, and `commit` is vacuous (the session's life is the
 /// transaction).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct TempTx {
     map: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// This session-store's system stamp: logical time from a
+    /// process-wide monotone counter. The temp keyspace is private
+    /// session state, so stamps need no wall-clock meaning, and logical
+    /// time keeps runs deterministic.
+    stamp: ValidityTs,
+}
+
+impl Default for TempTx {
+    fn default() -> Self {
+        static TEMP_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        TempTx {
+            map: BTreeMap::new(),
+            stamp: ValidityTs(std::cmp::Reverse(
+                TEMP_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+            )),
+        }
+    }
 }
 
 impl TempTx {
@@ -128,19 +148,17 @@ impl ReadTx for TempTx {
     }
 
     /// The same seek loop as the fjall backend's `SkipIterator`, over the
-    /// map: examine the next candidate, let `check_key_for_validity` decide
-    /// and give the re-seek bound, then on the Ok path advance strictly past
-    /// the examined key — with a byte-successor fallback for when the
-    /// returned bound would not move (the `TERMINAL_VALIDITY` collision at
-    /// `ts == i64::MIN`) — so hostile stored bytes cannot livelock the scan.
-    /// A `check_key_for_validity` Err is surfaced WITHOUT advancing
-    /// `next_bound` (parity with the fjall loop); engine callers stop at the
-    /// first Err, so re-examining the same key never arises in practice.
+    /// map: examine the next candidate, peek its polarity from the value,
+    /// let `check_key_for_bitemporal` decide and give the re-seek bound,
+    /// then on the Ok path advance strictly past the examined key — with a
+    /// byte-successor fallback so hostile stored bytes cannot livelock the
+    /// scan. A corrupt key or value is surfaced as Err WITHOUT advancing
+    /// (the contract's rule); engine callers stop at the first Err.
     fn range_skip_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
         upper: &[u8],
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let mut next_bound = lower.to_vec();
         let upper = upper.to_vec();
@@ -160,7 +178,11 @@ impl ReadTx for TempTx {
                     None => return None,
                     Some((k, v)) => (k.clone(), v.clone()),
                 };
-                let (ret, nxt_bound) = match check_key_for_validity(&k, valid_at, None) {
+                let polarity = match claim_polarity_of_value(&v) {
+                    Ok(p) => p,
+                    Err(e) => return Some(Err(e)),
+                };
+                let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, as_of, None) {
                     Ok(pair) => pair,
                     Err(e) => return Some(Err(e)),
                 };
@@ -173,7 +195,7 @@ impl ReadTx for TempTx {
                     succ
                 };
                 if let Some(mut tup) = ret {
-                    if let Err(e) = extend_tuple_from_v(&mut tup, &v) {
+                    if let Err(e) = extend_tuple_from_bitemporal_v(&mut tup, &v) {
                         return Some(Err(e));
                     }
                     return Some(Ok(tup));
@@ -188,6 +210,10 @@ impl ReadTx for TempTx {
 }
 
 impl WriteTx for TempTx {
+    fn system_stamp(&self) -> ValidityTs {
+        self.stamp
+    }
+
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.map.insert(key.to_vec(), val.to_vec());
         Ok(())
@@ -231,22 +257,32 @@ mod tests {
     use std::cmp::Reverse;
 
     use super::*;
+    use crate::data::bitemporal::ClaimPolarity;
     use crate::data::tuple::{RelationId, TupleT};
-    use crate::data::value::{DataValue, Validity};
+    use crate::data::value::{DataValue, Validity, ValidityTs};
 
     const REL: RelationId = RelationId(7);
 
-    /// A time-travel key: `[int x, validity(ts, assert)]` under `REL`.
-    fn vk(x: i64, ts: i64, assert: bool) -> Vec<u8> {
-        vec![
-            DataValue::from(x),
+    /// A bitemporal key: `[int x, valid(ts), sys(ts)]` under `REL`, slot
+    /// flags pinned to assert (the row's polarity lives in the value).
+    fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
+        let slot = |ts: i64| {
             DataValue::Validity(Validity {
                 timestamp: ValidityTs(Reverse(ts)),
-                is_assert: Reverse(assert),
-            }),
-        ]
-        .encode_as_key(REL)
-        .to_vec()
+                is_assert: Reverse(true),
+            })
+        };
+        vec![DataValue::from(x), slot(valid_ts), slot(sys_ts)]
+            .encode_as_key(REL)
+            .to_vec()
+    }
+
+    /// A bitemporal value: relation-id header, polarity byte, no payload —
+    /// the shape the engine writes for a key-only relation.
+    fn bv(polarity: ClaimPolarity) -> Vec<u8> {
+        let mut v = REL.raw_encode().to_vec();
+        v.push(polarity.encode());
+        v
     }
 
     /// The half-open byte range covering the whole of `REL`'s keyspace.
@@ -257,23 +293,33 @@ mod tests {
         )
     }
 
-    /// Skip-scan as-of `ts`, projected to `(x, version_ts)` pairs — the
-    /// ACTUAL returned tuple values, not a count. `.take` caps emission so a
-    /// mutant that emits forever fails fast rather than merely hanging.
-    fn scan_at(t: &TempTx, ts: i64) -> Vec<(i64, i64)> {
+    /// Skip-scan at the bitemporal coordinate, projected to
+    /// `(x, valid_version_ts)` pairs — the ACTUAL returned tuple values,
+    /// not a count. `.take` caps emission so a mutant that emits forever
+    /// fails fast rather than merely hanging.
+    fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Vec<(i64, i64)> {
         let (lo, hi) = rel_bounds();
-        t.range_skip_scan_tuple(&lo, &hi, ValidityTs(Reverse(ts)))
+        let as_of = AsOf {
+            sys: ValidityTs(Reverse(sys)),
+            valid: ValidityTs(Reverse(valid)),
+        };
+        t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
                 let tup = r.expect("engine-shaped rows decode cleanly");
                 let x = tup[0].get_int().expect("int key column");
                 let version_ts = match &tup[1] {
                     DataValue::Validity(v) => v.timestamp.0.0,
-                    other => panic!("expected a trailing validity, got {other:?}"),
+                    other => panic!("expected a valid-instant slot, got {other:?}"),
                 };
                 (x, version_ts)
             })
             .collect()
+    }
+
+    /// Current-belief scan at valid time `ts` (`sys = i64::MAX`).
+    fn scan_at(t: &TempTx, ts: i64) -> Vec<(i64, i64)> {
+        scan_at_coord(t, i64::MAX, ts)
     }
 
     #[test]
@@ -319,8 +365,12 @@ mod tests {
     #[test]
     fn skip_scan_honors_validity_with_asserted_values() {
         let mut t = TempTx::default();
-        for k in [vk(1, 10, true), vk(1, 20, false), vk(2, 8, true)] {
-            t.put(&k, b"").unwrap();
+        for (k, v) in [
+            (bk(1, 10, 1), bv(ClaimPolarity::Assert)),
+            (bk(1, 20, 1), bv(ClaimPolarity::Retract)),
+            (bk(2, 8, 1), bv(ClaimPolarity::Assert)),
+        ] {
+            t.put(&k, &v).unwrap();
         }
         assert_eq!(scan_at(&t, 5), vec![], "before any assertion");
         assert_eq!(scan_at(&t, 9), vec![(2, 8)], "only tuple 2 asserted yet");
@@ -338,11 +388,11 @@ mod tests {
     #[test]
     fn skip_scan_returns_version_at_exact_query_ts() {
         let mut t = TempTx::default();
-        for k in [vk(1, 20, true), vk(1, 10, true)] {
-            t.put(&k, b"").unwrap();
+        for k in [bk(1, 20, 1), bk(1, 10, 1)] {
+            t.put(&k, &bv(ClaimPolarity::Assert)).unwrap();
         }
-        // ts=10: the first candidate (ts=20) is in the future, so the loop
-        // re-seeks to exactly `valid(10)` — which must land on the ts=10 key.
+        // valid=10: the first candidate (ts=20) is in the future, so the
+        // loop re-seeks to exactly `valid(10)` — which must land on it.
         assert_eq!(
             scan_at(&t, 10),
             vec![(1, 10)],
@@ -350,19 +400,36 @@ mod tests {
         );
         assert_eq!(scan_at(&t, 20), vec![(1, 20)], "newest at 20");
         assert_eq!(scan_at(&t, 15), vec![(1, 10)], "newest at or before 15");
+        // The SYSTEM axis is inclusive the same way: two system versions
+        // of one instant, queried exactly at the older one's stamp.
+        let mut t = TempTx::default();
+        t.put(&bk(1, 10, 10), &bv(ClaimPolarity::Assert)).unwrap();
+        t.put(&bk(1, 10, 20), &bv(ClaimPolarity::Retract)).unwrap();
+        assert_eq!(
+            scan_at_coord(&t, 10, 15),
+            vec![(1, 10)],
+            "as recorded at sys=10 the assert governs"
+        );
+        assert_eq!(
+            scan_at_coord(&t, 20, 15),
+            vec![],
+            "the sys=20 correction retracts it"
+        );
     }
 
-    /// A retraction stored at `ts == i64::MIN` has validity equal to the
-    /// `TERMINAL_VALIDITY` seek sentinel: without the byte-successor
-    /// fallback the re-seek bound never advances and the scan livelocks. The
-    /// honest row must return and the scan must TERMINATE. (Kills the
-    /// strict-advance mutant — by timeout, the same way `storage/tests.rs`
-    /// pins the fjall backend.)
+    /// Extreme stored instants (`ts == i64::MIN` in both slots) sit as
+    /// close to the `TERMINAL_VALIDITY` seek sentinel as a storable key
+    /// can (the sentinel itself carries a retract flag, which no longer
+    /// parses): the kernel's clear-bounds still advance strictly and the
+    /// scan must TERMINATE while answering honestly. (Kills the
+    /// strict-advance mutant — by the `.take` cap, the same way
+    /// `storage/tests.rs` pins the fjall backend.)
     #[test]
     fn skip_scan_terminates_on_min_ts_retraction() {
         let mut t = TempTx::default();
-        t.put(&vk(1, 5, true), b"").unwrap();
-        t.put(&vk(9, i64::MIN, false), b"").unwrap();
+        t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert)).unwrap();
+        t.put(&bk(9, i64::MIN, i64::MIN), &bv(ClaimPolarity::Retract))
+            .unwrap();
         assert_eq!(scan_at(&t, 10), vec![(1, 5)]);
     }
 
@@ -372,9 +439,9 @@ mod tests {
     #[test]
     fn skip_scan_degenerate_bounds_are_empty() {
         let mut t = TempTx::default();
-        t.put(&vk(1, 5, true), b"").unwrap();
+        t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert)).unwrap();
         let (lo, hi) = rel_bounds();
-        let at = ValidityTs(Reverse(10));
+        let at = AsOf::current(ValidityTs(Reverse(10)));
         assert_eq!(t.range_skip_scan_tuple(&hi, &lo, at).count(), 0, "inverted");
         assert_eq!(t.range_skip_scan_tuple(&lo, &lo, at).count(), 0, "equal");
     }
@@ -604,54 +671,81 @@ mod tests {
     #[test]
     fn three_way_differential_skip_scan() {
         // Honest versioned rows planted alongside hostile inhabitants:
-        // a too-short key, a full-length key whose tail is not a validity,
-        // extreme timestamps, and a garbage rmp value (hits only on emit).
+        // a too-short key, a full-length key whose slot tag is clobbered,
+        // extreme timestamps, a value missing its polarity byte, an
+        // unknown polarity byte, and a garbage rmp payload (hits only on
+        // emit).
         let (lower, upper) = rel_bounds();
         let hostile_short: Vec<u8> = [&REL.0.to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
-        let mut hostile_tail = vk(5, 100, true);
-        let n = hostile_tail.len();
-        hostile_tail[n - 10] = 0xFE; // clobber the validity tag
+        let mut hostile_sys_tag = bk(5, 100, 1);
+        let n = hostile_sys_tag.len();
+        hostile_sys_tag[n - 10] = 0xFE; // clobber the system slot's tag
+        let mut hostile_valid_tag = bk(6, 100, 1);
+        let n = hostile_valid_tag.len();
+        hostile_valid_tag[n - 20] = 0xFE; // clobber the valid slot's tag
+        let a = || bv(ClaimPolarity::Assert);
+        let r = || bv(ClaimPolarity::Retract);
+        let e = || bv(ClaimPolarity::Erase);
+        let mut garbage_payload = bv(ClaimPolarity::Assert);
+        garbage_payload.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack
+        let mut unknown_polarity = REL.raw_encode().to_vec();
+        unknown_polarity.push(0xEE);
         let scenarios: Vec<(Vec<(Vec<u8>, Vec<u8>)>, &str)> = vec![
             (
                 vec![
-                    (vk(1, 10, true), vec![]),
-                    (vk(1, 20, false), vec![]),
-                    (vk(2, i64::MIN, false), vec![]),
-                    (vk(2, 15, true), vec![]),
-                    (vk(3, i64::MAX, true), vec![]),
-                    (vk(4, 0, true), vec![]),
-                    (vk(4, 0, false), vec![]),
+                    (bk(1, 10, 1), a()),
+                    (bk(1, 20, 2), r()),
+                    (bk(2, i64::MIN, i64::MIN), r()),
+                    (bk(2, 15, 3), a()),
+                    (bk(3, i64::MAX, i64::MAX), a()),
+                    (bk(4, 0, 1), a()),
+                    (bk(4, 0, 5), e()),
+                    (bk(4, -5, 1), a()),
                 ],
-                "honest versions + extreme timestamps",
+                "honest versions + extreme timestamps + erase fall-through",
             ),
             (
                 vec![
-                    (vk(1, 10, true), vec![]),
-                    (hostile_short.clone(), vec![]),
-                    (vk(9, 10, true), vec![]),
+                    (bk(1, 10, 1), a()),
+                    (hostile_short.clone(), a()),
+                    (bk(9, 10, 1), a()),
                 ],
                 "short key planted mid-range",
             ),
             (
                 vec![
-                    (vk(1, 10, true), vec![]),
-                    (hostile_tail.clone(), vec![]),
-                    (vk(9, 10, true), vec![]),
+                    (bk(1, 10, 1), a()),
+                    (hostile_sys_tag.clone(), a()),
+                    (bk(9, 10, 1), a()),
                 ],
-                "garbage validity tag mid-range",
+                "garbage system-slot tag mid-range",
             ),
             (
                 vec![
-                    (
-                        vk(1, 10, true),
-                        b"\x00\x00\x00\x00\x00\x00\x00\x00garbage".to_vec(),
-                    ),
-                    (vk(9, 10, true), vec![]),
+                    (bk(1, 10, 1), a()),
+                    (hostile_valid_tag.clone(), a()),
+                    (bk(9, 10, 1), a()),
                 ],
-                "garbage rmp value on an emitted hit",
+                "garbage valid-slot tag mid-range",
+            ),
+            (
+                vec![(bk(1, 10, 1), garbage_payload.clone()), (bk(9, 10, 1), a())],
+                "garbage rmp payload on an emitted hit",
+            ),
+            (
+                vec![(bk(1, 10, 1), vec![]), (bk(9, 10, 1), a())],
+                "value missing its polarity byte",
+            ),
+            (
+                vec![
+                    (bk(1, 10, 1), unknown_polarity.clone()),
+                    (bk(9, 10, 1), a()),
+                ],
+                "unknown polarity byte",
             ),
         ];
         let queries: Vec<i64> = vec![i64::MIN, i64::MIN + 1, -1, 0, 5, 10, 15, 20, 25, i64::MAX];
+        let sys_queries: Vec<i64> = vec![i64::MIN, 0, 1, 2, 3, 4, 5, i64::MAX];
 
         for (rows, label) in &scenarios {
             let dir = tempfile::tempdir().unwrap();
@@ -665,15 +759,20 @@ mod tests {
                 fjall_tx.put(k, v).unwrap();
                 sim_tx.put(k, v).unwrap();
             }
-            for ts in &queries {
-                let at = ValidityTs(Reverse(*ts));
-                let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
-                let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
-                let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));
-                assert_eq!(a, b, "skip scan temp vs fjall: {label}, ts {ts}");
-                assert_eq!(a, c, "skip scan temp vs sim: {label}, ts {ts}");
+            for sys in &sys_queries {
+                for ts in &queries {
+                    let at = AsOf {
+                        sys: ValidityTs(Reverse(*sys)),
+                        valid: ValidityTs(Reverse(*ts)),
+                    };
+                    let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
+                    let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
+                    let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));
+                    assert_eq!(a, b, "skip scan temp vs fjall: {label}, sys {sys}, ts {ts}");
+                    assert_eq!(a, c, "skip scan temp vs sim: {label}, sys {sys}, ts {ts}");
+                }
             }
-            let at = ValidityTs(Reverse(5));
+            let at = AsOf::current(ValidityTs(Reverse(5)));
             assert_eq!(temp_tx.range_skip_scan_tuple(&upper, &lower, at).count(), 0);
             assert_eq!(temp_tx.range_skip_scan_tuple(&lower, &lower, at).count(), 0);
         }

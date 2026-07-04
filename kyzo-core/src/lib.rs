@@ -36,10 +36,17 @@
 //! - [`DataValue`] — the atom of meaning: thirteen kinds whose *declaration
 //!   order is the cross-type order*. [`Tuple`] is a fact's body, an ordered
 //!   sequence of them.
-//! - [`Validity`] / [`ValidityTs`] — a time-stamped existence claim, ordered
-//!   newest-first; retraction is a first-class assertion of absence.
+//! - [`Validity`] / [`ValidityTs`] — the time coordinate of an existence
+//!   claim, ordered newest-first. Every fact is **bitemporal**: a valid
+//!   instant (when the fact holds in the world) and a system version (when
+//!   the store learned it) ride in every key, and the claim's polarity —
+//!   assert, retract, erase (`data::bitemporal::ClaimPolarity`) — rides in
+//!   the value, so one valid instant has exactly one system lineage and
+//!   retraction is a first-class assertion of absence.
 //! - [`EncodedKey`] — a fact's written form: relation prefix, memcomparable
-//!   tuple bytes, fixed-width validity tail. Constructed only by encoders, so
+//!   tuple bytes, and a fixed-width bitemporal tail (valid instant outer,
+//!   system version inner); the value side is FormatVersion 3's
+//!   self-describing tagged fields (`data::fact_payload`). Constructed only by encoders, so
 //!   possession proves provenance; bytes read back from disk are *claimed*
 //!   keys until fallible decoding proves them. The law beneath the whole
 //!   store: encoded byte order equals semantic value order (`data::memcmp`),
@@ -58,8 +65,11 @@
 //!   is the typed, retryable [`ConflictError`],
 //!   and [`retry_on_conflict`] is its liveness half. Both traits are sealed:
 //!   one backend by decree (`fjall`, a pure-Rust LSM). Time travel is
-//!   mandatory, not per-relation opt-in: the validity tail lets an as-of scan
-//!   seek to the newest version at or before a query time.
+//!   mandatory, not per-relation opt-in: the bitemporal tail lets an as-of
+//!   scan seek to the newest system version at or before an `AsOf`
+//!   coordinate. Stamp minting is snapshot-then-mint by construction (the
+//!   mint takes the open snapshot as an argument), which is the proof that
+//!   reads-from order agrees with stamp order.
 //! - [`VerifyReport`] — the store's integrity, made inspectable.
 //!
 //! ## Parse — claimed text becomes proven syntax (`parse`)
@@ -85,6 +95,14 @@
 //! proven to survive unadorned) → compiled relational algebra (`query::ra`,
 //! where `NegRight` is the constructor proof that negation's illegal right
 //! sides are unreachable) → semi-naive fixpoint evaluation (`query::eval`).
+//! Execution is **vectorized**: rows flow as batches (`query::batch_ops`)
+//! through the columnar expression evaluator (`query::vm`), law-bound
+//! observationally identical — values, presence, and error identity — to
+//! scalar `Expr` evaluation; the connectives `&&`/`||`/`~` short-circuit as
+//! `Expr::Lazy`, and no strict boolean ops exist. Fixpoint state lives as
+//! level-merged immutable sorted runs (`query::levels`): each epoch's
+//! accumulator seals as the newest level — the delta IS the newest level —
+//! and compaction is a logarithmic pure function of level sizes.
 //! The tier's seven laws and where each is enforced are documented in
 //! `query/mod.rs`; the load-bearing ones: optimized evaluation equals the
 //! naive fixpoint, unstratifiable programs are *refused* rather than
@@ -99,16 +117,27 @@
 //! derivation of each admitted tuple is witnessed at the barrier in canonical
 //! order; the off-state is the `()` sink, compiled away.
 //!
-//! ## Runtime — the execution substances (`runtime`)
+//! ## Runtime — the session tier (`runtime`)
 //!
-//! The typed catalog (`runtime::relation`, whose `SystemKey` is the closed
-//! set of system-keyspace shapes, so no third shape appears by accident) and
-//! the semi-naive delta stores (`runtime::temp_store`, whose `Admitted` count
-//! is the budget's deterministic unit of account). The `db.rs` entrypoint —
-//! `run_query`, sessions, cooperative cancellation — is the one tier not yet
-//! landed (see the boundaries below).
+//! Everything between a caller and the engine organs: the [`Db`] entrypoint
+//! (`run_query`, sessions, cooperative cancellation, commit retry with
+//! backoff), the mutation tier (`runtime::mutate` — puts, retractions at
+//! bitemporal coordinates, index creation with resumable backfill), the
+//! typed catalog (`runtime::relation`, whose `SystemKey` is the closed set
+//! of system-keyspace shapes, so no third shape appears by accident),
+//! transaction-scoped constraints, and change callbacks. The fixpoint
+//! stores' `Admitted` count (`query::levels`) is the budget's deterministic
+//! unit of account.
 //!
-//! ## Fixed rules and full-text (`fixed_rule`, `fts`)
+//! ## Engines — the derived-index organs (`engines`)
+//!
+//! HNSW vector search, full-text search, MinHash-LSH, spatial, sparse
+//! vectors, and the gazetteer — each an index engine whose search surface
+//! joins into query plans as a relation (`query::ra::search`), with the
+//! text-analysis pipeline (`engines::text`) feeding the ones that read
+//! prose. Each engine's laws are pinned by its own harness in-tree.
+//!
+//! ## Fixed rules (`fixed_rule`)
 //!
 //! A fixed rule is an opaque, stratum-bounded computation (the built-in graph
 //! algorithms and utilities) that consumes whole input relations and fills a
@@ -118,11 +147,11 @@
 //! cooperative kill point for outside cancellation; the kill-switch and
 //! budget-deadline wiring that pulls it arrives with the unlanded session
 //! tier — and draw any randomness from a seeded PRNG, so the same
-//! facts and query answer identically run to run. Full-text search resolves a
-//! `TokenizerConfig` (pure data in an index manifest) into a runnable
-//! analyzer — validated at definition time so a bad config never reaches the
-//! manifest, and re-checked fallibly at use time because stored data is never
-//! trusted to be well-formed just because it was once written.
+//! facts and query answer identically run to run. (Full-text analysis lives
+//! with the engines: a `TokenizerConfig` is pure data in an index manifest,
+//! validated at definition time and re-checked fallibly at use time, because
+//! stored data is never trusted to be well-formed just because it was once
+//! written.)
 //!
 //! # The enforcement ladder: compiler > constructor > test
 //!
@@ -164,17 +193,15 @@
 //! - **Mutation**: the suites prove their guarantees by surviving mutants,
 //!   not merely by passing.
 //!
-//! # Honest boundaries: complete, refusing, not yet here
+//! # Honest boundaries: complete, refusing, still internal
 //!
 //! The **kernel is complete and load-bearing**: `data` and `storage` are the
-//! substrate everything else stands on. The **engine tiers exist, compile,
-//! and are tested in-crate** (parse, query, runtime, fixed_rule, fts), but
-//! they are `pub(crate)` and land bottom-up in dependency order (story #3).
-//! The public surface today is the kernel — the re-exports below — and there
-//! is **no public query entrypoint yet**: `runtime/db.rs` (`run_query`,
-//! sessions) has not landed, so in the non-`test` build the engine tiers are
-//! legitimately dead code, and the `expect(dead_code)` attributes below fire
-//! — forcing their removal — as each consumer lands. What refuses *today*,
+//! substrate everything else stands on. The **engine is live end to end**:
+//! the public surface is the kernel re-exports plus the [`Db`] session
+//! entrypoint below; the tiers between (parse, query, engines, runtime,
+//! fixed_rule) stay `pub(crate)` — internal organs, not API. Remaining
+//! `allow(dead_code)` attributes below mark surface whose consuming operator
+//! has not landed; each is removed as its consumer arrives. What refuses *today*,
 //! typed and (where it has a source location) spanned: malformed query text
 //! (parser), unstratifiable programs (stratifier), budget exhaustion,
 //! fixed-rule arity mismatch, format-version mismatch, and transaction
@@ -194,6 +221,7 @@
 #![allow(clippy::mutable_key_type)]
 
 pub(crate) mod data;
+pub(crate) mod engines;
 // The fixed-rule tier's consumer (the runtime evaluator, which drives
 // `run` and merges the output stores) lands later. Same dead-code posture
 // as `parse`: partially exercised by in-file tests, dead in the lib build.
@@ -202,9 +230,6 @@ pub(crate) mod fixed_rule;
 // The fts tier's consumers (the operator tier: fts/indexing.rs and
 // runtime/db.rs) land later. Same dead-code posture as `parse`: fully dead
 // in the lib build, partially exercised by in-file tests.
-#[cfg_attr(not(test), expect(dead_code))]
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) mod fts;
 // The parse tier's consumers (runtime/db.rs) land later. In the lib build
 // the whole module is dead (expect); in test builds the in-file tests
 // exercise the parsers but not every AST field a runtime consumer reads,
@@ -215,10 +240,10 @@ pub(crate) mod query;
 pub(crate) mod runtime;
 pub(crate) mod storage;
 
-pub use data::tuple::{EncodedKey, Tuple, encode_tuple_key};
+pub use data::tuple::{EncodedKey, Tuple, decode_tuple_from_key, encode_tuple_key};
 pub use data::value::{
-    DataValue, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs, VecElementType,
-    Vector, current_validity,
+    AsOf, DataValue, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
+    VecElementType, Vector, current_validity,
 };
 pub use storage::backup::{dump_storage, restore_storage};
 pub use storage::fjall::{

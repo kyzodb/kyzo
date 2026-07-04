@@ -75,23 +75,24 @@ use thiserror::Error;
 use crate::data::program::{
     InputProgram, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation,
 };
+use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, ValidityTs, current_validity};
+use crate::data::value::{AsOf, DataValue, ValidityTs, current_validity};
 use crate::fixed_rule::{CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
 use crate::query::compile::stratified_magic_compile;
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::query::levels::EpochStore;
 use crate::query::normalize::{SessionFixedRule, SessionNormalizer, SessionView};
 use crate::query::sort::sort_and_collect;
 use crate::runtime::callback::{CallbackCollector, EventCallbackRegistry};
 use crate::runtime::relation::{
-    AccessLevel, RelationHandle, create_relation, describe_relation, destroy_relation,
-    get_relation, list_relations, rename_relation, set_access_level, set_relation_triggers,
-    write_relation_row,
+    AccessLevel, KeyspaceKind, RelationHandle, create_relation, describe_relation,
+    destroy_relation, get_relation, list_relations, rename_relation, set_access_level,
+    set_relation_triggers, write_relation_row,
 };
-use crate::runtime::temp_store::EpochStore;
 use crate::storage::temp::TempTx;
 use crate::storage::{ReadTx, Storage, WriteTx};
 
@@ -101,11 +102,16 @@ use crate::storage::{ReadTx, Storage, WriteTx};
 /// unbounded loop. Overridable per script through [`ScriptOptions`].
 const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 
-/// How many times a write commit replays on a typed [`ConflictError`] before
-/// giving up. Reads never conflict.
+/// How many times a write commit replays on a typed [`ConflictError`]
+/// before giving up. Reads never conflict. This is a liveness backstop
+/// against pathological contention, not a tuning knob: with the retry
+/// tier's capped exponential backoff, exhausting it means roughly eight
+/// seconds of continuous same-fact races — at 32 it was reachable by
+/// three writers under a loaded machine, which is contention working,
+/// not failing.
 ///
 /// [`ConflictError`]: crate::storage::ConflictError
-const MAX_COMMIT_ATTEMPTS: usize = 32;
+const MAX_COMMIT_ATTEMPTS: usize = 128;
 
 /// A script asked for the imperative genus (`?[…] <- …` control flow), which
 /// the session tier executes for queries and system ops but not yet for
@@ -188,6 +194,7 @@ pub struct ScriptOptions {
 /// visible on the others — the handle is a shared view of one universe.
 pub struct Db<S> {
     pub(crate) storage: S,
+    pub(crate) segments: Arc<crate::engines::segments::SegmentEngine>,
     pub(crate) fixed_rules: Arc<RwLock<BTreeMap<String, Arc<dyn FixedRule>>>>,
     pub(crate) event_callbacks: Arc<RwLock<EventCallbackRegistry>>,
     pub(crate) callback_count: Arc<AtomicU32>,
@@ -197,6 +204,7 @@ impl<S: Clone> Clone for Db<S> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
+            segments: self.segments.clone(),
             fixed_rules: self.fixed_rules.clone(),
             event_callbacks: self.event_callbacks.clone(),
             callback_count: self.callback_count.clone(),
@@ -211,6 +219,7 @@ impl<S: Storage> Db<S> {
         let fixed_rules = DEFAULT_FIXED_RULES.clone();
         Ok(Self {
             storage,
+            segments: Arc::new(crate::engines::segments::SegmentEngine::default()),
             fixed_rules: Arc::new(RwLock::new(fixed_rules)),
             event_callbacks: Arc::new(RwLock::new(EventCallbackRegistry::default())),
             callback_count: Arc::new(AtomicU32::new(0)),
@@ -335,7 +344,7 @@ impl<S: Storage> Db<S> {
         }
         if program.needs_write_lock().is_some() {
             let callback_targets = self.current_callback_targets();
-            crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
+            crate::storage::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
                 // Fresh transaction AND fresh collector per attempt: a
                 // conflicted attempt is discarded whole, so no phantom events.
                 let mut collector = CallbackCollector::default();
@@ -354,8 +363,19 @@ impl<S: Storage> Db<S> {
                 // post-write state; a non-empty result is a typed refusal
                 // and the whole transaction rolls back.
                 self.enforce_constraints(&mut tx, cur_vld)?;
+                // Segment soundness: bumps precede the commit, so any
+                // snapshot that can see these writes sees the new marks.
+                for rel in &tx.touched_relations {
+                    self.segments.bump_before_commit(*rel);
+                }
                 tx.store.commit()?;
-                // Post-commit only: the universe is durable, now tell observers.
+                // Post-commit only: retirements are durable, so their
+                // segments and watermarks leave the engine now (a
+                // rolled-back destroy never reaches this line).
+                for rel in &tx.retired_relations {
+                    self.segments.evict(*rel);
+                }
+                // The universe is durable, now tell observers.
                 self.send_callbacks(collector);
                 Ok(rows)
             })
@@ -380,6 +400,7 @@ impl<S: Storage> Db<S> {
         program: InputProgram,
         cur_vld: ValidityTs,
         options: &ScriptOptions,
+        segments: crate::engines::segments::Segments<'_>,
     ) -> Result<(EpochStore, bool, Vec<Symbol>, QueryOutOptions)> {
         let view = SessionView { store, temp };
         let out_opts = program.out_opts().clone();
@@ -397,12 +418,14 @@ impl<S: Storage> Db<S> {
         let (strat, lifetimes) = nf.into_stratified_program()?;
         let magic = strat.magic_sets_rewrite(&view)?;
         let compiled = stratified_magic_compile(store, magic)?;
-        let eval_prog = crate::query::compile::bind_for_eval(
-            &compiled,
-            store,
-            crate::query::compile::ExecMode::Iterator,
-            &mut |app| Ok(SessionFixedRule::new(app, view, cancel.clone())),
-        )?;
+        // ONE machine: vectorized execution end to end, judged by the
+        // naive oracle. (The row-at-a-time twin was deleted; criterion on
+        // a loaded 32-core box had it losing or tying everywhere it was
+        // measured against the batch pipeline.)
+        let eval_prog =
+            crate::query::compile::bind_for_eval(&compiled, store, segments, &mut |app| {
+                Ok(SessionFixedRule::new(app, view, cancel.clone()))
+            })?;
 
         // Eval applies take/skip only when the query is not sorted; a sorted
         // query must see every row before ordering (upstream's rule).
@@ -480,7 +503,7 @@ impl<S: Storage> Db<S> {
     /// for top-level mutations (`trigger_depth` 0) and for trigger
     /// recursion, which passes the parent's depth + 1; the mutation
     /// pipeline refuses a cascade past its typed ceiling
-    /// ([`crate::query::stored::MAX_TRIGGER_CASCADE_DEPTH`]).
+    /// ([`crate::runtime::mutate::MAX_TRIGGER_CASCADE_DEPTH`]).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_query(
         &self,
@@ -513,8 +536,18 @@ impl<S: Storage> Db<S> {
             }
         }
 
-        let (result, limited, head, out_opts) =
-            self.compile_and_eval(&tx.store, &tx.temp, program, cur_vld, &options)?;
+        // Segments are COMMITTED-state mirrors; a write session's queries
+        // (including trigger and constraint evaluation) read the tx's own
+        // uncommitted view, so the segment context is OFF here — typed
+        // dirty-read protection, pinned by the constraint suite.
+        let (result, limited, head, out_opts) = self.compile_and_eval(
+            &tx.store,
+            &tx.temp,
+            program,
+            cur_vld,
+            &options,
+            crate::engines::segments::Segments::OFF,
+        )?;
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
 
         match out_opts.store_relation {
@@ -562,8 +595,14 @@ impl<S: Storage> Db<S> {
         cur_vld: ValidityTs,
     ) -> Result<NamedRows> {
         let options = tx.options.clone();
-        let (result, limited, head, out_opts) =
-            self.compile_and_eval(&tx.store, &tx.temp, program, cur_vld, &options)?;
+        let (result, limited, head, out_opts) = self.compile_and_eval(
+            &tx.store,
+            &tx.temp,
+            program,
+            cur_vld,
+            &options,
+            crate::engines::segments::Segments(Some(&self.segments)),
+        )?;
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
         Ok(materialize(rows, &head))
     }
@@ -652,7 +691,7 @@ impl<S: Storage> Db<S> {
             // Write catalog ops (retry on conflict).
             SysOp::RemoveRelation(names) => self.sys_write(|tx| {
                 for name in &names {
-                    destroy_relation(&mut tx.store, &name.name)?;
+                    tx.destroy_relation(&name.name)?;
                 }
                 Ok(status_ok())
             }),
@@ -730,7 +769,9 @@ impl<S: Storage> Db<S> {
                     .collect();
                 Ok(NamedRows::new(vec!["name".into(), "kind".into()], rows))
             }
-            SysOp::CreateIndex(..) => bail!(IndexOpNotLanded("::index")),
+            SysOp::CreateIndex(rel, name, cols) => {
+                self.sys_write(|tx| tx.create_plain_index(&rel.name, &name.name, &cols))
+            }
             SysOp::CreateVectorIndex(cfg) => self.sys_write(|tx| tx.create_hnsw_index(&cfg)),
             SysOp::CreateFtsIndex(cfg) => self.sys_write(|tx| tx.create_fts_index(&cfg)),
             SysOp::CreateMinHashLshIndex(cfg) => self.sys_write(|tx| tx.create_lsh_index(&cfg)),
@@ -746,10 +787,16 @@ impl<S: Storage> Db<S> {
         &self,
         f: impl Fn(&mut SessionTx<S::WriteTx>) -> Result<NamedRows>,
     ) -> Result<NamedRows> {
-        crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
+        crate::storage::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(self.storage.write_tx()?, ScriptOptions::default());
             let out = f(&mut tx)?;
+            for rel in &tx.touched_relations {
+                self.segments.bump_before_commit(*rel);
+            }
             tx.store.commit()?;
+            for rel in &tx.retired_relations {
+                self.segments.evict(*rel);
+            }
             Ok(out)
         })
     }
@@ -839,7 +886,7 @@ pub struct SessionTx<T> {
     /// permutations), cached per index relation name for this session.
     pub(crate) index_ctxs: std::collections::BTreeMap<
         smartstring::SmartString<smartstring::LazyCompact>,
-        crate::query::stored::IndexCtx,
+        crate::runtime::mutate::IndexCtx,
     >,
     pub(crate) store: T,
     pub(crate) temp: TempTx,
@@ -857,6 +904,14 @@ pub struct SessionTx<T> {
     /// mutation pipeline and drained by
     /// [`Db::enforce_constraints`](crate::runtime::db::Db) before commit.
     pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, String>,
+    /// Every relation id this transaction wrote (user writes, trigger
+    /// writes, index backfills alike) — drained into segment-watermark
+    /// bumps BEFORE the storage commit (the segments' soundness rule).
+    pub(crate) touched_relations: std::collections::BTreeSet<crate::data::tuple::RelationId>,
+    /// Relation ids permanently retired by this transaction (destroy /
+    /// replace / index drop) — drained into segment-engine evictions
+    /// AFTER a successful commit (a rolled-back destroy retires nothing).
+    pub(crate) retired_relations: std::collections::BTreeSet<crate::data::tuple::RelationId>,
 }
 
 impl<T: ReadTx> SessionTx<T> {
@@ -868,6 +923,8 @@ impl<T: ReadTx> SessionTx<T> {
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
+            touched_relations: std::collections::BTreeSet::new(),
+            retired_relations: std::collections::BTreeSet::new(),
         }
     }
 
@@ -898,6 +955,29 @@ impl<T: ReadTx> SessionTx<T> {
             self.store.exists(key)
         }
     }
+
+    /// The fact's current LOGICAL row at the given valid coordinate,
+    /// routed: the versioned format's point read (a bitemporal probe under
+    /// the fact's key prefix), replacing exact-key reads for relation
+    /// rows. Under SSI in a write transaction the probe conflict-tracks
+    /// its range, so uniqueness races on the fact abort one racer.
+    pub(crate) fn current_row_routed(
+        &self,
+        handle: &RelationHandle,
+        key_cols: &[DataValue],
+        span: SourceSpan,
+    ) -> Result<Option<Tuple>> {
+        // Current belief, whole valid axis: the write side's probes must
+        // see the newest committed claim whatever its instant — both for
+        // honest old-row transitions and because this read's range is the
+        // conflict surface that makes same-fact racers abort.
+        let as_of = AsOf::current(crate::data::value::MAX_VALIDITY_TS);
+        if handle.is_temp {
+            handle.current_row(&self.temp, key_cols, as_of, span)
+        } else {
+            handle.current_row(&self.store, key_cols, as_of, span)
+        }
+    }
 }
 
 impl<T: WriteTx> SessionTx<T> {
@@ -909,6 +989,21 @@ impl<T: WriteTx> SessionTx<T> {
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
+            touched_relations: std::collections::BTreeSet::new(),
+            retired_relations: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// The system stamp every bitemporal row written to the given store
+    /// carries, routed like the row itself: the persistent store's stamp
+    /// comes from the storage's monotone clock, the session temp store's
+    /// from its logical clock. One stamp per transaction per store — a
+    /// transaction's writes are one instant of recorded history.
+    pub(crate) fn system_stamp_routed(&self, is_temp: bool) -> ValidityTs {
+        if is_temp {
+            self.temp.system_stamp()
+        } else {
+            self.store.system_stamp()
         }
     }
 
@@ -927,20 +1022,28 @@ impl<T: WriteTx> SessionTx<T> {
     pub(crate) fn create_relation(
         &mut self,
         input: crate::data::program::InputRelationHandle,
+        keyspace_kind: KeyspaceKind,
     ) -> Result<RelationHandle> {
         if input.name.name.starts_with('_') {
-            create_relation(&mut self.temp, input)
+            create_relation(&mut self.temp, input, keyspace_kind)
         } else {
-            create_relation(&mut self.store, input)
+            create_relation(&mut self.store, input, keyspace_kind)
         }
     }
 
     /// Destroy a relation (catalog row and keyspace, in-transaction), routed
-    /// by name.
+    /// by name. The retired id is recorded so the session evicts its
+    /// segment and watermark after commit — every permanent retirement
+    /// (remove, replace, ::index drop, LSH inverse drop) funnels through
+    /// here, so none can leak (hostile-review finding: three sibling
+    /// destroy sites leaked one engine entry per cycle, forever).
     pub(crate) fn destroy_relation(&mut self, name: &str) -> Result<()> {
         if name.starts_with('_') {
             destroy_relation(&mut self.temp, name)
         } else {
+            if let Ok(handle) = self.get_relation(name) {
+                self.retired_relations.insert(handle.id);
+            }
             destroy_relation(&mut self.store, name)
         }
     }
@@ -1003,6 +1106,91 @@ mod tests {
         BTreeMap::new()
     }
 
+    /// The segment law, end to end: a pure read builds and serves the
+    /// relation's current-state segment; ANY committed write to the
+    /// relation orphans it (a re-read sees the write, never the cached
+    /// past); a DENIED write leaves state and answers untouched; and the
+    /// same query inside a write session reads the transaction's own
+    /// uncommitted view, never a committed-state segment.
+    #[test]
+    fn segments_serve_fresh_and_never_dirty() {
+        let db = Db::new(SimStorage::new(7)).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 10], [2, 20]] :create w {k => v}",
+            no_params(),
+        )
+        .unwrap();
+
+        // First read builds the segment; second is served from it.
+        let q = "?[k, v] := *w[k, v]";
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+
+        // A committed write orphans the segment: the re-read sees it.
+        db.run_script("?[k, v] <- [[3, 30]] :put w {k, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20], vec![3, 30]]
+        );
+
+        // A retraction is a write like any other: served state updates.
+        db.run_script("?[k, v] <- [[2, 20]] :rm w {k, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![3, 30]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![3, 30]]
+        );
+
+        // A write whose transaction rolls back (parse-stage failure after
+        // the relation was touched is hard to stage; a constraint denial
+        // is the canonical rollback) leaves both state and served answers
+        // untouched — the early bump merely orphans, never lies.
+        db.run_script(
+            "::constraint create nonneg { ?[k, v] := *w[k, v], v < 0 }",
+            no_params(),
+        )
+        .unwrap();
+        assert!(
+            db.run_script("?[k, v] <- [[4, -1]] :put w {k, v}", no_params())
+                .is_err(),
+            "violating write denied"
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![3, 30]]
+        );
+
+        // A PLAIN INDEX is a mutated relation in its own right: its
+        // segment must orphan when a base-relation write updates the
+        // mirrored rows (hostile-review reproducer: the served index
+        // segment returned the stale two-row past after a base `:put`).
+        db.run_script("::index create w:by_v {v}", no_params())
+            .unwrap();
+        let qi = "?[v, k] := *w:by_v{v, k}";
+        assert_eq!(
+            int_rows(&db.run_script(qi, no_params()).unwrap()),
+            vec![vec![10, 1], vec![30, 3]]
+        );
+        db.run_script("?[k, v] <- [[5, 50]] :put w {k, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(qi, no_params()).unwrap()),
+            vec![vec![10, 1], vec![30, 3], vec![50, 5]],
+            "an index segment must never outlive a base write"
+        );
+    }
+
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
@@ -1043,6 +1231,78 @@ mod tests {
         assert!(
             msg.contains("ceiling") || msg.contains("exceeded") || msg.contains("limit"),
             "typed spend refusal, got: {msg}"
+        );
+    }
+
+    /// Pins the ONE production line the unit-level eval tests can't reach:
+    /// `SessionFixedRule::run`'s forwarding of the true `baseline` into
+    /// `FixedRuleOutput::new_budgeted` (`query/normalize.rs`). An Ok/Err-only
+    /// test can never catch a regression there — the mid-run guard's
+    /// non-perturbation theorem (see `InterruptTicker`'s doc) guarantees it
+    /// only ever refuses inputs the epoch barrier (fed by the real,
+    /// unaffected global total) would ALSO refuse — so this downcasts to the
+    /// typed refusal and pins the exact dimension AND spend.
+    ///
+    /// A chain of `N=10` directed edges (`i -> i+1`, sourced from a 10-edge
+    /// path) gives two independently useful, empirically confirmed counts
+    /// (`ShortestPathDijkstra`'s row count is exactly `N*(N+1)`, verified by
+    /// a throwaway probe run before this test was written):
+    /// - `r[a] := *edge[a, _b, _w]` admits exactly `B = 10` rows (the
+    ///   distinct sources) in the stratum BEFORE the fixed rule's — this is
+    ///   the baseline the fixed rule's stratum must see.
+    /// - `ShortestPathDijkstra` itself puts exactly `F = 110` rows: enough
+    ///   to cross ONE `OUTPUT_STRIDE` (64) mid-run check (at put #64, having
+    ///   stored 63 rows), but under 128, so no SECOND check ever happens
+    ///   inside the rule's own run.
+    ///
+    /// With `ceiling = 70`:
+    /// - Correct baseline: the one mid-run check sees `spent = 10 + 63 =
+    ///   73 > 70` — refuses immediately, typed `InFlightDerivations`,
+    ///   `spent == 73`, having stored only 63 of the eventual 110 rows.
+    /// - A baseline wrongly forwarded as 0: that same check sees
+    ///   `spent = 0 + 63 = 63 ≤ 70` and does NOT trip; no second check
+    ///   exists (F < 128), so the rule completes, all 110 rows merge, and
+    ///   only THEN does the epoch barrier refuse — typed `DerivedTuples`,
+    ///   `spent = 10 + 110 = 120` — a different dimension AND a different
+    ///   spend. Both fields are asserted exactly so either failure mode is
+    ///   caught.
+    #[test]
+    fn fixed_rule_dispatch_forwards_true_baseline_not_zero() {
+        let db = Db::new(SimStorage::new(7)).unwrap();
+        let mut edges = String::from("?[a, b, w] <- [");
+        for i in 0..10 {
+            edges.push_str(&format!("[{}, {}, 1.0],", i, i + 1));
+        }
+        edges.push_str("] :create edge {a, b => w}");
+        db.run_script(&edges, no_params()).expect("create edges");
+
+        let opts = ScriptOptions {
+            derived_tuple_ceiling: Some(70),
+            ..Default::default()
+        };
+        let err = db
+            .run_script_with(
+                "r[a] := *edge[a, _b, _w] ?[a, b, d, p] <~ ShortestPathDijkstra(*edge[], r[])",
+                no_params(),
+                opts,
+            )
+            .expect_err(
+                "the fixed rule's mid-run guard must refuse, counting the r-stratum's baseline",
+            );
+        let refusal: &crate::query::eval::LimitExceeded =
+            err.downcast_ref().expect("typed budget refusal");
+        assert_eq!(
+            refusal.dimension,
+            crate::query::eval::BudgetDimension::InFlightDerivations,
+            "must refuse INSIDE the fixed rule's own mid-run guard, not the later epoch \
+             barrier — a `DerivedTuples` refusal here means the guard never tripped, i.e. \
+             the forwarded baseline was too small (e.g. zeroed)"
+        );
+        assert_eq!(
+            refusal.spent, 73,
+            "spend must be the r-stratum's baseline(10) + this rule's own 63 rows put so \
+             far; a zeroed baseline would report 63 instead (and likely not refuse here at \
+             all, deferring to a much later `DerivedTuples` barrier refusal at spend 120)"
         );
     }
 
@@ -1133,6 +1393,34 @@ mod tests {
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 5}", no_params())
             .expect("fts search after delete");
         assert_eq!(out.rows.len(), 0, "deleted doc left the index");
+    }
+
+    /// A single search atom whose hit count exceeds one output batch
+    /// (1,200 matching docs > BATCH_ROWS = 1,024): the search executor's
+    /// cross-batch resumption must deliver every hit exactly once — the
+    /// same suspension state machine the materialized join pins.
+    #[test]
+    fn search_hits_resume_across_output_batch_boundary() {
+        let db = Db::new(SimStorage::new(7)).unwrap();
+        let mut script = String::from("?[id, body] <- [");
+        for i in 0..1200 {
+            script.push_str(&format!("[{i}, 'common fox term {i}'],"));
+        }
+        script.push_str("] :create doc {id => body: String}");
+        db.run_script(&script, no_params()).expect("seed");
+        db.run_script(
+            "::fts create doc:txt {extractor: body, tokenizer: Simple}",
+            no_params(),
+        )
+        .expect("fts create");
+        let out = db
+            .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 1500}", no_params())
+            .expect("boundary search");
+        assert_eq!(
+            out.rows.len(),
+            1200,
+            "every hit exactly once across the boundary"
+        );
     }
 
     /// LSH end to end: near-duplicate candidates come back; `::index drop`
@@ -1295,6 +1583,284 @@ mod tests {
             2 * PER_THREAD,
             "every increment landed; the retry loop lost no update"
         );
+    }
+
+    /// The reviewers' refuting scenario, pinned end to end: a retraction
+    /// lands at ITS OWN transaction's stamp instant, so it governs over
+    /// every earlier claim whatever wall-clock value the script captured
+    /// — delete-then-reinsert cycles resolve correctly on the logical-
+    /// clock sim backend exactly as on fjall. (The shipped defect keyed
+    /// retractions off script wall time while asserts used the stamp; on
+    /// the sim's logical clock the domains were incomparable and a plain
+    /// delete-reinsert lost the row for the life of the process.)
+    #[test]
+    fn retraction_governs_across_transactions_on_both_backends() {
+        fn drive<S: Storage>(db: Db<S>) {
+            db.run_script("?[k, v] <- [[1, 'first']] :create t {k => v}", no_params())
+                .expect("create");
+            db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
+                .expect("rm");
+            let gone = db
+                .run_script("?[k, v] := *t[k, v]", no_params())
+                .expect("read");
+            assert!(
+                gone.rows.is_empty(),
+                "retracted fact must be absent: {gone:?}"
+            );
+            db.run_script("?[k, v] <- [[1, 'second']] :put t {k => v}", no_params())
+                .expect("reinsert");
+            let back = db
+                .run_script("?[k, v] := *t[k, v]", no_params())
+                .expect("read");
+            assert_eq!(back.rows.len(), 1, "reinserted fact must be present");
+            assert_eq!(back.rows[0][1], DataValue::from("second"));
+            // And once more: the second retraction must also govern.
+            db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
+                .expect("rm again");
+            let gone = db
+                .run_script("?[k, v] := *t[k, v]", no_params())
+                .expect("read");
+            assert!(gone.rows.is_empty(), "re-retracted fact must be absent");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        drive(Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap());
+        drive(Db::new(crate::storage::sim::SimStorage::new(7)).unwrap());
+    }
+
+    /// The language surface's coordinate ORDER, pinned with a
+    /// discriminating history (reviewer's probe): a retroactive write —
+    /// valid instant far in the past, system stamp now — reads back only
+    /// when the parser maps `@ first, second` to (system, valid). Swapped
+    /// coordinates put the system cut before the write's stamp, where the
+    /// record knew nothing.
+    #[test]
+    fn asof_clause_first_coordinate_is_system_time() {
+        use crate::runtime::relation::get_relation;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[9, 'seed']] :create hist {k => v}",
+            no_params(),
+        )
+        .expect("create");
+        // The retroactive write: valid = 150 µs (ancient), sys = now.
+        let mut tx = db.storage.write_tx().unwrap();
+        let handle = get_relation(&tx, "hist").unwrap();
+        handle
+            .put_fact(
+                &mut tx,
+                &[DataValue::from(1), DataValue::from("retro")],
+                crate::data::value::ValidityTs(std::cmp::Reverse(150)),
+                SourceSpan(0, 0),
+            )
+            .unwrap();
+        tx.commit().unwrap();
+        let now = crate::data::value::current_validity().unwrap().0.0;
+
+        // (sys=now, valid=200): the record NOW says the fact held at 200.
+        let rows = db
+            .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
+            .expect("two-coordinate read");
+        assert_eq!(
+            rows.rows,
+            vec![vec![DataValue::from("retro")]],
+            "system-now, valid-200 must see the retroactive claim"
+        );
+        // Swapped (sys=200, valid=now): at system time 200 µs the record
+        // did not exist; a parser that swapped coordinates would return
+        // the row here and the empty set above.
+        let rows = db
+            .run_script(&format!("?[v] := *hist[1, v @ 200, {now}]"), no_params())
+            .expect("swapped-coordinate read");
+        assert!(
+            rows.rows.is_empty(),
+            "at system time 200µs the record knew nothing: {rows:?}"
+        );
+    }
+
+    /// Index-served as-of reads answer exactly like base scans, through
+    /// the REAL `::index create` surface: same rows at every coordinate,
+    /// including one where the fact was retracted and one where its value
+    /// changed between coordinates.
+    #[test]
+    fn plain_index_asof_reads_match_base_scans() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 10], [2, 20]] :create t {k => v}",
+            no_params(),
+        )
+        .expect("create");
+        db.run_script("::index create t:by_v {v}", no_params())
+            .expect("::index create must be a live surface");
+        // History: update k=1, retract k=2 (distinct stamps).
+        db.run_script("?[k, v] <- [[1, 11]] :put t {k => v}", no_params())
+            .expect("update");
+        db.run_script("?[k] <- [[2]] :rm t {k}", no_params())
+            .expect("retract");
+
+        // The index-served plan binds v first (the index's leading
+        // column); the base plan binds k first. Same logical query.
+        let via_index = db
+            .run_script("?[v, k] := *t:by_v{v, k} :order v", no_params())
+            .expect("index read");
+        let via_base = db
+            .run_script("?[v, k] := *t[k, v] :order v", no_params())
+            .expect("base read");
+        assert_eq!(
+            via_index.rows, via_base.rows,
+            "index and base must agree on current state"
+        );
+        assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
+        assert_eq!(
+            via_base.rows[0],
+            vec![DataValue::from(11), DataValue::from(1)]
+        );
+    }
+
+    /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
+    /// short-circuit, so a deciding left side protects the right side
+    /// from ever evaluating — through the whole engine, not just the
+    /// expression unit.
+    #[test]
+    fn guard_idiom_short_circuits_through_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[0, 10], [2, 20]] :create t {k => v}",
+            no_params(),
+        )
+        .expect("create");
+        // `%` errors on a zero divisor (`/` does NOT — it yields inf —
+        // so a division guard cannot discriminate lazy from strict; the
+        // hostile review caught the original test passing vacuously).
+        let rows = db
+            .run_script("?[k] := *t[k, v], k != 0 && v % k == 0", no_params())
+            .expect("guarded modulo must not error on the zero row");
+        assert_eq!(int_rows(&rows), vec![vec![2]]);
+        // Same law when the connective is nested inside another expression.
+        let rows = db
+            .run_script(
+                "?[k] := *t[k, v], w = if(k != 0 && v % k == 0, 1, 0), w == 1",
+                no_params(),
+            )
+            .expect("nested guard must not error");
+        assert_eq!(int_rows(&rows), vec![vec![2]]);
+        // The mirror proves the pin has teeth: unguarded, the zero row
+        // DOES error.
+        db.run_script("?[k] := *t[k, v], v % k == 0", no_params())
+            .expect_err("unguarded modulo must error on the zero row");
+        // Coalesce guards the same way.
+        let rows = db
+            .run_script("?[x] := x = null ~ 7", no_params())
+            .expect("coalesce");
+        assert_eq!(int_rows(&rows), vec![vec![7]]);
+    }
+
+    /// The reviewers' pushdown hazard, pinned: `to_conjunction` splits a
+    /// top-level guard conjunction across join sides, and the split must
+    /// never let the guarded expression evaluate on rows its guard would
+    /// have excluded — in any atom order, stored or derived.
+    #[test]
+    fn guard_survives_conjunction_pushdown_across_joins() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script("?[k] <- [[1], [2]] :create a {k}", no_params())
+            .expect("create a");
+        db.run_script(
+            "?[k, v] <- [[0, 5], [1, 20], [2, 30]] :create b {k => v}",
+            no_params(),
+        )
+        .expect("create b");
+        for (name, script) in [
+            (
+                "stored join",
+                "?[k, v] := *a[k], *b[k, v], k != 0 && v % k == 0",
+            ),
+            (
+                "reordered",
+                "?[k, v] := *b[k, v], *a[k], k != 0 && v % k == 0",
+            ),
+            (
+                "derived sides",
+                "aa[k] := *a[k]\nbb[k, v] := *b[k, v]\n?[k, v] := aa[k], bb[k, v], k != 0 && v % k == 0",
+            ),
+        ] {
+            let rows = db
+                .run_script(script, no_params())
+                .unwrap_or_else(|e| panic!("{name}: guard must survive pushdown: {e}"));
+            assert_eq!(
+                int_rows(&rows),
+                vec![vec![1, 20], vec![2, 30]],
+                "{name}: wrong rows"
+            );
+        }
+    }
+
+    /// Backfill batching at scale: a plain index created over MORE rows
+    /// than one backfill batch (4096) must index every row exactly once —
+    /// the resume bound (fact prefix + `Bot`) must neither skip nor
+    /// double-count across batch boundaries.
+    #[test]
+    fn index_backfill_resumes_correctly_across_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script("?[k, v] <- [[0, 0]] :create big {k => v}", no_params())
+            .expect("create");
+        let mut chunk = vec![];
+        for i in 0..5000i64 {
+            chunk.push(format!("[{}, {}]", i, i * 7));
+            if chunk.len() == 500 {
+                db.run_script(
+                    &format!("?[k, v] <- [{}] :put big {{k => v}}", chunk.join(", ")),
+                    no_params(),
+                )
+                .expect("seed chunk");
+                chunk.clear();
+            }
+        }
+        db.run_script("::index create big:by_v {v}", no_params())
+            .expect("index create over 5000 rows");
+        let via_index = db
+            .run_script("?[count(v)] := *big:by_v{v, k}", no_params())
+            .expect("count via index");
+        assert_eq!(
+            int_rows(&via_index),
+            vec![vec![5000]],
+            "every row indexed once"
+        );
+        // And value-level agreement with the base on a spot range.
+        let via_base = db
+            .run_script(
+                "?[v] := *big[k, v], k >= 4094, k <= 4098 :order v",
+                no_params(),
+            )
+            .expect("base spot");
+        let via_idx = db
+            .run_script(
+                "?[v] := *big:by_v{v, k}, k >= 4094, k <= 4098 :order v",
+                no_params(),
+            )
+            .expect("index spot");
+        assert_eq!(via_base.rows, via_idx.rows, "batch-boundary rows agree");
+    }
+
+    /// The `@` clause parses in both arities through the public script
+    /// surface: `@ valid` (current belief) and `@ system, valid` (the
+    /// record as it was). Resolution semantics are pinned by the
+    /// time-travel trials; this pins the LANGUAGE surface.
+    #[test]
+    fn asof_clause_parses_one_and_two_coordinates() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script("?[k, v] <- [[1, 10]] :create hist {k => v}", no_params())
+            .expect("create");
+        db.run_script("?[k, v] := *hist[k, v @ 12345]", no_params())
+            .expect("single-coordinate as-of parses and runs");
+        db.run_script("?[k, v] := *hist[k, v @ 12345, 67890]", no_params())
+            .expect("two-coordinate as-of parses and runs");
+        db.run_script("?[k, v] := *hist{k, v @ 12345, 67890}", no_params())
+            .expect("two-coordinate as-of parses in named form");
     }
 
     fn current<S: Storage>(db: &Db<S>) -> i64 {

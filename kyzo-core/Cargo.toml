@@ -81,6 +81,10 @@ name = "storage"
 harness = false
 
 [[bench]]
+name = "db_scan"
+harness = false
+
+[[bench]]
 name = "ra_exec"
 harness = false
 required-features = ["bench-internals"]

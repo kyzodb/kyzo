@@ -279,8 +279,16 @@ impl<S: Storage> Db<S> {
         cur_vld: ValidityTs,
         options: &ScriptOptions,
     ) -> Result<Vec<Tuple>> {
-        let (result, _limited, _head, _out_opts) =
-            self.compile_and_eval(store, temp, program, cur_vld, options)?;
+        let (result, _limited, _head, _out_opts) = self.compile_and_eval(
+            store,
+            temp,
+            program,
+            cur_vld,
+            options,
+            // Constraint bodies read the WRITE tx's post-write view;
+            // committed-state segments must never serve them.
+            crate::engines::segments::Segments::OFF,
+        )?;
         let mut rows: Vec<Tuple> = result.all_iter().map(|t| t.into_tuple()).collect();
         rows.sort();
         rows.dedup();

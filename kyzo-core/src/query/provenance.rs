@@ -53,11 +53,12 @@ use crate::query::eval::{
     provenance_graph, stratified_evaluate_with_stores,
 };
 use crate::query::laws::{HeadAggr, Literal, Program, Rel, Rule, Term, naive_eval};
+use crate::query::levels::EpochStore;
 use crate::query::semiring::{
     Boolean, Cost, Derivation, DerivationGraph, ProofNode, ProvenanceLimitExceeded, Semiring,
     SemiringOverflow, SolverBudget, Tropical, extract_min_cost_proof, solve, verify_proof,
 };
-use crate::runtime::temp_store::{EpochStore, RegularTempStore, TupleInIter};
+use crate::query::temp_store::{RegularTempStore, TupleInIter};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — splitmix64, one u64 seed and nothing else (replayable).
@@ -340,6 +341,7 @@ impl FixedRuleEval for NoFixed {
         _stores: &BTreeMap<MagicSymbol, EpochStore>,
         _out: &mut RegularTempStore,
         _budget: &Budget,
+        _baseline: u64,
     ) -> Result<()> {
         unreachable!("NoFixed is never installed in a program")
     }

@@ -78,7 +78,7 @@ use crate::data::expr::Expr;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::{DataValue, ValidityTs};
+use crate::data::value::{AsOf, DataValue};
 
 // The fixed-rule tier has landed: its trait and handle live in
 // `fixed_rule/mod.rs` (the former seam declarations here re-homed there
@@ -452,13 +452,13 @@ pub(crate) enum FixedRuleArg {
     Stored {
         name: Symbol,
         bindings: Vec<Symbol>,
-        valid_at: Option<ValidityTs>,
+        as_of: Option<AsOf>,
         span: SourceSpan,
     },
     NamedStored {
         name: Symbol,
         bindings: BTreeMap<SmartString<LazyCompact>, Symbol>,
-        valid_at: Option<ValidityTs>,
+        as_of: Option<AsOf>,
         span: SourceSpan,
     },
 }
@@ -662,7 +662,7 @@ pub(crate) struct InputRuleApplyAtom {
 pub(crate) struct InputNamedFieldRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: BTreeMap<SmartString<LazyCompact>, Expr>,
-    pub(crate) valid_at: Option<ValidityTs>,
+    pub(crate) as_of: Option<AsOf>,
     pub(crate) span: SourceSpan,
 }
 
@@ -671,7 +671,7 @@ pub(crate) struct InputNamedFieldRelationApplyAtom {
 pub(crate) struct InputRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Expr>,
-    pub(crate) valid_at: Option<ValidityTs>,
+    pub(crate) as_of: Option<AsOf>,
     pub(crate) span: SourceSpan,
 }
 
@@ -1128,7 +1128,7 @@ pub(crate) struct NormalFormRuleApplyAtom {
 pub(crate) struct NormalFormRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Symbol>,
-    pub(crate) valid_at: Option<ValidityTs>,
+    pub(crate) as_of: Option<AsOf>,
     pub(crate) span: SourceSpan,
 }
 
@@ -1539,7 +1539,7 @@ pub(crate) enum MagicFixedRuleRuleArg {
     Stored {
         name: Symbol,
         bindings: Vec<Symbol>,
-        valid_at: Option<ValidityTs>,
+        as_of: Option<AsOf>,
         span: SourceSpan,
     },
 }
@@ -1601,7 +1601,7 @@ pub(crate) struct MagicRuleApplyAtom {
 pub(crate) struct MagicRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Symbol>,
-    pub(crate) valid_at: Option<ValidityTs>,
+    pub(crate) as_of: Option<AsOf>,
     pub(crate) span: SourceSpan,
 }
 
@@ -2046,7 +2046,7 @@ mod tests {
             rule_args: vec![MagicFixedRuleRuleArg::Stored {
                 name: sym("edges"),
                 bindings: vec![sym("a"), sym("b")],
-                valid_at: None,
+                as_of: None,
                 span: SourceSpan(0, 0),
             }],
             options: Arc::new(BTreeMap::new()),

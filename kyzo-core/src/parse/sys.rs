@@ -39,7 +39,7 @@ use crate::data::program::{FixedRule, InputProgram};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, ValidityTs, VecElementType};
-use crate::fts::TokenizerConfig;
+use crate::engines::text::TokenizerConfig;
 use crate::parse::expr::{build_expr, parse_string};
 use crate::parse::query::parse_query;
 use crate::parse::{ExtractSpan, IntoChildren, Pairs, Rule, unexpected};

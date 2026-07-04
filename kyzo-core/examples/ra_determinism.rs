@@ -21,7 +21,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use kyzo::bench_api::{Backend, Exec, Graph, aggregation, scan_filter, transitive_closure};
+use kyzo::bench_api::{Backend, Graph, aggregation, scan_filter, transitive_closure};
 
 const SEED: u64 = 0x5EED_1234;
 
@@ -51,26 +51,23 @@ fn main() {
     let workloads: Vec<(&str, Vec<kyzo::Tuple>)> = vec![
         (
             "tc/dense/400/fjall",
-            transitive_closure(Backend::Fjall, Graph::Dense, 400, SEED, &dir())
-                .collect(Exec::Batched),
+            transitive_closure(Backend::Fjall, Graph::Dense, 400, SEED, &dir()).collect(),
         ),
         (
             "tc/random/400/fjall",
-            transitive_closure(Backend::Fjall, Graph::Random, 400, SEED, &dir())
-                .collect(Exec::Batched),
+            transitive_closure(Backend::Fjall, Graph::Random, 400, SEED, &dir()).collect(),
         ),
         (
             "tc/chain/240/mem",
-            transitive_closure(Backend::Mem, Graph::Chain, 240, SEED, &dir())
-                .collect(Exec::Batched),
+            transitive_closure(Backend::Mem, Graph::Chain, 240, SEED, &dir()).collect(),
         ),
         (
             "scan_filter/200k/sel50/fjall",
-            scan_filter(Backend::Fjall, 200_000, 50, SEED, &dir()).collect(Exec::Batched),
+            scan_filter(Backend::Fjall, 200_000, 50, SEED, &dir()).collect(),
         ),
         (
             "aggregation/200k/g1k/mem",
-            aggregation(Backend::Mem, 200_000, 1_000, SEED, &dir()).collect(Exec::Batched),
+            aggregation(Backend::Mem, 200_000, 1_000, SEED, &dir()).collect(),
         ),
     ];
 

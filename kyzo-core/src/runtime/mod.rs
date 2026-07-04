@@ -7,10 +7,11 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! The runtime tier: the engine's execution substances. Today that is the
-//! catalog ([`relation`]) and the semi-naive delta stores ([`temp_store`]);
-//! the `db.rs` entrypoint (`run_query`, sessions, cooperative cancellation)
-//! and the index operators land with the rest of the tier.
+//! The session tier: everything between a caller and the query/storage
+//! organs. The [`db`] entrypoint (`run_query`, sessions, cooperative
+//! cancellation, commit retry), the mutation tier ([`mutate`]: puts,
+//! retractions, index creation and backfill), the catalog ([`relation`]),
+//! transaction-scoped [`constraint`]s, and change [`callback`]s.
 
 // The tier's consumers (runtime/db.rs, query/eval.rs) land later. In the
 // lib build the modules are dead (expect); in test builds the in-file tests
@@ -24,29 +25,11 @@ pub(crate) mod constraint;
 pub(crate) mod db;
 #[cfg(test)]
 mod db_battery;
-// The index-operator engines. `index` is shared plumbing (`hnsw` and
-// `spatial_index` both construct IndexRowCorrupt), so it is live in the lib
-// build; the engines' db.rs dispatch (::hnsw etc.) is a typed refusal until
-// the operator ops land, and their in-file tests keep them live under test.
+// The mutation tier and catalog carry surface that is lib-dead until its
+// operator lands (`::index drop` variants, schema-compat checks used by
+// unlanded ops) and items whose only callers are tests; a mod-level
+// `allow` covers that remainder honestly.
 #[allow(dead_code)]
-pub(crate) mod fts_index;
-#[allow(dead_code)]
-pub(crate) mod gazetteer;
-#[cfg(test)]
-mod gazetteer_hostile;
-#[allow(dead_code)]
-pub(crate) mod hnsw;
-#[allow(dead_code)]
-pub(crate) mod index;
-#[allow(dead_code)]
-pub(crate) mod minhash_lsh;
+pub(crate) mod mutate;
 #[allow(dead_code)]
 pub(crate) mod relation;
-#[cfg(test)]
-mod sparse_hostile;
-#[allow(dead_code)]
-pub(crate) mod sparse_index;
-#[allow(dead_code)]
-pub(crate) mod spatial_index;
-#[allow(dead_code)]
-pub(crate) mod temp_store;

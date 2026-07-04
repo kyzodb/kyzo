@@ -31,9 +31,10 @@ use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 
+use crate::data::bitemporal::ClaimPolarity;
 use crate::data::memcmp::MemCmpEncoder;
 use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
-use crate::data::value::{DataValue, JsonData, Num, Validity, ValidityTs, Vector};
+use crate::data::value::{AsOf, DataValue, JsonData, Num, Validity, ValidityTs, Vector};
 use crate::storage::backup::{dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
 use crate::storage::{ReadTx, Storage, WriteTx};
@@ -359,15 +360,40 @@ fn del_range_kills_own_writes_too() {
 
 // ---------- time travel: seek-based scan vs naive oracle ----------
 
-fn vld_key(rel: RelationId, name: &str, ts: i64, assert: bool) -> EncodedKey {
-    let tuple: Tuple = vec![
-        DataValue::Str(name.into()),
+/// A bitemporal key: `[name, valid(ts), sys(sys_ts)]`, slot flags pinned
+/// (the row's polarity lives in the value — see [`pol_val`]).
+fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
+    let slot = |t: i64| {
         DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(ts)),
-            is_assert: Reverse(assert),
-        }),
-    ];
+            timestamp: ValidityTs(Reverse(t)),
+            is_assert: Reverse(true),
+        })
+    };
+    let tuple: Tuple = vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)];
     tuple.encode_as_key(rel)
+}
+
+/// A single-axis-shaped history row in the bitemporal format: valid
+/// instant `ts` recorded once (sys = 1), asserting or retracting per the
+/// flag. With one system version per instant, current-belief resolution
+/// (`AsOf::current`) equals the single-axis rule, so [`as_of_oracle`]
+/// stays the exact reference.
+fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (EncodedKey, Vec<u8>) {
+    (bitemp_key(rel, name, ts, 1), pol_val(rel, assert))
+}
+
+/// A bitemporal value: relation-id header + polarity byte, no payload.
+fn pol_val(rel: RelationId, assert: bool) -> Vec<u8> {
+    let mut v = rel.raw_encode().to_vec();
+    v.push(
+        if assert {
+            ClaimPolarity::Assert
+        } else {
+            ClaimPolarity::Retract
+        }
+        .encode(),
+    );
+    v
 }
 
 /// The naive reference: full-scan every version, group by payload, pick the
@@ -413,7 +439,8 @@ fn time_travel_matches_naive_oracle() {
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
     for (name, ts, assert) in history {
-        tx.put(&vld_key(rel, name, *ts, *assert), b"").unwrap();
+        let (k, v) = vld_row(rel, name, *ts, *assert);
+        tx.put(&k, &v).unwrap();
     }
     tx.commit().unwrap();
 
@@ -422,7 +449,7 @@ fn time_travel_matches_naive_oracle() {
     let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
-            .range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(at)))
+            .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(at))))
             .map(|r| {
                 let t = r.unwrap();
                 let name = match &t[0] {
@@ -451,15 +478,17 @@ fn time_travel_sees_own_writes() {
     let db = new_fjall_storage(dir.path()).unwrap();
     {
         let mut tx = db.write_tx().unwrap();
-        tx.put(&vld_key(rel, "a", 1, true), b"").unwrap();
+        let (k, v) = vld_row(rel, "a", 1, true);
+        tx.put(&k, &v).unwrap();
         tx.commit().unwrap();
     }
     let mut tx = db.write_tx().unwrap();
-    tx.put(&vld_key(rel, "b", 2, true), b"").unwrap();
+    let (k, v) = vld_row(rel, "b", 2, true);
+    tx.put(&k, &v).unwrap();
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().raw_encode().to_vec();
     let got: Vec<String> = tx
-        .range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(5)))
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(5))))
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
             v => panic!("unexpected {v:?}"),
@@ -500,16 +529,23 @@ fn backup_round_trip() {
 
 // ---------- sentinel and corruption edge cases ----------
 
-/// A stored retraction at ts == i64::MIN collides with the TERMINAL_VALIDITY
-/// seek sentinel; the scan must terminate (and skip it) rather than livelock.
+/// A stored retraction at ts == i64::MIN in BOTH slots sits as close to
+/// the TERMINAL_VALIDITY seek sentinel as a storable key can (the
+/// sentinel itself carries a retract flag, which no longer parses); the
+/// scan must terminate (and skip it) rather than livelock.
 #[test]
 fn skip_scan_terminates_on_retraction_at_min_ts() {
     let rel = RelationId::new(7);
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
-    tx.put(&vld_key(rel, "a", 1, true), b"").unwrap();
-    tx.put(&vld_key(rel, "z", i64::MIN, false), b"").unwrap();
+    let (k, v) = vld_row(rel, "a", 1, true);
+    tx.put(&k, &v).unwrap();
+    tx.put(
+        &bitemp_key(rel, "z", i64::MIN, i64::MIN),
+        &pol_val(rel, false),
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     let tx = db.read_tx().unwrap();
@@ -517,7 +553,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
             rel.next().raw_encode().as_ref(),
-            ValidityTs(Reverse(5)),
+            AsOf::current(ValidityTs(Reverse(5))),
         )
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
@@ -534,7 +570,11 @@ fn skip_scan_hit_at_min_ts_terminates() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
-    tx.put(&vld_key(rel, "a", i64::MIN, true), b"").unwrap();
+    tx.put(
+        &bitemp_key(rel, "a", i64::MIN, i64::MIN),
+        &pol_val(rel, true),
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     let tx = db.read_tx().unwrap();
@@ -542,7 +582,7 @@ fn skip_scan_hit_at_min_ts_terminates() {
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
             rel.next().raw_encode().as_ref(),
-            ValidityTs(Reverse(0)),
+            AsOf::current(ValidityTs(Reverse(0))),
         )
         .map(|r| r.unwrap())
         .collect();
@@ -563,7 +603,12 @@ fn corrupt_inputs_error_never_panic() {
         is_assert: Reverse(true),
     }));
     k.extend(enc);
-    let _ = crate::data::tuple::check_key_for_validity(&k, ValidityTs(Reverse(5)), None);
+    let _ = crate::data::bitemporal::check_key_for_bitemporal(
+        &k,
+        crate::data::bitemporal::ClaimPolarity::Assert,
+        AsOf::current(ValidityTs(Reverse(5))),
+        None,
+    );
 
     // A vector length prefix whose byte size overflows usize multiplication.
     let mut k = vec![0x0B, 0x01];
@@ -943,7 +988,7 @@ fn backup_edge_cases() {
 
     // Huge length prefix: error, not an allocation abort.
     let evil = dir.path().join("evil.kyzo");
-    let mut bytes = b"KYZODMP1".to_vec();
+    let mut bytes = b"KYZODMP2".to_vec();
     bytes.extend((1u64).to_be_bytes());
     bytes.extend(b"1");
     bytes.extend(u64::MAX.to_be_bytes());
@@ -953,7 +998,7 @@ fn backup_edge_cases() {
 
     // Truncated mid-pair: error.
     let cut = dir.path().join("cut.kyzo");
-    let mut bytes = b"KYZODMP1".to_vec();
+    let mut bytes = b"KYZODMP2".to_vec();
     bytes.extend((1u64).to_be_bytes());
     bytes.extend(b"1");
     bytes.extend((3u64).to_be_bytes());
@@ -1010,7 +1055,7 @@ fn inverted_ranges_under_contention_commit_clean() {
     assert_eq!(tx.range_scan(b"m", b"m").count(), 0, "empty scan");
     tx.del_range(b"z", b"a").unwrap(); // inverted del_range is a no-op
     assert_eq!(
-        tx.range_skip_scan_tuple(b"z", b"a", ValidityTs(Reverse(0)))
+        tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs(Reverse(0))))
             .count(),
         0,
         "inverted skip scan"
@@ -1242,7 +1287,10 @@ fn retry_on_conflict_reaches_completion_under_contention() {
 #[test]
 fn format_version_rejects_noncanonical_stamps() {
     use crate::storage::FormatVersion;
-    assert_eq!(FormatVersion::parse(b"1").unwrap(), FormatVersion::CURRENT);
+    assert_eq!(FormatVersion::parse(b"3").unwrap(), FormatVersion::CURRENT);
+    // An older stamp still parses (so the mismatch refusal can NAME it) —
+    // it is simply not CURRENT.
+    assert_ne!(FormatVersion::parse(b"2").unwrap(), FormatVersion::CURRENT);
     for bad in [&b"01"[..], b"+1", b" 1", b"1 ", b""] {
         assert!(
             FormatVersion::parse(bad).is_err(),
@@ -1498,13 +1546,14 @@ fn sim_time_travel_matches_naive_oracle() {
     let db = SimStorage::new(2);
     let mut tx = db.write_tx().unwrap();
     for (name, ts, assert) in history {
-        tx.put(&vld_key(rel, name, *ts, *assert), b"").unwrap();
+        let (k, v) = vld_row(rel, name, *ts, *assert);
+        tx.put(&k, &v).unwrap();
     }
     // Own writes are visible to the write transaction's as-of scan.
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().raw_encode().to_vec();
     assert!(
-        tx.range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(1)))
+        tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(1))))
             .next()
             .is_some(),
         "as-of scan must see own writes"
@@ -1514,7 +1563,7 @@ fn sim_time_travel_matches_naive_oracle() {
     let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
-            .range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(at)))
+            .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(at))))
             .map(|r| {
                 let t = r.unwrap();
                 let name = match &t[0] {
@@ -1534,15 +1583,20 @@ fn sim_time_travel_matches_naive_oracle() {
             "as-of {at}: sim seek scan diverged from the naive oracle"
         );
     }
-    // The sentinel edge: a retraction at ts == i64::MIN must not livelock.
+    // The sentinel edge: a MIN/MIN retraction must not livelock.
     let db = SimStorage::new(3);
     let mut tx = db.write_tx().unwrap();
-    tx.put(&vld_key(rel, "a", 1, true), b"").unwrap();
-    tx.put(&vld_key(rel, "z", i64::MIN, false), b"").unwrap();
+    let (k, v) = vld_row(rel, "a", 1, true);
+    tx.put(&k, &v).unwrap();
+    tx.put(
+        &bitemp_key(rel, "z", i64::MIN, i64::MIN),
+        &pol_val(rel, false),
+    )
+    .unwrap();
     tx.commit().unwrap();
     let tx = db.read_tx().unwrap();
     let got = tx
-        .range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(5)))
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(5))))
         .count();
     assert_eq!(got, 1, "scan must terminate and skip the MIN-ts retraction");
 }
@@ -1974,7 +2028,8 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                     for (name, ts, a) in plan {
                         retry_on_conflict(10_000, || {
                             let mut tx = db.write_tx()?;
-                            tx.put(&vld_key(rel, &name, ts, a), b"")?;
+                            let (k, v) = vld_row(rel, &name, ts, a);
+                            tx.put(&k, &v)?;
                             tx.commit()
                         })
                         .unwrap();
@@ -1993,7 +2048,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
         let tx = db.read_tx().unwrap();
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
-                .range_skip_scan_tuple(&lower, &upper, ValidityTs(Reverse(at)))
+                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(at))))
                 .map(|r| {
                     let t = r.unwrap();
                     let name = match &t[0] {
@@ -2395,4 +2450,255 @@ fn sim_retry_liveness_escapes_injected_faults() {
         let escaped = (0..1_000).any(|_| tx.get(b"k0").is_ok());
         assert!(escaped, "a re-read loop never escaped its injected fault");
     });
+}
+// probe: two overlapping write txs skip-scan the same fact range then write
+// distinct version keys — SSI must abort the second committer.
+#[test]
+fn bitemporal_fact_race_aborts_second_committer() {
+    use std::cmp::Reverse;
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let rel = RelationId::new(7);
+    // seed
+    let mut tx = db.write_tx().unwrap();
+    let (k, v) = vld_row(rel, "ctr", 0, true);
+    tx.put(&k, &v).unwrap();
+    tx.commit().unwrap();
+
+    let lower = rel.raw_encode().to_vec();
+    let upper = rel.next().raw_encode().to_vec();
+    let mut a = db.write_tx().unwrap();
+    let mut b = db.write_tx().unwrap();
+    // both read the fact range (the current-state probe)
+    let _ = a
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(i64::MAX))))
+        .count();
+    let _ = b
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(i64::MAX))))
+        .count();
+    // both write DISTINCT version keys of the same fact
+    let (ka, va) = (bitemp_key(rel, "ctr", 1, 100), pol_val(rel, true));
+    let (kb, vb) = (bitemp_key(rel, "ctr", 1, 200), pol_val(rel, true));
+    a.put(&ka, &va).unwrap();
+    b.put(&kb, &vb).unwrap();
+    a.commit().unwrap();
+    let second = b.commit();
+    assert!(
+        second.is_err(),
+        "second committer must abort: its read range was written by the first"
+    );
+}
+
+// ---------- the system clock: monotone stamps, crash-safe floors ----------
+
+/// Stamps are strictly monotone across transactions, and the fjall
+/// watermark makes them survive a close-and-reopen: a store reopened at
+/// the same path mints strictly above every stamp the previous handle
+/// ever minted, whatever the wall clock does.
+#[test]
+fn system_stamps_survive_reopen_strictly_monotone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut last = None;
+    {
+        let db = new_fjall_storage(dir.path()).unwrap();
+        for _ in 0..5 {
+            let tx = db.write_tx().unwrap();
+            let stamp = tx.system_stamp();
+            if let Some(prev) = last {
+                assert!(
+                    stamp < prev,
+                    "stamps strictly monotone (Reverse: later is smaller)"
+                );
+            }
+            last = Some(stamp);
+            // No commit: even an abandoned transaction's mint raises the
+            // floor — a too-high floor is safe, a reused stamp is not.
+        }
+    }
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let tx = db.write_tx().unwrap();
+    assert!(
+        tx.system_stamp() < last.unwrap(),
+        "a reopened store mints strictly above the previous handle's stamps"
+    );
+}
+
+/// The sim's logical stamp floor rides through simulated crashes and
+/// power cuts: post-recovery transactions mint strictly above every
+/// pre-crash stamp, mirroring the fjall watermark's guarantee.
+#[test]
+fn sim_stamps_survive_crash_and_powercut() {
+    let db = SimStorage::new(11);
+    let mut pre = None;
+    for _ in 0..3 {
+        let tx = db.write_tx().unwrap();
+        pre = Some(tx.system_stamp());
+    }
+    let crashed = db.sim_crash();
+    let tx = crashed.write_tx().unwrap();
+    assert!(
+        tx.system_stamp() < pre.unwrap(),
+        "crash keeps the stamp floor"
+    );
+    let cut = db.sim_powercut();
+    let tx = cut.write_tx().unwrap();
+    assert!(
+        tx.system_stamp() < pre.unwrap(),
+        "power cut keeps the stamp floor"
+    );
+}
+
+/// The SSI increment law under real thread contention, at the storage
+/// layer alone: two racers each skip-scan the fact's range on their WRITE
+/// transaction and write a fresh version key; every commit that returns
+/// `Ok` must be observed by every later reader. A lost update here is a
+/// conflict-oracle hole, not a query-tier bug.
+#[test]
+fn concurrent_increments_lose_nothing_at_the_storage_layer() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    use crate::storage::ConflictError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = std::sync::Arc::new(new_fjall_storage(dir.path()).unwrap());
+    let rel = RelationId::new(7);
+    let lower = rel.raw_encode().to_vec();
+    let upper = rel.next().raw_encode().to_vec();
+
+    // Assert value with a one-column msgpack payload: the counter.
+    let val_of = |v: i64| -> Vec<u8> {
+        let mut out = rel.raw_encode().to_vec();
+        out.push(crate::data::bitemporal::ClaimPolarity::Assert.encode());
+        crate::data::fact_payload::encode_fact_payload(&[DataValue::from(v)], &mut out).unwrap();
+        out
+    };
+    // Version key of the one fact at (valid=stamp, sys=stamp).
+    let key_at = |stamp: ValidityTs| -> EncodedKey {
+        let slot = DataValue::Validity(Validity {
+            timestamp: stamp,
+            is_assert: Reverse(true),
+        });
+        let tuple: Tuple = vec![DataValue::from(0), slot.clone(), slot];
+        tuple.encode_as_key(rel)
+    };
+    let current = |rows: Vec<Tuple>| -> i64 {
+        assert_eq!(rows.len(), 1, "exactly one live fact, got {rows:?}");
+        rows[0].last().unwrap().get_int().expect("counter int")
+    };
+
+    {
+        let mut tx = db.write_tx().unwrap();
+        let stamp = tx.system_stamp();
+        tx.put(&key_at(stamp), &val_of(0)).unwrap();
+        tx.commit().unwrap();
+    }
+
+    const PER_THREAD: i64 = 200;
+    let commits = AtomicI64::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            let db = db.clone();
+            let commits = &commits;
+            let (lower, upper) = (lower.clone(), upper.clone());
+            let (val_of, key_at) = (&val_of, &key_at);
+            scope.spawn(move || {
+                for _ in 0..PER_THREAD {
+                    loop {
+                        let mut tx = db.write_tx().unwrap();
+                        let stamp = tx.system_stamp();
+                        let rows: Vec<Tuple> = tx
+                            .range_skip_scan_tuple(
+                                &lower,
+                                &upper,
+                                AsOf::current(ValidityTs(Reverse(i64::MAX))),
+                            )
+                            .map(|r| r.unwrap())
+                            .collect();
+                        let old = current(rows);
+                        tx.put(&key_at(stamp), &val_of(old + 1)).unwrap();
+                        match tx.commit() {
+                            Ok(()) => {
+                                commits.fetch_add(1, Ordering::SeqCst);
+                                break;
+                            }
+                            Err(e) if e.downcast_ref::<ConflictError>().is_some() => {
+                                continue;
+                            }
+                            Err(e) => panic!("unexpected commit error: {e:?}"),
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let rtx = db.read_tx().unwrap();
+    let rows: Vec<Tuple> = rtx
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(i64::MAX))))
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(
+        current(rows),
+        2 * PER_THREAD,
+        "every Ok commit observed ({} commits)",
+        commits.load(Ordering::SeqCst)
+    );
+}
+
+/// Restore raises the target's clock floor to the dump's: stamps minted
+/// after a restore are strictly above every instant in the imported
+/// history, even when the source clock ran far ahead of this machine's
+/// wall clock.
+#[test]
+fn restore_raises_clock_floor_past_imported_stamps() {
+    let src_dir = tempfile::tempdir().unwrap();
+    let src = new_fjall_storage(src_dir.path()).unwrap();
+    // Push the source clock far into the future, then write one row so
+    // the dump carries both data and the inflated floor.
+    let far_future = crate::data::value::current_validity().unwrap().0.0 + 1_000_000_000;
+    src.raise_clock_floor(ValidityTs(Reverse(far_future)))
+        .unwrap();
+    {
+        let mut tx = src.write_tx().unwrap();
+        let stamp = tx.system_stamp();
+        assert!(stamp.0.0 > far_future, "source mints above its floor");
+        let (k, v) = vld_row(RelationId::new(3), "fact", 1, true);
+        tx.put(&k, &v).unwrap();
+        tx.commit().unwrap();
+    }
+    let dump = src_dir.path().join("dump.kyzo");
+    crate::storage::backup::dump_storage(&src, &dump).unwrap();
+
+    let dst_dir = tempfile::tempdir().unwrap();
+    let dst = new_fjall_storage(dst_dir.path()).unwrap();
+    crate::storage::backup::restore_storage(&dst, &dump).unwrap();
+    let tx = dst.write_tx().unwrap();
+    assert!(
+        tx.system_stamp().0.0 > far_future,
+        "post-restore mints must exceed every imported instant"
+    );
+}
+
+/// A dump truncated inside the fixed-width clock-floor field refuses
+/// cleanly (typed error, no import).
+#[test]
+fn truncated_dump_missing_floor_bytes_is_refused() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trunc.kyzo");
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(b"KYZODMP2").unwrap();
+    let version = crate::storage::FormatVersion::CURRENT.as_bytes();
+    f.write_all(&(version.len() as u64).to_be_bytes()).unwrap();
+    f.write_all(&version).unwrap();
+    f.write_all(&[0u8; 3]).unwrap(); // three of the floor's eight bytes
+    drop(f);
+    let db = new_fjall_storage(dir.path().join("store")).unwrap();
+    let err = crate::storage::backup::restore_storage(&db, &path).unwrap_err();
+    assert!(
+        err.to_string().contains("missing clock floor"),
+        "typed truncation refusal, got: {err}"
+    );
+    let rtx = db.read_tx().unwrap();
+    assert!(rtx.total_scan().next().is_none(), "nothing imported");
 }

@@ -110,6 +110,7 @@ use serde::Serialize;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::InputRelationHandle;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
@@ -117,7 +118,8 @@ use crate::data::symb::Symbol;
 use crate::data::tuple::{
     EncodedKey, RelationId, Tuple, TupleT, decode_tuple_from_kv, extend_tuple_from_v,
 };
-use crate::data::value::{DataValue, ValidityTs};
+use crate::data::tuple::{encode_projected_key, encode_projected_key_with_suffix};
+use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, Validity, ValidityTs};
 use crate::storage::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
@@ -282,14 +284,14 @@ pub(crate) enum IndexKind {
     Plain { mapper: Vec<usize> },
     /// Vector proximity (HNSW): the persisted manifest that rebuilds the
     /// index's parameters and extractor.
-    Hnsw(crate::runtime::hnsw::HnswIndexManifest),
+    Hnsw(crate::engines::hnsw::HnswIndexManifest),
     /// Full-text search: the persisted manifest (fields, tokenizer,
     /// filters), re-`build()`-able at any later time.
-    Fts(crate::fts::FtsIndexManifest),
+    Fts(crate::engines::text::FtsIndexManifest),
     /// MinHash-LSH: the persisted manifest plus the name of the second,
     /// inverse relation (`{base}:{index}:inv`) the engine maintains.
     Lsh {
-        manifest: crate::runtime::minhash_lsh::MinHashLshIndexManifest,
+        manifest: crate::engines::lsh::MinHashLshIndexManifest,
         inverse: SmartString<LazyCompact>,
     },
 }
@@ -351,6 +353,21 @@ pub(crate) enum IndexPositionUse {
 /// The serialized form of this struct (msgpack, struct maps) **is the
 /// on-disk catalog row format**; see the module docs and the pinned-bytes
 /// test.
+/// What a keyspace's rows ARE — the dispatch between the one universal
+/// bitemporal fact format and version-less algorithm state.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+pub(crate) enum KeyspaceKind {
+    /// Facts in the universal bitemporal format: two pinned time slots in
+    /// the key, polarity in the value. Every read is an as-of resolution;
+    /// there is no un-versioned read of a fact.
+    Facts,
+    /// A manifest index's internal state (HNSW graph rows, FTS postings,
+    /// LSH bands, ...): exact-key and current-only. The algorithm owns its
+    /// rows' lifecycle; versioning them would corrupt its invariants, and
+    /// historical reads go through the base relation, never this state.
+    AlgorithmState,
+}
+
 #[derive(Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct RelationHandle {
     pub(crate) name: SmartString<LazyCompact>,
@@ -375,12 +392,12 @@ pub(crate) struct RelationHandle {
     pub(crate) description: SmartString<LazyCompact>,
     /// Integrity constraints whose bodies read this relation, sorted by
     /// name (`::constraint create` maintains the ordering; names are
-    /// globally unique). `serde(default)`: catalog rows written before this
-    /// field existed decode as constraint-free — a deliberate, tested
-    /// catalog-format extension (see the pinned-bytes and legacy-decode
-    /// tests below).
-    #[serde(default)]
+    /// globally unique).
     pub(crate) constraints: Vec<ConstraintRef>,
+    /// What this keyspace's rows are — see [`KeyspaceKind`]. Decides
+    /// whether reads resolve bitemporally (facts) or exactly (algorithm
+    /// state).
+    pub(crate) keyspace_kind: KeyspaceKind,
 }
 
 impl Debug for RelationHandle {
@@ -419,6 +436,7 @@ impl RelationHandle {
         input: InputRelationHandle,
         id: RelationId,
         is_temp: bool,
+        keyspace_kind: KeyspaceKind,
     ) -> Self {
         RelationHandle {
             name: input.name.name,
@@ -432,6 +450,7 @@ impl RelationHandle {
             indices: vec![],
             description: Default::default(),
             constraints: vec![],
+            keyspace_kind,
         }
     }
 
@@ -511,6 +530,101 @@ impl RelationHandle {
     /// scans. Infallible: any prefix length is a valid scan seed.
     pub(crate) fn encode_partial_key_for_store(&self, tuple: &[DataValue]) -> EncodedKey {
         tuple.encode_as_key(self.id)
+    }
+
+    /// Encode a bitemporal row's storage key: the key columns followed by
+    /// the two pinned time slots (valid instant outer, system version
+    /// inner). The slots are infrastructure, not schema — `tuple` holds
+    /// user columns only, and what the row SAYS at the instant is its
+    /// [`ClaimPolarity`], written by
+    /// [`Self::encode_bitemporal_val_for_store`].
+    pub(crate) fn encode_bitemporal_key_for_store(
+        &self,
+        tuple: &[DataValue],
+        valid: ValidityTs,
+        sys: ValidityTs,
+        span: SourceSpan,
+    ) -> Result<EncodedKey> {
+        let len = self.metadata.keys.len();
+        ensure!(
+            tuple.len() >= len,
+            StoredRelArityMismatch {
+                name: self.name.to_string(),
+                expect_arity: self.arity(),
+                actual_arity: tuple.len(),
+                span
+            }
+        );
+        let slot = |ts: ValidityTs| {
+            DataValue::Validity(Validity {
+                timestamp: ts,
+                is_assert: std::cmp::Reverse(true),
+            })
+        };
+        let mut with_slots = Vec::with_capacity(len + 2);
+        with_slots.extend_from_slice(&tuple[0..len]);
+        with_slots.push(slot(valid));
+        with_slots.push(slot(sys));
+        Ok(with_slots.encode_as_key(self.id))
+    }
+
+    /// Write the fact's Assert row at the valid coordinate, stamped with
+    /// the transaction's system instant — the one-stop fact write for any
+    /// tier holding a row and a write transaction.
+    pub(crate) fn put_fact(
+        &self,
+        tx: &mut impl WriteTx,
+        row: &[DataValue],
+        valid: ValidityTs,
+        span: SourceSpan,
+    ) -> Result<()> {
+        let key = self.encode_bitemporal_key_for_store(row, valid, tx.system_stamp(), span)?;
+        let val = self.encode_bitemporal_val_for_store(row, ClaimPolarity::Assert, span)?;
+        tx.put(&key, &val)
+    }
+
+    /// Write the fact's Retract row at the valid coordinate — revision,
+    /// not erasure.
+    pub(crate) fn retract_fact(
+        &self,
+        tx: &mut impl WriteTx,
+        key_cols: &[DataValue],
+        valid: ValidityTs,
+        span: SourceSpan,
+    ) -> Result<()> {
+        let key = self.encode_bitemporal_key_for_store(key_cols, valid, tx.system_stamp(), span)?;
+        let val = self.encode_bitemporal_val_for_store(key_cols, ClaimPolarity::Retract, span)?;
+        tx.put(&key, &val)
+    }
+
+    /// Encode a bitemporal row's stored value: the relation-id header, the
+    /// polarity byte, then — for [`ClaimPolarity::Assert`] rows only — the
+    /// msgpack non-key columns. A retraction or erasure speaks about the
+    /// fact's key alone and carries no column data.
+    pub(crate) fn encode_bitemporal_val_for_store(
+        &self,
+        tuple: &[DataValue],
+        polarity: ClaimPolarity,
+        span: SourceSpan,
+    ) -> Result<Vec<u8>> {
+        let start = self.metadata.keys.len();
+        ensure!(
+            tuple.len() >= start,
+            StoredRelArityMismatch {
+                name: self.name.to_string(),
+                expect_arity: self.arity(),
+                actual_arity: tuple.len(),
+                span
+            }
+        );
+        let mut ret = Vec::with_capacity(9 + 16 * (tuple.len() - start));
+        ret.extend(self.id.raw_encode());
+        ret.push(polarity.encode());
+        if polarity == ClaimPolarity::Assert {
+            crate::data::fact_payload::encode_fact_payload(&tuple[start..], &mut ret)
+                .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+        }
+        Ok(ret)
     }
 
     /// Encode the non-key columns of `tuple` as this relation's stored
@@ -620,19 +734,11 @@ impl RelationHandle {
             let IndexKind::Plain { mapper } = &index.kind else {
                 continue;
             };
-            if validity_query {
-                // A validity query needs the base relation's validity
-                // column — its LAST key column — to be the index's last
-                // mapped column. `checked_sub` keeps a zero-key relation an
-                // honest no-match, and a missing last mapper entry likewise
-                // (law 5: the original underflowed / `unwrap`ped both).
-                let Some(last_key_pos) = self.metadata.keys.len().checked_sub(1) else {
-                    continue;
-                };
-                if mapper.last() != Some(&last_key_pos) {
-                    continue;
-                }
-            }
+            // As-of queries use plain indexes freely: every plain index
+            // row carries the base row's bitemporal coordinate and
+            // polarity (the mutation tier mirrors them), so an index scan
+            // resolves at any coordinate exactly like the base.
+            let _ = validity_query;
             let mut cur_prefix_len = 0usize;
             for i in mapper {
                 // A mapper position beyond the argument list would mean a
@@ -678,12 +784,19 @@ impl RelationHandle {
         (self.id.0 + 1).to_be_bytes()
     }
 
-    /// Scan every row of this relation.
+    /// Scan every fact's CURRENT row (a bitemporal resolution at the
+    /// current-belief coordinate — a fact has no un-versioned read), or
+    /// every raw row of an algorithm-state keyspace.
     pub(crate) fn scan_all<'a>(
         &self,
         tx: &'a impl ReadTx,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        tx.range_scan_tuple(&self.keyspace_lower(), &self.keyspace_upper())
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => self.skip_scan_all(tx, AsOf::current(MAX_VALIDITY_TS)),
+            KeyspaceKind::AlgorithmState => {
+                tx.range_scan_tuple(&self.keyspace_lower(), &self.keyspace_upper())
+            }
+        }
     }
 
     /// Scan every row as RAW key/value bytes — the batched execution path's
@@ -696,80 +809,193 @@ impl RelationHandle {
         tx.range_scan(&self.keyspace_lower(), &self.keyspace_upper())
     }
 
-    /// Time-travel scan of every row: the newest version at or before
-    /// `valid_at`, asserted rows only.
+    /// Drop a decoded bitemporal row's two time slots, yielding the
+    /// LOGICAL row (user columns only). The slots are infrastructure —
+    /// addressed by `@` coordinates, never visible as columns.
+    fn strip_time_slots(keys_len: usize, mut t: Tuple) -> Tuple {
+        t.drain(keys_len..keys_len + 2);
+        t
+    }
+
+    /// Bitemporal as-of scan of every row: each fact resolved at the
+    /// [`AsOf`] coordinate, asserted facts only, as LOGICAL rows.
     pub(crate) fn skip_scan_all<'a>(
         &self,
         tx: &'a impl ReadTx,
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        tx.range_skip_scan_tuple(&self.keyspace_lower(), &self.keyspace_upper(), valid_at)
+        let keys_len = self.metadata.keys.len();
+        Box::new(
+            tx.range_skip_scan_tuple(&self.keyspace_lower(), &self.keyspace_upper(), as_of)
+                .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
+        )
     }
 
-    /// Point-read one row by its full key columns.
-    pub(crate) fn get(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<Option<Tuple>> {
-        let key_data = key.encode_as_key(self.id);
-        tx.get(&key_data)?
-            .map(|val_data| decode_tuple_from_kv(&key_data, &val_data, Some(self.arity())))
+    /// The fact's current row at the coordinate, if asserted: the first
+    /// (and by resolution, only) hit of a bitemporal probe under the
+    /// fact's full key-column prefix — the versioned format's point read.
+    /// Returns the LOGICAL row.
+    pub(crate) fn current_row(
+        &self,
+        tx: &impl ReadTx,
+        key_cols: &[DataValue],
+        as_of: AsOf,
+        span: SourceSpan,
+    ) -> Result<Option<Tuple>> {
+        let len = self.metadata.keys.len();
+        ensure!(
+            key_cols.len() >= len,
+            StoredRelArityMismatch {
+                name: self.name.to_string(),
+                expect_arity: self.arity(),
+                actual_arity: key_cols.len(),
+                span
+            }
+        );
+        let lower = (&key_cols[0..len]).encode_as_key(self.id);
+        let mut upper_cols = key_cols[0..len].to_vec();
+        upper_cols.push(DataValue::Bot);
+        let upper = upper_cols.encode_as_key(self.id);
+        tx.range_skip_scan_tuple(&lower, &upper, as_of)
+            .next()
             .transpose()
+            .map(|opt| opt.map(|t| Self::strip_time_slots(len, t)))
     }
 
-    /// Point-read only the non-key columns of one row. Fallible decode
-    /// (law 5: the original `unwrap`ped the msgpack payload).
+    /// Point-read one fact's CURRENT row by its key columns (facts), or
+    /// one row by exact key (algorithm state).
+    pub(crate) fn get(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<Option<Tuple>> {
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => self.current_row(
+                tx,
+                key,
+                AsOf::current(MAX_VALIDITY_TS),
+                SourceSpan::default(),
+            ),
+            KeyspaceKind::AlgorithmState => {
+                let key_data = key.encode_as_key(self.id);
+                tx.get(&key_data)?
+                    .map(|val_data| decode_tuple_from_kv(&key_data, &val_data, Some(self.arity())))
+                    .transpose()
+            }
+        }
+    }
+
+    /// Point-read only the non-key columns of the fact's CURRENT row
+    /// (facts) or of the exact key's row (algorithm state).
     pub(crate) fn get_val_only(
         &self,
         tx: &impl ReadTx,
         key: &[DataValue],
     ) -> Result<Option<Tuple>> {
-        let key_data = key.encode_as_key(self.id);
-        match tx.get(&key_data)? {
-            None => Ok(None),
-            Some(val_data) => {
-                let mut ret = Tuple::new();
-                extend_tuple_from_v(&mut ret, &val_data)?;
-                Ok(Some(ret))
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => Ok(self
+                .current_row(
+                    tx,
+                    key,
+                    AsOf::current(MAX_VALIDITY_TS),
+                    SourceSpan::default(),
+                )?
+                .map(|row| row[self.metadata.keys.len()..].to_vec())),
+            KeyspaceKind::AlgorithmState => {
+                let key_data = key.encode_as_key(self.id);
+                match tx.get(&key_data)? {
+                    None => Ok(None),
+                    Some(val_data) => {
+                        let mut ret = Tuple::new();
+                        extend_tuple_from_v(&mut ret, &val_data)?;
+                        Ok(Some(ret))
+                    }
+                }
             }
         }
     }
 
-    /// Whether a row with these key columns exists.
+    /// Whether the fact is CURRENTLY asserted (facts) or the exact key
+    /// present (algorithm state).
     pub(crate) fn exists(&self, tx: &impl ReadTx, key: &[DataValue]) -> Result<bool> {
-        let key_data = key.encode_as_key(self.id);
-        tx.exists(&key_data)
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => Ok(self
+                .current_row(
+                    tx,
+                    key,
+                    AsOf::current(MAX_VALIDITY_TS),
+                    SourceSpan::default(),
+                )?
+                .is_some()),
+            KeyspaceKind::AlgorithmState => {
+                let key_data = key.encode_as_key(self.id);
+                tx.exists(&key_data)
+            }
+        }
     }
 
-    /// Scan the rows whose key columns start with `prefix`.
+    /// Scan the CURRENT rows whose key columns start with `prefix`
+    /// (facts), or the raw prefix range (algorithm state).
     pub(crate) fn scan_prefix<'a>(
         &self,
         tx: &'a impl ReadTx,
         prefix: &Tuple,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut lower = prefix.clone();
-        lower.truncate(self.metadata.keys.len());
-        let mut upper = lower.clone();
-        upper.push(DataValue::Bot);
-        let prefix_encoded = lower.encode_as_key(self.id);
-        let upper_encoded = upper.encode_as_key(self.id);
-        tx.range_scan_tuple(&prefix_encoded, &upper_encoded)
+        let cols: Vec<usize> = (0..prefix.len().min(self.metadata.keys.len())).collect();
+        self.scan_prefix_projected(tx, prefix, &cols)
     }
 
-    /// Time-travel variant of [`scan_prefix`](Self::scan_prefix).
+    /// [`scan_prefix`](Self::scan_prefix) reading its prefix THROUGH a
+    /// column projection of `row` — the zero-clone probe path: both scan
+    /// bounds are encoded straight from the projected values, and no
+    /// prefix tuple ever exists.
+    pub(crate) fn scan_prefix_projected<'a>(
+        &self,
+        tx: &'a impl ReadTx,
+        row: &[DataValue],
+        cols: &[usize],
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => {
+                self.skip_scan_prefix_projected(tx, row, cols, AsOf::current(MAX_VALIDITY_TS))
+            }
+            KeyspaceKind::AlgorithmState => {
+                let cols = &cols[..cols.len().min(self.metadata.keys.len())];
+                let lower = encode_projected_key(self.id, row, cols);
+                let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+                tx.range_scan_tuple(&lower, &upper)
+            }
+        }
+    }
+
+    /// Bitemporal as-of variant of [`scan_prefix`](Self::scan_prefix),
+    /// yielding LOGICAL rows.
     pub(crate) fn skip_scan_prefix<'a>(
         &self,
         tx: &'a impl ReadTx,
         prefix: &Tuple,
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut lower = prefix.clone();
-        lower.truncate(self.metadata.keys.len());
-        let mut upper = lower.clone();
-        upper.push(DataValue::Bot);
-        let prefix_encoded = lower.encode_as_key(self.id);
-        let upper_encoded = upper.encode_as_key(self.id);
-        tx.range_skip_scan_tuple(&prefix_encoded, &upper_encoded, valid_at)
+        let cols: Vec<usize> = (0..prefix.len().min(self.metadata.keys.len())).collect();
+        self.skip_scan_prefix_projected(tx, prefix, &cols, as_of)
     }
 
-    /// Scan rows under `prefix` whose next key column lies in
+    /// [`skip_scan_prefix`](Self::skip_scan_prefix) through a column
+    /// projection — see [`scan_prefix_projected`](Self::scan_prefix_projected).
+    pub(crate) fn skip_scan_prefix_projected<'a>(
+        &self,
+        tx: &'a impl ReadTx,
+        row: &[DataValue],
+        cols: &[usize],
+        as_of: AsOf,
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        let keys_len = self.metadata.keys.len();
+        let cols = &cols[..cols.len().min(keys_len)];
+        let lower = encode_projected_key(self.id, row, cols);
+        let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+        Box::new(
+            tx.range_skip_scan_tuple(&lower, &upper, as_of)
+                .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
+        )
+    }
+
+    /// Scan CURRENT rows under `prefix` whose next key column lies in
     /// `[lower, upper]`.
     pub(crate) fn scan_bounded_prefix<'a>(
         &self,
@@ -785,18 +1011,105 @@ impl RelationHandle {
         upper_t.push(DataValue::Bot);
         let lower_encoded = lower_t.encode_as_key(self.id);
         let upper_encoded = upper_t.encode_as_key(self.id);
-        tx.range_scan_tuple(&lower_encoded, &upper_encoded)
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => {
+                let keys_len = self.metadata.keys.len();
+                Box::new(
+                    tx.range_skip_scan_tuple(
+                        &lower_encoded,
+                        &upper_encoded,
+                        AsOf::current(MAX_VALIDITY_TS),
+                    )
+                    .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
+                )
+            }
+            KeyspaceKind::AlgorithmState => tx.range_scan_tuple(&lower_encoded, &upper_encoded),
+        }
     }
 
-    /// Time-travel variant of
-    /// [`scan_bounded_prefix`](Self::scan_bounded_prefix).
+    /// [`scan_bounded_prefix`](Self::scan_bounded_prefix) with the prefix
+    /// read THROUGH a projection of `row` — both scan bounds encoded
+    /// straight from projected values plus the bound literals.
+    pub(crate) fn scan_bounded_prefix_projected<'a>(
+        &self,
+        tx: &'a impl ReadTx,
+        row: &[DataValue],
+        cols: &[usize],
+        lower: &[DataValue],
+        upper: &[DataValue],
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        let lower_encoded = encode_projected_key_with_suffix(self.id, row, cols, lower);
+        let mut upper_owned = upper.to_vec();
+        upper_owned.push(DataValue::Bot);
+        let upper_encoded = encode_projected_key_with_suffix(self.id, row, cols, &upper_owned);
+        match self.keyspace_kind {
+            KeyspaceKind::Facts => {
+                let keys_len = self.metadata.keys.len();
+                Box::new(
+                    tx.range_skip_scan_tuple(
+                        &lower_encoded,
+                        &upper_encoded,
+                        AsOf::current(MAX_VALIDITY_TS),
+                    )
+                    .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
+                )
+            }
+            KeyspaceKind::AlgorithmState => tx.range_scan_tuple(&lower_encoded, &upper_encoded),
+        }
+    }
+
+    /// As-of variant of
+    /// [`scan_bounded_prefix_projected`](Self::scan_bounded_prefix_projected).
+    pub(crate) fn skip_scan_bounded_prefix_projected<'a>(
+        &self,
+        tx: &'a impl ReadTx,
+        row: &[DataValue],
+        cols: &[usize],
+        lower: &[DataValue],
+        upper: &[DataValue],
+        as_of: AsOf,
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        let lower_encoded = encode_projected_key_with_suffix(self.id, row, cols, lower);
+        let mut upper_owned = upper.to_vec();
+        upper_owned.push(DataValue::Bot);
+        let upper_encoded = encode_projected_key_with_suffix(self.id, row, cols, &upper_owned);
+        let keys_len = self.metadata.keys.len();
+        Box::new(
+            tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
+                .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
+        )
+    }
+
+    /// The current row whose key equals the projection of `row` — the point
+    /// lookup of the zero-clone probe path (key bytes built straight from
+    /// the projected values).
+    pub(crate) fn current_row_projected(
+        &self,
+        tx: &impl ReadTx,
+        row: &[DataValue],
+        cols: &[usize],
+    ) -> Result<Option<Tuple>> {
+        let len = self.metadata.keys.len();
+        debug_assert!(cols.len() >= len, "point probe under key width");
+        let cols = &cols[..len];
+        let lower = encode_projected_key(self.id, row, cols);
+        let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+        tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(MAX_VALIDITY_TS))
+            .next()
+            .transpose()
+            .map(|opt| opt.map(|t| Self::strip_time_slots(len, t)))
+    }
+
+    /// Bitemporal as-of variant of
+    /// [`scan_bounded_prefix`](Self::scan_bounded_prefix), yielding
+    /// LOGICAL rows.
     pub(crate) fn skip_scan_bounded_prefix<'a>(
         &self,
         tx: &'a impl ReadTx,
         prefix: &Tuple,
         lower: &[DataValue],
         upper: &[DataValue],
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let mut lower_t = prefix.clone();
         lower_t.extend_from_slice(lower);
@@ -805,7 +1118,11 @@ impl RelationHandle {
         upper_t.push(DataValue::Bot);
         let lower_encoded = lower_t.encode_as_key(self.id);
         let upper_encoded = upper_t.encode_as_key(self.id);
-        tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, valid_at)
+        let keys_len = self.metadata.keys.len();
+        Box::new(
+            tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
+                .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
+        )
     }
 }
 
@@ -927,6 +1244,7 @@ fn allocate_relation_id(tx: &mut impl WriteTx) -> Result<RelationId> {
 pub(crate) fn create_relation(
     tx: &mut impl WriteTx,
     input: InputRelationHandle,
+    keyspace_kind: KeyspaceKind,
 ) -> Result<RelationHandle> {
     if input.name.is_temp_relation_name() {
         bail!(TempRelationNotRoutable(input.name.to_string()));
@@ -936,7 +1254,7 @@ pub(crate) fn create_relation(
         bail!(RelNameConflictError(input.name.to_string()));
     }
     let id = allocate_relation_id(tx)?;
-    let handle = RelationHandle::new_from_input(input, id, false);
+    let handle = RelationHandle::new_from_input(input, id, false, keyspace_kind);
     tx.put(&row_key, &handle.encode()?)?;
     Ok(handle)
 }
@@ -1080,7 +1398,7 @@ mod tests {
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use crate::data::tuple::decode_tuple_from_key;
-    use crate::data::value::Validity;
+    use crate::data::value::{Validity, ValidityTs};
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{ConflictError, Storage};
 
@@ -1164,8 +1482,8 @@ mod tests {
 
         // Create two relations.
         let mut tx = db.write_tx().unwrap();
-        let a = create_relation(&mut tx, simple_input("alpha")).unwrap();
-        let b = create_relation(&mut tx, simple_input("beta")).unwrap();
+        let a = create_relation(&mut tx, simple_input("alpha"), KeyspaceKind::Facts).unwrap();
+        let b = create_relation(&mut tx, simple_input("beta"), KeyspaceKind::Facts).unwrap();
         assert_ne!(a.id, b.id);
         tx.commit().unwrap();
 
@@ -1192,9 +1510,8 @@ mod tests {
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(1), DataValue::from("one")];
         let mut tx = db.write_tx().unwrap();
-        let key = a.encode_key_for_store(&row, span).unwrap();
-        let val = a.encode_val_for_store(&row, span).unwrap();
-        tx.put(&key, &val).unwrap();
+        a.put_fact(&mut tx, &row, ValidityTs(std::cmp::Reverse(0)), span)
+            .unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
@@ -1232,14 +1549,12 @@ mod tests {
     fn destroy_within_one_transaction_kills_own_writes() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let span = SourceSpan(0, 0);
-
         let mut tx = db.write_tx().unwrap();
-        let rel = create_relation(&mut tx, simple_input("fleeting")).unwrap();
+        let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts).unwrap();
+        let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(9), DataValue::from("gone")];
-        let key = rel.encode_key_for_store(&row, span).unwrap();
-        let val = rel.encode_val_for_store(&row, span).unwrap();
-        tx.put(&key, &val).unwrap();
+        rel.put_fact(&mut tx, &row, ValidityTs(std::cmp::Reverse(0)), span)
+            .unwrap();
         destroy_relation(&mut tx, "fleeting").unwrap();
         tx.commit().unwrap();
 
@@ -1256,15 +1571,15 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
 
         let mut tx = db.write_tx().unwrap();
-        let first = create_relation(&mut tx, simple_input("one")).unwrap();
-        let second = create_relation(&mut tx, simple_input("two")).unwrap();
+        let first = create_relation(&mut tx, simple_input("one"), KeyspaceKind::Facts).unwrap();
+        let second = create_relation(&mut tx, simple_input("two"), KeyspaceKind::Facts).unwrap();
         tx.commit().unwrap();
         assert_eq!(first.id, RelationId(1));
         assert_eq!(second.id, RelationId(2));
 
         // A later transaction continues where the counter left off.
         let mut tx = db.write_tx().unwrap();
-        let third = create_relation(&mut tx, simple_input("three")).unwrap();
+        let third = create_relation(&mut tx, simple_input("three"), KeyspaceKind::Facts).unwrap();
         tx.commit().unwrap();
         assert_eq!(third.id, RelationId(3));
 
@@ -1283,8 +1598,8 @@ mod tests {
 
         let mut tx1 = db.write_tx().unwrap();
         let mut tx2 = db.write_tx().unwrap();
-        create_relation(&mut tx1, simple_input("left")).unwrap();
-        create_relation(&mut tx2, simple_input("right")).unwrap();
+        create_relation(&mut tx1, simple_input("left"), KeyspaceKind::Facts).unwrap();
+        create_relation(&mut tx2, simple_input("right"), KeyspaceKind::Facts).unwrap();
         tx1.commit().unwrap();
         let err = tx2
             .commit()
@@ -1297,7 +1612,7 @@ mod tests {
         // The retry (a fresh transaction) sees the committed counter and
         // allocates the next id.
         let mut tx3 = db.write_tx().unwrap();
-        let right = create_relation(&mut tx3, simple_input("right")).unwrap();
+        let right = create_relation(&mut tx3, simple_input("right"), KeyspaceKind::Facts).unwrap();
         tx3.commit().unwrap();
         assert_eq!(right.id, RelationId(2));
     }
@@ -1310,7 +1625,7 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
 
         let mut tx = db.write_tx().unwrap();
-        create_relation(&mut tx, simple_input("guarded")).unwrap();
+        create_relation(&mut tx, simple_input("guarded"), KeyspaceKind::Facts).unwrap();
         set_access_level(&mut tx, "guarded", AccessLevel::ReadOnly).unwrap();
         tx.commit().unwrap();
 
@@ -1355,7 +1670,8 @@ mod tests {
         // Force the counter to the last allocatable id.
         tx.put(&SystemKey::IdCounter.encode(), &(1u64 << 48).to_be_bytes())
             .unwrap();
-        let err = create_relation(&mut tx, simple_input("too_many")).unwrap_err();
+        let err =
+            create_relation(&mut tx, simple_input("too_many"), KeyspaceKind::Facts).unwrap_err();
         assert!(
             err.downcast_ref::<RelationIdSpaceExhausted>().is_some(),
             "expected typed exhaustion, got: {err:?}"
@@ -1370,11 +1686,12 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
 
         let mut tx = db.write_tx().unwrap();
-        let err = create_relation(&mut tx, simple_input("_scratch")).unwrap_err();
+        let err =
+            create_relation(&mut tx, simple_input("_scratch"), KeyspaceKind::Facts).unwrap_err();
         assert!(err.downcast_ref::<TempRelationNotRoutable>().is_some());
 
-        create_relation(&mut tx, simple_input("once")).unwrap();
-        let err = create_relation(&mut tx, simple_input("once")).unwrap_err();
+        create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap();
+        let err = create_relation(&mut tx, simple_input("once"), KeyspaceKind::Facts).unwrap_err();
         assert!(err.downcast_ref::<RelNameConflictError>().is_some());
     }
 
@@ -1383,14 +1700,12 @@ mod tests {
     fn rename_moves_the_row_and_keeps_the_keyspace() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let span = SourceSpan(0, 0);
-
         let mut tx = db.write_tx().unwrap();
-        let rel = create_relation(&mut tx, simple_input("before")).unwrap();
+        let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
+        let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(5), DataValue::from("five")];
-        let key = rel.encode_key_for_store(&row, span).unwrap();
-        let val = rel.encode_val_for_store(&row, span).unwrap();
-        tx.put(&key, &val).unwrap();
+        rel.put_fact(&mut tx, &row, ValidityTs(std::cmp::Reverse(0)), span)
+            .unwrap();
         rename_relation(
             &mut tx,
             &Symbol::new("before", SourceSpan(0, 0)),
@@ -1413,38 +1728,32 @@ mod tests {
     fn skip_scan_sees_the_asserted_past() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let span = SourceSpan(0, 0);
-
         let mut tx = db.write_tx().unwrap();
         let rel = create_relation(
             &mut tx,
-            input_handle(
-                "beliefs",
-                vec![col("k", ColType::Int), col("vld", ColType::Validity)],
-                vec![],
-            ),
+            input_handle("beliefs", vec![col("k", ColType::Int)], vec![]),
+            KeyspaceKind::Facts,
         )
         .unwrap();
-        let vld = |ts: i64, assert: bool| {
+        let slot = |ts: i64| {
             DataValue::Validity(Validity {
                 timestamp: ValidityTs(Reverse(ts)),
-                is_assert: Reverse(assert),
+                is_assert: Reverse(true),
             })
         };
-        // k=1 asserted at t=10, retracted at t=20.
-        for row in [
-            vec![DataValue::from(1), vld(10, true)],
-            vec![DataValue::from(1), vld(20, false)],
-        ] {
-            let key = rel.encode_key_for_store(&row, span).unwrap();
-            let val = rel.encode_val_for_store(&row, span).unwrap();
-            tx.put(&key, &val).unwrap();
-        }
+        let vts_of = |ts: i64| ValidityTs(Reverse(ts));
+        // k=1 asserted at valid t=10, retracted at valid t=20, through
+        // the handle's own fact writers.
+        let _ = slot;
+        rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))
+            .unwrap();
+        rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan(0, 0))
+            .unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
         let at = |ts: i64| -> Vec<Tuple> {
-            rel.skip_scan_all(&rtx, ValidityTs(Reverse(ts)))
+            rel.skip_scan_all(&rtx, AsOf::current(ValidityTs(Reverse(ts))))
                 .map(|t| t.unwrap())
                 .collect()
         };
@@ -1468,6 +1777,7 @@ mod tests {
             ),
             RelationId(7),
             false,
+            KeyspaceKind::Facts,
         );
         handle.indices = vec![
             IndexRef {
@@ -1515,7 +1825,12 @@ mod tests {
     /// dependent type through).
     #[test]
     fn ensure_compatible_checks_input_dependents() {
-        let stored = RelationHandle::new_from_input(simple_input("s"), RelationId(1), false);
+        let stored = RelationHandle::new_from_input(
+            simple_input("s"),
+            RelationId(1),
+            false,
+            KeyspaceKind::Facts,
+        );
         // Compatible input: same shapes.
         stored.ensure_compatible(&simple_input("s"), false).unwrap();
         // Incompatible dependent type: v as Int against stored String.
@@ -1549,6 +1864,7 @@ mod tests {
             ),
             RelationId(7),
             false,
+            KeyspaceKind::Facts,
         );
         handle.put_triggers = vec!["?[k, v] := *pin[k, v]".to_string()];
         handle.access_level = AccessLevel::ReadOnly;
@@ -1580,33 +1896,9 @@ mod tests {
     }
 
     /// The pinned wire bytes of the canonical handle above (msgpack,
-    /// struct maps). Regenerate ONLY as part of a deliberate format
-    /// migration.
-    ///
-    /// MIGRATION RECORD (constraints tier): the format gained a trailing
-    /// `constraints` field (`Vec<ConstraintRef>`, `serde(default)`). Rows
-    /// written before the field decode as constraint-free — proven by
-    /// `legacy_handle_bytes_without_constraints_decode` below, which pins
-    /// the PREVIOUS format's bytes.
-    const PINNED_HANDLE_HEX: &str = "8ba46e616d65a370696ea2696407a86d6574616461746182a46b6579739183a46e616d65a16ba6747970696e6782a7636f6c74797065a3496e74a86e756c6c61626c65c2ab64656661756c745f67656ec0a86e6f6e5f6b6579739183a46e616d65a176a6747970696e6782a7636f6c74797065a6537472696e67a86e756c6c61626c65c2ab64656661756c745f67656ec0ac7075745f747269676765727391b53f5b6b2c20765d203a3d202a70696e5b6b2c20765dab726d5f747269676765727390b07265706c6163655f747269676765727390ac6163636573735f6c6576656ca8526561644f6e6c79a769735f74656d70c2a7696e64696365739182a46e616d65a462795f76a46b696e6481a5506c61696e81a66d6170706572920100ab6465736372697074696f6ea670696e6e6564ab636f6e73747261696e74739182a46e616d65aa6e6f5f656d7074795f76a6736f75726365bb3f5b6b5d203a3d202a70696e5b6b2c20765d2c2076203d3d202727";
-
-    /// A catalog row serialized by the pre-constraints format (the previous
-    /// pinned bytes, verbatim) must still decode, with `constraints` empty:
-    /// existing stores open unchanged after the format extension.
-    #[test]
-    fn legacy_handle_bytes_without_constraints_decode() {
-        let legacy_hex = "8aa46e616d65a370696ea2696407a86d6574616461746182a46b6579739183a46e616d65a16ba6747970696e6782a7636f6c74797065a3496e74a86e756c6c61626c65c2ab64656661756c745f67656ec0a86e6f6e5f6b6579739183a46e616d65a176a6747970696e6782a7636f6c74797065a6537472696e67a86e756c6c61626c65c2ab64656661756c745f67656ec0ac7075745f747269676765727391b53f5b6b2c20765d203a3d202a70696e5b6b2c20765dab726d5f747269676765727390b07265706c6163655f747269676765727390ac6163636573735f6c6576656ca8526561644f6e6c79a769735f74656d70c2a7696e64696365739182a46e616d65a462795f76a46b696e6481a5506c61696e81a66d6170706572920100ab6465736372697074696f6ea670696e6e6564";
-        let bytes: Vec<u8> = (0..legacy_hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&legacy_hex[i..i + 2], 16).unwrap())
-            .collect();
-        let decoded = RelationHandle::decode(&bytes).expect("legacy rows must decode");
-        assert_eq!(decoded.name, "pin");
-        assert_eq!(decoded.id, RelationId(7));
-        assert_eq!(decoded.access_level, AccessLevel::ReadOnly);
-        assert!(
-            decoded.constraints.is_empty(),
-            "a pre-constraints row decodes as constraint-free"
-        );
-    }
+    /// struct maps; FormatVersion v2). Regenerate ONLY as part of a
+    /// deliberate format migration — the version stamp refuses mismatched
+    /// stores, so there is exactly one catalog format per FormatVersion
+    /// and no cross-version decode path.
+    const PINNED_HANDLE_HEX: &str = "8ca46e616d65a370696ea2696407a86d6574616461746182a46b6579739183a46e616d65a16ba6747970696e6782a7636f6c74797065a3496e74a86e756c6c61626c65c2ab64656661756c745f67656ec0a86e6f6e5f6b6579739183a46e616d65a176a6747970696e6782a7636f6c74797065a6537472696e67a86e756c6c61626c65c2ab64656661756c745f67656ec0ac7075745f747269676765727391b53f5b6b2c20765d203a3d202a70696e5b6b2c20765dab726d5f747269676765727390b07265706c6163655f747269676765727390ac6163636573735f6c6576656ca8526561644f6e6c79a769735f74656d70c2a7696e64696365739182a46e616d65a462795f76a46b696e6481a5506c61696e81a66d6170706572920100ab6465736372697074696f6ea670696e6e6564ab636f6e73747261696e74739182a46e616d65aa6e6f5f656d7074795f76a6736f75726365bb3f5b6b5d203a3d202a70696e5b6b2c20765d2c2076203d3d202727ad6b657973706163655f6b696e64a54661637473";
 }

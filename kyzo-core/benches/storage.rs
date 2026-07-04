@@ -35,17 +35,22 @@ fn key(i: u64) -> EncodedKey {
     encode_tuple_key(7, &[DataValue::from(i as i64)])
 }
 
-fn vld_key(name: i64, ts: i64, assert: bool) -> EncodedKey {
-    encode_tuple_key(
-        9,
-        &[
-            DataValue::from(name),
-            DataValue::Validity(Validity {
-                timestamp: ValidityTs(Reverse(ts)),
-                is_assert: Reverse(assert),
-            }),
-        ],
-    )
+fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> EncodedKey {
+    let slot = |t: i64| {
+        DataValue::Validity(Validity {
+            timestamp: ValidityTs(Reverse(t)),
+            is_assert: Reverse(true),
+        })
+    };
+    encode_tuple_key(9, &[DataValue::from(name), slot(valid_ts), slot(sys_ts)])
+}
+
+/// Relation-9 header + assert polarity byte: the value every versioned
+/// bench row carries.
+fn assert_val() -> Vec<u8> {
+    let mut v = 9u64.to_be_bytes().to_vec();
+    v.push(0); // ClaimPolarity::Assert
+    v
 }
 
 fn ops(c: &mut Criterion) {
@@ -166,13 +171,13 @@ fn asof(c: &mut Criterion) {
         let mut tx = db.write_tx().unwrap();
         for name in 0..tuples {
             for ts in 1..=versions {
-                tx.put(&vld_key(name, ts, true), b"").unwrap();
+                tx.put(&bitemp_key(name, ts, 1), &assert_val()).unwrap();
             }
         }
         tx.commit().unwrap();
         let lo = encode_tuple_key(9, &[]);
         let hi = encode_tuple_key(10, &[]);
-        let at = ValidityTs(Reverse(versions / 2));
+        let at = kyzo::AsOf::current(ValidityTs(Reverse(versions / 2)));
 
         let mut g = c.benchmark_group(format!("asof_{label}"));
         g.bench_function("seek_skip_scan", |b| {
@@ -190,18 +195,22 @@ fn asof(c: &mut Criterion) {
             let cutoff = versions / 2;
             b.iter(|| {
                 let mut newest: std::collections::BTreeMap<i64, (i64, bool)> = Default::default();
-                for r in tx.range_scan_tuple(&lo, &hi) {
-                    let t = r.unwrap();
-                    let (DataValue::Num(kyzo::Num::Int(name)), DataValue::Validity(v)) =
+                for r in tx.range_scan(&lo, &hi) {
+                    let (k, v) = r.unwrap();
+                    let t = kyzo::decode_tuple_from_key(&k, 4).unwrap();
+                    let (DataValue::Num(kyzo::Num::Int(name)), DataValue::Validity(vld)) =
                         (&t[0], &t[1])
                     else {
                         unreachable!()
                     };
-                    let ts = v.timestamp.0.0;
+                    let name = *name;
+                    // Assert polarity byte after the 8-byte value header.
+                    let assert = v[8] == 0;
+                    let ts = vld.timestamp.0.0;
                     if ts <= cutoff {
-                        let e = newest.entry(*name).or_insert((ts, v.is_assert.0));
+                        let e = newest.entry(name).or_insert((ts, assert));
                         if ts > e.0 {
-                            *e = (ts, v.is_assert.0);
+                            *e = (ts, assert);
                         }
                     }
                 }

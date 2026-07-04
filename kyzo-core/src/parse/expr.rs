@@ -38,11 +38,10 @@ use pest::pratt_parser::{Op, PrattParser};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::{Expr, get_op};
+use crate::data::expr::{Expr, LazyOp, get_op};
 use crate::data::functions::{
-    OP_ADD, OP_AND, OP_COALESCE, OP_CONCAT, OP_DIV, OP_EQ, OP_GE, OP_GT, OP_JSON_OBJECT, OP_LE,
-    OP_LIST, OP_LT, OP_MAYBE_GET, OP_MINUS, OP_MOD, OP_MUL, OP_NEGATE, OP_NEQ, OP_OR, OP_POW,
-    OP_SUB,
+    OP_ADD, OP_CONCAT, OP_DIV, OP_EQ, OP_GE, OP_GT, OP_JSON_OBJECT, OP_LE, OP_LIST, OP_LT,
+    OP_MAYBE_GET, OP_MINUS, OP_MOD, OP_MUL, OP_NEGATE, OP_NEQ, OP_POW, OP_SUB,
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -187,6 +186,21 @@ fn build_expr_bounded(
 
 fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Result<Expr> {
     let args = vec![lhs?, rhs?];
+    // The short-circuiting connectives are language forms, not ops: they
+    // parse straight to `Expr::Lazy` so laziness is structural.
+    if let Some(lazy) = match op.as_rule() {
+        Rule::op_and => Some(LazyOp::And),
+        Rule::op_or => Some(LazyOp::Or),
+        Rule::op_coalesce => Some(LazyOp::Coalesce),
+        _ => None,
+    } {
+        let span = args[0].span().merge(args[1].span());
+        return Ok(Expr::Lazy {
+            op: lazy,
+            args: args.into(),
+            span,
+        });
+    }
     let op = match op.as_rule() {
         Rule::op_add => &OP_ADD,
         Rule::op_sub => &OP_SUB,
@@ -201,9 +215,6 @@ fn build_expr_infix(lhs: Result<Expr>, op: Pair<'_>, rhs: Result<Expr>) -> Resul
         Rule::op_lt => &OP_LT,
         Rule::op_le => &OP_LE,
         Rule::op_concat => &OP_CONCAT,
-        Rule::op_or => &OP_OR,
-        Rule::op_and => &OP_AND,
-        Rule::op_coalesce => &OP_COALESCE,
         Rule::op_field_access => &OP_MAYBE_GET,
         _ => return Err(unexpected("an infix operator", &op)),
     };
@@ -412,6 +423,21 @@ fn build_term(
                     ];
                     Expr::Cond { clauses, span }
                 }
+                "and" => Expr::Lazy {
+                    op: LazyOp::And,
+                    args: args.into(),
+                    span,
+                },
+                "or" => Expr::Lazy {
+                    op: LazyOp::Or,
+                    args: args.into(),
+                    span,
+                },
+                "coalesce" => Expr::Lazy {
+                    op: LazyOp::Coalesce,
+                    args: args.into(),
+                    span,
+                },
                 _ => match get_op(ident) {
                     None => Expr::UnboundApply {
                         op: ident.into(),

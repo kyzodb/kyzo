@@ -14,20 +14,21 @@
 //!
 //! A [`Tuple`] is a fact's body — an ordered sequence of values. An
 //! [`EncodedKey`] is its written form: relation prefix, memcomparable tuple
-//! bytes, and (for versioned facts) a fixed-width validity tail. Encoding is
-//! infallible; decoding parses *claimed* bytes and is fallible everywhere.
+//! bytes, and (for facts) the two fixed-width bitemporal time slots.
+//! Encoding is infallible; decoding parses *claimed* bytes and is fallible
+//! everywhere.
 
 use miette::{Result, bail, miette};
-use std::cmp::Reverse;
 
 use crate::data::memcmp::{ENCODED_VLD_LEN, MemCmpEncoder};
-use crate::data::value::{DataValue, TERMINAL_VALIDITY, Validity, ValidityTs};
+use crate::data::value::DataValue;
 
 /// A fact's body: an ordered sequence of values.
 pub type Tuple = Vec<DataValue>;
 
 /// A fact's written form: the relation prefix followed by the memcomparable
-/// tuple encoding, with any validity as the fixed-width tail.
+/// tuple encoding, with the two bitemporal time slots as the fixed-width
+/// tail.
 ///
 /// Only encoders construct this — possession is proof of well-formed
 /// provenance. Bytes read back from storage are *claimed* keys until
@@ -38,8 +39,21 @@ pub struct EncodedKey(Vec<u8>);
 impl EncodedKey {
     /// Every key begins with this many bytes of relation id.
     pub const RELATION_PREFIX_LEN: usize = 8;
-    /// An encoded validity, when present, is exactly this many trailing bytes.
+    /// One encoded time slot is exactly this many trailing bytes.
     pub const VALIDITY_TAIL_LEN: usize = ENCODED_VLD_LEN;
+    /// A bitemporal key ends with two fixed-width validity slots, in this
+    /// order: the VALID instant (outer — when in the world the row speaks
+    /// of), then the SYSTEM version (inner — when the record came to say
+    /// it). Both flags are PINNED to assert: what the row says — assert,
+    /// retract, or erase — is its [`ClaimPolarity`], carried in the VALUE,
+    /// so one valid instant has exactly one system lineage and a
+    /// contradictory pair of lineages at the same instant cannot be
+    /// written at all. Valid-outer means a fact's versions group by valid
+    /// instant, newest first, with each instant's system versions adjacent
+    /// inside its group; that adjacency is what lets the two-axis skip
+    /// scan resolve "what did the record say at S about V?" with spliced
+    /// seeks and no reconstruction.
+    pub const BITEMPORAL_TAIL_LEN: usize = 2 * ENCODED_VLD_LEN;
 
     /// The raw bytes.
     pub fn as_bytes(&self) -> &[u8] {
@@ -85,6 +99,45 @@ where
     }
 }
 
+/// Encode a PROJECTION of a row as a storage key: the key bytes of
+/// `cols.map(|i| &row[i])` under the relation id, built without ever
+/// materializing the projected tuple — the zero-clone probe path's
+/// encoder. Identical bytes to `encode_as_key` on the materialized
+/// projection (pinned by test).
+pub(crate) fn encode_projected_key(
+    relation: RelationId,
+    row: &[DataValue],
+    cols: &[usize],
+) -> EncodedKey {
+    let mut ret = Vec::with_capacity(EncodedKey::RELATION_PREFIX_LEN + 14 * cols.len());
+    ret.extend(relation.raw_encode());
+    for &c in cols {
+        ret.encode_datavalue(&row[c]);
+    }
+    EncodedKey(ret)
+}
+
+/// [`encode_projected_key`] with literal values appended after the
+/// projection — bound values of a bounded prefix scan, or the `Bot`
+/// sentinel closing a plain prefix scan. Zero materialization either way.
+pub(crate) fn encode_projected_key_with_suffix(
+    relation: RelationId,
+    row: &[DataValue],
+    cols: &[usize],
+    suffix: &[DataValue],
+) -> EncodedKey {
+    let mut ret =
+        Vec::with_capacity(EncodedKey::RELATION_PREFIX_LEN + 14 * (cols.len() + suffix.len()));
+    ret.extend(relation.raw_encode());
+    for &c in cols {
+        ret.encode_datavalue(&row[c]);
+    }
+    for v in suffix {
+        ret.encode_datavalue(v);
+    }
+    EncodedKey(ret)
+}
+
 /// Encode a tuple as a storage key under the given relation id. The public
 /// face of the key format for benchmarks and tooling; the engine uses the
 /// internal typed path.
@@ -115,69 +168,33 @@ pub fn decode_key_into(key: &[u8], out: &mut Vec<DataValue>) -> Result<()> {
 
 const DEFAULT_SIZE_HINT: usize = 16;
 
-/// Check if the tuple key passed in should be a valid return for a validity query.
+/// Check whether a claimed key belongs in a bitemporal as-of result at
+/// the [`AsOf`] coordinate, and compute the next seek bound.
 ///
-/// Returns two elements: the first contains `Some(tuple)` if the key belongs
-/// in the result set and `None` otherwise; the second gives the next seek
-/// bound (inclusive lower). The bound is raw bytes, not an [`EncodedKey`]:
-/// its prefix comes from stored bytes that were never fully decoded.
+/// The key's last [`EncodedKey::BITEMPORAL_TAIL_LEN`] bytes are its two
+/// time slots (valid outer, system inner — see the constant's doc), both
+/// carried as [`Validity`] encodings with the flag PINNED to assert: a
+/// retract flag in a stored slot is corruption, refused here. The row's
+/// meaning at its instant is `polarity`, which the caller reads from the
+/// row's value — scans hold the value alongside the key, so the peek
+/// costs nothing.
 ///
-/// The validity occupies a fixed-width tail at the end of the key, so seek
-/// keys are computed by splicing bytes: the (potentially long) tuple prefix
-/// is never decoded or re-encoded on the skip paths — only an emitted hit
-/// pays for a full decode.
-pub fn check_key_for_validity(
-    key: &[u8],
-    valid_at: ValidityTs,
-    size_hint: Option<usize>,
-) -> Result<(Option<Tuple>, Vec<u8>)> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::VALIDITY_TAIL_LEN {
-        bail!("time-travel scan over a key too short to carry a validity");
-    }
-    let vld_off = key.len() - EncodedKey::VALIDITY_TAIL_LEN;
-    let (vld_val, rest) = DataValue::decode_from_key(&key[vld_off..])?;
-    let DataValue::Validity(vld) = vld_val else {
-        bail!("time-travel scan over a key without a trailing validity");
-    };
-    if !rest.is_empty() {
-        bail!("time-travel scan over a key with trailing bytes after its validity");
-    }
-
-    // The spliced result is a seek BOUND, not an EncodedKey: only the
-    // validity tail was proven above — the prefix is raw stored bytes, and
-    // blessing them into EncodedKey would launder unproven data into a type
-    // whose possession means provenance. Bounds live in the claimed-bytes
-    // domain (the seek loop's byte-successor bounds are not keys either).
-    let splice = |v: Validity| -> Vec<u8> {
-        let mut nxt = Vec::with_capacity(key.len());
-        nxt.extend_from_slice(&key[..vld_off]);
-        nxt.encode_datavalue(&DataValue::Validity(v));
-        nxt
-    };
-
-    if vld.timestamp < valid_at {
-        // Version is newer than the query time: seek to the newest version
-        // at or before `valid_at` for this same tuple.
-        Ok((
-            None,
-            splice(Validity {
-                timestamp: valid_at,
-                is_assert: Reverse(true),
-            }),
-        ))
-    } else if !vld.is_assert.0 {
-        // Retraction: this tuple does not exist at `valid_at`; skip past all
-        // of its remaining (older) versions.
-        Ok((None, splice(TERMINAL_VALIDITY)))
-    } else {
-        // Hit: emit it, then skip past this tuple's older versions.
-        let decoded = decode_tuple_from_key(key, size_hint.unwrap_or(DEFAULT_SIZE_HINT))?;
-        Ok((Some(decoded), splice(TERMINAL_VALIDITY)))
-    }
-}
-
+/// The question the scan answers: **as the record stood at system time
+/// `as_of.sys`, what held at valid time `as_of.valid`?** Resolution, per fact:
+///
+/// 1. Find the newest valid instant at or before `as_of.valid`.
+/// 2. The instant's state at `as_of.sys` is its newest system version
+///    at or before it — a single total order, because an instant has one
+///    lineage. An instant whose versions are all later-recorded, or whose
+///    governing version is [`ClaimPolarity::Erase`], contributes nothing:
+///    resolution falls to the fact's next older instant.
+/// 3. The first contributing instant decides: `Assert` emits the fact,
+///    `Retract` settles it absent. Either way the fact's older instants
+///    are skipped entirely.
+///
+/// The returned bound is raw claimed
 /// Stored values carry this many bytes of header before the rmp payload.
-const VALUE_HEADER_LEN: usize = 8;
+pub(crate) const VALUE_HEADER_LEN: usize = 8;
 
 /// Decode a tuple from a key-value pair. Used by [`ReadTx`](crate::ReadTx)
 /// implementations and scans.
@@ -225,7 +242,7 @@ pub(crate) struct RelationId(pub(crate) u64);
 /// Relation ids occupy a 48-bit space (the upstream invariant: ids stay
 /// within 6 bytes even though the encoded prefix is 8), leaving headroom in
 /// the key prefix.
-const MAX_RELATION_ID: u64 = 1 << 48;
+pub(crate) const MAX_RELATION_ID: u64 = 1 << 48;
 
 impl RelationId {
     pub(crate) fn new(u: u64) -> Self {
@@ -254,5 +271,66 @@ impl RelationId {
             bail!("corrupt key: relation id out of range");
         }
         Ok(Self(u))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::value::{DataValue, Num, Validity, ValidityTs};
+
+    /// The projected encoders' load-bearing law: byte-identical keys to
+    /// materialize-then-`encode_as_key`, across every value kind, any
+    /// column selection (unordered, repeated), and any literal suffix.
+    #[test]
+    fn projected_key_encoding_is_byte_identical_to_materialized() {
+        let kinds: Vec<DataValue> = vec![
+            DataValue::Null,
+            DataValue::Bool(true),
+            DataValue::from(-42i64),
+            DataValue::Num(Num::Float(2.5)),
+            DataValue::from("projected"),
+            DataValue::Bytes(vec![0, 255, 7]),
+            DataValue::List(vec![DataValue::from(1), DataValue::from("x")]),
+            DataValue::Validity(Validity {
+                timestamp: ValidityTs(std::cmp::Reverse(9)),
+                is_assert: std::cmp::Reverse(true),
+            }),
+            DataValue::Bot,
+        ];
+        // A deterministic seeded walk over rows/cols/suffixes.
+        let mut state = 0x9E37_79B9_u64;
+        let mut next = move |m: usize| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as usize % m
+        };
+        for trial in 0..500 {
+            let rel = RelationId(1 + (trial % 7) as u64);
+            let row: Vec<DataValue> = (0..1 + next(6))
+                .map(|_| kinds[next(kinds.len())].clone())
+                .collect();
+            let cols: Vec<usize> = (0..next(row.len() + 1)).map(|_| next(row.len())).collect();
+            let suffix: Vec<DataValue> = (0..next(3))
+                .map(|_| kinds[next(kinds.len())].clone())
+                .collect();
+
+            let materialized: Vec<DataValue> = cols
+                .iter()
+                .map(|&c| row[c].clone())
+                .chain(suffix.iter().cloned())
+                .collect();
+            let expected = materialized.encode_as_key(rel);
+            let got = if suffix.is_empty() {
+                encode_projected_key(rel, &row, &cols)
+            } else {
+                encode_projected_key_with_suffix(rel, &row, &cols, &suffix)
+            };
+            assert_eq!(
+                got.0, expected.0,
+                "trial {trial}: rel {rel:?} row {row:?} cols {cols:?} suffix {suffix:?}"
+            );
+        }
     }
 }

@@ -11,7 +11,7 @@
 //! file and restore it into a fresh store. (The CozoDB base used SQLite for
 //! this role; KyzoDB's format is a simple length-prefixed binary file.)
 //!
-//! Format: 8-byte magic `KYZODMP1`, then for each pair a u64-BE key length,
+//! Format: 8-byte magic `KYZODMP2`, then for each pair a u64-BE key length,
 //! the key bytes, a u64-BE value length, the value bytes. Pairs appear in
 //! ascending key order (`total_scan` order), which is exactly what
 //! [`Storage::batch_put`](crate::Storage::batch_put) requires on restore.
@@ -24,7 +24,7 @@ use miette::{IntoDiagnostic, Result, bail, miette};
 
 use crate::storage::{FormatVersion, ReadTx, Storage};
 
-const MAGIC: &[u8; 8] = b"KYZODMP1";
+const MAGIC: &[u8; 8] = b"KYZODMP2";
 
 /// Dump every key-value pair of the storage to the file at `path`.
 pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
@@ -37,6 +37,12 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     w.write_all(&(version.len() as u64).to_be_bytes())
         .into_diagnostic()?;
     w.write_all(&version).into_diagnostic()?;
+    // The dump carries the source's system-clock floor: system stamps in
+    // the dumped history must never be re-mintable by the restore
+    // target, or new writes could land AT or BELOW imported instants and
+    // be shadowed by history.
+    let floor = db.clock_floor()?;
+    w.write_all(&floor.0.0.to_be_bytes()).into_diagnostic()?;
     let tx = db.read_tx()?;
     for pair in tx.total_scan() {
         let (k, v) = pair?;
@@ -83,6 +89,15 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
             FormatVersion::CURRENT,
         );
     }
+    // Raise the target's clock floor to the source's BEFORE importing:
+    // the target must never mint a stamp at or below any instant in the
+    // imported history, or new writes could be shadowed by it.
+    let mut floor_bytes = [0u8; 8];
+    r.read_exact(&mut floor_bytes)
+        .map_err(|_| miette!("truncated dump: missing clock floor"))?;
+    db.raise_clock_floor(crate::data::value::ValidityTs(std::cmp::Reverse(
+        i64::from_be_bytes(floor_bytes),
+    )))?;
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());
     db.batch_put(Box::new(iter))?;
     db.sync()

@@ -80,7 +80,8 @@ use crate::query::eval::{
     stratified_evaluate,
 };
 use crate::query::laws::{FixedRule, HeadAggr, Literal, Program, Rel, Rule, Term, naive_eval};
-use crate::runtime::temp_store::{EpochStore, RegularTempStore, TupleInIter};
+use crate::query::levels::EpochStore;
+use crate::query::temp_store::{RegularTempStore, TupleInIter};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — the splitmix64 of storage/sim.rs, transcribed so the campaign
@@ -335,6 +336,7 @@ impl FixedRuleEval for ModelFixed {
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         out: &mut RegularTempStore,
         _budget: &Budget,
+        _baseline: u64,
     ) -> Result<()> {
         let inputs: Vec<BTreeSet<Tuple>> = self
             .inputs

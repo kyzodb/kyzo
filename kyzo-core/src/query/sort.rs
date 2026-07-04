@@ -35,7 +35,7 @@ use crate::data::program::SortDir;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
-use crate::runtime::temp_store::EpochStore;
+use crate::query::levels::EpochStore;
 
 /// An `:order` clause names a variable that is not in the entry head.
 /// (The CozoDB original panicked on this shape.)
@@ -87,7 +87,7 @@ pub(crate) fn sort_and_collect(
 mod tests {
     use super::*;
     use crate::data::value::DataValue;
-    use crate::runtime::temp_store::RegularTempStore;
+    use crate::query::temp_store::RegularTempStore;
 
     fn store_of(rows: &[Vec<i64>]) -> EpochStore {
         let mut fresh = RegularTempStore::default();

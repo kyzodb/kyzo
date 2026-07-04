@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Allocation + wall profile of the iterator RA path vs the batched path.
+//! Allocation + wall profile of the engine's one (vectorized) RA machine.
 //!
 //! `perf`/`valgrind` are not available in the proving environment, so the
 //! "where does the iterator time go" question is answered by a process-wide
@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use kyzo::bench_api::{
-    Backend, Exec, Graph, Workload, aggregation, scan_filter, three_way_join, transitive_closure,
+    Backend, Graph, Workload, aggregation, scan_filter, three_way_join, transitive_closure,
 };
 
 // ── counting global allocator ────────────────────────────────────────────
@@ -62,13 +62,13 @@ struct Measured {
 
 /// Run `w` in `exec` mode once, counting allocations and wall time over just
 /// the evaluation. A warm-up run (untimed) first pays any one-time lazy costs.
-fn measure(w: &Workload, exec: Exec) -> Measured {
-    let _ = w.run(exec); // warm up
+fn measure(w: &Workload) -> Measured {
+    let _ = w.run(); // warm up
 
     let calls0 = ALLOC_CALLS.load(Ordering::Relaxed);
     let bytes0 = ALLOC_BYTES.load(Ordering::Relaxed);
     let t0 = Instant::now();
-    let rows = w.run(exec);
+    let rows = w.run();
     let nanos = t0.elapsed().as_nanos();
     let allocs = ALLOC_CALLS.load(Ordering::Relaxed) - calls0;
     let bytes = ALLOC_BYTES.load(Ordering::Relaxed) - bytes0;
@@ -81,44 +81,26 @@ fn measure(w: &Workload, exec: Exec) -> Measured {
     }
 }
 
-fn row(name: &str, it: &Measured, ba: &Measured) {
-    let per = |m: &Measured| {
-        if m.rows == 0 {
-            0.0
-        } else {
-            m.allocs as f64 / m.rows as f64
-        }
-    };
-    let spd = if ba.nanos == 0 {
+fn row(name: &str, m: &Measured) {
+    let per = if m.rows == 0 {
         0.0
     } else {
-        it.nanos as f64 / ba.nanos as f64
+        m.allocs as f64 / m.rows as f64
     };
     println!(
-        "{name:<26} {rows:>8} | it {ia:>10} a {ib:>11} B {ins:>10}ns {ipr:>6.2}a/row \
-         | ba {ba_a:>10} a {ba_b:>11} B {bns:>10}ns {bpr:>6.2}a/row | x{spd:>4.2}",
+        "{name:<26} {rows:>8} | {a:>10} a {b:>11} B {ns:>10}ns {per:>6.2}a/row",
         name = name,
-        rows = it.rows,
-        ia = it.allocs,
-        ib = it.bytes,
-        ins = it.nanos,
-        ipr = per(it),
-        ba_a = ba.allocs,
-        ba_b = ba.bytes,
-        bns = ba.nanos,
-        bpr = per(ba),
-        spd = spd,
+        rows = m.rows,
+        a = m.allocs,
+        b = m.bytes,
+        ns = m.nanos,
+        per = per,
     );
 }
 
 fn profile(name: &str, w: &Workload) {
-    let it = measure(w, Exec::Iterator);
-    let ba = measure(w, Exec::Batched);
-    assert_eq!(
-        it.rows, ba.rows,
-        "iterator/batched row count disagree on {name}"
-    );
-    row(name, &it, &ba);
+    let m = measure(w);
+    row(name, &m);
 }
 
 fn main() {
@@ -131,11 +113,8 @@ fn main() {
         p
     };
 
-    println!(
-        "workload                       rows |  iterator (allocs/bytes/ns/per-row) \
-              | batched (allocs/bytes/ns/per-row) | speedup"
-    );
-    println!("{}", "-".repeat(150));
+    println!("workload                       rows |  allocs/bytes/ns/per-row");
+    println!("{}", "-".repeat(90));
 
     // scan_filter is the camp's home turf — its iter/batch delta is the
     // clean measurement of the per-row dispatch+alloc tax on a pure pipeline.

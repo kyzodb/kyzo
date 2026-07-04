@@ -90,6 +90,19 @@ pub enum Bytecode {
         #[serde(skip)]
         span: SourceSpan,
     },
+    /// pop 1
+    JumpIfTrue {
+        jump_to: usize,
+        #[serde(skip)]
+        span: SourceSpan,
+    },
+    /// peek: jump keeping the value when it is non-null, else pop it and
+    /// fall through (the coalesce step)
+    JumpNotNull {
+        jump_to: usize,
+        #[serde(skip)]
+        span: SourceSpan,
+    },
     /// unchanged
     Goto {
         jump_to: usize,
@@ -123,6 +136,16 @@ enum BytecodeDe {
         #[serde(skip)]
         span: SourceSpan,
     },
+    JumpIfTrue {
+        jump_to: usize,
+        #[serde(skip)]
+        span: SourceSpan,
+    },
+    JumpNotNull {
+        jump_to: usize,
+        #[serde(skip)]
+        span: SourceSpan,
+    },
     Goto {
         jump_to: usize,
         #[serde(skip)]
@@ -142,6 +165,8 @@ impl BytecodeDe {
                 Bytecode::Apply { op, arity, span }
             }
             BytecodeDe::JumpIfFalse { jump_to, span } => Bytecode::JumpIfFalse { jump_to, span },
+            BytecodeDe::JumpIfTrue { jump_to, span } => Bytecode::JumpIfTrue { jump_to, span },
+            BytecodeDe::JumpNotNull { jump_to, span } => Bytecode::JumpNotNull { jump_to, span },
             BytecodeDe::Goto { jump_to, span } => Bytecode::Goto { jump_to, span },
         })
     }
@@ -161,13 +186,18 @@ impl<'de> serde::Deserialize<'de> for Bytecode {
 #[derive(Error, Diagnostic, Debug)]
 #[error("The variable '{0}' is unbound")]
 #[diagnostic(code(eval::unbound))]
-struct UnboundVariableError(String, #[label] SourceSpan);
+pub(crate) struct UnboundVariableError(pub(crate) String, #[label] pub(crate) SourceSpan);
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The tuple bound by variable '{0}' is too short: index is {1}, length is {2}")]
 #[diagnostic(help("This is definitely a bug. Please report it."))]
 #[diagnostic(code(eval::tuple_too_short))]
-struct TupleTooShortError(String, usize, usize, #[label] SourceSpan);
+pub(crate) struct TupleTooShortError(
+    pub(crate) String,
+    pub(crate) usize,
+    pub(crate) usize,
+    #[label] pub(crate) SourceSpan,
+);
 
 /// A bytecode program that violates stack discipline or jumps out of range.
 /// Compiled programs cannot produce this; it is reachable only through
@@ -216,6 +246,71 @@ pub(crate) fn expr2bytecode(expr: &Expr, collector: &mut Vec<Bytecode>) -> Resul
                 arity,
                 span: *span,
             })
+        }
+        Expr::Lazy { op, args, span } => {
+            // Short-circuit via jumps, derived from the connective's
+            // declaration: a boolean-decided form (`deciding_bool`) jumps
+            // out on its deciding value and nets the decision constant;
+            // Coalesce jumps out keeping the first non-null value itself.
+            match op.deciding_bool() {
+                Some(deciding) => {
+                    // Each argument's jump carries THAT ARGUMENT's span:
+                    // the type refusal for a non-boolean argument reports
+                    // where the offending argument is, exactly as the tree
+                    // evaluator's `Decision::Refused` arm does.
+                    let jump = |jump_to: usize, span: SourceSpan| -> Bytecode {
+                        if deciding {
+                            Bytecode::JumpIfTrue { jump_to, span }
+                        } else {
+                            Bytecode::JumpIfFalse { jump_to, span }
+                        }
+                    };
+                    let mut decided_jumps = vec![];
+                    for arg in args.iter() {
+                        expr2bytecode(arg, collector)?;
+                        collector.push(jump(0, arg.span()));
+                        decided_jumps.push((collector.len() - 1, arg.span()));
+                    }
+                    collector.push(Bytecode::Const {
+                        val: op.identity(),
+                        span: *span,
+                    });
+                    collector.push(Bytecode::Goto {
+                        jump_to: collector.len() + 2,
+                        span: *span,
+                    });
+                    let decided_target = collector.len();
+                    for (pos, arg_span) in decided_jumps {
+                        collector[pos] = jump(decided_target, arg_span);
+                    }
+                    collector.push(Bytecode::Const {
+                        val: DataValue::from(deciding),
+                        span: *span,
+                    });
+                }
+                None => {
+                    let mut done_jumps = vec![];
+                    for arg in args.iter() {
+                        expr2bytecode(arg, collector)?;
+                        collector.push(Bytecode::JumpNotNull {
+                            jump_to: 0,
+                            span: *span,
+                        });
+                        done_jumps.push(collector.len() - 1);
+                    }
+                    collector.push(Bytecode::Const {
+                        val: op.identity(),
+                        span: *span,
+                    });
+                    let end = collector.len();
+                    for pos in done_jumps {
+                        collector[pos] = Bytecode::JumpNotNull {
+                            jump_to: end,
+                            span: *span,
+                        };
+                    }
+                }
+            }
         }
         Expr::Cond { clauses, span } => {
             let mut return_jump_pos = vec![];
@@ -336,6 +431,30 @@ pub fn eval_bytecode(
                     pointer = *jump_to;
                 }
             }
+            Bytecode::JumpIfTrue { jump_to, span } => {
+                let val = stack
+                    .pop()
+                    .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
+                let cond = val
+                    .get_bool()
+                    .ok_or_else(|| PredicateTypeError(*span, val))?;
+                if cond {
+                    pointer = *jump_to;
+                } else {
+                    pointer += 1;
+                }
+            }
+            Bytecode::JumpNotNull { jump_to, .. } => {
+                let val = stack
+                    .last()
+                    .ok_or(CorruptBytecodeError("coalesce jump on an empty stack"))?;
+                if *val == DataValue::Null {
+                    stack.pop();
+                    pointer += 1;
+                } else {
+                    pointer = *jump_to;
+                }
+            }
             Bytecode::Goto { jump_to, .. } => {
                 pointer = *jump_to;
             }
@@ -405,6 +524,102 @@ pub enum Expr {
         #[serde(skip)]
         span: SourceSpan,
     },
+    /// A short-circuiting connective: arguments evaluate left to right,
+    /// and evaluation STOPS at the deciding argument — later arguments are
+    /// never touched, so their errors never fire. This is what makes the
+    /// guard idiom (`k != 0 && v / k > 1`, `maybe ~ fallback`) a language
+    /// guarantee instead of an accident of filter splitting.
+    Lazy {
+        /// Which connective.
+        op: LazyOp,
+        /// Arguments, evaluated left to right.
+        args: Box<[Expr]>,
+        /// Source span
+        #[serde(skip)]
+        span: SourceSpan,
+    },
+}
+
+/// The short-circuiting connectives. `And` and `Or` require every argument
+/// they evaluate to be a boolean; `Coalesce` takes any values and yields
+/// the first non-null one.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde_derive::Serialize,
+    serde_derive::Deserialize,
+)]
+pub enum LazyOp {
+    /// True iff every argument is true; false decides at the first false.
+    And,
+    /// True iff any argument is true; true decides at the first true.
+    Or,
+    /// The first non-null argument, or null if all are.
+    Coalesce,
+}
+
+/// What one evaluated argument means to a [`LazyOp`].
+pub(crate) enum Decision {
+    /// This argument ends evaluation with this value; later arguments are
+    /// dead and are never touched.
+    Decided(DataValue),
+    /// This argument is inert; evaluation moves to the next.
+    Continue,
+    /// This argument's type is refused by the connective (reported by the
+    /// caller with the argument's span).
+    Refused,
+}
+
+impl LazyOp {
+    /// The identity element: the value of the empty form, and of any form
+    /// whose arguments are all inert.
+    pub(crate) fn identity(self) -> DataValue {
+        match self {
+            LazyOp::And => DataValue::from(true),
+            LazyOp::Or => DataValue::from(false),
+            LazyOp::Coalesce => DataValue::Null,
+        }
+    }
+    /// THE truth table. Every machine that evaluates a lazy connective —
+    /// the tree evaluator, the constant folder, the bytecode compiler —
+    /// derives from this single declaration.
+    pub(crate) fn decide(self, val: &DataValue) -> Decision {
+        match self {
+            LazyOp::And => match val.get_bool() {
+                Some(true) => Decision::Continue,
+                Some(false) => Decision::Decided(DataValue::from(false)),
+                None => Decision::Refused,
+            },
+            LazyOp::Or => match val.get_bool() {
+                Some(false) => Decision::Continue,
+                Some(true) => Decision::Decided(DataValue::from(true)),
+                None => Decision::Refused,
+            },
+            LazyOp::Coalesce => {
+                if *val == DataValue::Null {
+                    Decision::Continue
+                } else {
+                    Decision::Decided(val.clone())
+                }
+            }
+        }
+    }
+    /// The boolean that decides the form, when the connective is decided
+    /// by a boolean at all (`None` for Coalesce, which is decided by
+    /// non-nullness and needs its own jump shape).
+    fn deciding_bool(self) -> Option<bool> {
+        match self {
+            LazyOp::And => Some(false),
+            LazyOp::Or => Some(true),
+            LazyOp::Coalesce => None,
+        }
+    }
 }
 
 /// Wire twin of [`Expr`]: what serde may construct before the arity law has
@@ -508,6 +723,18 @@ impl Display for Expr {
                 }
                 writer.finish()
             }
+            Expr::Lazy { op, args, .. } => {
+                let name = match op {
+                    LazyOp::And => "and",
+                    LazyOp::Or => "or",
+                    LazyOp::Coalesce => "coalesce",
+                };
+                let mut writer = f.debug_tuple(name);
+                for arg in args.iter() {
+                    writer.field(arg);
+                }
+                writer.finish()
+            }
             Expr::UnboundApply { op, args, .. } => {
                 let mut writer = f.debug_tuple(op);
                 for arg in args.iter() {
@@ -540,7 +767,7 @@ pub(crate) struct PredicateTypeError(#[label] pub(crate) SourceSpan, pub(crate) 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Evaluation of expression failed")]
 #[diagnostic(code(eval::throw))]
-struct EvalRaisedError(#[label] SourceSpan, #[help] String);
+pub(crate) struct EvalRaisedError(#[label] pub(crate) SourceSpan, #[help] pub(crate) String);
 
 impl Expr {
     pub(crate) fn compile(&self) -> Result<Vec<Bytecode>> {
@@ -551,7 +778,10 @@ impl Expr {
     pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Expr::Binding { var, .. } => var.span,
-            Expr::Const { span, .. } | Expr::Apply { span, .. } | Expr::Cond { span, .. } => *span,
+            Expr::Const { span, .. }
+            | Expr::Apply { span, .. }
+            | Expr::Cond { span, .. }
+            | Expr::Lazy { span, .. } => *span,
             Expr::UnboundApply { span, .. } => *span,
         }
     }
@@ -577,8 +807,8 @@ impl Expr {
         }
     }
     pub(crate) fn build_and(exprs: Vec<Expr>, span: SourceSpan) -> Self {
-        Expr::Apply {
-            op: &OP_AND,
+        Expr::Lazy {
+            op: LazyOp::And,
             args: exprs.into(),
             span,
         }
@@ -599,7 +829,11 @@ impl Expr {
     }
     pub(crate) fn to_conjunction(&self) -> Vec<Self> {
         match self {
-            Expr::Apply { op, args, .. } if **op == OP_AND => args.to_vec(),
+            Expr::Lazy {
+                op: LazyOp::And,
+                args,
+                ..
+            } => args.to_vec(),
             v => vec![v.clone()],
         }
     }
@@ -620,7 +854,7 @@ impl Expr {
                 *tuple_pos = Some(found_idx)
             }
             Expr::Const { .. } => {}
-            Expr::Apply { args, .. } => {
+            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
                 for arg in args.iter_mut() {
                     arg.fill_binding_indices(binding_map)?;
                 }
@@ -652,7 +886,7 @@ impl Expr {
                 }
             }
             Expr::Const { .. } => {}
-            Expr::Apply { args, .. } => {
+            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
                 for arg in args.iter() {
                     arg.do_binding_indices(coll)?;
                 }
@@ -702,6 +936,45 @@ impl Expr {
         bail!(NotConstError(span))
     }
     pub(crate) fn partial_eval(&mut self) -> Result<()> {
+        if let Expr::Lazy { op, args, span } = self {
+            let span = *span;
+            let op = *op;
+            // Fold left to right and STOP at the first argument that either
+            // decides the form or resists folding. A deciding constant
+            // prefix folds the whole form without touching later arguments:
+            // under short-circuit semantics they are dead code, and their
+            // errors must not fire at fold time any more than at runtime.
+            for arg in args.iter_mut() {
+                if arg.partial_eval().is_err() {
+                    // The argument errors when evaluated. Whether it is
+                    // ever evaluated is the deciding prefix's runtime
+                    // business, not the folder's: leave it, stop folding.
+                    return Ok(());
+                }
+                let Expr::Const { val, .. } = arg else {
+                    // Not statically known; nothing past here can decide
+                    // at compile time.
+                    return Ok(());
+                };
+                match op.decide(val) {
+                    Decision::Decided(v) => {
+                        *self = Expr::Const { val: v, span };
+                        return Ok(());
+                    }
+                    Decision::Continue => {}
+                    // A refused constant is a runtime type error on every
+                    // row it is reached on; leave it for the evaluator to
+                    // report with its span rather than folding a lie.
+                    Decision::Refused => return Ok(()),
+                }
+            }
+            // Every argument folded inert: the form IS its identity.
+            *self = Expr::Const {
+                val: op.identity(),
+                span,
+            };
+            return Ok(());
+        }
         if let Expr::Apply { op, args, span } = self {
             let span = *span;
             let mut all_evaluated = true;
@@ -751,7 +1024,7 @@ impl Expr {
                 coll.insert(var.clone());
             }
             Expr::Const { .. } => {}
-            Expr::Apply { args, .. } => {
+            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
                 for arg in args.iter() {
                     arg.collect_bindings(coll)?;
                 }
@@ -809,6 +1082,17 @@ impl Expr {
                 }
                 Ok(DataValue::Null)
             }
+            Expr::Lazy { op, args, .. } => {
+                for arg in args.iter() {
+                    let v = arg.eval(bindings.as_ref())?;
+                    match op.decide(&v) {
+                        Decision::Decided(d) => return Ok(d),
+                        Decision::Continue => {}
+                        Decision::Refused => bail!(PredicateTypeError(arg.span(), v)),
+                    }
+                }
+                Ok(op.identity())
+            }
             Expr::UnboundApply { op, span, .. } => {
                 bail!(NoImplementationError(*span, op.to_string()));
             }
@@ -816,7 +1100,9 @@ impl Expr {
     }
     pub(crate) fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
         Ok(match self {
-            Expr::Binding { .. } | Expr::Const { .. } | Expr::Cond { .. } => ValueRange::default(),
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
+                ValueRange::default()
+            }
             Expr::Apply { op, args, .. } => match op.name {
                 n if n == OP_GE.name || n == OP_GT.name => {
                     if let Some(symb) = args[0].get_binding()
@@ -906,7 +1192,7 @@ impl Expr {
                 coll.insert(var.to_string());
             }
             Expr::Const { .. } => {}
-            Expr::Apply { args, .. } => {
+            Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
                 for arg in args.iter() {
                     arg.do_get_variables(coll)?;
                 }
@@ -1129,7 +1415,6 @@ impl Debug for Op {
 
 pub(crate) fn get_op(name: &str) -> Option<&'static Op> {
     Some(match name {
-        "coalesce" => &OP_COALESCE,
         "list" => &OP_LIST,
         "json" => &OP_JSON,
         "set_json_path" => &OP_SET_JSON_PATH,
@@ -1178,8 +1463,6 @@ pub(crate) fn get_op(name: &str) -> Option<&'static Op> {
         "ge" => &OP_GE,
         "lt" => &OP_LT,
         "le" => &OP_LE,
-        "or" => &OP_OR,
-        "and" => &OP_AND,
         "negate" => &OP_NEGATE,
         "bit_and" => &OP_BIT_AND,
         "bit_or" => &OP_BIT_OR,

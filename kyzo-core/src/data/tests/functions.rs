@@ -593,16 +593,9 @@ fn test_mod() {
 
 #[test]
 fn test_boolean() {
-    assert_eq!(op_and(&[]).unwrap(), DataValue::from(true));
-    assert_eq!(
-        op_and(&[DataValue::from(true), DataValue::from(false)]).unwrap(),
-        DataValue::from(false)
-    );
-    assert_eq!(op_or(&[]).unwrap(), DataValue::from(false));
-    assert_eq!(
-        op_or(&[DataValue::from(true), DataValue::from(false)]).unwrap(),
-        DataValue::from(true)
-    );
+    // `and`/`or` are language forms (`Expr::Lazy`), not ops; their
+    // semantics — including short-circuit — are pinned in
+    // `data/tests/exprs.rs`. Only negation remains an op.
     assert_eq!(
         op_negate(&[DataValue::from(false)]).unwrap(),
         DataValue::from(true)

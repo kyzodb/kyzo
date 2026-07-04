@@ -19,12 +19,18 @@ use miette::Result;
 
 use crate::storage::ConflictError;
 
-/// Run `attempt` until it commits without conflict.
+/// Run `attempt` until it commits without conflict, retrying HOT (no
+/// pause between attempts).
 ///
 /// `attempt` must be a complete transaction cycle — create, read/write,
 /// commit — so each retry sees a fresh snapshot. Non-conflict errors
 /// propagate immediately. `max_attempts` bounds pathological contention;
 /// exhausting it returns the final [`ConflictError`].
+///
+/// Hot retry is for harnesses whose conflicts are injected or simulated
+/// (the DST campaigns): pausing there wastes wall-clock on races that
+/// virtual time already resolves. Real concurrent sessions retry through
+/// [`retry_on_conflict_with_backoff`] instead.
 pub fn retry_on_conflict<T>(
     max_attempts: usize,
     mut attempt: impl FnMut() -> Result<T>,
@@ -42,3 +48,46 @@ pub fn retry_on_conflict<T>(
     }
     Err(last_err.expect("max_attempts > 0"))
 }
+
+/// As [`retry_on_conflict`], with losses backing off: the first retries
+/// yield the scheduler slot, later ones sleep with exponential growth
+/// (capped). Hot-spinning loses fairness under real contention — a
+/// writer racing N rivals on one fact can lose every round while the
+/// winners immediately re-enter; the backoff de-synchronizes the herd so
+/// every writer eventually lands. The session tier's mutation path
+/// retries through this. Timing is the only thing affected; answers
+/// never depend on it.
+pub fn retry_on_conflict_with_backoff<T>(
+    max_attempts: usize,
+    mut attempt: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    debug_assert!(max_attempts > 0);
+    let mut last_err = None;
+    for n in 0..max_attempts {
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.downcast_ref::<ConflictError>().is_some() => {
+                last_err = Some(e);
+                backoff(n);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("max_attempts > 0"))
+}
+
+/// The `n`-th loss's pause: yield for the first few, then sleep,
+/// doubling to a cap.
+#[cfg(not(target_arch = "wasm32"))]
+fn backoff(n: usize) {
+    if n < 3 {
+        std::thread::yield_now();
+    } else {
+        let ms = 1u64 << (n - 3).min(6); // 1ms .. 64ms
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
+/// Single-threaded wasm has no rival to wait out.
+#[cfg(target_arch = "wasm32")]
+fn backoff(_n: usize) {}

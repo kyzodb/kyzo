@@ -49,6 +49,7 @@
 
 #![cfg(test)]
 
+use crate::engines::segments::Segments;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
@@ -64,11 +65,14 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, ValidityTs};
+use std::cmp::Reverse;
+
+use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::query::compile::{
-    CompiledProgram, ExecMode, NoFixedRules, bind_for_eval, stratified_magic_compile,
+    CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::sim::{FaultConfig, SimRng, SimStorage, for_each_seed};
 use crate::storage::{Storage, WriteTx};
@@ -132,15 +136,15 @@ fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        valid_at: None,
+        as_of: None,
         span: sp(),
     })
 }
-fn rel_atom_asof(name: &str, args: &[Symbol], valid_at: ValidityTs) -> MagicAtom {
+fn rel_atom_asof(name: &str, args: &[Symbol], as_of: AsOf) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        valid_at: Some(valid_at),
+        as_of: Some(as_of),
         span: sp(),
     })
 }
@@ -210,11 +214,9 @@ fn stored_relation<S: Storage>(db: &S, name: &str, arity: usize, rows: &[Tuple])
         span: sp(),
     };
     let mut tx = db.write_tx()?;
-    let handle = create_relation(&mut tx, input)?;
+    let handle = create_relation(&mut tx, input, KeyspaceKind::Facts)?;
     for row in rows {
-        let key = handle.encode_key_for_store(row, sp())?;
-        let val = handle.encode_val_for_store(row, sp())?;
-        tx.put(&key, &val)?;
+        handle.put_fact(&mut tx, row, ValidityTs(Reverse(0)), sp())?;
     }
     tx.commit()?;
     Ok(())
@@ -230,12 +232,11 @@ fn try_run<S: Storage>(db: &S, prog: StratifiedMagicProgram) -> Result<BTreeSet<
     let rtx = db.read_tx()?;
     let compiled = stratified_magic_compile(&rtx, prog)?;
     let lifetimes = immortal_lifetimes(&compiled);
-    let program =
-        bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, ExecMode::Iterator, &mut |_| {
-            // These corpora contain no fixed rules, so this is never reached; a
-            // returned Err (not a panic) keeps the "no panics" invariant honest.
-            Err(miette!("dst-query corpus has no fixed rules"))
-        })?;
+    let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
+        // These corpora contain no fixed rules, so this is never reached; a
+        // returned Err (not a panic) keeps the "no panics" invariant honest.
+        Err(miette!("dst-query corpus has no fixed rules"))
+    })?;
     let outcome = stratified_evaluate(
         &program,
         &lifetimes,
@@ -595,10 +596,15 @@ fn observe_faulted(fx: &Fixture, seed: u64, faults: FaultConfig) -> Observed {
 /// returns a typed error. A wrong answer is CRITICAL and pins its seed.
 #[test]
 fn read_fault_campaign_correct_or_typed_never_wrong() {
-    // 12% read faults: dense enough that both arms are well populated at
-    // these query sizes, sparse enough that setup retries stay cheap.
+    // 3% read faults. The one-machine (vectorized) executor accumulates up
+    // to a full batch of rows before yielding, so a query touches more
+    // storage reads per observable outcome than the retired row-at-a-time
+    // path did; at the old 12% density no stratified_negation seed
+    // completed and the Answer arm went vacuous. 3% keeps BOTH arms well
+    // populated across every fixture (the anti-vacuity asserts below are
+    // the instrument that keeps this calibration honest).
     let faults = FaultConfig {
-        read_fail_ppm: 120_000,
+        read_fail_ppm: 30_000,
         ..Default::default()
     };
     let n = seeds(64);
@@ -681,13 +687,12 @@ fn crash_consistency_is_query_visible() {
                 dep_bindings: vec![],
                 span: sp(),
             },
+            KeyspaceKind::Facts,
         )
         .unwrap();
         let put = |tx: &mut crate::storage::sim::SimWriteTx, a: i64, b: i64| {
             let row = vec![v(a), v(b)];
-            let k = h.encode_key_for_store(&row, sp()).unwrap();
-            let val = h.encode_val_for_store(&row, sp()).unwrap();
-            tx.put(&k, &val).unwrap();
+            h.put_fact(tx, &row, ValidityTs(Reverse(0)), sp()).unwrap();
         };
         put(&mut tx, 1, 2);
         put(&mut tx, 2, 3);
@@ -792,12 +797,11 @@ fn crash_recovery_under_faults_never_tears() {
                     dep_bindings: vec![],
                     span: sp(),
                 },
+                KeyspaceKind::Facts,
             )?;
             for (a, b) in [(1, 2), (2, 3)] {
                 let row = vec![v(a), v(b)];
-                let k = h.encode_key_for_store(&row, sp())?;
-                let val = h.encode_val_for_store(&row, sp())?;
-                tx.put(&k, &val)?;
+                h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())?;
             }
             tx.commit_durable()?;
             Ok(h)
@@ -818,10 +822,8 @@ fn crash_recovery_under_faults_never_tears() {
         // not commit, which is one of the two legal recovered states.
         if let Ok(mut tx) = db.write_tx() {
             let row = vec![v(3), v(4)];
-            if let (Ok(k), Ok(val)) = (
-                h.encode_key_for_store(&row, sp()),
-                h.encode_val_for_store(&row, sp()),
-            ) && tx.put(&k, &val).is_ok()
+            if h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+                .is_ok()
             {
                 let _ = tx.commit(); // buffer tier; ignore fault
             }
@@ -879,13 +881,13 @@ fn snapshot_isolation_holds_at_answer_level() {
                 dep_bindings: vec![sym("num")],
                 span: sp(),
             },
+            KeyspaceKind::Facts,
         )
         .unwrap();
         for (slot, num) in [(0i64, 0i64), (1, C)] {
             let row = vec![v(slot), v(num)];
-            let k = h.encode_key_for_store(&row, sp()).unwrap();
-            let val = h.encode_val_for_store(&row, sp()).unwrap();
-            tx.put(&k, &val).unwrap();
+            h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+                .unwrap();
         }
         tx.commit().unwrap();
         h
@@ -922,18 +924,14 @@ fn snapshot_isolation_holds_at_answer_level() {
                     let mut good = true;
                     for (slot, num) in [(0i64, k), (1, C - k)] {
                         let row = vec![v(slot), v(num)];
-                        match h.encode_key_for_store(&row, sp()) {
-                            Ok(key) => {
-                                let val = h.encode_val_for_store(&row, sp()).unwrap();
-                                if tx.put(&key, &val).is_err() {
-                                    good = false;
-                                    break;
-                                }
-                            }
-                            Err(_) => {
-                                good = false;
-                                break;
-                            }
+                        // Same valid instant every round: each atomic pair
+                        // update is a system-time correction of the pair,
+                        // and the current read resolves to the newest one.
+                        if h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+                            .is_err()
+                        {
+                            good = false;
+                            break;
                         }
                     }
                     if good && tx.commit().is_ok() {
@@ -994,44 +992,42 @@ fn time_travel_under_faults_answers_or_errors() {
             InputRelationHandle {
                 name: sym("hist"),
                 metadata: StoredRelationMetadata {
-                    keys: vec![col("id"), validity_col()],
+                    keys: vec![col("id")],
                     non_keys: vec![col("state")],
                 },
-                key_bindings: vec![sym("id"), sym("at")],
+                key_bindings: vec![sym("id")],
                 dep_bindings: vec![sym("state")],
                 span: sp(),
             },
+            KeyspaceKind::Facts,
         )?;
         for (id, at, assertive, state) in [
             (1i64, 10i64, true, "a"),
             (1, 20, false, ""),
             (1, 30, true, "c"),
         ] {
-            let row = vec![
-                v(id),
-                DataValue::Validity(crate::data::value::Validity::from((at, assertive))),
-                DataValue::Str(SmartString::from(state)),
-            ];
-            let k = h.encode_key_for_store(&row, sp())?;
-            let val = h.encode_val_for_store(&row, sp())?;
-            tx.put(&k, &val)?;
+            if assertive {
+                let row = vec![v(id), DataValue::Str(SmartString::from(state))];
+                h.put_fact(&mut tx, &row, ValidityTs(Reverse(at)), sp())?;
+            } else {
+                h.retract_fact(&mut tx, &[v(id)], ValidityTs(Reverse(at)), sp())?;
+            }
         }
         tx.commit()
     };
 
     let asof_program = |at: i64| -> StratifiedMagicProgram {
-        let (id, at_var, state) = (sym("id"), sym("at"), sym("state"));
-        // A validity relation's stored arity counts the validity column, so
-        // the as-of atom lists it positionally (the last key slot) even though
-        // `valid_at` supplies the query time; the head projects it away.
+        let (id, state) = (sym("id"), sym("state"));
+        // The time slots are infrastructure: the atom binds user columns
+        // only, and `as_of` supplies the coordinate.
         program_of(vec![vec![(
             entry_symbol(),
             vec![plain_rule(
                 &[id.clone(), state.clone()],
                 vec![rel_atom_asof(
                     "hist",
-                    &[id, at_var, state],
-                    ValidityTs(std::cmp::Reverse(at)),
+                    &[id, state],
+                    AsOf::current(ValidityTs(std::cmp::Reverse(at))),
                 )],
             )],
         )]])
@@ -1095,17 +1091,6 @@ fn time_travel_under_faults_answers_or_errors() {
     assert!(errs.get() > 0, "as-of error arm never fired");
 }
 
-fn validity_col() -> ColumnDef {
-    ColumnDef {
-        name: SmartString::from("at"),
-        typing: NullableColType {
-            coltype: ColType::Validity,
-            nullable: false,
-        },
-        default_gen: None,
-    }
-}
-
 fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
     data.iter()
         .map(|(id, s)| vec![v(*id), DataValue::Str(SmartString::from(*s))])
@@ -1160,8 +1145,11 @@ fn determinism_multihead_parallel_is_measured() {
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build_global();
+    // 4%: recalibrated for the one-machine executor's denser read pattern
+    // (see read_fault_campaign_correct_or_typed_never_wrong) — the assert
+    // below demands BOTH observables, which keeps this rate honest.
     let faults = FaultConfig {
-        read_fail_ppm: 150_000,
+        read_fail_ppm: 40_000,
         ..Default::default()
     };
     let n = seeds(150);

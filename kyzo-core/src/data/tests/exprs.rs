@@ -153,3 +153,177 @@ fn deserialized_bytecode_arity_is_rejected() {
     let serialized = serde_json::to_string(&good).unwrap();
     assert_eq!(serde_json::from_str::<Bytecode>(&serialized).unwrap(), good);
 }
+
+// ─── The short-circuit law (Expr::Lazy) ─────────────────────────────────
+//
+// `&&`, `||`, and `~` are language forms: arguments evaluate left to
+// right and evaluation STOPS at the deciding argument. A deciding earlier
+// argument means later arguments are never touched — their errors never
+// fire. Pinned through BOTH evaluators: any divergence between the tree
+// and the bytecode machine is a bug by definition.
+
+/// An expression that compiles fine and errors at RUNTIME (adding a
+/// number to a string is a typed evaluation error in both machines).
+fn erroring() -> Expr {
+    Expr::Apply {
+        op: &OP_ADD,
+        args: Box::new([cnst(1), cnst("boom")]),
+        span: Default::default(),
+    }
+}
+
+fn lazy(op: crate::data::expr::LazyOp, args: Vec<Expr>) -> Expr {
+    Expr::Lazy {
+        op,
+        args: args.into(),
+        span: Default::default(),
+    }
+}
+
+fn eval_both_ways(e: &Expr) -> (miette::Result<DataValue>, miette::Result<DataValue>) {
+    let tree = e.eval(&[] as &[DataValue]);
+    let mut prog = vec![];
+    let byte = crate::data::expr::expr2bytecode(e, &mut prog)
+        .and_then(|()| eval_bytecode(&prog, &[] as &[DataValue], &mut vec![]));
+    (tree, byte)
+}
+
+#[test]
+fn and_short_circuits_past_errors() {
+    use crate::data::expr::LazyOp;
+    let e = lazy(LazyOp::And, vec![cnst(false), erroring()]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(false));
+    assert_eq!(byte.unwrap(), DataValue::from(false));
+
+    // The dual: a non-deciding prefix reaches the error.
+    let e = lazy(LazyOp::And, vec![cnst(true), erroring()]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert!(tree.is_err());
+    assert!(byte.is_err());
+
+    // All-true nets true; empty is the identity.
+    let e = lazy(LazyOp::And, vec![cnst(true), cnst(true)]);
+    assert_eq!(e.eval(&[] as &[DataValue]).unwrap(), DataValue::from(true));
+    let e = lazy(LazyOp::And, vec![]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(true));
+    assert_eq!(byte.unwrap(), DataValue::from(true));
+}
+
+#[test]
+fn or_short_circuits_past_errors() {
+    use crate::data::expr::LazyOp;
+    let e = lazy(LazyOp::Or, vec![cnst(true), erroring()]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(true));
+    assert_eq!(byte.unwrap(), DataValue::from(true));
+
+    let e = lazy(LazyOp::Or, vec![cnst(false), erroring()]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert!(tree.is_err());
+    assert!(byte.is_err());
+
+    let e = lazy(LazyOp::Or, vec![]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(false));
+    assert_eq!(byte.unwrap(), DataValue::from(false));
+}
+
+#[test]
+fn coalesce_short_circuits_past_errors() {
+    use crate::data::expr::LazyOp;
+    let e = lazy(LazyOp::Coalesce, vec![cnst(7), erroring()]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(7));
+    assert_eq!(byte.unwrap(), DataValue::from(7));
+
+    // Null falls through to the next argument.
+    let e = lazy(
+        LazyOp::Coalesce,
+        vec![cnst(DataValue::Null), cnst(42), erroring()],
+    );
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(42));
+    assert_eq!(byte.unwrap(), DataValue::from(42));
+
+    // All null nets null.
+    let e = lazy(
+        LazyOp::Coalesce,
+        vec![cnst(DataValue::Null), cnst(DataValue::Null)],
+    );
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::Null);
+    assert_eq!(byte.unwrap(), DataValue::Null);
+}
+
+#[test]
+fn lazy_connectives_type_check_evaluated_arguments() {
+    use crate::data::expr::LazyOp;
+    // Non-bool in the evaluated prefix is a typed error in both machines…
+    let e = lazy(LazyOp::And, vec![cnst(1), cnst(true)]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert!(tree.is_err());
+    assert!(byte.is_err());
+    // …but a non-bool PAST the deciding argument is never seen.
+    let e = lazy(LazyOp::Or, vec![cnst(true), cnst(1)]);
+    let (tree, byte) = eval_both_ways(&e);
+    assert_eq!(tree.unwrap(), DataValue::from(true));
+    assert_eq!(byte.unwrap(), DataValue::from(true));
+}
+
+#[test]
+fn lazy_folding_preserves_short_circuit() {
+    use crate::data::expr::LazyOp;
+    // partial_eval folds a closed lazy expression through its own lazy
+    // eval: the deciding prefix protects the erroring tail at fold time.
+    let mut e = lazy(LazyOp::And, vec![cnst(false), erroring()]);
+    e.partial_eval().unwrap();
+    assert_eq!(e, cnst(false));
+}
+
+#[test]
+fn lazy_refusal_spans_agree_between_machines() {
+    use crate::data::expr::LazyOp;
+    use crate::data::span::SourceSpan;
+    // Distinct spans everywhere: a span-blind fixture cannot see a
+    // divergence (the reviewers' refutation of the earlier pins).
+    let bad_arg = Expr::Const {
+        val: DataValue::from(1),
+        span: SourceSpan(30, 4),
+    };
+    let e = Expr::Lazy {
+        op: LazyOp::And,
+        args: Box::new([
+            Expr::Const {
+                val: DataValue::from(true),
+                span: SourceSpan(10, 4),
+            },
+            bad_arg,
+        ]),
+        span: SourceSpan(10, 100),
+    };
+    let tree_err = e.eval(&[] as &[DataValue]).unwrap_err();
+    let mut prog = vec![];
+    crate::data::expr::expr2bytecode(&e, &mut prog).unwrap();
+    let byte_err = eval_bytecode(&prog, &[] as &[DataValue], &mut vec![]).unwrap_err();
+    // Same error, same location: the offending ARGUMENT's span.
+    assert_eq!(tree_err.to_string(), byte_err.to_string());
+    let labels = |e: &miette::Report| -> Vec<(usize, usize)> {
+        e.labels()
+            .into_iter()
+            .flatten()
+            .map(|l| (l.offset(), l.len()))
+            .collect()
+    };
+    assert_eq!(
+        labels(&tree_err),
+        vec![(30, 4)],
+        "tree points at the argument"
+    );
+    assert_eq!(
+        labels(&byte_err),
+        vec![(30, 4)],
+        "bytecode points at the argument"
+    );
+}

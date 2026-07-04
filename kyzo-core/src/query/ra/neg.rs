@@ -1,0 +1,291 @@
+/*
+ * Copyright 2022, The Cozo Project Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
+ * (MPL-2.0); split out of query/ra.rs — see query/ra/mod.rs for the
+ * transformation record.
+ */
+
+//! Anti-join: left rows with no matching right row.
+// ─────────────────────────────────────────────────────────────────────────
+// NegJoin: anti-join
+// ─────────────────────────────────────────────────────────────────────────
+
+use super::{RelAlgebra, epoch_store_of};
+use crate::data::program::MagicSymbol;
+use crate::data::span::SourceSpan;
+use crate::data::symb::Symbol;
+use crate::data::value::DataValue;
+use crate::engines::segments::Segments;
+use crate::query::batch_ops::{Batch, BatchIter};
+use crate::query::levels::EpochStore;
+use crate::query::ra::StoredRowTooShortError;
+use crate::query::ra::join::{get_eliminate_indices, join_is_prefix};
+use crate::query::ra::{Joiner, StoredRA, TempStoreRA};
+use crate::storage::ReadTx;
+use itertools::Itertools;
+use miette::Result;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
+
+/// The permitted right sides of a negation: a rule-store scan or a
+/// stored-relation scan. Everything else is refused at construction by
+/// [`RelAlgebra::neg_join`] — this type is the constructor proof that the
+/// original's `unreachable!()` dispatch arms cannot be reached.
+#[derive(Debug)]
+pub(crate) enum NegRight {
+    TempStore(TempStoreRA),
+    Stored(StoredRA),
+}
+
+impl NegRight {
+    pub(crate) fn bindings(&self) -> &[Symbol] {
+        match self {
+            NegRight::TempStore(r) => &r.bindings,
+            NegRight::Stored(r) => &r.bindings,
+        }
+    }
+}
+
+/// Anti-join: a left tuple passes iff no right row matches it on the join
+/// columns. Introduces no columns of its own — semantically a filter over
+/// the left stream. Negation always reads right-side TOTALS, never deltas.
+#[derive(Debug)]
+pub(crate) struct NegJoin {
+    pub(crate) left: RelAlgebra,
+    pub(crate) right: NegRight,
+    pub(crate) joiner: Joiner,
+    pub(crate) to_eliminate: BTreeSet<Symbol>,
+    pub(crate) span: SourceSpan,
+}
+
+impl NegJoin {
+    pub(crate) fn do_eliminate_temp_vars(&mut self, used: &BTreeSet<Symbol>) -> Result<()> {
+        for binding in self.left.bindings_after_eliminate() {
+            if !used.contains(&binding) {
+                self.to_eliminate.insert(binding.clone());
+            }
+        }
+        let mut left = used.clone();
+        left.extend(self.joiner.left_keys.clone());
+        self.left.eliminate_temp_vars(&left)?;
+        // right acts as a filter, introduces nothing, no need to eliminate
+        Ok(())
+    }
+
+    /// The join strategy this node will use (explain output).
+    pub(crate) fn join_type(&self) -> Result<&'static str> {
+        let join_indices = self
+            .joiner
+            .join_indices(&self.left.bindings_after_eliminate(), self.right.bindings())?;
+        Ok(match &self.right {
+            NegRight::TempStore(_) => {
+                if join_is_prefix(&join_indices.1) {
+                    "mem_neg_prefix_join"
+                } else {
+                    "mem_neg_mat_join"
+                }
+            }
+            NegRight::Stored(_) => {
+                if join_is_prefix(&join_indices.1) {
+                    "stored_neg_prefix_join"
+                } else {
+                    "stored_neg_mat_join"
+                }
+            }
+        })
+    }
+}
+
+impl NegJoin {
+    /// The anti-join, batch-native: a filter over the left batch stream.
+    /// Per left row (a slice into the batch — no `Tuple` minted) one of
+    /// four probes answers "does any right row match?": a prefix scan or a
+    /// materialized join-column set, against a rule store or a stored
+    /// relation. Survivors are written once into the output batch, with
+    /// this node's eliminations applied. Negation always reads right-side
+    /// TOTALS, never deltas.
+    pub(crate) fn iter_batched<'a>(
+        &'a self,
+        tx: &'a impl ReadTx,
+        delta_rule: Option<&MagicSymbol>,
+        stores: &'a BTreeMap<MagicSymbol, EpochStore>,
+        segments: Segments<'a>,
+    ) -> Result<BatchIter<'a>> {
+        let bindings = self.left.bindings_after_eliminate();
+        let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
+        let (left_join_indices, right_join_indices) =
+            self.joiner.join_indices(&bindings, self.right.bindings())?;
+        debug_assert!(!right_join_indices.is_empty());
+
+        let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
+        right_invert_indices.sort_by_key(|(_, b)| **b);
+        let mut left_to_prefix_indices = vec![];
+        for (ord, (idx, ord_sorted)) in right_invert_indices.iter().enumerate() {
+            if ord != **ord_sorted {
+                break;
+            }
+            left_to_prefix_indices.push(left_join_indices[*idx]);
+        }
+
+        let has_match: Box<dyn FnMut(&[DataValue]) -> Result<bool> + 'a> = match &self.right {
+            NegRight::TempStore(r) => {
+                let storage = epoch_store_of(stores, &r.storage_key)?;
+                if join_is_prefix(&right_join_indices) {
+                    let lji = left_join_indices;
+                    let rji = right_join_indices;
+                    Box::new(move |row: &[DataValue]| {
+                        'outer: for found in
+                            storage.prefix_iter_projected(row, &left_to_prefix_indices, false)
+                        {
+                            for (l, r) in lji.iter().zip(rji.iter()) {
+                                if row[*l] != *found.get(*r) {
+                                    continue 'outer;
+                                }
+                            }
+                            return Ok(true);
+                        }
+                        Ok(false)
+                    })
+                } else {
+                    let mut right_join_vals = BTreeSet::new();
+                    for tuple in storage.all_iter() {
+                        let to_join: Box<[DataValue]> = right_join_indices
+                            .iter()
+                            .map(|i| tuple.get(*i).clone())
+                            .collect();
+                        right_join_vals.insert(to_join);
+                    }
+                    let lji = left_join_indices;
+                    Box::new(move |row: &[DataValue]| {
+                        let left_join_vals: Box<[DataValue]> =
+                            lji.iter().map(|i| row[*i].clone()).collect();
+                        Ok(right_join_vals.contains(&left_join_vals))
+                    })
+                }
+            }
+            NegRight::Stored(v) => {
+                if join_is_prefix(&right_join_indices) {
+                    let lji = left_join_indices;
+                    let rji = right_join_indices;
+                    Box::new(move |row: &[DataValue]| {
+                        'outer: for found in
+                            v.storage
+                                .scan_prefix_projected(tx, row, &left_to_prefix_indices)
+                        {
+                            let found = found?;
+                            for (l, r) in lji.iter().zip(rji.iter()) {
+                                let found_val = found.get(*r).ok_or_else(|| {
+                                    StoredRowTooShortError(
+                                        v.storage.name.to_string(),
+                                        *r,
+                                        found.len(),
+                                        v.span,
+                                    )
+                                })?;
+                                if row[*l] != *found_val {
+                                    continue 'outer;
+                                }
+                            }
+                            return Ok(true);
+                        }
+                        Ok(false)
+                    })
+                } else {
+                    let mut right_join_vals = BTreeSet::new();
+                    for tuple in v.storage.scan_all(tx) {
+                        let tuple = tuple?;
+                        let to_join: Box<[DataValue]> = right_join_indices
+                            .iter()
+                            .map(|i| tuple[*i].clone())
+                            .collect();
+                        right_join_vals.insert(to_join);
+                    }
+                    let lji = left_join_indices;
+                    Box::new(move |row: &[DataValue]| {
+                        let left_join_vals: Box<[DataValue]> =
+                            lji.iter().map(|i| row[*i].clone()).collect();
+                        Ok(right_join_vals.contains(&left_join_vals))
+                    })
+                }
+            }
+        };
+
+        Ok(Box::new(NegBatchFilter {
+            left: self.left.iter_batched(tx, delta_rule, stores, segments)?,
+            has_match,
+            eliminate_indices,
+            pending_err: None,
+        }))
+    }
+}
+
+/// The anti-join's batch executor: survivors accumulate densely across
+/// input batches; a probe error is stashed so already-accepted rows emit
+/// FIRST, in row order, before the error surfaces (the error-identity
+/// discipline every batch node keeps).
+struct NegBatchFilter<'a> {
+    left: BatchIter<'a>,
+    has_match: Box<dyn FnMut(&[DataValue]) -> Result<bool> + 'a>,
+    eliminate_indices: BTreeSet<usize>,
+    pending_err: Option<miette::Error>,
+}
+
+impl NegBatchFilter<'_> {
+    fn next_batch(&mut self) -> Result<Option<Batch>> {
+        if let Some(err) = self.pending_err.take() {
+            return Err(err);
+        }
+        let mut out = Batch::new();
+        while !out.is_full() {
+            let Some(batch) = self.left.next() else { break };
+            let batch = match batch {
+                Ok(b) => b,
+                Err(e) => {
+                    if out.is_empty() {
+                        return Err(e);
+                    }
+                    self.pending_err = Some(e);
+                    return Ok(Some(out));
+                }
+            };
+            for i in 0..batch.len() {
+                let row = batch.row(i);
+                match (self.has_match)(row) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        out.push_with(|buf| {
+                            for (j, v) in row.iter().enumerate() {
+                                if !self.eliminate_indices.contains(&j) {
+                                    buf.push(v.clone());
+                                }
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    Err(e) => {
+                        if out.is_empty() {
+                            return Err(e);
+                        }
+                        self.pending_err = Some(e);
+                        return Ok(Some(out));
+                    }
+                }
+            }
+        }
+        Ok(if out.is_empty() { None } else { Some(out) })
+    }
+}
+
+impl Iterator for NegBatchFilter<'_> {
+    type Item = Result<Batch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_batch().transpose()
+    }
+}

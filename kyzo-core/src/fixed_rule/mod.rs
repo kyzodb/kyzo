@@ -94,12 +94,13 @@ use crate::data::program::{
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, ValidityTs};
+use crate::data::value::{AsOf, DataValue};
 use crate::fixed_rule::algos::*;
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;
 use crate::query::eval::{BudgetDimension, LimitExceeded};
-use crate::runtime::temp_store::{EpochStore, RegularTempStore};
+use crate::query::levels::EpochStore;
+use crate::query::temp_store::RegularTempStore;
 
 pub(crate) mod algos;
 pub(crate) mod graph;
@@ -177,18 +178,14 @@ impl CancelFlag {
 /// never see this trait — it exists so their code is final now.
 pub(crate) trait StoredInputSource {
     fn stored_arity(&self, name: &Symbol) -> Result<usize>;
-    /// Scan the whole relation, as-of `valid_at` if given.
-    fn stored_scan_all<'a>(
-        &'a self,
-        name: &Symbol,
-        valid_at: Option<ValidityTs>,
-    ) -> Result<TupleIter<'a>>;
+    /// Scan the whole relation, as-of `as_of` if given.
+    fn stored_scan_all<'a>(&'a self, name: &Symbol, as_of: Option<AsOf>) -> Result<TupleIter<'a>>;
     /// Scan the tuples whose first key column equals `prefix`.
     fn stored_scan_prefix<'a>(
         &'a self,
         name: &Symbol,
         prefix: &DataValue,
-        valid_at: Option<ValidityTs>,
+        as_of: Option<AsOf>,
     ) -> Result<TupleIter<'a>>;
 }
 
@@ -224,18 +221,14 @@ impl StoredInputSource for NoStoredInputs {
     fn stored_arity(&self, name: &Symbol) -> Result<usize> {
         self.refuse(name)
     }
-    fn stored_scan_all<'a>(
-        &'a self,
-        name: &Symbol,
-        _valid_at: Option<ValidityTs>,
-    ) -> Result<TupleIter<'a>> {
+    fn stored_scan_all<'a>(&'a self, name: &Symbol, _as_of: Option<AsOf>) -> Result<TupleIter<'a>> {
         self.refuse(name)
     }
     fn stored_scan_prefix<'a>(
         &'a self,
         name: &Symbol,
         _prefix: &DataValue,
-        _valid_at: Option<ValidityTs>,
+        _as_of: Option<AsOf>,
     ) -> Result<TupleIter<'a>> {
         self.refuse(name)
     }
@@ -296,8 +289,8 @@ impl<'a> FixedRuleInputRelation<'a> {
                 })?;
                 Box::new(store.all_iter().map(|t| Ok(t.into_tuple())))
             }
-            MagicFixedRuleRuleArg::Stored { name, valid_at, .. } => {
-                self.stored.stored_scan_all(name, *valid_at)?
+            MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
+                self.stored.stored_scan_all(name, *as_of)?
             }
         })
     }
@@ -314,8 +307,8 @@ impl<'a> FixedRuleInputRelation<'a> {
                 let t = vec![prefix.clone()];
                 Box::new(store.prefix_iter(&t).map(|t| Ok(t.into_tuple())))
             }
-            MagicFixedRuleRuleArg::Stored { name, valid_at, .. } => {
-                self.stored.stored_scan_prefix(name, prefix, *valid_at)?
+            MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
+                self.stored.stored_scan_prefix(name, prefix, *as_of)?
             }
         })
     }
@@ -723,9 +716,11 @@ impl FixedRuleOutput {
 
     /// As [`Self::new`], but armed with the query's derived-tuple ceiling so
     /// the writer refuses mid-run once `baseline + rows > ceiling`. The
-    /// evaluator's fixed-rule dispatch (in `query::eval`, same module as
-    /// `Budget`) passes the epoch-0 `spent_derived` as `baseline` and the
-    /// budget's `derived_tuple_ceiling`; `None` leaves the writer unbounded.
+    /// evaluator passes the epoch-0 `spent_derived` as the `baseline`
+    /// argument of `query::eval::FixedRuleEval::run`; the session's fixed-
+    /// rule adapter (`query::normalize::SessionFixedRule`) forwards it here
+    /// unchanged, along with the budget's `derived_tuple_ceiling`. `None`
+    /// leaves the writer unbounded.
     pub(crate) fn new_budgeted(
         arity: usize,
         span: SourceSpan,
@@ -1486,7 +1481,7 @@ mod tests {
         let arg = MagicFixedRuleRuleArg::Stored {
             name: Symbol::new("some_relation", span),
             bindings: vec![],
-            valid_at: None,
+            as_of: None,
             span,
         };
         let stores = BTreeMap::new();

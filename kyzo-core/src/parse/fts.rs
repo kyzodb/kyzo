@@ -43,7 +43,7 @@ use smartstring::SmartString;
 use thiserror::Error;
 
 use crate::data::span::SourceSpan;
-use crate::fts::ast::{FtsExpr, FtsLiteral, FtsNear};
+use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::parse::expr::parse_string;
 use crate::parse::{
     ExtractSpan, IntoChildren, NESTING_CEILING, NestingTooDeep, Pair, ParseError, Rule,
@@ -310,7 +310,7 @@ static PRATT_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::{FTS_OPS_CEILING, FtsTooManyOps, parse_fts_query};
-    use crate::fts::ast::{FtsExpr, FtsNear};
+    use crate::engines::text::ast::{FtsExpr, FtsNear};
     use crate::parse::{NESTING_CEILING, NestingTooDeep};
 
     #[test]

@@ -22,8 +22,10 @@
  * are typed internal errors; the `rule_idx`/`sup_idx` narrowing to `u16` is
  * checked (silent wrap-around would merge distinct supplementary relations
  * — extra join tuples, i.e. changed *results*, not just changed demand);
- * time travel on a stored relation with no key columns is refused instead
- * of panicking (`keys.last().unwrap()`); the transaction-facing schema
+ * every stored relation time-travels through the universal bitemporal
+ * format (no per-schema validity column exists to check, so the old
+ * `keys.last().unwrap()` panic site has no successor); the
+ * transaction-facing schema
  * lookups sit behind the [`StoredRelationSchemaSource`] seam (the mirror of
  * `BodyNormalizer` in `data/program.rs` — the runtime's session transaction
  * implements it when it lands); the index-search atom arms (HNSW/FTS/LSH)
@@ -31,10 +33,8 @@
  * adornments are `Vec<bool>` (no `smallvec` dependency); the
  * `exempt_aggr_rules_for_magic_sets` walk is re-homed from
  * `NormalFormProgram` onto [`NormalFormStratum`], which is what the landed
- * stratified tier stores. `InvalidTimeTravelScanning` and
- * `NamedFieldNotFound` are declared here, their first port-order user; the
- * original homed them in `query/ra.rs` and `query/logical.rs`, which should
- * import them from here (or re-home them) when those files land.
+ * stratified tier stores. `NamedFieldNotFound` is declared here, its
+ * first port-order user.
  */
 
 //! The magic-sets rewrite: demand-driven evaluation as a program transform.
@@ -91,7 +91,7 @@ use crate::data::program::{
     MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum,
     StratifiedMagicProgram, StratifiedNormalFormProgram,
 };
-use crate::data::relation::{ColType, NullableColType, StoredRelationMetadata};
+use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
 
@@ -120,17 +120,6 @@ pub(crate) trait StoredRelationSchemaSource {
 // ─────────────────────────────────────────────────────────────────────────
 // Errors
 // ─────────────────────────────────────────────────────────────────────────
-
-/// Time travel (`@ timestamp`) demanded of a stored relation whose last key
-/// column is not of type `Validity` — including a relation with no key
-/// columns at all (the original panicked on that shape).
-#[derive(Debug, Error, Diagnostic)]
-#[error("Invalid time travel on relation {0}")]
-#[diagnostic(code(eval::invalid_time_travel))]
-#[diagnostic(help(
-    "Time travel scanning requires the last key column of the relation to be of type 'Validity'"
-))]
-pub(crate) struct InvalidTimeTravelScanning(pub(crate) String, #[label] pub(crate) SourceSpan);
 
 /// A named-field binding on a stored relation names a field the relation
 /// does not have.
@@ -471,29 +460,20 @@ fn adorn_fixed_rule_apply(
                 name,
                 bindings,
                 span,
-                valid_at,
-            } => {
-                if valid_at.is_some() {
-                    let metadata = schemas.stored_relation_schema(name, *span)?;
-                    ensure_validity_keyed(&metadata, name, *span)?;
-                }
-                MagicFixedRuleRuleArg::Stored {
-                    name: name.clone(),
-                    bindings: bindings.clone(),
-                    valid_at: *valid_at,
-                    span: *span,
-                }
-            }
+                as_of,
+            } => MagicFixedRuleRuleArg::Stored {
+                name: name.clone(),
+                bindings: bindings.clone(),
+                as_of: *as_of,
+                span: *span,
+            },
             FixedRuleArg::NamedStored {
                 name,
                 bindings,
-                valid_at,
+                as_of,
                 span,
             } => {
                 let metadata = schemas.stored_relation_schema(name, *span)?;
-                if valid_at.is_some() {
-                    ensure_validity_keyed(&metadata, name, *span)?;
-                }
                 let fields: BTreeSet<_> = metadata
                     .keys
                     .iter()
@@ -522,7 +502,7 @@ fn adorn_fixed_rule_apply(
                 MagicFixedRuleRuleArg::Stored {
                     name: name.clone(),
                     bindings: new_bindings,
-                    valid_at: *valid_at,
+                    as_of: *as_of,
                     span: *span,
                 }
             }
@@ -536,27 +516,6 @@ fn adorn_fixed_rule_apply(
         options: fixed.options.clone(),
         arity: fixed.arity,
     })
-}
-
-/// Refuse time travel unless the relation's last key column is exactly
-/// non-nullable `Validity`. A relation with no key columns fails too — the
-/// original called `keys.last().unwrap()` there.
-fn ensure_validity_keyed(
-    metadata: &StoredRelationMetadata,
-    name: &Symbol,
-    span: SourceSpan,
-) -> Result<()> {
-    let validity_keyed = metadata.keys.last().is_some_and(|col| {
-        col.typing
-            == NullableColType {
-                coltype: ColType::Validity,
-                nullable: false,
-            }
-    });
-    if !validity_keyed {
-        bail!(InvalidTimeTravelScanning(name.to_string(), span));
-    }
-    Ok(())
 }
 
 impl NormalFormInlineRule {
@@ -600,7 +559,7 @@ impl NormalFormAtom {
                 let v = MagicRelationApplyAtom {
                     name: v.name.clone(),
                     args: v.args.clone(),
-                    valid_at: v.valid_at,
+                    as_of: v.as_of,
                     span: v.span,
                 };
                 for arg in v.args.iter() {
@@ -674,7 +633,7 @@ impl NormalFormAtom {
                 MagicAtom::NegatedRelation(MagicRelationApplyAtom {
                     name: nv.name.clone(),
                     args: nv.args.clone(),
-                    valid_at: nv.valid_at,
+                    as_of: nv.as_of,
                     span: nv.span,
                 })
             }
@@ -939,6 +898,8 @@ mod tests {
         Unification,
     };
     use crate::data::relation::ColumnDef;
+    use crate::data::relation::{ColType, NullableColType};
+    use crate::data::value::AsOf;
     use crate::data::value::DataValue;
 
     // ── construction helpers ────────────────────────────────────────────
@@ -959,7 +920,7 @@ mod tests {
         NormalFormAtom::Relation(NormalFormRelationApplyAtom {
             name: sym(name),
             args: args.iter().map(|a| sym(a)).collect(),
-            valid_at: None,
+            as_of: None,
             span: SourceSpan(0, 0),
         })
     }
@@ -1567,7 +1528,7 @@ mod tests {
                     .iter()
                     .map(|(k, v)| (SmartString::from(*k), sym(v)))
                     .collect(),
-                valid_at: None,
+                as_of: None,
                 span: SourceSpan(0, 0),
             }],
             options: Arc::new(BTreeMap::new()),
@@ -1630,7 +1591,7 @@ mod tests {
             rule_args: vec![FixedRuleArg::Stored {
                 name: sym("edges"),
                 bindings: vec![sym("x")],
-                valid_at: Some(ValidityTs(Reverse(0))),
+                as_of: Some(AsOf::current(ValidityTs(Reverse(0)))),
                 span: SourceSpan(0, 0),
             }],
             options: Arc::new(BTreeMap::new()),
@@ -1640,25 +1601,19 @@ mod tests {
             fixed_impl: Arc::new(NoRule),
         };
 
-        let validity_keyed = FixedSchema(StoredRelationMetadata {
-            keys: vec![column("a", ColType::Int), column("at", ColType::Validity)],
-            non_keys: vec![],
-        });
-        adorn_fixed_rule_apply(&apply, &validity_keyed).expect("validity-keyed is accepted");
-
+        // Every facts relation time-travels in the one universal format:
+        // plain and even keyless schemas adorn under `@` without refusal.
         let plain = FixedSchema(StoredRelationMetadata {
             keys: vec![column("a", ColType::Int)],
             non_keys: vec![],
         });
-        let err = adorn_fixed_rule_apply(&apply, &plain).expect_err("must refuse");
-        assert!(err.to_string().contains("time travel"), "got: {err}");
+        adorn_fixed_rule_apply(&apply, &plain).expect("any facts relation time-travels");
 
         let keyless = FixedSchema(StoredRelationMetadata {
             keys: vec![],
             non_keys: vec![column("a", ColType::Int)],
         });
-        let err = adorn_fixed_rule_apply(&apply, &keyless)
-            .expect_err("keyless relation must refuse, not panic");
-        assert!(err.to_string().contains("time travel"), "got: {err}");
+        adorn_fixed_rule_apply(&apply, &keyless)
+            .expect("a keyless relation adorns without panicking");
     }
 }

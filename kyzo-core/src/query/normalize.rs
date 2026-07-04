@@ -67,14 +67,15 @@ use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
 use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, ValidityTs};
+use crate::data::value::{AsOf, DataValue};
 use crate::fixed_rule::{
     CancelFlag, FixedRuleOutput, FixedRulePayload, StoredInputSource, TupleIter,
 };
 use crate::query::eval::{Budget, FixedRuleEval};
+use crate::query::levels::EpochStore;
 use crate::query::magic::StoredRelationSchemaSource;
+use crate::query::temp_store::RegularTempStore;
 use crate::runtime::relation::{RelationHandle, get_relation};
-use crate::runtime::temp_store::{EpochStore, RegularTempStore};
 use crate::storage::ReadTx;
 use crate::storage::temp::TempTx;
 
@@ -145,13 +146,9 @@ impl<'a, T: ReadTx> SessionView<'a, T> {
     }
 
     /// Scan every row of a relation through the routed reader, as-of
-    /// `valid_at` when time travel is requested.
-    pub(crate) fn scan_all(
-        &self,
-        handle: &RelationHandle,
-        valid_at: Option<ValidityTs>,
-    ) -> TupleIter<'a> {
-        match (handle.is_temp, valid_at) {
+    /// `as_of` when time travel is requested.
+    pub(crate) fn scan_all(&self, handle: &RelationHandle, as_of: Option<AsOf>) -> TupleIter<'a> {
+        match (handle.is_temp, as_of) {
             (true, None) => handle.scan_all(self.temp),
             (true, Some(vld)) => handle.skip_scan_all(self.temp, vld),
             (false, None) => handle.scan_all(self.store),
@@ -164,9 +161,9 @@ impl<'a, T: ReadTx> SessionView<'a, T> {
         &self,
         handle: &RelationHandle,
         prefix: &Tuple,
-        valid_at: Option<ValidityTs>,
+        as_of: Option<AsOf>,
     ) -> TupleIter<'a> {
-        match (handle.is_temp, valid_at) {
+        match (handle.is_temp, as_of) {
             (true, None) => handle.scan_prefix(self.temp, prefix),
             (true, Some(vld)) => handle.skip_scan_prefix(self.temp, prefix, vld),
             (false, None) => handle.scan_prefix(self.store, prefix),
@@ -192,23 +189,19 @@ impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
         Ok(self.handle(&name.name)?.arity())
     }
 
-    fn stored_scan_all<'b>(
-        &'b self,
-        name: &Symbol,
-        valid_at: Option<ValidityTs>,
-    ) -> Result<TupleIter<'b>> {
+    fn stored_scan_all<'b>(&'b self, name: &Symbol, as_of: Option<AsOf>) -> Result<TupleIter<'b>> {
         let handle = self.handle(&name.name)?;
-        Ok(self.scan_all(&handle, valid_at))
+        Ok(self.scan_all(&handle, as_of))
     }
 
     fn stored_scan_prefix<'b>(
         &'b self,
         name: &Symbol,
         prefix: &DataValue,
-        valid_at: Option<ValidityTs>,
+        as_of: Option<AsOf>,
     ) -> Result<TupleIter<'b>> {
         let handle = self.handle(&name.name)?;
-        Ok(self.scan_prefix(&handle, &vec![prefix.clone()], valid_at))
+        Ok(self.scan_prefix(&handle, &vec![prefix.clone()], as_of))
     }
 }
 
@@ -407,7 +400,7 @@ fn convert_named_field_relation(
     InputNamedFieldRelationApplyAtom {
         name,
         mut args,
-        valid_at,
+        as_of,
         span,
     }: InputNamedFieldRelationApplyAtom,
     symb_gen: &mut TempSymbGen,
@@ -437,7 +430,7 @@ fn convert_named_field_relation(
     Ok(InputRelationApplyAtom {
         name,
         args: new_args,
-        valid_at,
+        as_of,
         span,
     })
 }
@@ -521,7 +514,7 @@ fn normalize_relation_apply(
     let apply = NormalFormRelationApplyAtom {
         name: atom.name,
         args,
-        valid_at: atom.valid_at,
+        as_of: atom.as_of,
         span: atom.span,
     };
     ret.push(if is_negated {
@@ -735,21 +728,22 @@ impl<T: ReadTx> FixedRuleEval for SessionFixedRule<'_, T> {
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         out: &mut RegularTempStore,
         budget: &Budget,
+        baseline: u64,
     ) -> Result<()> {
         let payload = FixedRulePayload {
             manifest: self.apply,
             stores,
             stored: &self.view,
         };
-        // Armed with the query's derived-tuple ceiling so a row-amplifying
-        // algorithm refuses mid-run instead of materializing unbounded
-        // output. Baseline 0: the bound is per-rule (this writer's own
-        // distinct rows), the conservative sound scope available here —
-        // the cross-rule cumulative check remains the epoch barrier's.
+        // Armed with the query's derived-tuple ceiling and the true global
+        // admitted total as of this stratum's epoch-0 barrier, so a
+        // row-amplifying algorithm refuses mid-run — counting every prior
+        // admission, not just this writer's own rows — instead of
+        // materializing unbounded output.
         let mut output = FixedRuleOutput::new_budgeted(
             self.apply.arity,
             self.apply.span,
-            0,
+            baseline,
             budget.derived_tuple_ceiling(),
         );
         self.apply

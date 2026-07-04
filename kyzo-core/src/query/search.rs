@@ -40,10 +40,10 @@ use crate::data::program::{SearchInput, TempSymbGen};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
-use crate::fts::tokenizer::TextAnalyzer;
-use crate::runtime::fts_index::{FtsScoreKind, FtsSearchParams};
-use crate::runtime::hnsw::HnswKnnParams;
-use crate::runtime::minhash_lsh::{HashPermutations, LshSearchParams};
+use crate::engines::fts::{FtsScoreKind, FtsSearchParams};
+use crate::engines::hnsw::HnswKnnParams;
+use crate::engines::lsh::{HashPermutations, LshSearchParams};
+use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::runtime::relation::{IndexKind, RelationHandle};
 
 /// A search atom the catalog has proven: live handles, decoded manifest,
@@ -105,7 +105,7 @@ impl std::fmt::Debug for SearchConfig {
 pub(crate) struct HnswSearch {
     pub(crate) base: RelationHandle,
     pub(crate) idx: RelationHandle,
-    pub(crate) manifest: crate::runtime::hnsw::HnswIndexManifest,
+    pub(crate) manifest: crate::engines::hnsw::HnswIndexManifest,
     pub(crate) params: HnswKnnParams,
 }
 
@@ -125,7 +125,7 @@ pub(crate) struct FtsSearch {
 pub(crate) struct LshSearch {
     pub(crate) base: RelationHandle,
     pub(crate) idx: RelationHandle,
-    pub(crate) manifest: crate::runtime::minhash_lsh::MinHashLshIndexManifest,
+    pub(crate) manifest: crate::engines::lsh::MinHashLshIndexManifest,
     pub(crate) params: LshSearchParams,
     pub(crate) analyzer: Arc<TextAnalyzer>,
     pub(crate) perms: Arc<HashPermutations>,

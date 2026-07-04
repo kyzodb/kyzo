@@ -18,8 +18,21 @@ The contract:
 - **MVCC commit with conflict detection (SSI)**: every read and range in a write transaction is
   conflict-tracked; commit fails with the typed, retryable `ConflictError` — discarding all changes —
   on conflict. Liveness is `retry_on_conflict`.
-- **Time travel = a validity stamp in the last key slot**: an as-of scan returns the newest version at
-  or before the query time, by seeking, with guaranteed termination on any stored bytes. Not optional.
+- **Time travel is bitemporal (mandatory, no single-axis past)**: every fact key ends with TWO
+  fixed-width slots — valid instant (outer) and system version (inner), flags pinned to assert — and a
+  row's claim polarity (Assert / Retract / Erase, `data/bitemporal.rs::ClaimPolarity`) rides in the
+  VALUE, never the key, so one valid instant has exactly one system lineage. An as-of scan
+  (`range_skip_scan_tuple`) resolves at an `AsOf { sys, valid }` coordinate by seeking, with
+  guaranteed termination on any stored bytes; a flag-bearing slot refuses as corruption.
+- **Stamp minting is snapshot-then-mint, and the order is load-bearing**: `write_tx` takes the fjall
+  snapshot FIRST and mints the system stamp SECOND (the mint takes the open snapshot as an argument,
+  so the reverse is unrepresentable). That ordering alone proves reads-from order agrees with stamp
+  order; minting first shipped a silent lost-update once.
+- **The clock floor is a monotone watermark** (`Storage::{clock_floor, raise_clock_floor}`): restore
+  raises the target's floor to the dump's before importing so imported instants can never be
+  re-minted; the persisted watermark writes under a lock so it never regresses under concurrent
+  mints. Bulk import (`batch_put`) is OUTSIDE the stamp/SSI surface and both backends refuse a
+  non-empty target.
 - **Pure Rust**: no C or C++ toolchain. Zero `unsafe` (compiler-enforced via `#![forbid]`).
 
 Durability is explicit and typed: `commit` survives a process crash, `commit_durable`/`sync` survive a

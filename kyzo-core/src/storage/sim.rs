@@ -91,8 +91,11 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use miette::{Result, miette};
 
-use crate::data::tuple::{Tuple, check_key_for_validity, extend_tuple_from_v};
-use crate::data::value::ValidityTs;
+use crate::data::bitemporal::{
+    check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
+};
+use crate::data::tuple::Tuple;
+use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
@@ -205,6 +208,11 @@ type VersionMap = BTreeMap<Vec<u8>, Vec<(u64, Option<Vec<u8>>)>>;
 
 struct SimState {
     versions: VersionMap,
+    /// The monotone logical system clock: DST determinism requires stamps
+    /// to be a pure function of the schedule, never the wall clock. Minted
+    /// under this state lock at write-transaction creation, matching the
+    /// contract's snapshot-creation stamping.
+    next_system_stamp: i64,
     /// Buffer-tier watermark: everything `<=` this survives a process crash.
     commit_seq: u64,
     /// Fsync-tier watermark: everything `<=` this survives a power cut.
@@ -468,14 +476,25 @@ impl SimStorage {
     }
 
     pub(crate) fn with_faults(seed: u64, faults: FaultConfig) -> Self {
-        Self::reopen(VersionMap::new(), 0, seed, 0, faults)
+        Self::reopen(VersionMap::new(), 0, 0, seed, 0, faults)
     }
 
-    fn reopen(versions: VersionMap, seq: u64, seed: u64, epoch: u64, faults: FaultConfig) -> Self {
+    fn reopen(
+        versions: VersionMap,
+        seq: u64,
+        stamp_floor: i64,
+        seed: u64,
+        epoch: u64,
+        faults: FaultConfig,
+    ) -> Self {
         SimStorage {
             ctx: SimCtx {
                 state: Arc::new(Mutex::new(SimState {
                     versions,
+                    // Stamps stay monotone across simulated restarts: the
+                    // floor carries the pre-crash clock, playing the role
+                    // fjall's persisted watermark plays for real crashes.
+                    next_system_stamp: stamp_floor,
                     commit_seq: seq,
                     synced_seq: seq,
                     attempts: BTreeMap::new(),
@@ -500,6 +519,7 @@ impl SimStorage {
         Self::reopen(
             st.versions.clone(),
             st.commit_seq,
+            st.next_system_stamp,
             self.ctx.seed,
             self.ctx.epoch + 1,
             self.ctx.faults,
@@ -535,6 +555,7 @@ impl SimStorage {
         Self::reopen(
             versions,
             st.synced_seq,
+            st.next_system_stamp,
             self.ctx.seed,
             self.ctx.epoch + 1,
             self.ctx.faults,
@@ -550,6 +571,17 @@ impl Storage for SimStorage {
         "sim"
     }
 
+    fn clock_floor(&self) -> Result<ValidityTs> {
+        let st = self.ctx.state.lock().expect(POISONED);
+        Ok(ValidityTs(std::cmp::Reverse(st.next_system_stamp)))
+    }
+
+    fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
+        let mut st = self.ctx.state.lock().expect(POISONED);
+        st.next_system_stamp = st.next_system_stamp.max(floor.0.0);
+        Ok(())
+    }
+
     fn read_tx(&self) -> Result<SimReadTx> {
         self.ctx.yield_turn();
         let st = self.ctx.state.lock().expect(POISONED);
@@ -561,9 +593,12 @@ impl Storage for SimStorage {
 
     fn write_tx(&self) -> Result<SimWriteTx> {
         self.ctx.yield_turn();
-        let st = self.ctx.state.lock().expect(POISONED);
+        let mut st = self.ctx.state.lock().expect(POISONED);
+        st.next_system_stamp += 1;
+        let stamp = ValidityTs(std::cmp::Reverse(st.next_system_stamp));
         Ok(SimWriteTx {
             snapshot: snapshot_at(&st, st.commit_seq),
+            stamp,
             start_seq: st.commit_seq,
             writes: BTreeMap::new(),
             reads: Mutex::new(ReadSet::default()),
@@ -575,6 +610,21 @@ impl Storage for SimStorage {
         &'a self,
         data: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
     ) -> Result<()> {
+        // The fresh-store precondition is refused, not just documented —
+        // same contract as the real backend, including its ORACLE: live
+        // keys only. A written-then-deleted store is genuinely empty,
+        // exactly as fjall's range probe sees it (tombstones must not
+        // make the test double stricter than reality).
+        {
+            let st = self.ctx.state.lock().expect(POISONED);
+            let has_live = st
+                .versions
+                .iter()
+                .any(|(_, versions)| versions.last().is_some_and(|(_, v)| v.is_some()));
+            if has_live {
+                miette::bail!("bulk import target is not empty: import only into a fresh store");
+            }
+        }
         // Atomic chunks, like the real backend: an interrupted import leaves
         // a clean prefix of the input, never a torn chunk. Chunk size
         // deliberately differs from fjall's (sim 1024 vs fjall 32_768) so
@@ -631,6 +681,7 @@ struct ReadSet {
 /// `&self` (and requires `Sync`) while conflict tracking must record.
 pub(crate) struct SimWriteTx {
     snapshot: BTreeMap<Vec<u8>, Vec<u8>>,
+    stamp: ValidityTs,
     start_seq: u64,
     /// `None` = tombstone. Read-your-own-writes overlays this on `snapshot`.
     writes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
@@ -674,6 +725,7 @@ impl SimWriteTx {
         self.ctx.yield_turn();
         let SimWriteTx {
             snapshot: _,
+            stamp: _,
             start_seq,
             writes,
             reads,
@@ -763,7 +815,7 @@ impl SimWriteTx {
 }
 
 /// The validity-aware seek loop, written once against the `ReadTx` surface:
-/// each step opens a fresh range at the bound `check_key_for_validity`
+/// each step opens a fresh range at the bound `check_key_for_bitemporal`
 /// returns. On a write transaction each step's `range_scan` records a read
 /// range — the "conservatively coarse, one per seek step" tracking the
 /// contract documents. Same termination guard as the real backend: the seek
@@ -771,7 +823,7 @@ impl SimWriteTx {
 struct SimSkipIter<'a, T: ReadTx + ?Sized> {
     tx: &'a T,
     upper: Vec<u8>,
-    valid_at: ValidityTs,
+    as_of: AsOf,
     next_bound: Vec<u8>,
 }
 
@@ -790,7 +842,11 @@ impl<T: ReadTx + ?Sized> Iterator for SimSkipIter<'_, T> {
                 Some(Ok(kv)) => kv,
             };
             drop(range);
-            let (ret, nxt_bound) = match check_key_for_validity(&k, self.valid_at, None) {
+            let polarity = match claim_polarity_of_value(&v) {
+                Ok(p) => p,
+                Err(e) => return Some(Err(e)),
+            };
+            let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, self.as_of, None) {
                 Ok(pair) => pair,
                 Err(e) => return Some(Err(e)),
             };
@@ -802,7 +858,7 @@ impl<T: ReadTx + ?Sized> Iterator for SimSkipIter<'_, T> {
                 succ
             };
             if let Some(mut tup) = ret {
-                if let Err(e) = extend_tuple_from_v(&mut tup, &v) {
+                if let Err(e) = extend_tuple_from_bitemporal_v(&mut tup, &v) {
                     return Some(Err(e));
                 }
                 return Some(Ok(tup));
@@ -846,12 +902,12 @@ impl ReadTx for SimReadTx {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         Box::new(SimSkipIter {
             tx: self,
             upper: upper.to_vec(),
-            valid_at,
+            as_of,
             next_bound: lower.to_vec(),
         })
     }
@@ -913,12 +969,12 @@ impl ReadTx for SimWriteTx {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-        valid_at: ValidityTs,
+        as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         Box::new(SimSkipIter {
             tx: self,
             upper: upper.to_vec(),
-            valid_at,
+            as_of,
             next_bound: lower.to_vec(),
         })
     }
@@ -934,6 +990,10 @@ impl ReadTx for SimWriteTx {
 }
 
 impl WriteTx for SimWriteTx {
+    fn system_stamp(&self) -> ValidityTs {
+        self.stamp
+    }
+
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.ctx.yield_turn();
         self.writes.insert(key.to_vec(), Some(val.to_vec()));

@@ -57,7 +57,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::{DataValue, MAX_VALIDITY_TS, ValidityTs};
+use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, ValidityTs};
 use crate::parse::expr::build_expr;
 use crate::parse::schema::parse_schema;
 use crate::parse::{
@@ -731,12 +731,12 @@ fn parse_atom(
                 .into_inner()
                 .map(|v| build_expr(v, param_pool))
                 .try_collect()?;
-            let valid_at = parse_validity_clause(src.next(), param_pool, cur_vld)?;
+            let as_of = parse_validity_clause(src.next(), param_pool, cur_vld)?;
             InputAtom::Relation {
                 inner: InputRelationApplyAtom {
                     name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
                     args,
-                    valid_at,
+                    as_of,
                     span,
                 },
             }
@@ -787,13 +787,13 @@ fn parse_atom(
                 .into_inner()
                 .map(|arg| extract_named_apply_arg(arg, param_pool))
                 .try_collect()?;
-            let valid_at = parse_validity_clause(src.next(), param_pool, cur_vld)?;
+            let as_of = parse_validity_clause(src.next(), param_pool, cur_vld)?;
             InputAtom::NamedFieldRelation {
                 inner: InputNamedFieldRelationApplyAtom {
                     name,
                     args,
                     span,
-                    valid_at,
+                    as_of,
                 },
             }
         }
@@ -821,15 +821,25 @@ fn parse_validity_clause(
     clause: Option<Pair<'_>>,
     param_pool: &BTreeMap<String, DataValue>,
     cur_vld: ValidityTs,
-) -> Result<Option<ValidityTs>> {
+) -> Result<Option<AsOf>> {
     match clause {
         None => Ok(None),
         Some(vld_clause) => {
-            let vld_expr = build_expr(
-                vld_clause.children().expect("the validity expression")?,
-                param_pool,
+            let mut coords = vld_clause.children();
+            let first = expr2vld_spec(
+                build_expr(coords.expect("the as-of expression")?, param_pool)?,
+                cur_vld,
             )?;
-            Ok(Some(expr2vld_spec(vld_expr, cur_vld)?))
+            Ok(Some(match coords.next() {
+                // `@ valid`: the record's current belief about that instant.
+                None => AsOf::current(first),
+                // `@ system, valid`: what the record said at `system`
+                // about the world at `valid`.
+                Some(second) => AsOf {
+                    sys: first,
+                    valid: expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?,
+                },
+            }))
         }
     }
 }
@@ -979,7 +989,7 @@ fn parse_fixed_rule(
                         let mut els = inner.children();
                         let name = els.expect("the relation name")?;
                         let mut bindings = vec![];
-                        let mut valid_at = None;
+                        let mut as_of = None;
                         for v in els {
                             match v.as_rule() {
                                 Rule::var => {
@@ -999,10 +1009,7 @@ fn parse_fixed_rule(
                                     }
                                 }
                                 Rule::validity_clause => {
-                                    let vld_inner =
-                                        v.children().expect("the validity expression")?;
-                                    let vld_expr = build_expr(vld_inner, param_pool)?;
-                                    valid_at = Some(expr2vld_spec(vld_expr, cur_vld)?)
+                                    as_of = parse_validity_clause(Some(v), param_pool, cur_vld)?;
                                 }
                                 _ => {
                                     return Err(unexpected("a binding or validity clause", &v));
@@ -1012,7 +1019,7 @@ fn parse_fixed_rule(
                         rule_args.push(FixedRuleArg::Stored {
                             name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
                             bindings,
-                            valid_at,
+                            as_of,
                             span,
                         })
                     }
@@ -1020,7 +1027,7 @@ fn parse_fixed_rule(
                         let mut els = inner.children();
                         let name = els.expect("the relation name")?;
                         let mut bindings = BTreeMap::new();
-                        let mut valid_at = None;
+                        let mut as_of = None;
                         for p in els {
                             match p.as_rule() {
                                 Rule::fixed_named_relation_arg_pair => {
@@ -1044,10 +1051,7 @@ fn parse_fixed_rule(
                                     bindings.insert(k, v);
                                 }
                                 Rule::validity_clause => {
-                                    let vld_inner =
-                                        p.children().expect("the validity expression")?;
-                                    let vld_expr = build_expr(vld_inner, param_pool)?;
-                                    valid_at = Some(expr2vld_spec(vld_expr, cur_vld)?)
+                                    as_of = parse_validity_clause(Some(p), param_pool, cur_vld)?;
                                 }
                                 _ => {
                                     return Err(unexpected("a field pair or validity clause", &p));
@@ -1062,7 +1066,7 @@ fn parse_fixed_rule(
                             // fixed-rule argument.
                             name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
                             bindings,
-                            valid_at,
+                            as_of,
                             span,
                         })
                     }

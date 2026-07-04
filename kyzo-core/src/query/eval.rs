@@ -124,7 +124,7 @@
 //! [`stratified_evaluate`] runs an execution-ordered stratified program
 //! (the shape minted by the magic tier; see
 //! [`crate::data::program::StratifiedMagicProgram`]) over the delta stores
-//! of [`crate::runtime::temp_store`]. Per stratum, rules are evaluated
+//! of [`crate::query::temp_store`]. Per stratum, rules are evaluated
 //! epoch by epoch: epoch 0 computes every rule from the current totals;
 //! later epochs re-derive only rules whose dependencies changed, joining
 //! against the *delta* of one changed store at a time (semi-naive). Each
@@ -191,9 +191,10 @@ use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
-use crate::runtime::temp_store::{
-    AdmissionSink, EpochStore, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
+use crate::query::temp_store::{
+    AdmissionSink, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
 };
 
 /// One head position's aggregation, if any — the shape carried through
@@ -211,7 +212,7 @@ type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum BudgetDimension {
     /// Derivations admitted to any store's total, summed over the whole
-    /// query — the [`Admitted`](crate::runtime::temp_store::Admitted)
+    /// query — the [`Admitted`](crate::query::temp_store::Admitted)
     /// counts of the admission seam, checked at the epoch **barrier**.
     DerivedTuples,
     /// A single rule's in-flight materialized derivations *within* one
@@ -634,15 +635,23 @@ pub(crate) trait RuleBody: Send + Sync {
 /// A fixed rule (graph algorithm / utility), as eval runs it: once, at
 /// epoch 0 of its stratum — stratification proves its inputs are complete
 /// strictly below and its readers sit strictly above. The fixed-rule tier
-/// implements this over `MagicFixedRuleApply` when it lands; the `budget`
-/// is passed so long-running algorithms can check interrupts cooperatively
-/// (the original passed `Poison` for the same purpose).
+/// (`query::normalize::SessionFixedRule`, over `fixed_rule::FixedRule`)
+/// implements this over `MagicFixedRuleApply`; the `budget` is passed so
+/// long-running algorithms can check interrupts cooperatively (the original
+/// passed `Poison` for the same purpose).
+///
+/// `baseline` is the globally admitted total as of this stratum's epoch-0
+/// barrier — the same quantity [`Budget::ticker`]'s `baseline` is for
+/// inline rules, so a fixed rule's own mid-run spend guard (e.g.
+/// [`crate::fixed_rule::FixedRuleOutput::new_budgeted`]) can count prior
+/// admissions instead of starting from zero.
 pub(crate) trait FixedRuleEval: Send + Sync {
     fn run(
         &self,
         stores: &BTreeMap<MagicSymbol, EpochStore>,
         out: &mut RegularTempStore,
         budget: &Budget,
+        baseline: u64,
     ) -> Result<()>;
 }
 
@@ -1121,7 +1130,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                 EvalDefinition::Fixed { rule, .. } => {
                     if epoch == 0 {
                         let mut out = RegularTempStore::default();
-                        rule.run(borrowed_stores, &mut out, budget)?;
+                        rule.run(borrowed_stores, &mut out, budget, epoch_baseline)?;
                         (false, out.wrap(), PendingWitnesses::new())
                     } else {
                         // Fixed rules run exactly once.
@@ -1684,7 +1693,7 @@ fn incremental_meet_eval<R: RuleBody>(
                 }
                 // The meet stores are slice consumers end to end: no derived
                 // row is ever minted on this path, owned or not.
-                if out.meet_put_admission_faithful(&item, total_meet)? {
+                if out.meet_put_admission_faithful(&item, &total_meet)? {
                     effective += 1;
                 }
                 ticker.tick(effective as usize)?;
@@ -2115,6 +2124,7 @@ mod tests {
             stores: &BTreeMap<MagicSymbol, EpochStore>,
             out: &mut RegularTempStore,
             _budget: &Budget,
+            _baseline: u64,
         ) -> Result<()> {
             let inputs: Vec<BTreeSet<Tuple>> = self
                 .inputs
@@ -4029,6 +4039,103 @@ mod tests {
         );
     }
 
+    /// A fixed rule that `put`s `rows` distinct tuples, ticking the ordinary
+    /// per-rule mid-run guard ([`Budget::ticker`]) as it goes — exercising
+    /// the exact `baseline` [`FixedRuleEval::run`] receives, the same way
+    /// [`crate::fixed_rule::FixedRuleOutput`]'s own guard does in
+    /// production.
+    struct BaselineCheckingFixed {
+        rows: i64,
+        symb: MagicSymbol,
+    }
+    impl FixedRuleEval for BaselineCheckingFixed {
+        fn run(
+            &self,
+            _stores: &BTreeMap<MagicSymbol, EpochStore>,
+            out: &mut RegularTempStore,
+            budget: &Budget,
+            baseline: u64,
+        ) -> Result<()> {
+            let mut ticker = budget.ticker(baseline, &self.symb);
+            for i in 0..self.rows {
+                ticker.tick(out.len())?;
+                out.put(vec![v(i)]);
+            }
+            Ok(())
+        }
+    }
+
+    /// Fixed-rule twin of [`nonzero_baseline_mid_epoch_refusal_counts_baseline`]:
+    /// proves the baseline `FixedRuleEval::run` now receives is the true
+    /// global admitted spend, not the fixed baseline-0 compromise. Stratum 0
+    /// admits exactly 100 rows and completes; stratum 1 (the entry) is a
+    /// FIXED rule that puts up to 400 rows, ticking the same mid-run guard
+    /// ordinary rules use.
+    ///
+    /// With ceiling 101: the fixed rule's first stride check lands at
+    /// `out.len() == 63`, so `spent` must be `baseline(100) + 63 == 163 >
+    /// 101` — refusing. Sabotage check: if the baseline were zeroed (the old
+    /// compromise), `0 + 63 == 63 ≤ 101` would NOT trip at that check; the
+    /// rule would keep materializing and only refuse later, at a different
+    /// (lower) `spent` value — so pinning `spent == 163` exactly fails under
+    /// that reversion.
+    ///
+    /// With ceiling 1000 (accommodates the true total of 100 + 400 = 500):
+    /// the same program must COMPLETE, proving the plumbing doesn't
+    /// over-refuse when the global total fits.
+    #[test]
+    fn fixed_rule_budget_counts_global_baseline() {
+        fn program(ceiling: u64) -> (EvalProgram<CrossProduct, BaselineCheckingFixed>, Budget) {
+            let mut s0: EvalStratum<CrossProduct, BaselineCheckingFixed> = EvalStratum::default();
+            s0.defs.insert(
+                muggle("s0"),
+                EvalDefinition::Rules(
+                    EvalRuleSet::new(
+                        vec![None, None],
+                        vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
+                    )
+                    .unwrap(),
+                ),
+            );
+            let mut s1: EvalStratum<CrossProduct, BaselineCheckingFixed> = EvalStratum::default();
+            s1.defs.insert(
+                entry_symbol(),
+                EvalDefinition::Fixed {
+                    arity: 1,
+                    rule: BaselineCheckingFixed {
+                        rows: 400,
+                        symb: entry_symbol(),
+                    },
+                },
+            );
+            let program = EvalProgram::from_execution_order(vec![s0, s1]).unwrap();
+            let budget = generous_budget().with_derived_tuple_ceiling(ceiling);
+            (program, budget)
+        }
+
+        // Refuses: the fixed rule's own spend, uncounted, would never cross
+        // 101; only the true global baseline (100 from stratum 0) does.
+        let (prog, budget) = program(101);
+        let err = stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
+            .expect_err("the fixed rule must refuse because the global baseline is counted");
+        let refusal: &LimitExceeded = err.downcast_ref().expect("typed refusal");
+        assert_eq!(refusal.dimension, BudgetDimension::InFlightDerivations);
+        assert_eq!(refusal.ceiling, 101);
+        assert_eq!(
+            refusal.spent, 163,
+            "spend must be baseline(100) + in_flight(63); a zeroed baseline changes both \
+             the trip point and this value"
+        );
+
+        // Completes: a ceiling that accommodates the true total (100 + 400)
+        // must not refuse.
+        let (prog, budget) = program(1000);
+        let outcome =
+            stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
+                .expect("a ceiling covering the true total must not refuse");
+        assert_eq!(outcome.store.all_iter().count(), 400);
+    }
+
     /// F3 pin: the STREAMING harness bounds the killer shape. A 10_000×10_000
     /// cross product (100M candidate rows) through the `ModelBody` oracle
     /// harness with a small ceiling must refuse — typed, fast, bounded — NOT
@@ -4154,6 +4261,7 @@ mod tests {
             _stores: &BTreeMap<MagicSymbol, EpochStore>,
             _out: &mut RegularTempStore,
             _budget: &Budget,
+            _baseline: u64,
         ) -> Result<()> {
             Ok(())
         }

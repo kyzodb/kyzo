@@ -6,12 +6,17 @@ paths:
 
 `kyzo-core` (package name `kyzo`) is the database engine. Map:
 
-- `data/` — value model, **memcmp.rs** (on-disk key encoding), tuple layout
+- `data/` — value model; the three wire formats each in their own file: **memcmp.rs** (key
+  encoding), **bitemporal.rs** (two-axis resolution kernel + claim polarity), **fact_payload.rs**
+  (self-describing value layout); tuple layout; **batch.rs** (the columnar execution currency)
 - `parse/` — pest grammar → `InputProgram` (the language is KyzoScript)
-- `query/` — the Datalog compiler (see the query rule)
+- `query/` — the Datalog compiler and evaluator, including the fixpoint state (`temp_store.rs`)
+  and the columnar expression evaluator (`vm.rs`) (see the query rule)
 - `storage/` — the `Storage`/`ReadTx`/`WriteTx` species + the single pure-Rust KV backend (see the storage rule)
-- `runtime/` — `db.rs` entrypoint; hnsw/minhash_lsh/fts operators; transactions
-- `fts/`, `fixed_rule/` — full-text search; built-in graph algorithms
+- `engines/` — the derived-index engines: hnsw, fts, lsh, spatial, sparse, gazetteer
+- `runtime/` — the session layer: `db.rs` entrypoint, the mutation tier (`mutate.rs`), the
+  catalog (`relation.rs`), constraints, callbacks
+- `fixed_rule/` — built-in graph algorithms (text analysis lives in `engines/text/`)
 
 **Standing laws:**
 - The engine is **pure Rust**: no C or C++ compiler in the `kyzo-core` / `kyzo-bin` build. Do not

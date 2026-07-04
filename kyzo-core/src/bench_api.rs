@@ -8,8 +8,8 @@
  */
 
 //! An opaque façade over the crate-internal query pipeline, for the RA-layer
-//! criterion benches (`benches/ra_exec.rs`) and the iterator-vs-batched
-//! equivalence campaign.
+//! criterion benches (`benches/ra_exec.rs`) and the determinism campaign —
+//! all through the engine's one (vectorized) execution machine.
 //!
 //! The RA execution path — `stratified_magic_compile → bind_for_eval →
 //! stratified_evaluate` — is entirely `pub(crate)`; a criterion bench is an
@@ -45,10 +45,12 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
+use crate::engines::segments::Segments;
 use crate::query::compile::{
-    CompiledProgram, ExecMode, NoFixedRules, bind_for_eval, stratified_magic_compile,
+    CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
 use crate::storage::sim::SimStorage;
@@ -63,26 +65,6 @@ pub enum Backend {
     /// On-disk LSM (`fjall`). The real substrate; measures scan cost through
     /// the storage contract.
     Fjall,
-}
-
-/// Which RA execution strategy the run drives. The batched path is
-/// selected here and threaded through `bind_for_eval` to `RelAlgebra`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Exec {
-    /// The classic tuple-at-a-time iterator tree.
-    Iterator,
-    /// The batched (vectorized) pipeline, where implemented; falls back to
-    /// the iterator path per-operator otherwise.
-    Batched,
-}
-
-impl Exec {
-    fn to_mode(self) -> ExecMode {
-        match self {
-            Exec::Iterator => ExecMode::Iterator,
-            Exec::Batched => ExecMode::Batched,
-        }
-    }
 }
 
 // ── span / symbol plumbing (mirrors compile.rs's test helpers) ───────────
@@ -127,7 +109,7 @@ fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        valid_at: None,
+        as_of: None,
         span: sp(),
     })
 }
@@ -179,26 +161,26 @@ impl Workload {
 
     /// Evaluate to the entry store and return its row count. The whole
     /// point of the bench: this is the region criterion times.
-    pub fn run(&self, exec: Exec) -> usize {
+    pub fn run(&self) -> usize {
         match &self.backend {
-            BackendStore::Mem(s) => self.run_on(s, exec),
-            BackendStore::Fjall(s) => self.run_on(s, exec),
+            BackendStore::Mem(s) => self.run_on(s),
+            BackendStore::Fjall(s) => self.run_on(s),
         }
     }
 
     /// Evaluate to the entry store and return its rows, sorted. Used by the
     /// equivalence campaign (iterator vs batched must be byte-identical).
-    pub fn collect(&self, exec: Exec) -> Vec<Tuple> {
+    pub fn collect(&self) -> Vec<Tuple> {
         match &self.backend {
-            BackendStore::Mem(s) => self.collect_on(s, exec),
-            BackendStore::Fjall(s) => self.collect_on(s, exec),
+            BackendStore::Mem(s) => self.collect_on(s),
+            BackendStore::Fjall(s) => self.collect_on(s),
         }
     }
 
-    fn run_on<S: Storage>(&self, store: &S, exec: Exec) -> usize {
+    fn run_on<S: Storage>(&self, store: &S) -> usize {
         let rtx = store.read_tx().expect("read tx");
         let program =
-            bind_for_eval::<_, NoFixedRules>(&self.compiled, &rtx, exec.to_mode(), &mut |_| {
+            bind_for_eval::<_, NoFixedRules>(&self.compiled, &rtx, Segments::OFF, &mut |_| {
                 panic!("bench workloads have no fixed rules")
             })
             .expect("binds");
@@ -213,10 +195,10 @@ impl Workload {
         outcome.store.all_iter().count()
     }
 
-    fn collect_on<S: Storage>(&self, store: &S, exec: Exec) -> Vec<Tuple> {
+    fn collect_on<S: Storage>(&self, store: &S) -> Vec<Tuple> {
         let rtx = store.read_tx().expect("read tx");
         let program =
-            bind_for_eval::<_, NoFixedRules>(&self.compiled, &rtx, exec.to_mode(), &mut |_| {
+            bind_for_eval::<_, NoFixedRules>(&self.compiled, &rtx, Segments::OFF, &mut |_| {
                 panic!("bench workloads have no fixed rules")
             })
             .expect("binds");
@@ -307,11 +289,16 @@ fn seed_backend<S: Storage>(store: &S, seeds: &[SeedRelation]) {
             dep_bindings: vec![],
             span: sp(),
         };
-        let handle = create_relation(&mut tx, input).expect("create relation");
+        let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
         for row in &rel.rows {
-            let key = handle.encode_key_for_store(row, sp()).expect("encode key");
-            let val = handle.encode_val_for_store(row, sp()).expect("encode val");
-            tx.put(&key, &val).expect("put row");
+            handle
+                .put_fact(
+                    &mut tx,
+                    row,
+                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    sp(),
+                )
+                .expect("put row");
         }
     }
     tx.commit().expect("commit");

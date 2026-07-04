@@ -35,7 +35,7 @@ use std::path::PathBuf;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kyzo::bench_api::{
-    Backend, Exec, Graph, Workload, aggregation, scan_filter, three_way_join, transitive_closure,
+    Backend, Graph, Workload, aggregation, scan_filter, three_way_join, transitive_closure,
 };
 
 const SEED: u64 = 0x5EED_1234;
@@ -64,17 +64,11 @@ impl DirFactory {
 
 fn bench_workload(c: &mut Criterion, group_name: &str, w: &Workload) {
     let mut g = c.benchmark_group(group_name);
-    // A fixed row count is the natural throughput unit; criterion prints
-    // time/iter, and the two modes share the id so they sit side by side.
-    for exec in [Exec::Iterator, Exec::Batched] {
-        let tag = match exec {
-            Exec::Iterator => "iter",
-            Exec::Batched => "batch",
-        };
-        g.bench_with_input(BenchmarkId::new(w.label(), tag), &exec, |b, &exec| {
-            b.iter(|| black_box(w.run(exec)));
-        });
-    }
+    // One machine: the id keeps the historical "batch" tag so criterion's
+    // stored baselines stay comparable across the twin's deletion.
+    g.bench_with_input(BenchmarkId::new(w.label(), "batch"), &(), |b, _| {
+        b.iter(|| black_box(w.run()));
+    });
     g.finish();
 }
 

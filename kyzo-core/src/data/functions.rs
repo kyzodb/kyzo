@@ -332,16 +332,6 @@ pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
     }
 }
 
-define_op!(OP_COALESCE, 0, true, true);
-pub(crate) fn op_coalesce(args: &[DataValue]) -> Result<DataValue> {
-    for val in args {
-        if *val != DataValue::Null {
-            return Ok(val.clone());
-        }
-    }
-    Ok(DataValue::Null)
-}
-
 define_op!(OP_EQ, 2, false, true);
 pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match (&args[0], &args[1]) {
@@ -1141,32 +1131,6 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
         }
         _ => bail!("'mod' requires numbers"),
     })
-}
-
-define_op!(OP_AND, 0, true, true);
-pub(crate) fn op_and(args: &[DataValue]) -> Result<DataValue> {
-    for arg in args {
-        if !arg
-            .get_bool()
-            .ok_or_else(|| miette!("'and' requires booleans"))?
-        {
-            return Ok(DataValue::from(false));
-        }
-    }
-    Ok(DataValue::from(true))
-}
-
-define_op!(OP_OR, 0, true, true);
-pub(crate) fn op_or(args: &[DataValue]) -> Result<DataValue> {
-    for arg in args {
-        if arg
-            .get_bool()
-            .ok_or_else(|| miette!("'or' requires booleans"))?
-        {
-            return Ok(DataValue::from(true));
-        }
-    }
-    Ok(DataValue::from(false))
 }
 
 define_op!(OP_NEGATE, 1, false, true);

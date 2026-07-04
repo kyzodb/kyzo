@@ -2,6 +2,8 @@
 paths:
   - "kyzo-core/src/data/memcmp.rs"
   - "kyzo-core/src/data/tuple.rs"
+  - "kyzo-core/src/data/bitemporal.rs"
+  - "kyzo-core/src/data/fact_payload.rs"
 ---
 # Rule: memory-comparable key encoding (ON-DISK FORMAT)
 
@@ -23,7 +25,7 @@ serve relational, graph, vector, and text access paths uniformly.
 
 The invariant is executable law: `storage/tests.rs` holds the round-trip and order-embedding property
 tests (corpus + generative + byte-flip corruption). `EncodedKey` (tuple.rs) is the typed written form —
-only encoders construct it; the key layout (relation prefix, fixed-width validity tail) lives on that
+only encoders construct it; the key layout (relation prefix, fixed-width bitemporal tail (two time slots: valid-instant outer, system-version inner — the resolution algebra over them is `data/bitemporal.rs`; the value's tagged-field layout is `data/fact_payload.rs`, FormatVersion 3)) lives on that
 type, not as scattered offsets.
 
 **A change here requires:** the law tests passing (round-trip, order embedding, never-panic on corrupt

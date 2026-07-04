@@ -129,6 +129,7 @@ pub struct ValidityTs(pub Reverse<i64>);
 #[derive(
     Copy,
     Clone,
+    Debug,
     Eq,
     PartialEq,
     Ord,
@@ -169,6 +170,32 @@ pub fn current_validity() -> miette::Result<ValidityTs> {
         .map_err(|_| miette::miette!("host clock reports a time before 1970"))?
         .as_micros() as i64;
     Ok(ValidityTs(Reverse(ts_micros)))
+}
+
+/// A bitemporal read coordinate: WHERE in recorded history a query
+/// stands. `sys` picks the record's state (what was known), `valid`
+/// picks the world instant asked about (what held). One named pair
+/// instead of two adjacent `ValidityTs` arguments, so a sys/valid swap
+/// is a type the compiler never sees, not a bug a test must catch.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct AsOf {
+    /// The system-time coordinate: resolve each fact by the newest
+    /// system version at or before this instant.
+    pub sys: ValidityTs,
+    /// The valid-time coordinate: among believed claims, the newest
+    /// valid instant at or before this one governs.
+    pub valid: ValidityTs,
+}
+
+impl AsOf {
+    /// The record's current belief about the world at `valid` — the
+    /// coordinate every non-historical read uses.
+    pub const fn current(valid: ValidityTs) -> Self {
+        AsOf {
+            sys: MAX_VALIDITY_TS,
+            valid,
+        }
+    }
 }
 
 pub(crate) const MAX_VALIDITY_TS: ValidityTs = ValidityTs(Reverse(i64::MAX));
@@ -311,6 +338,35 @@ impl<'de> serde::Deserialize<'de> for Vector {
     }
 }
 
+/// Bytes that borrow from the input when the deserializer can lend and
+/// copy when it cannot — total over serde's byte access patterns.
+struct CowBytes<'de>(std::borrow::Cow<'de, [u8]>);
+
+impl<'de> serde::Deserialize<'de> for CowBytes<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = CowBytes<'de>;
+            fn expecting(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a byte array")
+            }
+            fn visit_borrowed_bytes<E>(self, v: &'de [u8]) -> Result<Self::Value, E> {
+                Ok(CowBytes(std::borrow::Cow::Borrowed(v)))
+            }
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(CowBytes(std::borrow::Cow::Owned(v.to_vec())))
+            }
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(CowBytes(std::borrow::Cow::Owned(v)))
+            }
+        }
+        deserializer.deserialize_bytes(V)
+    }
+}
+
 struct VectorVisitor;
 
 impl<'de> Visitor<'de> for VectorVisitor {
@@ -326,9 +382,15 @@ impl<'de> Visitor<'de> for VectorVisitor {
         let tag: u8 = seq
             .next_element()?
             .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-        let bytes: &[u8] = seq
-            .next_element()?
-            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+        // Borrow when the source can lend (slice-backed decode), copy when
+        // it cannot (reader-backed decode): a vector must deserialize from
+        // BOTH, so demanding `&'de [u8]` here would wrongly refuse any
+        // reader-based deserializer.
+        let bytes: std::borrow::Cow<'de, [u8]> = seq
+            .next_element::<CowBytes<'de>>()?
+            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?
+            .0;
+        let bytes: &[u8] = &bytes;
         match tag {
             0u8 => {
                 if !bytes.len().is_multiple_of(4) {

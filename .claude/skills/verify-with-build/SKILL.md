@@ -22,10 +22,15 @@ Every claim about the code is backed by evidence produced in this session, or it
 
 ## Standard verification commands
 
-    cargo build -p kyzo --release        # core
-    cargo test  -p kyzo --release        # core tests
-    cargo build --workspace              # whole-workspace (the honest scope)
-    cargo tree  -p kyzo -e normal,build  # dependency-graph claims (incl. build deps)
+    (ulimit -v 12582912 && timeout 1800 cargo build -p kyzo --release)        # core
+    (ulimit -v 12582912 && timeout 1800 cargo test  -p kyzo --release)        # core tests
+    (ulimit -v 12582912 && timeout 1800 cargo build --workspace)              # whole-workspace (the honest scope)
+    (ulimit -v 12582912 && timeout 1800 cargo tree  -p kyzo -e normal,build)  # dependency-graph claims
+
+Every cargo invocation is memory-capped and timed out — two machines have
+been OOM-killed without this. Mutation runs use the tighter cap:
+`(ulimit -v 8388608 && timeout 600 cargo mutants ...)`.
+
 
 ## Exit codes, not pipe output
 A command piped into grep/tail reports the LAST pipe stage's exit code: `cargo clippy | tail` looks

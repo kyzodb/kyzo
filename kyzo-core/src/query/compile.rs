@@ -117,6 +117,7 @@
 //! [`bind_for_eval`], which binds a transaction and yields the
 //! `EvalProgram` that `query/eval.rs::stratified_evaluate` runs.
 
+use crate::engines::segments::Segments;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
@@ -138,11 +139,12 @@ use crate::query::eval::{
     ContainedRuleMultiplicity, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
     FixedRuleEval, Premises, RuleBody,
 };
+use crate::query::levels::EpochStore;
 use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
+use crate::query::temp_store::RegularTempStore;
 use crate::runtime::relation::{
     AccessLevel, IndexKind, IndexPositionUse, InsufficientAccessLevel, get_relation,
 };
-use crate::runtime::temp_store::{EpochStore, RegularTempStore};
 use crate::storage::ReadTx;
 
 /// One head position's aggregation, if any — the same shape carried by
@@ -453,17 +455,13 @@ pub(crate) fn compile_magic_rule_body(
                     }
                 }
 
-                let chosen_index = store.choose_index(&join_indices, rel_app.valid_at.is_some());
+                let chosen_index = store.choose_index(&join_indices, rel_app.as_of.is_some());
 
                 match chosen_index {
                     None => {
                         // scan the base relation
-                        let right = RelAlgebra::relation(
-                            right_vars,
-                            store,
-                            rel_app.span,
-                            rel_app.valid_at,
-                        )?;
+                        let right =
+                            RelAlgebra::relation(right_vars, store, rel_app.span, rel_app.as_of)?;
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret = ret.join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }
@@ -491,7 +489,7 @@ pub(crate) fn compile_magic_rule_body(
                                 new_right_vars,
                                 idx_store,
                                 rel_app.span,
-                                rel_app.valid_at,
+                                rel_app.as_of,
                             )?;
                             debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                             ret =
@@ -526,7 +524,7 @@ pub(crate) fn compile_magic_rule_body(
                                     index_vars.clone(),
                                     idx_store,
                                     rel_app.span,
-                                    rel_app.valid_at,
+                                    rel_app.as_of,
                                 )?;
                                 ret = ret.join(index, left_keys, right_keys, rel_app.span)?;
                             }
@@ -544,7 +542,7 @@ pub(crate) fn compile_magic_rule_body(
                                     right_vars,
                                     store,
                                     rel_app.span,
-                                    rel_app.valid_at,
+                                    rel_app.as_of,
                                 )?;
                                 ret = ret.join(relation, left_keys, right_keys, rel_app.span)?;
                             }
@@ -651,19 +649,15 @@ pub(crate) fn compile_magic_rule_body(
                     }
                 }
 
-                let chosen_index = store.choose_index(&join_indices, rel_app.valid_at.is_some());
+                let chosen_index = store.choose_index(&join_indices, rel_app.as_of.is_some());
 
                 match chosen_index {
                     // No usable index, or one that would need a back-join
                     // (useless under negation: the anti-join needs the
                     // base rows themselves): scan the base relation.
                     None | Some((_, true)) => {
-                        let right = RelAlgebra::relation(
-                            right_vars,
-                            store,
-                            rel_app.span,
-                            rel_app.valid_at,
-                        )?;
+                        let right =
+                            RelAlgebra::relation(right_vars, store, rel_app.span, rel_app.as_of)?;
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
@@ -688,7 +682,7 @@ pub(crate) fn compile_magic_rule_body(
                             new_right_vars,
                             idx_store,
                             rel_app.span,
-                            rel_app.valid_at,
+                            rel_app.as_of,
                         )?;
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
@@ -825,25 +819,7 @@ pub(crate) fn compile_magic_rule_body(
 pub(crate) struct CompiledRuleBody<'a, T> {
     plan: &'a CompiledRule,
     tx: &'a T,
-    mode: ExecMode,
-}
-
-/// Which RA execution strategy a bound rule body drives. The two paths are
-/// observationally identical (same tuples, same order); the choice is a
-/// performance knob threaded from `bind_for_eval`. This is the single seam
-/// where the tuple-at-a-time iterator tree and the batched (vectorized)
-/// pipeline coexist: `for_each_derivation` picks one and hands each row to
-/// the slice-consuming callback — borrowed straight out of the batch
-/// buffer on the batched path, owned on the iterator path — so nothing
-/// above it (the semi-naive loop, the admission barrier, the budget) sees
-/// a difference, and no batch row is minted unless eval admits it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ExecMode {
-    /// The classic `RelAlgebra::iter` tuple stream.
-    Iterator,
-    /// The batched `RelAlgebra::iter_batched` pipeline, where a node
-    /// implements it; per-operator fallback to the iterator path otherwise.
-    Batched,
+    segments: Segments<'a>,
 }
 
 impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
@@ -854,29 +830,18 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
         _want_premises: bool,
         f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
-        match self.mode {
-            ExecMode::Iterator => {
-                for tuple in self.plan.relation.iter(self.tx, delta_from, stores)? {
-                    if f(Cow::Owned(tuple?), Premises::NotRequested)?.is_break() {
-                        return Ok(());
-                    }
-                }
-            }
-            ExecMode::Batched => {
-                for batch in self
-                    .plan
-                    .relation
-                    .iter_batched(self.tx, delta_from, stores)?
-                {
-                    // Rows cross the seam as borrowed slices into the
-                    // batch's flattened buffer: eval dedups and filters on
-                    // the slice and mints an owned row only on admission.
-                    let batch = batch?;
-                    for row in batch.iter_rows() {
-                        if f(Cow::Borrowed(row), Premises::NotRequested)?.is_break() {
-                            return Ok(());
-                        }
-                    }
+        for batch in self
+            .plan
+            .relation
+            .iter_batched(self.tx, delta_from, stores, self.segments)?
+        {
+            // Rows cross the seam as borrowed slices into the
+            // batch's flattened buffer: eval dedups and filters on
+            // the slice and mints an owned row only on admission.
+            let batch = batch?;
+            for row in batch.iter_rows() {
+                if f(Cow::Borrowed(row), Premises::NotRequested)?.is_break() {
+                    return Ok(());
                 }
             }
         }
@@ -901,6 +866,7 @@ impl FixedRuleEval for NoFixedRules {
         _stores: &BTreeMap<MagicSymbol, EpochStore>,
         _out: &mut RegularTempStore,
         _budget: &crate::query::eval::Budget,
+        _baseline: u64,
     ) -> Result<()> {
         match *self {}
     }
@@ -915,7 +881,7 @@ impl FixedRuleEval for NoFixedRules {
 pub(crate) fn bind_for_eval<'a, T: ReadTx, F: FixedRuleEval>(
     compiled: &'a [CompiledProgram],
     tx: &'a T,
-    mode: ExecMode,
+    segments: Segments<'a>,
     make_fixed: &mut dyn FnMut(&'a MagicFixedRuleApply) -> Result<F>,
 ) -> Result<EvalProgram<CompiledRuleBody<'a, T>, F>> {
     let mut strata = Vec::with_capacity(compiled.len());
@@ -927,7 +893,7 @@ pub(crate) fn bind_for_eval<'a, T: ReadTx, F: FixedRuleEval>(
                     let bodies = rules
                         .rules
                         .iter()
-                        .map(|plan| CompiledRuleBody { plan, tx, mode })
+                        .map(|plan| CompiledRuleBody { plan, tx, segments })
                         .collect();
                     EvalDefinition::Rules(
                         EvalRuleSet::new(rules.aggr.clone(), bodies)
@@ -971,6 +937,7 @@ mod tests {
     use crate::data::tuple::Tuple;
     use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
     use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
+    use crate::runtime::relation::KeyspaceKind;
     use crate::runtime::relation::{create_relation, set_access_level};
     use crate::storage::fjall::{FjallStorage, new_fjall_storage};
     use crate::storage::{Storage, WriteTx};
@@ -1050,11 +1017,16 @@ mod tests {
             span: sp(),
         };
         let mut tx = db.write_tx().expect("write tx");
-        let handle = create_relation(&mut tx, input).expect("create relation");
+        let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
         for row in rows {
-            let key = handle.encode_key_for_store(row, sp()).expect("encode key");
-            let val = handle.encode_val_for_store(row, sp()).expect("encode val");
-            tx.put(&key, &val).expect("put row");
+            handle
+                .put_fact(
+                    &mut tx,
+                    row,
+                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    sp(),
+                )
+                .expect("put row");
         }
         tx.commit().expect("commit");
     }
@@ -1078,7 +1050,7 @@ mod tests {
         MagicAtom::Relation(MagicRelationApplyAtom {
             name: sym(name),
             args: args.to_vec(),
-            valid_at: None,
+            as_of: None,
             span: sp(),
         })
     }
@@ -1086,7 +1058,7 @@ mod tests {
         MagicAtom::NegatedRelation(MagicRelationApplyAtom {
             name: sym(name),
             args: args.to_vec(),
-            valid_at: None,
+            as_of: None,
             span: sp(),
         })
     }
@@ -1137,18 +1109,14 @@ mod tests {
     /// Compile against a read snapshot and evaluate to the entry rows, on
     /// the classic iterator path.
     fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<Tuple> {
-        compile_and_run_mode(db, prog, ExecMode::Iterator)
+        compile_and_run_mode(db, prog)
     }
 
     /// [`compile_and_run`] over a chosen execution mode. The differential
     /// harness runs BOTH modes and asserts each equals the oracle, which is
     /// what proves the batched (vectorized) path equivalent.
-    fn compile_and_run_mode(
-        db: &FjallStorage,
-        prog: StratifiedMagicProgram,
-        mode: ExecMode,
-    ) -> BTreeSet<Tuple> {
-        compile_and_run_mode_budget(db, prog, mode, generous_budget())
+    fn compile_and_run_mode(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<Tuple> {
+        compile_and_run_mode_budget(db, prog, generous_budget())
     }
 
     /// [`compile_and_run_mode`] over an explicit budget — the batch-boundary
@@ -1157,13 +1125,12 @@ mod tests {
     fn compile_and_run_mode_budget(
         db: &FjallStorage,
         prog: StratifiedMagicProgram,
-        mode: ExecMode,
         budget: Budget,
     ) -> BTreeSet<Tuple> {
         let rtx = db.read_tx().expect("read tx");
         let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
         let lifetimes = immortal_lifetimes(&compiled);
-        let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, mode, &mut |_| {
+        let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
             panic!("test programs have no fixed rules")
         })
         .expect("binds");
@@ -1703,12 +1670,7 @@ mod tests {
 
     /// Evaluate `target` of the model through the REAL pipeline tail:
     /// stored EDB → compiled RA plans → semi-naive evaluation.
-    fn ra_eval(
-        model: &Program,
-        target: Rel,
-        target_arity: usize,
-        mode: ExecMode,
-    ) -> BTreeSet<Tuple> {
+    fn ra_eval(model: &Program, target: Rel, target_arity: usize) -> BTreeSet<Tuple> {
         assert!(
             model.fixed.is_empty(),
             "RA differential corpus has no fixed rules"
@@ -1772,7 +1734,7 @@ mod tests {
             vec![plain_rule(&vars, vec![rule_atom(target, &vars)])],
         ));
 
-        compile_and_run_mode(&db, program_of(strata), mode)
+        compile_and_run_mode(&db, program_of(strata))
     }
 
     /// THE differential: every IDB relation of the model, evaluated by the
@@ -1797,13 +1759,11 @@ mod tests {
             .collect::<BTreeSet<_>>()
         {
             let oracle_rows = oracle_db.get(rel).cloned().unwrap_or_default();
-            for mode in [ExecMode::Iterator, ExecMode::Batched] {
-                let ra_rows = ra_eval(model, rel, arities[rel], mode);
-                assert_eq!(
-                    ra_rows, oracle_rows,
-                    "FINDING: RA-backed eval ({mode:?}) disagrees with the oracle on '{rel}'"
-                );
-            }
+            let ra_rows = ra_eval(model, rel, arities[rel]);
+            assert_eq!(
+                ra_rows, oracle_rows,
+                "FINDING: RA-backed eval disagrees with the oracle on '{rel}'"
+            );
         }
     }
 
@@ -2201,13 +2161,18 @@ mod tests {
             span: sp(),
         };
         let mut tx = db.write_tx().expect("write tx");
-        let handle = create_relation(&mut tx, input).expect("create relation");
-        let key = handle
-            .encode_key_for_store(key_vals, sp())
-            .expect("encode key");
-        // Empty value: `extend_tuple_from_v` adds nothing, so the row
-        // decodes to `num_keys` columns — `num_vals` short of the arity.
-        tx.put(&key, &[]).expect("put truncated row");
+        let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
+        // An Assert row with a keys-only tuple: its payload is the empty
+        // sequence, so the logical row decodes to `num_keys` columns —
+        // `num_vals` short of the arity.
+        handle
+            .put_fact(
+                &mut tx,
+                key_vals,
+                crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                sp(),
+            )
+            .expect("put truncated row");
         tx.commit().expect("commit");
     }
 
@@ -2237,11 +2202,10 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
         let lifetimes = immortal_lifetimes(&compiled);
-        let program =
-            bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, ExecMode::Iterator, &mut |_| {
-                panic!("no fixed rules")
-            })
-            .expect("binds");
+        let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
+            panic!("no fixed rules")
+        })
+        .expect("binds");
         let err = stratified_evaluate(
             &program,
             &lifetimes,
@@ -2281,11 +2245,10 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
         let lifetimes = immortal_lifetimes(&compiled);
-        let program =
-            bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, ExecMode::Iterator, &mut |_| {
-                panic!("no fixed rules")
-            })
-            .expect("binds");
+        let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
+            panic!("no fixed rules")
+        })
+        .expect("binds");
         let err = stratified_evaluate(
             &program,
             &lifetimes,
@@ -2301,7 +2264,7 @@ mod tests {
         );
     }
 
-    // ── batched (vectorized) execution: iterator ≡ batched ────────────────
+    // ── batched (vectorized) execution: the one machine ────────────────
     //
     // The seven `differential_*` tests above already assert BOTH modes equal
     // the oracle (see `assert_ra_matches_oracle`). These add what a
@@ -2332,6 +2295,134 @@ mod tests {
 
     /// `?[c0, c1] := *w[c0, c1], c1 > threshold` — the batched
     /// scan→filter→project pipeline end to end.
+    /// Cross-mode differential for BATCHED UNIFICATION (the campaign
+    /// generates no unify atoms, so this is its coverage): single and
+    /// spread forms across batch boundaries, plus per-row error identity
+    /// for a poison row landing mid-stream.
+    #[test]
+    fn batched_unification_matches_iterator() {
+        use crate::data::functions::{OP_ADD, OP_LIST};
+        let unify_prog = |multi: bool| -> StratifiedMagicProgram {
+            let (c0, c1, w) = (sym("c0"), sym("c1"), sym("w"));
+            let expr = if multi {
+                Expr::Apply {
+                    op: &OP_LIST,
+                    args: Box::new([
+                        Expr::Binding {
+                            var: c0.clone(),
+                            tuple_pos: None,
+                        },
+                        Expr::Binding {
+                            var: c1.clone(),
+                            tuple_pos: None,
+                        },
+                    ]),
+                    span: sp(),
+                }
+            } else {
+                Expr::Apply {
+                    op: &OP_ADD,
+                    args: Box::new([
+                        Expr::Binding {
+                            var: c0.clone(),
+                            tuple_pos: None,
+                        },
+                        Expr::Binding {
+                            var: c1.clone(),
+                            tuple_pos: None,
+                        },
+                    ]),
+                    span: sp(),
+                }
+            };
+            program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[c0.clone(), c1.clone(), w.clone()],
+                    vec![
+                        rel_atom("w", &[c0, c1]),
+                        MagicAtom::Unification(Unification {
+                            binding: w,
+                            expr,
+                            one_many_unif: multi,
+                            span: sp(),
+                        }),
+                    ],
+                )],
+            )]])
+        };
+        // 2049 rows: straddles the 1024 batch boundary twice.
+        for multi in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = new_fjall_storage(dir.path()).unwrap();
+            let rows: Vec<Tuple> = (0..2049i64).map(|i| vec![v(i), v(i * 3)]).collect();
+            stored_relation(&db, "w", 2, &rows);
+            let rows_out = compile_and_run_mode_budget(&db, unify_prog(multi), boundary_budget());
+            assert_eq!(rows_out.len(), if multi { 2049 * 2 - 1 } else { 2049 });
+        }
+        // Error identity: a poison row (string in an arithmetic unify)
+        // past the first batch boundary errors IDENTICALLY in both modes.
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut rows: Vec<Tuple> = (0..1500i64).map(|i| vec![v(i), v(i)]).collect();
+        rows[1300][1] = DataValue::from("poison");
+        stored_relation(&db, "w", 2, &rows);
+        let run = || -> String {
+            let rtx = db.read_tx().expect("read tx");
+            let compiled = stratified_magic_compile(&rtx, unify_prog_err()).expect("compiles");
+            let lifetimes = immortal_lifetimes(&compiled);
+            let program =
+                bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
+                    panic!("no fixed rules")
+                })
+                .expect("binds");
+            stratified_evaluate(
+                &program,
+                &lifetimes,
+                RowLimit::default(),
+                &boundary_budget(),
+                None,
+            )
+            .expect_err("poison row must error")
+            .to_string()
+        };
+        fn unify_prog_err() -> StratifiedMagicProgram {
+            use crate::data::functions::OP_ADD;
+            let (c0, c1, w) = (sym("c0"), sym("c1"), sym("w"));
+            program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[c0.clone(), w.clone()],
+                    vec![
+                        rel_atom("w", &[c0.clone(), c1.clone()]),
+                        MagicAtom::Unification(Unification {
+                            binding: w,
+                            expr: Expr::Apply {
+                                op: &OP_ADD,
+                                args: Box::new([
+                                    Expr::Binding {
+                                        var: c0,
+                                        tuple_pos: None,
+                                    },
+                                    Expr::Binding {
+                                        var: c1,
+                                        tuple_pos: None,
+                                    },
+                                ]),
+                                span: sp(),
+                            },
+                            one_many_unif: false,
+                            span: sp(),
+                        }),
+                    ],
+                )],
+            )]])
+        }
+        // One machine: the pin is determinism — two runs of the same
+        // program yield the byte-identical refusal.
+        assert_eq!(run(), run(), "error identity across runs");
+    }
+
     fn scan_filter_prog(threshold: i64) -> StratifiedMagicProgram {
         let (c0, c1) = (sym("c0"), sym("c1"));
         program_of(vec![vec![(
@@ -2353,27 +2444,13 @@ mod tests {
         let rows: Vec<Tuple> = (0..n as i64).map(|i| vec![v(i), v(i)]).collect();
         stored_relation(&db, "w", 2, &rows);
 
-        let iter_rows = compile_and_run_mode_budget(
-            &db,
-            scan_filter_prog(threshold),
-            ExecMode::Iterator,
-            boundary_budget(),
-        );
-        let batch_rows = compile_and_run_mode_budget(
-            &db,
-            scan_filter_prog(threshold),
-            ExecMode::Batched,
-            boundary_budget(),
-        );
+        let batch_rows =
+            compile_and_run_mode_budget(&db, scan_filter_prog(threshold), boundary_budget());
         let expected: BTreeSet<Tuple> = (0..n as i64)
             .filter(|&i| i > threshold)
             .map(|i| vec![v(i), v(i)])
             .collect();
 
-        assert_eq!(
-            iter_rows, batch_rows,
-            "FINDING: batched scan+filter diverges from iterator at n={n}, threshold={threshold}"
-        );
         assert_eq!(
             batch_rows, expected,
             "batched scan+filter wrong result at n={n}, threshold={threshold}"
@@ -2442,12 +2519,13 @@ mod tests {
                     )],
                 ])
             };
-            let it =
-                compile_and_run_mode_budget(&db, prog(), ExecMode::Iterator, boundary_budget());
-            let ba = compile_and_run_mode_budget(&db, prog(), ExecMode::Batched, boundary_budget());
-            assert_eq!(it, ba, "FINDING: batched recursion diverges at chain n={n}");
-            // sanity: a chain of n edges has n*(n+1)/2 reachable pairs
-            assert_eq!(it.len(), n * (n + 1) / 2, "chain TC pair count at n={n}");
+            let rows_out = compile_and_run_mode_budget(&db, prog(), boundary_budget());
+            // a chain of n edges has n*(n+1)/2 reachable pairs
+            assert_eq!(
+                rows_out.len(),
+                n * (n + 1) / 2,
+                "chain TC pair count at n={n}"
+            );
         }
     }
 
@@ -2508,13 +2586,12 @@ mod tests {
     }
 
     /// The seam contract is stronger than set equality: `for_each_derivation`
-    /// must deliver the SAME TUPLES IN THE SAME ORDER on both modes (the
-    /// admission sink normalizes order, so the set-level differentials above
-    /// cannot see a within-batch reorder; this test can). Drives the entry
-    /// rule's `CompiledRuleBody` directly on both modes and compares the
-    /// flattened streams as sequences, at sizes straddling BATCH_ROWS.
+    /// Drives the entry rule's `CompiledRuleBody` directly and checks the
+    /// survivor COUNT against the analytic answer at batch boundaries.
+    /// (The row-vs-batch order comparison died with the iterator machine;
+    /// ordering itself is pinned by the byte-identity trials.)
     #[test]
-    fn batched_stream_order_matches_iterator() {
+    fn batched_stream_survivor_count_is_analytic() {
         for &(n, threshold) in &[
             (1023usize, -1i64),
             (1024, -1),
@@ -2540,28 +2617,19 @@ mod tests {
                 .expect("an inline rule");
 
             let stores: BTreeMap<MagicSymbol, EpochStore> = BTreeMap::new();
-            let mut streams: Vec<Vec<Tuple>> = Vec::new();
-            for mode in [ExecMode::Iterator, ExecMode::Batched] {
-                let body = CompiledRuleBody {
-                    plan: entry,
-                    tx: &rtx,
-                    mode,
-                };
-                let mut seen: Vec<Tuple> = Vec::new();
-                body.for_each_derivation(&stores, None, false, &mut |t, _| {
-                    seen.push(t.into_owned());
-                    Ok(ControlFlow::Continue(()))
-                })
-                .expect("derives");
-                streams.push(seen);
-            }
-            assert_eq!(
-                streams[0], streams[1],
-                "FINDING: batched stream order/content diverges from iterator \
-                 at n={n}, threshold={threshold}"
-            );
+            let body = CompiledRuleBody {
+                plan: entry,
+                tx: &rtx,
+                segments: Segments::OFF,
+            };
+            let mut seen: Vec<Tuple> = Vec::new();
+            body.for_each_derivation(&stores, None, false, &mut |t, _| {
+                seen.push(t.into_owned());
+                Ok(ControlFlow::Continue(()))
+            })
+            .expect("derives");
             let survivors = (threshold.max(-1) + 1..n as i64).count();
-            assert_eq!(streams[0].len(), survivors, "survivor count at n={n}");
+            assert_eq!(seen.len(), survivors, "survivor count at n={n}");
         }
     }
 }

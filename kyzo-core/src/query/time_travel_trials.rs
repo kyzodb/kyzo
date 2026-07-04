@@ -23,7 +23,7 @@
  * as-of programs on top.
  *
  * Pinned boundary semantics (verified here, and traceable to
- * `data/tuple.rs::check_key_for_validity` + the `ValidityTs(Reverse(_))`
+ * `data/tuple.rs::check_key_for_bitemporal` + the `ValidityTs(Reverse(_))`
  * ordering): an as-of read AT instant T is INCLUSIVE — it returns the newest
  * stored version whose real timestamp is <= T. At the same instant, an
  * assertion beats a retraction (assert encodes to byte 0x00, retract to 0x01,
@@ -34,6 +34,7 @@
 
 #![cfg(test)]
 
+use crate::engines::segments::Segments;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -50,12 +51,13 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, Validity, ValidityTs};
+use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::query::compile::{
-    CompiledProgram, ExecMode, NoFixedRules, bind_for_eval, stratified_magic_compile,
+    CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::ra::{NegationOverTimeTravelError, RelAlgebra};
+use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
 use crate::storage::{Storage, WriteTx};
@@ -75,9 +77,6 @@ fn v(i: i64) -> DataValue {
 }
 fn s(x: &str) -> DataValue {
     DataValue::from(x)
-}
-fn vld(ts: i64, assert: bool) -> DataValue {
-    DataValue::Validity(Validity::from((ts, assert)))
 }
 fn vts(ts: i64) -> ValidityTs {
     ValidityTs(Reverse(ts))
@@ -118,7 +117,7 @@ fn rel_atom_at(name: &str, args: &[Symbol], at: Option<i64>) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        valid_at: at.map(vts),
+        as_of: at.map(|t| AsOf::current(vts(t))),
         span: sp(),
     })
 }
@@ -127,7 +126,7 @@ fn neg_rel_atom_at(name: &str, args: &[Symbol], at: Option<i64>) -> MagicAtom {
     MagicAtom::NegatedRelation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        valid_at: at.map(vts),
+        as_of: at.map(|t| AsOf::current(vts(t))),
         span: sp(),
     })
 }
@@ -209,11 +208,10 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
     let rtx = db.read_tx().expect("read tx");
     let compiled = stratified_magic_compile(&rtx, prog).expect("compiles");
     let lifetimes = immortal_lifetimes(&compiled);
-    let program =
-        bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, ExecMode::Iterator, &mut |_| {
-            panic!("time-travel trials have no fixed rules")
-        })
-        .expect("binds");
+    let program = bind_for_eval::<_, NoFixedRules>(&compiled, &rtx, Segments::OFF, &mut |_| {
+        panic!("time-travel trials have no fixed rules")
+    })
+    .expect("binds");
     let outcome = stratified_evaluate(
         &program,
         &lifetimes,
@@ -258,10 +256,14 @@ fn ver(key: &[i64], ts: i64, assert: bool, vals: &[DataValue]) -> Version {
     }
 }
 
-/// Create a time-travel relation: `key_arity` integer key columns, a trailing
-/// `Validity` key column, and `val_names` non-key columns; then write every
-/// version. Identical (key, ts, assert) triples are the SAME stored key, so a
-/// later write overwrites an earlier one exactly as the KV `put` does.
+/// Create a versioned relation (`key_arity` integer key columns and
+/// `val_names` non-key columns — the time slots are infrastructure, never
+/// schema) and write every version at its valid instant: an assertion via
+/// [`RelationHandle::put_fact`], a retraction via
+/// [`RelationHandle::retract_fact`]. All versions land in ONE transaction
+/// (one system stamp), so versions at the SAME (key, ts) share one stored
+/// key and the LAST write in list order wins — the one-lineage-per-instant
+/// law.
 fn write_history(
     db: &FjallStorage,
     name: &str,
@@ -269,10 +271,9 @@ fn write_history(
     val_names: &[&str],
     versions: &[Version],
 ) {
-    let mut keys: Vec<ColumnDef> = (0..key_arity)
+    let keys: Vec<ColumnDef> = (0..key_arity)
         .map(|i| col(&format!("k{i}"), ColType::Int))
         .collect();
-    keys.push(col("at", ColType::Validity));
     let non_keys: Vec<ColumnDef> = val_names.iter().map(|n| col(n, ColType::Any)).collect();
     let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
     let dep_bindings = non_keys.iter().map(|c| sym(&c.name)).collect();
@@ -284,16 +285,22 @@ fn write_history(
         span: sp(),
     };
     let mut tx = db.write_tx().expect("write tx");
-    let handle = create_relation(&mut tx, input).expect("create relation");
+    let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
     for ver in versions {
         assert_eq!(ver.key.len(), key_arity, "version key arity");
-        assert_eq!(ver.vals.len(), val_names.len(), "version value arity");
-        let mut row: Tuple = ver.key.iter().copied().map(v).collect();
-        row.push(vld(ver.ts, ver.assert));
-        row.extend(ver.vals.iter().cloned());
-        let key = handle.encode_key_for_store(&row, sp()).expect("encode key");
-        let val = handle.encode_val_for_store(&row, sp()).expect("encode val");
-        tx.put(&key, &val).expect("put row");
+        let key_cols: Tuple = ver.key.iter().copied().map(v).collect();
+        if ver.assert {
+            assert_eq!(ver.vals.len(), val_names.len(), "version value arity");
+            let mut row = key_cols;
+            row.extend(ver.vals.iter().cloned());
+            handle
+                .put_fact(&mut tx, &row, vts(ver.ts), sp())
+                .expect("put version");
+        } else {
+            handle
+                .retract_fact(&mut tx, &key_cols, vts(ver.ts), sp())
+                .expect("retract version");
+        }
     }
     tx.commit().expect("commit");
 }
@@ -316,35 +323,48 @@ fn stored_plain(db: &FjallStorage, name: &str, arity: usize, rows: &[Vec<i64>]) 
         span: sp(),
     };
     let mut tx = db.write_tx().expect("write tx");
-    let handle = create_relation(&mut tx, input).expect("create relation");
+    let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
     for r in rows {
         let row: Tuple = r.iter().copied().map(v).collect();
-        let key = handle.encode_key_for_store(&row, sp()).expect("encode key");
-        let val = handle.encode_val_for_store(&row, sp()).expect("encode val");
-        tx.put(&key, &val).expect("put row");
+        handle
+            .put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+            .expect("put row");
     }
     tx.commit().expect("commit");
 }
 
-/// The oracle. Group by key prefix; among versions at or before `at`
-/// (INCLUSIVE), take the newest; an assertion emits `(key, vals)`, a
-/// retraction emits nothing. `boundary_inclusive = false` is the SABOTAGED
-/// form used only by the mutation tests. `assert_wins` toggles the
-/// same-instant tie-break (the correct engine behaviour is `true`).
+/// The oracle. One lineage per instant: identical (key, ts) pairs
+/// collapse to the LAST version in write order, whatever its polarity —
+/// the stored key is the same and a later `put` overwrites. Then, per
+/// key, the newest surviving instant at or before `at` (INCLUSIVE)
+/// governs: an assertion emits `(key, vals)`, a retraction emits
+/// nothing. `boundary_inclusive = false` and `last_write_wins = false`
+/// are the SABOTAGED forms used only by the mutation tests (the correct
+/// engine behaviour is `true` for both).
 fn naive_asof_cfg(
     versions: &[Version],
     at: i64,
     boundary_inclusive: bool,
-    assert_wins: bool,
+    last_write_wins: bool,
 ) -> BTreeSet<Tuple> {
-    // Collapse identical (key, ts, assert) triples: last write wins, as `put`.
-    let mut collapsed: BTreeMap<(Vec<i64>, i64, bool), Vec<DataValue>> = BTreeMap::new();
+    // Collapse identical (key, ts) pairs: one lineage per instant.
+    let mut collapsed: BTreeMap<(Vec<i64>, i64), (bool, Vec<DataValue>)> = BTreeMap::new();
     for ver in versions {
-        collapsed.insert((ver.key.clone(), ver.ts, ver.assert), ver.vals.clone());
+        match collapsed.entry((ver.key.clone(), ver.ts)) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert((ver.assert, ver.vals.clone()));
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                if last_write_wins {
+                    e.insert((ver.assert, ver.vals.clone()));
+                }
+                // Sabotaged form: keep the first write.
+            }
+        }
     }
     // Group surviving versions by key prefix.
     let mut by_key: BTreeMap<Vec<i64>, Vec<(i64, bool, Vec<DataValue>)>> = BTreeMap::new();
-    for ((key, ts, assert), vals) in collapsed {
+    for ((key, ts), (assert, vals)) in collapsed {
         by_key.entry(key).or_default().push((ts, assert, vals));
     }
     let mut out = BTreeSet::new();
@@ -357,26 +377,10 @@ fn naive_asof_cfg(
                 *ts < at
             }
         });
-        let Some(max_ts) = versions.iter().map(|(ts, _, _)| *ts).max() else {
+        let Some((_, assert, vals)) = versions.iter().max_by_key(|(ts, _, _)| *ts) else {
             continue;
         };
-        // Tie-break at the winning instant: assertion first.
-        let at_max: Vec<&(i64, bool, Vec<DataValue>)> =
-            versions.iter().filter(|(ts, _, _)| *ts == max_ts).collect();
-        let chosen = if assert_wins {
-            at_max
-                .iter()
-                .find(|(_, a, _)| *a)
-                .or_else(|| at_max.first())
-                .copied()
-        } else {
-            at_max
-                .iter()
-                .find(|(_, a, _)| !*a)
-                .or_else(|| at_max.first())
-                .copied()
-        };
-        if let Some((_, true, vals)) = chosen {
+        if *assert {
             let mut row: Tuple = key.iter().copied().map(v).collect();
             row.extend(vals.iter().cloned());
             out.insert(row);
@@ -385,7 +389,7 @@ fn naive_asof_cfg(
     out
 }
 
-/// The correct oracle: inclusive boundary, assert-wins tie-break.
+/// The correct oracle: inclusive boundary, last-write-wins at an instant.
 fn naive_asof(versions: &[Version], at: i64) -> BTreeSet<Tuple> {
     naive_asof_cfg(versions, at, true, true)
 }
@@ -417,13 +421,13 @@ fn interesting_instants(versions: &[Version]) -> Vec<i64> {
 // As-of program builders (full compile→RA→eval path).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `?[k0..,v0..] := *rel{k0..,at,v0..} @ AT` — a bare projection scan.
+/// `?[k0..,v0..] := *rel{k0..,v0..} @ AT` — a bare projection scan. The
+/// time slots are infrastructure: the row binds user columns only, and
+/// the coordinate rides on the atom.
 fn select_asof(key_arity: usize, val_names: &[&str], at: Option<i64>) -> StratifiedMagicProgram {
     let key_syms: Vec<Symbol> = (0..key_arity).map(|i| sym(&format!("k{i}"))).collect();
     let val_syms: Vec<Symbol> = val_names.iter().map(|n| sym(n)).collect();
-    let at_sym = sym("at");
     let mut args = key_syms.clone();
-    args.push(at_sym);
     args.extend(val_syms.clone());
     let mut head = key_syms;
     head.extend(val_syms);
@@ -461,20 +465,57 @@ fn boundary_at_instant_is_inclusive() {
     );
 }
 
-/// Same instant, assert vs retract on the same key: the assertion wins (the
-/// fact is visible). This pins the same-instant tie-break.
+/// Same instant, assert then retract on the same key: ONE lineage per
+/// instant, so the later write governs — polarity lives in the value and
+/// there is no assert-vs-retract bucket order to tie-break. Both write
+/// orders are pinned.
 #[test]
-fn same_instant_assert_beats_retract() {
+fn same_instant_newest_write_governs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    // Assert then retract: the retract is the instant's governing version.
+    let hist = vec![
+        ver(&[1], 10, true, &[s("present")]),
+        ver(&[1], 10, false, &[]),
+    ];
+    write_history(&db, "hist", 1, &["val"], &hist);
+    let got = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
+    assert!(got.is_empty(), "the later retract governs the instant");
+    assert_eq!(got, naive_asof(&hist, 10));
+
+    // Retract then assert: the assert governs.
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let hist = vec![
+        ver(&[1], 10, false, &[]),
         ver(&[1], 10, true, &[s("present")]),
-        ver(&[1], 10, false, &[s("present")]),
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     let got = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
     assert_eq!(got, BTreeSet::from([vec![v(1), s("present")]]));
     assert_eq!(got, naive_asof(&hist, 10));
+}
+
+/// The tie-break law is differential-visible: a first-write-wins oracle
+/// must DISAGREE with the engine on a polarity-flipping same-instant
+/// history — else the harness is blind to the collapse rule.
+#[test]
+fn mutation_first_write_wins_is_caught() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let hist = vec![
+        ver(&[1], 10, true, &[s("present")]),
+        ver(&[1], 10, false, &[]),
+    ];
+    write_history(&db, "hist", 1, &["val"], &hist);
+    let engine = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
+    let correct = naive_asof_cfg(&hist, 10, true, true);
+    let sabotaged = naive_asof_cfg(&hist, 10, true, false);
+    assert_eq!(engine, correct, "engine must match last-write-wins");
+    assert_ne!(
+        engine, sabotaged,
+        "a first-write-wins oracle must disagree — else the harness is blind"
+    );
 }
 
 /// Same instant, same key, same assert flag, different value: the two writes
@@ -499,9 +540,9 @@ fn whole_history_of_retractions_never_present() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let hist = vec![
-        ver(&[7], 10, false, &[s("x")]),
-        ver(&[7], 20, false, &[s("x")]),
-        ver(&[7], 30, false, &[s("x")]),
+        ver(&[7], 10, false, &[]),
+        ver(&[7], 20, false, &[]),
+        ver(&[7], 30, false, &[]),
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     for at in [5, 10, 15, 20, 25, 30, 35] {
@@ -526,16 +567,17 @@ fn full_history_matrix_differential() {
         // key 1: assert@10 "a", supersede@30 "b", retract@50, re-assert@70 "c"
         ver(&[1], 10, true, &[s("a")]),
         ver(&[1], 30, true, &[s("b")]),
-        ver(&[1], 50, false, &[s("b")]),
+        ver(&[1], 50, false, &[]),
         ver(&[1], 70, true, &[s("c")]),
         // key 2: assert@20 "p", retract@40 (latest fact for key 2)
         ver(&[2], 20, true, &[s("p")]),
-        ver(&[2], 40, false, &[s("p")]),
+        ver(&[2], 40, false, &[]),
         // key 3: assert@60 "q" only
         ver(&[3], 60, true, &[s("q")]),
-        // key 4: assert@10 and retract@10 at the SAME instant (assert wins)
+        // key 4: assert and retract at the SAME instant — the later
+        // write (the retract) governs the instant's one lineage.
         ver(&[4], 10, true, &[s("blink")]),
-        ver(&[4], 10, false, &[s("blink")]),
+        ver(&[4], 10, false, &[]),
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     for at in interesting_instants(&hist) {
@@ -564,7 +606,7 @@ fn tc_over_time_reachability_differs_per_instant() {
     ];
     write_history(&db, "edge", 2, &[], &edges);
 
-    let (x, y, z, at) = (sym("x"), sym("y"), sym("z"), sym("at"));
+    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
     let tc_program = |instant: i64| {
         program_of(vec![
             vec![(
@@ -572,16 +614,12 @@ fn tc_over_time_reachability_differs_per_instant() {
                 vec![
                     plain_rule(
                         &[x.clone(), y.clone()],
-                        vec![rel_atom_at(
-                            "edge",
-                            &[x.clone(), y.clone(), at.clone()],
-                            Some(instant),
-                        )],
+                        vec![rel_atom_at("edge", &[x.clone(), y.clone()], Some(instant))],
                     ),
                     plain_rule(
                         &[x.clone(), y.clone()],
                         vec![
-                            rel_atom_at("edge", &[x.clone(), z.clone(), at.clone()], Some(instant)),
+                            rel_atom_at("edge", &[x.clone(), z.clone()], Some(instant)),
                             rule_atom("path", &[z.clone(), y.clone()]),
                         ],
                     ),
@@ -626,7 +664,7 @@ fn join_two_relations_at_same_instant() {
     write_history(&db, "ra", 1, &["a"], &ha);
     write_history(&db, "rb", 1, &["b"], &hb);
 
-    let (k, at1, at2, a, b) = (sym("k"), sym("at1"), sym("at2"), sym("a"), sym("b"));
+    let (k, a, b) = (sym("k"), sym("a"), sym("b"));
     let join_program = |instant: i64| {
         program_of(vec![vec![(
             entry_symbol(),
@@ -635,14 +673,14 @@ fn join_two_relations_at_same_instant() {
                 vec![
                     MagicAtom::Relation(MagicRelationApplyAtom {
                         name: sym("ra"),
-                        args: vec![k.clone(), at1.clone(), a.clone()],
-                        valid_at: Some(vts(instant)),
+                        args: vec![k.clone(), a.clone()],
+                        as_of: Some(AsOf::current(vts(instant))),
                         span: sp(),
                     }),
                     MagicAtom::Relation(MagicRelationApplyAtom {
                         name: sym("rb"),
-                        args: vec![k.clone(), at2.clone(), b.clone()],
-                        valid_at: Some(vts(instant)),
+                        args: vec![k.clone(), b.clone()],
+                        as_of: Some(AsOf::current(vts(instant))),
                         span: sp(),
                     }),
                 ],
@@ -681,7 +719,7 @@ fn normal_aggregation_over_asof_read() {
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
 
-    let (k0, at, val) = (sym("k0"), sym("at"), sym("val"));
+    let (k0, val) = (sym("k0"), sym("val"));
     let count = parse_aggr("count").expect("count exists");
     let sum = parse_aggr("sum").expect("sum exists");
     let agg_program = |instant: i64| {
@@ -692,7 +730,7 @@ fn normal_aggregation_over_asof_read() {
                 vec![Some((count, vec![])), Some((sum, vec![]))],
                 vec![rel_atom_at(
                     "hist",
-                    &[k0.clone(), at.clone(), val.clone()],
+                    &[k0.clone(), val.clone()],
                     Some(instant),
                 )],
             )],
@@ -734,7 +772,7 @@ fn meet_aggregation_over_asof_read() {
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
 
-    let (k0, at, val) = (sym("k0"), sym("at"), sym("val"));
+    let (k0, val) = (sym("k0"), sym("val"));
     let min = parse_aggr("min").expect("min exists");
     assert!(min.is_meet(), "min must be a meet aggregation");
     let min_program = |instant: i64| {
@@ -745,7 +783,7 @@ fn meet_aggregation_over_asof_read() {
                 vec![Some((min, vec![]))],
                 vec![rel_atom_at(
                     "hist",
-                    &[k0.clone(), at.clone(), val.clone()],
+                    &[k0.clone(), val.clone()],
                     Some(instant),
                 )],
             )],
@@ -796,7 +834,7 @@ fn bounded_asof_scan_over_post_prefix_key_range() {
     ];
     write_history(&db, "hist", 2, &["val"], &hist);
 
-    let (k0, k1, at, val) = (sym("k0"), sym("k1"), sym("at"), sym("val"));
+    let (k0, k1, val) = (sym("k0"), sym("k1"), sym("val"));
     let bounded_program = |instant: i64| {
         program_of(vec![vec![(
             entry_symbol(),
@@ -806,7 +844,7 @@ fn bounded_asof_scan_over_post_prefix_key_range() {
                     rel_atom_at("drv", std::slice::from_ref(&k0), None),
                     rel_atom_at(
                         "hist",
-                        &[k0.clone(), k1.clone(), at.clone(), val.clone()],
+                        &[k0.clone(), k1.clone(), val.clone()],
                         Some(instant),
                     ),
                     pred_ge("k1", 20),
@@ -887,39 +925,36 @@ fn retraction_is_revision_not_erasure() {
     }
 }
 
-/// The history itself is enumerable: a PLAIN (non-time-travel) scan returns
-/// every stored version — assertions and retractions alike — with the
-/// validity column carried as data. This is the surface by which the full
-/// history is queryable today.
+/// A PLAIN (coordinate-free) scan reads CURRENT state — the newest
+/// believed claim per fact — never raw versions: the time slots are
+/// infrastructure, and history is addressed through `@` coordinates, not
+/// by enumerating stored rows. Retracted facts are absent; superseded
+/// values are invisible.
 #[test]
-fn full_history_enumerable_via_plain_scan() {
+fn plain_scan_reads_current_state_not_versions() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let hist = vec![
         ver(&[1], 10, true, &[s("a")]),
-        ver(&[1], 30, false, &[s("a")]),
+        ver(&[1], 30, false, &[]),
         ver(&[2], 20, true, &[s("b")]),
+        ver(&[3], 5, true, &[s("old")]),
+        ver(&[3], 25, true, &[s("new")]),
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
 
-    let (k0, at, val) = (sym("k0"), sym("at"), sym("val"));
+    let (k0, val) = (sym("k0"), sym("val"));
     let prog = program_of(vec![vec![(
         entry_symbol(),
         vec![plain_rule(
-            &[k0.clone(), at.clone(), val.clone()],
-            vec![rel_atom_at(
-                "hist",
-                &[k0.clone(), at.clone(), val.clone()],
-                None,
-            )],
+            &[k0.clone(), val.clone()],
+            vec![rel_atom_at("hist", &[k0.clone(), val.clone()], None)],
         )],
     )]]);
     let got = compile_and_run(&db, prog);
-    let expected: BTreeSet<Tuple> = hist
-        .iter()
-        .map(|x| vec![v(x.key[0]), vld(x.ts, x.assert), x.vals[0].clone()])
-        .collect();
-    assert_eq!(got, expected, "plain scan must enumerate the whole history");
+    // Key 1 is retracted, key 2 asserted, key 3's newest value governs.
+    let expected: BTreeSet<Tuple> = BTreeSet::from([vec![v(2), s("b")], vec![v(3), s("new")]]);
+    assert_eq!(got, expected, "a plain scan is a current-state read");
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -943,7 +978,7 @@ fn asof_run_is_byte_identical_across_threads() {
     ];
     write_history(&db, "edge", 2, &[], &edges);
 
-    let (x, y, z, at) = (sym("x"), sym("y"), sym("z"), sym("at"));
+    let (x, y, z) = (sym("x"), sym("y"), sym("z"));
     let build = || {
         program_of(vec![
             vec![(
@@ -951,16 +986,12 @@ fn asof_run_is_byte_identical_across_threads() {
                 vec![
                     plain_rule(
                         &[x.clone(), y.clone()],
-                        vec![rel_atom_at(
-                            "edge",
-                            &[x.clone(), y.clone(), at.clone()],
-                            Some(35),
-                        )],
+                        vec![rel_atom_at("edge", &[x.clone(), y.clone()], Some(35))],
                     ),
                     plain_rule(
                         &[x.clone(), y.clone()],
                         vec![
-                            rel_atom_at("edge", &[x.clone(), z.clone(), at.clone()], Some(35)),
+                            rel_atom_at("edge", &[x.clone(), z.clone()], Some(35)),
                             rule_atom("path", &[z.clone(), y.clone()]),
                         ],
                     ),
@@ -1005,15 +1036,15 @@ fn negation_over_validity_scan_refuses() {
     write_history(&db, "hist", 1, &["val"], &[ver(&[1], 10, true, &[s("a")])]);
     write_history(&db, "base", 1, &["val"], &[ver(&[1], 10, true, &[s("b")])]);
 
-    let (k0, at, val) = (sym("k0"), sym("at"), sym("val"));
+    let (k0, val) = (sym("k0"), sym("val"));
     // ?[k0] := *base{k0,at,val}@T, not *hist{k0,at,val}@T
     let prog = program_of(vec![vec![(
         entry_symbol(),
         vec![plain_rule(
             std::slice::from_ref(&k0),
             vec![
-                rel_atom_at("base", &[k0.clone(), at.clone(), val.clone()], Some(20)),
-                neg_rel_atom_at("hist", &[k0.clone(), at.clone(), val.clone()], Some(20)),
+                rel_atom_at("base", &[k0.clone(), val.clone()], Some(20)),
+                neg_rel_atom_at("hist", &[k0.clone(), val.clone()], Some(20)),
             ],
         )],
     )]]);
@@ -1029,7 +1060,7 @@ fn negation_over_validity_scan_refuses() {
 /// refuses every stored read with a typed, spanned `StoredInputUnavailable`.
 /// A fixed rule consuming a validity relation is therefore a typed refusal
 /// today — NOT a silent wrong answer — pending the runtime tier. The as-of
-/// argument (`valid_at`) is threaded to `stored_scan_all` at both the magic
+/// argument (`as_of`) is threaded to `stored_scan_all` at both the magic
 /// tier and the fixed-rule arg tier; only the concrete reader is absent.
 #[test]
 fn fixed_rule_stored_input_is_a_refusing_seam() {
@@ -1039,7 +1070,7 @@ fn fixed_rule_stored_input_is_a_refusing_seam() {
     let src = NoStoredInputs;
     // As-of read of a (would-be) validity relation refuses, typed.
     let err = src
-        .stored_scan_all(&sym("hist"), Some(vts(20)))
+        .stored_scan_all(&sym("hist"), Some(AsOf::current(vts(20))))
         .err()
         .expect("NoStoredInputs must refuse an as-of stored scan");
     assert!(
@@ -1063,10 +1094,10 @@ fn validity_scan_is_a_constructible_relation() {
     let rtx = db.read_tx().unwrap();
     let handle = crate::runtime::relation::get_relation(&rtx, "hist").expect("relation exists");
     let ra = RelAlgebra::relation(
-        vec![sym("k0"), sym("at"), sym("val")],
+        vec![sym("k0"), sym("val")],
         handle,
         sp(),
-        Some(vts(20)),
+        Some(AsOf::current(vts(20))),
     )
     .expect("a validity scan is constructible");
     assert!(
@@ -1117,7 +1148,7 @@ fn mutation_dropped_retraction_is_caught() {
     let db = new_fjall_storage(dir.path()).unwrap();
     let full = vec![
         ver(&[1], 10, true, &[s("a")]),
-        ver(&[1], 30, false, &[s("a")]), // the retraction the engine will see
+        ver(&[1], 30, false, &[]), // the retraction the engine will see
     ];
     write_history(&db, "hist", 1, &["val"], &full);
 
@@ -1133,6 +1164,106 @@ fn mutation_dropped_retraction_is_caught() {
     assert_ne!(
         engine, sabotaged,
         "a reference missing the retraction must disagree with the engine"
+    );
+}
+
+/// The two-coordinate as-of read, end to end: a correction (a second
+/// system version at the same valid instant) is invisible at system
+/// coordinates before its stamp and governs at coordinates from its
+/// stamp on. This is the bitemporal flagship: "what did the record say
+/// at S about V?"
+#[test]
+fn two_coordinate_asof_sees_the_record_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+
+    // The relation and the original claim, in one transaction (stamp s1).
+    let mut tx = db.write_tx().unwrap();
+    let handle = create_relation(
+        &mut tx,
+        {
+            let keys = vec![col("k0", ColType::Int)];
+            let non_keys = vec![col("val", ColType::Any)];
+            let key_bindings = vec![sym("k0")];
+            let dep_bindings = vec![sym("val")];
+            InputRelationHandle {
+                name: sym("hist"),
+                metadata: StoredRelationMetadata { keys, non_keys },
+                key_bindings,
+                dep_bindings,
+                span: sp(),
+            }
+        },
+        KeyspaceKind::Facts,
+    )
+    .unwrap();
+    let s1 = tx.system_stamp();
+    handle
+        .put_fact(&mut tx, &[v(1), s("original")], vts(100), sp())
+        .unwrap();
+    tx.commit().unwrap();
+
+    // The correction: a second system version of the SAME valid instant
+    // (stamp s2 > s1).
+    let mut tx = db.write_tx().unwrap();
+    let s2 = tx.system_stamp();
+    assert!(
+        s2 < s1,
+        "stamps are monotone (Reverse order: later is smaller)"
+    );
+    handle
+        .put_fact(&mut tx, &[v(1), s("corrected")], vts(100), sp())
+        .unwrap();
+    tx.commit().unwrap();
+
+    let read_at = |as_of: AsOf| -> BTreeSet<Tuple> {
+        let (k0, val) = (sym("k0"), sym("val"));
+        let prog = program_of(vec![vec![(
+            entry_symbol(),
+            vec![plain_rule(
+                &[k0.clone(), val.clone()],
+                vec![MagicAtom::Relation(MagicRelationApplyAtom {
+                    name: sym("hist"),
+                    args: vec![k0, val],
+                    as_of: Some(as_of),
+                    span: sp(),
+                })],
+            )],
+        )]]);
+        compile_and_run(&db, prog)
+    };
+
+    // As the record stood at s1: the original claim.
+    assert_eq!(
+        read_at(AsOf {
+            sys: s1,
+            valid: vts(150)
+        }),
+        BTreeSet::from([vec![v(1), s("original")]]),
+        "before the correction was recorded, the original governs"
+    );
+    // As the record stands at s2 (and currently): the correction.
+    assert_eq!(
+        read_at(AsOf {
+            sys: s2,
+            valid: vts(150)
+        }),
+        BTreeSet::from([vec![v(1), s("corrected")]]),
+        "from the correction's stamp on, it governs"
+    );
+    assert_eq!(
+        read_at(AsOf::current(vts(150))),
+        BTreeSet::from([vec![v(1), s("corrected")]]),
+        "current belief is the corrected claim"
+    );
+    // Valid-axis still resolves under both system cuts.
+    assert!(
+        read_at(AsOf {
+            sys: s2,
+            valid: vts(50)
+        })
+        .is_empty(),
+        "before the valid instant, the fact does not hold at any system cut"
     );
 }
 
