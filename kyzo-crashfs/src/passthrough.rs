@@ -531,10 +531,37 @@ impl Filesystem for PassthroughFs {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        // Any writes still pending here were never fsynced: exactly like a
-        // real OS, they are not guaranteed to survive and this model does
-        // not materialize them.
-        self.handles.lock().unwrap().remove(&fh);
+        // A normal close does NOT lose unsynced writes on a real OS — the
+        // data sits in the page cache and stays visible to any later
+        // read/reopen (even by a fresh handle on the same path) regardless
+        // of whether fsync was ever called; only an actual crash loses it.
+        // This model's crash IS the whole mount session dying (every
+        // STILL-open handle's `pending` drops with the `PassthroughFs`
+        // instance) or an explicit ClearCache/TornOp/TornSeq decided back
+        // in `write()`. Earlier this method just discarded `pending`
+        // unconditionally on every ordinary close — which silently lost
+        // data on EVERY release, fault-free runs included (caught the hard
+        // way: a keyspace's own manifest bootstrap write, closed via
+        // flush+release with no intervening fsync, came back permanently
+        // empty even with no fault plan active at all). Fixed: drain and
+        // materialize each write's ALREADY-DECIDED outcome (from `write()`
+        // — there is no separate `Release` op kind, so no new fault
+        // decision happens here), the same per-entry application `fsync`
+        // performs, just without the `sync_all` (release claims no
+        // power-cut durability, only "the bytes are on the backing file
+        // now," matching a real close).
+        let mut handles = self.handles.lock().unwrap();
+        if let Some(mut handle) = handles.remove(&fh) {
+            for pw in handle.pending.drain(..) {
+                let _ = match pw.outcome {
+                    WriteOutcome::Clean => handle.file.write_at(&pw.data, pw.offset),
+                    WriteOutcome::Dropped => Ok(0),
+                    WriteOutcome::Split { split_at } => handle
+                        .file
+                        .write_at(&pw.data[..split_at as usize], pw.offset),
+                };
+            }
+        }
         reply.ok();
     }
 
