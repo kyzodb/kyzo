@@ -61,6 +61,13 @@
 #[cfg(test)]
 pub(crate) mod laws;
 
+// Trial (issue #29): the SQLancer-class metamorphic logic-bug gauntlet —
+// magic-sets NoREC-analog oracle, generated programs, swept demand
+// adornment. Test-only; adds no lib code. Kept out of `trials.rs` (its own
+// module, per the design ruling) and out of `laws.rs` (reuses it instead).
+#[cfg(test)]
+mod gauntlet;
+
 // Deterministic simulation testing up the query path: compiled programs run
 // over the storage double under seeded fault/crash/contention plans. Test-only.
 #[cfg(test)]
