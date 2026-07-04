@@ -814,6 +814,7 @@ dependencies = [
  "libfuzzer-sys",
  "ndarray",
  "regex",
+ "rmp-serde",
  "serde_json",
  "uuid",
 ]

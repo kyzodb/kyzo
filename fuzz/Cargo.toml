@@ -27,6 +27,11 @@ uuid = { version = "1.8.0", features = ["v1", "v4"] }
 regex = "1.10.4"
 serde_json = "1.0.116"
 ndarray = "0.17"
+# Pinned to the exact version kyzo-core depends on: fact_payload_decode
+# decodes a bare `DataValue` straight off the wire the same way
+# `data/fact_payload.rs`'s `FIELD_OTHER` island and `RelationHandle::decode`
+# do internally.
+rmp-serde = "1.3"
 
 [dependencies.kyzo]
 path = "../kyzo-core"
@@ -42,6 +47,13 @@ bench = false
 [[bin]]
 name = "kyzoscript_parser"
 path = "fuzz_targets/kyzoscript_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fact_payload_decode"
+path = "fuzz_targets/fact_payload_decode.rs"
 test = false
 doc = false
 bench = false
