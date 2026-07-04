@@ -2137,11 +2137,7 @@ mod tests {
 
         let edges = [(1, 2), (2, 3), (3, 4), (5, 6)];
         let var = |s: &'static str| Term::Var(s);
-        let lit = |rel: &'static str, args: Vec<Term>| Literal {
-            rel,
-            args,
-            negated: false,
-        };
+        let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
 
         // The reference program: path = edge ∪ edge∘path, full fixpoint.
         let program = Program {

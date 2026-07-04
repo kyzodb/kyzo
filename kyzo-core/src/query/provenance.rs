@@ -503,11 +503,7 @@ fn compile_for(model: &Program, target: Rel, target_arity: usize, retain_all: bo
         .collect();
     let entry_body = ModelBody::new(
         vars.clone(),
-        vec![Literal {
-            rel: target,
-            args: vars,
-            negated: false,
-        }],
+        vec![Literal::pos(target, vars)],
         facts.clone(),
         idb.clone(),
     );
@@ -621,7 +617,11 @@ fn z() -> Term {
     Term::Var("Z")
 }
 fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
-    Literal { rel, args, negated }
+    if negated {
+        Literal::neg(rel, args)
+    } else {
+        Literal::pos(rel, args)
+    }
 }
 fn named(name: &str) -> HeadAggr {
     Some((parse_aggr(name).expect("real aggregation"), vec![]))
@@ -712,11 +712,7 @@ fn gen_positive(seed: u64, small: bool) -> Program {
             ],
         ));
     }
-    Program {
-        rules,
-        fixed: vec![],
-        facts,
-    }
+    Program::untimed(rules, vec![], facts)
 }
 
 /// Randomized per-(head, rule-index) weights in `1..=8`, plus the map the
@@ -1200,8 +1196,8 @@ fn certificate_model() -> Program {
         .iter()
         .map(|(a, b)| vec![v(*a), v(*b)])
         .collect();
-    Program {
-        rules: vec![
+    Program::untimed(
+        vec![
             Rule::plain(
                 "path",
                 vec![x(), y()],
@@ -1216,9 +1212,9 @@ fn certificate_model() -> Program {
                 ],
             ),
         ],
-        fixed: vec![],
-        facts: BTreeMap::from([("edge", edges)]),
-    }
+        vec![],
+        BTreeMap::from([("edge", edges)]),
+    )
 }
 
 struct CertificateFixture {
@@ -1403,8 +1399,8 @@ fn aggregation_boundary_collapses_to_ground_facts() {
     // seed(node, val); m(K, min(V)) folded inside recursion along edges;
     // out(K, V) a plain reader above — the PA4 collapse: m's tuples are
     // ground (cost 0), out's derivations are costed above them.
-    let model = Program {
-        rules: vec![
+    let model = Program::untimed(
+        vec![
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
@@ -1422,8 +1418,8 @@ fn aggregation_boundary_collapses_to_ground_facts() {
             ),
             Rule::plain("out", vec![x(), y()], vec![lit("m", vec![x(), y()], false)]),
         ],
-        fixed: vec![],
-        facts: BTreeMap::from([
+        vec![],
+        BTreeMap::from([
             (
                 "edge",
                 [(0, 1), (1, 2), (2, 0)]
@@ -1439,7 +1435,7 @@ fn aggregation_boundary_collapses_to_ground_facts() {
                     .collect(),
             ),
         ]),
-    };
+    );
     let oracle = naive_eval(&model).expect("oracle accepts");
     let out =
         run_pipeline(&model, "out", 2, generous_ceiling(), &unit_weight).expect("pipeline runs");

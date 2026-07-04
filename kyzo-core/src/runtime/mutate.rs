@@ -1809,4 +1809,46 @@ mod bulk_write_tests {
             "store bytes for the seeded bulk workload changed"
         );
     }
+
+    /// A per-row `@` clause's coordinate comes out of the row's own data
+    /// (`WriteValidity::PerRow`, resolved once per row inside
+    /// `put_into_relation`'s loop), so the reserved terminal tick
+    /// (`i64::MAX`, issue #62's ruling) can only be caught here, at
+    /// runtime, when the offending row is actually reached — parse time
+    /// only proved `@ ts` names one of the mutation's own output columns,
+    /// nothing about the values that column will hold. This seeds one
+    /// well-formed row ahead of the offending one to prove the whole
+    /// mutation refuses, not just the bad row: `put_into_relation` writes
+    /// straight into the (uncommitted) write transaction as it iterates,
+    /// so "no partial write" is a property of `run_script` never
+    /// committing that transaction on error, not of the loop stopping
+    /// early.
+    #[test]
+    fn per_row_write_validity_at_terminal_instant_refuses_whole_mutation() {
+        let db = Db::new(SimStorage::new(0xB01C_0002)).expect("db");
+        db.run_script("?[k, v] <- [] :create w3 {k => v}", no_params())
+            .expect("create");
+
+        let err = db
+            .run_script(
+                &format!(
+                    "?[k, v, ts] <- [[1, 'a', 100], [2, 'b', {}]] :put w3 {{k => v}} @ ts",
+                    i64::MAX
+                ),
+                no_params(),
+            )
+            .expect_err("row 2's coordinate is the reserved terminal tick");
+        assert!(err.to_string().contains("reserved"), "got: {err}");
+
+        let out = db
+            .run_script("?[k, v] := *w3{k, v}", no_params())
+            .expect("read back");
+        assert_eq!(
+            out.rows.len(),
+            0,
+            "the refused mutation must not commit row 1 either — the write \
+             transaction that reached the reserved instant on row 2 was never \
+             committed"
+        );
+    }
 }

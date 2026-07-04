@@ -642,6 +642,22 @@ struct WriteValiditySetsSystemTime(#[label] SourceSpan);
 #[diagnostic(code(parser::write_validity_on_non_write_op))]
 struct WriteValidityOnNonWriteOp(&'static str, #[label] SourceSpan);
 
+/// `valid = i64::MAX` (`'END'`, or the literal microsecond itself) is the
+/// reserved terminal tick every open-end sentinel depends on being
+/// unwritable (issue #62's ruling: the temporal oracle and the Interval
+/// `DataValue` both read "no stored event governs past here" as "still
+/// open" — a fact actually stored AT that instant would collide with that
+/// reading and derive as a zero-width interval). `@ 'END'` stays legal on
+/// the READ side (`data_value_to_vld_spec`'s "as of the end of time"); this
+/// refusal is write-only, at the one coordinate a `@` clause resolves to a
+/// parse-time constant.
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "the valid instant `i64::MAX` (`'END'`) is reserved as the open-end sentinel and cannot be written to; name a concrete instant, or omit `@` (every row lands at the transaction's own stamp)"
+)]
+#[diagnostic(code(parser::write_validity_at_terminal_instant))]
+struct WriteValidityAtTerminalInstant(#[label] SourceSpan);
+
 /// Stage a `relation_option`'s optional trailing `validity_clause`: refuse
 /// the two-coordinate form and any clause on `:ensure`/`:ensure_not` here
 /// (both are op/shape checks, not head-dependent), leaving only the head
@@ -699,6 +715,9 @@ fn resolve_write_validity(
                     span,
                     cur_vld,
                 )?;
+                if vld == crate::data::value::MAX_VALIDITY_TS {
+                    bail!(WriteValidityAtTerminalInstant(span));
+                }
                 Ok(WriteValidity::Fixed(vld))
             } else {
                 let head = prog.get_entry_out_head()?;
@@ -1404,18 +1423,44 @@ mod tests {
         );
     }
 
-    /// `@ 'NOW'` / `@ 'END'` resolve through the same sentinel coercion
-    /// the read side uses (`data_value_to_vld_spec`).
+    /// `@ 'NOW'` resolves through the same sentinel coercion the read side
+    /// uses (`data_value_to_vld_spec`); `@ 'END'` resolves to the same
+    /// `i64::MAX` coordinate but is then REFUSED — issue #62's ruling
+    /// reserves the terminal tick as non-writable, since it is the instant
+    /// every open-end sentinel (the temporal oracle, the Interval
+    /// `DataValue`) reads as "still open." (This test once pinned `@ 'END'`
+    /// resolving to `WriteValidity::Fixed(MAX_VALIDITY_TS)`; a hostile
+    /// review of that behavior showed it stored a fact AT the terminal
+    /// instant, which derives as a zero-width interval — see
+    /// `put_at_end_sentinel_is_refused` below and
+    /// `WriteValidityAtTerminalInstant`.)
     #[test]
-    fn put_at_now_and_end_sentinels_resolve() {
+    fn put_at_now_sentinel_resolves() {
         assert_eq!(
             write_vld("?[k, v] <- [[1, 'a']] :put t {k => v} @ 'NOW'"),
             WriteValidity::Fixed(vld())
         );
-        assert_eq!(
-            write_vld("?[k, v] <- [[1, 'a']] :put t {k => v} @ 'END'"),
-            WriteValidity::Fixed(crate::data::value::MAX_VALIDITY_TS)
-        );
+    }
+
+    /// REFUSED: `@ 'END'` on a write names the reserved terminal tick
+    /// (issue #62's ruling) rather than resolving to `WriteValidity::Fixed`.
+    #[test]
+    fn put_at_end_sentinel_is_refused() {
+        let err = parse_single("?[k, v] <- [[1, 'a']] :put t {k => v} @ 'END'").unwrap_err();
+        assert!(err.to_string().contains("reserved"), "got: {err}");
+    }
+
+    /// REFUSED: the same reservation applies to the literal microsecond
+    /// value, not just the `'END'` spelling — a script that spells out
+    /// `9223372036854775807` is refused identically.
+    #[test]
+    fn put_at_literal_max_is_refused() {
+        let err = parse_single(&format!(
+            "?[k, v] <- [[1, 'a']] :put t {{k => v}} @ {}",
+            i64::MAX
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("reserved"), "got: {err}");
     }
 
     /// `@ <var>` naming one of the entry's own output columns becomes a

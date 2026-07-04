@@ -1831,7 +1831,11 @@ mod tests {
         RowLimit::default()
     }
     fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
-        Literal { rel, args, negated }
+        if negated {
+            Literal::neg(rel, args)
+        } else {
+            Literal::pos(rel, args)
+        }
     }
     fn x() -> Term {
         Term::Var("X")

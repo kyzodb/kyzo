@@ -71,6 +71,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj, NormalAggrObj};
+use crate::data::bitemporal::ClaimPolarity;
 use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 
@@ -82,11 +83,420 @@ pub(crate) enum Term {
     Const(DataValue),
 }
 
+/// A bitemporal read coordinate, mirroring `data::value::AsOf`'s `(sys,
+/// valid)` shape and "newest at or before governs" semantics — but in
+/// plain ascending `i64` (larger means later) rather than `ValidityTs`'s
+/// `Reverse`-wrapped descending order. The oracle stays in this module's
+/// own idiom (plain values, no wrapper cleverness, obviously correct by
+/// inspection); the two bitemporal test harnesses this oracle unifies
+/// (`query/time_travel_trials.rs`, `query/time_travel_script_laws.rs`)
+/// already work in plain ascending timestamps throughout, so this is also
+/// the coordinate their generated histories bridge against directly.
+///
+/// **The exact correspondence.** `laws::AsOf { valid: v, sys: s }` is
+/// `data::value::AsOf { valid: ValidityTs(Reverse(v)), sys:
+/// ValidityTs(Reverse(s)) }` — wrap each field in `ValidityTs(Reverse(_))`
+/// to go from this type to the real one. Because `Reverse` inverts
+/// comparison, this module's ascending `t <= v` ("instant `t` is at or
+/// before coordinate `v`") is the real type's DESCENDING `ValidityTs(t) >=
+/// ValidityTs(v)` — the two types encode the identical total order
+/// through inverted representations, never a different one.
+/// [`asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture`] proves
+/// the two pick the same governing version on shared rows, rather than
+/// leaving that "the same order" claim as an assertion in a doc comment.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct AsOf {
+    /// The valid-time coordinate: among believed claims, the newest valid
+    /// instant at or before this one governs.
+    pub valid: i64,
+    /// The system-time coordinate: resolve by the newest system version
+    /// at or before this instant.
+    pub sys: i64,
+}
+
+impl AsOf {
+    /// The record's current belief: every stored instant is visible, at
+    /// its newest recorded system version.
+    pub(crate) const fn current() -> Self {
+        AsOf {
+            valid: i64::MAX,
+            sys: i64::MAX,
+        }
+    }
+
+    /// The record's current belief about the world at `valid` — mirrors
+    /// `data::value::AsOf::current`.
+    pub(crate) const fn current_at(valid: i64) -> Self {
+        AsOf {
+            valid,
+            sys: i64::MAX,
+        }
+    }
+}
+
+/// One stored point-event in a fact's bitemporal history: the fact's
+/// identifying key columns, the non-key payload it claims (populated only
+/// for [`ClaimPolarity::Assert`] — empty for `Retract`/`Erase`, mirroring
+/// the stored format where polarity lives in the value and a
+/// retract/erase carries no payload, `data/bitemporal.rs`), the valid
+/// instant, the system version, and the polarity.
+///
+/// **The untimed embedding.** A plain (non-historical) fact tuple `t` in
+/// `Program::facts` is sugar for exactly one canonical `Event`: assert
+/// `t` at the canonical instant `(valid = 0, sys = 0)`. [`Event::untimed`]
+/// makes this embedding a real, callable function rather than a comment —
+/// used by the bridge differentials proving the unified resolution
+/// algebra reproduces the disjoint oracles it replaces — but
+/// `Program::facts` itself is untouched: an untimed program's facts are
+/// never routed through event history at all (no `Program::histories`
+/// entry), so every existing untimed differential stays byte-identical
+/// with zero code-path change. A relation is EITHER plain (`facts`) or
+/// historical (`histories`), never both (`check_wellformed` refuses the
+/// overlap) — the two worlds are cleanly disjoint, unified only through
+/// the one evaluator that reads either.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Event {
+    pub key: Tuple,
+    pub payload: Tuple,
+    pub valid: i64,
+    pub sys: i64,
+    pub polarity: ClaimPolarity,
+}
+
+impl Event {
+    /// The valid instant `i64::MAX` is RESERVED for the `@ 'END'`
+    /// write-side sentinel (`parse/query.rs`'s end-sentinel resolution,
+    /// `put_at_now_and_end_sentinels_resolve`) — never a storable event
+    /// coordinate. Refusing it here, at construction, is what keeps a
+    /// zero-width `[i64::MAX, i64::MAX)` derived interval unrepresentable:
+    /// `OPEN_END` reuses that same value for "unbounded," so an assert
+    /// claiming the terminal tick itself would have nowhere left to end.
+    /// (Hostile-review ruling, issue #62 comment 4882951801: the write
+    /// path's own refusal of the same instant is a separate, later
+    /// change; this is the oracle's side of the reservation.)
+    fn check_valid_not_reserved(valid: i64) -> miette::Result<()> {
+        if valid == i64::MAX {
+            miette::bail!(
+                "valid instant i64::MAX is reserved for the `@ 'END'` write-side \
+                 sentinel; no event may claim it as its own coordinate"
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn assert(key: Tuple, payload: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
+        Self::check_valid_not_reserved(valid)?;
+        Ok(Event {
+            key,
+            payload,
+            valid,
+            sys,
+            polarity: ClaimPolarity::Assert,
+        })
+    }
+    pub(crate) fn retract(key: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
+        Self::check_valid_not_reserved(valid)?;
+        Ok(Event {
+            key,
+            payload: Vec::new(),
+            valid,
+            sys,
+            polarity: ClaimPolarity::Retract,
+        })
+    }
+    pub(crate) fn erase(key: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
+        Self::check_valid_not_reserved(valid)?;
+        Ok(Event {
+            key,
+            payload: Vec::new(),
+            valid,
+            sys,
+            polarity: ClaimPolarity::Erase,
+        })
+    }
+    /// The untimed embedding: sugar for "this fact has always held, as
+    /// far as any historical read can see." See the type doc. Bypasses
+    /// the reserved-tick check entirely (not merely passes it): `valid =
+    /// 0` is a fixed internal constant, never user input, so there is no
+    /// coordinate here to validate.
+    pub(crate) fn untimed(tuple: Tuple) -> Self {
+        Event {
+            key: tuple,
+            payload: Vec::new(),
+            valid: 0,
+            sys: 0,
+            polarity: ClaimPolarity::Assert,
+        }
+    }
+}
+
+/// The governing tuple for one fact — all events sharing a key — at `at`.
+/// The brute-force twin of the governing-version sweep already pinned in
+/// miniature at `data/bitemporal.rs:305-346`
+/// (`check_key_for_bitemporal`/its own test oracle): among instants at or
+/// before `at.valid`, newest first, the newest system version at or
+/// before `at.sys` governs that instant; `Assert` holds (`key ++
+/// payload`), `Retract` settles absent (no fall-through), `Erase` is
+/// transparent — resolution falls through to the fact's next older
+/// instant.
+fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
+    let mut instants: Vec<i64> = events
+        .iter()
+        .map(|e| e.valid)
+        .filter(|v| *v <= at.valid)
+        .collect();
+    instants.sort_unstable();
+    instants.dedup();
+    for instant in instants.into_iter().rev() {
+        let governing = events
+            .iter()
+            .filter(|e| e.valid == instant && e.sys <= at.sys)
+            .max_by_key(|e| e.sys);
+        match governing.map(|e| e.polarity) {
+            Some(ClaimPolarity::Assert) => {
+                let e = governing.expect("just matched Some");
+                let mut tuple = e.key.clone();
+                tuple.extend(e.payload.iter().cloned());
+                return Some(tuple);
+            }
+            Some(ClaimPolarity::Retract) => return None,
+            Some(ClaimPolarity::Erase) | None => {}
+        }
+    }
+    None
+}
+
+/// [`resolve_events`] for one named fact key within a relation's whole
+/// event history.
+pub(crate) fn resolve(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
+    let events: Vec<&Event> = history.iter().filter(|e| &e.key == key).collect();
+    resolve_events(&events, at)
+}
+
+/// The relation-wide snapshot at `at`: every fact key with a governing
+/// tuple.
+pub(crate) fn resolve_relation(history: &[Event], at: AsOf) -> BTreeSet<Tuple> {
+    let mut by_key: BTreeMap<&Tuple, Vec<&Event>> = BTreeMap::new();
+    for e in history {
+        by_key.entry(&e.key).or_default().push(e);
+    }
+    by_key
+        .into_values()
+        .filter_map(|events| resolve_events(&events, at))
+        .collect()
+}
+
+/// Which axis a derived-interval sweep varies, the other held `fixed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Axis {
+    /// Valid-time intervals at a fixed system snapshot — "what held, and
+    /// when, as believed as of `fixed`."
+    Valid,
+    /// System-time intervals at a fixed valid instant — "what the record
+    /// said about this one instant, over the record's own history,"
+    /// `[stamp, next-version-stamp)`.
+    Sys,
+}
+
+/// One maximal half-open run `[start, end)` of a fact's step function
+/// along `Axis`, holding the governing tuple (`key ++ payload`, [`resolve`]'s
+/// return convention) throughout. `end == `[`OPEN_END`] means the run is
+/// still open (nothing later supersedes it in this history).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Interval {
+    pub start: i64,
+    pub end: i64,
+    pub tuple: Tuple,
+}
+
+/// The sentinel meaning "no later coordinate closes this interval" — the
+/// maximum representable instant, never a real stored coordinate.
+pub(crate) const OPEN_END: i64 = i64::MAX;
+
+/// Derived intervals are never stored, only computed: at fixed `fixed`,
+/// the step function `v ↦ resolve(history, key, coordinate(v))` — for
+/// `Axis::Valid`, `coordinate(v) = AsOf { valid: v, sys: fixed }`; for
+/// `Axis::Sys`, `coordinate(v) = AsOf { valid: fixed, sys: v }` —
+/// decomposed into maximal constant half-open runs. One interval per
+/// maximal run of *equal* payload; coalescing is definitional, so
+/// un-coalesced output is unrepresentable by construction (the loop below
+/// only closes a run when the next breakpoint's payload differs).
+pub(crate) fn derive_intervals(
+    history: &[Event],
+    key: &Tuple,
+    axis: Axis,
+    fixed: i64,
+) -> Vec<Interval> {
+    let events: Vec<&Event> = history.iter().filter(|e| &e.key == key).collect();
+    let mut breaks: Vec<i64> = match axis {
+        // Every stored valid instant of this fact is a candidate
+        // breakpoint at the fixed system snapshot.
+        Axis::Valid => events.iter().map(|e| e.valid).collect(),
+        // Only versions recorded at or before the fixed valid instant can
+        // ever govern it (fall-through only reaches OLDER instants, never
+        // newer ones), so later instants' system stamps are irrelevant
+        // breakpoints here.
+        Axis::Sys => events
+            .iter()
+            .filter(|e| e.valid <= fixed)
+            .map(|e| e.sys)
+            .collect(),
+    };
+    breaks.sort_unstable();
+    breaks.dedup();
+    let coordinate = |pt: i64| -> AsOf {
+        match axis {
+            Axis::Valid => AsOf {
+                valid: pt,
+                sys: fixed,
+            },
+            Axis::Sys => AsOf {
+                valid: fixed,
+                sys: pt,
+            },
+        }
+    };
+
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < breaks.len() {
+        let start = breaks[i];
+        let Some(tuple) = resolve_events(&events, coordinate(start)) else {
+            i += 1;
+            continue;
+        };
+        let mut j = i;
+        while j + 1 < breaks.len()
+            && resolve_events(&events, coordinate(breaks[j + 1])).as_ref() == Some(&tuple)
+        {
+            j += 1;
+        }
+        let end = if j + 1 < breaks.len() {
+            breaks[j + 1]
+        } else {
+            OPEN_END
+        };
+        out.push(Interval { start, end, tuple });
+        i = j + 1;
+    }
+    out
+}
+
+/// A net snapshot difference: a signed fact, never a "modified" kind — a
+/// payload change at one key falls out of a plain set difference as a
+/// `Minus`/`Plus` pair (the old and new tuples differ in full, so each
+/// appears on its own side).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SignedFact {
+    Plus(Tuple),
+    Minus(Tuple),
+}
+
+/// The reference diff: axis-parameterized only in that `from`/`to` may
+/// differ along either coordinate (or both) — the same computation either
+/// way, since it operates on the two resolved snapshots directly, never
+/// on the intervals.
+pub(crate) fn diff(history: &[Event], from: AsOf, to: AsOf) -> BTreeSet<SignedFact> {
+    let a = resolve_relation(history, from);
+    let b = resolve_relation(history, to);
+    let mut out = BTreeSet::new();
+    for t in a.difference(&b) {
+        out.insert(SignedFact::Minus(t.clone()));
+    }
+    for t in b.difference(&a) {
+        out.insert(SignedFact::Plus(t.clone()));
+    }
+    out
+}
+
+/// Patch composition with cancellation: tally each tuple's net polarity
+/// (`Plus` = +1, `Minus` = -1) across both patches, in order; a tuple
+/// whose net is zero cancels out of the result entirely (e.g. a payload
+/// that changes and changes back within the composed window). The
+/// executable form of the compositionality law
+/// `diff(a,c) == diff(a,b) ⊕ diff(b,c)`.
+pub(crate) fn compose(
+    first: &BTreeSet<SignedFact>,
+    second: &BTreeSet<SignedFact>,
+) -> BTreeSet<SignedFact> {
+    let mut tally: BTreeMap<&Tuple, i32> = BTreeMap::new();
+    for patch in [first, second] {
+        for fact in patch {
+            let (t, delta) = match fact {
+                SignedFact::Plus(t) => (t, 1),
+                SignedFact::Minus(t) => (t, -1),
+            };
+            *tally.entry(t).or_insert(0) += delta;
+        }
+    }
+    tally
+        .into_iter()
+        .filter_map(|(t, net)| match net {
+            0 => None,
+            n if n > 0 => Some(SignedFact::Plus(t.clone())),
+            _ => Some(SignedFact::Minus(t.clone())),
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Literal {
     pub rel: Rel,
     pub args: Vec<Term>,
     pub negated: bool,
+    /// The literal's own bitemporal read coordinate, overriding the
+    /// query-level default (`naive_eval_at`'s parameter) when present.
+    /// Meaningful only on a literal reading a relation with an entry in
+    /// [`Program::histories`]; `check_wellformed` refuses it elsewhere.
+    /// Negating a literal that carries one is refused
+    /// (`Rejection::NegationOverTimeTravel`), mirroring the engine's
+    /// `NegationOverTimeTravelError` (`query/ra/mod.rs:260`).
+    pub as_of: Option<AsOf>,
+}
+
+impl Literal {
+    /// A positive body literal, current/untimed (no explicit as-of) — the
+    /// one seam every call site should construct through, so a future
+    /// field on `Literal` fans out from here instead of from every file's
+    /// own hand-written struct literal (the lesson of story #62's
+    /// compiler-forced fallout across five files).
+    pub(crate) fn pos(rel: Rel, args: Vec<Term>) -> Self {
+        Literal {
+            rel,
+            args,
+            negated: false,
+            as_of: None,
+        }
+    }
+    /// A negated body literal, current/untimed.
+    pub(crate) fn neg(rel: Rel, args: Vec<Term>) -> Self {
+        Literal {
+            rel,
+            args,
+            negated: true,
+            as_of: None,
+        }
+    }
+    /// A positive body literal at its own bitemporal coordinate.
+    pub(crate) fn pos_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
+        Literal {
+            rel,
+            args,
+            negated: false,
+            as_of: Some(at),
+        }
+    }
+    /// A negated body literal at its own bitemporal coordinate — refused
+    /// by [`check_time_travel_negation`], but constructible so the
+    /// refusal corpus (and this file's own refusal test) can build the
+    /// exact shape that must be rejected.
+    pub(crate) fn neg_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
+        Literal {
+            rel,
+            args,
+            negated: true,
+            as_of: Some(at),
+        }
+    }
 }
 
 /// One head position's aggregation, if any: the real landed [`Aggregation`]
@@ -147,6 +557,33 @@ pub(crate) struct Program {
     pub rules: Vec<Rule>,
     pub fixed: Vec<FixedRule>,
     pub facts: BTreeMap<Rel, BTreeSet<Tuple>>,
+    /// Bitemporal EDBs: a relation lives here XOR in `facts`, never both
+    /// (`check_wellformed` refuses the overlap). A historical relation's
+    /// current snapshot at any coordinate is [`resolve_relation`], never a
+    /// precomputed set — literals reading it may each carry their own
+    /// [`AsOf`], so the same relation can be read at different coordinates
+    /// within one program.
+    pub histories: BTreeMap<Rel, Vec<Event>>,
+}
+
+impl Program {
+    /// An untimed program: no historical relations at all. The one seam
+    /// call sites that never touch time should build through, instead of
+    /// each hand-spelling `histories: Default::default()` (or, worse,
+    /// enumerating every field and silently drifting when a new one is
+    /// added — the exact fallout story #62 caused across five files).
+    pub(crate) fn untimed(
+        rules: Vec<Rule>,
+        fixed: Vec<FixedRule>,
+        facts: BTreeMap<Rel, BTreeSet<Tuple>>,
+    ) -> Self {
+        Program {
+            rules,
+            fixed,
+            facts,
+            histories: BTreeMap::new(),
+        }
+    }
 }
 
 /// Why a program is refused, or an evaluation failed. The real compiler
@@ -171,6 +608,10 @@ pub(crate) enum Rejection {
     /// An aggregation failed at evaluation time (e.g. a type error inside
     /// a fold); carried as a value, never a panic.
     AggrError(String),
+    /// A negated literal carries its own as-of coordinate — mirrors the
+    /// engine's `NegationOverTimeTravelError` (`query/ra/mod.rs:260`):
+    /// negation over a time-travel scan is refused, not silently wrong.
+    NegationOverTimeTravel(&'static str),
 }
 
 fn literal_vars(l: &Literal) -> HashSet<&'static str> {
@@ -354,6 +795,67 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
             return Err(Rejection::Malformed(rel));
         }
     }
+    // A relation lives in `facts` XOR `histories`, never both — the two
+    // worlds (always-current EDB, bitemporal EDB) stay disjoint, unified
+    // only through the one evaluator that reads either.
+    for rel in program.histories.keys() {
+        if program.facts.contains_key(rel) {
+            return Err(Rejection::Malformed(rel));
+        }
+    }
+    // A historical relation is a stored EDB leaf, never a derivable head:
+    // a rule or fixed rule sharing its name would derive into `db` while
+    // every reader still resolves the SAME name through `histories`
+    // (`literal_rows` prefers a historical entry unconditionally, ahead
+    // of `db`) — the derivation would exist and never be seen by
+    // anything that reads it. Refused alongside the facts∩histories
+    // check above (hostile-review finding, issue #62 comment
+    // 4882951801).
+    for rule in &program.rules {
+        if program.histories.contains_key(rule.head_rel) {
+            return Err(Rejection::Malformed(rule.head_rel));
+        }
+    }
+    for f in &program.fixed {
+        if program.histories.contains_key(f.head_rel) {
+            return Err(Rejection::Malformed(f.head_rel));
+        }
+    }
+    // Every event of one historical relation shares one key arity, and
+    // every ASSERT shares one payload arity (retract/erase carry none, by
+    // construction) — a relation with inconsistent shapes across its own
+    // history is ill-formed the same way a fact tuple at the wrong arity
+    // is.
+    for (rel, history) in &program.histories {
+        let key_arity = history.first().map(|e| e.key.len());
+        for e in history {
+            if Some(e.key.len()) != key_arity {
+                return Err(Rejection::Malformed(rel));
+            }
+        }
+        let payload_arity = history
+            .iter()
+            .find(|e| e.polarity == ClaimPolarity::Assert)
+            .map(|e| e.payload.len());
+        for e in history
+            .iter()
+            .filter(|e| e.polarity == ClaimPolarity::Assert)
+        {
+            if Some(e.payload.len()) != payload_arity {
+                return Err(Rejection::Malformed(rel));
+            }
+        }
+    }
+    // A literal's `as_of` is meaningful only on a historical relation —
+    // time is a read coordinate resolved at stored leaves, and a plain
+    // fact/derived (IDB) relation has no leaf to resolve it against.
+    for rule in &program.rules {
+        for lit in &rule.body {
+            if lit.as_of.is_some() && !program.histories.contains_key(lit.rel) {
+                return Err(Rejection::Malformed(lit.rel));
+            }
+        }
+    }
     // One arity per relation, across facts, rule heads, and body literals
     // (the real compiler refuses arity clashes at compile time). A fixed
     // head's *output* arity is opaque to the model — its `eval` may emit
@@ -376,6 +878,17 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
             check_arity(rel, t.len())?;
         }
     }
+    for (rel, history) in &program.histories {
+        if let (Some(k), Some(v)) = (
+            history.first().map(|e| e.key.len()),
+            history
+                .iter()
+                .find(|e| e.polarity == ClaimPolarity::Assert)
+                .map(|e| e.payload.len()),
+        ) {
+            check_arity(rel, k + v)?;
+        }
+    }
     for rule in &program.rules {
         check_arity(rule.head_rel, rule.head_args.len())?;
         for l in &rule.body {
@@ -396,6 +909,7 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
         .iter()
         .flat_map(|r| std::iter::once(r.head_rel).chain(r.body.iter().map(|l| l.rel)))
         .chain(program.facts.keys().copied())
+        .chain(program.histories.keys().copied())
         .chain(
             program
                 .fixed
@@ -461,25 +975,51 @@ fn ground(args: &[Term], bound: &Bindings) -> Tuple {
         .collect()
 }
 
+/// The rows a literal reading `lit.rel` sees. A plain fact/derived
+/// relation reads `db` exactly as before this module grew a time axis —
+/// zero behavior change for every untimed program, no `Program::histories`
+/// lookup even attempted. A historical relation is never a precomputed
+/// snapshot in `db`: it is resolved fresh, here, at the literal's own
+/// coordinate if it carries one, else `default_as_of` — so two literals
+/// reading the SAME historical relation at different coordinates within
+/// one program each see their own snapshot (`AsOf` pushed down to the
+/// stored leaf the literal names, never precomputed above it).
+fn literal_rows(
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    lit: &Literal,
+    default_as_of: AsOf,
+) -> BTreeSet<Tuple> {
+    match program.histories.get(lit.rel) {
+        Some(history) => resolve_relation(history, lit.as_of.unwrap_or(default_as_of)),
+        None => db.get(lit.rel).cloned().unwrap_or_default(),
+    }
+}
+
 /// All satisfying bindings of a rule body against the current database,
 /// one per distinct binding of the body's variables. Positives first, so
 /// safety guarantees negated literals are fully bound when probed.
-fn body_bindings(rule: &Rule, db: &BTreeMap<Rel, BTreeSet<Tuple>>) -> Vec<Bindings> {
-    let empty = BTreeSet::new();
+fn body_bindings(
+    rule: &Rule,
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+) -> Vec<Bindings> {
     let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
     ordered.extend(rule.body.iter().filter(|l| l.negated));
 
     let mut frontier: Vec<Bindings> = vec![Bindings::new()];
     for lit in ordered {
+        let rows = literal_rows(program, db, lit, default_as_of);
         let mut next = Vec::new();
         for bound in &frontier {
             if lit.negated {
                 let probe = ground(&lit.args, bound);
-                if !db.get(lit.rel).unwrap_or(&empty).contains(&probe) {
+                if !rows.contains(&probe) {
                     next.push(bound.clone());
                 }
             } else {
-                for tuple in db.get(lit.rel).unwrap_or(&empty) {
+                for tuple in &rows {
                     if let Some(b) = unify(&lit.args, tuple, bound) {
                         next.push(b);
                     }
@@ -494,8 +1034,13 @@ fn body_bindings(rule: &Rule, db: &BTreeMap<Rel, BTreeSet<Tuple>>) -> Vec<Bindin
 /// The rule's derived head rows, one per body binding. Distinct bindings
 /// can ground to the same row; the multiplicity is what normal
 /// aggregations fold over, so it is preserved.
-fn derived_rows(rule: &Rule, db: &BTreeMap<Rel, BTreeSet<Tuple>>) -> Vec<Tuple> {
-    body_bindings(rule, db)
+fn derived_rows(
+    rule: &Rule,
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+) -> Vec<Tuple> {
+    body_bindings(rule, program, db, default_as_of)
         .iter()
         .map(|b| ground(&rule.head_args, b))
         .collect()
@@ -510,7 +1055,9 @@ fn derived_rows(rule: &Rule, db: &BTreeMap<Rel, BTreeSet<Tuple>>) -> Vec<Tuple> 
 /// the single empty-fold row.
 fn eval_normal_aggr_head(
     rules: &[&Rule],
+    program: &Program,
     db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
 ) -> Result<BTreeSet<Tuple>, Rejection> {
     // Well-formedness guarantees every rule of the head shares this
     // signature.
@@ -535,7 +1082,7 @@ fn eval_normal_aggr_head(
 
     let mut groups: BTreeMap<Tuple, Vec<Box<dyn NormalAggrObj>>> = BTreeMap::new();
     for rule in rules {
-        for row in derived_rows(rule, db) {
+        for row in derived_rows(rule, program, db, default_as_of) {
             let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
             let ops = match groups.entry(key) {
                 Entry::Occupied(e) => e.into_mut(),
@@ -652,14 +1199,47 @@ impl MeetState {
     }
 }
 
+/// Every negated literal must resolve at a single, statically-known
+/// coordinate — never a moving target it could itself perturb. A literal
+/// carrying its own as-of coordinate is refused when negated, mirroring
+/// the engine's `NegationOverTimeTravelError` (`query/ra/mod.rs:260`):
+/// lifting this refusal (negation over a FIXED as-of snapshot is
+/// well-defined) is a later task, named but not done here.
+fn check_time_travel_negation(program: &Program) -> Result<(), Rejection> {
+    for rule in &program.rules {
+        for lit in rule.body.iter().filter(|l| l.negated) {
+            if lit.as_of.is_some() {
+                return Err(Rejection::NegationOverTimeTravel(rule.head_rel));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Naive stratified fixpoint evaluation: the textbook algorithm extended
 /// with the aggregation and fixed-rule semantics in the module docs — the
 /// oracle for Laws 1 and 3. Validates shape, safety, and stratifiability
-/// first.
+/// first. The untimed entry point: every historical literal without its
+/// own coordinate reads its relation's current belief
+/// ([`AsOf::current`]).
 pub(crate) fn naive_eval(program: &Program) -> Result<BTreeMap<Rel, BTreeSet<Tuple>>, Rejection> {
+    naive_eval_at(program, AsOf::current())
+}
+
+/// [`naive_eval`], with an explicit query-level default coordinate: every
+/// literal reading a historical relation without its own `as_of` resolves
+/// at `default_as_of` instead of "current." Untimed programs (no
+/// `Program::histories` entries at all) are unaffected by `default_as_of`
+/// — no code path in this function ever consults it unless a literal
+/// actually reads a historical relation.
+pub(crate) fn naive_eval_at(
+    program: &Program,
+    default_as_of: AsOf,
+) -> Result<BTreeMap<Rel, BTreeSet<Tuple>>, Rejection> {
     check_wellformed(program)?;
     check_safety(program)?;
     check_stratifiable(program)?;
+    check_time_travel_negation(program)?;
     let classes = head_classes(program);
     let strata_of = strata(program);
     let max_stratum = strata_of.values().copied().max().unwrap_or(0);
@@ -702,7 +1282,7 @@ pub(crate) fn naive_eval(program: &Program) -> Result<BTreeMap<Rel, BTreeSet<Tup
                 .iter()
                 .filter(|r| r.head_rel == *head)
                 .collect();
-            let out = eval_normal_aggr_head(&head_rules, &db)?;
+            let out = eval_normal_aggr_head(&head_rules, program, &db, default_as_of)?;
             db.insert(head, out);
         }
 
@@ -734,7 +1314,7 @@ pub(crate) fn naive_eval(program: &Program) -> Result<BTreeMap<Rel, BTreeSet<Tup
                 .iter()
                 .filter(|r| strata_of[r.head_rel] == stratum && !normal_heads.contains(r.head_rel))
             {
-                let rows = derived_rows(rule, &db);
+                let rows = derived_rows(rule, program, &db, default_as_of);
                 if let Some(state) = meets.get_mut(rule.head_rel) {
                     for row in &rows {
                         changed |= state.meet_row(row)?;
@@ -783,7 +1363,11 @@ pub(crate) fn naive_eval(program: &Program) -> Result<BTreeMap<Rel, BTreeSet<Tup
 /// reference checker's self-tests and (as they land) the real compiler's.
 pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
     fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
-        Literal { rel, args, negated }
+        if negated {
+            Literal::neg(rel, args)
+        } else {
+            Literal::pos(rel, args)
+        }
     }
     fn named(name: &'static str) -> (Aggregation, Vec<DataValue>) {
         let aggr = crate::data::aggr::parse_aggr(name)
@@ -936,7 +1520,19 @@ mod tests {
         facts
     }
     fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
-        Literal { rel, args, negated }
+        if negated {
+            Literal::neg(rel, args)
+        } else {
+            Literal::pos(rel, args)
+        }
+    }
+    /// A body literal reading a historical relation at its own coordinate.
+    fn lit_at(rel: Rel, args: Vec<Term>, negated: bool, at: AsOf) -> Literal {
+        if negated {
+            Literal::neg_at(rel, args, at)
+        } else {
+            Literal::pos_at(rel, args, at)
+        }
     }
     fn x() -> Term {
         Term::Var("X")
@@ -1795,5 +2391,849 @@ mod tests {
             prop_assert_eq!(&m, &semi_naive);
             prop_assert_eq!(db.get("out").cloned().unwrap_or_default(), m);
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // The unified temporal oracle: resolution, derived intervals, diff —
+    // unifying this module's naive_eval with the two bespoke test-oracle
+    // families it replaces (`time_travel_trials.rs::naive_asof`,
+    // `time_travel_script_laws.rs::oracle_at`).
+    // ═════════════════════════════════════════════════════════════════
+
+    fn k(i: i64) -> Tuple {
+        vec![v(i)]
+    }
+    fn pay(i: i64) -> Tuple {
+        vec![v(i)]
+    }
+    /// The full governing tuple `key ++ payload` for key `i`, payload `p`.
+    fn kv(i: i64, p: i64) -> Tuple {
+        vec![v(i), v(p)]
+    }
+
+    /// `Event` construction is fallible only for the reserved terminal
+    /// tick (`i64::MAX`); no fixture below ever uses it (the dedicated
+    /// tests for that reservation construct it explicitly, without these
+    /// helpers). Panicking here is `expect`, not a swallowed error.
+    fn ev_assert(key: Tuple, payload: Tuple, valid: i64, sys: i64) -> Event {
+        Event::assert(key, payload, valid, sys)
+            .expect("valid instant is never the reserved terminal tick in these fixtures")
+    }
+    fn ev_retract(key: Tuple, valid: i64, sys: i64) -> Event {
+        Event::retract(key, valid, sys)
+            .expect("valid instant is never the reserved terminal tick in these fixtures")
+    }
+    fn ev_erase(key: Tuple, valid: i64, sys: i64) -> Event {
+        Event::erase(key, valid, sys)
+            .expect("valid instant is never the reserved terminal tick in these fixtures")
+    }
+
+    // ── Degenerate-case table: each ruled case pinned as its own test ───
+
+    #[test]
+    fn retract_clips_start_to_retract_exclusive() {
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(100), 10, 0),
+            ev_retract(key.clone(), 30, 0),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(
+            ivs,
+            vec![Interval {
+                start: 10,
+                end: 30,
+                tuple: kv(1, 100)
+            }]
+        );
+        assert_eq!(
+            resolve(&history, &key, AsOf { valid: 29, sys: 0 }),
+            Some(kv(1, 100))
+        );
+        assert_eq!(
+            resolve(&history, &key, AsOf { valid: 30, sys: 0 }),
+            None,
+            "the retract's own instant is excluded from the prior interval"
+        );
+    }
+
+    #[test]
+    fn dangling_retract_blocks_erase_fall_through() {
+        // An older instant asserts; a newer, terminal instant retracts:
+        // the retract settles absence definitively — nothing may fall
+        // through to the older claim, unlike an Erase in the same shape.
+        let key = k(1);
+        let retracted = vec![
+            ev_assert(key.clone(), pay(1), 10, 0),
+            ev_retract(key.clone(), 20, 0),
+        ];
+        assert_eq!(resolve(&retracted, &key, AsOf::current()), None);
+
+        let erased = vec![
+            ev_assert(key.clone(), pay(1), 10, 0),
+            ev_erase(key.clone(), 20, 0),
+        ];
+        assert_eq!(
+            resolve(&erased, &key, AsOf::current()),
+            Some(kv(1, 1)),
+            "erase is transparent; a dangling retract is not"
+        );
+    }
+
+    #[test]
+    fn double_assert_same_payload_is_idempotent_one_interval() {
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(9), 10, 0),
+            ev_assert(key.clone(), pay(9), 20, 0),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(
+            ivs,
+            vec![Interval {
+                start: 10,
+                end: OPEN_END,
+                tuple: kv(1, 9)
+            }],
+            "identical re-asserts coalesce into one interval"
+        );
+    }
+
+    #[test]
+    fn double_assert_different_payload_splits_at_the_second_assert() {
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(9), 10, 0),
+            ev_assert(key.clone(), pay(8), 20, 0),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(
+            ivs,
+            vec![
+                Interval {
+                    start: 10,
+                    end: 20,
+                    tuple: kv(1, 9)
+                },
+                Interval {
+                    start: 20,
+                    end: OPEN_END,
+                    tuple: kv(1, 8)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn assert_after_retract_opens_a_new_interval() {
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(1), 10, 0),
+            ev_retract(key.clone(), 20, 0),
+            ev_assert(key.clone(), pay(2), 30, 0),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(
+            ivs,
+            vec![
+                Interval {
+                    start: 10,
+                    end: 20,
+                    tuple: kv(1, 1)
+                },
+                Interval {
+                    start: 30,
+                    end: OPEN_END,
+                    tuple: kv(1, 2)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn assert_then_retract_same_instant_newer_sys_holds_nowhere() {
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(1), 10, 0),
+            ev_retract(key.clone(), 10, 1),
+        ];
+        assert_eq!(resolve(&history, &key, AsOf::current()), None);
+        assert!(
+            derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys).is_empty(),
+            "the fact holds at no instant"
+        );
+        // Before the correction's own stamp, the assert still governed.
+        assert_eq!(
+            resolve(&history, &key, AsOf { valid: 10, sys: 0 }),
+            Some(kv(1, 1))
+        );
+    }
+
+    #[test]
+    fn erase_is_transparent_to_intervals() {
+        // Assert at 10; a system correction erases the instant at 20 (no
+        // claim was ever really made there); assert again at 30 with a
+        // DIFFERENT payload. The derived interval must show the original
+        // claim continuing straight through the erased instant.
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(1), 10, 0),
+            ev_erase(key.clone(), 20, 0),
+            ev_assert(key.clone(), pay(2), 30, 0),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(
+            ivs,
+            vec![
+                Interval {
+                    start: 10,
+                    end: 30,
+                    tuple: kv(1, 1)
+                },
+                Interval {
+                    start: 30,
+                    end: OPEN_END,
+                    tuple: kv(1, 2)
+                },
+            ],
+            "the erased instant contributes no breakpoint of its own"
+        );
+    }
+
+    #[test]
+    fn instants_are_one_tick_no_zero_width_intervals() {
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(1), 10, 0),
+            ev_assert(key.clone(), pay(2), 11, 0),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        assert_eq!(
+            ivs,
+            vec![
+                Interval {
+                    start: 10,
+                    end: 11,
+                    tuple: kv(1, 1)
+                },
+                Interval {
+                    start: 11,
+                    end: OPEN_END,
+                    tuple: kv(1, 2)
+                },
+            ]
+        );
+        for iv in &ivs {
+            assert!(iv.end > iv.start, "no zero-width interval: {iv:?}");
+        }
+    }
+
+    #[test]
+    fn system_axis_interval_of_a_version_is_stamp_to_next_version_stamp() {
+        // One valid instant, three system corrections: [0,5) the first
+        // claim, [5,9) the second, [9, OPEN_END) the third and current.
+        let key = k(1);
+        let history = vec![
+            ev_assert(key.clone(), pay(1), 100, 0),
+            ev_assert(key.clone(), pay(2), 100, 5),
+            ev_assert(key.clone(), pay(3), 100, 9),
+        ];
+        let ivs = derive_intervals(&history, &key, Axis::Sys, 100);
+        assert_eq!(
+            ivs,
+            vec![
+                Interval {
+                    start: 0,
+                    end: 5,
+                    tuple: kv(1, 1)
+                },
+                Interval {
+                    start: 5,
+                    end: 9,
+                    tuple: kv(1, 2)
+                },
+                Interval {
+                    start: 9,
+                    end: OPEN_END,
+                    tuple: kv(1, 3)
+                },
+            ]
+        );
+    }
+
+    // ── The reserved terminal tick (hostile-review ruling) ──────────────
+
+    /// `Event::assert`/`retract`/`erase` all refuse `valid == i64::MAX` —
+    /// the terminal tick is reserved for the `@ 'END'` write-side
+    /// sentinel, never a storable event coordinate.
+    #[test]
+    fn terminal_tick_is_reserved_and_refused_at_construction() {
+        assert!(Event::assert(k(1), pay(1), i64::MAX, 0).is_err());
+        assert!(Event::retract(k(1), i64::MAX, 0).is_err());
+        assert!(Event::erase(k(1), i64::MAX, 0).is_err());
+        // Every other instant, including the one just short of it, is fine.
+        assert!(Event::assert(k(1), pay(1), i64::MAX - 1, 0).is_ok());
+    }
+
+    /// The reviewer's reproducer: an assert at the terminal tick is
+    /// refused at construction, so `derive_intervals` never even sees it
+    /// — the zero-width `[i64::MAX, i64::MAX)` interval the old
+    /// "unreachable" waiver would have let through is unrepresentable,
+    /// not merely rare.
+    #[test]
+    fn assert_at_terminal_tick_never_produces_a_zero_width_interval() {
+        let key = k(1);
+        let history = vec![ev_assert(key.clone(), pay(1), 10, 0)];
+        let err = Event::assert(key.clone(), pay(2), i64::MAX, 1)
+            .expect_err("the terminal tick must be refused, not silently accepted");
+        assert!(
+            err.to_string().contains("reserved"),
+            "expected a reservation error, got: {err}"
+        );
+        // The history therefore never contains a terminal-tick event, and
+        // every derived interval is non-zero-width.
+        let ivs = derive_intervals(&history, &key, Axis::Valid, AsOf::current().sys);
+        for iv in &ivs {
+            assert!(iv.end > iv.start, "no zero-width interval: {iv:?}");
+        }
+    }
+
+    // ── Cross-check against the real kernel ─────────────────────────────
+
+    /// The plain-ascending `laws::AsOf` mirror and the real, Reverse-
+    /// wrapped `data::bitemporal` kernel (`check_key_for_bitemporal`) pick
+    /// the SAME governing version on shared rows — the two reference
+    /// models are provably the same algebra, not merely similarly worded.
+    /// The kernel side replicates `data/bitemporal.rs`'s own
+    /// `skip_walk`/`bikey` test helpers (private to that module, so
+    /// reconstructed here rather than imported) against the real, public
+    /// `check_key_for_bitemporal`; the mirror side calls this module's
+    /// `resolve_relation` on the identical rows, translated per the exact
+    /// correspondence documented on [`AsOf`].
+    #[test]
+    fn asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture() {
+        use crate::data::bitemporal::check_key_for_bitemporal;
+        use crate::data::tuple::{RelationId, TupleT};
+        use crate::data::value::{Validity, ValidityTs};
+        use std::cmp::Reverse;
+
+        fn vts(t: i64) -> ValidityTs {
+            ValidityTs(Reverse(t))
+        }
+        fn slot(t: i64) -> Validity {
+            Validity {
+                timestamp: vts(t),
+                is_assert: Reverse(true),
+            }
+        }
+        fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
+            [
+                DataValue::from(fact),
+                DataValue::Validity(slot(valid_ts)),
+                DataValue::Validity(slot(sys_ts)),
+            ]
+            .encode_as_key(RelationId(7))
+            .into_vec()
+        }
+        /// A from-scratch skip-walk over the real kernel — the same shape
+        /// as `data/bitemporal.rs`'s private `skip_walk` test helper.
+        fn kernel_resolves(
+            store: &BTreeMap<Vec<u8>, ClaimPolarity>,
+            sys_at: i64,
+            valid_at: i64,
+        ) -> BTreeSet<i64> {
+            let mut out = BTreeSet::new();
+            let mut bound = vec![];
+            let mut steps = 0usize;
+            loop {
+                steps += 1;
+                assert!(
+                    steps <= 4 * store.len() + 4,
+                    "kernel walk failed to terminate"
+                );
+                let Some((k, polarity)) = store.range(bound..).next() else {
+                    break;
+                };
+                let (ret, nxt) = check_key_for_bitemporal(
+                    k,
+                    *polarity,
+                    crate::data::value::AsOf {
+                        sys: vts(sys_at),
+                        valid: vts(valid_at),
+                    },
+                    None,
+                )
+                .expect("well-formed test key");
+                bound = if nxt.as_slice() > k.as_slice() {
+                    nxt
+                } else {
+                    let mut succ = k.clone();
+                    succ.push(0);
+                    succ
+                };
+                if let Some(t) = ret {
+                    out.insert(t[0].get_int().expect("int fact column"));
+                }
+            }
+            out
+        }
+
+        // Two facts; asserts, a retraction, and a system-time erasure
+        // interleaved across instants and corrections — the same
+        // ingredients `data/bitemporal.rs`'s own fixtures exercise, with
+        // negative valid AND negative sys coordinates folded into the
+        // STORED rows themselves (hostile-review pin: sign-boundary
+        // coverage belongs in the fixture, not only in the probe grid).
+        let rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![
+            (1, -20, -20, ClaimPolarity::Assert),
+            (1, -3, -10, ClaimPolarity::Assert),
+            (1, -3, -5, ClaimPolarity::Retract),
+            (1, 10, -5, ClaimPolarity::Assert),
+            (1, 10, 15, ClaimPolarity::Erase),
+            (1, 20, 5, ClaimPolarity::Assert),
+            (2, 15, -25, ClaimPolarity::Assert),
+        ];
+        let store: BTreeMap<Vec<u8>, ClaimPolarity> = rows
+            .iter()
+            .map(|(f, valid, sys, p)| (bikey(*f, *valid, *sys), *p))
+            .collect();
+        let events: Vec<Event> = rows
+            .iter()
+            .map(|(f, valid, sys, polarity)| Event {
+                key: vec![v(*f)],
+                payload: vec![],
+                valid: *valid,
+                sys: *sys,
+                polarity: *polarity,
+            })
+            .collect();
+
+        for sys_at in [-25i64, -5, 0, 5, 15, 25] {
+            for valid_at in [-30i64, -10, -3, 0, 10, 20, 30] {
+                let kernel = kernel_resolves(&store, sys_at, valid_at);
+                let mirror: BTreeSet<i64> = resolve_relation(
+                    &events,
+                    AsOf {
+                        valid: valid_at,
+                        sys: sys_at,
+                    },
+                )
+                .into_iter()
+                .map(|t| t[0].get_int().expect("int fact"))
+                .collect();
+                assert_eq!(
+                    mirror, kernel,
+                    "sys_at={sys_at} valid_at={valid_at}: the laws::AsOf mirror \
+                     disagrees with the real bitemporal kernel"
+                );
+            }
+        }
+    }
+
+    /// The typed refusal, not a panic: a literal's `as_of` naming a
+    /// relation entirely absent from `Program::histories` (never mind
+    /// present-with-zero-rows) is `Rejection::Malformed` at
+    /// `check_wellformed`, before evaluation ever runs.
+    #[test]
+    fn as_of_naming_a_relation_absent_from_histories_is_refused() {
+        let program = Program {
+            rules: vec![Rule::plain(
+                "out",
+                vec![x()],
+                vec![lit_at("ghost", vec![x()], false, AsOf::current_at(10))],
+            )],
+            ..Program::default()
+        };
+        assert_eq!(
+            check_wellformed(&program),
+            Err(Rejection::Malformed("ghost"))
+        );
+        assert!(matches!(
+            naive_eval(&program),
+            Err(Rejection::Malformed("ghost"))
+        ));
+    }
+
+    /// A rule head sharing a name with a historical relation is refused:
+    /// its derivation would land in `db` under that name while every
+    /// reader (`literal_rows`) still resolves the SAME name through
+    /// `histories` first — the derived rows would exist and never be
+    /// seen. Pinned as its own test alongside the facts∩histories check
+    /// it sits beside (hostile-review finding, issue #62 comment
+    /// 4882951801).
+    #[test]
+    fn rule_head_sharing_a_name_with_a_historical_relation_is_refused() {
+        // Arity-consistent on purpose (`h`'s historical rows are key
+        // arity 1 + payload arity 1 = 2, matching the rule's own head and
+        // body here): this isolates the NEW rule-head∩histories refusal
+        // from the pre-existing arity-mismatch refusal, which would
+        // otherwise return the same `Malformed("h")` value for an
+        // unrelated reason and mask a broken check.
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert("h", vec![ev_assert(k(1), pay(1), 5, 0)]);
+        let program = Program {
+            rules: vec![Rule::plain(
+                "h",
+                vec![x(), y()],
+                vec![lit("h", vec![x(), y()], false)],
+            )],
+            histories,
+            ..Program::default()
+        };
+        assert_eq!(check_wellformed(&program), Err(Rejection::Malformed("h")));
+        assert!(matches!(
+            naive_eval(&program),
+            Err(Rejection::Malformed("h"))
+        ));
+    }
+
+    /// The fixed-rule twin of the above: a fixed rule's head sharing a
+    /// name with a historical relation is refused the same way.
+    #[test]
+    fn fixed_head_sharing_a_name_with_a_historical_relation_is_refused() {
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert("h", vec![ev_assert(k(1), pay(1), 5, 0)]);
+        let program = Program {
+            fixed: vec![FixedRule {
+                head_rel: "h",
+                inputs: vec![],
+                eval: |_| BTreeSet::new(),
+            }],
+            histories,
+            ..Program::default()
+        };
+        assert_eq!(check_wellformed(&program), Err(Rejection::Malformed("h")));
+    }
+
+    // ── The untimed embedding ────────────────────────────────────────
+
+    #[test]
+    fn untimed_event_embedding_matches_a_plain_fact_byte_identically() {
+        // path(X,Y) :- edge(X,Y); path(X,Y) :- edge(X,Z), path(Z,Y), run
+        // once with `edge` as a plain fact set, once with `edge` as a
+        // historical relation whose events are the untimed embedding of
+        // the SAME tuples ([`Event::untimed`]) — the two must agree
+        // byte-for-byte on the derived `path` relation.
+        let edges = edge_facts(&[(1, 2), (2, 3), (3, 4)]);
+        let plain = Program {
+            rules: transitive_closure(),
+            facts: edges.clone(),
+            ..Program::default()
+        };
+        let plain_db = naive_eval(&plain).unwrap();
+
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert(
+            "edge",
+            edges["edge"].iter().cloned().map(Event::untimed).collect(),
+        );
+        let historical = Program {
+            rules: transitive_closure(),
+            histories,
+            ..Program::default()
+        };
+        let historical_db = naive_eval(&historical).unwrap();
+        assert_eq!(historical_db["path"], plain_db["path"]);
+    }
+
+    // ── Per-literal resolution inside naive_eval ────────────────────────
+
+    #[test]
+    fn naive_eval_resolves_historical_literals_at_their_own_coordinate() {
+        // both(X) :- edge{X,_}@5, edge{X,_}@15 — a key present in only
+        // one of the two snapshots must never join.
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert(
+            "edge",
+            vec![
+                ev_assert(k(1), pay(0), 0, 0),  // 1 present from t=0
+                ev_retract(k(1), 10, 0),        // 1 gone from t=10
+                ev_assert(k(2), pay(0), 10, 0), // 2 present from t=10
+            ],
+        );
+        let program = Program {
+            rules: vec![Rule::plain(
+                "both",
+                vec![x()],
+                vec![
+                    lit_at("edge", vec![x(), y()], false, AsOf::current_at(5)),
+                    lit_at("edge", vec![x(), z()], false, AsOf::current_at(15)),
+                ],
+            )],
+            histories,
+            ..Program::default()
+        };
+        let db = naive_eval(&program).unwrap();
+        // A rule that derives zero rows may be absent from `db` entirely
+        // (the fixpoint loop only touches `db.entry(head)` for a nonempty
+        // `rows`, matching the rest of this module's convention, e.g.
+        // `normal_aggregation_over_no_rows`).
+        assert!(
+            db.get("both").is_none_or(BTreeSet::is_empty),
+            "no key is present at both t=5 and t=15: {:?}",
+            db.get("both")
+        );
+    }
+
+    #[test]
+    fn negation_without_its_own_as_of_is_not_refused() {
+        // A negated literal that does NOT carry its own coordinate reads
+        // the query-level default like any other literal — only an
+        // EXPLICIT per-literal as-of on a negated literal is refused.
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert("hist", vec![ev_assert(k(1), vec![], 5, 0)]);
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("base", [k(1), k(2)].into_iter().collect());
+        let program = Program {
+            rules: vec![Rule::plain(
+                "absent",
+                vec![x()],
+                vec![lit("base", vec![x()], false), lit("hist", vec![x()], true)],
+            )],
+            facts,
+            histories,
+            ..Program::default()
+        };
+        let db = naive_eval_at(&program, AsOf::current()).unwrap();
+        assert_eq!(db["absent"], [k(2)].into_iter().collect());
+    }
+
+    // ── The typed refusal: mirrors NegationOverTimeTravelError ──────────
+
+    #[test]
+    fn negation_over_time_travel_literal_is_refused() {
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert("hist", vec![ev_assert(k(1), vec![], 5, 0)]);
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("base", [k(1)].into_iter().collect());
+        let program = Program {
+            rules: vec![Rule::plain(
+                "out",
+                vec![x()],
+                vec![
+                    lit("base", vec![x()], false),
+                    lit_at("hist", vec![x()], true, AsOf { valid: 10, sys: 10 }),
+                ],
+            )],
+            facts,
+            histories,
+            ..Program::default()
+        };
+        assert_eq!(
+            naive_eval(&program),
+            Err(Rejection::NegationOverTimeTravel("out"))
+        );
+        assert_eq!(
+            check_time_travel_negation(&program),
+            Err(Rejection::NegationOverTimeTravel("out"))
+        );
+    }
+
+    // ── Generative campaigns: the grid differential and the diff
+    // composition law, seeded per the splitmix64 discipline of
+    // `query/trials.rs`. ─────────────────────────────────────────────────
+
+    struct Rng {
+        state: u64,
+    }
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            Rng { state: seed }
+        }
+        fn next_u64(&mut self) -> u64 {
+            self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            debug_assert!(n > 0);
+            self.next_u64() % n
+        }
+        fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            debug_assert!(hi > lo);
+            lo + self.below((hi - lo) as u64) as i64
+        }
+        fn one_of<T: Copy>(&mut self, xs: &[T]) -> T {
+            xs[self.below(xs.len() as u64) as usize]
+        }
+    }
+
+    /// A random event history for one key: a handful of events at small,
+    /// often-colliding valid/sys coordinates (so same-instant collisions,
+    /// retract/erase interplay, and payload repeats are all common), plus
+    /// noise from an unrelated key the resolution/derivation must ignore.
+    fn gen_history(rng: &mut Rng, key: &Tuple) -> Vec<Event> {
+        let n = rng.range(1, 10);
+        let polarities = [
+            ClaimPolarity::Assert,
+            ClaimPolarity::Retract,
+            ClaimPolarity::Erase,
+        ];
+        let mut history = Vec::new();
+        for _ in 0..n {
+            let valid = rng.range(0, 6);
+            let sys = rng.range(0, 6);
+            match rng.one_of(&polarities) {
+                ClaimPolarity::Assert => {
+                    history.push(ev_assert(key.clone(), pay(rng.range(0, 3)), valid, sys));
+                }
+                ClaimPolarity::Retract => history.push(ev_retract(key.clone(), valid, sys)),
+                ClaimPolarity::Erase => history.push(ev_erase(key.clone(), valid, sys)),
+            }
+        }
+        for _ in 0..rng.range(0, 4) {
+            let valid = rng.range(0, 6);
+            let sys = rng.range(0, 6);
+            history.push(ev_assert(k(999), pay(rng.range(0, 3)), valid, sys));
+        }
+        history
+    }
+
+    /// Every distinct stored coordinate on `axis`, ± one tick, plus the
+    /// extremes — the pointwise grid the ratified design claims is
+    /// COMPLETE for a step function that only changes at stored
+    /// coordinates.
+    fn grid(history: &[Event], axis: Axis) -> Vec<i64> {
+        let mut pts: Vec<i64> = history
+            .iter()
+            .flat_map(|e| {
+                let c = match axis {
+                    Axis::Valid => e.valid,
+                    Axis::Sys => e.sys,
+                };
+                [c - 1, c, c + 1]
+            })
+            .collect();
+        pts.push(i64::MIN);
+        // Not `i64::MAX` itself as a QUERY point: `OPEN_END` and
+        // `AsOf::current()`'s "see everything" bound share that one value
+        // by construction, so the half-open interval `[start, OPEN_END)`
+        // technically excludes the single instant `i64::MAX`. This is no
+        // longer waved off as "unreachable" — the terminal tick is a
+        // RESERVED coordinate (hostile-review ruling, issue #62 comment
+        // 4882951801): `Event::assert`/`retract`/`erase` refuse
+        // `valid == i64::MAX` at construction (see
+        // `terminal_tick_is_reserved_and_refused_at_construction` and
+        // `assert_at_terminal_tick_never_produces_a_zero_width_interval`
+        // below), so no STORED coordinate can ever collide with the
+        // sentinel; probing the grid one tick short of it is still the
+        // right complete-grid extreme for a QUERY coordinate, which is
+        // unrestricted (`AsOf::current()` legitimately queries at
+        // `i64::MAX`).
+        pts.push(i64::MAX - 1);
+        pts.sort_unstable();
+        pts.dedup();
+        pts
+    }
+
+    #[test]
+    fn grid_differential_derived_intervals_equal_maximal_runs() {
+        let mut cases = 0usize;
+        for seed in 0..500u64 {
+            let mut rng = Rng::new(0xB17E_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let key = k(1);
+            let history = gen_history(&mut rng, &key);
+            let valid_grid = grid(&history, Axis::Valid);
+            let sys_grid = grid(&history, Axis::Sys);
+            for &sys_pt in &sys_grid {
+                let ivs = derive_intervals(&history, &key, Axis::Valid, sys_pt);
+                for &valid_pt in &valid_grid {
+                    let direct = resolve(
+                        &history,
+                        &key,
+                        AsOf {
+                            valid: valid_pt,
+                            sys: sys_pt,
+                        },
+                    );
+                    let via_intervals = ivs
+                        .iter()
+                        .find(|iv| iv.start <= valid_pt && valid_pt < iv.end)
+                        .map(|iv| iv.tuple.clone());
+                    assert_eq!(
+                        direct, via_intervals,
+                        "seed {seed}: valid axis, valid={valid_pt} sys={sys_pt} history={history:?}"
+                    );
+                    cases += 1;
+                }
+            }
+            for &fixed_valid in &[history.first().map(|e| e.valid).unwrap_or(0), 3] {
+                let ivs = derive_intervals(&history, &key, Axis::Sys, fixed_valid);
+                for &sys_pt in &sys_grid {
+                    let direct = resolve(
+                        &history,
+                        &key,
+                        AsOf {
+                            valid: fixed_valid,
+                            sys: sys_pt,
+                        },
+                    );
+                    let via_intervals = ivs
+                        .iter()
+                        .find(|iv| iv.start <= sys_pt && sys_pt < iv.end)
+                        .map(|iv| iv.tuple.clone());
+                    assert_eq!(
+                        direct, via_intervals,
+                        "seed {seed}: sys axis, fixed_valid={fixed_valid} sys={sys_pt} history={history:?}"
+                    );
+                    cases += 1;
+                }
+            }
+        }
+        assert!(cases > 5000, "expected a rich grid campaign, ran {cases}");
+    }
+
+    #[test]
+    fn diff_composition_law_holds_across_axes() {
+        let mut cases = 0usize;
+        for seed in 0..300u64 {
+            let mut rng = Rng::new(0xD1FF_C0DE_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let key = k(1);
+            let history = gen_history(&mut rng, &key);
+
+            let sys_now = AsOf::current().sys;
+            let a = AsOf {
+                valid: 0,
+                sys: sys_now,
+            };
+            let b = AsOf {
+                valid: 3,
+                sys: sys_now,
+            };
+            let c = AsOf {
+                valid: 6,
+                sys: sys_now,
+            };
+            let ab = diff(&history, a, b);
+            let bc = diff(&history, b, c);
+            let ac = diff(&history, a, c);
+            assert_eq!(compose(&ab, &bc), ac, "seed {seed}: valid-axis composition");
+            cases += 1;
+
+            let fixed_valid = 3;
+            let a = AsOf {
+                valid: fixed_valid,
+                sys: 0,
+            };
+            let b = AsOf {
+                valid: fixed_valid,
+                sys: 3,
+            };
+            let c = AsOf {
+                valid: fixed_valid,
+                sys: 6,
+            };
+            let ab = diff(&history, a, b);
+            let bc = diff(&history, b, c);
+            let ac = diff(&history, a, c);
+            assert_eq!(compose(&ab, &bc), ac, "seed {seed}: sys-axis composition");
+            cases += 1;
+        }
+        assert!(
+            cases >= 500,
+            "expected hundreds of composition cases, ran {cases}"
+        );
     }
 }

@@ -56,6 +56,7 @@ use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::query::laws;
 use crate::query::ra::{NegationOverTimeTravelError, RelAlgebra};
 use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
@@ -333,65 +334,206 @@ fn stored_plain(db: &FjallStorage, name: &str, arity: usize, rows: &[Vec<i64>]) 
     tx.commit().expect("commit");
 }
 
-/// The oracle. One lineage per instant: identical (key, ts) pairs
-/// collapse to the LAST version in write order, whatever its polarity —
-/// the stored key is the same and a later `put` overwrites. Then, per
-/// key, the newest surviving instant at or before `at` (INCLUSIVE)
-/// governs: an assertion emits `(key, vals)`, a retraction emits
-/// nothing. `boundary_inclusive = false` and `last_write_wins = false`
-/// are the SABOTAGED forms used only by the mutation tests (the correct
-/// engine behaviour is `true` for both).
+/// The oracle: the file's `Version` history routed through the UNIFIED
+/// temporal oracle (`query::laws::resolve_relation`) instead of a bespoke
+/// collapse-then-group algorithm — story #62's oracle unification. Each
+/// `Version` becomes a `laws::Event` at its own `(key, ts)` valid
+/// coordinate; write order becomes the SYSTEM axis (`sys = list index`),
+/// so "one lineage per instant, last write in write order governs" is
+/// exactly `laws::resolve`'s "newest system version at or before `sys_at`
+/// governs" with `sys_at` fixed at "see everything." `boundary_inclusive
+/// = false` (probe `at - 1` instead of `at`, excluding the queried
+/// instant) and `last_write_wins = false` (reverse the write-order→`sys`
+/// encoding, so the FIRST write governs a collision) are the SABOTAGED
+/// forms used only by the mutation tests below — still routed through
+/// the one real resolution function, just fed a deliberately wrong
+/// encoding of "which write governs." The correct engine behaviour is
+/// `true` for both.
 fn naive_asof_cfg(
     versions: &[Version],
     at: i64,
     boundary_inclusive: bool,
     last_write_wins: bool,
 ) -> BTreeSet<Tuple> {
-    // Collapse identical (key, ts) pairs: one lineage per instant.
-    let mut collapsed: BTreeMap<(Vec<i64>, i64), (bool, Vec<DataValue>)> = BTreeMap::new();
-    for ver in versions {
-        match collapsed.entry((ver.key.clone(), ver.ts)) {
+    let n = versions.len() as i64;
+    let events: Vec<laws::Event> = versions
+        .iter()
+        .enumerate()
+        .map(|(i, ver)| {
+            let key: Tuple = ver.key.iter().copied().map(v).collect();
+            let sys = if last_write_wins {
+                i as i64
+            } else {
+                n - 1 - i as i64
+            };
+            // `ver.ts` is a small, bounded generated/fixture timestamp
+            // throughout this file: never the reserved terminal tick.
+            if ver.assert {
+                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
+                    .expect("version timestamps in this file are never the reserved terminal tick")
+            } else {
+                laws::Event::retract(key, ver.ts, sys)
+                    .expect("version timestamps in this file are never the reserved terminal tick")
+            }
+        })
+        .collect();
+    let probe_at = if boundary_inclusive { at } else { at - 1 };
+    laws::resolve_relation(
+        &events,
+        laws::AsOf {
+            valid: probe_at,
+            sys: i64::MAX,
+        },
+    )
+}
+
+/// The correct oracle: inclusive boundary, last-write-wins at an instant.
+fn naive_asof(versions: &[Version], at: i64) -> BTreeSet<Tuple> {
+    naive_asof_cfg(versions, at, true, true)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Bridge differential (story #62): `naive_asof_cfg`'s unified-oracle
+// encoding, checked against a FROM-SCRATCH reference — written without
+// reusing any part of `naive_asof_cfg`, old or new — over hundreds of
+// seeded random histories and all four (boundary, write-order) configs.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// An independent brute-force reference: for every key, scan every
+/// version linearly and keep the one the window-and-tiebreak rule picks
+/// — same rule `naive_asof_cfg` states in its doc comment, computed here
+/// by direct comparison instead of by building `laws::Event`s and calling
+/// the unified oracle.
+fn independent_asof_reference(
+    versions: &[Version],
+    at: i64,
+    boundary_inclusive: bool,
+    last_write_wins: bool,
+) -> BTreeSet<Tuple> {
+    let mut best: BTreeMap<Vec<i64>, (i64, usize, bool, Vec<DataValue>)> = BTreeMap::new();
+    for (i, ver) in versions.iter().enumerate() {
+        let in_window = if boundary_inclusive {
+            ver.ts <= at
+        } else {
+            ver.ts < at
+        };
+        if !in_window {
+            continue;
+        }
+        let candidate = (ver.ts, i, ver.assert, ver.vals.clone());
+        match best.entry(ver.key.clone()) {
             std::collections::btree_map::Entry::Vacant(e) => {
-                e.insert((ver.assert, ver.vals.clone()));
+                e.insert(candidate);
             }
             std::collections::btree_map::Entry::Occupied(mut e) => {
-                if last_write_wins {
-                    e.insert((ver.assert, ver.vals.clone()));
+                let cur = e.get();
+                let better = if candidate.0 != cur.0 {
+                    candidate.0 > cur.0
+                } else if last_write_wins {
+                    candidate.1 > cur.1
+                } else {
+                    candidate.1 < cur.1
+                };
+                if better {
+                    e.insert(candidate);
                 }
-                // Sabotaged form: keep the first write.
             }
         }
     }
-    // Group surviving versions by key prefix.
-    let mut by_key: BTreeMap<Vec<i64>, Vec<(i64, bool, Vec<DataValue>)>> = BTreeMap::new();
-    for ((key, ts), (assert, vals)) in collapsed {
-        by_key.entry(key).or_default().push((ts, assert, vals));
-    }
     let mut out = BTreeSet::new();
-    for (key, mut versions) in by_key {
-        // Newest at or before `at`.
-        versions.retain(|(ts, _, _)| {
-            if boundary_inclusive {
-                *ts <= at
-            } else {
-                *ts < at
-            }
-        });
-        let Some((_, assert, vals)) = versions.iter().max_by_key(|(ts, _, _)| *ts) else {
-            continue;
-        };
-        if *assert {
+    for (key, (_, _, assert, vals)) in best {
+        if assert {
             let mut row: Tuple = key.iter().copied().map(v).collect();
-            row.extend(vals.iter().cloned());
+            row.extend(vals);
             out.insert(row);
         }
     }
     out
 }
 
-/// The correct oracle: inclusive boundary, last-write-wins at an instant.
-fn naive_asof(versions: &[Version], at: i64) -> BTreeSet<Tuple> {
-    naive_asof_cfg(versions, at, true, true)
+/// The splitmix64 generator of `query/trials.rs`, transcribed for this
+/// file's own seeded campaign (one `u64` seed, replayable, no ambient
+/// entropy).
+struct BridgeRng {
+    state: u64,
+}
+impl BridgeRng {
+    fn new(seed: u64) -> Self {
+        BridgeRng { state: seed }
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        debug_assert!(n > 0);
+        self.next_u64() % n
+    }
+    fn range(&mut self, lo: i64, hi: i64) -> i64 {
+        debug_assert!(hi > lo);
+        lo + self.below((hi - lo) as u64) as i64
+    }
+    fn chance(&mut self, num: u64, den: u64) -> bool {
+        self.below(den) < num
+    }
+}
+
+/// A random version history over a handful of keys, small timestamps (so
+/// same-instant collisions are common), and a mix of asserts/retracts.
+fn gen_versions(rng: &mut BridgeRng, n_keys: i64, n_events: usize) -> Vec<Version> {
+    (0..n_events)
+        .map(|_| {
+            let key = vec![rng.range(0, n_keys)];
+            let ts = rng.range(0, 8);
+            let assert = rng.chance(7, 10);
+            let vals = if assert {
+                vec![v(rng.range(0, 4))]
+            } else {
+                vec![]
+            };
+            ver(&key, ts, assert, &vals)
+        })
+        .collect()
+}
+
+/// The bridge: `naive_asof_cfg` (now backed by `laws::resolve_relation`)
+/// against the from-scratch reference above, over hundreds of generated
+/// histories, every probed instant, and all four boundary/write-order
+/// configurations (the two sabotaged forms included — they must keep
+/// agreeing with their own from-scratch counterpart, not just the
+/// correct form with the correct one).
+#[test]
+fn naive_asof_cfg_matches_an_independent_reference_generatively() {
+    let mut cases = 0usize;
+    for seed in 0..300u64 {
+        let mut rng = BridgeRng::new(0xA50F_0FFE_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let n_keys = rng.range(1, 4);
+        let n_events = rng.range(1, 20) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
+        for at in -1..=9 {
+            for boundary_inclusive in [true, false] {
+                for last_write_wins in [true, false] {
+                    let got = naive_asof_cfg(&versions, at, boundary_inclusive, last_write_wins);
+                    let want = independent_asof_reference(
+                        &versions,
+                        at,
+                        boundary_inclusive,
+                        last_write_wins,
+                    );
+                    assert_eq!(
+                        got, want,
+                        "seed {seed} at={at} boundary_inclusive={boundary_inclusive} \
+                         last_write_wins={last_write_wins}: versions={versions:?}"
+                    );
+                    cases += 1;
+                }
+            }
+        }
+    }
+    assert!(cases > 500, "expected a rich bridge campaign, ran {cases}");
 }
 
 /// The distinct instants worth reading at: before the earliest, at and

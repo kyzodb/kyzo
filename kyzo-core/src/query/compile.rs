@@ -1845,7 +1845,11 @@ mod tests {
     }
 
     fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
-        Literal { rel, args, negated }
+        if negated {
+            Literal::neg(rel, args)
+        } else {
+            Literal::pos(rel, args)
+        }
     }
     fn tx() -> Term {
         Term::Var("X")

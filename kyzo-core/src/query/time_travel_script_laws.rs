@@ -73,6 +73,7 @@
 use std::collections::BTreeSet;
 
 use crate::data::value::DataValue;
+use crate::query::laws;
 use crate::runtime::db::Db;
 use crate::storage::Storage;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
@@ -192,36 +193,157 @@ fn write_transaction(
 /// stored key, last write wins. Then, per entity, the newest surviving
 /// instant at or before `at` (inclusive) governs; an assertion emits
 /// `(entity, val)`, a retraction emits nothing.
+///
+/// Routed through the UNIFIED temporal oracle (story #62,
+/// `query::laws::resolve_relation`) instead of a bespoke collapse-then-
+/// group algorithm: each event becomes a `laws::Event` at its own
+/// `(entity, ts)` valid coordinate, with write order riding the SYSTEM
+/// axis (`sys = list index`) — "last write in write order governs" is
+/// exactly `laws::resolve`'s "newest system version at or before
+/// `sys_at` governs," with `sys_at` fixed at "see everything."
+/// `boundary_inclusive = false` (the sabotaged form used only by
+/// [`asof_script_boundary_mutation_is_caught`]) probes `at - 1` instead
+/// of `at`, excluding the queried instant — still the one real
+/// resolution function, just a deliberately wrong coordinate.
 fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i64, String)> {
-    let mut collapsed: std::collections::BTreeMap<(i64, i64), (bool, Option<String>)> =
-        std::collections::BTreeMap::new();
-    for ev in events {
-        collapsed.insert((ev.entity, ev.ts), (ev.is_assert, ev.val.clone()));
-    }
-    let mut by_entity: std::collections::BTreeMap<i64, Vec<(i64, bool, Option<String>)>> =
-        std::collections::BTreeMap::new();
-    for ((entity, ts), (is_assert, val)) in collapsed {
-        by_entity
-            .entry(entity)
-            .or_default()
-            .push((ts, is_assert, val));
-    }
-    let mut out = BTreeSet::new();
-    for (entity, mut versions) in by_entity {
-        versions.retain(|(ts, _, _)| {
-            if boundary_inclusive {
-                *ts <= at
+    let history: Vec<laws::Event> = events
+        .iter()
+        .enumerate()
+        .map(|(i, ev)| {
+            let key = vec![DataValue::from(ev.entity)];
+            // `ev.ts` is a small, bounded generated/fixture timestamp
+            // throughout this file: never the reserved terminal tick.
+            if ev.is_assert {
+                let val = ev.val.clone().expect("assert carries a value");
+                laws::Event::assert(key, vec![DataValue::from(val)], ev.ts, i as i64)
+                    .expect("event timestamps in this file are never the reserved terminal tick")
             } else {
-                *ts < at
+                laws::Event::retract(key, ev.ts, i as i64)
+                    .expect("event timestamps in this file are never the reserved terminal tick")
             }
-        });
-        if let Some((_, is_assert, val)) = versions.into_iter().max_by_key(|(ts, _, _)| *ts)
-            && is_assert
-        {
-            out.insert((entity, val.expect("assert carries a value")));
+        })
+        .collect();
+    let probe_at = if boundary_inclusive { at } else { at - 1 };
+    laws::resolve_relation(
+        &history,
+        laws::AsOf {
+            valid: probe_at,
+            sys: i64::MAX,
+        },
+    )
+    .into_iter()
+    .map(|row| {
+        let entity = row[0].get_int().expect("int key");
+        let val = match &row[1] {
+            DataValue::Str(s) => s.to_string(),
+            other => panic!("expected a string value, got {other:?}"),
+        };
+        (entity, val)
+    })
+    .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Bridge differential (story #62): `oracle_at`'s unified-oracle encoding,
+// checked against a FROM-SCRATCH reference over hundreds of seeded random
+// event sequences and both boundary configurations.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// An independent brute-force reference for `oracle_at`'s rule, written
+/// without reusing any part of it, old or new: for every entity, scan
+/// every event linearly and keep the one the window-and-tiebreak rule
+/// picks (newest ts in the probe window; ties broken by list position,
+/// last write governing).
+fn independent_oracle_at_reference(
+    events: &[Event],
+    at: i64,
+    boundary_inclusive: bool,
+) -> BTreeSet<(i64, String)> {
+    let mut best: std::collections::BTreeMap<i64, (i64, usize, bool, Option<String>)> =
+        std::collections::BTreeMap::new();
+    for (i, ev) in events.iter().enumerate() {
+        let in_window = if boundary_inclusive {
+            ev.ts <= at
+        } else {
+            ev.ts < at
+        };
+        if !in_window {
+            continue;
+        }
+        let candidate = (ev.ts, i, ev.is_assert, ev.val.clone());
+        match best.entry(ev.entity) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(candidate);
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                let cur = e.get();
+                let better = if candidate.0 != cur.0 {
+                    candidate.0 > cur.0
+                } else {
+                    candidate.1 > cur.1
+                };
+                if better {
+                    e.insert(candidate);
+                }
+            }
         }
     }
-    out
+    best.into_iter()
+        .filter_map(|(entity, (_, _, is_assert, val))| {
+            is_assert.then(|| (entity, val.expect("assert carries a value")))
+        })
+        .collect()
+}
+
+/// A random event sequence over a handful of entities and small,
+/// often-colliding timestamps, mixing asserts and retracts.
+fn gen_events(rng: &mut SimRng, n_entities: i64, n_events: usize) -> Vec<Event> {
+    let mut version_ctr = 0u64;
+    (0..n_events)
+        .map(|_| {
+            let entity = 1 + rng.below(n_entities as u64) as i64;
+            let ts = rng.below(8) as i64;
+            let is_assert = rng.below(10) < 7;
+            let val = is_assert.then(|| {
+                version_ctr += 1;
+                format!("v{version_ctr}")
+            });
+            Event {
+                entity,
+                ts,
+                is_assert,
+                val,
+            }
+        })
+        .collect()
+}
+
+/// The bridge: `oracle_at` (now backed by `laws::resolve_relation`)
+/// against the from-scratch reference above, over hundreds of generated
+/// event sequences, every probed instant, and both boundary
+/// configurations.
+#[test]
+fn oracle_at_matches_an_independent_reference_generatively() {
+    let mut cases = 0usize;
+    for seed in 0..300u64 {
+        let mut rng = SimRng::new(0xACE0_ACE0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let n_entities = 1 + rng.below(4) as i64;
+        let n_events = 1 + rng.below(20) as usize;
+        let events = gen_events(&mut rng, n_entities, n_events);
+        for at in -1..=9 {
+            for boundary_inclusive in [true, false] {
+                let got = oracle_at(&events, at, boundary_inclusive);
+                let want = independent_oracle_at_reference(&events, at, boundary_inclusive);
+                assert_eq!(
+                    got, want,
+                    "seed {seed} at={at} boundary_inclusive={boundary_inclusive}: \
+                     events={events:?}"
+                );
+                cases += 1;
+            }
+        }
+    }
+    assert!(cases > 500, "expected a rich bridge campaign, ran {cases}");
 }
 
 /// Every distinct timestamp in the history, plus one before the first and

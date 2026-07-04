@@ -548,4 +548,87 @@ mod tests {
         bad.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack bytes
         assert!(extend_tuple_from_bitemporal_v(&mut vec![], &bad).is_err());
     }
+
+    /// The judge-of-the-judge: story #62's unified oracle
+    /// (`query::laws::resolve_relation`) mirrors THIS kernel across the
+    /// sign boundary on both axes — 2000 generated histories, valid and
+    /// system coordinates each spanning negative and positive, probed at
+    /// coordinates on both sides of every stored one (this module's own
+    /// `bikey`/`skip_walk` reused directly, which is exactly why this
+    /// cross-check lives here rather than as a second, hand-built copy
+    /// in `query/laws.rs` — that file keeps a small fixed fixture as a
+    /// fast sanity check; this is the exhaustive one). Hostile-review
+    /// pin, issue #62 comment 4882951801.
+    #[test]
+    fn reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps() {
+        use crate::query::laws;
+        let mut state: u64 = 0xDEAD_BEEF_CAFE_F00D;
+        let mut next = move |m: usize| -> usize {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as usize) % m
+        };
+        let valids = [-30i64, -10, -3, 0, 10, 20, 30];
+        let syss = [-25i64, -5, 0, 5, 15, 25];
+        for _case in 0..2000 {
+            let n_rows = 1 + next(10);
+            let mut rows: Vec<(i64, i64, i64, ClaimPolarity)> = vec![];
+            for _ in 0..n_rows {
+                rows.push((
+                    next(3) as i64,
+                    valids[next(valids.len())],
+                    syss[next(syss.len())],
+                    [
+                        ClaimPolarity::Assert,
+                        ClaimPolarity::Retract,
+                        ClaimPolarity::Erase,
+                    ][next(3)],
+                ));
+            }
+            rows.sort_unstable_by_key(|r| (r.0, r.1, r.2));
+            rows.dedup_by_key(|r| (r.0, r.1, r.2));
+            let store: BTreeMap<Vec<u8>, ClaimPolarity> = rows
+                .iter()
+                .map(|(f, v, s, p)| (bikey(*f, *v, *s), *p))
+                .collect();
+            // `.expect`: every `v` here is drawn from the fixed `valids`
+            // list above, never the reserved terminal tick
+            // (`laws::Event`'s constructors refuse `valid == i64::MAX`).
+            let history: Vec<laws::Event> = rows
+                .iter()
+                .map(|(f, v, s, p)| {
+                    let key = vec![DataValue::from(*f)];
+                    match p {
+                        ClaimPolarity::Assert => laws::Event::assert(key, vec![], *v, *s),
+                        ClaimPolarity::Retract => laws::Event::retract(key, *v, *s),
+                        ClaimPolarity::Erase => laws::Event::erase(key, *v, *s),
+                    }
+                    .expect("valid instant is drawn from a bounded fixture list, never the reserved terminal tick")
+                })
+                .collect();
+            for sys_at in [-40i64, -25, -5, 0, 5, 15, 25, 40] {
+                for valid_at in [-40i64, -30, -10, -3, 0, 10, 20, 30, 40] {
+                    let got_real = facts_of(&skip_walk(&store, sys_at, valid_at).unwrap());
+                    let got_laws: Vec<i64> = laws::resolve_relation(
+                        &history,
+                        laws::AsOf {
+                            valid: valid_at,
+                            sys: sys_at,
+                        },
+                    )
+                    .into_iter()
+                    .map(|t| match &t[0] {
+                        DataValue::Num(Num::Int(i)) => *i,
+                        other => panic!("non-integer fact column: {other:?}"),
+                    })
+                    .collect();
+                    assert_eq!(
+                        got_real, got_laws,
+                        "sys_at={sys_at} valid_at={valid_at} rows={rows:?}"
+                    );
+                }
+            }
+        }
+    }
 }

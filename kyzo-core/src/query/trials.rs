@@ -557,11 +557,7 @@ fn compile_for(
         .collect();
     let entry_body = ModelBody::new(
         vars.clone(),
-        vec![Literal {
-            rel: target,
-            args: vars,
-            negated: false,
-        }],
+        vec![Literal::pos(target, vars)],
         facts.clone(),
         idb.clone(),
     );
@@ -669,7 +665,11 @@ fn z() -> Term {
     Term::Var("Z")
 }
 fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
-    Literal { rel, args, negated }
+    if negated {
+        Literal::neg(rel, args)
+    } else {
+        Literal::pos(rel, args)
+    }
 }
 fn named(name: &str) -> HeadAggr {
     Some((parse_aggr(name).expect("real aggregation"), vec![]))
@@ -999,11 +999,7 @@ fn generate(seed: u64) -> Generated {
         ));
     }
 
-    let program = Program {
-        rules,
-        fixed,
-        facts,
-    };
+    let program = Program::untimed(rules, fixed, facts);
     Generated {
         program,
         entry: "path",
@@ -1489,14 +1485,7 @@ fn provenance_fixture() -> (Program, Rel) {
             ],
         ),
     ];
-    (
-        Program {
-            rules,
-            fixed: vec![],
-            facts,
-        },
-        "labeled",
-    )
+    (Program::untimed(rules, vec![], facts), "labeled")
 }
 
 /// Evaluate the fixture with recording on and return (entry rows, witness
