@@ -51,8 +51,21 @@
  *    alternative. A string literal must be one contiguous token; this is
  *    also what makes the parser's pre-parse nesting scan (see
  *    `parse/mod.rs`) able to agree with the grammar about where strings
- *    end. Ordinary strings — including `"a#b"`, `"a/*x*/b"` and every
- *    `___"…"___` raw form written contiguously — parse identically.
+ *    end. `quoted_string`/`s_quoted_string` are `${…}` too, so they get
+ *    the same immunity — `raw_string`'s fence is `"_"+` (one or more),
+ *    never `"_"*`, specifically so a fenceless `"…"` cannot also match
+ *    `raw_string` and win the `string = _{(raw_string | s_quoted_string |
+ *    quoted_string)}` alternation ahead of `quoted_string` by trying
+ *    first: a zero-length fence would make EVERY double-quoted string a
+ *    raw string, silently switching off `quoted_string`'s escape
+ *    processing for `\n`/`\t`/`\\`/`\"`/`\uXXXX` on all of them (story
+ *    #93 — found via `kyzo-lsp`'s own verification harness, live in every
+ *    KyzoScript double-quoted string literal ever written against this
+ *    grammar until the fence was widened). Ordinary strings without a
+ *    fence — including `"a#b"`, `"a/*x*/b"` — parse via `quoted_string`
+ *    and are just as comment/whitespace-immune; every `_"…"_`/`__"…"__`/…
+ *    fenced form written contiguously still parses as the literal,
+ *    no-escape-processing raw string it always was.
  */
 
 script = _{sys_script | imperative_script | query_script}
@@ -263,8 +276,14 @@ s_char = {
 // Compound-atomic (divergence 2 in the header): a raw string is one
 // contiguous token — no implicit whitespace or comments between the
 // underscore sigils and the quotes, or inside the body's repetitions.
+// The fence is "_"+ (one or more), never "_"* (story #93): a zero-length
+// fence would make a fenceless `"..."` match `raw_string` too, and since
+// it's tried first in `string`'s alternation below, EVERY double-quoted
+// string would silently become a literal (no escape processing) raw
+// string — `quoted_string`'s `\n`/`\t`/`\\`/`\"`/`\uXXXX` handling would
+// never run. A raw string always names itself with at least one `_`.
 raw_string = ${
-    PUSH("_"*) ~ "\""    // push the number signs onto the stack
+    PUSH("_"+) ~ "\""    // push the number signs onto the stack
     ~ raw_string_inner
     ~ "\"" ~ POP               // match a quotation mark and the number signs
 }

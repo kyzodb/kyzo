@@ -666,4 +666,101 @@ mod tests {
             assert!(res.is_err(), "{src} must error, not panic");
         }
     }
+
+    /// The decode-assertion corpus (story #93): every escape a double- or
+    /// single-quoted string literal accepts must produce the REAL
+    /// character, not the literal backslash sequence. This is the test
+    /// class whose total absence hid a real bug for as long as this
+    /// grammar has existed: `raw_string`'s fence used to accept a
+    /// zero-length `"_"*`, so a plain `"..."` matched `raw_string` (tried
+    /// first in `string`'s alternation) before `quoted_string` ever got a
+    /// turn, and every `\n`/`\t`/`\\`/`\"`/`\uXXXX` in a double-quoted
+    /// string silently stayed a literal backslash sequence. Every existing
+    /// test before this one asserted only "parses" or "evaluates to some
+    /// string", never "evaluates to the DECODED string" — a passing suite
+    /// with a dead escape decoder underneath it.
+    #[test]
+    fn string_escapes_decode_to_the_real_character() {
+        // (source literal, expected decoded content)
+        let cases: &[(&str, &str)] = &[
+            // Double-quoted (`quoted_string`): every escape `char` accepts.
+            (r#""\n""#, "\n"),
+            (r#""\t""#, "\t"),
+            (r#""\r""#, "\r"),
+            (r#""\\""#, "\\"),
+            (r#""\"""#, "\""),
+            (r#""\/""#, "/"),
+            (r#""\b""#, "\u{08}"),
+            (r#""\f""#, "\u{0c}"),
+            (r#""A""#, "A"),
+            (r#""line1\nline2""#, "line1\nline2"),
+            (r#""tab\there""#, "tab\there"),
+            // Single-quoted (`s_quoted_string`): the same escape set,
+            // never affected by the `raw_string` collision (different
+            // quote character), but never asserted against its decoded
+            // form either until now.
+            (r"'\n'", "\n"),
+            (r"'\t'", "\t"),
+            (r"'\\'", "\\"),
+            (r"'\''", "'"),
+            (r"'A'", "A"),
+            (r"'line1\nline2'", "line1\nline2"),
+        ];
+        for (src, expected) in cases {
+            let val = eval_const(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+            assert_eq!(
+                val,
+                DataValue::from(*expected),
+                "{src} must decode to {expected:?}, not its literal backslash spelling"
+            );
+        }
+    }
+
+    /// The fenced raw-string form (`_"…"_`, `__"…"__`, …) is the one place
+    /// `\` genuinely has no special meaning — a backslash inside it must
+    /// survive verbatim, unlike the quoted forms above.
+    #[test]
+    fn raw_string_backslash_is_never_an_escape() {
+        for (src, expected) in [
+            (r#"_"a\nb"_"#, r"a\nb"),
+            (r#"_"bad \q escape"_"#, r"bad \q escape"),
+            (r##"__"quote " inside"__"##, "quote \" inside"),
+        ] {
+            let val = eval_const(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+            assert_eq!(val, DataValue::from(expected), "{src} must stay literal");
+        }
+    }
+
+    /// A `\u` escape naming a UTF-16 surrogate half is not a valid Unicode
+    /// scalar value on its own (`char::from_u32` rejects the whole
+    /// D800..=DFFF range) — this must be a designed, spanned error
+    /// (`InvalidUtf8Error`), not silently accepted as literal text. Before
+    /// story #93's fix this input was silently a raw string (`\ud800`
+    /// unread as a codepoint at all, seven characters of literal text);
+    /// after the fix it reaches the codepoint check for the first time.
+    #[test]
+    fn lone_surrogate_escape_is_a_designed_error_not_silent_literal_text() {
+        let err = eval_const(r#""\ud800""#).expect_err("a lone surrogate must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unicode code point"),
+            "expected the designed InvalidUtf8Error message, got: {msg}"
+        );
+    }
+
+    /// An unrecognized escape (anything not in `char`/`s_char`'s whitelist)
+    /// is a grammar-level refusal — `char`/`s_char` simply have no
+    /// alternative that matches `\q`, so the whole quoted-string rule
+    /// fails to close where expected. Pinned so a future grammar change
+    /// that widened the escape set wouldn't silently make `\q` legal
+    /// without anyone noticing.
+    #[test]
+    fn unrecognized_escape_is_refused() {
+        for src in [r#""bad \q escape""#, r"'bad \q escape'"] {
+            assert!(
+                parse_expressions(src, &Default::default()).is_err(),
+                "{src} must be refused: \\q is not a recognized escape"
+            );
+        }
+    }
 }
