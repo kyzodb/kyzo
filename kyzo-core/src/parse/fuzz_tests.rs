@@ -173,8 +173,57 @@ where
                 "LAW VIOLATION (span-less error): {report:?} on input {src:?}"
             ));
         }
+        if let Some(generic) = matches_banned_generic_message(&report.to_string()) {
+            // Designed-ness is enforced unconditionally too (story #73): the
+            // diagnostics redesign retired every bare "unexpected token"-
+            // style message in the parser, so a top-level error whose
+            // `Display` still equals one of the retired placeholders is a
+            // regression, not a new shape to excuse.
+            return Err(format!(
+                "LAW VIOLATION (undesigned message, matches retired placeholder {generic:?}): \
+                 {report:?} on input {src:?}"
+            ));
+        }
     }
     Ok(())
+}
+
+/// The exact, non-parameterized placeholder messages the diagnostics
+/// redesign (story #73) retired — every one of these used to be a
+/// complete error message on its own, with no offending name or value
+/// interpolated in, so an exact-equality check can catch a regression to
+/// any of them without ever risking a false hit on a legitimately designed
+/// message that merely shares a word (the parameterized retired messages —
+/// `"Query option {0} is not constant"` and its kin — can't regress to
+/// their old *exact* text at all, since the interpolated name makes every
+/// rendering different from the fixed string that never existed on its
+/// own; those are instead covered by the `#[help]`-presence and
+/// SQL-refugee checks elsewhere in this module).
+const BANNED_GENERIC_MESSAGES: &[&str] = &[
+    "Invalid expression encountered",
+    "Cannot parse integer",
+    "Cannot parse float",
+    "unexpected token",
+    "unexpected input",
+];
+
+/// The retired `ParseError` message was `"The query parser has encountered
+/// unexpected input / end of input at {span}"` — parameterized by the span,
+/// so never an exact match, but the sentence *before* the span is fixed and
+/// distinctive enough that no legitimate designed message would start with
+/// it by coincidence.
+const BANNED_MESSAGE_PREFIX: &str = "The query parser has encountered unexpected input";
+
+/// `Some(the banned phrase)` if `message` exactly equals one of
+/// [`BANNED_GENERIC_MESSAGES`] or starts with [`BANNED_MESSAGE_PREFIX`].
+fn matches_banned_generic_message(message: &str) -> Option<&'static str> {
+    if message.starts_with(BANNED_MESSAGE_PREFIX) {
+        return Some(BANNED_MESSAGE_PREFIX);
+    }
+    BANNED_GENERIC_MESSAGES
+        .iter()
+        .find(|&&banned| message == banned)
+        .copied()
 }
 
 /// The laws for `parse_script` with empty params and the real default
@@ -1255,6 +1304,52 @@ fn regression_corpus_upholds_laws() {
         if let Err(violation) = check_fts_laws(&src) {
             panic!("fts corpus entry {what:?}: {violation}");
         }
+    }
+}
+
+/// One script per SQL keyword [`crate::parse::SQL_KEYWORD_HINTS`] maps to a
+/// KyzoScript idiom — a plausible SQL-shaped mistake a Datalog newcomer
+/// would actually type, one clause at a time so each script's failure
+/// implicates a single keyword's hint. Not exhaustive over every possible
+/// SQL sentence (that's the newcomer's problem to invent, not this
+/// corpus's); exhaustive over every keyword the hint table knows about.
+fn sql_refugee_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("select", "SELECT name, age FROM person"),
+        ("from", "?[name] := FROM person"),
+        ("where", "?[x] := *person{x} WHERE x > 1"),
+        ("join", "SELECT * FROM a JOIN b ON a.id = b.id"),
+        ("group", "?[dept] := *emp{dept} GROUP BY dept"),
+        ("having", "?[dept] := *emp{dept} HAVING count(dept) > 1"),
+        ("order", "?[x] := *t{x} ORDER BY x"),
+        ("insert", "INSERT INTO person VALUES (1, 'a')"),
+        ("update", "UPDATE person SET name = 'a'"),
+        ("delete", "DELETE FROM person WHERE x = 1"),
+        ("values", "INSERT INTO person VALUES (1, 'a')"),
+        ("create", "CREATE TABLE person (id INT)"),
+    ]
+}
+
+/// The diagnostics law test the redesign's DoD names explicitly: every
+/// entry in [`sql_refugee_corpus`] must fail to parse (none of these are
+/// legal KyzoScript) AND carry a `#[help]` naming KyzoScript's real idiom —
+/// not just a refusal, a *designed* refusal. Each script also still passes
+/// through [`check_script_laws`] (spanned, no banned placeholder), so this
+/// test is additive to the general laws, not a carve-out from them.
+#[test]
+fn sql_refugee_mistakes_get_designed_help() {
+    for (keyword, src) in sql_refugee_corpus() {
+        if let Err(violation) = check_script_laws(src) {
+            panic!("SQL-refugee corpus entry {keyword:?}: {violation}");
+        }
+        let err = parse_script(src, &BTreeMap::new(), &DEFAULT_FIXED_RULES, vld())
+            .expect_err("SQL syntax is not legal KyzoScript");
+        let help = err.help().map(|h| h.to_string());
+        assert!(
+            help.as_deref().is_some_and(|h| h.contains("KyzoScript")),
+            "keyword {keyword:?} ({src:?}) should get a designed KyzoScript-idiom hint, \
+             got: {err:?}"
+        );
     }
 }
 

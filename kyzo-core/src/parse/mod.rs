@@ -702,32 +702,33 @@ const SQL_KEYWORD_HINTS: &[(&str, &str)] = &[
     ),
     (
         "order",
-        "Sorting is the `:order` (or `:sort`) query option: `?[x] := … :order x`.",
+        "KyzoScript has no ORDER BY: sorting is the `:order` (or `:sort`) query option, \
+         e.g. `?[x] := … :order x`.",
     ),
     (
         "insert",
-        "Writes are a relation operation on a rule, e.g. \
+        "KyzoScript has no INSERT: writes are a relation operation on a rule, e.g. \
          `?[x, y] <- [[1, 2]] :put relation_name {x, y}` (or `:insert`).",
     ),
     (
         "update",
-        "Writes are a relation operation on a rule, e.g. \
+        "KyzoScript has no UPDATE: writes are a relation operation on a rule, e.g. \
          `?[x, y] <- [[1, 2]] :update relation_name {x, y}`.",
     ),
     (
         "delete",
-        "Deletes are the `:rm` relation operation, e.g. \
+        "KyzoScript has no DELETE: deletes are the `:rm` relation operation, e.g. \
          `?[key] := … :rm relation_name {key}`.",
     ),
     (
         "values",
-        "There's no VALUES clause: the constant rows are the constant rule's own value, \
-         e.g. `?[x, y] <- [[1, 2], [3, 4]]`.",
+        "KyzoScript has no VALUES clause: the constant rows are the constant rule's own \
+         value, e.g. `?[x, y] <- [[1, 2], [3, 4]]`.",
     ),
     (
         "create",
-        "Schema definitions use `:create`, e.g. \
-         `?[a] <- [] :create relation_name {key: Int, value: String}` — not `CREATE TABLE`.",
+        "KyzoScript has no CREATE TABLE: schema definitions use `:create`, e.g. \
+         `?[a] <- [] :create relation_name {key: Int, value: String}`.",
     ),
 ];
 
