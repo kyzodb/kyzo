@@ -488,12 +488,23 @@ impl SimStorage {
     }
 
     pub(crate) fn with_faults(seed: u64, faults: FaultConfig) -> Self {
-        Self::reopen(VersionMap::new(), 0, 0, seed, 0, faults)
+        Self::reopen(VersionMap::new(), 0, 0, 0, seed, 0, faults)
     }
 
+    /// `commit_seq` and `synced_seq` are separate parameters, never one
+    /// shared `seq` collapsed into both (kyzodb/kyzo#91: a prior single-`seq`
+    /// signature let `sim_crash` silently promote the synced watermark to
+    /// the commit sequence, so a power cut simulated after an intervening
+    /// crash wrongly retained buffer-tier writes that were never fsynced —
+    /// a real bug the #79 DST arm caught at seed 18). A process crash and a
+    /// power cut land the two tiers at DIFFERENT sequences in general; only
+    /// a fresh store and a just-power-cut store happen to have them equal,
+    /// and even those callers now say so explicitly rather than relying on
+    /// one value doing double duty.
     fn reopen(
         versions: VersionMap,
-        seq: u64,
+        commit_seq: u64,
+        synced_seq: u64,
         stamp_floor: i64,
         seed: u64,
         epoch: u64,
@@ -507,8 +518,8 @@ impl SimStorage {
                     // floor carries the pre-crash clock, playing the role
                     // fjall's persisted watermark plays for real crashes.
                     next_system_stamp: stamp_floor,
-                    commit_seq: seq,
-                    synced_seq: seq,
+                    commit_seq,
+                    synced_seq,
                     attempts: BTreeMap::new(),
                     total_puts: 0,
                     total_dels: 0,
@@ -527,12 +538,18 @@ impl SimStorage {
     /// treats survivors as settled on disk, restarts its op counter at 0,
     /// keeps the same seed and fault plan, and bumps the crash epoch — so
     /// the post-crash epoch explores a different (still seed-deterministic)
-    /// fault sequence instead of replaying the pre-crash one.
+    /// fault sequence instead of replaying the pre-crash one. The synced
+    /// watermark carries over UNCHANGED (kyzodb/kyzo#91): a process crash
+    /// neither advances nor loses which prefix was ever fsynced, so a power
+    /// cut simulated on the reopened store must still see only the TRUE
+    /// pre-crash fsync frontier, not everything this crash's commit_seq
+    /// happens to cover.
     pub(crate) fn sim_crash(&self) -> SimStorage {
         let st = self.ctx.state.lock().expect(POISONED);
         Self::reopen(
             st.versions.clone(),
             st.commit_seq,
+            st.synced_seq,
             st.next_system_stamp,
             self.ctx.seed,
             self.ctx.epoch + 1,
@@ -584,7 +601,11 @@ impl SimStorage {
         }
         Self::reopen(
             versions,
-            st.synced_seq,
+            st.synced_seq, // commit_seq: nothing past the synced watermark
+            // survives a power cut, so it degenerates to that watermark
+            st.synced_seq, // synced_seq: everything kept above WAS synced,
+            // by construction of the filter — the one case where the two
+            // parameters legitimately share a value
             st.next_system_stamp,
             self.ctx.seed,
             self.ctx.epoch + 1,

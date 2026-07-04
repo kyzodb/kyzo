@@ -594,13 +594,14 @@ mod tests {
     /// The DST fault campaign, run for real: 60 seeds, faults injected on
     /// every read/sync/commit, crashes and power cuts sprinkled throughout.
     ///
-    /// BLOCKED on kyzodb/kyzo#91: `SimStorage::sim_crash` conflates the
+    /// kyzodb/kyzo#91 (fixed): `SimStorage::sim_crash` used to conflate the
     /// synced watermark with `commit_seq` on reopen, so a power cut
-    /// simulated after an intervening crash wrongly retains buffer-tier
+    /// simulated after an intervening crash wrongly retained buffer-tier
     /// data that was never fsynced. This campaign's random seeds hit that
-    /// bug directly (first observed at seed 18) — un-ignore once #91 lands.
+    /// bug directly (first observed at seed 18); `reopen` now takes
+    /// `commit_seq`/`synced_seq` as separate parameters and `sim_crash`
+    /// carries the true pre-crash `synced_seq` through unchanged.
     #[test]
-    #[ignore = "kyzodb/kyzo#91: sim_crash loses the synced/committed distinction"]
     fn dst_fault_campaign_kv_survives_crash_and_powercut() {
         dst_fault_campaign_kv_survives_crash(0..60);
     }
@@ -609,7 +610,6 @@ mod tests {
     /// fsynced write and an unsynced one must not let the power cut that
     /// follows keep the unsynced write.
     #[test]
-    #[ignore = "kyzodb/kyzo#91: sim_crash loses the synced/committed distinction"]
     fn repro_crash_then_powercut_loses_the_synced_watermark() {
         let db = SimStorage::new(1);
         let mut tx = db.write_tx().unwrap();
