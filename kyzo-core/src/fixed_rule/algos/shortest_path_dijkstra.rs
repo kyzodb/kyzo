@@ -63,8 +63,8 @@ impl FixedRule for ShortestPathDijkstra {
         cancel: CancelFlag,
     ) -> Result<()> {
         let edges = payload.get_input(0)?;
-        let starting = payload.get_input(1)?;
-        let termination = payload.get_input(2);
+        let starting = payload.get_input(1)?.ensure_min_len(1)?;
+        let termination = payload.get_input(2).map(|t| t.ensure_min_len(1));
         let undirected = payload.bool_option("undirected", Some(false))?;
         let keep_ties = payload.bool_option("keep_ties", Some(false))?;
 
@@ -73,6 +73,8 @@ impl FixedRule for ShortestPathDijkstra {
         let mut starting_nodes = BTreeSet::new();
         for tuple in starting.iter()? {
             let tuple = tuple?;
+            // Structural: `ensure_min_len(1)` proved every tuple has a
+            // first column.
             let node = &tuple[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
@@ -81,9 +83,12 @@ impl FixedRule for ShortestPathDijkstra {
         let termination_nodes = match termination {
             Err(_) => None,
             Ok(t) => {
+                let t = t?;
                 let mut tn = BTreeSet::new();
                 for tuple in t.iter()? {
                     let tuple = tuple?;
+                    // Structural: `ensure_min_len(1)` proved every tuple
+                    // has a first column.
                     let node = &tuple[0];
                     if let Some(idx) = inv_indices.get(node) {
                         tn.insert(*idx);

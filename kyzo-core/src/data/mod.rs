@@ -18,6 +18,7 @@ pub(crate) mod bitemporal;
 pub(crate) mod expr;
 pub(crate) mod fact_payload;
 pub(crate) mod functions;
+pub(crate) mod json;
 pub(crate) mod memcmp;
 #[allow(dead_code)]
 pub(crate) mod program;

@@ -25,6 +25,7 @@ pub(crate) mod constraint;
 pub(crate) mod db;
 #[cfg(test)]
 mod db_battery;
+pub(crate) mod json;
 // The mutation tier and catalog carry surface that is lib-dead until its
 // operator lands (`::index drop` variants, schema-compat checks used by
 // unlanded ops) and items whose only callers are tests; a mod-level

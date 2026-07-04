@@ -63,6 +63,7 @@ use crate::data::bitemporal::ClaimPolarity;
 use crate::data::expr::Expr;
 use crate::data::program::{
     FixedRuleApply, InputInlineRulesOrFixed, InputProgram, InputRelationHandle, RelationOp,
+    WriteValidity,
 };
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -141,6 +142,7 @@ impl<T: WriteTx> SessionTx<T> {
         meta: &InputRelationHandle,
         headers: &[Symbol],
         cur_vld: ValidityTs,
+        write_vld: WriteValidity,
         callback_targets: &BTreeSet<SmartString<LazyCompact>>,
         callback_collector: &mut CallbackCollector,
         trigger_depth: usize,
@@ -226,6 +228,7 @@ impl<T: WriteTx> SessionTx<T> {
                 res_iter,
                 headers,
                 cur_vld,
+                &write_vld,
                 callback_targets,
                 callback_collector,
                 trigger_depth,
@@ -259,6 +262,7 @@ impl<T: WriteTx> SessionTx<T> {
                 res_iter,
                 headers,
                 cur_vld,
+                &write_vld,
                 callback_targets,
                 callback_collector,
                 trigger_depth,
@@ -274,6 +278,7 @@ impl<T: WriteTx> SessionTx<T> {
                     res_iter,
                     headers,
                     cur_vld,
+                    &write_vld,
                     callback_targets,
                     callback_collector,
                     trigger_depth,
@@ -297,6 +302,7 @@ impl<T: WriteTx> SessionTx<T> {
         res_iter: impl Iterator<Item = Tuple>,
         headers: &[Symbol],
         cur_vld: ValidityTs,
+        write_vld: &WriteValidity,
         callback_targets: &BTreeSet<SmartString<LazyCompact>>,
         callback_collector: &mut CallbackCollector,
         trigger_depth: usize,
@@ -350,30 +356,40 @@ impl<T: WriteTx> SessionTx<T> {
         };
         key_extractors.extend(val_extractors);
 
-        // The write coordinate: an unspecified valid instant defaults to
-        // the transaction's system stamp — snapshot-monotone, so a
-        // retrying writer can never land its update at an instant an
-        // already-committed writer has shadowed (wall-clock script time
-        // is NOT monotone across retries; the stamp is).
+        // The system coordinate: engine-owned and unconditional — every
+        // row this mutation writes lands in the SAME transaction, so it
+        // gets the SAME system stamp regardless of what valid instant it
+        // asserts.
         let stamp = self.system_stamp_routed(relation_store.is_temp);
         for tuple in res_iter {
+            // The valid coordinate: an unspecified `@` defaults to the
+            // transaction's own system stamp — snapshot-monotone, so a
+            // retrying writer can never land its update at an instant an
+            // already-committed writer has shadowed (wall-clock script
+            // time is NOT monotone across retries; the stamp is). A
+            // `@`-carrying mutation instead asserts the row at the
+            // instant its own clause names, per row if the clause names
+            // one of this row's own columns.
+            let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
             let extracted: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
 
             let key =
-                relation_store.encode_bitemporal_key_for_store(&extracted, stamp, stamp, span)?;
+                relation_store.encode_bitemporal_key_for_store(&extracted, valid, stamp, span)?;
 
-            // The current-state probe below is load-bearing under SSI and
-            // UNCONDITIONAL: bitemporal version keys are distinct per
-            // transaction stamp, so two writers of the same fact never
-            // collide on written keys — the fact-range READ this probe
-            // conflict-tracks is the only thing that makes a same-fact
-            // race abort one racer instead of losing an update. It also
-            // asserts absence for insertion and yields the transition's
-            // old row for indices and triggers.
-            let current = self.current_row_routed(relation_store, &extracted, span)?;
+            // The probe below is load-bearing under SSI and UNCONDITIONAL:
+            // bitemporal version keys are distinct per transaction stamp,
+            // so two writers of the same fact never collide on written
+            // keys — the fact-range READ this probe conflict-tracks is
+            // the only thing that makes a same-fact race abort one racer
+            // instead of losing an update. It also asserts absence for
+            // insertion and yields the transition's old row for indices
+            // and triggers — resolved AT THIS WRITE'S OWN `valid`, not
+            // "ever": what this write supersedes is whatever governed the
+            // instant it targets, never an unrelated later instant.
+            let current = self.current_row_routed(relation_store, &extracted, valid, span)?;
 
             if is_insert && current.is_some() {
                 bail!(TransactAssertionFailure {
@@ -397,6 +413,7 @@ impl<T: WriteTx> SessionTx<T> {
                                 relation_store,
                                 Some(&extracted),
                                 Some(&tup),
+                                valid,
                                 stamp,
                             )?;
                         }
@@ -406,7 +423,13 @@ impl<T: WriteTx> SessionTx<T> {
                     }
                     None => {
                         if has_indices {
-                            self.update_indices(relation_store, Some(&extracted), None, stamp)?;
+                            self.update_indices(
+                                relation_store,
+                                Some(&extracted),
+                                None,
+                                valid,
+                                stamp,
+                            )?;
                         }
                     }
                 }
@@ -442,6 +465,7 @@ impl<T: WriteTx> SessionTx<T> {
         res_iter: impl Iterator<Item = Tuple>,
         headers: &[Symbol],
         cur_vld: ValidityTs,
+        write_vld: &WriteValidity,
         callback_targets: &BTreeSet<SmartString<LazyCompact>>,
         callback_collector: &mut CallbackCollector,
         trigger_depth: usize,
@@ -485,25 +509,30 @@ impl<T: WriteTx> SessionTx<T> {
 
         let stamp = self.system_stamp_routed(relation_store.is_temp);
         for tuple in res_iter {
+            let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
             let mut new_kv: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
 
             let key =
-                relation_store.encode_bitemporal_key_for_store(&new_kv, stamp, stamp, span)?;
-            // The row being updated must currently exist: a bitemporal
-            // point read of the fact, yielding its logical row.
-            let old_kv: Tuple = match self.current_row_routed(relation_store, &new_kv, span)? {
-                None => {
-                    bail!(TransactAssertionFailure {
-                        relation: relation_store.name.to_string(),
-                        key: new_kv,
-                        notice: "key to update does not exist".to_string()
-                    })
-                }
-                Some(row) => row,
-            };
+                relation_store.encode_bitemporal_key_for_store(&new_kv, valid, stamp, span)?;
+            // The row being updated must already exist AT THIS WRITE'S
+            // OWN `valid`: a bitemporal point read of the fact, resolved
+            // at that instant, yielding its logical row — the value an
+            // unspecified (non-key) column carries forward is whatever
+            // held at THAT instant, never a later write's belief.
+            let old_kv: Tuple =
+                match self.current_row_routed(relation_store, &new_kv, valid, span)? {
+                    None => {
+                        bail!(TransactAssertionFailure {
+                            relation: relation_store.name.to_string(),
+                            key: new_kv,
+                            notice: "key to update does not exist".to_string()
+                        })
+                    }
+                    Some(row) => row,
+                };
             let original_val: Tuple = old_kv[relation_store.metadata.keys.len()..].to_vec();
             new_kv.reserve_exact(relation_store.arity());
             for (i, extractor) in val_extractors.iter().enumerate() {
@@ -531,7 +560,13 @@ impl<T: WriteTx> SessionTx<T> {
 
             if need_to_collect || has_indices {
                 if has_indices {
-                    self.update_indices(relation_store, Some(&new_kv), Some(&old_kv), stamp)?;
+                    self.update_indices(
+                        relation_store,
+                        Some(&new_kv),
+                        Some(&old_kv),
+                        valid,
+                        stamp,
+                    )?;
                 }
                 if need_to_collect {
                     old_tuples.push(old_kv);
@@ -565,6 +600,7 @@ impl<T: WriteTx> SessionTx<T> {
         res_iter: impl Iterator<Item = Tuple>,
         headers: &[Symbol],
         cur_vld: ValidityTs,
+        write_vld: &WriteValidity,
         callback_targets: &BTreeSet<SmartString<LazyCompact>>,
         callback_collector: &mut CallbackCollector,
         trigger_depth: usize,
@@ -601,13 +637,16 @@ impl<T: WriteTx> SessionTx<T> {
 
         let stamp = self.system_stamp_routed(relation_store.is_temp);
         for tuple in res_iter {
+            let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
             let extracted: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
             let key =
-                relation_store.encode_bitemporal_key_for_store(&extracted, stamp, stamp, span)?;
-            let current = self.current_row_routed(relation_store, &extracted, span)?;
+                relation_store.encode_bitemporal_key_for_store(&extracted, valid, stamp, span)?;
+            // Resolved AT THIS RETRACTION'S OWN `valid`: what it retracts
+            // is whatever governed the instant it targets.
+            let current = self.current_row_routed(relation_store, &extracted, valid, span)?;
             if check_exists && current.is_none() {
                 bail!(TransactAssertionFailure {
                     relation: relation_store.name.to_string(),
@@ -618,7 +657,7 @@ impl<T: WriteTx> SessionTx<T> {
             if need_to_collect || has_indices {
                 if let Some(tup) = current {
                     if has_indices {
-                        self.update_indices(relation_store, None, Some(&tup), stamp)?;
+                        self.update_indices(relation_store, None, Some(&tup), valid, stamp)?;
                     }
                     if need_to_collect {
                         old_tuples.push(tup);
@@ -752,7 +791,12 @@ impl<T: WriteTx> SessionTx<T> {
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
 
-            match self.current_row_routed(relation_store, &extracted, span)? {
+            match self.current_row_routed(
+                relation_store,
+                &extracted,
+                crate::data::value::MAX_VALIDITY_TS,
+                span,
+            )? {
                 None => {
                     bail!(TransactAssertionFailure {
                         relation: relation_store.name.to_string(),
@@ -763,6 +807,9 @@ impl<T: WriteTx> SessionTx<T> {
                 Some(row) => {
                     // Logical-row comparison: the ensure asserts the fact's
                     // CURRENT columns, not any particular stored version.
+                    // `:ensure` can never carry a `@` clause (refused at
+                    // parse time), so "current" here always means the
+                    // newest instant ever recorded, unconditionally.
                     if row != extracted {
                         bail!(TransactAssertionFailure {
                             relation: relation_store.name.to_string(),
@@ -807,8 +854,16 @@ impl<T: WriteTx> SessionTx<T> {
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
+            // `:ensure_not` can never carry a `@` clause (refused at
+            // parse time): "current" always means the newest instant
+            // ever recorded, unconditionally.
             if self
-                .current_row_routed(relation_store, &extracted, span)?
+                .current_row_routed(
+                    relation_store,
+                    &extracted,
+                    crate::data::value::MAX_VALIDITY_TS,
+                    span,
+                )?
                 .is_some()
             {
                 bail!(TransactAssertionFailure {
@@ -912,6 +967,7 @@ impl<T: WriteTx> SessionTx<T> {
         relation_store: &RelationHandle,
         new_kv: Option<&[DataValue]>,
         old_kv: Option<&[DataValue]>,
+        valid: ValidityTs,
         stamp: ValidityTs,
     ) -> Result<()> {
         for index in &relation_store.indices {
@@ -926,6 +982,7 @@ impl<T: WriteTx> SessionTx<T> {
                             mapper,
                             old,
                             ClaimPolarity::Retract,
+                            valid,
                             stamp,
                         )?;
                     }
@@ -936,6 +993,7 @@ impl<T: WriteTx> SessionTx<T> {
                             mapper,
                             new,
                             ClaimPolarity::Assert,
+                            valid,
                             stamp,
                         )?;
                     }
@@ -953,8 +1011,11 @@ impl<T: WriteTx> SessionTx<T> {
 impl<T: WriteTx> SessionTx<T> {
     /// One plain-index mirror row: the base row projected through the
     /// mapper, written bitemporally at the base write's own coordinate
-    /// with the base write's polarity — so as-of reads through the index
+    /// (valid AND system, both — a `@`-carrying base write's index mirror
+    /// must share its exact coordinate, not just its system stamp) with
+    /// the base write's polarity — so as-of reads through the index
     /// answer exactly like as-of reads of the base.
+    #[allow(clippy::too_many_arguments)]
     fn plain_index_write(
         &mut self,
         base: &RelationHandle,
@@ -962,11 +1023,12 @@ impl<T: WriteTx> SessionTx<T> {
         mapper: &[usize],
         row: &[DataValue],
         polarity: ClaimPolarity,
+        valid: ValidityTs,
         stamp: ValidityTs,
     ) -> Result<()> {
         let span = SourceSpan::default();
         let idx_tup: Tuple = project_mapper(mapper, row, base)?;
-        let key = idx_handle.encode_bitemporal_key_for_store(&idx_tup, stamp, stamp, span)?;
+        let key = idx_handle.encode_bitemporal_key_for_store(&idx_tup, valid, stamp, span)?;
         let val = idx_handle.encode_bitemporal_val_for_store(&idx_tup, polarity, span)?;
         // The index relation is a mutated relation in its own right: its
         // segment watermark must bump with this commit, or a served index
@@ -1424,12 +1486,18 @@ impl<T: WriteTx> SessionTx<T> {
                             unreachable!("ctx is None only for plain indexes")
                         };
                         let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
+                        // Backfill re-mints "now" for both coordinates —
+                        // it indexes the base's CURRENT rows (`as_of`
+                        // above), and the scan already discards each row's
+                        // original bitemporal slots, so there is no
+                        // per-row valid instant left to carry forward.
                         self.plain_index_write(
                             &base,
                             &idx_handle,
                             mapper,
                             row,
                             ClaimPolarity::Assert,
+                            stamp,
                             stamp,
                         )?;
                     }

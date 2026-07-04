@@ -15,7 +15,19 @@ if [ ! -f Cargo.toml ]; then
 fi
 
 # Crates whose presence means a C/C++ compiler or the banned base backends got in.
-BANNED='^(cc|cmake|cxx|cxx-build|bindgen|pkg-config|sqlite3-src|libsqlite3-sys|rusqlite|librocksdb-sys|rocksdb|cozorocks) '
+# The C-carrying crypto/compression stacks (ring, aws-lc, openssl, native-tls, zstd,
+# libz/lzma/bzip2 -sys) are named explicitly as defense in depth: each also pulls `cc`,
+# but a named hit reads as "you picked the wrong TLS/codec stack — the pure choices are
+# rustls+rustls-rustcrypto, miniz_oxide (flate2 rust_backend), and the brotli crate"
+# instead of a bare toolchain violation. `-sys ` as a suffix is caught wholesale below.
+BANNED='^(cc|cmake|cxx|cxx-build|bindgen|pkg-config|sqlite3-src|libsqlite3-sys|rusqlite|librocksdb-sys|rocksdb|cozorocks|ring|aws-lc-rs|aws-lc-sys|aws-lc-fips-sys|openssl|openssl-sys|openssl-src|native-tls|zstd|zstd-sys|zstd-safe|libz-sys|libz-ng-sys|lzma-sys|bzip2-sys) '
+# Any *-sys crate is, by convention, a binding to a native library: none belongs in the
+# engine tree. Caught as a class so new C bindings can't slip in under an unlisted name.
+BANNED_SUFFIX='-sys v'
+# The two -sys-by-name crates that are pure Rust: syscall/ABI *metadata* (constants and
+# extern declarations), no C source, no cc/bindgen. Anything else must earn its own
+# entry here with the same argument, in this comment.
+PURE_SYS='^(linux-raw-sys|windows-sys) '
 
 # Query each engine package separately: a cargo error must FAIL the gate (a
 # silently-empty tree reads as "clean"), while a package that simply has not
@@ -41,7 +53,7 @@ if [ -z "$checked" ]; then
   exit 1
 fi
 
-hits=$(printf '%s' "$trees" | sort -u | grep -E "$BANNED" || true)
+hits=$(printf '%s' "$trees" | sort -u | grep -E -e "$BANNED" -e "$BANNED_SUFFIX" | grep -Ev "$PURE_SYS" || true)
 
 if [ -n "$hits" ]; then
   echo "FAIL pure-Rust gate: C/C++-toolchain crates found in the engine dependency tree:"

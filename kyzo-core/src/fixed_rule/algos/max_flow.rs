@@ -112,8 +112,8 @@ impl FixedRule for MaxFlow {
         cancel: CancelFlag,
     ) -> Result<()> {
         let edges = payload.get_input(0)?;
-        let source_rel = payload.get_input(1)?;
-        let sink_rel = payload.get_input(2)?;
+        let source_rel = payload.get_input(1)?.ensure_min_len(1)?;
+        let sink_rel = payload.get_input(2)?.ensure_min_len(1)?;
 
         // Directed, non-negative capacities (negatives refused by the builder).
         let (graph, indices, inv_indices) = edges.as_directed_weighted_graph(false, false)?;
@@ -158,7 +158,9 @@ fn single_node(
         .iter()?
         .next()
         .ok_or_else(|| EmptyEndpointError(which, rel.span()))??;
-    // Structural: a bound endpoint column yields a non-empty tuple.
+    // Structural: the caller's `ensure_min_len(1)` on `rel` proved every
+    // tuple has a first column (a nullary relation would otherwise yield
+    // an empty tuple here despite the row-count check above).
     let dv = tuple.into_iter().next().unwrap();
     inv_indices.get(&dv).copied().ok_or_else(|| {
         NodeNotFoundError {

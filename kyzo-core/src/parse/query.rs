@@ -32,7 +32,6 @@
 //! x` is refused), aggregation and fixed-rule resolution, and validity
 //! specs (`@ 'NOW'`) evaluated against the query's one clock reading.
 
-use std::cmp::Reverse;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -47,17 +46,16 @@ use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, parse_aggr};
 use crate::data::expr::Expr;
-use crate::data::functions::str2vld;
 use crate::data::program::{
     FixedRule, FixedRuleApply, FixedRuleArg, FixedRuleHandle, InputAtom, InputInlineRule,
     InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
     InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
-    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Unification,
+    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Unification, WriteValidity,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, ValidityTs};
+use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::parse::expr::build_expr;
 use crate::parse::schema::parse_schema;
 use crate::parse::{
@@ -385,8 +383,31 @@ pub(crate) fn parse_query(
 
                 let name_p = args.expect("the output relation's name")?;
                 let name = Symbol::new(name_p.as_str(), name_p.extract_span());
-                match args.next() {
-                    None => stored_relation = Some(StagedRelation::Unnamed { name, span, op }),
+
+                // What's left is `table_schema? ~ validity_clause?`: zero,
+                // one, or two more children. Sorted by their own rule, not
+                // position, since either may be absent.
+                let mut schema_p = None;
+                let mut validity_p = None;
+                for rest in args {
+                    match rest.as_rule() {
+                        Rule::table_schema => schema_p = Some(rest),
+                        Rule::validity_clause => validity_p = Some(rest),
+                        _ => return Err(unexpected("a table schema or `@` clause", &rest)),
+                    }
+                }
+
+                let raw_write_vld = parse_write_validity_clause(validity_p, op, param_pool)?;
+
+                match schema_p {
+                    None => {
+                        stored_relation = Some(StagedRelation::Unnamed {
+                            name,
+                            span,
+                            op,
+                            raw_write_vld,
+                        })
+                    }
                     Some(schema_p) => {
                         let (mut metadata, mut key_bindings, mut dep_bindings) =
                             parse_schema(schema_p)?;
@@ -405,6 +426,7 @@ pub(crate) fn parse_query(
                                 span,
                             },
                             op,
+                            raw_write_vld,
                         })
                     }
                 }
@@ -448,7 +470,7 @@ pub(crate) fn parse_query(
     // before keys) is the original's live site, preserved; only the arity
     // matters, since the data is empty.
     if progs.is_empty()
-        && let Some(StagedRelation::WithSchema { handle, op }) = &stored_relation
+        && let Some(StagedRelation::WithSchema { handle, op, .. }) = &stored_relation
         && *op == RelationOp::Create
     {
         let mut bindings = handle.dep_bindings.clone();
@@ -462,11 +484,17 @@ pub(crate) fn parse_query(
 
     match stored_relation {
         None => {}
-        Some(StagedRelation::Unnamed { name, span, op }) => {
+        Some(StagedRelation::Unnamed {
+            name,
+            span,
+            op,
+            raw_write_vld,
+        }) => {
             let head = prog.get_entry_out_head()?;
             for symb in &head {
                 symb.ensure_valid_field()?;
             }
+            let write_vld = resolve_write_validity(raw_write_vld, &prog, cur_vld)?;
 
             let metadata = StoredRelationMetadata {
                 keys: head
@@ -490,10 +518,15 @@ pub(crate) fn parse_query(
                 dep_bindings: vec![],
                 span,
             };
-            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation))
+            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation, write_vld))
         }
-        Some(StagedRelation::WithSchema { handle, op }) => {
-            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation))
+        Some(StagedRelation::WithSchema {
+            handle,
+            op,
+            raw_write_vld,
+        }) => {
+            let write_vld = resolve_write_validity(raw_write_vld, &prog, cur_vld)?;
+            prog.out_opts_mut().store_relation = Some((handle, op, returning_mutation, write_vld))
         }
     }
 
@@ -520,7 +553,7 @@ pub(crate) fn parse_query(
 
     let empty_mutation_head = match &prog.out_opts().store_relation {
         None => false,
-        Some((handle, _, _)) if handle.key_bindings.is_empty() => {
+        Some((handle, _, _, _)) if handle.key_bindings.is_empty() => {
             if handle.dep_bindings.is_empty() {
                 true
             } else {
@@ -535,7 +568,7 @@ pub(crate) fn parse_query(
         // `empty_mutation_head` is only true when `store_relation` matched
         // `Some` just above; if that proof is ever broken this is a no-op,
         // not an abort (the original had `else { unreachable!() }`).
-        if let Some((handle, _, _)) = &mut prog.out_opts_mut().store_relation {
+        if let Some((handle, _, _, _)) = &mut prog.out_opts_mut().store_relation {
             if head_args.is_empty() {
                 bail!(RelationHasNoKeys(handle.name.to_string(), handle.span));
             }
@@ -566,12 +599,120 @@ enum StagedRelation {
         name: Symbol,
         span: SourceSpan,
         op: RelationOp,
+        raw_write_vld: RawWriteValidity,
     },
     /// `:create name {…}` — schema written out.
     WithSchema {
         handle: InputRelationHandle,
         op: RelationOp,
+        raw_write_vld: RawWriteValidity,
     },
+}
+
+/// A write-time `@` clause as staged during the option loop: refused shapes
+/// (two coordinates, or any `@` on `:ensure`/`:ensure_not`) are already
+/// rejected by this point, but whether the one surviving coordinate is a
+/// parse-time constant or a per-row column reference isn't decided until
+/// the entry rule's head is known — which happens only after
+/// [`InputProgram::new`], since a `:put` line may parse before its entry
+/// rule does.
+enum RawWriteValidity {
+    /// No `@` clause: every row lands at the transaction's system stamp.
+    Now,
+    /// `@ <expr>`: the one legal write-side coordinate, not yet resolved
+    /// against the entry head.
+    OneCoord(Expr),
+}
+
+/// The write side's `@` clause cannot set the system coordinate: system
+/// time is always the committing transaction's own engine-minted stamp, so
+/// a script that could choose it would let a writer forge when the
+/// database "learned" a fact.
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "a write's `@` clause takes exactly one coordinate (the valid instant); system time is never script-settable"
+)]
+#[diagnostic(code(parser::write_validity_sets_system))]
+struct WriteValiditySetsSystemTime(#[label] SourceSpan);
+
+/// `:ensure`/`:ensure_not` only read current state; they perform no
+/// bitemporal write, so a `@` clause on them would silently do nothing.
+#[derive(Debug, Error, Diagnostic)]
+#[error("`@` has no effect on `{0}`, which checks current state and writes nothing")]
+#[diagnostic(code(parser::write_validity_on_non_write_op))]
+struct WriteValidityOnNonWriteOp(&'static str, #[label] SourceSpan);
+
+/// Stage a `relation_option`'s optional trailing `validity_clause`: refuse
+/// the two-coordinate form and any clause on `:ensure`/`:ensure_not` here
+/// (both are op/shape checks, not head-dependent), leaving only the head
+/// resolution ([`resolve_write_validity`]) for after construction.
+fn parse_write_validity_clause(
+    clause: Option<Pair<'_>>,
+    op: RelationOp,
+    param_pool: &BTreeMap<String, DataValue>,
+) -> Result<RawWriteValidity> {
+    let Some(clause) = clause else {
+        return Ok(RawWriteValidity::Now);
+    };
+    let span = clause.extract_span();
+    if let RelationOp::Ensure | RelationOp::EnsureNot = op {
+        let name = if op == RelationOp::Ensure {
+            ":ensure"
+        } else {
+            ":ensure_not"
+        };
+        bail!(WriteValidityOnNonWriteOp(name, span));
+    }
+    let mut coords = clause.children();
+    let first = build_expr(coords.expect("the write's as-of expression")?, param_pool)?;
+    if coords.next().is_some() {
+        bail!(WriteValiditySetsSystemTime(span));
+    }
+    Ok(RawWriteValidity::OneCoord(first))
+}
+
+/// Resolve a staged `@` clause: a fully constant expression is one instant
+/// for every row (parity with the read side's single-coordinate `@`,
+/// folded once here); an expression that still names a free variable must
+/// name one of the mutation's own output columns, and becomes a per-row
+/// extractor exactly like any other column (`runtime::mutate`'s
+/// `DataExtractor`) — the primary backfill/import use case, where every
+/// row carries its own timestamp.
+///
+/// The entry's output head is fetched lazily (only in the per-row branch):
+/// unlike `StagedRelation::Unnamed`, `WithSchema` mutations never otherwise
+/// needed it, and some legal entries (an unnamed fixed-rule head) don't
+/// have one — a `@ <constant>` or headless mutation must not regress by
+/// suddenly requiring one.
+fn resolve_write_validity(
+    raw: RawWriteValidity,
+    prog: &InputProgram,
+    cur_vld: ValidityTs,
+) -> Result<WriteValidity> {
+    match raw {
+        RawWriteValidity::Now => Ok(WriteValidity::Now),
+        RawWriteValidity::OneCoord(expr) => {
+            if expr.bindings()?.is_empty() {
+                let span = expr.span();
+                let vld = crate::data::functions::data_value_to_vld_spec(
+                    expr.eval_to_const()?,
+                    span,
+                    cur_vld,
+                )?;
+                Ok(WriteValidity::Fixed(vld))
+            } else {
+                let head = prog.get_entry_out_head()?;
+                let frame: BTreeMap<Symbol, usize> = head
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (s.clone(), i))
+                    .collect();
+                let mut expr = expr;
+                expr.fill_binding_indices(&frame)?;
+                Ok(WriteValidity::PerRow(expr))
+            }
+        }
+    }
 }
 
 fn parse_rule(
@@ -915,11 +1056,6 @@ fn parse_rule_head_arg(
     })
 }
 
-#[derive(Debug, Error, Diagnostic)]
-#[error("bad specification of validity")]
-#[diagnostic(code(parser::bad_validity_spec))]
-struct BadValiditySpecification(#[label] SourceSpan);
-
 fn parse_fixed_rule(
     src: Pair<'_>,
     param_pool: &BTreeMap<String, DataValue>,
@@ -1162,20 +1298,7 @@ fn insert_empty_const_entry(
 
 fn expr2vld_spec(expr: Expr, cur_vld: ValidityTs) -> Result<ValidityTs> {
     let vld_span = expr.span();
-    match expr.eval_to_const()? {
-        DataValue::Num(n) => {
-            let microseconds = n.get_int().ok_or(BadValiditySpecification(vld_span))?;
-            Ok(ValidityTs(Reverse(microseconds)))
-        }
-        DataValue::Str(s) => match &s as &str {
-            "NOW" => Ok(cur_vld),
-            "END" => Ok(MAX_VALIDITY_TS),
-            s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(vld_span))?),
-        },
-        _ => {
-            bail!(BadValiditySpecification(vld_span))
-        }
-    }
+    crate::data::functions::data_value_to_vld_spec(expr.eval_to_const()?, vld_span, cur_vld)
 }
 
 #[cfg(test)]
@@ -1209,7 +1332,7 @@ mod tests {
             other => panic!("expected a synthesized Constant entry, got {other:?}"),
         }
         // And the staged relation landed in the options.
-        let (handle, op, _) = prog.out_opts().store_relation.as_ref().unwrap();
+        let (handle, op, _, _) = prog.out_opts().store_relation.as_ref().unwrap();
         assert_eq!(&handle.name as &str, "t");
         assert_eq!(*op, RelationOp::Create);
     }
@@ -1249,5 +1372,101 @@ mod tests {
     #[test]
     fn unknown_aggregation_errors() {
         assert!(parse_single("?[frobnicate(a)] := a in [1, 2]").is_err());
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Write-time `@`: the mutation surface's own validity clause.
+    // ─────────────────────────────────────────────────────────────────
+
+    fn write_vld(src: &str) -> WriteValidity {
+        let prog = parse_single(src).unwrap();
+        let (_, _, _, write_vld) = prog.out_opts().store_relation.clone().unwrap();
+        write_vld
+    }
+
+    /// No `@` clause at all: `WriteValidity::Now`, byte-for-byte the
+    /// pre-`@` behavior (every row lands at the transaction's stamp).
+    #[test]
+    fn put_without_at_clause_is_now() {
+        assert_eq!(
+            write_vld("?[k, v] <- [[1, 'a']] :put t {k => v}"),
+            WriteValidity::Now
+        );
+    }
+
+    /// `@ <constant>` folds once at parse time into `WriteValidity::Fixed`,
+    /// exactly like the read side's single-coordinate `@`.
+    #[test]
+    fn put_at_constant_is_fixed() {
+        assert_eq!(
+            write_vld("?[k, v] <- [[1, 'a']] :put t {k => v} @ 12345"),
+            WriteValidity::Fixed(ValidityTs(Reverse(12345)))
+        );
+    }
+
+    /// `@ 'NOW'` / `@ 'END'` resolve through the same sentinel coercion
+    /// the read side uses (`data_value_to_vld_spec`).
+    #[test]
+    fn put_at_now_and_end_sentinels_resolve() {
+        assert_eq!(
+            write_vld("?[k, v] <- [[1, 'a']] :put t {k => v} @ 'NOW'"),
+            WriteValidity::Fixed(vld())
+        );
+        assert_eq!(
+            write_vld("?[k, v] <- [[1, 'a']] :put t {k => v} @ 'END'"),
+            WriteValidity::Fixed(crate::data::value::MAX_VALIDITY_TS)
+        );
+    }
+
+    /// `@ <var>` naming one of the entry's own output columns becomes a
+    /// per-row extractor — the backfill/import case, one instant per row.
+    #[test]
+    fn put_at_output_column_is_per_row() {
+        match write_vld("?[k, v, ts] <- [[1, 'a', 999]] :put t {k => v} @ ts") {
+            WriteValidity::PerRow(expr) => {
+                assert_eq!(expr.get_binding().map(|s| s.name.as_str()), Some("ts"));
+            }
+            other => panic!("expected PerRow, got {other:?}"),
+        }
+    }
+
+    /// `:rm` gets the identical `@` surface as `:put`.
+    #[test]
+    fn rm_accepts_at_clause() {
+        assert_eq!(
+            write_vld("?[k] <- [[1]] :rm t {k} @ 777"),
+            WriteValidity::Fixed(ValidityTs(Reverse(777)))
+        );
+    }
+
+    /// REFUSED: two coordinates on a write would let a script pick the
+    /// system stamp — the one thing that must always be engine-minted.
+    #[test]
+    fn put_at_two_coordinates_is_refused() {
+        let err = parse_single("?[k, v] <- [[1, 'a']] :put t {k => v} @ 1, 2").unwrap_err();
+        assert!(err.to_string().contains("one coordinate"), "got: {err}");
+    }
+
+    /// REFUSED: `@` has no effect on `:ensure` (no bitemporal write
+    /// happens), so it is rejected rather than silently ignored.
+    #[test]
+    fn ensure_with_at_clause_is_refused() {
+        let err = parse_single("?[k, v] <- [[1, 'a']] :ensure t {k => v} @ 100").unwrap_err();
+        assert!(err.to_string().contains("no effect"), "got: {err}");
+    }
+
+    /// REFUSED: same for `:ensure_not`.
+    #[test]
+    fn ensure_not_with_at_clause_is_refused() {
+        let err = parse_single("?[k, v] <- [[1, 'a']] :ensure_not t {k => v} @ 100").unwrap_err();
+        assert!(err.to_string().contains("no effect"), "got: {err}");
+    }
+
+    /// REFUSED: `@` naming something that is not one of the mutation's own
+    /// output columns — a per-row clause must bind to a real column, not a
+    /// stray identifier.
+    #[test]
+    fn put_at_unbound_name_is_refused() {
+        assert!(parse_single("?[k, v] <- [[1, 'a']] :put t {k => v} @ nonexistent_var").is_err());
     }
 }

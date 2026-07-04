@@ -70,6 +70,10 @@ rayon = "1"
 # the RA-layer criterion benches (benches/ra_exec.rs). Not part of the public
 # surface; enabled only by `cargo bench`/`cargo test` invocations that name it.
 bench-internals = []
+# Exposes `fuzz_api::fuzz_parse_script`, a one-function façade over the
+# internal parse tier for the KyzoScript fuzz target (`fuzz/`). Not part of
+# the public surface; enabled only by the fuzz crate.
+fuzz-internals = []
 
 [dev-dependencies]
 tempfile = "3"

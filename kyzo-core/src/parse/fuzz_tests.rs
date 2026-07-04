@@ -630,10 +630,23 @@ fn option_strategy() -> impl Strategy<Value = String> {
             ),
             select(IDENT_NAMES),
             proptest::option::of(schema_strategy()),
+            // The write-time `@` clause: mostly the legal one-coordinate
+            // form (sometimes a real validity spec, sometimes one of this
+            // mutation's own output vars — the per-row case), but also the
+            // two-coordinate form and `:ensure`/`:ensure_not` (via the `op`
+            // draw above) so the refusal paths get fuzzed too, never just
+            // the happy path.
+            proptest::option::of(prop_oneof![
+                3 => select(VALIDITIES).prop_map(|v| format!(" @ {v}")),
+                2 => select(VAR_NAMES).prop_map(|v| format!(" @ {v}")),
+                1 => (select(VALIDITIES), select(VALIDITIES))
+                    .prop_map(|(a, b)| format!(" @ {a}, {b}")),
+            ]),
         )
-            .prop_map(|(op, rel, schema)| {
+            .prop_map(|(op, rel, schema, at)| {
                 let schema = schema.map(|s| format!(" {s}")).unwrap_or_default();
-                format!("{op} {rel}{schema}")
+                let at = at.unwrap_or_default();
+                format!("{op} {rel}{schema}{at}")
             }),
     ]
 }

@@ -1008,6 +1008,29 @@ mod tests {
         ));
     }
 
+    /// `::lsh create`'s `n_gram`/`n_perm` options used to cast `get_int()`'s
+    /// `i64` straight to `usize` (`as usize`) BEFORE the `> 0` positivity
+    /// `ensure!` ran: `n_gram: -1` wraps to a huge `usize` and sails through
+    /// the later check, eventually reaching `Vec::with_capacity` in the LSH
+    /// engine (`engines/lsh.rs::MinHashPermutations::new`) with an
+    /// allocator-aborting size. `dim`/`ef_construction`/`m_neighbours`
+    /// (`::hnsw create`) already validated the `i64` before casting; `n_gram`
+    /// and `n_perm` now match that shape and refuse at parse time instead.
+    #[test]
+    fn lsh_negative_options_refuse_at_parse_not_wrap() {
+        for (what, src) in [
+            ("n_gram", "::lsh create r:i {n_gram: -1}"),
+            ("n_perm", "::lsh create r:i {n_perm: -1}"),
+        ] {
+            let err = parse(src).expect_err(&format!("{what}: negative option must refuse"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains("must be positive"),
+                "{what}: expected a positivity refusal, got: {msg}"
+            );
+        }
+    }
+
     /// `::merkle_root` parses to the right variant: bare ⇒ whole keyspace
     /// (`None`), with a name ⇒ that relation (`Some`).
     #[test]

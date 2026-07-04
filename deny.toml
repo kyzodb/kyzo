@@ -24,6 +24,27 @@ ignore = [
   # and no version drops it. Accepted with the same revisit as fxhash:
   # issue #18's dependency-hygiene triage of the FTS tokenizer tier.
   "RUSTSEC-2025-0141",
+  # paste is unmaintained (advisory-class: unmaintained, not a vulnerability;
+  # archived by its author, no fork adopted upstream). Reached only through
+  # rustls-rustcrypto (kyzo-bin's TLS crypto provider — see that dependency's
+  # Cargo.toml comment), where it is a proc-macro used at build time only; it
+  # generates code and is not linked into or reachable from the running
+  # binary. Removal condition: the provider drops paste (its own dependency
+  # choice, out of this workspace's control) or switches to a maintained fork.
+  "RUSTSEC-2024-0436",
+  # rsa 0.10.0-rc.18's Marvin Attack timing side-channel (RUSTSEC-2023-0071)
+  # leaks information ONLY through a private key's own decrypt/sign timing,
+  # observable by an attacker who can query that private key. kyzo-bin's only
+  # use of rsa is as a TLS *client* verifying RSA-signed server certificates
+  # (rustls-rustcrypto's crypto provider, `client.rs`) — a public-key
+  # signature-verification operation. `client.rs` calls
+  # `.with_no_client_auth()` unconditionally: this process never holds, nor
+  # ever performs any operation with, an RSA private key, so there is no
+  # oracle for this attack to observe. Removal condition: rustls-rustcrypto
+  # depends on a stable (non-rc) rsa release off the constant-time migration
+  # line the crate is already on (confirmed via its Cargo.toml at the pinned
+  # rev: `rsa = "0.10.0-rc.18"`).
+  "RUSTSEC-2023-0071",
 ]
 
 [licenses]
@@ -39,6 +60,9 @@ allow = [
   "0BSD",        # varint-rs (fjall dep) — public-domain-equivalent
   "BSL-1.0",     # xxhash-rust (fjall dep) — permissive, MPL-compatible
   "BSD-2-Clause", # cedarwood (jieba-rs's double-array trie) — permissive, MPL-compatible
+  "BSD-3-Clause", # ed25519-dalek/x25519-dalek/subtle (rustls-rustcrypto's TLS provider) — permissive, MPL-compatible
+  "CDLA-Permissive-2.0", # webpki-roots (client.rs's hand-rolled TLS client's root store) — a data
+                         # license (the Mozilla CA bundle, not code), permissive, MPL-compatible
 ]
 
 [bans]
@@ -55,4 +79,16 @@ deny = [
   # Re-opening that decision means editing this file, visibly, not swapping a crate quietly.
   { crate = "redb", reason = "single-writer B-tree; re-imposes the one-writer wall fjall was chosen to escape" },
   { crate = "sled", reason = "stalled and unstable; rejected in the backend decision" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+  # kyzo-bin's TLS crypto provider is pinned to a git rev, not the published
+  # 0.0.2-alpha, because that release drags four RUSTSEC advisories in via
+  # rustls-webpki 0.102.8 — see the pin's justification comment in
+  # kyzo-bin/Cargo.toml. Remove this entry together with that pin once a
+  # release lands without the rustls-webpki dependency.
+  "https://github.com/RustCrypto/rustls-rustcrypto",
 ]

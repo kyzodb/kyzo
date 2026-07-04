@@ -1706,4 +1706,205 @@ mod tests {
             }
         }
     }
+
+    /// Systemic finding: ten graph algorithms read a "node" relation's first
+    /// column (`tuple[0]`, or `.next().unwrap()` on the same shape) without
+    /// first proving the relation has at least one bound column. A NULLARY
+    /// relation (zero columns) supplied as that argument made every one of
+    /// them panic instead of refusing cleanly — `ensure_min_len` checks the
+    /// relation's declared arity (from its bindings), not its row count, so
+    /// this is a schema-level guard, not a data-shape one (mirrors the
+    /// pre-existing guard in `shortest_path_bfs.rs`).
+    ///
+    /// Each of the ten now guards with `.ensure_min_len(1)?` (or `?` after
+    /// an `and_then`/match for the algorithms where the relation is
+    /// optional and a MISSING one is a legitimate "skip", but a PROVIDED
+    /// nullary one must still be a real error). This test drives one
+    /// nullary relation through each and asserts a typed arity refusal, not
+    /// a panic — so a run that used to abort the whole process instead
+    /// fails just this one assertion if the guard is ever removed.
+    #[test]
+    fn nullary_node_relation_refuses_not_panics_across_algos() {
+        use crate::fixed_rule::algos::{
+            Bfs, DegreeCentrality, Dfs, KShortestPathYen, MaxFlow, MinimumSpanningTreePrim,
+            RandomWalk, ShortestPathAStar, ShortestPathDijkstra, StronglyConnectedComponent,
+        };
+
+        fn e(a: &str, b: &str, w: f64) -> Vec<DataValue> {
+            vec![s(a), s(b), DataValue::from(w)]
+        }
+        fn const_expr(v: DataValue) -> Expr {
+            Expr::Const {
+                val: v,
+                span: SourceSpan::default(),
+            }
+        }
+        // Zero bindings, one zero-length row: exactly the shape that used
+        // to reach `tuple[0]` / `.next().unwrap()` and panic. Every case
+        // below is otherwise a complete, valid, non-empty setup — options
+        // included — so removing just the one guard under test lets
+        // execution reach the real indexing site instead of stopping on
+        // some unrelated missing-input/-option error.
+        let nullary = || TestInput::new(vec![], vec![vec![]]);
+
+        let cases: Vec<(&str, Result<Vec<Tuple>>)> = vec![
+            (
+                "ShortestPathDijkstra: starting",
+                run_fixed_rule(
+                    &ShortestPathDijkstra,
+                    vec![
+                        TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
+                        nullary(),
+                        TestInput::new(vec!["end"], vec![vec![s("b")]]),
+                    ],
+                    BTreeMap::new(),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "KShortestPathYen: starting",
+                run_fixed_rule(
+                    &KShortestPathYen,
+                    vec![
+                        TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
+                        nullary(),
+                        TestInput::new(vec!["end"], vec![vec![s("b")]]),
+                    ],
+                    BTreeMap::from([(SmartString::from("k"), const_expr(DataValue::from(1i64)))]),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "ShortestPathAStar: starting",
+                run_fixed_rule(
+                    &ShortestPathAStar,
+                    vec![
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                        nullary(),
+                        TestInput::new(vec!["goal"], vec![vec![s("b")]]),
+                    ],
+                    BTreeMap::from([(
+                        SmartString::from("heuristic"),
+                        const_expr(DataValue::from(0.0)),
+                    )]),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "Bfs: starting_nodes",
+                run_fixed_rule(
+                    &Bfs,
+                    vec![
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                        nullary(),
+                    ],
+                    BTreeMap::from([(
+                        SmartString::from("condition"),
+                        const_expr(DataValue::from(true)),
+                    )]),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "Dfs: starting_nodes",
+                run_fixed_rule(
+                    &Dfs,
+                    vec![
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                        nullary(),
+                    ],
+                    BTreeMap::from([(
+                        SmartString::from("condition"),
+                        const_expr(DataValue::from(true)),
+                    )]),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "MaxFlow: source_rel",
+                run_fixed_rule(
+                    &MaxFlow,
+                    vec![
+                        TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
+                        nullary(),
+                        TestInput::new(vec!["sink"], vec![vec![s("b")]]),
+                    ],
+                    BTreeMap::new(),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "MinimumSpanningTreePrim: starting",
+                run_fixed_rule(
+                    &MinimumSpanningTreePrim,
+                    // A real edge, so `graph.node_count() != 0` and the run
+                    // reaches the starting-node check instead of the
+                    // legitimate empty-graph early return.
+                    vec![
+                        TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
+                        nullary(),
+                    ],
+                    BTreeMap::new(),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "DegreeCentrality: nodes",
+                run_fixed_rule(
+                    &DegreeCentrality,
+                    vec![
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        nullary(),
+                    ],
+                    BTreeMap::new(),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "RandomWalk: starting",
+                run_fixed_rule(
+                    &RandomWalk,
+                    vec![
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                        nullary(),
+                    ],
+                    BTreeMap::from([(
+                        SmartString::from("steps"),
+                        const_expr(DataValue::from(1i64)),
+                    )]),
+                    CancelFlag::default(),
+                ),
+            ),
+            (
+                "StronglyConnectedComponent: nodes",
+                run_fixed_rule(
+                    &StronglyConnectedComponent::new(true),
+                    vec![
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        nullary(),
+                    ],
+                    BTreeMap::new(),
+                    CancelFlag::default(),
+                ),
+            ),
+        ];
+
+        for (name, res) in cases {
+            let err = match res {
+                Ok(rows) => panic!(
+                    "{name}: a nullary node relation must refuse, not succeed — got {} rows",
+                    rows.len()
+                ),
+                Err(e) => e,
+            };
+            assert!(
+                err.to_string().contains("arity"),
+                "{name}: expected the typed arity refusal, got: {err}"
+            );
+        }
+    }
 }

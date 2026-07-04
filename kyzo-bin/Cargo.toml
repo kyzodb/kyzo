@@ -1,0 +1,78 @@
+[package]
+name = "kyzo-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "KyzoDB standalone binary: CLI, REPL, and HTTP server"
+
+[[bin]]
+name = "kyzo"
+path = "src/main.rs"
+
+[dependencies]
+kyzo = { path = "../kyzo-core" }
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+rand = "0.9"
+serde = "1"
+serde_derive = "1"
+serde_json = "1"
+itertools = "0.15"
+base64 = "0.22"
+# Aligned to kyzo-core's miette major version so the tree carries one copy.
+miette = { version = "7", features = ["fancy"] }
+prettytable = "0.10"
+rustyline = "17"
+# HTTP(S) client for `%import <url>` (see `client.rs`'s module doc for the
+# two designs that were tried and rejected first: `minreq`'s `https-rustls`
+# — ring, C, banned; `ureq`'s `rustls-no-provider` — pure but leans on a
+# process-global crypto-provider default). `client.rs` hand-rolls the GET
+# over `std::net::TcpStream` + `rustls`, so the only deps this buys are
+# `rustls` itself (no bundled crypto provider — `default-features = false`
+# means neither `ring` nor `aws-lc-rs` compiles in), `rustls-rustcrypto`
+# (the pure-Rust RustCrypto-based provider passed in explicitly), and
+# `webpki-roots` (the Mozilla CA bundle, data not code). Verified twice:
+# `cargo tree -e normal,build` on this crate shows no `cc`/`ring`/`aws-lc-rs`
+# /`*-sys` crate anywhere, and a real HTTPS GET against a live server
+# succeeded end to end with this exact stack before it was wired in here.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+# Pinned to a git rev, not the published 0.0.2-alpha: that release still
+# depends on rustls-webpki 0.102.8, which carries four RUSTSEC advisories
+# (RUSTSEC-2026-0049/-0098/-0099/-0104 — CRL/name-constraint bugs and a
+# reachable panic in CRL parsing) and rsa 0.9.10 (RUSTSEC-2023-0071, the
+# Marvin timing attack). Upstream's git master has already dropped the
+# rustls-webpki dependency entirely (certificate verification runs solely
+# through rustls's own rustls-webpki, which resolves to 0.103.13 here —
+# confirmed in Cargo.lock, containing all four fixes) and moved to the
+# rsa 0.10 constant-time migration line. Rev checked before pinning: read
+# CHANGELOG.md (template only, no entries) and the last ~20 commits
+# (routine dependabot dependency bumps, nothing security-relevant); license
+# unchanged (MIT OR Apache-2.0). Remove this git pin once a release lands
+# without a rustls-webpki dependency.
+rustls-rustcrypto = { git = "https://github.com/RustCrypto/rustls-rustcrypto", rev = "a2f53960d7f5ee924b753cbdfd036205d59fba15" }
+webpki-roots = "0.26"
+ctrlc = "3"
+tempfile = "3"
+
+# The HTTP server. tokio features are named explicitly, not "full": a
+# database engine does not get to inherit invisible defaults (the same
+# posture kyzo-core's `StorageOptions` takes on cache/thread knobs).
+tokio = { version = "1", features = ["rt-multi-thread", "net", "fs", "sync"] }
+axum = "0.8"
+axum-macros = "0.5"
+async-stream = "0.3"
+futures = "0.3"
+# CORS/auth/compression. Compression is deliberately gzip+brotli ONLY:
+# `compression-gzip` -> `async-compression`'s `flate2` codec, whose default
+# backend is `miniz_oxide` (pure Rust; the C `libz-sys`/`zlib-ng` backends
+# are separate, non-default flate2 features, never enabled here) —
+# `compression-br` -> the `brotli` crate, a from-scratch pure-Rust port,
+# not a binding to Google's C library. `compression-zstd` is excluded: it
+# depends on `zstd-safe` -> `zstd-sys`, C. Verified with the same
+# `cargo tree` sweep as the TLS stack: no `cc`/`*-sys` crate present.
+tower-http = { version = "0.6", features = ["cors", "auth", "compression-gzip", "compression-br"] }
+rayon = "1"

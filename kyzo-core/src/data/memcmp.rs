@@ -21,6 +21,15 @@
 //! 1. decode(encode(v)) == v            (round-trip identity)
 //! 2. encode(a) < encode(b) ⇔ a < b     (order embedding)
 //!
+//! Law 2 is why every non-canonical float bit pattern that its `DataValue`'s
+//! own `Ord`/`Eq` treats as equal to some canonical pattern must encode
+//! identically to it: `Vector` lanes use `OrderedFloat` semantics (all NaNs
+//! equal, `-0.0 == 0.0`), so `canonical_vec_f32`/`canonical_vec_f64`
+//! canonicalize both NaN and negative zero before encoding. Scalar `Num`
+//! floats use `total_cmp` instead (NaN payloads/signs and `-0.0` vs `0.0`
+//! all distinct and ordered), so `order_encode_f64` canonicalizes neither —
+//! see the doc comments on each for the full argument.
+//!
 //! The type tags below are assigned in exactly the declaration order of the
 //! `DataValue` enum, so cross-type byte order and cross-type semantic order
 //! agree by construction. Never reorder or reuse a tag once data exists.
@@ -130,7 +139,7 @@ pub(crate) trait MemCmpEncoder: Write {
                         self.write_u8(VEC_F32).unwrap();
                         self.write_u64::<BigEndian>(a.len() as u64).unwrap();
                         for el in a {
-                            self.write_u32::<BigEndian>(order_encode_f32(canonical_nan_f32(*el)))
+                            self.write_u32::<BigEndian>(order_encode_f32(canonical_vec_f32(*el)))
                                 .unwrap();
                         }
                     }
@@ -138,7 +147,7 @@ pub(crate) trait MemCmpEncoder: Write {
                         self.write_u8(VEC_F64).unwrap();
                         self.write_u64::<BigEndian>(a.len() as u64).unwrap();
                         for el in a {
-                            self.write_u64::<BigEndian>(order_encode_f64(canonical_nan_f64(*el)))
+                            self.write_u64::<BigEndian>(order_encode_f64(canonical_vec_f64(*el)))
                                 .unwrap();
                         }
                     }
@@ -258,8 +267,10 @@ fn order_decode_i64(u: u64) -> i64 {
 /// Order-encode a float: positive values get the sign bit set, negative
 /// values are bit-flipped, so unsigned byte order equals `f64::total_cmp`
 /// order — which is exactly the order `Num::cmp` uses for floats (including
-/// -NaN below -∞ and +NaN above +∞). No NaN normalization here: scalars
-/// follow total_cmp.
+/// -NaN below -∞ and +NaN above +∞, and -0.0 below +0.0). No NaN or
+/// signed-zero normalization here: scalars follow total_cmp, which orders
+/// them as distinct values, unlike the `OrderedFloat` semantics `Vector`
+/// lanes use (see `canonical_vec_f64`).
 fn order_encode_f64(v: f64) -> u64 {
     let u = v.to_bits();
     if v.is_sign_positive() {
@@ -288,16 +299,30 @@ fn order_encode_f32(v: f32) -> u32 {
 }
 
 /// Vector elements order under `OrderedFloat` semantics (all NaNs equal and
-/// greater than everything), unlike scalar `Num` floats which use
-/// `total_cmp`. Canonicalizing every NaN to the positive quiet NaN makes the
-/// byte order match, at the cost of NaN sign/payload not round-tripping —
-/// which `OrderedFloat` equality cannot observe.
-fn canonical_nan_f32(v: f32) -> f32 {
-    if v.is_nan() { f32::NAN } else { v }
+/// greater than everything, and `-0.0 == 0.0`), unlike scalar `Num` floats
+/// which use `total_cmp` (all NaN payloads/signs distinct, `-0.0 < 0.0`; see
+/// `order_encode_f64`'s doc comment). Canonicalizing every NaN to the
+/// positive quiet NaN, and every negative zero to positive zero, makes the
+/// byte order match, at the cost of NaN sign/payload and zero sign not
+/// round-tripping — neither of which `OrderedFloat` equality can observe.
+fn canonical_vec_f32(v: f32) -> f32 {
+    if v.is_nan() {
+        f32::NAN
+    } else if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
 }
 
-fn canonical_nan_f64(v: f64) -> f64 {
-    if v.is_nan() { f64::NAN } else { v }
+fn canonical_vec_f64(v: f64) -> f64 {
+    if v.is_nan() {
+        f64::NAN
+    } else if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
 }
 
 fn order_decode_f32(u: u32) -> f32 {

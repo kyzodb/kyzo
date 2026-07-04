@@ -56,8 +56,8 @@ impl FixedRule for RandomWalk {
         cancel: CancelFlag,
     ) -> Result<()> {
         let edges = payload.get_input(0)?.ensure_min_len(2)?;
-        let nodes = payload.get_input(1)?;
-        let starting = payload.get_input(2)?;
+        let nodes = payload.get_input(1)?.ensure_min_len(1)?;
+        let starting = payload.get_input(2)?.ensure_min_len(1)?;
         let iterations = payload.pos_integer_option("iterations", Some(1))?;
         let steps = payload.pos_integer_option("steps", None)?;
         // Determinism: each step's neighbor pick is seeded from this option
@@ -81,6 +81,8 @@ impl FixedRule for RandomWalk {
         let mut rng = SeededRng::new(seed);
         for start_node in starting.iter()? {
             let start_node = start_node?;
+            // Structural: `ensure_min_len(1)` proved every tuple has a
+            // first column.
             let start_node_key = &start_node[0];
             let starting_tuple =
                 nodes
@@ -95,6 +97,9 @@ impl FixedRule for RandomWalk {
                 let mut current_tuple = starting_tuple.clone();
                 let mut path = vec![start_node_key.clone()];
                 for _ in 0..steps {
+                    // Structural: `nodes.ensure_min_len(1)` proved every
+                    // `nodes` tuple (which `current_tuple` always is) has
+                    // a first column.
                     let cur_node_key = &current_tuple[0];
                     let candidate_steps: Vec<_> = edges.prefix_iter(cur_node_key)?.try_collect()?;
                     if candidate_steps.is_empty() {

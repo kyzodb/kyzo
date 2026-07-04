@@ -77,6 +77,13 @@ mod trials;
 #[cfg(test)]
 mod time_travel_trials;
 
+// Time-travel LANGUAGE-surface laws (story #4): the same as-of claim, proven
+// through the actual public surface — `Db::run_script` parsing real
+// KyzoScript `@` clauses — rather than hand-built magic-program ASTs.
+// Test-only; adds no lib code.
+#[cfg(test)]
+mod time_travel_script_laws;
+
 // The plan compiler's production caller (runtime/db.rs::run_query) lands
 // later; until then its lib code (and, transitively, `ra` below) is dead in
 // lib builds, while the in-file tests (the real-storage compile-then-eval

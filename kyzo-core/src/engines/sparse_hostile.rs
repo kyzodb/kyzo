@@ -323,14 +323,15 @@ fn total_docs_counts_base_rows_not_postings() {
     assert_eq!(sparse_total_docs(&rtx2, &empty.base).unwrap(), 0);
 }
 
-/// REVIEWER PROBE (finding evidence, not an endorsement): with a filter present
-/// and k == 0, the truncation-after-push shape returns ONE row, while the
-/// no-filter path returns zero — `k` fails to bound the filtered path at k=0.
-/// This test records the CURRENT behavior; the inherited FTS draft shares the
-/// same loop shape. A fix (guard k==0 or check before push) must flip the
-/// first assertion consciously.
+/// `k == 0` must bound the filtered path exactly like the unfiltered one:
+/// zero rows. The loop used to check `ret.len() >= k` AFTER pushing a
+/// candidate, so a filter-present search with k=0 returned one row instead
+/// of zero (the unfiltered path never showed it: it truncates `result` to
+/// `k` up front and skips the loop body entirely at k=0). Fixed by checking
+/// before pushing, in both this engine and the identical shape in FTS
+/// (`engines/fts.rs::fts_search`).
 #[test]
-fn k_zero_filter_path_returns_one_row_finding() {
+fn k_zero_filter_path_returns_zero_rows() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let docs: &[Doc] = &[(1, "a", &[(0, 1.0)])];
@@ -356,10 +357,10 @@ fn k_zero_filter_path_returns_one_row_finding() {
         &mut stack,
     )
     .unwrap();
-    assert_eq!(
-        with_filter.len(),
-        1,
-        "k=0 + filter returns 1 row (the finding)"
+    assert!(
+        with_filter.is_empty(),
+        "k=0 + filter must return 0 rows, got {}",
+        with_filter.len()
     );
     let without = sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &None, &mut stack).unwrap();
     assert!(without.is_empty(), "k=0 without filter returns 0 rows");

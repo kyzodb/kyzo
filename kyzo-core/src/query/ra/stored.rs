@@ -83,13 +83,19 @@ impl StoredRA {
         match self.storage.keyspace_kind {
             KeyspaceKind::Facts => {
                 if let Segments(Some(engine)) = segments {
-                    let seg = self.segment_at(tx, engine)?;
-                    return Ok(Box::new(SegmentScanBatches {
-                        seg,
-                        next_row: 0,
-                        pred: conjunction_pred(&self.filters),
-                        done: false,
-                    }));
+                    // `None`: the relation is too large to fit the
+                    // segment's `u32` offset encoding. A segment is an
+                    // optional acceleration structure, so this falls
+                    // through to the unsegmented scan below (which has no
+                    // such ceiling) instead of refusing the query.
+                    if let Some(seg) = self.segment_at(tx, engine)? {
+                        return Ok(Box::new(SegmentScanBatches {
+                            seg,
+                            next_row: 0,
+                            pred: conjunction_pred(&self.filters),
+                            done: false,
+                        }));
+                    }
                 }
                 Ok(Box::new(BatchTupleFilter {
                     inner: self.storage.scan_all(tx),
@@ -110,16 +116,22 @@ impl StoredRA {
     /// (the build pays the same storage scan the read would have paid,
     /// plus one dense flatten; every subsequent scan at the same witness
     /// skips LSM iteration and memcmp decode entirely).
-    fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Arc<Segment>> {
+    ///
+    /// `None` iff [`Segment::build`] declined (the relation is too large
+    /// for the `u32` offset encoding): the caller falls back to an
+    /// unsegmented scan. That path re-scans storage, but only in a case
+    /// that needs ~4.3 billion values in one relation to reach at all.
+    fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Option<Arc<Segment>>> {
         let witness = engine.witness_after_snapshot(tx, self.storage.id);
         if let Some(seg) = engine.get(self.storage.id, witness) {
-            return Ok(seg);
+            return Ok(Some(seg));
         }
         let mut rows = Vec::new();
         for t in self.storage.scan_all(tx) {
             rows.push(t?);
         }
-        Ok(engine.install(self.storage.id, Segment::build(rows.into_iter(), witness)))
+        Ok(Segment::build(rows.into_iter(), witness)
+            .map(|seg| engine.install(self.storage.id, seg)))
     }
 
     /// Batched form of [`prefix_join`](Self::prefix_join) (which dispatches

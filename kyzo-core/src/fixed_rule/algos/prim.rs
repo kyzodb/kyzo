@@ -47,6 +47,7 @@ impl FixedRule for MinimumSpanningTreePrim {
         let starting = match payload.get_input(1) {
             Err(_) => 0,
             Ok(rel) => {
+                let rel = rel.ensure_min_len(1)?;
                 let tuple = rel.iter()?.next().ok_or_else(|| {
                     #[derive(Debug, Error, Diagnostic)]
                     #[error("The provided starting nodes relation is empty")]
@@ -55,6 +56,8 @@ impl FixedRule for MinimumSpanningTreePrim {
 
                     EmptyStarting(rel.span())
                 })??;
+                // Structural: `ensure_min_len(1)` proved every tuple has a
+                // first column.
                 let dv = &tuple[0];
                 *inv_indices.get(dv).ok_or_else(|| {
                     #[derive(Debug, Error, Diagnostic)]

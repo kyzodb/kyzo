@@ -127,7 +127,11 @@
 //! of system-keyspace shapes, so no third shape appears by accident),
 //! transaction-scoped constraints, and change callbacks. The fixpoint
 //! stores' `Admitted` count (`query::levels`) is the budget's deterministic
-//! unit of account.
+//! unit of account. [`Db::run_script_json`] (`runtime::json`) is the one
+//! JSON-params-in, JSON-envelope-out surface every binding shares; it
+//! composes `data::json`'s wire format ([`DataValue`] <-> JSON, `NamedRows`
+//! <-> JSON, error reports -> JSON) rather than reimplementing it — a
+//! binding adds transport, not JSON shaping.
 //!
 //! ## Engines — the derived-index organs (`engines`)
 //!
@@ -240,6 +244,7 @@ pub(crate) mod query;
 pub(crate) mod runtime;
 pub(crate) mod storage;
 
+pub use data::json::format_error_as_json;
 pub use data::tuple::{EncodedKey, Tuple, decode_tuple_from_key, encode_tuple_key};
 pub use data::value::{
     AsOf, DataValue, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
@@ -267,3 +272,9 @@ pub use runtime::db::{Db, ScriptOptions};
 // no crate-internal type crosses the boundary.
 #[cfg(feature = "bench-internals")]
 pub mod bench_api;
+
+// A one-function façade over the crate-internal parse tier, for the
+// KyzoScript fuzz target. Gated behind the `fuzz-internals` feature so it
+// never touches the normal public surface.
+#[cfg(feature = "fuzz-internals")]
+pub mod fuzz_api;

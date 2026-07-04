@@ -625,7 +625,14 @@ impl Num {
             Num::Float(f) => {
                 // Only floats that are integral AND inside i64's exact range:
                 // a saturating `as` cast would silently corrupt an index key.
-                if f.round() == *f && (i64::MIN as f64..=i64::MAX as f64).contains(f) {
+                //
+                // `i64::MAX as f64` rounds *up* to 2^63 (the true max, 2^63-1,
+                // isn't exactly representable in f64), so comparing against it
+                // admits 2^63 itself — a value one past the real boundary that
+                // then saturates to `i64::MAX` on cast, silently fabricating a
+                // different number. Use the exact power-of-two bound instead.
+                const I64_MAX_BOUND_EXCLUSIVE: f64 = 9223372036854775808.0; // 2^63
+                if f.round() == *f && *f >= i64::MIN as f64 && *f < I64_MAX_BOUND_EXCLUSIVE {
                     Some(*f as i64)
                 } else {
                     None
@@ -825,3 +832,47 @@ impl DataValue {
 }
 
 pub(crate) const LARGEST_UTF_CHAR: char = '\u{10ffff}';
+
+#[cfg(test)]
+mod num_get_int_tests {
+    use super::Num;
+
+    #[test]
+    fn rejects_float_at_2_pow_63() {
+        // 2^63 is exactly representable in f64 and integral, but one past
+        // i64::MAX (2^63 - 1): must not silently saturate to i64::MAX.
+        let f = Num::Float(9223372036854775808.0);
+        assert_eq!(f.get_int(), None);
+    }
+
+    #[test]
+    fn rejects_float_below_i64_min() {
+        // -2^63 - 2048: the nearest f64-representable integer strictly
+        // below -2^63 (ULP doubles to 2048 past that magnitude, so
+        // "-2^63 - 1" itself isn't representable and rounds back to -2^63).
+        let f = Num::Float(-9223372036854777856.0);
+        assert_eq!(f.get_int(), None);
+    }
+
+    #[test]
+    fn accepts_i64_min_exactly() {
+        // -2^63 is exactly representable and *is* a valid i64.
+        let f = Num::Float(-9223372036854775808.0);
+        assert_eq!(f.get_int(), Some(i64::MIN));
+    }
+
+    #[test]
+    fn accepts_largest_exactly_representable_integer_below_2_pow_63() {
+        // 2^63 - 1024 is the nearest f64-representable integer strictly
+        // below 2^63, and it fits comfortably in i64.
+        let f = Num::Float(9223372036854774784.0);
+        assert_eq!(f.get_int(), Some(9223372036854774784_i64));
+    }
+
+    #[test]
+    fn accepts_ordinary_ints_and_rejects_non_integral() {
+        assert_eq!(Num::Float(42.0).get_int(), Some(42));
+        assert_eq!(Num::Float(42.5).get_int(), None);
+        assert_eq!(Num::Int(-7).get_int(), Some(-7));
+    }
+}

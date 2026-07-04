@@ -54,8 +54,8 @@ impl FixedRule for KShortestPathYen {
         cancel: CancelFlag,
     ) -> Result<()> {
         let edges = payload.get_input(0)?;
-        let starting = payload.get_input(1)?;
-        let termination = payload.get_input(2)?;
+        let starting = payload.get_input(1)?.ensure_min_len(1)?;
+        let termination = payload.get_input(2)?.ensure_min_len(1)?;
         let undirected = payload.bool_option("undirected", Some(false))?;
         let k = payload.pos_integer_option("k", None)?;
 
@@ -64,6 +64,8 @@ impl FixedRule for KShortestPathYen {
         let mut starting_nodes = BTreeSet::new();
         for tuple in starting.iter()? {
             let tuple = tuple?;
+            // Structural: `ensure_min_len(1)` proved every tuple has a
+            // first column.
             let node = &tuple[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
@@ -72,6 +74,8 @@ impl FixedRule for KShortestPathYen {
         let mut termination_nodes = BTreeSet::new();
         for tuple in termination.iter()? {
             let tuple = tuple?;
+            // Structural: `ensure_min_len(1)` proved every tuple has a
+            // first column.
             let node = &tuple[0];
             if let Some(idx) = inv_indices.get(node) {
                 termination_nodes.insert(*idx);
@@ -132,7 +136,11 @@ fn k_shortest_path_yen(
     goal: u32,
     cancel: CancelFlag,
 ) -> Result<Vec<(f32, Vec<u32>)>> {
-    let mut k_shortest: Vec<(f32, Vec<u32>)> = Vec::with_capacity(k);
+    // `k` is a caller-supplied option with no upper bound: reserving from it
+    // directly would let an absurd `k` abort the allocator before a single
+    // path is found. Grow amortized instead — the final length is the same
+    // either way.
+    let mut k_shortest: Vec<(f32, Vec<u32>)> = Vec::new();
     let mut candidates: Vec<(f32, Vec<u32>)> = vec![];
 
     match dijkstra(edges, start, &Some(goal), &(), &(), cancel.clone())?

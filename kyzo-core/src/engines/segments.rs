@@ -146,22 +146,37 @@ pub(crate) struct Segment {
     offsets: Vec<u32>,
 }
 
+/// The checked cast at the heart of [`Segment::build`]'s row-offset
+/// encoding, factored out so the u32 boundary is unit-testable without
+/// materializing the ~4.3 billion `DataValue`s it would take to actually
+/// reach it through `build`. `None` past `u32::MAX`, exactly where a bare
+/// `as u32` would silently wrap and corrupt every later row's boundaries.
+fn checked_row_end(values_len: usize) -> Option<u32> {
+    u32::try_from(values_len).ok()
+}
+
 impl Segment {
     /// Build from the rows a plain current-state scan produced, in the
     /// scan's own (key) order, at the witness taken for that scan's
     /// snapshot.
-    pub(crate) fn build(rows: impl Iterator<Item = Tuple>, built_at: Watermark) -> Self {
+    ///
+    /// `None` iff the relation's flattened value count would overflow the
+    /// `u32` offset encoding (~4.3 billion `DataValue`s in one relation): a
+    /// segment is an optional, rebuildable acceleration structure, so
+    /// declining to build one is semantically free — the caller falls back
+    /// to a normal scan, which has no such ceiling.
+    pub(crate) fn build(rows: impl Iterator<Item = Tuple>, built_at: Watermark) -> Option<Self> {
         let mut values = Vec::new();
         let mut offsets = Vec::new();
         for row in rows {
             values.extend(row);
-            offsets.push(values.len() as u32);
+            offsets.push(checked_row_end(values.len())?);
         }
-        Segment {
+        Some(Segment {
             built_at,
             values,
             offsets,
-        }
+        })
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -234,7 +249,7 @@ mod tests {
         // order, same as the scan produces.
         rows.push(vec![DataValue::from(7), DataValue::from("x")]);
         rows.push(vec![DataValue::from(7), DataValue::from("y")]);
-        let s = Segment::build(rows.clone().into_iter(), Watermark(0));
+        let s = Segment::build(rows.clone().into_iter(), Watermark(0)).unwrap();
         for a in -1..9 {
             let probe = [DataValue::from(a)];
             let got = s.prefix_range(&probe);
@@ -260,7 +275,7 @@ mod tests {
         let snapshot = (); // any open snapshot stands in
 
         let w0 = engine.witness_after_snapshot(&snapshot, rel);
-        engine.install(rel, Segment::build([row(&[1, 2])].into_iter(), w0));
+        engine.install(rel, Segment::build([row(&[1, 2])].into_iter(), w0).unwrap());
         assert!(engine.get(rel, w0).is_some(), "fresh segment serves");
 
         engine.bump_before_commit(rel);
@@ -271,7 +286,7 @@ mod tests {
             "a write orphans the segment: it must NOT serve at the new witness"
         );
 
-        let held = engine.install(rel, Segment::build([row(&[3, 4])].into_iter(), w1));
+        let held = engine.install(rel, Segment::build([row(&[3, 4])].into_iter(), w1).unwrap());
         assert!(engine.get(rel, w1).is_some(), "rebuilt segment serves");
         engine.evict(rel);
         assert!(engine.get(rel, w1).is_none(), "evicted");
@@ -280,8 +295,22 @@ mod tests {
 
     #[test]
     fn empty_segment_probes_cleanly() {
-        let s = Segment::build(std::iter::empty(), Watermark(0));
+        let s = Segment::build(std::iter::empty(), Watermark(0)).unwrap();
         assert!(s.is_empty());
         assert!(s.prefix_range(&[DataValue::from(1)]).is_empty());
+    }
+
+    /// F7: the row-offset boundary arithmetic, isolated from the ~4.3
+    /// billion-value relation it would otherwise take to reach. Before the
+    /// fix, `Segment::build` computed this as a bare `values.len() as u32`,
+    /// which wraps silently past `u32::MAX` and corrupts every later row's
+    /// boundary; `checked_row_end` is that exact cast, made total.
+    #[test]
+    fn checked_row_end_boundary() {
+        assert_eq!(checked_row_end(0), Some(0));
+        assert_eq!(checked_row_end(1), Some(1));
+        assert_eq!(checked_row_end(u32::MAX as usize), Some(u32::MAX));
+        assert_eq!(checked_row_end(u32::MAX as usize + 1), None);
+        assert_eq!(checked_row_end(usize::MAX), None);
     }
 }

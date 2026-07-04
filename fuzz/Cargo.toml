@@ -1,0 +1,47 @@
+[package]
+name = "kyzo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Its own workspace root: this crate deliberately does NOT join the parent
+# (kyzo-core) workspace, so the pure-Rust workspace's Cargo.toml/Cargo.lock
+# stay untouched by the fuzzer's own toolchain (nightly + libfuzzer-sys).
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Structured input generation for both targets: the memcmp target builds
+# arbitrary `DataValue` trees: kyzoscript_parser builds an arbitrary `&str`
+# via `arbitrary::Unstructured`'s raw-byte access, no derive needed there.
+arbitrary = { version = "1", features = ["derive"] }
+# Pinned to the exact versions kyzo-core depends on: the memcmp target
+# constructs `kyzo::UuidWrapper(uuid::Uuid)` / `kyzo::Vector::F32(Array1<f32>)`
+# / `kyzo::JsonData(serde_json::Value)` / `kyzo::RegexWrapper(regex::Regex)`
+# directly, which only type-checks if these are the same crate versions
+# kyzo-core itself resolves.
+uuid = { version = "1.8.0", features = ["v1", "v4"] }
+regex = "1.10.4"
+serde_json = "1.0.116"
+ndarray = "0.17"
+
+[dependencies.kyzo]
+path = "../kyzo-core"
+features = ["fuzz-internals"]
+
+[[bin]]
+name = "memcmp_codec"
+path = "fuzz_targets/memcmp_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kyzoscript_parser"
+path = "fuzz_targets/kyzoscript_parser.rs"
+test = false
+doc = false
+bench = false

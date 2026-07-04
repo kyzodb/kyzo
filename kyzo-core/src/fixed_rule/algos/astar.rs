@@ -46,8 +46,8 @@ impl FixedRule for ShortestPathAStar {
     ) -> Result<()> {
         let edges = payload.get_input(0)?.ensure_min_len(2)?;
         let nodes = payload.get_input(1)?;
-        let starting = payload.get_input(2)?;
-        let goals = payload.get_input(3)?;
+        let starting = payload.get_input(2)?.ensure_min_len(1)?;
+        let goals = payload.get_input(3)?.ensure_min_len(1)?;
         let mut heuristic = payload.expr_option("heuristic", None)?;
 
         let mut binding_map = nodes.get_binding_map(0);
@@ -59,6 +59,8 @@ impl FixedRule for ShortestPathAStar {
             for goal in goals.iter()? {
                 let goal = goal?;
                 let (cost, path) = astar(&start, &goal, edges, nodes, &heuristic, cancel.clone())?;
+                // Structural: `ensure_min_len(1)` on `starting`/`goals`
+                // proved every tuple has a first column.
                 out.put(vec![
                     start[0].clone(),
                     goal[0].clone(),
@@ -89,6 +91,8 @@ fn astar(
     heuristic: &Expr,
     cancel: CancelFlag,
 ) -> Result<(f64, Vec<DataValue>)> {
+    // Structural: the caller's `ensure_min_len(1)` on `starting`/`goals`
+    // proved every tuple has a first column.
     let start_node = &starting[0];
     let goal_node = &goal[0];
     let heuristic_bytecode = heuristic.compile()?;

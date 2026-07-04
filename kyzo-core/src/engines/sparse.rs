@@ -421,8 +421,21 @@ pub(crate) fn sparse_search(
         result.truncate(params.k);
     }
 
-    let mut ret = Vec::with_capacity(params.k);
+    // Cap the reservation at the real (already-materialized) candidate
+    // count: `params.k` is caller-controlled and unbounded, and reserving
+    // straight from it would let an absurd `k` abort the allocator.
+    let mut ret = Vec::with_capacity(params.k.min(result.len()));
     for (doc_key, score) in result {
+        // Checked BEFORE pushing: `k == 0` (or any k already met) must
+        // yield zero more rows, not "one past the limit" — pushing first
+        // and checking `>= k` after made `k == 0` push exactly one row
+        // whenever a filter predicate was present (mirrors the identical
+        // fix in `engines/fts.rs::fts_search`; `filter_code.is_none()`
+        // truncates `result` to `k` up front and so never hit this loop
+        // body at all, which is why the no-filter path never showed it).
+        if ret.len() >= params.k {
+            break;
+        }
         let mut cand = base.get(tx, &doc_key)?.ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
@@ -439,9 +452,6 @@ pub(crate) fn sparse_search(
             continue;
         }
         ret.push(cand);
-        if ret.len() >= params.k {
-            break;
-        }
     }
     Ok(ret)
 }

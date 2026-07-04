@@ -453,24 +453,40 @@ pub(crate) fn parse_sys(
                                 let mut expr = build_expr(opt_val, param_pool)?;
                                 expr.partial_eval()?;
                                 let v = expr.eval_to_const()?;
-                                n_gram = v.get_int().ok_or_else(|| {
+                                let v = v.get_int().ok_or_else(|| {
                                     IndexOptionError(
                                         "n_gram must be an integer".to_string(),
                                         val_span,
                                     )
-                                })? as usize;
+                                })?;
+                                ensure!(
+                                    v > 0,
+                                    IndexOptionError(
+                                        "n_gram must be positive".to_string(),
+                                        val_span
+                                    )
+                                );
+                                n_gram = v as usize;
                             }
                             "n_perm" => {
                                 n_perm_span = val_span;
                                 let mut expr = build_expr(opt_val, param_pool)?;
                                 expr.partial_eval()?;
                                 let v = expr.eval_to_const()?;
-                                n_perm = v.get_int().ok_or_else(|| {
+                                let v = v.get_int().ok_or_else(|| {
                                     IndexOptionError(
                                         "n_perm must be an integer".to_string(),
                                         val_span,
                                     )
-                                })? as usize;
+                                })?;
+                                ensure!(
+                                    v > 0,
+                                    IndexOptionError(
+                                        "n_perm must be positive".to_string(),
+                                        val_span
+                                    )
+                                );
+                                n_perm = v as usize;
                             }
                             "target_threshold" => {
                                 threshold_span = val_span;

@@ -77,10 +77,15 @@ impl FixedRule for StronglyConnectedComponent {
         let mut counter = tarjan.len() as i64;
 
         if let Ok(nodes) = payload.get_input(1) {
+            // A missing (unbound) nodes relation is the "not provided" case
+            // above and skips this block entirely; a PROVIDED nullary
+            // relation is a real error, not something to silently ignore —
+            // propagate it instead of letting the `unwrap` below panic.
+            let nodes = nodes.ensure_min_len(1)?;
             for tuple in nodes.iter()? {
                 let tuple = tuple?;
-                // Structural: rows of the nodes relation are non-empty
-                // tuples (a zero-arity input cannot bind a node column).
+                // Structural: `ensure_min_len(1)` proved every tuple has a
+                // first column.
                 let node = tuple.into_iter().next().unwrap();
                 if !inv_indices.contains_key(&node) {
                     inv_indices.insert(node.clone(), u32::MAX);

@@ -641,8 +641,20 @@ pub(crate) fn fts_search(
         result.truncate(params.k);
     }
 
-    let mut ret = Vec::with_capacity(params.k);
+    // Cap the reservation at the real (already-materialized) candidate
+    // count: `params.k` is caller-controlled and unbounded, and reserving
+    // straight from it would let an absurd `k` abort the allocator.
+    let mut ret = Vec::with_capacity(params.k.min(result.len()));
     for (doc_key, score) in result {
+        // Checked BEFORE pushing: `k == 0` (or any k already met) must
+        // yield zero more rows, not "one past the limit" — pushing first
+        // and checking `>= k` after made `k == 0` push exactly one row
+        // whenever a filter predicate was present (`filter_code.is_none()`
+        // truncates `result` to `k` up front and so never hit this loop
+        // body at all, which is why the no-filter path never showed it).
+        if ret.len() >= params.k {
+            break;
+        }
         cancel.check()?;
         let mut cand = base.get(tx, &doc_key)?.ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
@@ -660,9 +672,6 @@ pub(crate) fn fts_search(
             continue;
         }
         ret.push(cand);
-        if ret.len() >= params.k {
-            break;
-        }
     }
     Ok(ret)
 }
@@ -1172,5 +1181,59 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    /// `k == 0` must bound the filtered path exactly like the unfiltered
+    /// one: zero rows. The loop used to check `ret.len() >= k` AFTER
+    /// pushing a candidate, so a filter-present search with k=0 returned
+    /// one row instead of zero (the unfiltered path never showed it: it
+    /// truncates `result` to `k` up front and skips the loop body
+    /// entirely at k=0). Fixed by checking before pushing, in both this
+    /// engine and the identical shape in `engines/sparse.rs::sparse_search`.
+    #[test]
+    fn k_zero_filter_path_returns_zero_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let f = setup(&db, &[(1, "cat sat")]);
+        let rtx = db.read_tx().unwrap();
+        let mut stack = vec![];
+        // Always-true filter: the constant `true`.
+        let filter = vec![Bytecode::Const {
+            val: DataValue::from(true),
+            span: SourceSpan(0, 0),
+        }];
+        let p = params(0, FtsScoreKind::Tf);
+        let with_filter = fts_search(
+            &CancelFlag::default(),
+            &rtx,
+            "cat",
+            &f.base,
+            &f.idx,
+            &p,
+            &Some((filter, SourceSpan(0, 0))),
+            &mut stack,
+            &f.analyzer,
+            0,
+        )
+        .unwrap();
+        assert!(
+            with_filter.is_empty(),
+            "k=0 + filter must return 0 rows, got {}",
+            with_filter.len()
+        );
+        let without = fts_search(
+            &CancelFlag::default(),
+            &rtx,
+            "cat",
+            &f.base,
+            &f.idx,
+            &p,
+            &None,
+            &mut stack,
+            &f.analyzer,
+            0,
+        )
+        .unwrap();
+        assert!(without.is_empty(), "k=0 without filter returns 0 rows");
     }
 }

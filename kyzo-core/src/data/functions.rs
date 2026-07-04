@@ -2628,6 +2628,39 @@ pub(crate) fn str2vld(s: &str) -> Result<ValidityTs> {
     Ok(ValidityTs(Reverse(timestamp_to_micros(ts))))
 }
 
+#[derive(Debug, Error, Diagnostic)]
+#[error("bad specification of validity")]
+#[diagnostic(code(parser::bad_validity_spec))]
+pub(crate) struct BadValiditySpecification(#[label] pub(crate) crate::data::span::SourceSpan);
+
+/// Interpret an already-evaluated [`DataValue`] as a validity coordinate — an
+/// integer microsecond count, the sentinels `"NOW"`/`"END"`, or an RFC 3339
+/// string. Shared by both `@` clauses in the grammar: the read side's
+/// (`parse::query::expr2vld_spec`, evaluated once at parse time) and the
+/// write side's per-row form (`runtime::mutate`, evaluated once per output
+/// row) — one coercion law for what a validity expression may mean, however
+/// many times it ends up evaluated.
+pub(crate) fn data_value_to_vld_spec(
+    val: DataValue,
+    span: crate::data::span::SourceSpan,
+    cur_vld: ValidityTs,
+) -> Result<ValidityTs> {
+    match val {
+        DataValue::Num(n) => {
+            let microseconds = n.get_int().ok_or(BadValiditySpecification(span))?;
+            Ok(ValidityTs(Reverse(microseconds)))
+        }
+        DataValue::Str(s) => match &s as &str {
+            "NOW" => Ok(cur_vld),
+            "END" => Ok(crate::data::value::MAX_VALIDITY_TS),
+            s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(span))?),
+        },
+        _ => {
+            bail!(BadValiditySpecification(span))
+        }
+    }
+}
+
 // Nondeterministic: fresh randomness and a clock read per evaluation; never
 // constant-folded.
 define_op!(OP_RAND_UUID_V1, 0, false, false);

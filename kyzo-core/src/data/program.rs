@@ -78,7 +78,7 @@ use crate::data::expr::Expr;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::{AsOf, DataValue};
+use crate::data::value::{AsOf, DataValue, ValidityTs};
 
 // The fixed-rule tier has landed: its trait and handle live in
 // `fixed_rule/mod.rs` (the former seam declarations here re-homed there
@@ -126,6 +126,52 @@ pub(crate) enum RelationOp {
     EnsureNot,
 }
 
+/// The valid-time coordinate a mutation's rows are asserted at — the write
+/// side's `@` clause. There is no system-time counterpart here by design:
+/// the system coordinate is always the committing transaction's own
+/// engine-minted stamp (`SessionTx::system_stamp_routed`); a script has no
+/// syntax to set it, which is what keeps "system time" meaning "when the
+/// database learned this" rather than something a writer can forge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WriteValidity {
+    /// No `@` clause: every row lands at the transaction's own system
+    /// stamp — byte-for-byte the pre-`@` behavior.
+    Now,
+    /// `@ <constant>`: one valid instant for every row this mutation
+    /// writes, resolved once at parse time exactly like the read side's
+    /// single-coordinate `@`.
+    Fixed(ValidityTs),
+    /// `@ <expr over one of this mutation's own output columns>`: each row
+    /// supplies its own valid instant, extracted per row like any other
+    /// column — the backfill/import case, where every row carries its own
+    /// timestamp.
+    PerRow(Expr),
+}
+
+impl WriteValidity {
+    /// Resolve this mutation's valid coordinate for one row: `Now` is the
+    /// transaction's own system stamp (untouched pre-`@` behavior), `Fixed`
+    /// is the same instant for every row, and `PerRow` evaluates its
+    /// expression against THIS row exactly like any other column
+    /// extractor.
+    pub(crate) fn resolve(
+        &self,
+        row: &[DataValue],
+        stamp: ValidityTs,
+        cur_vld: ValidityTs,
+    ) -> Result<ValidityTs> {
+        match self {
+            WriteValidity::Now => Ok(stamp),
+            WriteValidity::Fixed(v) => Ok(*v),
+            WriteValidity::PerRow(expr) => {
+                let span = expr.span();
+                let val = expr.eval(row)?;
+                crate::data::functions::data_value_to_vld_spec(val, span, cur_vld)
+            }
+        }
+    }
+}
+
 /// The output stored relation as the query *declares* it: name, declared
 /// schema, and which head bindings feed the key and non-key columns.
 ///
@@ -157,7 +203,12 @@ pub(crate) struct QueryOutOptions {
     /// Sleep after performing the query for this number of seconds. Ignored in WASM.
     pub(crate) sleep: Option<f64>,
     pub(crate) sorters: Vec<(Symbol, SortDir)>,
-    pub(crate) store_relation: Option<(InputRelationHandle, RelationOp, ReturnMutation)>,
+    pub(crate) store_relation: Option<(
+        InputRelationHandle,
+        RelationOp,
+        ReturnMutation,
+        WriteValidity,
+    )>,
     pub(crate) assertion: Option<QueryAssertion>,
 }
 
@@ -195,6 +246,7 @@ impl Display for QueryOutOptions {
             },
             op,
             return_mutation,
+            write_vld,
         )) = &self.store_relation
         {
             if *return_mutation == ReturnMutation::Returning {
@@ -259,7 +311,13 @@ impl Display for QueryOutOptions {
                     write!(f, " = {bind}")?;
                 }
             }
-            writeln!(f, "}};")?;
+            write!(f, "}}")?;
+            match write_vld {
+                WriteValidity::Now => {}
+                WriteValidity::Fixed(ts) => write!(f, " @ {}", ts.0.0)?,
+                WriteValidity::PerRow(expr) => write!(f, " @ {expr}")?,
+            }
+            writeln!(f, ";")?;
         }
 
         if let Some(a) = &self.assertion {
@@ -793,7 +851,7 @@ impl InputProgram {
     /// The stored relation this query needs a write lock on, if any:
     /// its output relation, unless that is a temporary.
     pub(crate) fn needs_write_lock(&self) -> Option<SmartString<LazyCompact>> {
-        if let Some((h, _, _)) = &self.out_opts.store_relation {
+        if let Some((h, _, _, _)) = &self.out_opts.store_relation {
             if !h.name.is_temp_relation_name() {
                 Some(h.name.name.clone())
             } else {
@@ -2091,6 +2149,7 @@ mod tests {
                     handle(name),
                     RelationOp::Create,
                     ReturnMutation::NotReturning,
+                    WriteValidity::Now,
                 )),
                 ..Default::default()
             };

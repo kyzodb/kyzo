@@ -40,7 +40,7 @@ impl FixedRule for Bfs {
     ) -> Result<()> {
         let edges = payload.get_input(0)?.ensure_min_len(2)?;
         let nodes = payload.get_input(1)?;
-        let starting_nodes = payload.get_input(2).unwrap_or(nodes);
+        let starting_nodes = payload.get_input(2).unwrap_or(nodes).ensure_min_len(1)?;
         let limit = payload.pos_integer_option("limit", Some(1))?;
         let mut condition = payload.expr_option("condition", None)?;
         let binding_map = nodes.get_binding_map(0);
@@ -57,6 +57,8 @@ impl FixedRule for Bfs {
 
         'outer: for node_tuple in starting_nodes.iter()? {
             let node_tuple = node_tuple?;
+            // Structural: `ensure_min_len(1)` proved every tuple has a
+            // first column.
             let starting_node = &node_tuple[0];
             if visited.contains(starting_node) {
                 continue;

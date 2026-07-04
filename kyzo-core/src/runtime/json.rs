@@ -1,0 +1,136 @@
+/*
+ * Copyright 2022, The Cozo Project Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
+ * (`cozo-core/src/lib.rs`'s `run_script_fold_err`, MPL-2.0).
+ *
+ * The wire format itself — `DataValue`<->JSON, `NamedRows`<->JSON,
+ * error-report<->JSON — lives in `data::json` (it needs no live session, so
+ * it belongs with the value kernel, not the runtime tier; see that module's
+ * doc for the full account, including the `DataValue::Bot` panic fix).
+ * This file adds exactly the one piece that DOES need a live session: the
+ * entry point that runs a script and renders the result through that wire
+ * format. It composes `data::json`'s functions; it does not reimplement
+ * any JSON shaping.
+ *
+ * - [`Db::run_script_json`] takes `params` as a `&JsonValue` (must be a JSON
+ *   object) rather than a pre-built `BTreeMap<String, DataValue>`, so a
+ *   binding whose only natural representation of "the caller's parameters"
+ *   is JSON (JS, a C string, an HTTP body) never has to hand-roll the
+ *   `DataValue` conversion `data::json` already does. A non-object
+ *   `params` is reported through the same envelope as any other query
+ *   error, not a separate `Result` a caller could forget to check.
+ * - Timing (`"took"`) is `#[cfg(not(target_arch = "wasm32"))]`:
+ *   `std::time::Instant` panics on bare `wasm32-unknown-unknown` (the same
+ *   platform gap `data/value.rs`'s `current_validity` already calls out),
+ *   so on that target the field is simply absent rather than a compile
+ *   error or a stubbed zero that would silently misreport.
+ */
+
+//! [`Db::run_script_json`]: the single "JSON params in, JSON envelope out"
+//! entry point every binding shares, built on `data::json`'s wire format.
+
+use serde_json::{Map, Value as JsonValue, json};
+use std::collections::BTreeMap;
+
+use crate::data::json::format_error_as_json;
+use crate::data::value::DataValue;
+use crate::runtime::db::Db;
+use crate::storage::Storage;
+
+impl<S: Storage> Db<S> {
+    /// Run a script with JSON-encoded parameters, returning a JSON envelope
+    /// that is always `Ok` at the Rust level — the ONE "JSON in, JSON out"
+    /// entry point every binding (HTTP, WASM, C ABI) should call instead of
+    /// reimplementing this shaping:
+    ///
+    /// - success: `{"ok": true, "took": <seconds, omitted on wasm32>,
+    ///   "headers": [...], "rows": [...], "next": ...}`
+    /// - failure (bad params, parse error, budget refusal, conflict, ...):
+    ///   [`format_error_as_json`]'s envelope, always `"ok": false`.
+    ///
+    /// `params` must be a JSON object (`{"name": <value>, ...}`); anything
+    /// else is reported through the same failure envelope, not a bare
+    /// `Result` a caller could forget to check.
+    pub fn run_script_json(&self, payload: &str, params: &JsonValue) -> JsonValue {
+        #[cfg(not(target_arch = "wasm32"))]
+        let start = std::time::Instant::now();
+
+        let params: BTreeMap<String, DataValue> = match params {
+            JsonValue::Object(map) => map
+                .iter()
+                .map(|(k, v)| (k.clone(), DataValue::from(v)))
+                .collect(),
+            JsonValue::Null => BTreeMap::new(),
+            _ => {
+                return format_error_as_json(
+                    miette::miette!("query parameters must be a JSON object"),
+                    Some(payload),
+                );
+            }
+        };
+
+        match self.run_script(payload, params) {
+            Ok(rows) => {
+                let mut envelope = rows.into_json();
+                let map: &mut Map<String, JsonValue> = envelope
+                    .as_object_mut()
+                    .expect("into_json always renders an object");
+                map.insert("ok".to_string(), json!(true));
+                #[cfg(not(target_arch = "wasm32"))]
+                map.insert("took".to_string(), json!(start.elapsed().as_secs_f64()));
+                envelope
+            }
+            Err(err) => format_error_as_json(err, Some(payload)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::db::Db;
+    use crate::storage::fjall::new_fjall_storage;
+
+    #[test]
+    fn run_script_json_success_envelope_has_ok_headers_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let out = db.run_script_json("?[x] <- [[1],[2]]", &json!({}));
+        assert_eq!(out["ok"], json!(true));
+        assert_eq!(out["headers"], json!(["x"]));
+        assert_eq!(out["rows"], json!([[1], [2]]));
+    }
+
+    #[test]
+    fn run_script_json_binds_params_from_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let out = db.run_script_json("?[x] <- [[$v]]", &json!({"v": 99}));
+        assert_eq!(out["ok"], json!(true));
+        assert_eq!(out["rows"], json!([[99]]));
+    }
+
+    #[test]
+    fn run_script_json_reports_parse_error_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let out = db.run_script_json("not a valid script", &json!({}));
+        assert_eq!(out["ok"], json!(false));
+        assert!(out.get("message").is_some());
+        assert!(out.get("display").is_some());
+    }
+
+    #[test]
+    fn run_script_json_refuses_non_object_params() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        let out = db.run_script_json("?[x] <- [[1]]", &json!([1, 2, 3]));
+        assert_eq!(out["ok"], json!(false));
+    }
+}

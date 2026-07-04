@@ -50,8 +50,15 @@ impl FixedRule for DegreeCentrality {
             cancel.check()?;
         }
         if let Ok(nodes) = payload.get_input(1) {
+            // A missing (unbound) nodes relation is the "not provided" case
+            // above and skips this block entirely; a PROVIDED nullary
+            // relation is a real error, not something to silently ignore —
+            // propagate it instead of letting `tuple[0]` panic below.
+            let nodes = nodes.ensure_min_len(1)?;
             for tuple in nodes.iter()? {
                 let tuple = tuple?;
+                // Structural: `ensure_min_len(1)` proved every tuple has a
+                // first column.
                 let id = &tuple[0];
                 if !counter.contains_key(id) {
                     counter.insert(id.clone(), (0, 0, 0));

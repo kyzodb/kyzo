@@ -165,6 +165,17 @@ pub(crate) struct FixedRuleNameConflict(pub(crate) String);
 #[diagnostic(code(db::store_relation_precondition))]
 pub(crate) struct StoreRelationPrecondition(String);
 
+/// A `:timeout` (or caller-supplied deadline) that cannot become a
+/// [`Duration`]: negative, non-finite, or too large to fit. The parser only
+/// bounds `:timeout` by `> 0`, so this is the last line of defense before
+/// `Duration::from_secs_f64` would panic.
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "timeout of {0} seconds is not usable: it must be a finite, non-negative number of seconds that fits in a Duration"
+)]
+#[diagnostic(code(db::invalid_timeout))]
+pub(crate) struct InvalidTimeout(pub(crate) f64);
+
 /// The scan ceiling for `::merkle_root` when the caller sets no
 /// derived-tuple ceiling: 2^32 key-value pairs. Large enough for any store
 /// this engine has met, small enough that no scan is unbounded.
@@ -334,7 +345,7 @@ impl<S: Storage> Db<S> {
         // session-tier block; the block itself is the session author's F2
         // fix, not constraint work.
         #[allow(clippy::collapsible_if)]
-        if let Some((h, _, _)) = &program.out_opts().store_relation
+        if let Some((h, _, _, _)) = &program.out_opts().store_relation
             && h.name.is_temp_relation_name()
         {
             bail!(TempRelationNotReachableError(
@@ -516,7 +527,7 @@ impl<S: Storage> Db<S> {
     ) -> Result<NamedRows> {
         let options = tx.options.clone();
         // Pre-mutation preconditions on the output relation.
-        if let Some((meta, op, _)) = &program.out_opts().store_relation {
+        if let Some((meta, op, _, _)) = &program.out_opts().store_relation {
             let exists = tx.get_relation(&meta.name.name).is_ok();
             match op {
                 RelationOp::Create if exists => {
@@ -551,7 +562,7 @@ impl<S: Storage> Db<S> {
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
 
         match out_opts.store_relation {
-            Some((meta, op, ret)) => {
+            Some((meta, op, ret, write_vld)) => {
                 let force_collect = if ret == ReturnMutation::Returning {
                     meta.name.name.as_str()
                 } else {
@@ -564,6 +575,7 @@ impl<S: Storage> Db<S> {
                     &meta,
                     &head,
                     cur_vld,
+                    write_vld,
                     callback_targets,
                     callback_collector,
                     trigger_depth,
@@ -824,7 +836,8 @@ fn build_budget(
         .filter(|s| *s > 0.0)
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     if let Some(secs) = deadline {
-        budget = budget.with_timeout(Duration::from_secs_f64(secs));
+        let duration = Duration::try_from_secs_f64(secs).map_err(|_| InvalidTimeout(secs))?;
+        budget = budget.with_timeout(duration);
     }
     Ok(budget)
 }
@@ -956,22 +969,37 @@ impl<T: ReadTx> SessionTx<T> {
         }
     }
 
-    /// The fact's current LOGICAL row at the given valid coordinate,
-    /// routed: the versioned format's point read (a bitemporal probe under
-    /// the fact's key prefix), replacing exact-key reads for relation
-    /// rows. Under SSI in a write transaction the probe conflict-tracks
-    /// its range, so uniqueness races on the fact abort one racer.
+    /// The fact's LOGICAL row governing AT `valid`, routed: the versioned
+    /// format's point read (a bitemporal probe under the fact's key
+    /// prefix, resolved with the newest system knowledge), replacing
+    /// exact-key reads for relation rows.
+    ///
+    /// `valid` is the write's OWN target instant — "the row this write
+    /// supersedes" must mean "whatever governed the instant being
+    /// written", not some unrelated later instant a different write
+    /// happened to land at. The three write paths in `runtime/mutate.rs`
+    /// pass their own resolved `WriteValidity` coordinate; `:ensure` /
+    /// `:ensure_not` (which can never carry a `@` clause) pass
+    /// [`crate::data::value::MAX_VALIDITY_TS`] for the ordinary "does this
+    /// exist at all, right now" question. For an unspecified-`@` write
+    /// `valid` is the transaction's own system stamp, which is always at
+    /// or past every instant an ordinary (non-`@`) history could contain,
+    /// so this is byte-for-byte the old "newest ever" behavior whenever no
+    /// write anywhere has used `@` — only an explicit historical or
+    /// future-dated `@` write can make the two diverge.
+    ///
+    /// Under SSI in a write transaction the probe conflict-tracks its
+    /// range — the WHOLE fact-key prefix, independent of `valid` — so
+    /// uniqueness races on the fact abort one racer regardless of which
+    /// instant either racer targets.
     pub(crate) fn current_row_routed(
         &self,
         handle: &RelationHandle,
         key_cols: &[DataValue],
+        valid: ValidityTs,
         span: SourceSpan,
     ) -> Result<Option<Tuple>> {
-        // Current belief, whole valid axis: the write side's probes must
-        // see the newest committed claim whatever its instant — both for
-        // honest old-row transitions and because this read's range is the
-        // conflict surface that makes same-fact racers abort.
-        let as_of = AsOf::current(crate::data::value::MAX_VALIDITY_TS);
+        let as_of = AsOf::current(valid);
         if handle.is_temp {
             handle.current_row(&self.temp, key_cols, as_of, span)
         } else {
@@ -1304,6 +1332,44 @@ mod tests {
              far; a zeroed baseline would report 63 instead (and likely not refuse here at \
              all, deferring to a much later `DerivedTuples` barrier refusal at spend 120)"
         );
+    }
+
+    /// A `:timeout` so large it cannot become a `Duration` must be a clean
+    /// query error, not a panic. The parser only bounds `:timeout` by `> 0`
+    /// (`parse/query.rs`), so an absurd-but-positive value like `1e300`
+    /// reaches `build_budget` unfiltered; before the fix this called
+    /// `Duration::from_secs_f64(1e300)` directly, which panics.
+    #[test]
+    fn huge_timeout_is_a_clean_error_not_a_panic() {
+        let db = Db::new(SimStorage::new(7)).unwrap();
+        let err = db
+            .run_script("?[a] := a in [1, 2, 3] :timeout 1e300", no_params())
+            .expect_err("an unrepresentable timeout must refuse cleanly");
+        assert!(
+            err.downcast_ref::<InvalidTimeout>().is_some(),
+            "expected a typed InvalidTimeout refusal, got: {err}"
+        );
+    }
+
+    /// Same reproduction via the `ScriptOptions.timeout_secs` Rust-API path
+    /// (bypasses the parser's own `:timeout` handling entirely), and also
+    /// covers infinity — both must be refused, never panic.
+    #[test]
+    fn huge_or_infinite_timeout_via_script_options_is_a_clean_error() {
+        let db = Db::new(SimStorage::new(7)).unwrap();
+        for bad in [1e300_f64, f64::INFINITY] {
+            let opts = ScriptOptions {
+                timeout_secs: Some(bad),
+                ..Default::default()
+            };
+            let err = db
+                .run_script_with("?[a] := a in [1, 2, 3]", no_params(), opts)
+                .expect_err("an unrepresentable timeout must refuse cleanly, not panic");
+            assert!(
+                err.downcast_ref::<InvalidTimeout>().is_some(),
+                "expected a typed InvalidTimeout refusal for {bad}, got: {err}"
+            );
+        }
     }
 
     /// THE SEARCH PIPELINE END TO END: `::hnsw create` builds and backfills

@@ -1,0 +1,125 @@
+/*
+ * Copyright 2023, The Cozo Project Authors.
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
+ * (MPL-2.0). See `server/mod.rs`'s module doc for the auth-model changes
+ * (no per-request mutability, `x-kyzo-auth`, the simplified token-table
+ * check) — this file is the mechanism, that doc is the account of what
+ * changed and why. The token-table relation name (an operator-supplied
+ * `--token-table` value, not per-request attacker input) is spliced into
+ * composed KyzoScript the same way `relations.rs` splices caller-supplied
+ * relation names, so it gets the same validation — see that module's doc
+ * for why this hardens rather than closes an escalation.
+ */
+
+//! The auth gate every route (except `/`) passes through: bind address
+//! `127.0.0.1` skips it, otherwise a request needs the `x-kyzo-auth`
+//! header, an `?auth=` query parameter, or (if a token table is
+//! configured) a `Bearer` token matching a row in it.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{Request, Response, StatusCode};
+use futures::future::BoxFuture;
+use kyzo::{DataValue, Db, FjallStorage};
+use tower_http::auth::AsyncAuthorizeRequest;
+
+#[derive(Clone)]
+pub(super) struct MyAuth {
+    skip_auth: bool,
+    auth_guard: String,
+    token_table: Option<Arc<(String, Db<FjallStorage>)>>,
+}
+
+impl MyAuth {
+    pub(super) fn new(
+        skip_auth: bool,
+        auth_guard: String,
+        token_table: Option<Arc<(String, Db<FjallStorage>)>>,
+    ) -> Self {
+        Self {
+            skip_auth,
+            auth_guard,
+            token_table,
+        }
+    }
+
+    /// Does a matching `{token: <token>}` row exist in the configured
+    /// token-table relation? `false` on any error (a broken auth check
+    /// refuses, it never fails open) — including an invalid relation name,
+    /// which is an operator misconfiguration, not a request to satisfy.
+    fn token_table_authorizes(table: &(String, Db<FjallStorage>), token: &str) -> bool {
+        let (name, db) = table;
+        if crate::relations::validate_identifier(name).is_err() {
+            eprintln!("token-table auth check failed: '{name}' is not a valid relation name");
+            return false;
+        }
+        match db.run_script(
+            &format!("?[token] := *{name}{{token: $token}}"),
+            BTreeMap::from([("token".to_string(), DataValue::from(token))]),
+        ) {
+            Ok(rows) => !rows.rows.is_empty(),
+            Err(err) => {
+                eprintln!("token-table auth check failed: {err}");
+                false
+            }
+        }
+    }
+}
+
+impl AsyncAuthorizeRequest<Body> for MyAuth {
+    type RequestBody = Body;
+    type ResponseBody = Body;
+    type Future = BoxFuture<'static, Result<Request<Body>, Response<Self::ResponseBody>>>;
+
+    fn authorize(&mut self, request: Request<Body>) -> Self::Future {
+        let skip_auth = self.skip_auth;
+        let auth_guard = self.auth_guard.clone();
+        let token_table = self.token_table.clone();
+        Box::pin(async move {
+            let authorized = if skip_auth {
+                true
+            } else {
+                match request.headers().get("x-kyzo-auth") {
+                    Some(v) => v.to_str().map(|s| s == auth_guard).unwrap_or(false),
+                    None => {
+                        let via_query = request
+                            .uri()
+                            .query()
+                            .into_iter()
+                            .flat_map(|q| q.split('&'))
+                            .filter_map(|pair| pair.split_once('='))
+                            .any(|(k, v)| k == "auth" && v == auth_guard);
+                        if via_query {
+                            true
+                        } else {
+                            match (&token_table, request.headers().get("Authorization")) {
+                                (Some(tt), Some(auth_header)) => auth_header
+                                    .to_str()
+                                    .ok()
+                                    .and_then(|s| s.strip_prefix("Bearer "))
+                                    .is_some_and(|token| MyAuth::token_table_authorizes(tt, token)),
+                                _ => false,
+                            }
+                        }
+                    }
+                }
+            };
+            if authorized {
+                Ok(request)
+            } else {
+                Err(Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body(Body::empty())
+                    .unwrap())
+            }
+        })
+    }
+}

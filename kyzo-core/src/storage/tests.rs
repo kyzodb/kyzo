@@ -106,8 +106,15 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Vec(Vector::F32(ndarray::arr1(&[-2.5f32, 0.5, 1.0]))),
         DataValue::Vec(Vector::F32(ndarray::arr1(&[1.0f32]))),
         DataValue::Vec(Vector::F32(ndarray::arr1(&[f32::NAN]))),
+        // Signed zero: `OrderedFloat` treats -0.0 == 0.0 (unlike scalar
+        // `Num`, which distinguishes them below), so these two must encode
+        // byte-identically — see `law_vector_signed_zero_canonicalizes`.
+        DataValue::Vec(Vector::F32(ndarray::arr1(&[-0.0f32]))),
+        DataValue::Vec(Vector::F32(ndarray::arr1(&[0.0f32]))),
         DataValue::Vec(Vector::F64(ndarray::arr1(&[-7.5f64]))),
         DataValue::Vec(Vector::F64(ndarray::arr1(&[0.25f64, -7.5]))),
+        DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64]))),
+        DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64]))),
         DataValue::Json(JsonData(serde_json::json!({"a": 1}))),
         DataValue::Json(JsonData(serde_json::json!([1, 2, 3]))),
         DataValue::Validity(Validity {
@@ -227,6 +234,52 @@ proptest! {
     fn law3_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
         let _ = DataValue::decode_from_key(&bytes);
     }
+}
+
+/// Signed zero in a `Vector` lane: `-0.0` and `+0.0` are semantically Equal
+/// under `Vector`'s `OrderedFloat`-based `Ord`/`PartialEq` (unlike scalar
+/// `Num`, which uses `total_cmp` and legitimately orders `-0.0 < +0.0` — see
+/// `order_encode_f64`'s doc comment). The encoding must therefore produce
+/// byte-identical, equally-ordered keys for `-0.0` and `+0.0` inside a
+/// vector, exactly as it already does for the two NaN encodings.
+#[test]
+fn law_vector_signed_zero_canonicalizes() {
+    let neg_f32 = DataValue::Vec(Vector::F32(ndarray::arr1(&[-0.0f32])));
+    let pos_f32 = DataValue::Vec(Vector::F32(ndarray::arr1(&[0.0f32])));
+    assert_eq!(neg_f32.cmp(&pos_f32), std::cmp::Ordering::Equal);
+    assert_eq!(
+        encode(&neg_f32),
+        encode(&pos_f32),
+        "-0.0 and +0.0 are semantically Equal in a Vector lane but encoded to different bytes"
+    );
+
+    let neg_f64 = DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64])));
+    let pos_f64 = DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64])));
+    assert_eq!(neg_f64.cmp(&pos_f64), std::cmp::Ordering::Equal);
+    assert_eq!(
+        encode(&neg_f64),
+        encode(&pos_f64),
+        "-0.0 and +0.0 are semantically Equal in a Vector lane but encoded to different bytes"
+    );
+
+    // Mixed sign, multi-element: only the zero lane should collapse.
+    let neg_mixed = DataValue::Vec(Vector::F32(ndarray::arr1(&[-1.5f32, -0.0, 2.5])));
+    let pos_mixed = DataValue::Vec(Vector::F32(ndarray::arr1(&[-1.5f32, 0.0, 2.5])));
+    assert_eq!(neg_mixed.cmp(&pos_mixed), std::cmp::Ordering::Equal);
+    assert_eq!(encode(&neg_mixed), encode(&pos_mixed));
+}
+
+/// Scalar `Num::Float` deliberately does NOT canonicalize signed zero:
+/// `Num::cmp` uses `total_cmp`, which orders `-0.0` strictly below `+0.0`,
+/// so the two must stay distinguishable — this pins that design decision so
+/// a future change to `Vector` canonicalization can't accidentally leak into
+/// the scalar path.
+#[test]
+fn law_scalar_num_signed_zero_stays_distinct() {
+    let neg = DataValue::Num(Num::Float(-0.0));
+    let pos = DataValue::Num(Num::Float(0.0));
+    assert_eq!(neg.cmp(&pos), std::cmp::Ordering::Less);
+    assert!(encode(&neg) < encode(&pos));
 }
 
 // ---------- KV contract vs a model oracle ----------
