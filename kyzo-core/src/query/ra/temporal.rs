@@ -68,21 +68,27 @@
 //!
 //! ## The signed-fact currency (story #77)
 //!
-//! [`SignedFact`]/[`compose`] are the PRODUCTION twin of `query/laws.rs`'s
-//! oracle-only `SignedFact`/`compose` — the Z-set patch algebra (signed
-//! multiplicity with cancellation) `laws.rs` proved as an executable law
-//! was, until this story, wired into zero production code: [`DeltaRA`]
-//! computed the same two-set difference but tagged its output with a bare
-//! `DataValue::Num` sign column, never through a real typed currency. This
-//! is a currency change ONLY, not an algorithm change: `iter_batched`
-//! below still resolves two full snapshots and differences them (the
-//! naive-by-ruling algorithm this module's doc names above, whose
-//! acceleration is #62 chunk 4's scope, not this story's) — it just
-//! carries its intermediate result as `SignedFact`s instead of
-//! pre-flattened rows, so `compose` is now a real, callable, tested
-//! production primitive future composition work (#62 chunk 4's
-//! acceleration seam, #61's standing-query patch application) can build
-//! on instead of reinventing.
+//! [`SignedFact`] is the PRODUCTION twin of `query/laws.rs`'s oracle-only
+//! `SignedFact` — the Z-set patch algebra (signed multiplicity with
+//! cancellation) `laws.rs` proved as an executable law was, until this
+//! story, wired into zero production code: [`DeltaRA`] computed the same
+//! two-set difference but tagged its output with a bare `DataValue::Num`
+//! sign column, never through a real typed currency. This is a currency
+//! change ONLY, not an algorithm change: `iter_batched` below still
+//! resolves two full snapshots and differences them (the naive-by-ruling
+//! algorithm this module's doc names above, whose acceleration is #62
+//! chunk 4's scope, not this story's) — it just carries its intermediate
+//! result as `SignedFact`s instead of pre-flattened rows.
+//!
+//! [`compose`] is proven here — differentialed against `laws.rs::compose`
+//! on real engine output, both directions of the cancellation law, in
+//! `query/time_travel_trials.rs` — but has NO production caller yet:
+//! nothing in this engine composes two already-computed diffs today (a
+//! single `DeltaRA` evaluation only ever produces one diff, never reuses
+//! another). It is the tested law, awaiting its consumer, not a
+//! production-exercised accelerator — that consumer is #62 chunk 4's
+//! posting-index seam (already reserved at this operator's constructor,
+//! see above) or #61's standing-query patch application, not this story.
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Result, bail, miette};
