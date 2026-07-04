@@ -104,7 +104,7 @@ pub(crate) fn parse_fts_query(q: &str) -> Result<FtsExpr> {
     // at pest's reported location (the same conversion the script parser
     // uses) instead of passing the span-less pest rendering through
     // `into_diagnostic`.
-    let parsed = ScriptParser::parse(Rule::fts_doc, q).map_err(ParseError::from_pest)?;
+    let parsed = ScriptParser::parse(Rule::fts_doc, q).map_err(|e| ParseError::from_pest(e, q))?;
     let pairs = single(parsed, "the parsed fts_doc", Rule::fts_doc)?.into_inner();
     // One operator budget for the whole query, threaded through every
     // nesting level.

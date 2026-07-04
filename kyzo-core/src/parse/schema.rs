@@ -47,8 +47,9 @@ pub(crate) fn parse_schema(
     let mut seen_names = BTreeSet::new();
 
     #[derive(Debug, Error, Diagnostic)]
-    #[error("Column {0} is defined multiple times")]
+    #[error("column `{0}` is declared twice")]
     #[diagnostic(code(parser::dup_name_in_cols))]
+    #[diagnostic(help("every column — key or dependent — needs a name unique in the relation"))]
     struct DuplicateNameInCols(String, #[label] SourceSpan);
     for p in src.expect("the key columns")?.into_inner() {
         let span = p.extract_span();
@@ -141,8 +142,12 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
                     let dv = expr.eval_to_const()?;
 
                     #[derive(Debug, Error, Diagnostic)]
-                    #[error("Bad specification of list length in type: {0:?}")]
+                    #[error("a list type's length must be a non-negative integer, got {0:?}")]
                     #[diagnostic(code(parser::bad_list_len_in_type))]
+                    #[diagnostic(help(
+                        "write the fixed length as a plain integer, e.g. `[Int; 3]`, or omit \
+                         it for a variable-length list, e.g. `[Int]`"
+                    ))]
                     struct BadListLenSpec(DataValue, #[label] SourceSpan);
 
                     let n = dv.get_int().ok_or(BadListLenSpec(dv, span))?;

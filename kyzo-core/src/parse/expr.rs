@@ -74,16 +74,25 @@ static PRATT_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("Invalid expression encountered")]
+#[error("this doesn't parse as an expression")]
 #[diagnostic(code(parser::invalid_expression))]
+#[diagnostic(help(
+    "expressions are literals, `$params`, `var`s, `[lists]`, `{{objects}}`, operators \
+     (`a + b`, `not x`, …), or function calls (`f(a, b)`)"
+))]
 pub(crate) struct InvalidExpression(#[label] pub(crate) SourceSpan);
 
 /// An integer literal that does not fit in `i64`. One error for every
 /// radix: the CozoDB original raised it only on the decimal path and
 /// *panicked* on `0x`/`0o`/`0b` overflow (`parse/expr.rs:427`).
 #[derive(Error, Diagnostic, Debug)]
-#[error("Cannot parse integer")]
+#[error("integer literal out of range")]
 #[diagnostic(code(parser::bad_pos_int))]
+#[diagnostic(help(
+    "KyzoScript integers are 64-bit signed (-9223372036854775808..=9223372036854775807); \
+     a bigger constant needs `$parameter` binding to an arbitrary-precision `Float` or a \
+     `String`, not a literal"
+))]
 struct BadIntError(#[label] SourceSpan);
 
 /// Is this pair one of `expr`'s operator children? Each one costs a level
@@ -240,8 +249,12 @@ fn build_term(
         },
         Rule::param => {
             #[derive(Error, Diagnostic, Debug)]
-            #[error("Required parameter {0} not found")]
+            #[error("`${0}` was never bound")]
             #[diagnostic(code(parser::param_not_found))]
+            #[diagnostic(help(
+                "pass a value for `{0}` in the parameter map the script runs with, or write \
+                 the value as a literal instead of `${0}` if it never varies"
+            ))]
             struct ParamNotFoundError(String, #[label] SourceSpan);
 
             let param_str = strip_sigil(&pair, '$')?;
@@ -278,8 +291,12 @@ fn build_term(
         },
         Rule::dot_float | Rule::sci_float => {
             #[derive(Error, Diagnostic, Debug)]
-            #[error("Cannot parse float")]
+            #[error("this float literal doesn't parse as an `f64`")]
             #[diagnostic(code(parser::bad_float))]
+            #[diagnostic(help(
+                "the grammar accepted the shape but the digits don't form a valid IEEE-754 \
+                 `f64` (check the exponent and any `_` digit-group separators)"
+            ))]
             struct BadFloatError(#[label] SourceSpan);
 
             let f = pair
@@ -349,8 +366,13 @@ fn build_term(
                 "cond" => {
                     if args.is_empty() {
                         #[derive(Error, Diagnostic, Debug)]
-                        #[error("'cond' cannot have empty body")]
+                        #[error("`cond()` has no clauses")]
                         #[diagnostic(code(parser::empty_cond))]
+                        #[diagnostic(help(
+                            "`cond` needs alternating condition/value pairs, e.g. \
+                             `cond(x > 0, 'positive', x < 0, 'negative', 'zero')` — the \
+                             trailing unpaired value is the default"
+                        ))]
                         struct EmptyCond(#[label] SourceSpan);
                         bail!(EmptyCond(span));
                     }
@@ -393,8 +415,12 @@ fn build_term(
                 }
                 "if" => {
                     #[derive(Debug, Error, Diagnostic)]
-                    #[error("wrong number of arguments to if: 2 or 3 required")]
+                    #[error("`if()` needs 2 or 3 arguments")]
                     #[diagnostic(code(parser::bad_if))]
+                    #[diagnostic(help(
+                        "`if(cond, then)` or `if(cond, then, else)` — for more than one \
+                         branch, use `cond(c1, v1, c2, v2, …, default)` instead"
+                    ))]
                     struct WrongArgsToIf(#[label] SourceSpan);
 
                     let mut args = args.into_iter();
@@ -447,7 +473,7 @@ fn build_term(
                     Some(op) => {
                         op.post_process_args(&mut args);
                         #[derive(Error, Diagnostic, Debug)]
-                        #[error("Wrong number of arguments for function '{0}'")]
+                        #[error("`{0}` got the wrong number of arguments")]
                         #[diagnostic(code(parser::func_wrong_num_args))]
                         struct WrongNumArgsError(String, #[label] SourceSpan, #[help] String);
 
@@ -456,7 +482,11 @@ fn build_term(
                             WrongNumArgsError(
                                 ident.to_string(),
                                 span,
-                                format!("Need {} argument(s)", op.arity_requirement())
+                                format!(
+                                    "`{ident}` takes {}; {} given",
+                                    op.arity_requirement(),
+                                    args.len()
+                                )
                             )
                         );
                         Expr::Apply {
@@ -499,13 +529,22 @@ pub(crate) fn parse_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
 }
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("invalid UTF8 code {0}")]
+#[error("`\\u{0:04x}` is not a valid Unicode code point")]
 #[diagnostic(code(parser::invalid_utf8_code))]
+#[diagnostic(help(
+    "Unicode code points run 0..=0x10FFFF, excluding the UTF-16 surrogate range \
+     0xD800..=0xDFFF"
+))]
 struct InvalidUtf8Error(u32, #[label] SourceSpan);
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("invalid escape sequence {0}")]
+#[error("`{0}` is not a recognized escape sequence")]
 #[diagnostic(code(parser::invalid_escape_seq))]
+#[diagnostic(help(
+    r#"valid escapes: `\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX` — or use a \
+     raw string (`_"…"_`, fenced with as many `_` as needed), where `\` has no special \
+     meaning"#
+))]
 struct InvalidEscapeSeqError(String, #[label] SourceSpan);
 
 fn parse_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {

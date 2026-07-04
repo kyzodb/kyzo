@@ -74,31 +74,43 @@ use crate::fixed_rule::utilities::Constant;
 // ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("Query option {0} is not constant")]
+#[error("`:{0}` must evaluate to a constant")]
 #[diagnostic(code(parser::option_not_constant))]
+#[diagnostic(help(
+    "options are evaluated once, at parse time, before any row exists — the expression can't \
+     reference row variables or aggregations; see the attached cause for what stopped it \
+     from folding to a constant"
+))]
 struct OptionNotConstantError(&'static str, #[label] SourceSpan, #[related] [Report; 1]);
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("Query option {0} requires a non-negative integer")]
+#[error("`:{0}` needs a non-negative integer")]
 #[diagnostic(code(parser::option_not_non_neg))]
+#[diagnostic(help("`:{0}` takes an integer that is 0 or greater"))]
 struct OptionNotNonNegIntError(&'static str, #[label] SourceSpan);
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("Query option {0} requires a positive integer")]
+#[error("`:{0}` needs a positive integer")]
 #[diagnostic(code(parser::option_not_pos))]
+#[diagnostic(help("`:{0}` takes an integer greater than 0"))]
 struct OptionNotPosIntError(&'static str, #[label] SourceSpan);
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("Query option {0} requires a boolean")]
+#[error("`:{0}` needs a boolean")]
 #[diagnostic(code(parser::option_not_bool))]
+#[diagnostic(help("write `:{0} true` or `:{0} false`"))]
 struct OptionNotBoolError(&'static str, #[label] SourceSpan);
 
 #[derive(Debug)]
 struct MultipleRuleDefinitionError(String, Vec<SourceSpan>);
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("Multiple query output assertions defined")]
+#[error("this query asserts its output relation more than once")]
 #[diagnostic(code(parser::multiple_out_assert))]
+#[diagnostic(help(
+    "a script has exactly one entry point — one `?[...] := …` (or `<-`/`<~`) — pick one and \
+     fold the rest into rules the entry calls"
+))]
 struct DuplicateQueryAssertion(#[label] SourceSpan);
 
 impl Error for MultipleRuleDefinitionError {}
@@ -107,7 +119,8 @@ impl Display for MultipleRuleDefinitionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "The rule '{0}' cannot have multiple definitions since it contains non-Horn clauses",
+            "`{0}` is defined more than once, and at least one definition isn't a plain \
+             Horn clause (it has aggregation, or is a fixed rule)",
             self.0
         )
     }
@@ -116,6 +129,14 @@ impl Display for MultipleRuleDefinitionError {
 impl Diagnostic for MultipleRuleDefinitionError {
     fn code<'a>(&'a self) -> Option<Box<dyn Display + 'a>> {
         Some(Box::new("parser::mult_rule_def"))
+    }
+    fn help<'a>(&'a self) -> Option<Box<dyn Display + 'a>> {
+        Some(Box::new(format!(
+            "only plain rules (`{0}[...] := body`, no aggregation) may share a name across \
+             multiple definitions — a fixed rule or an aggregating rule must be the only \
+             definition of `{0}`",
+            self.0
+        )))
     }
     fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
         Some(Box::new(
@@ -241,8 +262,13 @@ pub(crate) fn parse_query(
                 }
 
                 #[derive(Debug, Error, Diagnostic)]
-                #[error("Constant rules cannot have aggregation application")]
+                #[error("a constant rule's head can't apply an aggregation")]
                 #[diagnostic(code(parser::aggr_in_const_rule))]
+                #[diagnostic(help(
+                    "`head <- value` binds `value`'s rows verbatim — there is nothing to \
+                     aggregate over; drop the aggregation from the head, or use a real rule \
+                     (`head := body`) if you need it"
+                ))]
                 struct AggrInConstRuleError(#[label] SourceSpan);
 
                 for (a, v) in aggr.iter().zip(head.iter()) {
@@ -533,8 +559,9 @@ pub(crate) fn parse_query(
 
     if !prog.out_opts().sorters.is_empty() {
         #[derive(Debug, Error, Diagnostic)]
-        #[error("Sort key '{0}' not found")]
+        #[error("`:sort`/`:order` names `{0}`, which isn't a head column")]
         #[diagnostic(code(parser::sort_key_not_found))]
+        #[diagnostic(help("a sort key must be one of the entry rule's own head variables"))]
         struct SortKeyNotFound(String, #[label] SourceSpan);
 
         let head_args = prog.get_entry_out_head()?;
@@ -548,8 +575,12 @@ pub(crate) fn parse_query(
     }
 
     #[derive(Debug, Error, Diagnostic)]
-    #[error("Input relation '{0}' has no keys")]
+    #[error("`{0}` declares dependent columns but no key column")]
     #[diagnostic(code(parser::relation_has_no_keys))]
+    #[diagnostic(help(
+        "every stored relation needs at least one key column before `=>`, e.g. \
+         `{0} {{id => value}}`, not `{0} {{=> value}}`"
+    ))]
     struct RelationHasNoKeys(String, #[label] SourceSpan);
 
     let empty_mutation_head = match &prog.out_opts().store_relation {
@@ -634,6 +665,7 @@ enum RawWriteValidity {
     "a write's `@` clause takes exactly one coordinate (the valid instant); system time is never script-settable"
 )]
 #[diagnostic(code(parser::write_validity_sets_system))]
+#[diagnostic(help("write `@ instant` (one coordinate), not `@ system, instant`"))]
 struct WriteValiditySetsSystemTime(#[label] SourceSpan);
 
 /// `:ensure`/`:ensure_not` only read current state; they perform no
@@ -641,6 +673,7 @@ struct WriteValiditySetsSystemTime(#[label] SourceSpan);
 #[derive(Debug, Error, Diagnostic)]
 #[error("`@` has no effect on `{0}`, which checks current state and writes nothing")]
 #[diagnostic(code(parser::write_validity_on_non_write_op))]
+#[diagnostic(help("drop the `@` clause; `{0}` performs no bitemporal write for it to date"))]
 struct WriteValidityOnNonWriteOp(&'static str, #[label] SourceSpan);
 
 /// `valid = i64::MAX` (`'END'`, or the literal microsecond itself) is the
@@ -747,8 +780,9 @@ fn parse_rule(
     let (name, head, aggr) = parse_rule_head(head, param_pool)?;
 
     #[derive(Debug, Error, Diagnostic)]
-    #[error("Horn-clause rule cannot have empty rule head")]
+    #[error("a rule head needs at least one column")]
     #[diagnostic(code(parser::empty_horn_rule_head))]
+    #[diagnostic(help("name at least one output variable, e.g. `name[x] := …`"))]
     struct EmptyRuleHead(#[label] SourceSpan);
 
     ensure!(!head.is_empty(), EmptyRuleHead(head_span));
@@ -909,13 +943,17 @@ fn parse_atom(
             let name_segs = name_p.as_str().split(':').collect_vec();
 
             #[derive(Debug, Error, Diagnostic)]
-            #[error("Search head must be of the form `relation_name:index_name`")]
+            #[error("`~{0}` isn't `relation:index`")]
             #[diagnostic(code(parser::invalid_search_head))]
-            struct InvalidSearchHead(#[label] SourceSpan);
+            #[diagnostic(help(
+                "a search atom names the base relation and the index together, e.g. \
+                 `~doc:emb{{…}}` for the `emb` index on `doc`"
+            ))]
+            struct InvalidSearchHead(String, #[label] SourceSpan);
 
             ensure!(
                 name_segs.len() == 2,
-                InvalidSearchHead(name_p.extract_span())
+                InvalidSearchHead(name_p.as_str().to_string(), name_p.extract_span())
             );
             let relation = Symbol::new(name_segs[0], name_p.extract_span());
             let index = Symbol::new(name_segs[1], name_p.extract_span());
@@ -1105,8 +1143,73 @@ fn parse_rule_head(
 
 #[derive(Error, Diagnostic, Debug)]
 #[diagnostic(code(parser::aggr_not_found))]
-#[error("Aggregation '{0}' not found")]
-struct AggrNotFound(String, #[label] SourceSpan);
+#[error("`{0}` isn't a known aggregation")]
+struct AggrNotFound(String, #[label] SourceSpan, #[help] Option<String>);
+
+/// The common built-in aggregations, for the "did you mean" hint on
+/// [`AggrNotFound`] only. `parse_aggr` (`data/aggr.rs`) plus the sketch
+/// aggregations it defers to are the actual source of truth for what a
+/// script may name; if this list ever drifts from that, the failure mode is
+/// a weaker hint, never a wrong refusal.
+const COMMON_AGGR_NAMES: &[&str] = &[
+    "count",
+    "count_unique",
+    "sum",
+    "product",
+    "mean",
+    "variance",
+    "std_dev",
+    "min",
+    "max",
+    "unique",
+    "collect",
+    "group_count",
+    "union",
+    "intersection",
+    "choice",
+    "choice_rand",
+    "shortest",
+    "min_cost",
+    "bit_and",
+    "bit_or",
+    "bit_xor",
+    "latest_by",
+    "smallest_by",
+    "and",
+    "or",
+];
+
+/// The closest [`COMMON_AGGR_NAMES`] entry to `name`, offered only when it's
+/// close enough to plausibly be a typo rather than an unrelated word.
+fn suggest_aggr(name: &str) -> Option<String> {
+    COMMON_AGGR_NAMES
+        .iter()
+        .map(|&candidate| (candidate, edit_distance(name, candidate)))
+        .filter(|&(_, distance)| distance <= 2)
+        .min_by_key(|&(_, distance)| distance)
+        .map(|(candidate, _)| format!("did you mean `{candidate}`?"))
+}
+
+/// Levenshtein edit distance, for typo suggestions only (no crate pulled in
+/// for one small function over short identifiers).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, &ca) in a.iter().enumerate() {
+        let mut cur = vec![0usize; b.len() + 1];
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            cur[j + 1] = if ca == cb {
+                prev[j]
+            } else {
+                1 + prev[j].min(prev[j + 1]).min(cur[j])
+            };
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
 
 fn parse_rule_head_arg(
     src: Pair<'_>,
@@ -1127,7 +1230,11 @@ fn parse_rule_head_arg(
                 Symbol::new(var.as_str(), var.extract_span()),
                 Some((
                     parse_aggr(aggr_name).ok_or_else(|| {
-                        AggrNotFound(aggr_name.to_string(), aggr_p.extract_span())
+                        AggrNotFound(
+                            aggr_name.to_string(),
+                            aggr_p.extract_span(),
+                            suggest_aggr(aggr_name),
+                        )
                     })?,
                     args,
                 )),
@@ -1148,14 +1255,22 @@ fn parse_fixed_rule(
         parse_rule_head(src.expect("the fixed rule's head")?, param_pool)?;
 
     #[derive(Debug, Error, Diagnostic)]
-    #[error("fixed rule cannot be combined with aggregation")]
+    #[error("a fixed rule's head can't apply an aggregation")]
     #[diagnostic(code(parser::fixed_aggr_conflict))]
+    #[diagnostic(help(
+        "a fixed rule (`head <~ Algo(...)`) names its own output columns; wrap its result in \
+         a further rule if you need to aggregate over them"
+    ))]
     struct AggrInFixedError(#[label] SourceSpan);
 
     #[derive(Debug, Error, Diagnostic)]
-    #[error("fixed rule cannot have duplicate bindings")]
+    #[error("`{0}` is bound twice in this fixed-rule invocation")]
     #[diagnostic(code(parser::duplicate_bindings_for_fixed_rule))]
-    struct DuplicateBindingError(#[label] SourceSpan);
+    #[diagnostic(help(
+        "each argument relation's bindings share one namespace across the whole invocation; \
+         rename one occurrence, or bind it as `_` if the value doesn't matter there"
+    ))]
+    struct DuplicateBindingError(String, #[label] SourceSpan);
 
     for (a, v) in aggr.iter().zip(head.iter()) {
         ensure!(a.is_none(), AggrInFixedError(v.span))
@@ -1190,7 +1305,7 @@ fn parse_fixed_rule(
                                 bindings.push(symb);
                             } else {
                                 if !seen_bindings.insert(s) {
-                                    bail!(DuplicateBindingError(v.extract_span()))
+                                    bail!(DuplicateBindingError(s.to_string(), v.extract_span()))
                                 }
                                 let symb = Symbol::new(s, v.extract_span());
                                 bindings.push(symb);
@@ -1220,7 +1335,10 @@ fn parse_fixed_rule(
                                         bindings.push(symb);
                                     } else {
                                         if !seen_bindings.insert(s) {
-                                            bail!(DuplicateBindingError(v.extract_span()))
+                                            bail!(DuplicateBindingError(
+                                                s.to_string(),
+                                                v.extract_span()
+                                            ))
                                         }
                                         bindings.push(Symbol::new(v.as_str(), v.extract_span()))
                                     }
@@ -1254,13 +1372,19 @@ fn parse_fixed_rule(
                                     let v = match vs.next() {
                                         Some(vp) => {
                                             if !seen_bindings.insert(vp.as_str()) {
-                                                bail!(DuplicateBindingError(vp.extract_span()))
+                                                bail!(DuplicateBindingError(
+                                                    vp.as_str().to_string(),
+                                                    vp.extract_span()
+                                                ))
                                             }
                                             Symbol::new(vp.as_str(), vp.extract_span())
                                         }
                                         None => {
                                             if !seen_bindings.insert(kp.as_str()) {
-                                                bail!(DuplicateBindingError(kp.extract_span()))
+                                                bail!(DuplicateBindingError(
+                                                    kp.as_str().to_string(),
+                                                    kp.extract_span()
+                                                ))
                                             }
                                             Symbol::new(k.clone(), kp.extract_span())
                                         }
@@ -1331,14 +1455,18 @@ fn parse_fixed_rule(
 }
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("Fixed rule head arity mismatch")]
+#[error("the rule head names {1} column(s), but the fixed rule produces {0}")]
 #[diagnostic(code(parser::fixed_rule_head_arity_mismatch))]
-#[diagnostic(help("Expected arity: {0}, number of arguments given: {1}"))]
+#[diagnostic(help(
+    "either write exactly {0} head column(s) (`head[c1, c2, …]`), or omit the head columns \
+     entirely and let the fixed rule name them"
+))]
 struct FixedRuleHeadArityMismatch(usize, usize, #[label] SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("Encountered empty row for constant rule")]
+#[error("a constant rule's rows can't be zero columns wide")]
 #[diagnostic(code(parser::const_rule_empty_row))]
+#[diagnostic(help("`head <- value` needs `value` to be rows of at least one column each"))]
 struct EmptyRowForConstRule(#[label] SourceSpan);
 
 /// The synthetic entry of a body-less `:create`: a `Constant` rule with no

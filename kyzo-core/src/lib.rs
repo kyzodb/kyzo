@@ -244,6 +244,12 @@ pub(crate) mod query;
 pub(crate) mod runtime;
 pub(crate) mod storage;
 
+// Trial (issue #34): single-node SSI serializability checker. Test-only,
+// touches no engine source — consumes the public `Storage`/`Db` surface
+// exactly as an outside caller would (see the module docs for scope).
+#[cfg(test)]
+mod jepsen_trials;
+
 pub use data::json::format_error_as_json;
 pub use data::tuple::{EncodedKey, Tuple, decode_tuple_from_key, encode_tuple_key};
 pub use data::value::{

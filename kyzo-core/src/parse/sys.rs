@@ -201,8 +201,9 @@ pub enum HnswDistance {
 /// A `::kill` argument that evaluates to a non-integer value. Spanned at the
 /// argument expression, replacing the CozoDB original's span-less `miette!`.
 #[derive(Debug, Error, Diagnostic)]
-#[error("Process ID must be an integer")]
+#[error("`::kill` needs a process ID, not this")]
 #[diagnostic(code(parser::kill_pid_not_integer))]
+#[diagnostic(help("write the process ID as an integer literal or a `$parameter` bound to one"))]
 struct ProcessIdNotInteger(#[label("this must evaluate to an integer process ID")] SourceSpan);
 
 /// A rejected option in an `::hnsw`/`::fts`/`::lsh` index-DDL clause,
@@ -820,8 +821,11 @@ pub(crate) fn parse_sys(
                         .collect_vec();
 
                     #[derive(Debug, Diagnostic, Error)]
-                    #[error("index must have at least one column specified")]
+                    #[error("`::index create` needs at least one column")]
                     #[diagnostic(code(parser::empty_index))]
+                    #[diagnostic(help(
+                        "name the columns to index, e.g. `::index create rel:idx {{col1, col2}}`"
+                    ))]
                     struct EmptyIndex(#[label] SourceSpan);
 
                     ensure!(!cols.is_empty(), EmptyIndex(span));

@@ -479,24 +479,289 @@ impl Script {
 
 /// The input did not match the grammar at all: the user's error, labeled at
 /// the offending position. (Distinct from [`GrammarShapeError`], which is
-/// ours.)
+/// ours.) This is the single funnel every syntax mistake in KyzoScript
+/// passes through, so it is the highest-leverage diagnostic in the
+/// language: `summary`/`label` translate pest's expected-rule set into
+/// KyzoScript's own vocabulary via [`describe_expected`] (never a bare
+/// `Rule::foo` debug print), and `help` — when the mistake reads as
+/// SQL — points at the KyzoScript idiom instead of just refusing it
+/// (`sql_refugee_hint`): SQL muscle memory is the most common on-ramp
+/// error for a Datalog newcomer.
 #[derive(thiserror::Error, Diagnostic, Debug)]
-#[error("The query parser has encountered unexpected input / end of input at {span}")]
+#[error("{summary}")]
 #[diagnostic(code(parser::pest))]
 pub(crate) struct ParseError {
-    #[label]
+    summary: String,
+    #[label("{label}")]
     pub(crate) span: SourceSpan,
+    label: String,
+    #[help]
+    help: Option<String>,
 }
 
 impl ParseError {
-    /// Convert pest's location report into our spanned error.
-    fn from_pest(err: pest::error::Error<Rule>) -> Self {
-        let span = match err.location {
-            InputLocation::Pos(p) => SourceSpan(p, 0),
-            InputLocation::Span((start, end)) => SourceSpan(start, end - start),
+    /// Convert pest's location + expected-rule report into our spanned,
+    /// designed error. `src` is the whole program text: needed both to
+    /// quote the offending token and to scan for a SQL-shaped mistake.
+    fn from_pest(err: pest::error::Error<Rule>, src: &str) -> Self {
+        let start = match err.location {
+            InputLocation::Pos(p) => p,
+            InputLocation::Span((start, _)) => start,
         };
-        ParseError { span }
+        let end = match err.location {
+            InputLocation::Pos(p) => p,
+            InputLocation::Span((_, end)) => end,
+        };
+        let span = SourceSpan(start, end - start);
+        let expected = match &err.variant {
+            pest::error::ErrorVariant::ParsingError { positives, .. } => {
+                describe_expected(positives)
+            }
+            pest::error::ErrorVariant::CustomError { message } => Some(message.clone()),
+        };
+        let offending = src.get(start..end.max(start).min(src.len())).unwrap_or("");
+        let offending = offending.trim();
+        let summary = match (offending.is_empty(), &expected) {
+            (true, Some(e)) => format!("the query ends here, but {e} was expected next"),
+            (true, None) => "the query ends where more input was expected".to_string(),
+            (false, Some(e)) => format!("unexpected `{offending}` — expected {e}"),
+            (false, None) => format!("unexpected `{offending}`"),
+        };
+        let label = match &expected {
+            Some(e) => format!("expected {e} here"),
+            None => "unexpected input here".to_string(),
+        };
+        let help = sql_refugee_hint(src, start);
+        ParseError {
+            summary,
+            span,
+            label,
+            help,
+        }
     }
+}
+
+/// Turn pest's list of grammar rules it was still willing to accept at the
+/// failure point into one clause in KyzoScript's own vocabulary — e.g. "a
+/// rule head, a query option, or a fixed-rule application" — deduplicated
+/// and capped so a deeply ambiguous position doesn't produce an unreadable
+/// wall of alternatives. `None` for an empty list (nothing was expected:
+/// pest itself only raises this for a custom error, handled separately).
+fn describe_expected(positives: &[Rule]) -> Option<String> {
+    const MAX_ALTERNATIVES: usize = 5;
+    if positives.is_empty() {
+        return None;
+    }
+    // Dedup on the rendered phrase, not the `Rule`: several distinct rules
+    // (every operator token) deliberately render to the same phrase, and
+    // that collapse only happens here.
+    let mut seen = BTreeSet::new();
+    let mut phrases = Vec::new();
+    for &r in positives {
+        let phrase = describe_rule(r);
+        if seen.insert(phrase.clone()) {
+            phrases.push(phrase);
+        }
+    }
+    if phrases.len() > MAX_ALTERNATIVES {
+        phrases.truncate(MAX_ALTERNATIVES);
+        phrases.push("other constructs".to_string());
+    }
+    Some(match phrases.as_slice() {
+        [one] => one.clone(),
+        [a, b] => format!("{a} or {b}"),
+        many => {
+            let (last, rest) = many.split_last().expect("checked non-empty above");
+            format!("{}, or {last}", rest.join(", "))
+        }
+    })
+}
+
+/// One grammar rule's meaning, in words a KyzoScript user would recognize.
+/// The rules that actually show up as "expected" at a real parse failure —
+/// the top-level script forms, rule/atom/expression shapes, options,
+/// literals — get a hand-written phrase naming KyzoScript syntax. Every
+/// other rule (the grammar has ~200) falls back to its own pest name with
+/// underscores turned to spaces, so this can never bottom out in a bare
+/// `Rule::foo` debug print, even for a rule nobody hand-wrote a phrase for.
+fn describe_rule(r: Rule) -> String {
+    let phrase = match r {
+        Rule::script | Rule::query_script => "a query (a rule head, e.g. `?[x] := …`)",
+        Rule::sys_script => "a `::` system operation",
+        Rule::imperative_script => "a `%`-imperative script",
+        Rule::rule_head => "a rule head, e.g. `?[x, y]`",
+        Rule::rule => "a rule (`head := body`)",
+        Rule::const_rule => "a constant rule (`head <- value`)",
+        Rule::fixed_rule => "a fixed-rule application (`head <~ Algo(...)`)",
+        Rule::option => "a query option (e.g. `:limit 10`, `:order x`)",
+        Rule::atom => "a rule-body atom (a relation, a condition, or `not …`)",
+        Rule::relation_apply => "a relation application, e.g. `rel[x, y]`",
+        Rule::relation_named_apply => "a named relation application, e.g. `rel{x, y}`",
+        Rule::rule_apply => "a rule application",
+        Rule::negation => "a negated atom (`not …`)",
+        Rule::unify | Rule::unify_multi => "a binding (`x = expr` or `x in expr`)",
+        Rule::expr | Rule::term => "an expression",
+        Rule::grouped => "a parenthesized expression `(…)`",
+        Rule::literal | Rule::number | Rule::boolean | Rule::null => "a literal value",
+        Rule::string | Rule::quoted_string | Rule::raw_string => "a string literal",
+        Rule::ident | Rule::compound_ident | Rule::relation_ident => "an identifier",
+        Rule::var => "a variable (starts with a letter or `_`)",
+        Rule::param => "a `$parameter`",
+        Rule::prog_entry => "the entry marker `?`",
+        Rule::list => "a list `[…]`",
+        Rule::object => "an object `{…}`",
+        Rule::validity_type => "the `Validity` column type",
+        Rule::spans_kw => "an `@spans` clause",
+        Rule::delta_kw => "an `@delta` clause",
+        Rule::delta_sys_kw => "an `@delta_sys` clause",
+        Rule::head_arg => "a head argument",
+        Rule::apply_args | Rule::named_apply_args => "relation arguments",
+        Rule::table_schema => "a schema (`{col: Type, …}`)",
+        Rule::table_col => "a column definition",
+        Rule::col_type => "a column type (`Int`, `Float`, `String`, …)",
+        Rule::sort_arg => "a sort key",
+        Rule::relation_op => {
+            "a relation operation (`:create`, `:put`, `:insert`, `:update`, `:rm`)"
+        }
+        Rule::validity_clause | Rule::read_validity_clause => {
+            "a validity clause (`@ 'NOW'`, `@ instant`)"
+        }
+        Rule::fixed_args_list | Rule::fixed_arg => "fixed-rule arguments",
+        Rule::index_op => "an index operation (`::index create`, …)",
+        Rule::EOI => "the end of the query",
+        // Every binary/unary operator token collapses to one phrase: pest
+        // reports each operator symbol it tried as its own `Rule`, and
+        // listing "op or, op and, op concat, …" fifteen times over is noise
+        // a real continuation-of-expression failure would otherwise drown
+        // in — the dedup in `describe_expected` then merges every one of
+        // these into the single alternative below.
+        Rule::op_or
+        | Rule::op_and
+        | Rule::op_concat
+        | Rule::op_add
+        | Rule::op_sub
+        | Rule::op_mul
+        | Rule::op_div
+        | Rule::op_mod
+        | Rule::op_pow
+        | Rule::op_eq
+        | Rule::op_ne
+        | Rule::op_gt
+        | Rule::op_lt
+        | Rule::op_ge
+        | Rule::op_le
+        | Rule::op_coalesce
+        | Rule::op_field_access
+        | Rule::minus
+        | Rule::negate
+        | Rule::or_op
+        | Rule::in_op
+        | Rule::not_op => "an operator (`+`, `==`, `and`, `or`, `.`, …)",
+        _ => return format!("{r:?}").replace('_', " "),
+    };
+    phrase.to_string()
+}
+
+/// SQL keywords mapped to the KyzoScript idiom that replaces them. Checked
+/// only after a real parse failure — so a relation or column that merely
+/// happens to be named `select` never triggers this, since well-formed
+/// KyzoScript using that name as an identifier parses fine and never
+/// reaches here. Ordered by how early each keyword would appear in a
+/// translated-verbatim SQL query, so the first hit is usually the mistake
+/// that actually caused the failure.
+const SQL_KEYWORD_HINTS: &[(&str, &str)] = &[
+    (
+        "select",
+        "KyzoScript has no SELECT: name the output columns directly in the rule head, \
+         e.g. `?[name, age] := person{name, age}`.",
+    ),
+    (
+        "from",
+        "KyzoScript has no FROM: the source relation is a body atom, \
+         e.g. `?[x] := relation_name{x}`.",
+    ),
+    (
+        "where",
+        "KyzoScript has no WHERE: conditions are just more atoms in the rule body, \
+         e.g. `?[x] := person{x, age}, age > 18`.",
+    ),
+    (
+        "join",
+        "KyzoScript has no JOIN: joins fall out of sharing a variable across two body \
+         atoms, e.g. `?[name, item] := person{id, name}, orders{id, item}`.",
+    ),
+    (
+        "group",
+        "KyzoScript has no GROUP BY: wrap the head variable in an aggregation instead, \
+         e.g. `?[dept, count(name)] := employee{dept, name}`.",
+    ),
+    (
+        "having",
+        "KyzoScript has no HAVING: filter after aggregation with a second rule over the \
+         aggregated one, e.g. `?[dept] := agg[dept, n := count(name)], n > 10`.",
+    ),
+    (
+        "order",
+        "Sorting is the `:order` (or `:sort`) query option: `?[x] := … :order x`.",
+    ),
+    (
+        "insert",
+        "Writes are a relation operation on a rule, e.g. \
+         `?[x, y] <- [[1, 2]] :put relation_name {x, y}` (or `:insert`).",
+    ),
+    (
+        "update",
+        "Writes are a relation operation on a rule, e.g. \
+         `?[x, y] <- [[1, 2]] :update relation_name {x, y}`.",
+    ),
+    (
+        "delete",
+        "Deletes are the `:rm` relation operation, e.g. \
+         `?[key] := … :rm relation_name {key}`.",
+    ),
+    (
+        "values",
+        "There's no VALUES clause: the constant rows are the constant rule's own value, \
+         e.g. `?[x, y] <- [[1, 2], [3, 4]]`.",
+    ),
+    (
+        "create",
+        "Schema definitions use `:create`, e.g. \
+         `?[a] <- [] :create relation_name {key: Int, value: String}` — not `CREATE TABLE`.",
+    ),
+];
+
+/// Does the query text contain one of [`SQL_KEYWORD_HINTS`] as a whole
+/// word, close to the failure? Checked in a window around the offending
+/// position first (the keyword that actually broke the parse is usually
+/// right there — `SELECT` fails immediately), then over the whole text (a
+/// SQL shape can fail several tokens after the keyword that gives it away,
+/// e.g. `SELECT x FROM t` fails at the bare `x`, not at `SELECT`).
+fn sql_refugee_hint(src: &str, near: usize) -> Option<String> {
+    let lower = src.to_ascii_lowercase();
+    let window_start = near.saturating_sub(32);
+    let window_end = (near + 32).min(lower.len());
+    let window = lower.get(window_start..window_end).unwrap_or("");
+    for (keyword, hint) in SQL_KEYWORD_HINTS {
+        if has_word(window, keyword) {
+            return Some((*hint).to_string());
+        }
+    }
+    for (keyword, hint) in SQL_KEYWORD_HINTS {
+        if has_word(&lower, keyword) {
+            return Some((*hint).to_string());
+        }
+    }
+    None
+}
+
+/// Whole-word search: `word` must appear as its own token, delimited by
+/// anything that isn't an identifier character, so `selected_at` never
+/// matches `select`.
+fn has_word(haystack: &str, word: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|token| token == word)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -809,7 +1074,8 @@ pub(crate) fn parse_expressions(
 ) -> Result<Expr> {
     reject_excessive_nesting(src)?;
     let parsed = single(
-        ScriptParser::parse(Rule::expression_script, src).map_err(ParseError::from_pest)?,
+        ScriptParser::parse(Rule::expression_script, src)
+            .map_err(|e| ParseError::from_pest(e, src))?,
         "the parsed expression_script",
         Rule::expression_script,
     )?;
@@ -841,7 +1107,7 @@ pub fn parse_script(
 ) -> Result<Script> {
     reject_excessive_nesting(src)?;
     let parsed = single(
-        ScriptParser::parse(Rule::script, src).map_err(ParseError::from_pest)?,
+        ScriptParser::parse(Rule::script, src).map_err(|e| ParseError::from_pest(e, src))?,
         "the parsed script",
         Rule::script,
     )?;
@@ -1440,5 +1706,20 @@ mod tests {
         let res =
             crate::parse::sys::parse_sys(spent, &Default::default(), &Default::default(), vld());
         assert!(res.is_err(), "exhausted input must error, not panic");
+    }
+
+    #[test]
+    fn eyeball_diagnostics() {
+        for src in [
+            "SELECT name, age FROM person WHERE age > 18",
+            "?[x] := *person[x educ",
+            "?[x] := *person{x}, x >",
+            "?[x] := *person{x} GROUP BY x",
+            "DELETE FROM person WHERE x = 1",
+            "?[cout(x)] := *person{x}",
+        ] {
+            let err = parse(src).expect_err("must fail to parse");
+            println!("=== {src:?} ===\n{err:?}\n");
+        }
     }
 }
