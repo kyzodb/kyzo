@@ -1,0 +1,232 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "KyzoScript",
+  "scopeName": "source.kyzoscript",
+  "comment": "Hand-written from kyzo-core/src/kyzoscript.pest (story #73's editor-tooling scaffold), not a generated artifact -- every pattern below cites the grammar rule it renders. Re-derive against the grammar when the two drift; a stale highlighter is the same defect class as a stale doc.",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#booleans-and-null" },
+    { "include": "#entry-marker" },
+    { "include": "#sigils" },
+    { "include": "#directives" },
+    { "include": "#imperative-keywords" },
+    { "include": "#word-operators" },
+    { "include": "#rule-arrows" },
+    { "include": "#validity-clause" },
+    { "include": "#operators" },
+    { "include": "#types" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "comment": "LINE_COMMENT = _{ \"#\" ~ (!\"\\n\" ~ ANY)* }",
+          "name": "comment.line.number-sign.kyzoscript",
+          "match": "#.*$"
+        },
+        {
+          "comment": "BLOCK_COMMENT = _{ \"/*\" ~ (BLOCK_COMMENT | !\"*/\" ~ ANY)* ~ \"*/\" } -- nestable, so the pattern includes itself.",
+          "name": "comment.block.kyzoscript",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [{ "include": "#comments" }]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "raw_string: a fence of zero-or-more `_` then `\"..\"`, closed by `\"` plus the SAME number of `_` (PUSH/POP in the grammar). No escapes at all inside.",
+          "name": "string.quoted.raw.kyzoscript",
+          "begin": "(_*)\"",
+          "beginCaptures": { "1": { "name": "punctuation.definition.string.begin.kyzoscript" } },
+          "end": "\"\\1",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.kyzoscript" } }
+        },
+        {
+          "comment": "quoted_string: double-quoted, with the escapes s_char/quoted_string_inner accept.",
+          "name": "string.quoted.double.kyzoscript",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "include": "#string-escapes" }]
+        },
+        {
+          "comment": "s_quoted_string: single-quoted, the same escapes as double-quoted.",
+          "name": "string.quoted.single.kyzoscript",
+          "begin": "'",
+          "end": "'",
+          "patterns": [{ "include": "#string-escapes" }]
+        }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "comment": "s_char: \\' \\\" \\\\ \\/ \\b \\f \\n \\r \\t, or \\u followed by 4 hex digits.",
+          "name": "constant.character.escape.kyzoscript",
+          "match": "\\\\(['\"\\\\/bfnrt]|u[0-9a-fA-F]{4})"
+        },
+        {
+          "name": "invalid.illegal.unrecognized-escape.kyzoscript",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "hex_pos_int / octo_pos_int / bin_pos_int, `_` digit-group separators allowed.",
+          "name": "constant.numeric.integer.kyzoscript",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.kyzoscript",
+          "match": "\\b0[oO][0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.kyzoscript",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "comment": "dot_float: digits, a decimal point, digits, optional exponent. Ordered before the bare-integer rule below so `1.5` isn't read as `1` then punctuation then `5`.",
+          "name": "constant.numeric.float.kyzoscript",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "comment": "sci_float: digits with an exponent and no decimal point (`1e10`).",
+          "name": "constant.numeric.float.kyzoscript",
+          "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9]+\\b"
+        },
+        {
+          "comment": "pos_int: a plain decimal integer.",
+          "name": "constant.numeric.integer.kyzoscript",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "booleans-and-null": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.kyzoscript",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.kyzoscript",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+    "entry-marker": {
+      "comment": "prog_entry: the `?` that names a script's one output rule.",
+      "name": "keyword.control.entry.kyzoscript",
+      "match": "\\?"
+    },
+    "sigils": {
+      "patterns": [
+        {
+          "comment": "param: `$name`, substituted from the parameter pool at parse time.",
+          "name": "variable.parameter.kyzoscript",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "comment": "relation_ident / *rel forms: `*` naming a stored relation in a body atom, distinct from the `*` multiplication operator by always being followed immediately by an identifier.",
+          "name": "entity.name.type.relation.kyzoscript",
+          "match": "\\*[A-Za-z_][A-Za-z0-9_]*(:[A-Za-z_][A-Za-z0-9_]*)?"
+        },
+        {
+          "comment": "search_apply head: `~relation:index{...}` -- a similarity/full-text search atom.",
+          "name": "entity.name.type.search.kyzoscript",
+          "match": "~[A-Za-z_][A-Za-z0-9_]*:[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "comment": "compound_or_index_ident with no sigil: the bare `relation:index` shape `::hnsw`/`::fts`/`::lsh create` take (index_create_adv). Matched before #directives/#identifiers so `doc:emb` reads as one qualified name, not `doc` plus a stray `:emb` directive.",
+          "name": "entity.name.type.relation.kyzoscript",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "directives": {
+      "comment": "Every `:option`/`:relation-op` and every `::sys-op` shares one prefix shape: `:` or `::` then a bare identifier. One general pattern instead of an enumerated keyword list, so a sys-op or option kyzoscript.pest adds later still highlights -- an enumerated list would silently miss it and go stale.",
+      "name": "keyword.control.directive.kyzoscript",
+      "match": "::?[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "imperative-keywords": {
+      "comment": "The `%`-imperative block-control vocabulary (imperative_stmt/imperative_sysop in the grammar): `%if`, `%then`, `%else`, `%end`, `%loop`, `%break`, `%continue`, `%return`, `%swap`, `%debug`, `%mark`, `%ignore_error`, `%if_not`, and any future `%word` the grammar adds.",
+      "name": "keyword.control.imperative.kyzoscript",
+      "match": "%[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "word-operators": {
+      "comment": "or_op / in_op / not_op: word-shaped operators, boundary-checked so `origin` doesn't light up as `or`+`igin`.",
+      "name": "keyword.operator.word.kyzoscript",
+      "match": "\\b(or|and|in|not)\\b"
+    },
+    "rule-arrows": {
+      "patterns": [
+        {
+          "comment": "rule: `head := body`.",
+          "name": "keyword.operator.rule.kyzoscript",
+          "match": ":="
+        },
+        {
+          "comment": "const_rule: `head <- value`.",
+          "name": "keyword.operator.rule.kyzoscript",
+          "match": "<-"
+        },
+        {
+          "comment": "fixed_rule: `head <~ Algo(...)`.",
+          "name": "keyword.operator.rule.kyzoscript",
+          "match": "<~"
+        }
+      ]
+    },
+    "validity-clause": {
+      "comment": "`@` opens a validity clause on either side (read: `rel{x @ instant}`; write: `:put rel {...} @ instant`), optionally `@spans`/`@delta`/`@delta_sys`.",
+      "name": "keyword.operator.validity.kyzoscript",
+      "match": "@(spans|delta_sys|delta)?"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.kyzoscript",
+          "match": "==|!=|>=|<=|>|<"
+        },
+        {
+          "name": "keyword.operator.logical.kyzoscript",
+          "match": "\\|\\||&&|!"
+        },
+        {
+          "name": "keyword.operator.arithmetic.kyzoscript",
+          "match": "\\+\\+|->|\\+|-|\\*|/|%|\\^|~"
+        },
+        {
+          "name": "keyword.operator.assignment.kyzoscript",
+          "match": "="
+        }
+      ]
+    },
+    "types": {
+      "comment": "col_type keywords from the schema grammar (bool_type/int_type/.../vec_type element names), for `{col: Type}` schema clauses.",
+      "name": "storage.type.kyzoscript",
+      "match": "\\b(Any|Bool|Int|Float|String|Bytes|Uuid|Json|Validity|F32|F64|Double)\\b"
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.comma.kyzoscript", "match": "," },
+        { "name": "punctuation.separator.colon.kyzoscript", "match": ":" },
+        { "name": "punctuation.separator.semicolon.kyzoscript", "match": ";" },
+        { "name": "punctuation.section.brackets.kyzoscript", "match": "[\\[\\]]" },
+        { "name": "punctuation.section.braces.kyzoscript", "match": "[{}]" },
+        { "name": "punctuation.section.parens.kyzoscript", "match": "[()]" }
+      ]
+    },
+    "identifiers": {
+      "comment": "ident / var / compound_ident: everything else that starts a word -- rule names, column names, variables.",
+      "name": "variable.other.kyzoscript",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "kyzoscript",
+  "displayName": "KyzoScript",
+  "description": "Syntax highlighting for KyzoScript, the Datalog dialect KyzoDB queries and mutates in.",
+  "version": "0.1.0",
+  "publisher": "kyzodb",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kyzodb/kyzo"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "kyzoscript",
+        "aliases": ["KyzoScript", "kyzoscript"],
+        "extensions": [".kz", ".kzs"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kyzoscript",
+        "scopeName": "source.kyzoscript",
+        "path": "./syntaxes/kyzoscript.tmLanguage.json"
+      }
+    ]
+  }
+}
