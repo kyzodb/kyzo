@@ -43,5 +43,7 @@ jobs:
           fi
           for t in $targets; do
             echo "=== fuzz target: $t (15m deep)"
-            cargo +nightly fuzz run "$t" -- -max_total_time=900
+            # Explicit gnu target: cargo-fuzz once auto-selected musl on the runner,
+            # and ASAN is incompatible with statically linked libc.
+            cargo +nightly fuzz run "$t" --target x86_64-unknown-linux-gnu -- -max_total_time=900
           done
