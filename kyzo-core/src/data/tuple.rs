@@ -175,6 +175,53 @@ pub fn encode_tuple_key(relation_id: u64, tuple: &[DataValue]) -> EncodedKey {
     tuple.encode_as_key(RelationId::new(relation_id))
 }
 
+/// A tuple's columns as one memcomparable byte string, with NO relation
+/// prefix — the bare in-memory form for structures that compare, sort, and
+/// dedup tuples without ever writing them to storage (story #77's
+/// representation-tax cut: the fixpoint's own admission bookkeeping is the
+/// first consumer, `query/temp_store.rs`). Byte-identical to
+/// [`encode_as_key`](TupleT::encode_as_key)'s per-value loop minus the
+/// prefix, so it inherits both of `memcmp.rs`'s laws unchanged: round-trip
+/// identity and order embedding — comparing two bare encodings byte-for-byte
+/// gives exactly the comparison `DataValue`'s own slice `Ord` would give,
+/// proven generatively below rather than merely asserted, since the
+/// per-value encoder's self-delimiting property (each value ends where the
+/// next begins, never ambiguously) is exactly what a concatenation bug would
+/// violate.
+///
+/// Landed ahead of its consumer, same as [`RelationId::next`]/`SYSTEM`/
+/// `raw_decode` above: story #77 lands in ordered chunks (chunk 1 is this
+/// codec, proven in isolation), and the fixpoint-state conversion that
+/// consumes it (`query/temp_store.rs`'s `RegularTempStore`/`MeetAggrStore`,
+/// `query/levels.rs`'s `NormalLevel`, and `TupleInIter`'s reference-returning
+/// shape, which a byte-backed store cannot keep — every one of its ~80
+/// call sites across `query/ra/*.rs` would need to move in the same burst)
+/// is chunk 2, not bundled here to avoid a half-converted signature change
+/// landing mid-flight.
+#[allow(dead_code)] // chunk 2's consumer, not yet landed
+pub(crate) fn encode_tuple_bare(tuple: &[DataValue]) -> Vec<u8> {
+    let mut ret = Vec::with_capacity(14 * tuple.len());
+    for val in tuple {
+        ret.encode_datavalue(val);
+    }
+    ret
+}
+
+/// The inverse of [`encode_tuple_bare`]: self-delimiting, so every column is
+/// recovered without a stored width or count — corrupt bytes are a typed
+/// error, never a panic, matching [`decode_tuple_from_key`]'s discipline.
+#[allow(dead_code)] // chunk 2's consumer, not yet landed
+pub(crate) fn decode_tuple_bare(bytes: &[u8]) -> Result<Tuple> {
+    let mut out = Vec::with_capacity(bytes.len() / 8 + 1);
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let (val, next) = DataValue::decode_from_key(remaining)?;
+        out.push(val);
+        remaining = next;
+    }
+    Ok(out)
+}
+
 /// Parse a claimed key into its tuple. Fallible: the bytes may be corrupt.
 pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple> {
     let mut ret = Vec::with_capacity(size_hint);
@@ -336,6 +383,8 @@ impl RelationId {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use super::*;
     use crate::data::value::{DataValue, Num, Validity, ValidityTs};
 
@@ -485,5 +534,116 @@ mod tests {
             err.to_string().contains("48-bit bound"),
             "unexpected error: {err}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // encode_tuple_bare/decode_tuple_bare (story #77): the two memcmp laws,
+    // transferred to the whole-tuple bare form.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Round-trip identity and order embedding for [`encode_tuple_bare`],
+    /// over variable-length tuples of every value kind — including the
+    /// prefix case (`[1]` vs `[1, 2]`), where a concatenation bug would most
+    /// plausibly hide: the self-delimiting per-value encoding must make a
+    /// strict tuple prefix's bytes a strict byte-prefix of the longer
+    /// tuple's bytes, matching `Vec<DataValue>`'s own derived `Ord`.
+    #[test]
+    fn bare_tuple_round_trips_and_preserves_order_generatively() {
+        let kinds: Vec<DataValue> = vec![
+            DataValue::Null,
+            DataValue::Bool(true),
+            DataValue::Bool(false),
+            DataValue::from(-42i64),
+            DataValue::from(0i64),
+            DataValue::from(42i64),
+            DataValue::Num(Num::Float(2.5)),
+            DataValue::Num(Num::Float(-0.5)),
+            DataValue::from(""),
+            DataValue::from("bare_tuple"),
+            DataValue::Bytes(vec![]),
+            DataValue::Bytes(vec![0, 255, 7]),
+            DataValue::List(vec![DataValue::from(1), DataValue::from("x")]),
+            DataValue::List(vec![]),
+            DataValue::Validity(Validity {
+                timestamp: ValidityTs(std::cmp::Reverse(9)),
+                is_assert: std::cmp::Reverse(true),
+            }),
+            DataValue::Bot,
+        ];
+        let mut state = 0xB47E_u64;
+        let mut next = move |m: usize| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as usize % m
+        };
+        for trial in 0..1000 {
+            let a: Vec<DataValue> = (0..next(6))
+                .map(|_| kinds[next(kinds.len())].clone())
+                .collect();
+            let b: Vec<DataValue> = (0..next(6))
+                .map(|_| kinds[next(kinds.len())].clone())
+                .collect();
+
+            // Law 1: round-trip identity.
+            let encoded_a = encode_tuple_bare(&a);
+            let decoded_a = decode_tuple_bare(&encoded_a).expect("valid encoding decodes");
+            assert_eq!(decoded_a, a, "trial {trial}: round-trip mismatch for {a:?}");
+
+            // Law 2: order embedding — bytewise order equals the semantic
+            // slice order `Vec<DataValue>`'s derived `Ord` already gives.
+            let encoded_b = encode_tuple_bare(&b);
+            assert_eq!(
+                a.cmp(&b),
+                encoded_a.cmp(&encoded_b),
+                "trial {trial}: order disagreement between {a:?} and {b:?}"
+            );
+        }
+    }
+
+    /// The prefix case in isolation, pinned by example rather than left to
+    /// the generative walk's odds: a tuple that is a strict prefix of
+    /// another (same leading columns, the longer one has more) must encode
+    /// so the shorter one's bytes are a strict byte-prefix of the longer
+    /// one's — never a tie, never reversed.
+    #[test]
+    fn bare_tuple_prefix_relationship_is_preserved() {
+        let short = vec![DataValue::from(1i64)];
+        let long = vec![DataValue::from(1i64), DataValue::from(2i64)];
+        assert_eq!(short.cmp(&long), Ordering::Less);
+        let (enc_short, enc_long) = (encode_tuple_bare(&short), encode_tuple_bare(&long));
+        assert_eq!(enc_short.cmp(&enc_long), Ordering::Less);
+        assert!(
+            enc_long.starts_with(&enc_short),
+            "a tuple prefix's bytes must be a strict byte-prefix of the extension's"
+        );
+    }
+
+    /// The empty tuple encodes to the empty byte string and decodes back
+    /// to itself — the base case every recursive proof above assumes.
+    #[test]
+    fn bare_empty_tuple_round_trips() {
+        let empty: Tuple = vec![];
+        let encoded = encode_tuple_bare(&empty);
+        assert!(encoded.is_empty());
+        assert_eq!(decode_tuple_bare(&encoded).unwrap(), empty);
+    }
+
+    /// Corrupt bytes refuse typed, never panic — the same discipline
+    /// `decode_from_key` already proves per-value; this pins it survives
+    /// composition into a whole-tuple walk.
+    #[test]
+    fn bare_decode_never_panics_on_arbitrary_bytes() {
+        let mut state = 0xDEAD_BEEF_u64;
+        let mut next_byte = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u8
+        };
+        for len in 0..40 {
+            let bytes: Vec<u8> = (0..len).map(|_| next_byte()).collect();
+            let _ = decode_tuple_bare(&bytes);
+        }
     }
 }
