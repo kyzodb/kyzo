@@ -1,7 +1,1534 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.endian-type]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+notes = "Manually read the entire crate (single ~150-line lib.rs). Provides BigEndian<T>/LittleEndian<T> byte-order wrapper types via declarative macros. Two unsafe blocks do raw pointer reinterpretation for from_bytes/as_bytes with a debug_assert length check; a possible alignment-UB edge case exists on exotic platforms for multi-byte T, but there is no attacker-controlled code execution, no I/O, no build.rs, no macros beyond macro_rules!. Used internally by radix_trie for trie-key nibbling, not exposed to arbitrary untrusted byte slices in a way that creates an exploitable vulnerability."
+
+[[audits.quadrature]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+notes = "Manually read the entire crate (344 lines across lib.rs + double_exponential/mod.rs + clenshaw_curtis/mod.rs, plus constants.rs data tables). Pure numerical-integration algorithms (ports of a public-domain C++ implementation by John D. Cook), zero unsafe, zero dependencies, no I/O/env/fs/net access, all loops bounded by fixed-size weight tables (hard 350/257 evaluation caps documented and enforced structurally). Author Eh2406 (Jacob Finkelman) is a well-known rust-lang cargo team member."
+
+[[audits.winapi-i686-pc-windows-gnu]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+notes = "Manually inspected: build.rs only adds a rustc-link-search path when TARGET matches this crate's own arch/windows-gnu triple (inert on our Linux CI); src/lib.rs is a single #![no_std] marker line; the payload is ~1387 tiny MinGW dlltool-generated .a import-stub archives (standard doncb*.o trampoline objects, auto-generated non-executable linker metadata for Windows system DLLs), unchanged since 2018. This is the well-known winapi-rs bundled-import-library mechanism (retep998, already trusted above as winapi's maintainer); nothing here executes at build or link time outside the windows-gnu target."
+
+[[audits.winapi-x86_64-pc-windows-gnu]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+notes = "Manually inspected: build.rs only adds a rustc-link-search path when TARGET matches this crate's own arch/windows-gnu triple (inert on our Linux CI); src/lib.rs is a single #![no_std] marker line; the payload is ~1387 tiny MinGW dlltool-generated .a import-stub archives (standard doncb*.o trampoline objects, auto-generated non-executable linker metadata for Windows system DLLs), unchanged since 2018. This is the well-known winapi-rs bundled-import-library mechanism (retep998, already trusted above as winapi's maintainer); nothing here executes at build or link time outside the windows-gnu target."
+
+[[trusted.aead]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-05"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.aead]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-08-29"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.aead]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-06-08"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.aes]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-05"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.aes]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2020-08-07"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.aes]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/block-ciphers"
+start = "2026-04-10"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.aes-gcm]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-16"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.aho-corasick]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-28"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.alloc-no-stdlib]]
+criteria = "safe-to-deploy"
+user-id = 4185 # Daniel (danielrh)
+start = "2021-07-31"
+end = "2027-07-04"
+notes = "Delegated trust: danielrh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.alloc-stdlib]]
+criteria = "safe-to-deploy"
+user-id = 4185 # Daniel (danielrh)
+start = "2022-09-12"
+end = "2027-07-04"
+notes = "Delegated trust: danielrh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.anstream]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-03-16"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.anstyle]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-05-18"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.anstyle-parse]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-03-08"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.anstyle-query]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-04-13"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.anstyle-wincon]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-03-08"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.async-compression]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:Nullus157/async-compression"
+start = "2025-07-13"
+end = "2027-07-04"
+notes = "Delegated trust: Nullus157/async-compression org GitHub Actions trusted-publishing signature; maintainers Nemo157/yoshuawuyts/robjtede/NobodyXu are established async-Rust ecosystem contributors."
+
+[[trusted.async-stream]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2019-06-07"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla vouches for carllerche (Carl Lerche, tokio-rs founder); covers tower-layer/async-stream family where he is a historical publisher."
+
+[[trusted.async-stream]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-21"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.async-stream-impl]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2019-08-13"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla vouches for carllerche (Carl Lerche, tokio-rs founder); covers tower-layer/async-stream family where he is a historical publisher."
+
+[[trusted.async-stream-impl]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-21"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.axum]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2026-04-14"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.axum-core]]
+criteria = "safe-to-deploy"
+user-id = 6913 # Jonas Platte (jplatte)
+start = "2024-09-20"
+end = "2027-07-04"
+notes = "Delegated trust: jplatte is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.axum-macros]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2026-04-14"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.base16ct]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-01-13"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.base64ct]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-01-21"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.bincode]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-08"
+end = "2027-07-04"
+notes = "Delegated trust: dtolnay already trusted (thiserror in this file); isrg/mozilla import sets vouch broadly."
+
+[[trusted.block-buffer]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-04"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.block-buffer]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-04-15"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.block-buffer]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-02-24"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.brotli]]
+criteria = "safe-to-deploy"
+user-id = 4185 # Daniel (danielrh)
+start = "2021-07-31"
+end = "2027-07-04"
+notes = "Delegated trust: danielrh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.brotli-decompressor]]
+criteria = "safe-to-deploy"
+user-id = 4185 # Daniel (danielrh)
+start = "2020-05-28"
+end = "2027-07-04"
+notes = "Delegated trust: danielrh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.bytes]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-11"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.chacha20]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-06-24"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.chacha20]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2020-08-25"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.chacha20]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/stream-ciphers"
+start = "2026-02-06"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.chacha20poly1305]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-30"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.cipher]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-10-15"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.cipher]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2022-02-10"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.cipher]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-04"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.clap]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-12-08"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger); kbknapp/huonw/sfackler/sebasmagri are prior well-known maintainers of the same crates, not a red flag."
+
+[[trusted.clap_builder]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-03-28"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.clap_derive]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-12-08"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger); kbknapp/huonw/sfackler/sebasmagri are prior well-known maintainers of the same crates, not a red flag."
+
+[[trusted.clap_lex]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-04-15"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.clipboard-win]]
+criteria = "safe-to-deploy"
+user-id = 1551 # Douman (DoumanAsh)
+start = "2019-05-30"
+end = "2027-07-04"
+notes = "Delegated trust: DoumanAsh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.cmov]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-02-27"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.cmov]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-04-02"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.colorchoice]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-04-13"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.compression-codecs]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:Nullus157/async-compression"
+start = "2025-08-23"
+end = "2027-07-04"
+notes = "Delegated trust: Nullus157/async-compression org GitHub Actions trusted-publishing signature; maintainers Nemo157/yoshuawuyts/robjtede/NobodyXu are established async-Rust ecosystem contributors."
+
+[[trusted.compression-core]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:Nullus157/async-compression"
+start = "2025-08-23"
+end = "2027-07-04"
+notes = "Delegated trust: Nullus157/async-compression org GitHub Actions trusted-publishing signature; maintainers Nemo157/yoshuawuyts/robjtede/NobodyXu are established async-Rust ecosystem contributors."
+
+[[trusted.const-oid]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-08-04"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.cpubits]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2026-01-18"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.cpubits]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-04-28"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.cpufeatures]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-04-26"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.crc32fast]]
+criteria = "safe-to-deploy"
+user-id = 1546 # Sam Rijs (srijs)
+start = "2019-03-05"
+end = "2027-07-04"
+notes = "Delegated trust: srijs is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.crossbeam-deque]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-12"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.crossbeam-epoch]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-12"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.crossbeam-skiplist]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2022-12-09"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.crossbeam-utils]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-12"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.crypto-bigint]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-04-30"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.crypto-bigint]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-08-16"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.crypto-bigint]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/crypto-bigint"
+start = "2026-02-12"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.crypto-common]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-04-28"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.crypto-common]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-02-10"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.crypto-common]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-04"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.crypto-primes]]
+criteria = "safe-to-deploy"
+user-id = 105941 # Bogdan Opanchuk (fjarri)
+start = "2023-01-21"
+end = "2027-07-04"
+notes = "Delegated trust: fjarri is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.csv]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-04-05"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.csv-core]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-26"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.ctr]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-06"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ctr]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-03-11"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ctr]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/block-modes"
+start = "2026-02-27"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.ctrlc]]
+criteria = "safe-to-deploy"
+user-id = 1142 # Antti Keränen (Detegr)
+start = "2019-04-23"
+end = "2027-07-04"
+notes = "Delegated trust: Detegr is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.ctutils]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2025-12-18"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ctutils]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-04-02"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.curve25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 5289
+start = "2021-01-07"
+end = "2027-07-04"
+notes = "Delegated trust: isislovecruft is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.curve25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2022-12-13"
+end = "2027-07-04"
+notes = "Delegated trust: rozbb is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.curve25519-dalek-derive]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2023-06-24"
+end = "2027-07-04"
+notes = "Delegated trust: rozbb is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.defmt]]
+criteria = "safe-to-deploy"
+user-id = 414585 # knoellle
+start = "2026-05-12"
+end = "2027-07-04"
+notes = "Delegated trust: knoellle is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.defmt-macros]]
+criteria = "safe-to-deploy"
+user-id = 414585 # knoellle
+start = "2026-05-12"
+end = "2027-07-04"
+notes = "Delegated trust: knoellle is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.defmt-parser]]
+criteria = "safe-to-deploy"
+user-id = 16374 # Lukas Wirth (Veykril)
+start = "2025-04-01"
+end = "2027-07-04"
+notes = "Delegated trust: Veykril is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.der]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-12-17"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.der]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/formats"
+start = "2026-02-11"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.digest]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-10"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.digest]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-06-30"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.digest]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-12"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.dirs-sys-next]]
+criteria = "safe-to-deploy"
+user-id = 36467 # tesuji
+start = "2020-05-06"
+end = "2027-07-04"
+notes = "Delegated trust: tesuji is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.dispatch2]]
+criteria = "safe-to-deploy"
+user-id = 36629 # Mads Marquart (madsmtm)
+start = "2025-01-23"
+end = "2027-07-04"
+notes = "Delegated trust: madsmtm is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.ecdsa]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-10-29"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ecdsa]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/signatures"
+start = "2026-04-15"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.ed25519]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-10"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ed25519]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/signatures"
+start = "2026-05-03"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.ed25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 5289
+start = "2019-10-04"
+end = "2027-07-04"
+notes = "Delegated trust: isislovecruft is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ed25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2023-02-04"
+end = "2027-07-04"
+notes = "Delegated trust: rozbb is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.elliptic-curve]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-12-05"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.elliptic-curve]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-07-20"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.elliptic-curve]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-03-10"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.encode_unicode]]
+criteria = "safe-to-deploy"
+user-id = 3883 # Torbjørn Birch Moltu (tormol)
+start = "2019-08-23"
+end = "2027-07-04"
+notes = "Delegated trust: tormol is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.env_filter]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2024-01-19"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.env_logger]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-11-24"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger); kbknapp/huonw/sfackler/sebasmagri are prior well-known maintainers of the same crates, not a red flag."
+
+[[trusted.error-code]]
+criteria = "safe-to-deploy"
+user-id = 1551 # Douman (DoumanAsh)
+start = "2020-01-11"
+end = "2027-07-04"
+notes = "Delegated trust: DoumanAsh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.fastrand]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-24"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.ff]]
+criteria = "safe-to-deploy"
+user-id = 1244 # Sean Bowe (ebfull)
+start = "2019-10-08"
+end = "2027-07-04"
+notes = "Delegated trust: ebfull is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 980 # Sebastian Thiel (Byron)
+start = "2023-08-15"
+end = "2027-07-04"
+notes = "Delegated trust: Byron (Sebastian Thiel) is the established maintainer of flate2; mozilla import also vouches for him."
+
+[[trusted.futures]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-channel]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-core]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-executor]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-io]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-macro]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-sink]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-task]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2019-07-29"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.futures-util]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2020-10-05"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.getrandom]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-06-28"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ghash]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-09-19"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ghash]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-07-20"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ghash]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/universal-hashes"
+start = "2026-02-28"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.group]]
+criteria = "safe-to-deploy"
+user-id = 1244 # Sean Bowe (ebfull)
+start = "2019-10-08"
+end = "2027-07-04"
+notes = "Delegated trust: ebfull is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.hermit-abi]]
+criteria = "safe-to-deploy"
+user-id = 91569 # Martin Kröning (mkroening)
+start = "2022-09-06"
+end = "2027-07-04"
+notes = "Delegated trust: mkroening is the established maintainer/publisher of record."
+
+[[trusted.hkdf]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-10-19"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.hkdf]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-12-07"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.hkdf]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/KDFs"
+start = "2026-03-30"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.hmac]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-10"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.hmac]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-07-11"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.hmac]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/MACs"
+start = "2026-03-20"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.home]]
+criteria = "safe-to-deploy"
+user-id = 6202 # Eric Huss (ehuss)
+start = "2023-04-25"
+end = "2027-07-04"
+notes = "Delegated trust: ehuss is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.home]]
+criteria = "safe-to-deploy"
+user-id = 36467 # tesuji
+start = "2019-08-21"
+end = "2027-07-04"
+notes = "Delegated trust: tesuji is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.http]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-04-05"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.http-body-util]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2022-10-25"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.httparse]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-07-03"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.hybrid-array]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-05-07"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.hyper]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-01"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.hyper-util]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2022-01-15"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.is-terminal]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2022-01-22"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for sunfishcode (Dan Gohman)."
+
+[[trusted.is_terminal_polyfill]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2024-05-02"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.itoa]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-02"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.jiff]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2024-02-17"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.jiff-static]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2025-03-06"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.jiff-tzdb]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2024-07-09"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.libredox]]
+criteria = "safe-to-deploy"
+user-id = 2668 # Jeremy Soller (jackpot51)
+start = "2025-06-25"
+end = "2027-07-04"
+notes = "Delegated trust: jackpot51 is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.linux-raw-sys]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-06-12"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for sunfishcode (Dan Gohman)."
+
+[[trusted.matchit]]
+criteria = "safe-to-deploy"
+user-id = 103448 # Ibraheem Ahmed (ibraheemdev)
+start = "2020-12-21"
+end = "2027-07-04"
+notes = "Delegated trust: ibraheemdev is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.memchr]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-07"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.mime]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-09-09"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.mio]]
+criteria = "safe-to-deploy"
+user-id = 6025 # Thomas de Zeeuw (Thomasdezeeuw)
+start = "2019-12-17"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Thomasdezeeuw; mio/socket2 co-owned by tokio-rs org team + sfackler (rust core alum) — legitimate shared ownership, not a red flag."
+
+[[trusted.nibble_vec]]
+criteria = "safe-to-deploy"
+user-id = 98 # Michael Sproul (michaelsproul)
+start = "2020-06-26"
+end = "2027-07-04"
+notes = "Delegated trust: michaelsproul is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.nix]]
+criteria = "safe-to-deploy"
+user-id = 146703 # SteveLauC (SteveLauC)
+start = "2024-02-24"
+end = "2027-07-04"
+notes = "Delegated trust: SteveLauC is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.objc2]]
+criteria = "safe-to-deploy"
+user-id = 36629 # Mads Marquart (madsmtm)
+start = "2021-11-19"
+end = "2027-07-04"
+notes = "Delegated trust: madsmtm is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.once_cell_polyfill]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2025-05-22"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.p256]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-01-06"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.p256]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/elliptic-curves"
+start = "2026-04-19"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.p384]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-01-06"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.p384]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/elliptic-curves"
+start = "2026-04-19"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.paste]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-19"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.pem-rfc7468]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-02-16"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.pin-project-lite]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2019-10-22"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.pkcs1]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-12"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.pkcs8]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-12"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.pkcs8]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/formats"
+start = "2026-02-11"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.poly1305]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-15"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.poly1305]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-07-20"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.poly1305]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/universal-hashes"
+start = "2026-05-10"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.polyval]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-13"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.polyval]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2021-07-20"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.polyval]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/universal-hashes"
+start = "2026-02-10"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.portable-atomic]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2022-02-24"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.portable-atomic-util]]
+criteria = "safe-to-deploy"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2023-01-15"
+end = "2027-07-04"
+notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
+
+[[trusted.prettytable]]
+criteria = "safe-to-deploy"
+user-id = 121693 # pinkforest(she/her) (pinkforest)
+start = "2022-12-27"
+end = "2027-07-04"
+notes = "Delegated trust: pinkforest is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.primefield]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2023-12-17"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.primefield]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/elliptic-curves"
+start = "2026-04-17"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.primeorder]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-06-30"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.primeorder]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/elliptic-curves"
+start = "2026-04-17"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.quote]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-09"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.radix_trie]]
+criteria = "safe-to-deploy"
+user-id = 98 # Michael Sproul (michaelsproul)
+start = "2019-09-15"
+end = "2027-07-04"
+notes = "Delegated trust: michaelsproul is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.rand_core]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:rust-random/rand_core"
+start = "2026-01-20"
+end = "2027-07-04"
+notes = "Delegated trust: rust-random org GitHub Actions trusted-publishing signature; dhardy (rand-rs lead, already implicitly vouched via widespread ecosystem use) is the org's maintainer."
+
+[[trusted.redox_syscall]]
+criteria = "safe-to-deploy"
+user-id = 2668 # Jeremy Soller (jackpot51)
+start = "2019-03-31"
+end = "2027-07-04"
+notes = "Delegated trust: jackpot51 is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.redox_users]]
+criteria = "safe-to-deploy"
+user-id = 2668 # Jeremy Soller (jackpot51)
+start = "2019-08-07"
+end = "2027-07-04"
+notes = "Delegated trust: jackpot51 is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.regex]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-27"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.regex-automata]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-25"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.regex-syntax]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-30"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.rfc6979]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-02-09"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rfc6979]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/signatures"
+start = "2026-05-06"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.ring]]
+criteria = "safe-to-deploy"
+user-id = 2342 # Brian Smith (briansmith)
+start = "2019-07-03"
+end = "2027-07-04"
+notes = "Delegated trust: briansmith is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.ring]]
+criteria = "safe-to-deploy"
+user-id = 2751 # Joe Birr-Pixton (ctz)
+start = "2025-02-22"
+end = "2027-07-04"
+notes = "Delegated trust: ctz is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rsa]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-03-10"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rsa]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2025-03-12"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rsa]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/RSA"
+start = "2026-02-27"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature."
+
+[[trusted.rustix]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-10-29"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for sunfishcode (Dan Gohman)."
+
+[[trusted.rustls]]
+criteria = "safe-to-deploy"
+user-id = 2751 # Joe Birr-Pixton (ctz)
+start = "2019-04-02"
+end = "2027-07-04"
+notes = "Delegated trust: ctz is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rustls]]
+criteria = "safe-to-deploy"
+user-id = 4556 # Dirkjan Ochtman (djc)
+start = "2022-05-18"
+end = "2027-07-04"
+notes = "Delegated trust: djc is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rustls-pki-types]]
+criteria = "safe-to-deploy"
+user-id = 2751 # Joe Birr-Pixton (ctz)
+start = "2023-09-07"
+end = "2027-07-04"
+notes = "Delegated trust: ctz is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rustls-webpki]]
+criteria = "safe-to-deploy"
+user-id = 2751 # Joe Birr-Pixton (ctz)
+start = "2023-01-09"
+end = "2027-07-04"
+notes = "Delegated trust: ctz is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.rustyline]]
+criteria = "safe-to-deploy"
+user-id = 5062 # gwenn (gwenn)
+start = "2019-04-24"
+end = "2027-07-04"
+notes = "Delegated trust: gwenn is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.ryu]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-02"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.sec1]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-08-26"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.sec1]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/formats"
+start = "2026-03-10"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.semver]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2021-05-25"
+end = "2027-07-04"
+notes = "Delegated trust: dtolnay already trusted (thiserror in this file); isrg/mozilla import sets vouch broadly."
+
+[[trusted.serde_bytes]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-02-25"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.serde_json]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-02-28"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.serde_path_to_error]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-08-20"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.serde_urlencoded]]
+criteria = "safe-to-deploy"
+user-id = 3100 # Anthony Ramine (nox)
+start = "2019-04-16"
+end = "2027-07-04"
+notes = "Delegated trust: nox is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.serdect]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-03-29"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.serdect]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/formats"
+start = "2026-05-04"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.sha2]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-05-24"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.sha2]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2020-01-06"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.signature]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-05-25"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.signature]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2025-02-20"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.signature]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-05-02"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.simd-adler32]]
+criteria = "safe-to-deploy"
+user-id = 100904 # Marvin Countryman (mcountryman)
+start = "2021-04-09"
+end = "2027-07-04"
+notes = "Delegated trust: mcountryman is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.slab]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-10-13"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.socket2]]
+criteria = "safe-to-deploy"
+user-id = 6025 # Thomas de Zeeuw (Thomasdezeeuw)
+start = "2020-09-09"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Thomasdezeeuw; mio/socket2 co-owned by tokio-rs org team + sfackler (rust core alum) — legitimate shared ownership, not a red flag."
+
+[[trusted.spki]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-12-03"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.spki]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/formats"
+start = "2026-04-04"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.syn]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.sync_wrapper]]
+criteria = "safe-to-deploy"
+user-id = 86681 # Roland Kuhn (rkuhn)
+start = "2020-05-16"
+end = "2027-07-04"
+notes = "Delegated trust: rkuhn is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.tempfile]]
+criteria = "safe-to-deploy"
+user-id = 280 # Steven Allen (Stebalien)
+start = "2019-05-19"
+end = "2027-07-04"
+notes = "Delegated trust: Stebalien is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.term]]
+criteria = "safe-to-deploy"
+user-id = 280 # Steven Allen (Stebalien)
+start = "2019-03-28"
+end = "2027-07-04"
+notes = "Delegated trust: Stebalien is the established maintainer/publisher of record for this crate on crates.io."
 
 [[trusted.thiserror]]
 criteria = "safe-to-deploy"
@@ -14,3 +1541,262 @@ criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-10-09"
 end = "2027-07-02"
+
+[[trusted.tokio]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-12-25"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.tokio-macros]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-10-26"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.tokio-util]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-12"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
+
+[[trusted.tower]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2024-09-09"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for seanmonstar (Sean McArthur, hyper/reqwest author); co-owner carllerche is tokio-rs founder, legitimate shared ownership."
+
+[[trusted.tower-http]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2024-09-23"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for seanmonstar (Sean McArthur, hyper/reqwest author); co-owner carllerche is tokio-rs founder, legitimate shared ownership."
+
+[[trusted.tower-layer]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2019-04-27"
+end = "2027-07-04"
+notes = "Delegated trust: mozilla vouches for carllerche (Carl Lerche, tokio-rs founder); covers tower-layer/async-stream family where he is a historical publisher."
+
+[[trusted.tower-layer]]
+criteria = "safe-to-deploy"
+user-id = 3959 # Lucio Franco (LucioFranco)
+start = "2019-09-11"
+end = "2027-07-04"
+notes = "Delegated trust: LucioFranco is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.tower-service]]
+criteria = "safe-to-deploy"
+user-id = 3959 # Lucio Franco (LucioFranco)
+start = "2019-08-20"
+end = "2027-07-04"
+notes = "Delegated trust: LucioFranco is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.tracing]]
+criteria = "safe-to-deploy"
+user-id = 172786 # Hayden Stainsby (hds)
+start = "2024-11-27"
+end = "2027-07-04"
+notes = "Delegated trust: hds is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.tracing-core]]
+criteria = "safe-to-deploy"
+user-id = 172786 # Hayden Stainsby (hds)
+start = "2024-11-25"
+end = "2027-07-04"
+notes = "Delegated trust: hds is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.ucd-trie]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-21"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.unicode-ident]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2021-10-02"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.universal-hash]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-30"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.universal-hash]]
+criteria = "safe-to-deploy"
+user-id = 5059 # Artyom Pavlov (newpavlov)
+start = "2019-08-30"
+end = "2027-07-04"
+notes = "Delegated trust: newpavlov is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.universal-hash]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-27"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.untrusted]]
+criteria = "safe-to-deploy"
+user-id = 2342 # Brian Smith (briansmith)
+start = "2019-07-03"
+end = "2027-07-04"
+notes = "Delegated trust: briansmith is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.walkdir]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-09"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.webpki-roots]]
+criteria = "safe-to-deploy"
+user-id = 2751 # Joe Birr-Pixton (ctz)
+start = "2019-07-21"
+end = "2027-07-04"
+notes = "Delegated trust: ctz is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.winapi]]
+criteria = "safe-to-deploy"
+user-id = 63 # Peter Atashian (retep998)
+start = "2019-04-03"
+end = "2027-07-04"
+notes = "Delegated trust: retep998 is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.windows-sys]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-15"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.windows-targets]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-09-09"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.windows_aarch64_gnullvm]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-09-01"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.windows_aarch64_msvc]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-05"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.windows_i686_gnu]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-28"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.windows_i686_gnullvm]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2024-04-02"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.windows_i686_msvc]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-27"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.windows_x86_64_gnu]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-28"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.windows_x86_64_gnullvm]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-09-01"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.windows_x86_64_msvc]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-27"
+end = "2027-07-04"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.wnaf]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2026-06-09"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.wnaf]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/elliptic-curves"
+start = "2026-06-23"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.x25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 5289
+start = "2019-02-28"
+end = "2027-07-04"
+notes = "Delegated trust: isislovecruft is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.x25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2023-03-31"
+end = "2027-07-04"
+notes = "Delegated trust: rozbb is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.xxhash-rust]]
+criteria = "safe-to-deploy"
+user-id = 1551 # Douman (DoumanAsh)
+start = "2020-10-15"
+end = "2027-07-04"
+notes = "Delegated trust: DoumanAsh is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.zeroize]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-11-05"
+end = "2027-07-04"
+notes = "Delegated trust: tarcieri is the primary/founding maintainer of the RustCrypto or rustls ecosystem crates they publish; well-established, high-reputation identity in the Rust security ecosystem."
+
+[[trusted.zeroize]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-06-12"
+end = "2027-07-04"
+notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.zmij]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2025-12-18"
+end = "2027-07-04"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."

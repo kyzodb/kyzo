@@ -45,6 +45,15 @@ fn test_add() {
         op_add(&[DataValue::from(1.5), DataValue::from(2.5)]).unwrap(),
         DataValue::from(4.0)
     );
+    // Boundary: i64::MAX stays exact right up to the edge, then errors
+    // rather than wrapping to i64::MIN (release builds) or panicking
+    // (debug builds).
+    assert_eq!(
+        op_add(&[DataValue::from(i64::MAX - 1), DataValue::from(1)]).unwrap(),
+        DataValue::from(i64::MAX)
+    );
+    assert!(op_add(&[DataValue::from(i64::MAX), DataValue::from(1)]).is_err());
+    assert!(op_add(&[DataValue::from(i64::MIN), DataValue::from(-1)]).is_err());
 }
 
 #[test]
@@ -61,6 +70,13 @@ fn test_sub() {
         op_sub(&[DataValue::from(1.5), DataValue::from(2.5)]).unwrap(),
         DataValue::from(-1.0)
     );
+    // Boundary: i64::MIN - 1 (and i64::MAX - (-1)) overflow and error.
+    assert_eq!(
+        op_sub(&[DataValue::from(i64::MIN + 1), DataValue::from(1)]).unwrap(),
+        DataValue::from(i64::MIN)
+    );
+    assert!(op_sub(&[DataValue::from(i64::MIN), DataValue::from(1)]).is_err());
+    assert!(op_sub(&[DataValue::from(i64::MAX), DataValue::from(-1)]).is_err());
 }
 
 #[test]
@@ -77,6 +93,23 @@ fn test_mul() {
     assert_eq!(
         op_mul(&[DataValue::from(0.5), DataValue::from(3)]).unwrap(),
         DataValue::from(1.5)
+    );
+    // Boundary: i64::MAX itself stays exact; doubling it overflows.
+    assert_eq!(
+        op_mul(&[DataValue::from(i64::MAX), DataValue::from(1)]).unwrap(),
+        DataValue::from(i64::MAX)
+    );
+    assert!(op_mul(&[DataValue::from(i64::MAX), DataValue::from(2)]).is_err());
+    // Regression for fuzz artifact crash-f1ef21a6c4f99a02f719c5bde2689bb158df629f:
+    // parse-time constant folding of this literal product panicked with
+    // "attempt to multiply with overflow" in debug builds and silently
+    // wrapped in release builds; it must now be a clean typed error.
+    assert!(
+        op_mul(&[
+            DataValue::from(2222222000_i64),
+            DataValue::from(867076028303_i64)
+        ])
+        .is_err()
     );
 }
 
@@ -375,6 +408,13 @@ fn test_minus() {
         op_minus(&[DataValue::from(f64::NEG_INFINITY)]).unwrap(),
         DataValue::from(f64::INFINITY)
     );
+    // Boundary: i64::MIN has no positive i64 counterpart (i64::MAX is one
+    // short of |i64::MIN|), so negating it errors instead of wrapping.
+    assert_eq!(
+        op_minus(&[DataValue::from(i64::MIN + 1)]).unwrap(),
+        DataValue::from(i64::MAX)
+    );
+    assert!(op_minus(&[DataValue::from(i64::MIN)]).is_err());
 }
 
 #[test]
@@ -385,6 +425,12 @@ fn test_abs() {
         op_abs(&[DataValue::from(-1.5)]).unwrap(),
         DataValue::from(1.5)
     );
+    // Boundary: same asymmetry as unary minus.
+    assert_eq!(
+        op_abs(&[DataValue::from(i64::MIN + 1)]).unwrap(),
+        DataValue::from(i64::MAX)
+    );
+    assert!(op_abs(&[DataValue::from(i64::MIN)]).is_err());
 }
 
 #[test]
@@ -577,6 +623,15 @@ fn test_pow() {
         op_pow(&[DataValue::from(2), DataValue::from(10)]).unwrap(),
         DataValue::from(1024.0)
     );
+    // `pow` always promotes integer operands to f64 (unlike `+`/`-`/`*`,
+    // which stay exact `i64` until they overflow it): a result or exponent
+    // far past i64's range saturates to infinity rather than overflowing
+    // or panicking, the same as any other float op.
+    let huge = op_pow(&[DataValue::from(i64::MAX), DataValue::from(i64::MAX)])
+        .unwrap()
+        .get_float()
+        .unwrap();
+    assert!(huge.is_infinite());
 }
 
 #[test]
@@ -589,6 +644,14 @@ fn test_mod() {
     assert!(op_mod(&[DataValue::from(5.), DataValue::from(0.)]).is_ok());
     assert!(op_mod(&[DataValue::from(5.), DataValue::from(0)]).is_ok());
     assert!(op_mod(&[DataValue::from(5), DataValue::from(0)]).is_err());
+    // Boundary: i64::MIN % -1 is the one nonzero divisor `Rem` still can't
+    // service (the implied i64::MIN / -1 doesn't fit in i64) — distinct
+    // from, and in addition to, the zero-divisor case above.
+    assert!(op_mod(&[DataValue::from(i64::MIN), DataValue::from(-1)]).is_err());
+    assert_eq!(
+        op_mod(&[DataValue::from(i64::MIN), DataValue::from(2)]).unwrap(),
+        DataValue::from(0)
+    );
 }
 
 #[test]

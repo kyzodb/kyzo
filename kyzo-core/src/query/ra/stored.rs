@@ -139,6 +139,24 @@ impl StoredRA {
     /// left side is consumed as batches, and `probe` — built once here,
     /// exactly mirroring the row-at-a-time dispatch — is handed a
     /// `&[DataValue]` slice per left row through [`PrefixProbeBatchJoin`].
+    ///
+    /// Current-state (`Facts`) probes are served from this relation's
+    /// segment when `segments` carries an engine: the point-lookup case and
+    /// the plain (unbounded) prefix case both become a binary search over
+    /// the dense decoded buffer instead of a bitemporal seek — see
+    /// [`segment_at`](Self::segment_at) for the once-per-instantiation
+    /// witness/build (so the probe loop itself pays zero synchronization)
+    /// and `engines/segments.rs`'s module docs for why a served segment is
+    /// current-state-sound. The BOUNDED prefix case (residual filter bounds
+    /// on trailing key columns) stays on the storage scan: on the workload
+    /// that motivated this conversion (`tc.kz`'s recursive join, which
+    /// carries no residual filters) it is cold, so converting it now would
+    /// spend risk on a path this pass has no evidence for. A `TempStore` or
+    /// as-of (`StoredWithValidity`) right side never reaches here — a
+    /// segment is a current-state-only acceleration structure, and
+    /// [`StoredWithValidityRA::prefix_join_batched`] has its own probe with
+    /// no segment argument at all.
+    ///
     /// Every match this relation's storage decodes is already an owned
     /// `Tuple` (the storage layer's own decode boundary, unavoidable and
     /// identical on both paths); what this saves is the left row's
@@ -150,6 +168,7 @@ impl StoredRA {
         left: BatchIter<'a>,
         (left_join_indices, right_join_indices): (Vec<usize>, Vec<usize>),
         eliminate_indices: BTreeSet<usize>,
+        segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
         let mut right_invert_indices = right_join_indices.iter().enumerate().collect_vec();
         right_invert_indices.sort_by_key(|(_, b)| **b);
@@ -159,40 +178,82 @@ impl StoredRA {
             .collect_vec();
 
         let key_len = self.storage.metadata.keys.len();
+
+        // Witnessed/built once here, not per probe: the same discipline
+        // `iter_batched`'s full-scan dispatch uses, so the soundness
+        // argument (served segment ⇒ witness equality ⇒ no intervening
+        // write) is established once per plan-node instantiation and the
+        // hot probe loop below never touches the watermark again.
+        let seg = match (self.storage.keyspace_kind, segments) {
+            (KeyspaceKind::Facts, Segments(Some(engine))) => self.segment_at(tx, engine)?,
+            _ => None,
+        };
+
         let probe: Box<dyn FnMut(&[DataValue]) -> Result<TupleIter<'a>> + 'a> =
             if left_to_prefix_indices.len() >= key_len {
-                Box::new(move |left_row: &[DataValue]| -> Result<TupleIter<'a>> {
-                    // Zero-clone: the key bytes are encoded straight from
-                    // the projected left row; no prefix tuple exists.
-                    let _ = key_len;
-                    Ok(
-                        match self.storage.current_row_projected(
-                            tx,
-                            left_row,
-                            &left_to_prefix_indices,
-                        )? {
-                            None => Box::new(iter::empty()),
-                            Some(found) => {
-                                for (lk, rk) in
-                                    left_join_indices.iter().zip(right_join_indices.iter())
-                                {
-                                    let found_val = found.get(*rk).ok_or_else(|| {
-                                        StoredRowTooShortError(
-                                            self.storage.name.to_string(),
-                                            *rk,
-                                            found.len(),
-                                            self.span,
-                                        )
-                                    })?;
-                                    if left_row[*lk] != *found_val {
-                                        return Ok(Box::new(iter::empty()));
-                                    }
+                if let Some(seg) = seg {
+                    Box::new(move |left_row: &[DataValue]| -> Result<TupleIter<'a>> {
+                        let prefix: Vec<DataValue> = left_to_prefix_indices[..key_len]
+                            .iter()
+                            .map(|&i| left_row[i].clone())
+                            .collect();
+                        for i in seg.prefix_range(&prefix) {
+                            let found = seg.row(i);
+                            let mut matches = true;
+                            for (lk, rk) in left_join_indices.iter().zip(right_join_indices.iter())
+                            {
+                                let found_val = found.get(*rk).ok_or_else(|| {
+                                    StoredRowTooShortError(
+                                        self.storage.name.to_string(),
+                                        *rk,
+                                        found.len(),
+                                        self.span,
+                                    )
+                                })?;
+                                if left_row[*lk] != *found_val {
+                                    matches = false;
+                                    break;
                                 }
-                                Box::new(iter::once(Ok(found)))
                             }
-                        },
-                    )
-                })
+                            if matches {
+                                return Ok(Box::new(iter::once(Ok(found.to_vec()))));
+                            }
+                        }
+                        Ok(Box::new(iter::empty()))
+                    })
+                } else {
+                    Box::new(move |left_row: &[DataValue]| -> Result<TupleIter<'a>> {
+                        // Zero-clone: the key bytes are encoded straight from
+                        // the projected left row; no prefix tuple exists.
+                        Ok(
+                            match self.storage.current_row_projected(
+                                tx,
+                                left_row,
+                                &left_to_prefix_indices,
+                            )? {
+                                None => Box::new(iter::empty()),
+                                Some(found) => {
+                                    for (lk, rk) in
+                                        left_join_indices.iter().zip(right_join_indices.iter())
+                                    {
+                                        let found_val = found.get(*rk).ok_or_else(|| {
+                                            StoredRowTooShortError(
+                                                self.storage.name.to_string(),
+                                                *rk,
+                                                found.len(),
+                                                self.span,
+                                            )
+                                        })?;
+                                        if left_row[*lk] != *found_val {
+                                            return Ok(Box::new(iter::empty()));
+                                        }
+                                    }
+                                    Box::new(iter::once(Ok(found)))
+                                }
+                            },
+                        )
+                    })
+                }
             } else {
                 let other_bindings = self
                     .bindings
@@ -221,11 +282,22 @@ impl StoredRA {
                             l_bound,
                             u_bound,
                         ),
-                        None => self.storage.scan_prefix_projected(
-                            tx,
-                            left_row,
-                            &left_to_prefix_indices,
-                        ),
+                        None => match &seg {
+                            Some(s) => {
+                                let prefix: Vec<DataValue> = left_to_prefix_indices
+                                    .iter()
+                                    .map(|&i| left_row[i].clone())
+                                    .collect();
+                                let s = s.clone();
+                                let range = s.prefix_range(&prefix);
+                                Box::new(range.map(move |i| Ok(s.row(i).to_vec())))
+                            }
+                            None => self.storage.scan_prefix_projected(
+                                tx,
+                                left_row,
+                                &left_to_prefix_indices,
+                            ),
+                        },
                     })
                 })
             };

@@ -38,20 +38,33 @@
  *   `EvalRuleSet::new`. One concept, one name.
  * - **`contained_rules` is re-homed here** (the compile tier owns the
  *   dependency map): upstream declared it on `MagicInlineRule` in
- *   `data/program.rs`; the landed data tier deliberately omitted it. The
- *   port is upstream's exact version — negated occurrences count toward
- *   `Many` (see the method's doc for why that is unobservable but right).
- *   [`ContainedRuleMultiplicity`] itself stays declared in
+ *   `data/program.rs`; the landed data tier deliberately omitted it.
+ *   Upstream's original numbered a body's dependencies by STORE NAME,
+ *   collapsing repeated occurrences of the same store into a `Many` that
+ *   forced a complete naive re-join every epoch — correct, but with no
+ *   delta narrowing at all for a body mentioning one store twice (the
+ *   self-join shape: `tc(x,z), tc(z,y)`; Andersen's `load`/`store` rules,
+ *   each mentioning `pt` twice). That shape's memory blowup is issue #68's
+ *   dominant driver, confirmed both structurally (this collapse) and by
+ *   measurement (`kyzo-core/examples/fixpoint_mem_profile.rs`: 18-43×
+ *   more allocations per output row than an equivalent single-occurrence
+ *   rule, growing super-linearly with scale where the single-occurrence
+ *   case stays flat). The fix here numbers by OCCURRENCE — this body's
+ *   position in `MagicInlineRule::body`, one id per `Rule`/`NegatedRule`
+ *   atom — so two occurrences of the same store get two independent
+ *   [`AtomOccurrence`]s and each is delta-selectable on its own: the
+ *   standard semi-naive self-join rewrite, `Δ(P⋈P) = (ΔP⋈P) ∪ (P⋈ΔP)`, one
+ *   pass per occurrence. [`AtomOccurrence`] stays declared in
  *   `query/eval.rs` (its one consumer, the delta discipline) — ONE
- *   definition; eval's note that it "lives here until the compile tier
- *   lands" resolves in eval's favour, since the seam trait
- *   `RuleBody::contained_rules` names it in its signature.
+ *   definition; the seam trait `RuleBody::contained_rules` names it in its
+ *   signature.
  * - **Compiled rules implement the evaluator's seam.**
  *   [`CompiledRuleBody`] binds a compiled plan to a transaction and
  *   implements `query/eval.rs::RuleBody`: `for_each_derivation` walks the
  *   plan's `TupleIter` with `delta_from` threaded to the rule-store scans
- *   (every occurrence deltas; negation reads totals — the operators
- *   enforce it, see `query/ra.rs`). [`bind_for_eval`] assembles the
+ *   (the ONE occurrence it names deltas; every other occurrence, including
+ *   another of the same store, reads its total; negation always reads
+ *   totals — the operators enforce it, see `query/ra.rs`). [`bind_for_eval`] assembles the
  *   `EvalProgram` stratum by stratum, with the fixed-rule evaluator
  *   injected by the caller (SEAM, fixed-rule wiring in db.rs; tests use
  *   the uninhabited [`NoFixedRules`]).
@@ -136,8 +149,8 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
 use crate::data::value::DataValue;
 use crate::query::eval::{
-    ContainedRuleMultiplicity, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
-    FixedRuleEval, Premises, RuleBody,
+    AtomOccurrence, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval, Premises,
+    RuleBody,
 };
 use crate::query::levels::EpochStore;
 use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
@@ -234,34 +247,61 @@ impl CompiledInlineRules {
 #[derive(Debug)]
 pub(crate) struct CompiledRule {
     pub(crate) relation: RelAlgebra,
-    pub(crate) contained_rules: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+    pub(crate) contained_rules: BTreeMap<AtomOccurrence, MagicSymbol>,
+}
+
+/// The atom-occurrence numbering shared by [`MagicInlineRule::contained_rules`]
+/// and every `TempStoreRA`-constructing call site in
+/// `compile_magic_rule_body` — both walk `body: &[MagicAtom]` left to right
+/// and must agree on which occurrence id names which atom, so the numbering
+/// itself lives in exactly one place. One id per `Rule`/`NegatedRule` atom,
+/// in body order; every other atom kind is not delta-selectable and consumes
+/// no id.
+pub(crate) fn atom_occurrences(
+    body: &[MagicAtom],
+) -> impl Iterator<Item = (AtomOccurrence, &MagicAtom)> {
+    body.iter()
+        .filter(|atom| matches!(atom, MagicAtom::Rule(_) | MagicAtom::NegatedRule(_)))
+        .enumerate()
+        .map(|(i, atom)| (AtomOccurrence(i), atom))
 }
 
 impl MagicInlineRule {
-    /// The in-memory rule stores this body mentions, with multiplicity —
-    /// re-homed from the original's `data/program.rs` (the compile tier
-    /// owns the dependency map; the data tier deliberately dropped it).
+    /// Every in-memory rule store this body reads (positively OR
+    /// negatively), keyed by occurrence — re-homed from the original's
+    /// `data/program.rs` (the compile tier owns the dependency map; the
+    /// data tier deliberately dropped it). Both `Rule` and `NegatedRule`
+    /// atoms are entered: this map is also `StoreLifetimes`' dependency
+    /// source (`note_use`, in `eval.rs`), and a store read only inside a
+    /// negation is used just as much as one read positively — dropping it
+    /// here would let its lifetime end before a later stratum's negation
+    /// reads it (`eval::invariant`: "a referenced rule has no store").
     ///
-    /// Ported UPSTREAM-exact: negated occurrences count toward `Many`.
-    /// In a stratified program this is unobservable — a negated dependency
-    /// is complete strictly below, so its delta is empty and the `Many`
-    /// complete-run trigger can never fire on its account — but the
-    /// conservative multiplicity is the compile tier's law, not the eval
-    /// harness's positives-only approximation (reconciliation note,
-    /// eval review F6).
-    pub(crate) fn contained_rules(&self) -> BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+    /// A store mentioned twice gets two entries (occurrence-keyed, not
+    /// name-keyed): the self-join shape (`tc(x,z), tc(z,y)`; Andersen's
+    /// `load`/`store` rules, each mentioning `pt` twice) is exactly the
+    /// case the predecessor name-keyed scheme collapsed into a `Many` that
+    /// forced a complete naive re-join every epoch, no delta narrowing at
+    /// all — issue #68's dominant memory-blowup driver. Numbering by
+    /// occurrence lets each be delta-selected independently.
+    ///
+    /// A negated occurrence's entry is never actually selected for delta
+    /// narrowing in practice — negation always reads totals
+    /// (`NegJoin::iter_batched` never consults `delta_from` for its own
+    /// right side), and stratification guarantees a negated dependency is
+    /// complete strictly below, so its delta is empty by the time this
+    /// body runs and `eval.rs`'s dispatch loop skips it (`!has_delta()`).
+    /// If it ever DID fire regardless, the result would still be sound —
+    /// no real `TempStoreRA` reads this occurrence's delta, so every
+    /// occurrence in the tree would read its total, the harmless
+    /// (wasteful, never-taken) equivalent of the predecessor's `Many`
+    /// fallback.
+    pub(crate) fn contained_rules(&self) -> BTreeMap<AtomOccurrence, MagicSymbol> {
         let mut coll = BTreeMap::new();
-        for atom in self.body.iter() {
+        for (occurrence, atom) in atom_occurrences(&self.body) {
             match atom {
                 MagicAtom::Rule(rule) | MagicAtom::NegatedRule(rule) => {
-                    match coll.entry(rule.name.clone()) {
-                        std::collections::btree_map::Entry::Vacant(ent) => {
-                            ent.insert(ContainedRuleMultiplicity::One);
-                        }
-                        std::collections::btree_map::Entry::Occupied(mut ent) => {
-                            *ent.get_mut() = ContainedRuleMultiplicity::Many;
-                        }
-                    }
+                    coll.insert(occurrence, rule.name.clone());
                 }
                 _ => {}
             }
@@ -368,9 +408,21 @@ pub(crate) fn compile_magic_rule_body(
         serial_id += 1;
         ret
     };
+    // One id per `Rule`/`NegatedRule` atom, in body order — the exact
+    // numbering `MagicInlineRule::contained_rules` (via `atom_occurrences`)
+    // assigns over this same `rule.body`, so a `TempStoreRA` built here and
+    // the occurrence key `eval.rs`'s delta discipline selects it by always
+    // agree.
+    let mut occurrence_counter = 0usize;
+    let mut next_occurrence = move || {
+        let occ = AtomOccurrence(occurrence_counter);
+        occurrence_counter += 1;
+        occ
+    };
     for atom in &rule.body {
         match atom {
             MagicAtom::Rule(rule_app) => {
+                let occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
                     RuleNotFound(
                         rule_app.name.as_plain_symbol().to_string(),
@@ -403,7 +455,12 @@ pub(crate) fn compile_magic_rule_body(
                     }
                 }
 
-                let right = RelAlgebra::derived(right_vars, rule_app.name.clone(), rule_app.span);
+                let right = RelAlgebra::derived(
+                    right_vars,
+                    rule_app.name.clone(),
+                    occurrence,
+                    rule_app.span,
+                );
                 debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                 ret = ret.join(right, prev_joiner_vars, right_joiner_vars, rule_app.span)?;
             }
@@ -572,6 +629,12 @@ pub(crate) fn compile_magic_rule_body(
                 }
             }
             MagicAtom::NegatedRule(rule_app) => {
+                // Consumes an occurrence id (keeps numbering in lockstep
+                // with `MagicInlineRule::contained_rules`) but the id is
+                // never selected for delta narrowing — negation always
+                // reads totals (`NegJoin::iter_batched` never threads
+                // `delta_from` to its own right side).
+                let negated_occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
                     RuleNotFound(
                         rule_app.name.as_plain_symbol().to_string(),
@@ -603,7 +666,12 @@ pub(crate) fn compile_magic_rule_body(
                     }
                 }
 
-                let right = RelAlgebra::derived(right_vars, rule_app.name.clone(), rule_app.span);
+                let right = RelAlgebra::derived(
+                    right_vars,
+                    rule_app.name.clone(),
+                    negated_occurrence,
+                    rule_app.span,
+                );
                 debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                 ret = ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rule_app.span)?;
             }
@@ -826,7 +894,7 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
     fn for_each_derivation(
         &self,
         stores: &BTreeMap<MagicSymbol, EpochStore>,
-        delta_from: Option<&MagicSymbol>,
+        delta_from: Option<AtomOccurrence>,
         _want_premises: bool,
         f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
@@ -848,7 +916,7 @@ impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
         Ok(())
     }
 
-    fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+    fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
         &self.plan.contained_rules
     }
 }
@@ -1837,6 +1905,35 @@ mod tests {
         });
     }
 
+    /// THREE occurrences of the same store in one body (`path` appears
+    /// three times): the self-join scheme generalizes past two occurrences
+    /// because every occurrence with a changed dependency gets its own
+    /// independent delta pass — verified against the naive oracle through
+    /// the real compiled pipeline.
+    #[test]
+    fn differential_three_way_self_join() {
+        assert_ra_matches_oracle(&Program {
+            rules: vec![
+                Rule::plain(
+                    "path",
+                    vec![tx(), ty()],
+                    vec![lit("edge", vec![tx(), ty()], false)],
+                ),
+                Rule::plain(
+                    "path",
+                    vec![tx(), Term::Var("W")],
+                    vec![
+                        lit("path", vec![tx(), ty()], false),
+                        lit("path", vec![ty(), tz()], false),
+                        lit("path", vec![tz(), Term::Var("W")], false),
+                    ],
+                ),
+            ],
+            facts: edge_facts(&[(1, 2), (2, 3), (3, 1), (3, 4), (4, 5)]),
+            ..Program::default()
+        });
+    }
+
     /// Stratified negation: unreachable vertex pairs, negating a
     /// recursive rule's store (mem_neg join paths) across a stratum
     /// boundary.
@@ -1878,6 +1975,55 @@ mod tests {
                 ),
             ],
             facts: edge_facts(&[(1, 2), (2, 3), (4, 4)]),
+            ..Program::default()
+        });
+    }
+
+    /// The self-join shape (a store mentioned TWICE in one body) through a
+    /// MEET-aggregation head, RA-BACKED (`compile_magic_rule_body` →
+    /// `TempStoreRA`/`incremental_meet_eval`) rather than eval.rs's
+    /// hand-rolled model harness (`differential_meet_self_join_many_
+    /// multiplicity`) — the review of issue #68's fix flagged that the
+    /// model-harness tests can't see bugs in the real compiled scan path
+    /// at all (confirmed: mutating `TempStoreRA::iter_batched`'s
+    /// `scan_epoch` test made this exact rule shape diverge from the
+    /// oracle while the model-harness suite stayed green). `m` appears
+    /// twice in the second rule's body — the case that used to collapse
+    /// to `ContainedRuleMultiplicity::Many` (a full non-delta re-run every
+    /// epoch) and now runs two independent per-occurrence delta passes.
+    #[test]
+    fn differential_meet_self_join_through_ra() {
+        let named = |name: &str| Some((parse_aggr(name).expect("aggr exists"), vec![]));
+        let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
+        facts.insert(
+            "seed",
+            [(1, 5), (2, 7), (3, 9)]
+                .iter()
+                .map(|(k, l)| vec![v(*k), v(*l)])
+                .collect(),
+        );
+        assert_ra_matches_oracle(&Program {
+            rules: vec![
+                Rule::aggregated(
+                    "m",
+                    vec![tx(), ty()],
+                    vec![None, named("min")],
+                    vec![lit("seed", vec![tx(), ty()], false)],
+                ),
+                // m(x, min w) :- m(x, _), m(w', w), edge(w', x): node x
+                // adopts any predecessor's value; `m` appears twice.
+                Rule::aggregated(
+                    "m",
+                    vec![tx(), tz()],
+                    vec![None, named("min")],
+                    vec![
+                        lit("m", vec![tx(), ty()], false),
+                        lit("m", vec![Term::Var("W"), tz()], false),
+                        lit("edge", vec![Term::Var("W"), tx()], false),
+                    ],
+                ),
+            ],
+            facts,
             ..Program::default()
         });
     }
@@ -1969,35 +2115,67 @@ mod tests {
         });
     }
 
-    /// The contained-rules multiplicity ports upstream's counting: a store
-    /// mentioned positively AND negatively counts as Many; distinct stores
-    /// stay One.
+    /// `contained_rules` is keyed by OCCURRENCE (position among
+    /// `Rule`/`NegatedRule` atoms), not by store name: a positive and a
+    /// negated occurrence of the same store get distinct occurrence ids,
+    /// and BOTH are entered into the map — this map is also
+    /// `StoreLifetimes`'s dependency source (`eval.rs`'s `note_use`), and a
+    /// store read only inside a negation is used just as much as one read
+    /// positively (dropping it would let its lifetime end before a later
+    /// stratum's negation reads it). Only the POSITIVE occurrence is ever
+    /// actually selected for delta narrowing in practice — negation always
+    /// reads totals, and stratification guarantees a negated dependency's
+    /// delta is empty by the time this body runs.
     #[test]
-    fn contained_rules_counts_negated_occurrences() {
+    fn contained_rules_keys_by_occurrence_not_name() {
         let (x, y) = (sym("x"), sym("y"));
         let rule = MagicInlineRule {
             head: vec![x.clone()],
             aggr: vec![None],
             body: vec![
-                rule_atom("a", &[x.clone(), y.clone()]),
-                neg_rule_atom("a", &[y.clone(), x.clone()]),
-                rule_atom("b", &[x.clone(), y.clone()]),
-                rel_atom("edge", &[x, y]),
+                rule_atom("a", &[x.clone(), y.clone()]),     // occurrence 0
+                neg_rule_atom("a", &[y.clone(), x.clone()]), // occurrence 1 (negated)
+                rule_atom("b", &[x.clone(), y.clone()]),     // occurrence 2
+                rel_atom("edge", &[x, y]),                   // not Rule/NegatedRule: no occurrence
             ],
         };
         let contained = rule.contained_rules();
         assert_eq!(
-            contained.get(&muggle("a")),
-            Some(&ContainedRuleMultiplicity::Many),
-            "positive + negated occurrences of one store count as Many (upstream's law)"
+            contained,
+            BTreeMap::from([
+                (AtomOccurrence(0), muggle("a")),
+                (AtomOccurrence(1), muggle("a")),
+                (AtomOccurrence(2), muggle("b")),
+            ]),
+            "occurrence 1 (the negated `a`) is numbered AND entered — distinct \
+             from occurrence 0's positive `a`, but both name store `a`"
         );
+    }
+
+    /// The self-join shape (`pt(...), pt(...)` — Andersen's `load`/`store`
+    /// rules, issue #68): the SAME store mentioned twice gets TWO
+    /// occurrences, each independently delta-selectable — the predecessor
+    /// name-keyed scheme collapsed these into one `Many` entry and lost
+    /// the ability to narrow either occurrence to a delta at all.
+    #[test]
+    fn contained_rules_gives_repeated_store_two_independent_occurrences() {
+        let (x, y, z) = (sym("x"), sym("y"), sym("z"));
+        let rule = MagicInlineRule {
+            head: vec![x.clone(), z.clone()],
+            aggr: vec![None, None],
+            body: vec![
+                rule_atom("pt", &[x.clone(), y.clone()]),
+                rule_atom("pt", &[y, z]),
+            ],
+        };
+        let contained = rule.contained_rules();
         assert_eq!(
-            contained.get(&muggle("b")),
-            Some(&ContainedRuleMultiplicity::One)
-        );
-        assert!(
-            !contained.contains_key(&muggle("edge")),
-            "stored relations are not rule stores"
+            contained,
+            BTreeMap::from([
+                (AtomOccurrence(0), muggle("pt")),
+                (AtomOccurrence(1), muggle("pt")),
+            ]),
+            "two occurrences of `pt`, keyed independently — not collapsed to one entry"
         );
     }
 

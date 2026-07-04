@@ -23,6 +23,7 @@ use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
+use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::query::ra::StoredRowTooShortError;
 use crate::query::ra::join::{get_eliminate_indices, join_is_prefix};
@@ -113,7 +114,7 @@ impl NegJoin {
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {

@@ -138,6 +138,35 @@ pub(crate) fn encode_projected_key_with_suffix(
     EncodedKey(ret)
 }
 
+/// Encode a key from a tuple PREFIX plus literal values appended after it,
+/// without ever materializing the concatenated tuple — the same
+/// zero-clone shape as [`encode_projected_key_with_suffix`], specialized to
+/// a contiguous prefix (no column-index indirection, so no `cols: &[usize]`
+/// allocation on the caller's side either). Byte-identical to
+/// `[tuple, suffix].concat().encode_as_key(relation)` (pinned by test).
+///
+/// This is the bulk-write path's per-row key encoder (every fact write's
+/// bitemporal key, and the current-row probe's bounds): it used to go
+/// through an intermediate `Vec<DataValue>` (tuple columns copied, then the
+/// bitemporal slots or the `Bot` sentinel pushed) before a second pass
+/// re-walked it into bytes. One pass, one allocation.
+pub(crate) fn encode_key_with_suffix(
+    relation: RelationId,
+    tuple: &[DataValue],
+    suffix: &[DataValue],
+) -> EncodedKey {
+    let mut ret =
+        Vec::with_capacity(EncodedKey::RELATION_PREFIX_LEN + 14 * (tuple.len() + suffix.len()));
+    ret.extend(relation.raw_encode());
+    for val in tuple {
+        ret.encode_datavalue(val);
+    }
+    for val in suffix {
+        ret.encode_datavalue(val);
+    }
+    EncodedKey(ret)
+}
+
 /// Encode a tuple as a storage key under the given relation id. The public
 /// face of the key format for benchmarks and tooling; the engine uses the
 /// internal typed path.
@@ -330,6 +359,57 @@ mod tests {
             assert_eq!(
                 got.0, expected.0,
                 "trial {trial}: rel {rel:?} row {row:?} cols {cols:?} suffix {suffix:?}"
+            );
+        }
+    }
+
+    /// [`encode_key_with_suffix`]'s load-bearing law: byte-identical to
+    /// `[tuple, suffix].concat().encode_as_key(rel)` — the bulk-write
+    /// path's per-row key encoder must not shift a single byte of the
+    /// sealed on-disk key format, only avoid materializing the concatenated
+    /// tuple.
+    #[test]
+    fn key_with_suffix_encoding_is_byte_identical_to_materialized() {
+        let kinds: Vec<DataValue> = vec![
+            DataValue::Null,
+            DataValue::Bool(true),
+            DataValue::from(-42i64),
+            DataValue::Num(Num::Float(2.5)),
+            DataValue::from("with_suffix"),
+            DataValue::Bytes(vec![0, 255, 7]),
+            DataValue::List(vec![DataValue::from(1), DataValue::from("x")]),
+            DataValue::Validity(Validity {
+                timestamp: ValidityTs(std::cmp::Reverse(9)),
+                is_assert: std::cmp::Reverse(true),
+            }),
+            DataValue::Bot,
+        ];
+        let mut state = 0xC0FF_EE01_u64;
+        let mut next = move |m: usize| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as usize % m
+        };
+        for trial in 0..500 {
+            let rel = RelationId(1 + (trial % 7) as u64);
+            let tuple: Vec<DataValue> = (0..next(6))
+                .map(|_| kinds[next(kinds.len())].clone())
+                .collect();
+            let suffix: Vec<DataValue> = (0..next(3))
+                .map(|_| kinds[next(kinds.len())].clone())
+                .collect();
+
+            let materialized: Vec<DataValue> = tuple
+                .iter()
+                .cloned()
+                .chain(suffix.iter().cloned())
+                .collect();
+            let expected = materialized.encode_as_key(rel);
+            let got = encode_key_with_suffix(rel, &tuple, &suffix);
+            assert_eq!(
+                got.0, expected.0,
+                "trial {trial}: rel {rel:?} tuple {tuple:?} suffix {suffix:?}"
             );
         }
     }

@@ -85,6 +85,7 @@
 //! [`sim_powercut`]: SimStorage::sim_powercut
 
 use std::cell::Cell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::sync::{Arc, Condvar, Mutex};
@@ -256,7 +257,7 @@ fn map_range<'m, V>(
     map: &'m BTreeMap<Vec<u8>, V>,
     lower: &[u8],
     upper: Option<&[u8]>,
-) -> impl Iterator<Item = (&'m Vec<u8>, &'m V)> {
+) -> impl Iterator<Item = (&'m Vec<u8>, &'m V)> + use<'m, V> {
     let inverted = upper.is_some_and(|u| lower >= u);
     let bounds: (Bound<&[u8]>, Bound<&[u8]>) = if inverted {
         // Included(x)..Excluded(x) is a legal, empty range.
@@ -690,23 +691,89 @@ pub(crate) struct SimWriteTx {
 }
 
 impl SimWriteTx {
-    /// The transaction's visible view of `[lower, upper)`: snapshot with the
-    /// write set overlaid, tombstones erased.
-    fn visible(&self, lower: &[u8], upper: Option<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut merged: BTreeMap<Vec<u8>, Vec<u8>> = map_range(&self.snapshot, lower, upper)
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        for (k, w) in map_range(&self.writes, lower, upper) {
-            match w {
-                Some(v) => {
-                    merged.insert(k.clone(), v.clone());
-                }
-                None => {
-                    merged.remove(k);
-                }
+    /// The transaction's visible view of `[lower, upper)`, LAZY: a
+    /// sorted-merge of two cursors (`self.snapshot`'s range, `self.writes`'s
+    /// range) rather than the eager "clone the whole snapshot range into a
+    /// `BTreeMap`, then overlay writes" `visible` used to do. That eager
+    /// build cost O(range size) per call regardless of how many items the
+    /// caller actually consumes — the same catastrophic shape
+    /// `SimReadTx::range_scan` had (see its doc comment): `SimSkipIter`
+    /// reopens a fresh range at every seek step and drops all but the first
+    /// item, so an O(n)-key skip scan paid O(n²) here too, on the ordinary
+    /// "insert/update from a Datalog query" write-lock script path
+    /// (`runtime/db.rs` routes every write-lock script's WHOLE query body
+    /// through a `SimWriteTx`, so any recursive/skip-scanning read inside
+    /// such a script hit this). On a key present in both cursors, the write
+    /// entry shadows the snapshot entry (read-your-own-writes); a `None`
+    /// write is a tombstone (erased, not yielded) whether or not a snapshot
+    /// entry exists under it.
+    fn visible_lazy<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: Option<&[u8]>,
+    ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a {
+        let mut snap = map_range(&self.snapshot, lower, upper).peekable();
+        let mut writes = map_range(&self.writes, lower, upper).peekable();
+        std::iter::from_fn(move || {
+            loop {
+                let snap_key = snap.peek().map(|(k, _)| *k);
+                let write_key = writes.peek().map(|(k, _)| *k);
+                return match (snap_key, write_key) {
+                    (None, None) => None,
+                    // Only the snapshot has keys left: yield as is.
+                    (Some(_), None) => {
+                        let (k, v) = snap.next().expect("peeked Some");
+                        Some((k.clone(), v.clone()))
+                    }
+                    // Only the write set has keys left.
+                    (None, Some(_)) => {
+                        let (k, w) = writes.next().expect("peeked Some");
+                        match w {
+                            Some(v) => Some((k.clone(), v.clone())),
+                            None => continue,
+                        }
+                    }
+                    (Some(sk), Some(wk)) => match sk.cmp(wk) {
+                        // The snapshot's next key is strictly before the
+                        // write set's: not shadowed, yield it as is.
+                        Ordering::Less => {
+                            let (k, v) = snap.next().expect("peeked Some");
+                            Some((k.clone(), v.clone()))
+                        }
+                        // The write set's next key is strictly before the
+                        // snapshot's (an insert with nothing shadowed, or a
+                        // tombstone over a key the snapshot never had).
+                        Ordering::Greater => {
+                            let (k, w) = writes.next().expect("peeked Some");
+                            match w {
+                                Some(v) => Some((k.clone(), v.clone())),
+                                None => continue,
+                            }
+                        }
+                        // Same key in both: the write shadows the snapshot
+                        // entry — advance BOTH cursors, and only yield if
+                        // the write isn't a tombstone.
+                        Ordering::Equal => {
+                            snap.next();
+                            let (k, w) = writes.next().expect("peeked Some");
+                            match w {
+                                Some(v) => Some((k.clone(), v.clone())),
+                                None => continue,
+                            }
+                        }
+                    },
+                };
             }
-        }
-        merged.into_iter().collect()
+        })
+    }
+
+    /// The transaction's visible view of `[lower, upper)`: snapshot with the
+    /// write set overlaid, tombstones erased. Eager (used only by
+    /// `del_range`, which must collect the doomed keys before mutating
+    /// `self.writes` anyway — a single pass over the range, not the
+    /// per-seek-step reopening `range_skip_scan_tuple` does).
+    fn visible(&self, lower: &[u8], upper: Option<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.visible_lazy(lower, upper).collect()
     }
 
     fn track_key(&self, key: &[u8]) {
@@ -892,10 +959,17 @@ impl ReadTx for SimReadTx {
         {
             return Box::new(std::iter::once(Err(e)));
         }
-        let items: Vec<_> = map_range(&self.snapshot, lower, Some(upper))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        Box::new(items.into_iter().map(Ok))
+        // Lazy: `BTreeMap::range` is already a cursor, so cloning per
+        // element as it's pulled costs O(1) amortized per item. The
+        // predecessor's `.collect()` into a `Vec` up front made every call
+        // O(remaining range size) regardless of how many items the caller
+        // actually consumes — catastrophic under `SimSkipIter`, which opens
+        // a fresh `range_scan` at every seek step and consumes only the
+        // FIRST item (`range.next()` then `drop(range)`): an O(n) skip
+        // scan over a range of n keys paid O(n²) total instead of O(n).
+        Box::new(
+            map_range(&self.snapshot, lower, Some(upper)).map(|(k, v)| Ok((k.clone(), v.clone()))),
+        )
     }
 
     fn range_skip_scan_tuple<'a>(
@@ -962,7 +1036,7 @@ impl ReadTx for SimWriteTx {
         {
             return Box::new(std::iter::once(Err(e)));
         }
-        Box::new(self.visible(lower, Some(upper)).into_iter().map(Ok))
+        Box::new(self.visible_lazy(lower, Some(upper)).map(Ok))
     }
 
     fn range_skip_scan_tuple<'a>(
@@ -985,7 +1059,7 @@ impl ReadTx for SimWriteTx {
         if let Err(e) = self.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
         }
-        Box::new(self.visible(&[], None).into_iter().map(Ok))
+        Box::new(self.visible_lazy(&[], None).map(Ok))
     }
 }
 

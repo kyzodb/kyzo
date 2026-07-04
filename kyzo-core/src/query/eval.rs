@@ -529,19 +529,26 @@ impl InterruptTicker<'_> {
 // SEAM: the compile tier's rule surface
 // ─────────────────────────────────────────────────────────────────────────
 
-/// How many times a rule's body mentions one dependency store. Drives the
-/// delta discipline: a changed dependency mentioned `Many` times forces a
-/// complete re-run of the rule (delta substitution replaces *every*
-/// occurrence of the store, which would miss delta×old combinations).
+/// The stable, positional key selecting one body-atom occurrence for
+/// semi-naive delta substitution — assigned by walking a rule body
+/// left-to-right, one id per `Rule`/`NegatedRule` atom in body order
+/// (`compile.rs`'s `MagicInlineRule::contained_rules` and the matching
+/// `TempStoreRA` construction sites in `query/ra/mod.rs` number in
+/// lockstep, both walking the same `body: &[MagicAtom]`).
 ///
-/// The original declared this in `query/compile.rs`; it is eval-tier
-/// substance (only the delta discipline consumes it) and lives here until
-/// the compile tier lands and populates it.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) enum ContainedRuleMultiplicity {
-    One,
-    Many,
-}
+/// Positional, not name-keyed: a store mentioned twice in one body — the
+/// self-join shape (`tc(x,z), tc(z,y)`; Andersen's `load`/`store` rules,
+/// each mentioning `pt` twice) — gets two distinct occurrences, and each
+/// can be delta-selected independently. That is the standard semi-naive
+/// self-join rewrite, `Δ(P⋈P) = (ΔP⋈P) ∪ (P⋈ΔP)` — one derivation pass per
+/// OCCURRENCE. The predecessor name-keyed scheme could only ask "does the
+/// body mention store `k`", collapsing both occurrences together; it could
+/// not select one occurrence's delta while the other still reads the
+/// total, so it fell back to a complete naive re-join of the WHOLE
+/// accumulated relation every epoch — no delta narrowing at all for
+/// exactly this rule shape (issue #68's dominant memory-blowup driver).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct AtomOccurrence(pub(crate) usize);
 
 /// The premise rows of one derivation, for provenance. `NotRequested` when
 /// eval did not ask (`want_premises` false) — the body implementation must
@@ -608,18 +615,26 @@ pub(crate) enum PremiseSource {
 ///   relations scan in key order). The limiter's early-stop point depends
 ///   on it.
 pub(crate) trait RuleBody: Send + Sync {
+    /// `delta_from: Some(occ)` means the ONE body-atom occurrence `occ`
+    /// reads that store's delta instead of its total; every other
+    /// occurrence — including another occurrence of the SAME store name —
+    /// reads its total. `None` reads totals only. Negated occurrences
+    /// always read totals, whatever `delta_from` names.
     fn for_each_derivation(
         &self,
         stores: &BTreeMap<MagicSymbol, EpochStore>,
-        delta_from: Option<&MagicSymbol>,
+        delta_from: Option<AtomOccurrence>,
         want_premises: bool,
         f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()>;
 
-    /// The in-memory rule stores this body reads, with multiplicity. The
-    /// delta discipline is driven by exactly this map; its canonical
-    /// (BTreeMap) order is the per-rule delta iteration order.
-    fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity>;
+    /// Every in-memory rule store this body's POSITIVE atoms read, keyed by
+    /// occurrence (body order) — not collapsed by name, so a store
+    /// mentioned twice gets two independent entries. The delta discipline
+    /// runs one derivation pass per occurrence whose named store has a
+    /// delta this epoch; canonical (BTreeMap, i.e. occurrence-index) order
+    /// is the per-rule delta iteration order.
+    fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol>;
 
     /// Provenance attribution: the source of each **positive** body
     /// literal, in body order — matching the premise rows this body
@@ -1354,7 +1369,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         store: name.as_plain_symbol().name.to_string(),
                         reason: "a rule body does not attribute its premises",
                     })?;
-                for dep in body.contained_rules().keys() {
+                for dep in body.contained_rules().values() {
                     if !stores.contains_key(dep) {
                         return Err(ProvenanceUnsupported {
                             store: dep.as_plain_symbol().name.to_string(),
@@ -1484,10 +1499,13 @@ fn initial_plain_eval<R: RuleBody>(
     Ok((should_check_limit, out.wrap(), pending))
 }
 
-/// Epochs > 0 for a plain rule set: the semi-naive delta discipline. A
-/// rule re-runs only if some contained store changed; a changed store
-/// mentioned `Many` times forces a complete run, otherwise the rule joins
-/// against one changed store's delta at a time, in canonical order.
+/// Epochs > 0 for a plain rule set: the semi-naive delta discipline. One
+/// derivation pass per body-atom OCCURRENCE whose named store has a delta
+/// this epoch, in canonical (occurrence-index) order — a store mentioned
+/// twice in one body (the self-join shape) gets two independent passes,
+/// each narrowing a DIFFERENT occurrence to delta while every other
+/// occurrence (including the other occurrence of the same store) reads
+/// its total: `Δ(P⋈P) = (ΔP⋈P) ∪ (P⋈ΔP)`.
 fn incremental_plain_eval<R: RuleBody>(
     rule_symb: &MagicSymbol,
     rule_set: &EvalRuleSet<R>,
@@ -1504,22 +1522,7 @@ fn incremental_plain_eval<R: RuleBody>(
     let mut ticker = budget.ticker(baseline, rule_symb);
 
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
-        let mut need_complete_run = false;
-        let mut dependencies_changed = false;
-        for (symb, multiplicity) in body.contained_rules() {
-            if store_of(stores, symb)?.has_delta() {
-                dependencies_changed = true;
-                if *multiplicity == ContainedRuleMultiplicity::Many {
-                    need_complete_run = true;
-                    break;
-                }
-            }
-        }
-        if !dependencies_changed {
-            continue;
-        }
-
-        // A `Cell` because `handle` lives across the per-delta iterations
+        // A `Cell` because `handle` lives across the per-occurrence passes
         // while the flag is read between them.
         let hit_limit = std::cell::Cell::new(false);
         let mut handle =
@@ -1562,20 +1565,18 @@ fn incremental_plain_eval<R: RuleBody>(
                 Ok(ControlFlow::Continue(()))
             };
 
-        if need_complete_run {
-            body.for_each_derivation(stores, None, recording, &mut handle)?;
+        for (occurrence, store_name) in body.contained_rules() {
+            if !store_of(stores, store_name)?.has_delta() {
+                // This occurrence's own store didn't change: a pass narrowed
+                // to its (empty) delta would derive nothing — skip it rather
+                // than pay for a no-op join.
+                continue;
+            }
+            body.for_each_derivation(stores, Some(*occurrence), recording, &mut handle)?;
             if hit_limit.get() {
                 return Ok((true, out.wrap(), pending));
             }
             budget.check_interrupt()?;
-        } else {
-            for delta_key in body.contained_rules().keys() {
-                body.for_each_derivation(stores, Some(delta_key), recording, &mut handle)?;
-                if hit_limit.get() {
-                    return Ok((true, out.wrap(), pending));
-                }
-                budget.check_interrupt()?;
-            }
         }
     }
     Ok((should_check_limit, out.wrap(), pending))
@@ -1667,20 +1668,6 @@ fn incremental_meet_eval<R: RuleBody>(
     // the meet analogue of the plain path's cross-body `out.len()`.
     let mut effective: u64 = 0;
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
-        let mut need_complete_run = false;
-        let mut dependencies_changed = false;
-        for (symb, multiplicity) in body.contained_rules() {
-            if store_of(stores, symb)?.has_delta() {
-                dependencies_changed = true;
-                if *multiplicity == ContainedRuleMultiplicity::Many {
-                    need_complete_run = true;
-                    break;
-                }
-            }
-        }
-        if !dependencies_changed {
-            continue;
-        }
         let mut handle =
             |item: Cow<'_, [DataValue]>, premises: Premises<'_>| -> Result<ControlFlow<()>> {
                 if recording {
@@ -1699,14 +1686,12 @@ fn incremental_meet_eval<R: RuleBody>(
                 ticker.tick(effective as usize)?;
                 Ok(ControlFlow::Continue(()))
             };
-        if need_complete_run {
-            body.for_each_derivation(stores, None, recording, &mut handle)?;
-            budget.check_interrupt()?;
-        } else {
-            for delta_key in body.contained_rules().keys() {
-                body.for_each_derivation(stores, Some(delta_key), recording, &mut handle)?;
-                budget.check_interrupt()?;
+        for (occurrence, store_name) in body.contained_rules() {
+            if !store_of(stores, store_name)?.has_delta() {
+                continue;
             }
+            body.for_each_derivation(stores, Some(*occurrence), recording, &mut handle)?;
+            budget.check_interrupt()?;
         }
     }
     Ok((false, out.wrap(), pending))
@@ -1917,7 +1902,18 @@ mod tests {
         facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,
         /// Which relations are rule/fixed heads (stores), not EDB.
         idb: Arc<BTreeSet<Rel>>,
-        contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+        /// Occurrence key = this literal's position in `body` (stable
+        /// across the positive/negated reordering `stream_join` uses for
+        /// evaluation order) — one entry per idb literal, positive OR
+        /// negated: this map is also the lifetime-tracking dependency
+        /// source (`note_use`, below), and a store read only inside a
+        /// negation is used just as much as one read positively. A
+        /// relation mentioned twice gets two independent occurrences, each
+        /// independently delta-selectable (matches the real engine's
+        /// `compile.rs::contained_rules`, which numbers the same way over
+        /// `MagicInlineRule::body`) — though `stream_join` never selects a
+        /// negated occurrence's delta (negation always reads totals).
+        contained: BTreeMap<AtomOccurrence, MagicSymbol>,
     }
 
     impl ModelBody {
@@ -1927,21 +1923,10 @@ mod tests {
             facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,
             idb: Arc<BTreeSet<Rel>>,
         ) -> Self {
-            let mut contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity> = BTreeMap::new();
-            let mut positive_counts: BTreeMap<Rel, usize> = BTreeMap::new();
-            for l in &body {
+            let mut contained: BTreeMap<AtomOccurrence, MagicSymbol> = BTreeMap::new();
+            for (i, l) in body.iter().enumerate() {
                 if idb.contains(l.rel) {
-                    if !l.negated {
-                        *positive_counts.entry(l.rel).or_default() += 1;
-                    }
-                    contained
-                        .entry(muggle(l.rel))
-                        .or_insert(ContainedRuleMultiplicity::One);
-                }
-            }
-            for (rel, count) in positive_counts {
-                if count > 1 {
-                    contained.insert(muggle(rel), ContainedRuleMultiplicity::Many);
+                    contained.insert(AtomOccurrence(i), muggle(l.rel));
                 }
             }
             Self {
@@ -2016,9 +2001,9 @@ mod tests {
         fn stream_join(
             &self,
             stores: &BTreeMap<MagicSymbol, EpochStore>,
-            delta_from: Option<&MagicSymbol>,
+            delta_from: Option<AtomOccurrence>,
             want_premises: bool,
-            ordered: &[&Literal],
+            ordered: &[(usize, &Literal)],
             idx: usize,
             bound: &Bindings,
             premises: &mut Vec<Tuple>,
@@ -2033,7 +2018,7 @@ mod tests {
                 };
                 return f(Cow::Owned(head), arg);
             }
-            let l = ordered[idx];
+            let (body_pos, l) = ordered[idx];
             if l.negated {
                 let probe = ground(&l.args, bound);
                 if self.negated_probe_hits(stores, l.rel, &probe)? {
@@ -2050,8 +2035,11 @@ mod tests {
                     f,
                 );
             }
-            let is_delta =
-                delta_from.is_some_and(|k| self.idb.contains(l.rel) && *k == muggle(l.rel));
+            // This literal's OWN occurrence — its position in the original
+            // body, stable across the positive/negated reordering above —
+            // must match `delta_from` exactly; a different occurrence of
+            // the SAME relation reads the total, per the seam contract.
+            let is_delta = delta_from == Some(AtomOccurrence(body_pos));
             let rows = self.rows_of(stores, l.rel, is_delta)?;
             for row in &rows {
                 if let Some(b) = unify(&l.args, row, bound) {
@@ -2084,12 +2072,17 @@ mod tests {
         fn for_each_derivation(
             &self,
             stores: &BTreeMap<MagicSymbol, EpochStore>,
-            delta_from: Option<&MagicSymbol>,
+            delta_from: Option<AtomOccurrence>,
             want_premises: bool,
             f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
-            let mut ordered: Vec<&Literal> = self.body.iter().filter(|l| !l.negated).collect();
-            ordered.extend(self.body.iter().filter(|l| l.negated));
+            let mut ordered: Vec<(usize, &Literal)> = self
+                .body
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| !l.negated)
+                .collect();
+            ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
             let mut premises: Vec<Tuple> = Vec::new();
             // The driver ignores the break/continue verdict: a break here
             // just means the visitor stopped early, which is fine at the top.
@@ -2106,7 +2099,7 @@ mod tests {
             Ok(())
         }
 
-        fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+        fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
             &self.contained
         }
     }
@@ -2312,7 +2305,7 @@ mod tests {
                 })
                 .collect();
             for body in &bodies {
-                for dep in body.contained_rules().keys() {
+                for dep in body.contained_rules().values() {
                     lifetimes.note_use(dep.clone(), stratum);
                 }
             }
@@ -3546,7 +3539,7 @@ mod tests {
         a: i64,
         b: i64,
         emitted: Arc<AtomicUsize>,
-        contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+        contained: BTreeMap<AtomOccurrence, MagicSymbol>,
     }
     impl CrossProduct {
         fn new(a: i64, b: i64, emitted: Arc<AtomicUsize>) -> Self {
@@ -3562,7 +3555,7 @@ mod tests {
         fn for_each_derivation(
             &self,
             _stores: &BTreeMap<MagicSymbol, EpochStore>,
-            _delta_from: Option<&MagicSymbol>,
+            _delta_from: Option<AtomOccurrence>,
             _want_premises: bool,
             f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
@@ -3576,7 +3569,7 @@ mod tests {
             }
             Ok(())
         }
-        fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+        fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
             &self.contained
         }
     }
@@ -3882,7 +3875,7 @@ mod tests {
     struct DistinctThenDup {
         distinct: i64,
         dups: i64,
-        contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+        contained: BTreeMap<AtomOccurrence, MagicSymbol>,
     }
     impl DistinctThenDup {
         fn new(distinct: i64, dups: i64) -> Self {
@@ -3897,7 +3890,7 @@ mod tests {
         fn for_each_derivation(
             &self,
             _stores: &BTreeMap<MagicSymbol, EpochStore>,
-            _delta_from: Option<&MagicSymbol>,
+            _delta_from: Option<AtomOccurrence>,
             _want_premises: bool,
             f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
         ) -> Result<()> {
@@ -3913,7 +3906,7 @@ mod tests {
             }
             Ok(())
         }
-        fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+        fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
             &self.contained
         }
     }
@@ -4192,7 +4185,7 @@ mod tests {
     #[test]
     fn kill_flag_interrupts_inside_rule_iteration() {
         struct FloodBody {
-            contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+            contained: BTreeMap<AtomOccurrence, MagicSymbol>,
             kill: Arc<AtomicBool>,
             emitted: Arc<AtomicUsize>,
         }
@@ -4200,7 +4193,7 @@ mod tests {
             fn for_each_derivation(
                 &self,
                 _stores: &BTreeMap<MagicSymbol, EpochStore>,
-                _delta_from: Option<&MagicSymbol>,
+                _delta_from: Option<AtomOccurrence>,
                 _want_premises: bool,
                 f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
             ) -> Result<()> {
@@ -4215,7 +4208,7 @@ mod tests {
                 }
                 Ok(())
             }
-            fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+            fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
                 &self.contained
             }
         }
@@ -4910,13 +4903,13 @@ mod tests {
         // defines: epoch 1's delta discipline must surface the invariant
         // as an error.
         struct GhostBody {
-            contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+            contained: BTreeMap<AtomOccurrence, MagicSymbol>,
         }
         impl RuleBody for GhostBody {
             fn for_each_derivation(
                 &self,
                 _stores: &BTreeMap<MagicSymbol, EpochStore>,
-                delta_from: Option<&MagicSymbol>,
+                delta_from: Option<AtomOccurrence>,
                 _want_premises: bool,
                 f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
             ) -> Result<()> {
@@ -4925,12 +4918,12 @@ mod tests {
                 }
                 Ok(())
             }
-            fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+            fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
                 &self.contained
             }
         }
         let mut contained = BTreeMap::new();
-        contained.insert(muggle("ghost"), ContainedRuleMultiplicity::One);
+        contained.insert(AtomOccurrence(0), muggle("ghost"));
         let rule_set = EvalRuleSet::new(vec![None], vec![GhostBody { contained }]).unwrap();
         let mut stratum: EvalStratum<GhostBody, NoFixed> = EvalStratum::default();
         stratum

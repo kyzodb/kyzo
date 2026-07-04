@@ -30,12 +30,15 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
+use smartstring::{LazyCompact, SmartString};
 
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::memcmp::MemCmpEncoder;
+use crate::data::relation::StoredRelationMetadata;
 use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
 use crate::data::value::{AsOf, DataValue, JsonData, Num, Validity, ValidityTs, Vector};
-use crate::storage::backup::{dump_storage, restore_storage};
+use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
+use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
 use crate::storage::{ReadTx, Storage, WriteTx};
 
@@ -180,8 +183,8 @@ fn law2_order_embedding_corpus_pairwise() {
 }
 
 /// The generative arm of the laws: arbitrary values, including the regions
-/// nobody thought to put in a corpus. Regex is excluded (arbitrary strings
-/// are not valid patterns); the corpus covers it.
+/// nobody thought to put in a corpus. Regex is the ONLY excluded variant
+/// (arbitrary strings are not valid patterns); the corpus covers it.
 fn arb_value() -> impl Strategy<Value = DataValue> {
     let leaf = prop_oneof![
         Just(DataValue::Null),
@@ -189,6 +192,11 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         any::<i64>().prop_map(|i| DataValue::Num(Num::Int(i))),
         any::<f64>().prop_map(|f| DataValue::Num(Num::Float(f))),
         "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s.into())),
+        // Json's Ord and encoding both reduce to the serialized string, but
+        // the reduction is an argument, not a law — fuzz it like the rest.
+        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::value::JsonData(
+            serde_json::Value::String(s)
+        ))),
         proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
         any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
         proptest::collection::vec(any::<f32>(), 0..6)
@@ -578,6 +586,218 @@ fn backup_round_trip() {
     let b: Vec<_> = tb.total_scan().map(|r| r.unwrap()).collect();
     assert_eq!(a.len(), 100);
     assert_eq!(a, b, "restored store must equal the source");
+}
+
+/// The lightest-weight cataloged relation the dump backstop can classify:
+/// zero-arity, no triggers/indices/constraints, `keyspace_kind: Facts`. The
+/// backstop only ever reads `id` and `keyspace_kind` off a catalog row, so
+/// every other field is filler.
+fn facts_handle(id: RelationId, name: &str) -> RelationHandle {
+    RelationHandle {
+        name: SmartString::<LazyCompact>::from(name),
+        id,
+        metadata: StoredRelationMetadata {
+            keys: vec![],
+            non_keys: vec![],
+        },
+        put_triggers: vec![],
+        rm_triggers: vec![],
+        replace_triggers: vec![],
+        access_level: AccessLevel::default(),
+        is_temp: false,
+        indices: vec![],
+        description: SmartString::default(),
+        constraints: vec![],
+        keyspace_kind: KeyspaceKind::Facts,
+    }
+}
+
+/// A hand-built bitemporal fact key with a CHOSEN system stamp — bypassing
+/// `tx.system_stamp()` entirely, exactly like [`bitemp_key`], so a test can
+/// mint a stamp the real clock would never produce.
+fn stamped_row(
+    rel: RelationId,
+    name: &str,
+    valid_ts: i64,
+    sys: ValidityTs,
+) -> (EncodedKey, Vec<u8>) {
+    let slot = |ts: ValidityTs| {
+        DataValue::Validity(Validity {
+            timestamp: ts,
+            is_assert: Reverse(true),
+        })
+    };
+    let tuple: Tuple = vec![
+        DataValue::Str(name.into()),
+        slot(ValidityTs(Reverse(valid_ts))),
+        slot(sys),
+    ];
+    (tuple.encode_as_key(rel), pol_val(rel, true))
+}
+
+/// Sabotage-verify the dump backstop (layer 3 of the clock-floor fix,
+/// `storage/backup.rs`): a `Facts` row whose stored system stamp exceeds
+/// the store's own clock floor is exactly the corruption class the
+/// historical race could silently produce (see the module's contract
+/// history). Confirm the backstop refuses it with a TYPED error rather
+/// than silently writing a lying dump.
+#[test]
+fn dump_refuses_a_row_stamped_above_its_own_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let rel = RelationId::new(100);
+    let handle = facts_handle(rel, "floor_test");
+
+    // Far enough in the future that it exceeds any floor a store opened
+    // "now" could possibly report (mirrors the existing
+    // `restore_raises_clock_floor_past_imported_stamps` convention).
+    let bad_sys = ValidityTs(Reverse(
+        crate::data::value::current_validity().unwrap().0.0 + 1_000_000_000,
+    ));
+    let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
+
+    let mut tx = db.write_tx().unwrap();
+    tx.put(
+        &SystemKey::Relation("floor_test").encode(),
+        &handle.encode().unwrap(),
+    )
+    .unwrap();
+    tx.put(&key, &val).unwrap();
+    tx.commit().unwrap();
+
+    let dump = dir.path().join("dump.kyzo");
+    let err = dump_storage(&db, &dump).unwrap_err();
+    assert!(
+        err.downcast_ref::<DumpClockFloorViolation>().is_some(),
+        "expected a typed DumpClockFloorViolation, got: {err}"
+    );
+
+    // Sanity: reverting to the historical (broken) order — floor read
+    // BEFORE the snapshot — would have raced with nothing here (this is a
+    // single-threaded sabotage, not the concurrency pin below), but the
+    // backstop must fire independently of timing since the bad row is
+    // already committed before the floor is ever read. Confirm a row
+    // whose stamp legitimately sits at-or-below the floor is unaffected.
+    let dir2 = tempfile::tempdir().unwrap();
+    let db2 = new_fjall_storage(dir2.path()).unwrap();
+    let handle2 = facts_handle(rel, "floor_test");
+    let mut tx2 = db2.write_tx().unwrap();
+    let ok_sys = tx2.system_stamp();
+    let (key2, val2) = stamped_row(rel, "fine", 1, ok_sys);
+    tx2.put(
+        &SystemKey::Relation("floor_test").encode(),
+        &handle2.encode().unwrap(),
+    )
+    .unwrap();
+    tx2.put(&key2, &val2).unwrap();
+    tx2.commit().unwrap();
+    let dump2 = dir2.path().join("dump.kyzo");
+    dump_storage(&db2, &dump2).unwrap();
+}
+
+/// Concurrency pin for the dump clock-floor fix: real writer threads mint
+/// real stamps through the storage clock (`tx.system_stamp()`) while dumps
+/// run in a loop on the main thread. For every dump produced, INDEPENDENTLY
+/// re-parse the dump FILE's bytes (not the in-process values `dump_storage`
+/// itself computed) and confirm every `Facts` row's system stamp is `<=`
+/// that same dump's own recorded floor — the exact property the historical
+/// race broke. With the fix this must hold on every cycle; the race window
+/// this closes was narrow, so many cycles under real contention are what
+/// would have caught it occasionally before the fix.
+#[test]
+fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let rel = RelationId::new(42);
+    let handle = facts_handle(rel, "floor_race");
+    {
+        let mut tx = db.write_tx().unwrap();
+        tx.put(
+            &SystemKey::Relation("floor_race").encode(),
+            &handle.encode().unwrap(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    const WRITERS: usize = 8;
+    const CYCLES: usize = 200;
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let writers: Vec<_> = (0..WRITERS)
+        .map(|w| {
+            let db = db.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut i: u64 = 0;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let mut tx = db.write_tx().unwrap();
+                    let sys = tx.system_stamp();
+                    let (k, v) = stamped_row(rel, &format!("w{w}-{i}"), 1, sys);
+                    tx.put(&k, &v).unwrap();
+                    tx.commit().unwrap();
+                    i += 1;
+                }
+            })
+        })
+        .collect();
+
+    let dump_path = dir.path().join("race.kyzo");
+    let rel_prefix = rel.raw_encode();
+
+    // Wait for the writers to actually get going before timing dump
+    // cycles: under heavy parallel test-binary contention, thread
+    // spawn/schedule delay can otherwise let the very first dump land
+    // before any writer has committed a row, which is a scheduling
+    // artifact unrelated to the property under test. Rows are never
+    // deleted here, so once one appears the store only grows from here.
+    let upper = rel.next().raw_encode();
+    while db
+        .read_tx()
+        .unwrap()
+        .range_count(&rel_prefix, &upper)
+        .unwrap()
+        == 0
+    {
+        std::thread::yield_now();
+    }
+
+    for cycle in 0..CYCLES {
+        dump_storage(&db, &dump_path).unwrap();
+
+        let bytes = std::fs::read(&dump_path).unwrap();
+        assert_eq!(&bytes[0..8], b"KYZODMP2".as_slice());
+        let mut off = 8usize;
+        let version_len = u64::from_be_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
+        off += 8 + version_len;
+        let floor = i64::from_be_bytes(bytes[off..off + 8].try_into().unwrap());
+        off += 8;
+
+        let mut checked = 0u64;
+        while off < bytes.len() {
+            let klen = u64::from_be_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let key = &bytes[off..off + klen];
+            off += klen;
+            let vlen = u64::from_be_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
+            off += 8 + vlen;
+            if key.len() >= 8 && key[0..8] == rel_prefix {
+                let stamp = crate::data::bitemporal::system_stamp_of_key(key).unwrap();
+                assert!(
+                    stamp.0.0 <= floor,
+                    "dump cycle {cycle}: row stamped {} exceeds this dump's own floor {floor}",
+                    stamp.0.0
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "dump cycle {cycle} saw no fact rows to check");
+    }
+
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for w in writers {
+        w.join().unwrap();
+    }
 }
 
 // ---------- sentinel and corruption edge cases ----------
@@ -1414,6 +1634,78 @@ fn sim_kv_contract_matches_model() {
         .collect();
     assert_eq!(got, want);
     assert_eq!(tx.range_count(b"k005", b"k030").unwrap(), want.len());
+}
+
+/// `SimWriteTx::range_scan`/`total_scan` (`visible_lazy`, the lazy
+/// snapshot/write-overlay merge that replaced an eager per-call rebuild)
+/// against an IN-FLIGHT, UNCOMMITTED transaction: every combination of
+/// key placement the merge must get right — snapshot-only, write-only
+/// (insert), present-in-both (write shadows snapshot), and a tombstone
+/// over each of "had a snapshot entry" and "never existed" — checked mid
+/// transaction, before commit, against a `BTreeMap` model of the same
+/// overlay semantics.
+#[test]
+fn sim_write_tx_range_scan_overlay_matches_model() {
+    let db = SimStorage::new(0xB17E);
+    {
+        let mut seed = db.write_tx().unwrap();
+        for n in [0u32, 2, 4, 6, 8, 10, 12] {
+            seed.put(format!("k{n:03}").as_bytes(), format!("snap{n}").as_bytes())
+                .unwrap();
+        }
+        seed.commit().unwrap();
+    }
+
+    let mut tx = db.write_tx().unwrap();
+    // Overwrite a snapshot key (write shadows snapshot).
+    tx.put(b"k002", b"overwritten").unwrap();
+    // Insert a fresh key the snapshot never had.
+    tx.put(b"k003", b"fresh").unwrap();
+    // Insert another fresh key, in between two existing ones.
+    tx.put(b"k005", b"fresh2").unwrap();
+    // Delete a snapshot key (tombstone shadowing a real entry).
+    tx.del(b"k004").unwrap();
+    // Delete a key that never existed (tombstone over nothing — a no-op
+    // for the merge, must not appear and must not panic).
+    tx.del(b"k999").unwrap();
+    // k000, k006, k008, k010, k012 are untouched: snapshot-only survivors.
+
+    let mut model: BTreeMap<Vec<u8>, Vec<u8>> = [0u32, 2, 4, 6, 8, 10, 12]
+        .into_iter()
+        .map(|n| {
+            (
+                format!("k{n:03}").into_bytes(),
+                format!("snap{n}").into_bytes(),
+            )
+        })
+        .collect();
+    model.insert(b"k002".to_vec(), b"overwritten".to_vec());
+    model.insert(b"k003".to_vec(), b"fresh".to_vec());
+    model.insert(b"k005".to_vec(), b"fresh2".to_vec());
+    model.remove(b"k004".as_slice());
+
+    let got: Vec<_> = tx.total_scan().map(|r| r.unwrap()).collect();
+    let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    assert_eq!(
+        got, want,
+        "total_scan mid-transaction diverged from the model"
+    );
+
+    // A bounded range spanning every case above, straddling both ends.
+    let got: Vec<_> = tx
+        .range_scan(b"k001", b"k011")
+        .map(|r| r.unwrap())
+        .collect();
+    let want: Vec<_> = model
+        .range(b"k001".to_vec()..b"k011".to_vec())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    assert_eq!(
+        got, want,
+        "range_scan mid-transaction diverged from the model"
+    );
+
+    tx.commit().unwrap();
 }
 
 /// The MVCC/SSI surface of the sim, point by point: typed conflicts on

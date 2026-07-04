@@ -75,8 +75,8 @@ use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::query::eval::{
-    Budget, BudgetDimension, ContainedRuleMultiplicity, EvalDefinition, EvalProgram, EvalRuleSet,
-    EvalStratum, FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody, Witness, WitnessTable,
+    AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
+    FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody, Witness, WitnessTable,
     stratified_evaluate,
 };
 use crate::query::laws::{FixedRule, HeadAggr, Literal, Program, Rel, Rule, Term, naive_eval};
@@ -183,7 +183,15 @@ struct ModelBody {
     body: Vec<Literal>,
     facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,
     idb: Arc<BTreeSet<Rel>>,
-    contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity>,
+    /// Occurrence key = this literal's position in `body` — one entry per
+    /// idb literal, positive OR negated: this map is also the
+    /// lifetime-tracking dependency source (`note_use`), and a store read
+    /// only inside a negation is used just as much as one read positively.
+    /// A relation mentioned twice gets two independent, independently
+    /// delta-selectable occurrences (matches `compile.rs::contained_rules`'s
+    /// numbering over the real engine's `MagicInlineRule::body`) — though
+    /// `for_each_derivation` never selects a negated occurrence's delta.
+    contained: BTreeMap<AtomOccurrence, MagicSymbol>,
 }
 
 impl ModelBody {
@@ -193,21 +201,10 @@ impl ModelBody {
         facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>>,
         idb: Arc<BTreeSet<Rel>>,
     ) -> Self {
-        let mut contained: BTreeMap<MagicSymbol, ContainedRuleMultiplicity> = BTreeMap::new();
-        let mut positive_counts: BTreeMap<Rel, usize> = BTreeMap::new();
-        for l in &body {
+        let mut contained: BTreeMap<AtomOccurrence, MagicSymbol> = BTreeMap::new();
+        for (i, l) in body.iter().enumerate() {
             if idb.contains(l.rel) {
-                if !l.negated {
-                    *positive_counts.entry(l.rel).or_default() += 1;
-                }
-                contained
-                    .entry(muggle(l.rel))
-                    .or_insert(ContainedRuleMultiplicity::One);
-            }
-        }
-        for (rel, count) in positive_counts {
-            if count > 1 {
-                contained.insert(muggle(rel), ContainedRuleMultiplicity::Many);
+                contained.insert(AtomOccurrence(i), muggle(l.rel));
             }
         }
         Self {
@@ -269,17 +266,21 @@ impl RuleBody for ModelBody {
     fn for_each_derivation(
         &self,
         stores: &BTreeMap<MagicSymbol, EpochStore>,
-        delta_from: Option<&MagicSymbol>,
+        delta_from: Option<AtomOccurrence>,
         want_premises: bool,
         f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
     ) -> Result<()> {
-        let mut ordered: Vec<&Literal> = self.body.iter().filter(|l| !l.negated).collect();
-        ordered.extend(self.body.iter().filter(|l| l.negated));
+        let mut ordered: Vec<(usize, &Literal)> = self
+            .body
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| !l.negated)
+            .collect();
+        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
 
         let mut frontier: Vec<(Bindings, Vec<Tuple>)> = vec![(Bindings::new(), Vec::new())];
-        for l in ordered {
-            let is_delta = !l.negated
-                && delta_from.is_some_and(|k| self.idb.contains(l.rel) && *k == muggle(l.rel));
+        for (body_pos, l) in ordered {
+            let is_delta = !l.negated && delta_from == Some(AtomOccurrence(body_pos));
             let mut next = Vec::new();
             if l.negated {
                 for (bound, premises) in &frontier {
@@ -318,7 +319,7 @@ impl RuleBody for ModelBody {
         Ok(())
     }
 
-    fn contained_rules(&self) -> &BTreeMap<MagicSymbol, ContainedRuleMultiplicity> {
+    fn contained_rules(&self) -> &BTreeMap<AtomOccurrence, MagicSymbol> {
         &self.contained
     }
 }
@@ -518,7 +519,7 @@ fn compile_for(
             })
             .collect();
         for body in &bodies {
-            for dep in body.contained_rules().keys() {
+            for dep in body.contained_rules().values() {
                 lifetimes.note_use(dep.clone(), stratum);
             }
         }

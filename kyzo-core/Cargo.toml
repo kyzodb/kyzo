@@ -100,3 +100,11 @@ required-features = ["bench-internals"]
 [[example]]
 name = "ra_determinism"
 required-features = ["bench-internals"]
+
+[[example]]
+name = "fixpoint_mem_profile"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "bulk_ingest_profile"
+required-features = ["bench-internals"]

@@ -25,6 +25,7 @@ use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred};
+use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::query::ra::join::push_joined_row;
 use crate::query::temp_store::TupleInIter;
@@ -36,12 +37,18 @@ use std::fmt::Debug;
 
 /// A scan of one rule's [`EpochStore`]. This variant is where the
 /// semi-naive delta discipline is *implemented*: when `delta_rule` names
-/// this store, the scan reads the delta instead of the total — every
-/// occurrence, per the `RuleBody` seam contract.
+/// THIS occurrence (this atom's specific position in its body, not merely
+/// its store name — a store mentioned twice in one body compiles to two
+/// `TempStoreRA`s with two distinct [`AtomOccurrence`]s), the scan reads
+/// the delta instead of the total, per the `RuleBody` seam contract.
 #[derive(Debug)]
 pub(crate) struct TempStoreRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage_key: MagicSymbol,
+    /// This atom's position among its body's `Rule`/`NegatedRule` atoms —
+    /// the key `delta_from` compares against (`compile.rs`'s shared
+    /// numbering, `atom_occurrences`).
+    pub(crate) occurrence: AtomOccurrence,
     pub(crate) filters: Vec<Expr>,
     pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
     pub(crate) span: SourceSpan,
@@ -67,14 +74,11 @@ impl TempStoreRA {
     /// order), accumulated into [`Batch`]es with a reused eval stack.
     pub(crate) fn iter_batched<'a>(
         &'a self,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
     ) -> Result<BatchIter<'a>> {
         let storage = epoch_store_of(stores, &self.storage_key)?;
-        let scan_epoch = match delta_rule {
-            None => false,
-            Some(name) => *name == self.storage_key,
-        };
+        let scan_epoch = delta_rule == Some(self.occurrence);
         let it = if scan_epoch {
             Left(storage.delta_all_iter().map(|t| Ok(t.into_tuple())))
         } else {
@@ -111,7 +115,7 @@ impl TempStoreRA {
         left: BatchIter<'a>,
         (left_join_indices, right_join_indices): (Vec<usize>, Vec<usize>),
         eliminate_indices: BTreeSet<usize>,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
     ) -> Result<BatchIter<'a>> {
         let storage = epoch_store_of(stores, &self.storage_key)?;
@@ -122,10 +126,7 @@ impl TempStoreRA {
             .into_iter()
             .map(|(a, _)| left_join_indices[a])
             .collect_vec();
-        let scan_epoch = match delta_rule {
-            None => false,
-            Some(name) => *name == self.storage_key,
-        };
+        let scan_epoch = delta_rule == Some(self.occurrence);
         let other_bindings = self.bindings.get(right_join_indices.len()..).unwrap_or(&[]);
         let (l_bound, u_bound) = if self.filters.is_empty() {
             Default::default()

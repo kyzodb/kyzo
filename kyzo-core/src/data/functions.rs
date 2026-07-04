@@ -418,12 +418,28 @@ pub(crate) fn op_le(args: &[DataValue]) -> Result<DataValue> {
 }
 
 define_op!(OP_ADD, 0, true, true);
+/// A 64-bit integer scalar op overflowed. Arithmetic errors are typed
+/// errors by law: never a silent panic (debug builds) and never silent
+/// wraparound (release builds serving a wrong answer). Float paths are
+/// untouched — they saturate to infinity legitimately.
+#[derive(Debug, Error, Diagnostic)]
+#[error("integer overflow evaluating '{op}'")]
+#[diagnostic(code(eval::integer_overflow))]
+#[diagnostic(help("The operands are exact 64-bit integers whose result does not fit in i64."))]
+pub(crate) struct IntegerOverflow {
+    pub(crate) op: &'static str,
+}
+
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     let mut i_accum = 0i64;
     let mut f_accum = 0.0f64;
     for arg in args {
         match arg {
-            DataValue::Num(Num::Int(i)) => i_accum += i,
+            DataValue::Num(Num::Int(i)) => {
+                i_accum = i_accum
+                    .checked_add(*i)
+                    .ok_or(IntegerOverflow { op: "add" })?;
+            }
             DataValue::Num(Num::Float(f)) => f_accum += f,
             DataValue::Vec(_) => return add_vecs(args),
             _ => bail!("addition requires numbers"),
@@ -523,9 +539,10 @@ pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_SUB, 2, false, true);
 pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Int(b))) => {
-            DataValue::Num(Num::Int(*a - *b))
-        }
+        (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Int(b))) => match a.checked_sub(*b) {
+            Some(v) => DataValue::Num(Num::Int(v)),
+            None => bail!(IntegerOverflow { op: "sub" }),
+        },
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Float(b))) => {
             DataValue::Num(Num::Float(*a - *b))
         }
@@ -587,7 +604,11 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
     let mut f_accum = 1.0f64;
     for arg in args {
         match arg {
-            DataValue::Num(Num::Int(i)) => i_accum *= i,
+            DataValue::Num(Num::Int(i)) => {
+                i_accum = i_accum
+                    .checked_mul(*i)
+                    .ok_or(IntegerOverflow { op: "mul" })?;
+            }
             DataValue::Num(Num::Float(f)) => f_accum *= f,
             DataValue::Vec(_) => return mul_vecs(args),
             _ => bail!("multiplication requires numbers"),
@@ -715,7 +736,10 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_MINUS, 1, false, true);
 pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::Int(-(*i))),
+        DataValue::Num(Num::Int(i)) => match i.checked_neg() {
+            Some(v) => DataValue::Num(Num::Int(v)),
+            None => bail!(IntegerOverflow { op: "minus" }),
+        },
         DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(-(*f))),
         DataValue::Vec(Vector::F64(v)) => DataValue::Vec(Vector::F64(0. - v)),
         DataValue::Vec(Vector::F32(v)) => DataValue::Vec(Vector::F32(0. - v)),
@@ -726,7 +750,10 @@ pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_ABS, 1, false, true);
 pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::Int(i.abs())),
+        DataValue::Num(Num::Int(i)) => match i.checked_abs() {
+            Some(v) => DataValue::Num(Num::Int(v)),
+            None => bail!(IntegerOverflow { op: "abs" }),
+        },
         DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(f.abs())),
         DataValue::Vec(Vector::F64(v)) => DataValue::Vec(Vector::F64(v.mapv(|x| x.abs()))),
         DataValue::Vec(Vector::F32(v)) => DataValue::Vec(Vector::F32(v.mapv(|x| x.abs()))),
@@ -1118,7 +1145,15 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             if *b == 0 {
                 bail!("'mod' requires non-zero divisor")
             }
-            DataValue::Num(Num::Int(a.rem(b)))
+            // `i64::MIN % -1` is the one other input pair `Rem` can't
+            // service: the mathematical quotient (`i64::MIN / -1`)
+            // doesn't fit in i64, so the divide-then-subtract this
+            // performs internally overflows too, distinct from the
+            // zero-divisor case just above.
+            match a.checked_rem(*b) {
+                Some(v) => DataValue::Num(Num::Int(v)),
+                None => bail!(IntegerOverflow { op: "mod" }),
+            }
         }
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Float(b))) => {
             DataValue::Num(Num::Float(a.rem(*b)))

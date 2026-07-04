@@ -26,6 +26,7 @@ use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter};
+use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::storage::ReadTx;
 use itertools::Itertools;
@@ -459,7 +460,7 @@ impl InnerJoin {
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
@@ -507,7 +508,13 @@ impl InnerJoin {
                     let bindings = self.bindings();
                     let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
                     let left = self.left.iter_batched(tx, delta_rule, stores, segments)?;
-                    return r.prefix_join_batched(tx, left, join_indices, eliminate_indices);
+                    return r.prefix_join_batched(
+                        tx,
+                        left,
+                        join_indices,
+                        eliminate_indices,
+                        segments,
+                    );
                 }
             }
             RelAlgebra::StoredWithValidity(r) => {
@@ -541,7 +548,7 @@ impl InnerJoin {
         &'a self,
         tx: &'a impl ReadTx,
         eliminate_indices: BTreeSet<usize>,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {

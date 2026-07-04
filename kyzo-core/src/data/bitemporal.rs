@@ -22,7 +22,7 @@ use miette::{Result, bail};
 
 use crate::data::memcmp::MemCmpEncoder;
 use crate::data::tuple::{EncodedKey, Tuple, VALUE_HEADER_LEN, decode_tuple_from_key};
-use crate::data::value::{AsOf, DataValue, TERMINAL_VALIDITY, Validity};
+use crate::data::value::{AsOf, DataValue, TERMINAL_VALIDITY, Validity, ValidityTs};
 
 const DEFAULT_SIZE_HINT: usize = 16;
 
@@ -181,6 +181,38 @@ pub fn check_key_for_bitemporal(
             ))
         }
     }
+}
+
+/// Decode ONLY a bitemporal key's SYSTEM-version slot (the tail's inner,
+/// second slot — the writer's system stamp for this row), without
+/// resolving a full `AsOf` query. No allocation: `Validity` is `Copy`, and
+/// the tag byte at this fixed offset is always `VLD_TAG` by construction,
+/// so `DataValue::decode_from_key` dispatches straight into that one
+/// branch — a fixed-offset slice plus a handful of field reads.
+///
+/// Used by integrity checks that must confirm a fact row's recorded stamp
+/// against some external bound (the dump path's clock-floor backstop,
+/// `storage/backup.rs`) without re-deriving the whole resolution algebra
+/// `check_key_for_bitemporal` implements.
+pub(crate) fn system_stamp_of_key(key: &[u8]) -> Result<ValidityTs> {
+    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
+        bail!("bitemporal key too short to carry its two time slots");
+    }
+    let sys_off = key.len() - EncodedKey::VALIDITY_TAIL_LEN;
+    let (sys_val, rest) = DataValue::decode_from_key(&key[sys_off..])?;
+    let DataValue::Validity(sys) = sys_val else {
+        bail!("bitemporal key without a system-time slot");
+    };
+    if !rest.is_empty() {
+        bail!("bitemporal key with trailing bytes after its system-time slot");
+    }
+    if !sys.is_assert.0 {
+        bail!(
+            "bitemporal key with a retract flag in its system-time slot \
+             (polarity lives in the value; stored slot flags are pinned)"
+        );
+    }
+    Ok(sys.timestamp)
 }
 
 pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()> {

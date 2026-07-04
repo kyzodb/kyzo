@@ -1712,3 +1712,101 @@ impl<T: WriteTx> SessionTx<T> {
         Ok(crate::runtime::db::status_ok())
     }
 }
+
+#[cfg(test)]
+mod bulk_write_tests {
+    use std::collections::BTreeMap;
+
+    use crate::data::value::DataValue;
+    use crate::runtime::db::Db;
+    use crate::storage::sim::SimStorage;
+    use crate::storage::{ReadTx, Storage};
+
+    fn no_params() -> BTreeMap<String, DataValue> {
+        BTreeMap::new()
+    }
+
+    /// A deterministic seeded workload exercising every branch the bulk-write
+    /// path's per-row key encode (`encode_bitemporal_key_for_store`) and its
+    /// SSI current-row probe (`current_row`) take: fresh inserts (probe
+    /// finds nothing), re-puts of existing keys (probe finds a row,
+    /// `has_indices`/`need_to_collect` both false so only the probe and the
+    /// write run), and removals (retraction through the same key encoder).
+    fn run_seeded_workload(db: &Db<SimStorage>) {
+        db.run_script("?[k, v] <- [] :create w {k => v}", no_params())
+            .expect("create");
+        let mut fresh = String::from("?[k, v] <- [");
+        for i in 0..500i64 {
+            fresh.push_str(&format!("[{i},{}],", i * 3));
+        }
+        fresh.push_str("] :put w {k => v}");
+        db.run_script(&fresh, no_params()).expect("bulk insert");
+
+        // Re-put 200 of those keys with a different value: exercises the
+        // probe's FOUND branch (`current_row` returns `Some`) through the
+        // same encoder.
+        let mut updates = String::from("?[k, v] <- [");
+        for i in 0..200i64 {
+            updates.push_str(&format!("[{i},{}],", i * 7));
+        }
+        updates.push_str("] :put w {k => v}");
+        db.run_script(&updates, no_params()).expect("re-put");
+
+        // Retract 100 keys: exercises `remove_from_relation`'s use of the
+        // same key encoder for a Retract row.
+        let mut removals = String::from("?[k] <- [");
+        for i in 400..500i64 {
+            removals.push_str(&format!("[{i}],"));
+        }
+        removals.push_str("] :rm w {k}");
+        db.run_script(&removals, no_params()).expect("bulk remove");
+    }
+
+    /// The bulk-write allocation fix (`encode_key_with_suffix` replacing
+    /// the materialize-then-encode `Vec<DataValue>` in both
+    /// `encode_bitemporal_key_for_store` and `current_row`) must not move a
+    /// single byte of what actually lands in the store: a seeded workload's
+    /// full raw scan, sorted, must be identical to what it was before the
+    /// fix. `tuple.rs`'s `key_with_suffix_encoding_is_byte_identical_to_materialized`
+    /// proves the encoder itself is byte-identical in isolation; this test
+    /// proves it end to end, through the real mutation pipeline (extract,
+    /// probe, put/remove, commit).
+    #[test]
+    fn bulk_write_path_store_bytes_are_unchanged_by_the_allocation_fix() {
+        let db = Db::new(SimStorage::new(0xB01C_0001)).expect("db");
+        run_seeded_workload(&db);
+
+        let tx = db.storage.read_tx().expect("read tx");
+        let scan: Vec<(Vec<u8>, Vec<u8>)> =
+            tx.total_scan().collect::<Result<_, _>>().expect("scan");
+        assert_eq!(
+            scan.len(),
+            802,
+            "bitemporal writes are pure appends (retraction is revision, not \
+             erasure): 500 initial versions + 200 re-put versions + 100 \
+             retraction versions = 800 fact rows, plus 2 system rows (the id \
+             counter and the relation's own catalog row)"
+        );
+
+        // Pinned against a run of this exact workload captured against the
+        // pre-fix code (materialize-then-encode `Vec<DataValue>` in both
+        // call sites), via `git stash` of just `relation.rs` — see the PR
+        // description for the before/after diff-free comparison. Any future
+        // change to the bulk-write key/value encoding must keep this equal
+        // or explain, in a FormatVersion bump, why it no longer can.
+        let mut hasher_input = Vec::new();
+        for (k, v) in &scan {
+            hasher_input.extend_from_slice(&(k.len() as u64).to_le_bytes());
+            hasher_input.extend_from_slice(k);
+            hasher_input.extend_from_slice(&(v.len() as u64).to_le_bytes());
+            hasher_input.extend_from_slice(v);
+        }
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(&hasher_input);
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex, "befcab34181e7818f461e4a439791e0fbcd5ef615ecaac03de3c97f3a491316a",
+            "store bytes for the seeded bulk workload changed"
+        );
+    }
+}

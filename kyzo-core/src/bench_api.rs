@@ -26,6 +26,7 @@
 //! `SimStorage` MVCC double) and the on-disk backend ([`Backend::Fjall`])
 //! are reachable.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::path::Path;
 
@@ -426,6 +427,124 @@ pub fn transitive_closure(
     )
 }
 
+/// Andersen-style points-to over synthetic `addr_of`/`assign`/`load`/`store`
+/// statements — mirrors `kyzo-bench`'s `pointsto.kz` exactly (issue #68's
+/// memory-blowup workload). The `load`/`store` rules each mention `pt` at
+/// TWO body positions — the self-join shape that used to collapse
+/// `contained_rules()` to a single name-keyed entry (the retired
+/// `ContainedRuleMultiplicity::Many`) and disable semi-naive delta
+/// narrowing for that rule entirely. Fixed by keying `contained_rules()`
+/// on [`crate::query::eval::AtomOccurrence`] (body position) instead of
+/// store name, so each occurrence is independently delta-selectable.
+///
+/// ```datalog
+/// pt[y, x] := *addr_of[y, x]
+/// pt[y, x] := *assign[y, z], pt[z, x]
+/// pt[y, w] := *load[y, x], pt[x, z], pt[z, w]
+/// pt[z, w] := *store[y, x], pt[y, z], pt[x, w]
+/// ?[y, x]  := pt[y, x]
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn points_to(
+    backend: Backend,
+    vars: u64,
+    addrs: u64,
+    assigns: u64,
+    loads: u64,
+    stores: u64,
+    seed: u64,
+    tmp: &Path,
+) -> Workload {
+    // Distinct sub-seeds per relation so the four generators don't retrace
+    // each other's draws (mirrors kyzo-bench's `seed.derive(label)`).
+    let gen_rel = |label: u64, count: u64| -> Vec<Tuple> {
+        let mut rng = StdRng::seed_from_u64(seed ^ (label << 32));
+        let mut rows: BTreeSet<(i64, i64)> = BTreeSet::new();
+        while (rows.len() as u64) < count {
+            let y = rng.random_range(0..vars as i64);
+            let x = rng.random_range(0..vars as i64);
+            if y != x {
+                rows.insert((y, x));
+            }
+        }
+        rows.into_iter().map(|(y, x)| vec![v(y), v(x)]).collect()
+    };
+    let addr_of = gen_rel(1, addrs);
+    let assign = gen_rel(2, assigns);
+    let load = gen_rel(3, loads);
+    let store = gen_rel(4, stores);
+    let (y, x, z, w) = (sym("y"), sym("x"), sym("z"), sym("w"));
+    let program = program_of(vec![
+        vec![(
+            muggle("pt"),
+            vec![
+                plain_rule(
+                    &[y.clone(), x.clone()],
+                    vec![rel_atom("addr_of", &[y.clone(), x.clone()])],
+                ),
+                plain_rule(
+                    &[y.clone(), x.clone()],
+                    vec![
+                        rel_atom("assign", &[y.clone(), z.clone()]),
+                        rule_atom("pt", &[z.clone(), x.clone()]),
+                    ],
+                ),
+                plain_rule(
+                    &[y.clone(), w.clone()],
+                    vec![
+                        rel_atom("load", &[y.clone(), x.clone()]),
+                        rule_atom("pt", &[x.clone(), z.clone()]),
+                        rule_atom("pt", &[z.clone(), w.clone()]),
+                    ],
+                ),
+                plain_rule(
+                    &[z.clone(), w.clone()],
+                    vec![
+                        rel_atom("store", &[y.clone(), x.clone()]),
+                        rule_atom("pt", &[y.clone(), z.clone()]),
+                        rule_atom("pt", &[x.clone(), w.clone()]),
+                    ],
+                ),
+            ],
+        )],
+        vec![(
+            entry_symbol(),
+            vec![plain_rule(
+                &[y.clone(), x.clone()],
+                vec![rule_atom("pt", &[y, x])],
+            )],
+        )],
+    ]);
+    build(
+        backend,
+        tmp,
+        vec![
+            SeedRelation {
+                name: "addr_of".into(),
+                arity: 2,
+                rows: addr_of,
+            },
+            SeedRelation {
+                name: "assign".into(),
+                arity: 2,
+                rows: assign,
+            },
+            SeedRelation {
+                name: "load".into(),
+                arity: 2,
+                rows: load,
+            },
+            SeedRelation {
+                name: "store".into(),
+                arity: 2,
+                rows: store,
+            },
+        ],
+        program,
+        format!("pointsto/v{vars}-a{addrs}-s{assigns}-l{loads}-t{stores}"),
+    )
+}
+
 /// A selective 3-way join: `j(x,w) := a(x,y), b(y,z), c(z,w)`. Each relation
 /// is a random bipartite mapping so the join fans in, not out. `n` rows per
 /// relation over a key domain of `n/fan` — `fan` sets match multiplicity.
@@ -589,4 +708,221 @@ pub fn aggregation(backend: Backend, n: usize, groups: usize, seed: u64, tmp: &P
         program,
         format!("aggregation/n{n}/g{groups}"),
     )
+}
+
+// ── bulk-ingest attribution (issue #74) ──────────────────────────────────
+//
+// Where a 1000-row `:put` batch's time goes: script parse (literal vs a
+// `$param`-substituted body), the mutation pipeline's per-row work (extract
+// + encode + the SSI current-row probe + the routed write), and the bare
+// storage floor (raw fjall put+commit with no relation/session/catalog at
+// all). Each function isolates exactly one of those so a caller can time
+// them independently and subtract; nothing here changes what the real
+// path does, it only calls the same crate-internal pieces the real path
+// calls, in isolation.
+
+/// A synthetic `n`-row batch: `[i, i*3]` starting at `start`, so successive
+/// batches never collide on key `i` (a genuine bulk INSERT shape, not
+/// repeated updates of the same keys).
+fn synthetic_rows(start: i64, n: usize) -> Vec<(i64, i64)> {
+    (0..n as i64)
+        .map(|i| (start + i, (start + i) * 3))
+        .collect()
+}
+
+fn put_literal_script(rows: &[(i64, i64)]) -> String {
+    let mut s = String::from("?[k, v] <- [");
+    for (k, v) in rows {
+        s.push_str(&format!("[{k},{v}],"));
+    }
+    s.push_str("] :put w {k => v}");
+    s
+}
+
+const PUT_PARAM_SCRIPT: &str = "?[k, v] <- $data :put w {k => v}";
+
+fn param_pool_of(rows: &[(i64, i64)]) -> BTreeMap<String, DataValue> {
+    let mut pool = BTreeMap::new();
+    pool.insert(
+        "data".to_string(),
+        DataValue::List(
+            rows.iter()
+                .map(|(k, v)| DataValue::List(vec![DataValue::from(*k), DataValue::from(*v)]))
+                .collect(),
+        ),
+    );
+    pool
+}
+
+/// Parse an `n`-row LITERAL `:put` script (the row values spelled out in
+/// the script text) and discard the result. Isolates the literal-shape
+/// parse cost alone — no compile, no eval, no storage.
+pub fn parse_put_literal(n: usize) -> miette::Result<()> {
+    let script = put_literal_script(&synthetic_rows(0, n));
+    let parsed = crate::parse::parse_script(
+        &script,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+    )?;
+    std::hint::black_box(parsed);
+    Ok(())
+}
+
+/// Parse the PARAM-DRIVEN `:put` script (`?[k, v] <- $data :put …`) with an
+/// `n`-row `$data` substituted from the param pool, and discard the result.
+/// The script TEXT is `n`-independent; whatever cost scales with `n` here is
+/// the cost of substituting (cloning) the param's `DataValue` into the AST
+/// at parse time, not text parsing.
+pub fn parse_put_param(n: usize) -> miette::Result<()> {
+    let pool = param_pool_of(&synthetic_rows(0, n));
+    let parsed = crate::parse::parse_script(
+        PUT_PARAM_SCRIPT,
+        &pool,
+        &BTreeMap::new(),
+        crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+    )?;
+    std::hint::black_box(parsed);
+    Ok(())
+}
+
+/// Run `n_batches` of `batch_rows`-row `:put`s through the PUBLIC `Db` —
+/// the full real path (parse, compile/bind, evaluate the `Constant` source,
+/// the mutation pipeline's extract/encode/probe/write, commit) exactly as a
+/// script-driving caller exercises it. Returns `(rows written, wall time
+/// for all batches)`; the relation is created once, up front, and excluded
+/// from the timed region. Each batch targets fresh keys (a bulk INSERT
+/// shape).
+pub fn run_put_batches(
+    backend: Backend,
+    batch_rows: usize,
+    n_batches: usize,
+    param_driven: bool,
+    tmp: &Path,
+) -> miette::Result<(usize, std::time::Duration)> {
+    fn seed_and_run<S: Storage>(
+        db: crate::runtime::db::Db<S>,
+        batch_rows: usize,
+        n_batches: usize,
+        param_driven: bool,
+    ) -> miette::Result<(usize, std::time::Duration)> {
+        db.run_script("?[k, v] <- [] :create w {k => v}", BTreeMap::new())?;
+        let t0 = std::time::Instant::now();
+        let mut total = 0usize;
+        for b in 0..n_batches {
+            let rows = synthetic_rows((b * batch_rows) as i64, batch_rows);
+            if param_driven {
+                db.run_script(PUT_PARAM_SCRIPT, param_pool_of(&rows))?;
+            } else {
+                db.run_script(&put_literal_script(&rows), BTreeMap::new())?;
+            }
+            total += rows.len();
+        }
+        Ok((total, t0.elapsed()))
+    }
+    match backend {
+        Backend::Mem => {
+            let db = crate::runtime::db::Db::new(SimStorage::new(0xB0FF_0001))?;
+            seed_and_run(db, batch_rows, n_batches, param_driven)
+        }
+        Backend::Fjall => {
+            let db = crate::runtime::db::Db::new(new_fjall_storage(tmp)?)?;
+            seed_and_run(db, batch_rows, n_batches, param_driven)
+        }
+    }
+}
+
+/// The bare storage floor: `n_batches` transactions of `batch_rows` raw
+/// `put`s each, straight through `Storage`/`WriteTx` — no relation catalog,
+/// no session, no extraction, no bitemporal key/value encoding, no
+/// current-row probe. Whatever fjall itself costs to accept the same
+/// number of keys, nothing more.
+pub fn bare_fjall_put_batches(
+    batch_rows: usize,
+    n_batches: usize,
+    tmp: &Path,
+) -> miette::Result<(usize, std::time::Duration)> {
+    let storage = new_fjall_storage(tmp)?;
+    let t0 = std::time::Instant::now();
+    let mut total = 0usize;
+    for b in 0..n_batches {
+        let mut tx = storage.write_tx()?;
+        for i in 0..batch_rows {
+            let k = (b * batch_rows + i) as i64;
+            let key = crate::data::tuple::encode_tuple_key(42, &[DataValue::from(k)]);
+            tx.put(key.as_bytes(), &k.to_be_bytes())?;
+        }
+        tx.commit()?;
+        total += batch_rows;
+    }
+    Ok((total, t0.elapsed()))
+}
+
+/// The bulk-write path's per-row key+value encode, alone: build a real
+/// `RelationHandle` (arity 2, one key column) over an in-memory `SimStorage`
+/// (no disk I/O to conflate with the encode cost itself), then encode `n`
+/// distinct rows' bitemporal key and value — the exact calls
+/// `put_into_relation` makes per row — and discard the bytes. No probe, no
+/// write, no commit.
+pub fn encode_only(n: usize) -> miette::Result<std::time::Duration> {
+    let store = SimStorage::new(0xE1C0DE01);
+    let mut tx = store.write_tx().expect("write tx");
+    let input = InputRelationHandle {
+        name: sym("w"),
+        metadata: StoredRelationMetadata {
+            keys: vec![col("k")],
+            non_keys: vec![col("v")],
+        },
+        key_bindings: vec![sym("k")],
+        dep_bindings: vec![sym("v")],
+        span: sp(),
+    };
+    let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
+    let stamp = tx.system_stamp();
+    let t0 = std::time::Instant::now();
+    for i in 0..n as i64 {
+        let row = [DataValue::from(i), DataValue::from(i * 3)];
+        let key = handle
+            .encode_bitemporal_key_for_store(&row, stamp, stamp, sp())
+            .expect("encode key");
+        let val = handle
+            .encode_bitemporal_val_for_store(
+                &row,
+                crate::data::bitemporal::ClaimPolarity::Assert,
+                sp(),
+            )
+            .expect("encode val");
+        std::hint::black_box((key, val));
+    }
+    Ok(t0.elapsed())
+}
+
+/// The bulk-write path's per-row SSI current-row probe, alone, against an
+/// otherwise-EMPTY relation (the genuine bulk-INSERT shape: every probed
+/// key is absent) — isolates
+/// [`RelationHandle::current_row`](crate::runtime::relation::RelationHandle)'s
+/// cost (key+bound encoding plus the conflict-tracked range read) from
+/// everything else `put_into_relation` does.
+pub fn probe_only_not_found(n: usize) -> miette::Result<std::time::Duration> {
+    let store = SimStorage::new(0xB0BE_0002);
+    let mut tx = store.write_tx().expect("write tx");
+    let input = InputRelationHandle {
+        name: sym("w"),
+        metadata: StoredRelationMetadata {
+            keys: vec![col("k")],
+            non_keys: vec![col("v")],
+        },
+        key_bindings: vec![sym("k")],
+        dep_bindings: vec![sym("v")],
+        span: sp(),
+    };
+    let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
+    let as_of = crate::data::value::AsOf::current(crate::data::value::MAX_VALIDITY_TS);
+    let t0 = std::time::Instant::now();
+    for i in 0..n as i64 {
+        let row = [DataValue::from(i)];
+        let found = handle.current_row(&tx, &row, as_of, sp()).expect("probe");
+        std::hint::black_box(found);
+    }
+    Ok(t0.elapsed())
 }

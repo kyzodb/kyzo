@@ -119,14 +119,22 @@
 //! looks at a name again.
 //!
 //! The delta discipline (the seam contract of `query/eval.rs::RuleBody`):
-//! `iter` takes `delta_rule: Option<&MagicSymbol>`; when it names store
-//! `k`, **every** [`TempStoreRA`] occurrence of `k` in the tree reads that
-//! store's *delta* instead of its total, while negation
-//! ([`NegJoin`]) always reads totals. Determinism: iteration order is a
-//! function of the stores and the plan alone — the in-memory stores
-//! iterate in canonical order, stored relations scan in memcmp key order,
-//! and every operator here is order-preserving (the materialized join
-//! sorts its cache).
+//! `iter` takes `delta_rule: Option<AtomOccurrence>`; when it names
+//! occurrence `k`, **only** the one [`TempStoreRA`] built for that body
+//! position reads its store's *delta* instead of its total — every OTHER
+//! occurrence, including another occurrence of the same store, reads its
+//! total — while negation ([`NegJoin`]) always reads totals regardless.
+//! Positional, not name-keyed: a store mentioned twice in one body (the
+//! self-join shape, e.g. `pt(x,y), pt(y,z)`) gets two distinct
+//! [`TempStoreRA`]s, each with its own [`AtomOccurrence`]
+//! (`compile.rs::compile_magic_rule_body` numbers them in the same
+//! left-to-right order `MagicInlineRule::contained_rules` does), so each
+//! can be delta-selected independently — the standard semi-naive
+//! self-join rewrite, `Δ(P⋈P) = (ΔP⋈P) ∪ (P⋈ΔP)`, one pass per occurrence.
+//! Determinism: iteration order is a function of the stores and the plan
+//! alone — the in-memory stores iterate in canonical order, stored
+//! relations scan in memcmp key order, and every operator here is
+//! order-preserving (the materialized join sorts its cache).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
@@ -143,6 +151,7 @@ use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, DataValue};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
+use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -399,14 +408,20 @@ impl RelAlgebra {
     }
 
     /// A scan of an in-memory rule store (a "derived" relation).
+    /// `occurrence` is this atom's position among its body's
+    /// `Rule`/`NegatedRule` atoms (`compile.rs`'s shared numbering) — the
+    /// key `delta_from` compares against to decide whether THIS specific
+    /// occurrence reads its store's delta.
     pub(crate) fn derived(
         bindings: Vec<Symbol>,
         storage_key: MagicSymbol,
+        occurrence: AtomOccurrence,
         span: SourceSpan,
     ) -> Self {
         Self::TempStore(TempStoreRA {
             bindings,
             storage_key,
+            occurrence,
             filters: vec![],
             filters_bytecodes: vec![],
             span,
@@ -488,6 +503,7 @@ impl RelAlgebra {
             RelAlgebra::TempStore(TempStoreRA {
                 bindings,
                 storage_key,
+                occurrence,
                 mut filters,
                 filters_bytecodes,
                 span,
@@ -496,6 +512,7 @@ impl RelAlgebra {
                 RelAlgebra::TempStore(TempStoreRA {
                     bindings,
                     storage_key,
+                    occurrence,
                     filters,
                     filters_bytecodes,
                     span,
@@ -757,7 +774,7 @@ impl RelAlgebra {
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
@@ -888,7 +905,19 @@ mod tests {
         tx: &'a impl ReadTx,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
     ) -> Result<Box<dyn Iterator<Item = Result<Tuple>> + 'a>> {
-        let mut batches = ra.iter_batched(tx, None, stores, Segments::OFF)?;
+        rows_of_seg(ra, tx, stores, Segments::OFF)
+    }
+
+    /// [`rows_of`] with an explicit [`Segments`] context — the segment-vs-
+    /// storage differential tests drive the SAME machine twice, once per
+    /// context, rather than maintaining a second reader.
+    fn rows_of_seg<'a>(
+        ra: &'a RelAlgebra,
+        tx: &'a impl ReadTx,
+        stores: &'a BTreeMap<MagicSymbol, EpochStore>,
+        segments: Segments<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Tuple>> + 'a>> {
+        let mut batches = ra.iter_batched(tx, None, stores, segments)?;
         let mut current: Vec<Tuple> = Vec::new();
         let mut idx = 0usize;
         Ok(Box::new(std::iter::from_fn(move || {
@@ -918,6 +947,7 @@ mod tests {
     use crate::data::relation::{ColType, NullableColType};
     use crate::data::relation::{ColumnDef, StoredRelationMetadata};
     use crate::data::value::ValidityTs;
+    use crate::engines::segments::SegmentEngine;
     use crate::query::temp_store::RegularTempStore;
     use crate::runtime::relation::create_relation;
     use crate::storage::fjall::new_fjall_storage;
@@ -1104,12 +1134,15 @@ mod tests {
         }
         tx.commit().unwrap();
         let rtx = db.read_tx().unwrap();
+        // The right side's join column gets its own symbol (`j2`), as the
+        // compiler guarantees before any join is minted: InnerJoin::bindings
+        // asserts (debug) that output bindings are duplicate-free.
         let mut ra = RelAlgebra::relation(vec![sym("j")], left_handle, sp(), None)
             .unwrap()
             .join(
-                RelAlgebra::relation(vec![sym("i"), sym("j")], right_handle, sp(), None).unwrap(),
+                RelAlgebra::relation(vec![sym("i"), sym("j2")], right_handle, sp(), None).unwrap(),
                 vec![sym("j")],
-                vec![sym("j")],
+                vec![sym("j2")],
                 sp(),
             )
             .unwrap();
@@ -1257,16 +1290,17 @@ mod tests {
         tx.commit().unwrap();
 
         // Reorder as inner-join RHS.
-        let reordered = RelAlgebra::derived(vec![sym("x")], entry(), sp()).reorder(vec![sym("x")]);
+        let reordered = RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(0), sp())
+            .reorder(vec![sym("x")]);
         let err = RelAlgebra::unit(sp())
             .join(reordered, vec![], vec![], sp())
             .unwrap_err();
         assert!(err.downcast_ref::<PlanInvariantError>().is_some());
 
         // NegJoin as inner-join RHS.
-        let neg = RelAlgebra::derived(vec![sym("x")], entry(), sp())
+        let neg = RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(0), sp())
             .neg_join(
-                RelAlgebra::derived(vec![sym("x")], entry(), sp()),
+                RelAlgebra::derived(vec![sym("x")], entry(), AtomOccurrence(1), sp()),
                 vec![sym("x")],
                 vec![sym("x")],
                 sp(),
@@ -1371,13 +1405,15 @@ mod tests {
             tx.commit().unwrap();
 
             let rtx = db.read_tx().unwrap();
+            // Right side's join column carries its own symbol (`k2`), per the
+            // compiler-guaranteed duplicate-free-bindings invariant.
             let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)
                 .unwrap()
                 .join(
-                    RelAlgebra::relation(vec![sym("k"), sym("v")], right_handle, sp(), None)
+                    RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None)
                         .unwrap(),
                     vec![sym("k")],
-                    vec![sym("k")],
+                    vec![sym("k2")],
                     sp(),
                 )
                 .unwrap();
@@ -1505,15 +1541,18 @@ mod tests {
             to_eliminate: Default::default(),
             span: sp(),
         });
+        // `k2` on the right: joins never carry a duplicated symbol across
+        // sides (compiler invariant, debug-asserted in InnerJoin::bindings).
         let right = RelAlgebra::TempStore(TempStoreRA {
-            bindings: vec![sym("k"), sym("val")],
+            bindings: vec![sym("k2"), sym("val")],
             storage_key: storage_key.clone(),
+            occurrence: AtomOccurrence(0),
             filters: vec![],
             filters_bytecodes: vec![],
             span: sp(),
         });
         let mut ra = left
-            .join(right, vec![sym("k")], vec![sym("k")], sp())
+            .join(right, vec![sym("k")], vec![sym("k2")], sp())
             .unwrap();
         ra.fill_binding_indices_and_compile().unwrap();
 
@@ -1526,13 +1565,13 @@ mod tests {
 
         // Against the DELTA, only key 2 (this epoch's fresh row) may join.
         let it: Vec<Tuple> = ra
-            .iter_batched(&rtx, Some(&storage_key), &stores, Segments::OFF)
+            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF)
             .unwrap()
             .map(Result::unwrap)
             .flat_map(Batch::into_rows)
             .collect();
         let ba: Vec<Tuple> = ra
-            .iter_batched(&rtx, Some(&storage_key), &stores, Segments::OFF)
+            .iter_batched(&rtx, Some(AtomOccurrence(0)), &stores, Segments::OFF)
             .unwrap()
             .map(Result::unwrap)
             .flat_map(Batch::into_rows)
@@ -1544,6 +1583,303 @@ mod tests {
             "delta threading must narrow the join to the fresh row only"
         );
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Issue #75: segment-served prefix-join probes. `StoredRA`'s
+    // point-lookup probe (right side's join columns cover its whole key)
+    // and plain-prefix probe (a strict leading subset, no residual filter
+    // bounds) now serve from the relation's segment when the caller passes
+    // a live `SegmentEngine`, instead of paying the bitemporal seek-based
+    // resolver on every probe. Both must be byte-identical, in order, to
+    // the storage-probe answer — judged against an independently
+    // hand-computed expected value, never against a second run of the same
+    // machine.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// The point-lookup probe (right relation's key is exactly the join
+    /// column): segments ON and OFF must produce the identical row stream,
+    /// and both must equal the hand-computed join.
+    #[test]
+    fn stored_point_lookup_join_segments_match_oracle_and_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        let left_handle = create_relation(
+            &mut tx,
+            input_handle("plj_l", vec![col("k", ColType::Int)], vec![]),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        let right_handle = create_relation(
+            &mut tx,
+            input_handle(
+                "plj_r",
+                vec![col("k2", ColType::Int)],
+                vec![col("v", ColType::Int)],
+            ),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        // Past one batch boundary, so a served segment must also resume
+        // correctly across output-batch edges, not just within one.
+        let n = BATCH_ROWS + 37;
+        let mut expected: Vec<Tuple> = Vec::new();
+        for i in 0..n {
+            let k = i as i64;
+            left_handle
+                .put_fact(&mut tx, &[v(k)], ValidityTs(Reverse(0)), sp())
+                .unwrap();
+            if k % 3 == 0 {
+                right_handle
+                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs(Reverse(0)), sp())
+                    .unwrap();
+                expected.push(vec![v(k), v(k), v(k * 10)]);
+            }
+        }
+        tx.commit().unwrap();
+
+        let rtx = db.read_tx().unwrap();
+        let mut ra = RelAlgebra::relation(vec![sym("k")], left_handle, sp(), None)
+            .unwrap()
+            .join(
+                RelAlgebra::relation(vec![sym("k2"), sym("v")], right_handle, sp(), None).unwrap(),
+                vec![sym("k")],
+                vec![sym("k2")],
+                sp(),
+            )
+            .unwrap();
+        ra.fill_binding_indices_and_compile().unwrap();
+        let stores = no_stores();
+
+        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            off, expected,
+            "storage probe diverged from hand-computed join"
+        );
+
+        let engine = SegmentEngine::default();
+        let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            on, expected,
+            "segment-served point-lookup probe diverged from hand-computed join"
+        );
+        assert_eq!(
+            on, off,
+            "segment path must be byte-identical to storage path"
+        );
+    }
+
+    /// The plain-prefix probe (right relation's key is TWO columns, the
+    /// join binds only the leading one, so one left row matches several
+    /// right rows — `edge`'s shape in `tc.kz`, the workload the fix
+    /// targets). Segments ON and OFF must produce the identical row
+    /// stream, in the identical (key) order, and both must equal the
+    /// hand-computed cross join.
+    #[test]
+    fn stored_prefix_join_segments_match_oracle_and_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        let left_handle = create_relation(
+            &mut tx,
+            input_handle("ppj_l", vec![col("z", ColType::Int)], vec![]),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        let right_handle = create_relation(
+            &mut tx,
+            input_handle(
+                "ppj_r",
+                vec![col("z2", ColType::Int), col("w", ColType::Int)],
+                vec![],
+            ),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        // n left keys, each with a handful of right neighbours at
+        // increasing width — past one batch boundary in total match count.
+        let n = 200;
+        let mut expected: Vec<Tuple> = Vec::new();
+        for z in 0..n {
+            left_handle
+                .put_fact(&mut tx, &[v(z)], ValidityTs(Reverse(0)), sp())
+                .unwrap();
+            for w in 0..(z % 7) {
+                right_handle
+                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs(Reverse(0)), sp())
+                    .unwrap();
+                expected.push(vec![v(z), v(z), v(w)]);
+            }
+        }
+        tx.commit().unwrap();
+
+        let rtx = db.read_tx().unwrap();
+        let mut ra = RelAlgebra::relation(vec![sym("z")], left_handle, sp(), None)
+            .unwrap()
+            .join(
+                RelAlgebra::relation(vec![sym("z2"), sym("w")], right_handle, sp(), None).unwrap(),
+                vec![sym("z")],
+                vec![sym("z2")],
+                sp(),
+            )
+            .unwrap();
+        ra.fill_binding_indices_and_compile().unwrap();
+        let stores = no_stores();
+
+        let off: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments::OFF)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            off, expected,
+            "storage probe diverged from hand-computed join"
+        );
+
+        let engine = SegmentEngine::default();
+        let on: Vec<Tuple> = rows_of_seg(&ra, &rtx, &stores, Segments(Some(&engine)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            on, expected,
+            "segment-served prefix probe diverged from hand-computed join"
+        );
+        assert_eq!(
+            on, off,
+            "segment path must be byte-identical to storage path"
+        );
+    }
+
+    /// DIAGNOSTIC, not a correctness assertion: reproduces issue #75's
+    /// measurement shape (the `tc.kz` recursive join's `edge` probe) at a
+    /// scale where JIT/cache effects have settled, and reports ns/probe for
+    /// the storage path (bitemporal seek-based resolver) vs the segment
+    /// path (binary search over the dense decoded buffer). Measured on this
+    /// machine at 200k probes over a 6,000-row two-column-key relation
+    /// (`edge`-shaped, ~3 matches/probe on average — `tc/sparse`'s own
+    /// n=2000/m=6000 ratio), three runs: storage 1023-1153 ns/probe,
+    /// segment 230-243 ns/probe — a consistent ~4.5x, on top of the
+    /// diagnosis's isolated single-match 2315ns-vs-694ns (3.34x) figure
+    /// because this shape's average fan-out amortizes the segment's binary
+    /// search over more than one emitted row per probe. Run explicitly:
+    /// `cargo test -p kyzo --release query::ra::tests::stored_prefix_join_segment_probe_cost_vs_storage -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn stored_prefix_join_segment_probe_cost_vs_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        // No left relation: the left side is synthetic probe rows fed
+        // straight in, below — only the probed (right) relation needs to
+        // exist in storage.
+        let right_handle = create_relation(
+            &mut tx,
+            input_handle(
+                "pcost_r",
+                vec![col("z2", ColType::Int), col("w", ColType::Int)],
+                vec![],
+            ),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        const N_NODES: i64 = 2000;
+        const M_EDGES: i64 = 6000;
+        for i in 0..M_EDGES {
+            let z = i % N_NODES;
+            let w = (i * 7 + 3) % N_NODES;
+            right_handle
+                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs(Reverse(0)), sp())
+                .unwrap();
+        }
+        tx.commit().unwrap();
+        let rtx = db.read_tx().unwrap();
+
+        const N_PROBES: usize = 200_000;
+        let probe_rows: Vec<Tuple> = (0..N_PROBES)
+            .map(|i| vec![v((i as i64) % N_NODES)])
+            .collect();
+        let left_of = |rows: Vec<Tuple>| -> BatchIter<'static> {
+            let chunks: Vec<Batch> = rows
+                .chunks(BATCH_ROWS)
+                .map(|c| Batch::with_rows(c.to_vec()))
+                .collect();
+            Box::new(chunks.into_iter().map(Ok))
+        };
+
+        let ra = StoredRA {
+            bindings: vec![sym("z2"), sym("w")],
+            storage: right_handle,
+            filters: vec![],
+            filters_bytecodes: vec![],
+            span: sp(),
+        };
+        let join_indices = || -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) };
+
+        // Storage path (Segments::OFF).
+        let t0 = std::time::Instant::now();
+        let mut n_rows = 0usize;
+        for b in ra
+            .prefix_join_batched(
+                &rtx,
+                left_of(probe_rows.clone()),
+                join_indices(),
+                Default::default(),
+                Segments::OFF,
+            )
+            .unwrap()
+        {
+            n_rows += b.unwrap().len();
+        }
+        let storage_ns_per_probe = t0.elapsed().as_nanos() as f64 / N_PROBES as f64;
+
+        // Segment path: prime the segment with a throwaway probe first, so
+        // the timed run pays zero build cost (the production call site
+        // builds once per plan-node instantiation too — see
+        // `prefix_join_batched`'s doc comment).
+        let engine = SegmentEngine::default();
+        let segments = Segments(Some(&engine));
+        for b in ra
+            .prefix_join_batched(
+                &rtx,
+                left_of(vec![probe_rows[0].clone()]),
+                join_indices(),
+                Default::default(),
+                segments,
+            )
+            .unwrap()
+        {
+            b.unwrap();
+        }
+        let t1 = std::time::Instant::now();
+        let mut n_rows_seg = 0usize;
+        for b in ra
+            .prefix_join_batched(
+                &rtx,
+                left_of(probe_rows),
+                join_indices(),
+                Default::default(),
+                segments,
+            )
+            .unwrap()
+        {
+            n_rows_seg += b.unwrap().len();
+        }
+        let segment_ns_per_probe = t1.elapsed().as_nanos() as f64 / N_PROBES as f64;
+
+        eprintln!(
+            "storage={storage_ns_per_probe:.1} ns/probe ({n_rows} rows) \
+             segment={segment_ns_per_probe:.1} ns/probe ({n_rows_seg} rows) \
+             speedup={:.2}x",
+            storage_ns_per_probe / segment_ns_per_probe
+        );
+    }
+
     /// A stream/decode error met DURING accumulation must not outrank an
     /// earlier accumulated row's predicate error: the row path interleaves
     /// decode and predicate per row, and the batched path must report the

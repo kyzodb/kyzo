@@ -31,7 +31,12 @@
  * first — cosmetic, nothing re-parses it); `InputRelationHandle.span` is
  * deliberately not serialized (spans are never persisted in KyzoDB);
  * `MagicInlineRule::contained_rules` lands with the compile tier, which
- * owns `ContainedRuleMultiplicity`.
+ * owns the occurrence-keyed delta-selection map (`AtomOccurrence`, in
+ * `query/eval.rs`) it returns — issue #68's fix replaced the original's
+ * name-keyed `ContainedRuleMultiplicity` (a store mentioned twice in one
+ * body collapsed to one `Many` entry and lost all delta narrowing) with
+ * one entry per body position, so repeated occurrences of the same store
+ * are each independently delta-selectable.
  */
 
 //! The program tiers: what a query *is* at each stage of compilation.

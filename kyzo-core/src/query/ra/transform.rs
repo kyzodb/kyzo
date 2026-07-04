@@ -26,6 +26,7 @@ use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
+use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::query::ra::join::{eliminate_from_tuple, get_eliminate_indices};
 use crate::storage::ReadTx;
@@ -54,7 +55,7 @@ impl ReorderRA {
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
@@ -142,7 +143,7 @@ impl FilteredRA {
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
@@ -207,7 +208,7 @@ impl UnificationRA {
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
-        delta_rule: Option<&MagicSymbol>,
+        delta_rule: Option<AtomOccurrence>,
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {

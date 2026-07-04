@@ -1219,6 +1219,58 @@ mod tests {
         );
     }
 
+    /// [`segments_serve_fresh_and_never_dirty`]'s reproducer, extended to
+    /// the JOIN PROBE path (issue #75's fix): `*jl[k], *jr[k, v]` compiles
+    /// to a prefix join whose right side (`jr`) is now served, current-
+    /// state, straight from its segment (`StoredRA::prefix_join_batched`)
+    /// instead of the bitemporal seek-based probe. The probe side must
+    /// obey the identical freshness law as a plain scan — a write to `jr`
+    /// bumps its watermark BEFORE commit, so the very next read's witness
+    /// can never match a segment built before that write, and the join
+    /// sees the new row immediately, never a cached probe answer.
+    #[test]
+    fn segments_serve_fresh_and_never_dirty_for_join_probes() {
+        let db = Db::new(SimStorage::new(9)).unwrap();
+        db.run_script("?[k] <- [[1], [2]] :create jl {k}", no_params())
+            .unwrap();
+        db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())
+            .unwrap();
+
+        // First read builds jr's segment and serves the point-lookup probe
+        // from it; second read is served from the cached segment.
+        let q = "?[k, v] := *jl[k], *jr[k, v]";
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10]]
+        );
+
+        // A committed write to jr — the PROBE side of the join — orphans
+        // its segment: the re-read must see the new row, not a stale
+        // probe answer served from before the write.
+        db.run_script("?[k2, v] <- [[2, 20]] :put jr {k2 => v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![1, 10], vec![2, 20]]
+        );
+
+        // A retraction on the probe side is a write like any other.
+        db.run_script("?[k2, v] <- [[1, 10]] :rm jr {k2, v}", no_params())
+            .unwrap();
+        assert_eq!(
+            int_rows(&db.run_script(q, no_params()).unwrap()),
+            vec![vec![2, 20]]
+        );
+    }
+
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
@@ -1370,6 +1422,35 @@ mod tests {
                 "expected a typed InvalidTimeout refusal for {bad}, got: {err}"
             );
         }
+    }
+
+    /// Regression for fuzz artifact
+    /// crash-f1ef21a6c4f99a02f719c5bde2689bb158df629f: a literal `i64`
+    /// product that overflows 64 bits panicked in parse-time constant
+    /// folding (debug builds: "attempt to multiply with overflow") and
+    /// silently wrapped to a wrong answer (release builds). Both profiles
+    /// must now see the same clean typed error.
+    #[test]
+    fn overflowing_literal_product_is_a_clean_error_not_a_panic() {
+        let db = Db::new(SimStorage::new(7)).unwrap();
+        let err = db
+            .run_script("?[x] := x = 2222222000*867076028303", no_params())
+            .expect_err("an i64-overflowing literal product must refuse cleanly");
+        // The op's `IntegerOverflow` is raised inside constant folding
+        // (`Expr::eval` via `Expr::partial_eval`), which wraps every op
+        // error as `EvalRaisedError` (its message, not its type, survives
+        // — in the struct's own help string, not its fixed `Display`) —
+        // the same wrapping every other op error gets.
+        let wrapped = err
+            .downcast_ref::<crate::data::expr::EvalRaisedError>()
+            .unwrap_or_else(|| {
+                panic!("expected an EvalRaisedError wrapping the overflow, got: {err}")
+            });
+        assert!(
+            wrapped.1.contains("integer overflow"),
+            "expected an integer-overflow message, got: {}",
+            wrapped.1
+        );
     }
 
     /// THE SEARCH PIPELINE END TO END: `::hnsw create` builds and backfills

@@ -118,7 +118,9 @@ use crate::data::symb::Symbol;
 use crate::data::tuple::{
     EncodedKey, RelationId, Tuple, TupleT, decode_tuple_from_kv, extend_tuple_from_v,
 };
-use crate::data::tuple::{encode_projected_key, encode_projected_key_with_suffix};
+use crate::data::tuple::{
+    encode_key_with_suffix, encode_projected_key, encode_projected_key_with_suffix,
+};
 use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, Validity, ValidityTs};
 use crate::storage::{ReadTx, WriteTx};
 
@@ -561,11 +563,17 @@ impl RelationHandle {
                 is_assert: std::cmp::Reverse(true),
             })
         };
-        let mut with_slots = Vec::with_capacity(len + 2);
-        with_slots.extend_from_slice(&tuple[0..len]);
-        with_slots.push(slot(valid));
-        with_slots.push(slot(sys));
-        Ok(with_slots.encode_as_key(self.id))
+        // Zero-clone: the tuple's key columns plus the two bitemporal
+        // slots, encoded straight to bytes in one pass — every fact write
+        // (put/update/remove alike) goes through this, so the
+        // materialize-then-encode `Vec<DataValue>` it replaced was a second
+        // allocation and a second pass over every row in the bulk-write
+        // path.
+        Ok(encode_key_with_suffix(
+            self.id,
+            &tuple[0..len],
+            &[slot(valid), slot(sys)],
+        ))
     }
 
     /// Write the fact's Assert row at the valid coordinate, stamped with
@@ -852,10 +860,15 @@ impl RelationHandle {
                 span
             }
         );
-        let lower = (&key_cols[0..len]).encode_as_key(self.id);
-        let mut upper_cols = key_cols[0..len].to_vec();
-        upper_cols.push(DataValue::Bot);
-        let upper = upper_cols.encode_as_key(self.id);
+        let key_cols = &key_cols[0..len];
+        // Zero-clone: this probe runs on EVERY mutated row (the SSI
+        // uniqueness/conflict probe `put_into_relation` etc. cannot skip),
+        // so the intermediate `Vec<DataValue>` the upper bound used to
+        // build (key columns copied, then `Bot` pushed) was one whole heap
+        // allocation per row that carried no information the direct
+        // encode below doesn't already have.
+        let lower = key_cols.encode_as_key(self.id);
+        let upper = encode_key_with_suffix(self.id, key_cols, &[DataValue::Bot]);
         tx.range_skip_scan_tuple(&lower, &upper, as_of)
             .next()
             .transpose()
