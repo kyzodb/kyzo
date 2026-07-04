@@ -126,6 +126,12 @@ pub(crate) mod fjall;
 #[allow(dead_code)]
 pub(crate) mod merkle;
 pub(crate) mod retry;
+// The generic bitemporal skip-scan driver (story #78 phase 1): a NEW,
+// standalone module the three backends (fjall/temp/sim) will port onto in
+// phase 2. Not yet wired to any backend's `range_skip_scan_tuple` — that
+// swap is phase 2's job once this lands.
+#[allow(dead_code)]
+mod skip_walk;
 // With `bench-internals` on (and test off), sim.rs compiles into the lib so
 // `bench_api` can build mem-backend workloads on `SimStorage`; the module's
 // DST-only helpers (scheduler, crash/powercut doubles) are then legitimately

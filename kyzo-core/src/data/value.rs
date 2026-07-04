@@ -154,6 +154,51 @@ impl From<(i64, bool)> for Validity {
     }
 }
 
+/// A storable bitemporal key-tail slot: the write-time proof that a
+/// fact's two time slots (valid instant, system version —
+/// `EncodedKey::BITEMPORAL_TAIL_LEN`, `data/tuple.rs`) are always
+/// well-formed. [`Self::new`] is the only constructor and it pins
+/// `is_assert` to `true` unconditionally, so a stored slot carrying a
+/// retract flag is unrepresentable at the point of writing, not merely
+/// rejected on read.
+///
+/// This is the enforcement-ladder promotion of the convention every fact
+/// key composer used to hand-roll (`runtime/relation.rs`'s
+/// `encode_bitemporal_key_for_store` kept a local `slot()` closure doing
+/// exactly this before this type existed). It also changes what
+/// `data::bitemporal::check_key_for_bitemporal`'s stored-flag check
+/// (`data/bitemporal.rs`, the `!valid.is_assert.0 || !sys.is_assert.0`
+/// refusal) MEANS: with every write path routed through
+/// [`Self::new`], that check no longer guards a runtime invariant the
+/// write path could violate — it demotes to a disk-corruption guard,
+/// catching only bytes this process never wrote (a corrupted store, a
+/// crafted dump). The check itself is unchanged; its job description is.
+///
+/// A general (unpinned) [`Validity`] remains the right type for read-time
+/// coordinates that are not stored key material — `check_key_for_bitemporal`'s
+/// own splice bounds, for instance, synthesize scan-seek bytes that are
+/// never a persisted fact's own slot, and both flags there are read, not
+/// written, by the scan.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) struct StoredValiditySlot(Validity);
+
+impl StoredValiditySlot {
+    /// The only constructor: `is_assert` is `true` by construction, never
+    /// a parameter.
+    pub(crate) fn new(ts: ValidityTs) -> Self {
+        StoredValiditySlot(Validity {
+            timestamp: ts,
+            is_assert: Reverse(true),
+        })
+    }
+
+    /// The slot's written form: a key-tail data value, ready for
+    /// `MemCmpEncoder::encode_datavalue`.
+    pub(crate) fn as_datavalue(self) -> DataValue {
+        DataValue::Validity(self.0)
+    }
+}
+
 /// The current time as a validity timestamp (microseconds since epoch).
 ///
 /// A host clock before 1970 is an error, not an abort — the same policy the
@@ -195,6 +240,16 @@ impl AsOf {
             sys: MAX_VALIDITY_TS,
             valid,
         }
+    }
+
+    /// What the record said at system time `sys` about valid time
+    /// `valid` — the general two-coordinate historical read.
+    /// [`Self::current`] is exactly the special case `sys ==
+    /// MAX_VALIDITY_TS`; this is the smart-constructor promotion of the
+    /// raw `AsOf { sys, valid }` struct literal every historical read
+    /// site used to hand-roll.
+    pub const fn at(sys: ValidityTs, valid: ValidityTs) -> Self {
+        AsOf { sys, valid }
     }
 }
 
@@ -1062,5 +1117,56 @@ mod interval_deserialize_tests {
             result.is_err(),
             "empty interval bytes must be refused, never constructed"
         );
+    }
+}
+
+#[cfg(test)]
+mod stored_validity_slot_and_as_of_constructor_tests {
+    use super::{AsOf, MAX_VALIDITY_TS, StoredValiditySlot, Validity, ValidityTs};
+    use crate::data::value::DataValue;
+    use std::cmp::Reverse;
+
+    /// The whole point of the type: every timestamp it is handed, however
+    /// extreme, comes out pinned `is_assert == true`. There is no
+    /// constructor parameter that could flip it — this walks the boundary
+    /// values a hostile or careless caller might try anyway.
+    #[test]
+    fn stored_validity_slot_always_pins_assert_true() {
+        for ts in [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX] {
+            let slot = StoredValiditySlot::new(ValidityTs(Reverse(ts)));
+            match slot.as_datavalue() {
+                DataValue::Validity(Validity {
+                    timestamp,
+                    is_assert,
+                }) => {
+                    assert!(is_assert.0, "slot for ts={ts} was not pinned to assert");
+                    assert_eq!(timestamp, ValidityTs(Reverse(ts)));
+                }
+                other => panic!("expected DataValue::Validity, got {other:?}"),
+            }
+        }
+    }
+
+    /// `AsOf::current(v)` is documented as exactly the special case
+    /// `AsOf::at(MAX_VALIDITY_TS, v)` — proved directly rather than left as
+    /// a comment, across a spread of `valid` coordinates including the
+    /// signed extremes.
+    #[test]
+    fn as_of_current_is_at_with_max_system_coordinate() {
+        for v in [i64::MIN, -100, -1, 0, 1, 100, i64::MAX] {
+            let valid = ValidityTs(Reverse(v));
+            assert_eq!(AsOf::current(valid), AsOf::at(MAX_VALIDITY_TS, valid));
+        }
+    }
+
+    /// `AsOf::at` is a pure field assignment — the smart constructor must
+    /// be behaviorally identical to the raw struct literal it replaces at
+    /// every call site, never a narrower or reordered surface.
+    #[test]
+    fn as_of_at_matches_the_raw_struct_literal_it_replaces() {
+        let sys = ValidityTs(Reverse(42));
+        let valid = ValidityTs(Reverse(-7));
+        let literal = AsOf { sys, valid };
+        assert_eq!(AsOf::at(sys, valid), literal);
     }
 }

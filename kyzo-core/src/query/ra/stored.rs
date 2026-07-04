@@ -112,19 +112,26 @@ impl StoredRA {
     }
 
     /// The session's current-state segment for this relation at THIS
-    /// snapshot's witness — served if valid, built and installed on miss
-    /// (the build pays the same storage scan the read would have paid,
-    /// plus one dense flatten; every subsequent scan at the same witness
-    /// skips LSM iteration and memcmp decode entirely).
+    /// snapshot's witness — served if valid, built and installed on a
+    /// STABLE miss (the build pays the same storage scan the read would
+    /// have paid, plus one dense flatten; every subsequent scan at the
+    /// same witness skips LSM iteration and memcmp decode entirely).
     ///
-    /// `None` iff [`Segment::build`] declined (the relation is too large
-    /// for the `u32` offset encoding): the caller falls back to an
-    /// unsegmented scan. That path re-scans storage, but only in a case
-    /// that needs ~4.3 billion values in one relation to reach at all.
+    /// `None` on any decline: either [`Segment::build`]'s (the relation is
+    /// too large for the `u32` offset encoding — needs ~4.3 billion values
+    /// in one relation to reach at all) or
+    /// [`SegmentEngine::should_build`]'s (this miss hasn't yet proven the
+    /// witness is holding still — see that method's doc for why this
+    /// matters for a write-interleaved caller). Either way the caller
+    /// falls back to an unsegmented scan or point probe, which pays no
+    /// more than the scan a build would have paid anyway.
     fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Option<Arc<Segment>>> {
         let witness = engine.witness_after_snapshot(tx, self.storage.id);
         if let Some(seg) = engine.get(self.storage.id, witness) {
             return Ok(Some(seg));
+        }
+        if !engine.should_build(self.storage.id, witness) {
+            return Ok(None);
         }
         let mut rows = Vec::new();
         for t in self.storage.scan_all(tx) {
@@ -468,6 +475,295 @@ impl Iterator for SegmentScanBatches {
                 }
                 Ok(b) if b.is_empty() => continue,
                 Ok(b) => return Some(Ok(b)),
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Issue #82: the rebuild gate (`engines/segments.rs`'s `should_build`),
+// exercised through the real `StoredRA::iter_batched` production path
+// rather than the engine in isolation — proving the gate's contract holds
+// for the code the OLTP mixed-op caller actually runs, not just its
+// building block.
+// ─────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod segment_gate_tests {
+    use std::cmp::Reverse;
+
+    use smartstring::SmartString;
+
+    use super::*;
+    use crate::data::program::InputRelationHandle;
+    use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use crate::data::value::ValidityTs;
+    use crate::engines::segments::SegmentEngine;
+    use crate::runtime::relation::create_relation;
+    use crate::storage::fjall::new_fjall_storage;
+    use crate::storage::{Storage, WriteTx};
+
+    fn sp() -> SourceSpan {
+        SourceSpan(0, 0)
+    }
+    fn sym(name: &str) -> Symbol {
+        Symbol::new(name, sp())
+    }
+    fn v(i: i64) -> DataValue {
+        DataValue::from(i)
+    }
+
+    fn col(name: &str, coltype: ColType) -> ColumnDef {
+        ColumnDef {
+            name: SmartString::from(name),
+            typing: NullableColType {
+                coltype,
+                nullable: false,
+            },
+            default_gen: None,
+        }
+    }
+
+    fn input_handle(
+        name: &str,
+        keys: Vec<ColumnDef>,
+        non_keys: Vec<ColumnDef>,
+    ) -> InputRelationHandle {
+        let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
+        let dep_bindings = non_keys.iter().map(|c| sym(&c.name)).collect();
+        InputRelationHandle {
+            name: sym(name),
+            metadata: StoredRelationMetadata { keys, non_keys },
+            key_bindings,
+            dep_bindings,
+            span: sp(),
+        }
+    }
+
+    /// A two-column (`k`, `v`) `Facts` relation and the `StoredRA` scanning
+    /// it whole — the production shape a point-read compiles down to when
+    /// its bound key is exactly the relation's key (`prefix_join_batched`'s
+    /// point-lookup case shares `segment_at` with this one; both dispatch
+    /// through the same gate).
+    fn kv_relation(db: &impl Storage, name: &str) -> crate::runtime::relation::RelationHandle {
+        let mut tx = db.write_tx().unwrap();
+        let handle = create_relation(
+            &mut tx,
+            input_handle(
+                name,
+                vec![col("k", ColType::Int)],
+                vec![col("v", ColType::Int)],
+            ),
+            KeyspaceKind::Facts,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        handle
+    }
+
+    fn ra_over(handle: &crate::runtime::relation::RelationHandle) -> StoredRA {
+        StoredRA {
+            bindings: vec![sym("k"), sym("v")],
+            storage: handle.clone(),
+            filters: vec![],
+            filters_bytecodes: vec![],
+            span: sp(),
+        }
+    }
+
+    /// Collect a `StoredRA`'s whole-relation scan under a given segment
+    /// context — the same `iter_batched` door the compiled plan uses.
+    fn rows(ra: &StoredRA, tx: &impl ReadTx, segments: Segments<'_>) -> Vec<Vec<DataValue>> {
+        let mut out = Vec::new();
+        for b in ra.iter_batched(tx, segments).unwrap() {
+            let b = b.unwrap();
+            out.extend((0..b.len()).map(|i| b.row(i).to_vec()));
+        }
+        out
+    }
+
+    fn put(
+        db: &impl Storage,
+        handle: &crate::runtime::relation::RelationHandle,
+        engine: &SegmentEngine,
+        k: i64,
+        val: i64,
+    ) {
+        let mut wtx = db.write_tx().unwrap();
+        handle
+            .put_fact(&mut wtx, &[v(k), v(val)], ValidityTs(Reverse(0)), sp())
+            .unwrap();
+        // Writers bump BEFORE commit (`engines/segments.rs` module doc's
+        // soundness pairing) — mirrors exactly what `runtime/db.rs`'s
+        // mutate path does around the real storage commit.
+        engine.bump_before_commit(handle.id);
+        wtx.commit().unwrap();
+    }
+
+    /// (a)/(c) end to end: a caller whose every read is immediately
+    /// preceded by a committed write to the same relation (issue #82's
+    /// exact shape) must never see the gate build — each write resets the
+    /// stable-miss streak to zero before the next read's single miss can
+    /// cross the threshold — and every gated-out read must still answer
+    /// correctly (never stale, never an error).
+    #[test]
+    fn segment_gate_never_builds_under_write_interleaved_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let handle = kv_relation(&db, "gate_rw");
+        let engine = SegmentEngine::default();
+        let ra = ra_over(&handle);
+
+        for i in 0..50i64 {
+            put(&db, &handle, &engine, 0, i);
+
+            let rtx = db.read_tx().unwrap();
+            let witness = engine.witness_after_snapshot(&rtx, handle.id);
+            assert_eq!(
+                rows(&ra, &rtx, Segments(Some(&engine))),
+                vec![vec![v(0), v(i)]],
+                "iteration {i}: a gated-out read must still answer correctly"
+            );
+            // Checked AFTER the read, at THIS read's own witness (no
+            // intervening write yet) — this is what actually proves the
+            // read just performed did not build. A pre-read check here
+            // would pass vacuously: `get`'s witness-equality filter already
+            // guarantees a PRIOR iteration's segment (built at a now-stale
+            // witness) can never serve, regardless of whether the gate
+            // itself is behaving.
+            assert!(
+                engine.get(handle.id, witness).is_none(),
+                "iteration {i}: a write-interleaved read must never have just built a segment"
+            );
+        }
+    }
+
+    /// (b) a read-only run's gate crosses threshold at exactly the
+    /// documented point: the first miss declines (not yet proven stable),
+    /// the second miss at the SAME witness builds and installs, and every
+    /// read after that — including the one that triggered the build —
+    /// answers correctly.
+    #[test]
+    fn segment_gate_builds_after_stable_read_run_and_serves() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let handle = kv_relation(&db, "gate_stable");
+        let engine = SegmentEngine::default();
+        for k in 0..5i64 {
+            put(&db, &handle, &engine, k, k * 10);
+        }
+        let ra = ra_over(&handle);
+        let expected: Vec<Vec<DataValue>> = (0..5i64).map(|k| vec![v(k), v(k * 10)]).collect();
+
+        let rtx = db.read_tx().unwrap();
+        let witness = engine.witness_after_snapshot(&rtx, handle.id);
+
+        assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
+        assert!(
+            engine.get(handle.id, witness).is_none(),
+            "first miss must decline to build"
+        );
+
+        assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
+        assert!(
+            engine.get(handle.id, witness).is_some(),
+            "second stable miss (no intervening write) must build and install"
+        );
+
+        assert_eq!(
+            rows(&ra, &rtx, Segments(Some(&engine))),
+            expected,
+            "a served segment must answer identically to the scan it was built from"
+        );
+    }
+
+    /// (c), isolated from (a): one miss, then a write, then the very next
+    /// miss must restart the streak at 1 (decline) rather than inherit the
+    /// prior count — proven through `segment_at`'s production call site,
+    /// not just the raw counter.
+    #[test]
+    fn segment_gate_reset_by_intervening_write_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let handle = kv_relation(&db, "gate_reset");
+        let engine = SegmentEngine::default();
+        put(&db, &handle, &engine, 1, 10);
+        let ra = ra_over(&handle);
+
+        let rtx1 = db.read_tx().unwrap();
+        assert_eq!(
+            rows(&ra, &rtx1, Segments(Some(&engine))),
+            vec![vec![v(1), v(10)]]
+        );
+
+        put(&db, &handle, &engine, 2, 20);
+
+        let rtx2 = db.read_tx().unwrap();
+        let witness2 = engine.witness_after_snapshot(&rtx2, handle.id);
+        let expected2 = vec![vec![v(1), v(10)], vec![v(2), v(20)]];
+        assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
+        assert!(
+            engine.get(handle.id, witness2).is_none(),
+            "the first miss at the post-write witness must decline, not inherit the pre-write count"
+        );
+        assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
+        assert!(
+            engine.get(handle.id, witness2).is_some(),
+            "the second miss at the post-write witness builds normally"
+        );
+    }
+
+    /// (d) the point of the gate: it may only ever decide WHEN to build,
+    /// never WHAT to serve. Over a seeded, deterministic mix of writes and
+    /// read-runs of varying length (so both the gated-out fallback and the
+    /// built-and-served path are exercised many times, in an order neither
+    /// this test nor the gate controls), a segment-context read must be
+    /// byte-identical to a segments-off read, and both must match an
+    /// independently maintained model — never a run of the same machine
+    /// checked against itself.
+    #[test]
+    fn segment_served_and_gated_out_answers_match_across_seeded_mixed_workload() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let handle = kv_relation(&db, "gate_diff");
+        let engine = SegmentEngine::default();
+        let ra = ra_over(&handle);
+
+        // xorshift64*: deterministic, dependency-free, seeded so the
+        // workload reproduces exactly on any run.
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next_u64 = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let mut model: BTreeMap<i64, i64> = BTreeMap::new();
+        for round in 0..40u32 {
+            let r = next_u64();
+            let key = (r % 12) as i64;
+            let val = ((r >> 16) % 1000) as i64;
+            put(&db, &handle, &engine, key, val);
+            model.insert(key, val);
+
+            // 1..=4 reads this round: a lone read after the write always
+            // stays gated-out; a run of 3-4 crosses the rebuild threshold
+            // partway through and serves from the segment for the rest.
+            let n_reads = 1 + (next_u64() % 4);
+            for read_i in 0..n_reads {
+                let rtx = db.read_tx().unwrap();
+                let expected: Vec<Vec<DataValue>> =
+                    model.iter().map(|(&k, &val)| vec![v(k), v(val)]).collect();
+                let off = rows(&ra, &rtx, Segments::OFF);
+                let on = rows(&ra, &rtx, Segments(Some(&engine)));
+                assert_eq!(
+                    off, expected,
+                    "round {round} read {read_i}: segments-off diverged from the model"
+                );
+                assert_eq!(
+                    on, off,
+                    "round {round} read {read_i}: segment-context answer diverged from segments-off"
+                );
             }
         }
     }

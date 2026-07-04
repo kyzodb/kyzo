@@ -121,7 +121,7 @@ use crate::data::tuple::{
 use crate::data::tuple::{
     encode_key_with_suffix, encode_projected_key, encode_projected_key_with_suffix,
 };
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, Validity, ValidityTs};
+use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, StoredValiditySlot, ValidityTs};
 use crate::storage::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
@@ -284,6 +284,28 @@ pub(crate) enum IndexKind {
     /// of the index relation, that column's position in the base
     /// relation's full tuple (keys then non-keys).
     Plain { mapper: Vec<usize> },
+    /// The transposed event-posting index (issue #62's temporal
+    /// acceleration structure): one posting per point event, keyed
+    /// `[Validity(valid instant) as a LEADING data column][base key
+    /// columns…][valid, sys tail]` — the valid instant promoted ahead of
+    /// the base's own key so the posting keyspace orders by WHEN first,
+    /// answering "what changed at/near instant t" with a contiguous scan
+    /// instead of a full-relation walk. No payload of its own: the base
+    /// key columns are the posting's whole identity, and its polarity
+    /// mirrors the base write's exactly (assert/retract/erase), so the
+    /// posting relation is itself an ordinary bitemporal `Facts` keyspace
+    /// — a window read is an as-of read of postings, with no separate
+    /// correction logic.
+    ///
+    /// Scan-shaped, not search-shaped: unlike `Hnsw`/`Fts`/`Lsh` (each a
+    /// user-named, engine-probed search structure with its own manifest),
+    /// `Temporal` carries no manifest and is maintained through the same
+    /// seam as `Plain` — see `runtime/mutate.rs`'s `update_indices` and
+    /// `attach_and_backfill`. A `Plain` mapper cannot express this kind:
+    /// a mapper only permutes positions already present in the base ROW,
+    /// and the leading column here is the WRITE'S OWN coordinate, which is
+    /// never one of the row's columns.
+    Temporal,
     /// Vector proximity (HNSW): the persisted manifest that rebuilds the
     /// index's parameters and extractor.
     Hnsw(crate::engines::hnsw::HnswIndexManifest),
@@ -297,6 +319,15 @@ pub(crate) enum IndexKind {
         inverse: SmartString<LazyCompact>,
     },
 }
+
+/// The synthetic leading column of a [`IndexKind::Temporal`] posting row:
+/// the write's own valid instant, promoted ahead of the base relation's
+/// key columns. Not a user-visible schema name in the sense of anything
+/// scriptable today — the read-side RA operator (issue #62's other
+/// write-side-adjacent chunk) is the first consumer that resolves it by
+/// name — but it must be a real, stable `ColumnDef` name because the
+/// posting relation's catalog row is real schema, decoded like any other.
+pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 
 // ---------------------------------------------------------------------------
 // Constraints, mirrored onto every relation they read.
@@ -557,12 +588,7 @@ impl RelationHandle {
                 span
             }
         );
-        let slot = |ts: ValidityTs| {
-            DataValue::Validity(Validity {
-                timestamp: ts,
-                is_assert: std::cmp::Reverse(true),
-            })
-        };
+        let slot = |ts: ValidityTs| StoredValiditySlot::new(ts).as_datavalue();
         // Zero-clone: the tuple's key columns plus the two bitemporal
         // slots, encoded straight to bytes in one pass — every fact write
         // (put/update/remove alike) goes through this, so the
@@ -1411,7 +1437,7 @@ mod tests {
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use crate::data::tuple::decode_tuple_from_key;
-    use crate::data::value::{Validity, ValidityTs};
+    use crate::data::value::ValidityTs;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{ConflictError, Storage};
 
@@ -1803,16 +1829,9 @@ mod tests {
             KeyspaceKind::Facts,
         )
         .unwrap();
-        let slot = |ts: i64| {
-            DataValue::Validity(Validity {
-                timestamp: ValidityTs(Reverse(ts)),
-                is_assert: Reverse(true),
-            })
-        };
         let vts_of = |ts: i64| ValidityTs(Reverse(ts));
         // k=1 asserted at valid t=10, retracted at valid t=20, through
         // the handle's own fact writers.
-        let _ = slot;
         rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))
             .unwrap();
         rel.retract_fact(&mut tx, &[DataValue::from(1)], vts_of(20), SourceSpan(0, 0))

@@ -299,10 +299,7 @@ mod tests {
     /// fails fast rather than merely hanging.
     fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Vec<(i64, i64)> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf {
-            sys: ValidityTs(Reverse(sys)),
-            valid: ValidityTs(Reverse(valid)),
-        };
+        let as_of = AsOf::at(ValidityTs(Reverse(sys)), ValidityTs(Reverse(valid)));
         t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
@@ -761,10 +758,7 @@ mod tests {
             }
             for sys in &sys_queries {
                 for ts in &queries {
-                    let at = AsOf {
-                        sys: ValidityTs(Reverse(*sys)),
-                        valid: ValidityTs(Reverse(*ts)),
-                    };
+                    let at = AsOf::at(ValidityTs(Reverse(*sys)), ValidityTs(Reverse(*ts)));
                     let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));

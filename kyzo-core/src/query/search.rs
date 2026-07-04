@@ -145,9 +145,11 @@ pub(crate) struct SearchIndexNotFound(
 );
 
 #[derive(Debug, Error, Diagnostic)]
-#[error("index '{0}' is a plain projection index; the search atom serves HNSW/FTS/LSH")]
+#[error("index '{0}' is a plain or temporal index; the search atom serves HNSW/FTS/LSH")]
 #[diagnostic(code(query::search_over_plain_index))]
-#[diagnostic(help("plain indices are chosen automatically by the planner; query the relation"))]
+#[diagnostic(help(
+    "plain and temporal indices are chosen automatically by the planner; query the relation"
+))]
 pub(crate) struct SearchOverPlainIndex(pub(crate) String, #[label] pub(crate) SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
@@ -317,7 +319,7 @@ pub(crate) fn resolve_search(
     let mut own_bindings = base_frame(&base, inp.bindings, symb_gen, span)?;
 
     let cfg = match idx_ref.kind {
-        IndexKind::Plain { .. } => {
+        IndexKind::Plain { .. } | IndexKind::Temporal => {
             bail!(SearchOverPlainIndex(inp.index.name.to_string(), span))
         }
         IndexKind::Hnsw(manifest) => {

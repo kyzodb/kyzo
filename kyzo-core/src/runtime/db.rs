@@ -45,11 +45,14 @@
  *   `Constant` rule behind every `<- [[…]]` inline datum.
  *
  * INTERIM (named, not smoothed over):
- * - Index-operator system ops (`::index`, `::hnsw`, `::fts`, `::lsh`) hit a
- *   typed refusal until the operator tier lands; catalog ops are complete.
+ * - Index-operator system ops are LANDED (`::index`, `::hnsw`, `::fts`,
+ *   `::lsh` create/drop all dispatch to the real creation/backfill tier);
+ *   this note previously deferred them and went stale — an external audit
+ *   read the stale claim as ground truth, which is exactly the failure a
+ *   comment in this codebase must never cause. Still deferred, still typed:
+ *   `::explain` and `::running`/`::kill` (see `IndexOpNotLanded`).
  * - The imperative script genus (`Script::Imperative`) is refused; the query
- *   and system genera are executed. `::explain` and `::running`/`::kill` are
- *   likewise deferred (typed refusals / empty results).
+ *   and system genera are executed.
  */
 
 //! The database entrypoint: from a script string to result rows.
@@ -138,8 +141,11 @@ pub(crate) struct TempRelationNotReachableError(
     #[label] pub(crate) crate::data::span::SourceSpan,
 );
 
-/// A system op needs the index-operator tier (HNSW / FTS / LSH), which has
-/// not landed. Catalog system ops are complete.
+/// A system op needs an operator-tier feature that has not landed — today
+/// exactly `::explain` and `::running`/`::kill`. Index DDL (`::index`,
+/// `::hnsw`, `::fts`, `::lsh` create/drop) and catalog ops are complete;
+/// this error's name predates their landing and survives only for the two
+/// ops above.
 #[derive(Debug, Error, Diagnostic)]
 #[error("system op '{0}' needs the index-operator tier, which has not landed")]
 #[diagnostic(code(db::index_op_not_landed))]
@@ -772,6 +778,7 @@ impl<S: Storage> Db<S> {
                     .map(|r| {
                         let kind = match &r.kind {
                             crate::runtime::relation::IndexKind::Plain { .. } => "plain",
+                            crate::runtime::relation::IndexKind::Temporal => "temporal",
                             crate::runtime::relation::IndexKind::Hnsw(..) => "hnsw",
                             crate::runtime::relation::IndexKind::Fts(..) => "fts",
                             crate::runtime::relation::IndexKind::Lsh { .. } => "lsh",
@@ -1134,12 +1141,16 @@ mod tests {
         BTreeMap::new()
     }
 
-    /// The segment law, end to end: a pure read builds and serves the
-    /// relation's current-state segment; ANY committed write to the
+    /// The segment law, end to end: a run of pure reads with no
+    /// intervening write eventually builds and serves the relation's
+    /// current-state segment (the rebuild gate declines the first miss and
+    /// builds on the second — `engines/segments.rs`'s
+    /// `rebuild_gated_by_stable_miss_streak`); ANY committed write to the
     /// relation orphans it (a re-read sees the write, never the cached
-    /// past); a DENIED write leaves state and answers untouched; and the
-    /// same query inside a write session reads the transaction's own
-    /// uncommitted view, never a committed-state segment.
+    /// past, whether or not a segment had actually been built yet); a
+    /// DENIED write leaves state and answers untouched; and the same query
+    /// inside a write session reads the transaction's own uncommitted view,
+    /// never a committed-state segment.
     #[test]
     fn segments_serve_fresh_and_never_dirty() {
         let db = Db::new(SimStorage::new(7)).unwrap();
@@ -1149,7 +1160,10 @@ mod tests {
         )
         .unwrap();
 
-        // First read builds the segment; second is served from it.
+        // The first read's miss is ungated (declines to build, per the
+        // rebuild gate); the second read's miss is at the same witness
+        // (stable) and crosses the threshold, building the segment. Either
+        // way both reads return the correct answer.
         let q = "?[k, v] := *w[k, v]";
         assert_eq!(
             int_rows(&db.run_script(q, no_params()).unwrap()),
@@ -1236,8 +1250,9 @@ mod tests {
         db.run_script("?[k2, v] <- [[1, 10]] :create jr {k2 => v}", no_params())
             .unwrap();
 
-        // First read builds jr's segment and serves the point-lookup probe
-        // from it; second read is served from the cached segment.
+        // The first read's miss declines (rebuild gate); the second read's
+        // miss is at the same stable witness and builds jr's segment, so
+        // its point-lookup probe is served from the cache from here on.
         let q = "?[k, v] := *jl[k], *jr[k, v]";
         assert_eq!(
             int_rows(&db.run_script(q, no_params()).unwrap()),
@@ -2225,5 +2240,632 @@ mod tests {
         };
         assert_eq!(got2, want2, "backward-demand result must match the oracle");
         assert_eq!(got2, vec![vec![1], vec![2], vec![3]]);
+    }
+
+    /// Issue #68 reopened, diagnostic: does the PUBLIC path's magic-sets
+    /// rewrite actually stay identity for `pointsto.kz`'s fully-unbound
+    /// entry (`?[y, x] := pt[y, x]`), as the closing comment's "unlikely"
+    /// assessment assumed (`strange_case_with_disabled_rewrite_is_identity`
+    /// pins the unbound case in isolation, but never against this specific
+    /// 4-rule, two-self-reference-occurrence program end to end)? Prints
+    /// the compiled symbol names — a `|`-adorned name would mean the
+    /// rewrite fired and pt's rules stopped being the same Muggle rules
+    /// `bench_api::points_to` hand-builds.
+    #[test]
+    fn pointsto_magic_symbols_are_unadorned() {
+        let db = Db::new(SimStorage::new(6800)).unwrap();
+        db.run_script("?[a, b] <- [] :create addr_of {a, b}", no_params())
+            .expect("create addr_of");
+        db.run_script("?[a, b] <- [] :create assign {a, b}", no_params())
+            .expect("create assign");
+        db.run_script("?[a, b] <- [] :create load {a, b}", no_params())
+            .expect("create load");
+        db.run_script("?[a, b] <- [] :create store {a, b}", no_params())
+            .expect("create store");
+        let script = "
+            pt[y, x] := *addr_of[y, x]
+            pt[y, x] := *assign[y, z], pt[z, x]
+            pt[y, w] := *load[y, x], pt[x, z], pt[z, w]
+            pt[z, w] := *store[y, x], pt[y, z], pt[x, w]
+            ?[y, x] := pt[y, x]
+        ";
+        let syms = compiled_magic_symbols(&db, script);
+        eprintln!("pointsto compiled symbols: {syms:?}");
+        // The fully-unbound entry demands only `pt`'s ff (fully-free)
+        // variant — issue #68's fix (`AdornedProgram::collapse_ff_redundant_variants`)
+        // collapses what sideways information passing would otherwise
+        // proliferate into Mff/Mbf/Mbb plus ~20 Input/supplementary
+        // relations, all computing overlapping fragments of the same `pt`.
+        assert_eq!(
+            syms,
+            vec!["?".to_string(), "pt|Mff".to_string()],
+            "expected the fully-unbound entry to collapse pt to its one ff variant; got {syms:?}"
+        );
+    }
+
+    /// Diagnostic companion to `pointsto_magic_symbols_are_unadorned`: is
+    /// the spurious-adornment mechanism specific to points-to's two-atom
+    /// self-join, or does ANY recursive rule with a base-relation atom
+    /// before its recursive call spuriously adorn under a fully-unbound
+    /// top query? (`path[a,b] := edge[a,c], path[c,b]` — the standard
+    /// transitive-closure shape used throughout this test module.)
+    #[test]
+    fn transitive_closure_magic_symbols_under_unbound_query() {
+        let db = Db::new(SimStorage::new(6801)).unwrap();
+        db.run_script(
+            "?[a, b] <- [[1,2],[2,3],[3,4]] :create edge {a, b}",
+            no_params(),
+        )
+        .expect("create edge");
+        let script = "
+            path[a, b] := *edge[a, b]
+            path[a, b] := *edge[a, c], path[c, b]
+            ?[a, b] := path[a, b]
+        ";
+        let syms = compiled_magic_symbols(&db, script);
+        eprintln!("tc compiled symbols (fully unbound query): {syms:?}");
+        assert_eq!(
+            syms,
+            vec!["?".to_string(), "path|Mff".to_string()],
+            "expected the fully-unbound entry to collapse path to its one ff variant; got {syms:?}"
+        );
+    }
+
+    // ── obligation 12: the standing magic-vs-bypass differential (#68) ───────
+    //
+    // The two diagnostic tests above pin the symbol shape for one program
+    // each, by hand. This is that check turned into a permanent, generic
+    // differential: a small recursive corpus, each program queried with NO
+    // bound arguments, run BOTH through the public `Db::run_script` path
+    // (this file, `magic.rs`'s rewrite included) and through the
+    // crate-internal path `bench_api::Workload` drives directly
+    // (`stratified_magic_compile` → `bind_for_eval` → `stratified_evaluate`,
+    // bypassing `magic.rs` entirely) — asserting byte-identical answers
+    // (magic-sets law 1) AND a byte-identical adorned-symbol shape, one
+    // variant per predicate with no `Input`/`Sup` (magic.rs's fully-free
+    // identity theorem). A regression in either direction — wrong answers,
+    // or the theorem's cost guarantee — fails here, for any future program
+    // added to the corpus, not just points-to.
+    #[cfg(feature = "bench-internals")]
+    mod magic_bypass_differential {
+        use super::*;
+        use crate::bench_api::{Backend, Graph, points_to, transitive_closure};
+
+        /// Every non-`?` symbol name, sorted — order-independent, so this
+        /// doesn't couple to `BTreeMap` iteration order the way the
+        /// hand-pinned tests above (deliberately) do.
+        fn sorted_syms<S: Storage>(db: &Db<S>, script: &str) -> Vec<String> {
+            let mut syms = compiled_magic_symbols(db, script);
+            syms.sort();
+            syms
+        }
+
+        /// Transitive closure over a tiny deterministic chain (`gen_edges`'s
+        /// `Graph::Chain`, `0→1→…→n-1` — no RNG, so the public path can
+        /// reproduce it by construction rather than by mirroring a seed).
+        #[test]
+        fn tc_chain_public_matches_bypass_byte_identical_and_unadorned() {
+            let n = 10usize;
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let bypass = transitive_closure(Backend::Mem, Graph::Chain, n, 0, tmp.path());
+            let mut bypass_rows: Vec<Vec<i64>> = bypass
+                .collect()
+                .into_iter()
+                .map(|t| t.iter().map(|v| v.get_int().expect("int")).collect())
+                .collect();
+            bypass_rows.sort();
+
+            let db = Db::new(SimStorage::new(68_001)).unwrap();
+            let edge_literal: String = (0..n as i64 - 1)
+                .map(|i| format!("[{i},{}],", i + 1))
+                .collect();
+            db.run_script(
+                &format!("?[a, b] <- [{edge_literal}] :create edge {{a, b}}"),
+                no_params(),
+            )
+            .expect("create edge");
+            let script = "
+                path[a, b] := *edge[a, b]
+                path[a, b] := *edge[a, c], path[c, b]
+                ?[a, b] := path[a, b]
+            ";
+            let public_rows = int_rows(&db.run_script(script, no_params()).expect("query"));
+
+            assert_eq!(
+                public_rows, bypass_rows,
+                "public path and bypass path must derive the identical answer"
+            );
+            assert_eq!(
+                sorted_syms(&db, script),
+                vec!["?".to_string(), "path|Mff".to_string()],
+                "a fully-unbound entry must leave path as its one ff variant, matching the \
+                 bypass path's cost (no Input/Sup machinery)"
+            );
+        }
+
+        /// Andersen points-to's self-join shape (`pt` occurs twice in
+        /// `load`/`store`'s bodies) — issue #68's actual corpus member. The
+        /// public path's facts mirror `bench_api::points_to`'s `gen_rel`
+        /// generator exactly (same `StdRng` seeding, same dedup-via-`BTreeSet`
+        /// construction), so both paths compute over byte-identical input.
+        #[test]
+        fn pointsto_self_join_public_matches_bypass_byte_identical_and_unadorned() {
+            use rand::rngs::StdRng;
+            use rand::{Rng, SeedableRng};
+            use std::collections::BTreeSet;
+
+            let (vars, addrs, assigns, loads, stores) = (12u64, 8u64, 10u64, 6u64, 6u64);
+            let seed = 0x5EED_0068u64;
+
+            let gen_rel = |label: u64, count: u64| -> Vec<(i64, i64)> {
+                let mut rng = StdRng::seed_from_u64(seed ^ (label << 32));
+                let mut rows: BTreeSet<(i64, i64)> = BTreeSet::new();
+                while (rows.len() as u64) < count {
+                    let y = rng.random_range(0..vars as i64);
+                    let x = rng.random_range(0..vars as i64);
+                    if y != x {
+                        rows.insert((y, x));
+                    }
+                }
+                rows.into_iter().collect()
+            };
+
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let bypass = points_to(
+                Backend::Mem,
+                vars,
+                addrs,
+                assigns,
+                loads,
+                stores,
+                seed,
+                tmp.path(),
+            );
+            let mut bypass_rows: Vec<Vec<i64>> = bypass
+                .collect()
+                .into_iter()
+                .map(|t| t.iter().map(|v| v.get_int().expect("int")).collect())
+                .collect();
+            bypass_rows.sort();
+
+            let db = Db::new(SimStorage::new(68_002)).unwrap();
+            let load_rel = |name: &str, rows: &[(i64, i64)]| {
+                let literal: String = rows.iter().map(|(y, x)| format!("[{y},{x}],")).collect();
+                db.run_script(
+                    &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
+                    no_params(),
+                )
+                .expect("create");
+            };
+            load_rel("addr_of", &gen_rel(1, addrs));
+            load_rel("assign", &gen_rel(2, assigns));
+            load_rel("load", &gen_rel(3, loads));
+            load_rel("store", &gen_rel(4, stores));
+            let script = "
+                pt[y, x] := *addr_of[y, x]
+                pt[y, x] := *assign[y, z], pt[z, x]
+                pt[y, w] := *load[y, x], pt[x, z], pt[z, w]
+                pt[z, w] := *store[y, x], pt[y, z], pt[x, w]
+                ?[y, x] := pt[y, x]
+            ";
+            let public_rows = int_rows(&db.run_script(script, no_params()).expect("query"));
+
+            assert_eq!(
+                public_rows, bypass_rows,
+                "public path and bypass path must derive the identical answer"
+            );
+            assert_eq!(
+                sorted_syms(&db, script),
+                vec!["?".to_string(), "pt|Mff".to_string()],
+                "a fully-unbound entry must leave pt as its one ff variant, matching the bypass \
+                 path's cost (no Input/Sup machinery) — issue #68's regression shape"
+            );
+        }
+
+        /// Hostile-review corpus, added post-landing: four adversarial shapes
+        /// beyond points-to's plain self-join, each checked against the
+        /// sealed naive oracle (`query::laws::naive_eval`) for answer
+        /// identity and against `compiled_magic_symbols` for the expected
+        /// (minimal, non-proliferated) adorned shape. Every program below is
+        /// queried with a FULLY UNBOUND entry — the theorem's domain.
+        fn oracle_answer(program: &crate::query::laws::Program, target: &str) -> Vec<Vec<i64>> {
+            use crate::query::laws::naive_eval;
+            let mut rows: Vec<Vec<i64>> = naive_eval(program)
+                .expect("naive oracle evaluates")
+                .get(target)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.into_iter().map(|v| v.get_int().expect("int")).collect())
+                .collect();
+            rows.sort();
+            rows
+        }
+
+        /// Mutual recursion where only ONE of the two predicates (`p`) is
+        /// demanded fully-free (from the entry); `r` is reached only through
+        /// `p`'s own rule and never gains a free sibling of its own. `p`
+        /// must collapse to its one ff variant; `r` must keep its genuinely-
+        /// needed bound variant (with its Input/Sup chain) — the mutual
+        /// reference back from `r` to `p` must redirect onto `p|Mff`.
+        #[test]
+        fn mutual_recursion_bf_and_ff_stays_correctly_reachable() {
+            use crate::query::laws::{Literal, Program, Rule, Term};
+            let var = |s: &'static str| Term::Var(s);
+            let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+            let v = |i: i64| DataValue::from(i);
+
+            let program = Program {
+                rules: vec![
+                    Rule::plain(
+                        "p",
+                        vec![var("a"), var("b")],
+                        vec![lit("seedp", vec![var("a"), var("b")])],
+                    ),
+                    Rule::plain(
+                        "p",
+                        vec![var("a"), var("b")],
+                        vec![
+                            lit("linkp", vec![var("a"), var("c")]),
+                            lit("r", vec![var("c"), var("b")]),
+                        ],
+                    ),
+                    Rule::plain(
+                        "r",
+                        vec![var("a"), var("b")],
+                        vec![lit("seedr", vec![var("a"), var("b")])],
+                    ),
+                    Rule::plain(
+                        "r",
+                        vec![var("a"), var("b")],
+                        vec![
+                            lit("linkr", vec![var("a"), var("c")]),
+                            lit("p", vec![var("c"), var("b")]),
+                        ],
+                    ),
+                ],
+                facts: [
+                    ("seedp", [vec![v(1), v(2)]].into_iter().collect()),
+                    ("linkp", [vec![v(2), v(3)]].into_iter().collect()),
+                    ("seedr", [vec![v(3), v(4)]].into_iter().collect()),
+                    ("linkr", [vec![v(4), v(1)]].into_iter().collect()),
+                ]
+                .into_iter()
+                .collect(),
+                ..Program::default()
+            };
+            let expected = oracle_answer(&program, "p");
+
+            let db = Db::new(SimStorage::new(68_101)).unwrap();
+            for (name, rows) in [
+                ("seedp", vec![(1i64, 2i64)]),
+                ("linkp", vec![(2, 3)]),
+                ("seedr", vec![(3, 4)]),
+                ("linkr", vec![(4, 1)]),
+            ] {
+                let literal: String = rows.iter().map(|(a, b)| format!("[{a},{b}],")).collect();
+                db.run_script(
+                    &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
+                    no_params(),
+                )
+                .expect("create");
+            }
+            let script = "
+                p[a, b] := *seedp[a, b]
+                p[a, b] := *linkp[a, c], r[c, b]
+                r[a, b] := *seedr[a, b]
+                r[a, b] := *linkr[a, c], p[c, b]
+                ?[a, b] := p[a, b]
+            ";
+            let got = int_rows(&db.run_script(script, no_params()).expect("query"));
+            assert_eq!(
+                got, expected,
+                "mutual recursion must match the naive oracle"
+            );
+
+            let syms = sorted_syms(&db, script);
+            assert!(
+                syms.iter()
+                    .filter(|s| s.starts_with("p|M"))
+                    .eq(["p|Mff"].iter()),
+                "p is fully-unbound from the entry and must collapse to its one Magic variant \
+                 (a `p|S…` supplementary relation feeding r's bound join is fine); got {syms:?}"
+            );
+            assert!(
+                syms.iter().any(|s| s == "r|Mbf" || s == "r|Mfb"),
+                "r is never demanded unbound and must keep its genuinely-needed bound variant; got {syms:?}"
+            );
+        }
+
+        /// A predicate negated from a later stratum, alongside a SEPARATE
+        /// predicate that gets an ff sibling and undergoes the collapse —
+        /// negation always targets a Muggle (cross-stratum-exempt) name and
+        /// must be completely inert to the redirect/sweep machinery.
+        #[test]
+        fn negation_with_ff_sibling_stays_correct() {
+            use crate::query::laws::{Literal, Program, Rule, Term};
+            let var = |s: &'static str| Term::Var(s);
+            let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+            let neg = |rel: &'static str, args: Vec<Term>| Literal::neg(rel, args);
+            let v = |i: i64| DataValue::from(i);
+
+            // Stratum 0: `pt`, self-joining exactly like points-to (gains
+            // Mff from the entry, Mbf/Mbb from its own self-reference).
+            // Stratum 1: `excluded`, negating `blocked` (an ordinary base
+            // relation) — independent of pt's adornment activity entirely.
+            let program = Program {
+                rules: vec![
+                    Rule::plain(
+                        "pt",
+                        vec![var("y"), var("x")],
+                        vec![lit("addr_of", vec![var("y"), var("x")])],
+                    ),
+                    Rule::plain(
+                        "pt",
+                        vec![var("y"), var("x")],
+                        vec![
+                            lit("assign", vec![var("y"), var("z")]),
+                            lit("pt", vec![var("z"), var("x")]),
+                        ],
+                    ),
+                    Rule::plain(
+                        "excluded",
+                        vec![var("y"), var("x")],
+                        vec![
+                            lit("pt", vec![var("y"), var("x")]),
+                            neg("blocked", vec![var("y"), var("x")]),
+                        ],
+                    ),
+                ],
+                facts: [
+                    (
+                        "addr_of",
+                        [vec![v(1), v(2)], vec![v(2), v(3)]].into_iter().collect(),
+                    ),
+                    (
+                        "assign",
+                        [vec![v(2), v(3)], vec![v(3), v(4)]].into_iter().collect(),
+                    ),
+                    ("blocked", [vec![v(1), v(2)]].into_iter().collect()),
+                ]
+                .into_iter()
+                .collect(),
+                ..Program::default()
+            };
+            let expected = oracle_answer(&program, "excluded");
+
+            let db = Db::new(SimStorage::new(68_102)).unwrap();
+            for (name, rows) in [
+                ("addr_of", vec![(1i64, 2i64), (2, 3)]),
+                ("assign", vec![(2, 3), (3, 4)]),
+                ("blocked", vec![(1, 2)]),
+            ] {
+                let literal: String = rows.iter().map(|(a, b)| format!("[{a},{b}],")).collect();
+                db.run_script(
+                    &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
+                    no_params(),
+                )
+                .expect("create");
+            }
+            let script = "
+                pt[y, x] := *addr_of[y, x]
+                pt[y, x] := *assign[y, z], pt[z, x]
+                excluded[y, x] := pt[y, x], not *blocked[y, x]
+                ?[y, x] := excluded[y, x]
+            ";
+            let got = int_rows(&db.run_script(script, no_params()).expect("query"));
+            assert_eq!(
+                got, expected,
+                "negation alongside an ff-sibling predicate must match the oracle"
+            );
+            assert_eq!(
+                sorted_syms(&db, script),
+                vec![
+                    "?".to_string(),
+                    "excluded|Mff".to_string(),
+                    "pt|Mff".to_string()
+                ],
+                "pt (and the also-fully-unbound excluded) must collapse to their one ff variant \
+                 apiece, with negation elsewhere in the program"
+            );
+        }
+
+        /// Repeated-variable adornment (`r[v, y, y]`'s pinned quirk in
+        /// `query::magic`'s own unit tests: the SECOND occurrence of a
+        /// repeated variable adorns bound within the SAME atom application)
+        /// combined with a fully-unbound entry elsewhere in the program —
+        /// confirms the collapse/sweep pair doesn't interact badly with
+        /// repeated-argument adornment.
+        #[test]
+        fn repeated_var_partial_adornment_matches_oracle() {
+            use crate::query::laws::{Literal, Program, Rule, Term};
+            let var = |s: &'static str| Term::Var(s);
+            let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+            let v = |i: i64| DataValue::from(i);
+
+            let program = Program {
+                rules: vec![
+                    Rule::plain(
+                        "q",
+                        vec![var("a"), var("b"), var("c")],
+                        vec![lit("baseq", vec![var("a"), var("b"), var("c")])],
+                    ),
+                    Rule::plain(
+                        "dup",
+                        vec![var("y")],
+                        vec![
+                            lit("seedv", vec![var("v")]),
+                            lit("q", vec![var("v"), var("y"), var("y")]),
+                        ],
+                    ),
+                ],
+                facts: [
+                    (
+                        "baseq",
+                        [vec![v(1), v(2), v(2)], vec![v(1), v(3), v(4)]]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ("seedv", [vec![v(1)]].into_iter().collect()),
+                ]
+                .into_iter()
+                .collect(),
+                ..Program::default()
+            };
+            let expected = oracle_answer(&program, "dup");
+
+            let db = Db::new(SimStorage::new(68_103)).unwrap();
+            db.run_script(
+                "?[a, b, c] <- [[1,2,2],[1,3,4]] :create baseq {a, b, c}",
+                no_params(),
+            )
+            .expect("create baseq");
+            db.run_script("?[a] <- [[1]] :create seedv {a}", no_params())
+                .expect("create seedv");
+            let script = "
+                q[a, b, c] := *baseq[a, b, c]
+                dup[y] := *seedv[v], q[v, y, y]
+                ?[y] := dup[y]
+            ";
+            let got = int_rows(&db.run_script(script, no_params()).expect("query"));
+            assert_eq!(
+                got, expected,
+                "repeated-variable adornment must match the oracle"
+            );
+        }
+
+        /// The reviewer's orphan shape, reconstructed to the closest
+        /// adversarial approximation this investigation could derive from
+        /// the review summary alone (the literal repro text was not
+        /// available to reconstruct verbatim): `helper` is referenced from
+        /// WITHIN `pt`'s own self-joining `load` rule, bound via `load`'s
+        /// output rather than `pt`'s own head — an adornment-INVARIANT
+        /// binding source, so `helper`'s demand is identical whether walked
+        /// under `pt`'s surviving ff variant or its (redirected-away) bound
+        /// ones. This construction keeps `helper` correctly reachable
+        /// through `pt`'s surviving copy rather than orphaning it; it is
+        /// included as a verified-correct adjacent case, not a positive
+        /// reproduction of the reviewer's exact finding. The sweep's actual
+        /// necessity is independently and unambiguously demonstrated by
+        /// `pointsto_magic_symbols_are_unadorned` and
+        /// `tc_chain_public_matches_bypass_byte_identical_and_unadorned`
+        /// above: with `collapse_ff_redundant_variants` refactored to only
+        /// redirect (its own drop step removed once the sweep landed),
+        /// disabling `sweep_unreachable` leaves points-to's OWN redirected-
+        /// away `pt|Mbf`/`pt|Mbb` uncollected in the base case, which both
+        /// of those tests catch directly.
+        #[test]
+        fn helper_via_relation_bound_var_inside_self_join_survives_correctly() {
+            use crate::query::laws::{Literal, Program, Rule, Term};
+            let var = |s: &'static str| Term::Var(s);
+            let lit = |rel: &'static str, args: Vec<Term>| Literal::pos(rel, args);
+            let v = |i: i64| DataValue::from(i);
+
+            let program = Program {
+                rules: vec![
+                    Rule::plain(
+                        "pt",
+                        vec![var("y"), var("x")],
+                        vec![lit("addr_of", vec![var("y"), var("x")])],
+                    ),
+                    Rule::plain(
+                        "pt",
+                        vec![var("y"), var("x")],
+                        vec![
+                            lit("assign", vec![var("y"), var("z")]),
+                            lit("pt", vec![var("z"), var("x")]),
+                        ],
+                    ),
+                    Rule::plain(
+                        "pt",
+                        vec![var("y"), var("w")],
+                        vec![
+                            lit("load", vec![var("y"), var("x")]),
+                            lit("helper", vec![var("x"), var("z")]),
+                            lit("pt", vec![var("z"), var("w")]),
+                        ],
+                    ),
+                    Rule::plain(
+                        "pt",
+                        vec![var("z"), var("w")],
+                        vec![
+                            lit("store", vec![var("y"), var("x")]),
+                            lit("pt", vec![var("y"), var("z")]),
+                            lit("pt", vec![var("x"), var("w")]),
+                        ],
+                    ),
+                    Rule::plain(
+                        "helper",
+                        vec![var("a"), var("b")],
+                        vec![lit("baseh", vec![var("a"), var("b")])],
+                    ),
+                    Rule::plain(
+                        "helper",
+                        vec![var("a"), var("b")],
+                        vec![
+                            lit("linkh", vec![var("a"), var("c")]),
+                            lit("helper", vec![var("c"), var("b")]),
+                        ],
+                    ),
+                ],
+                facts: [
+                    ("addr_of", [vec![v(1), v(2)]].into_iter().collect()),
+                    ("assign", [vec![v(2), v(3)]].into_iter().collect()),
+                    ("load", [vec![v(3), v(4)]].into_iter().collect()),
+                    ("store", [vec![v(4), v(1)]].into_iter().collect()),
+                    ("baseh", [vec![v(4), v(5)]].into_iter().collect()),
+                    ("linkh", [vec![v(5), v(6)]].into_iter().collect()),
+                ]
+                .into_iter()
+                .collect(),
+                ..Program::default()
+            };
+            let expected = oracle_answer(&program, "pt");
+
+            let db = Db::new(SimStorage::new(68_104)).unwrap();
+            for (name, rows) in [
+                ("addr_of", vec![(1i64, 2i64)]),
+                ("assign", vec![(2, 3)]),
+                ("load", vec![(3, 4)]),
+                ("store", vec![(4, 1)]),
+                ("baseh", vec![(4, 5)]),
+                ("linkh", vec![(5, 6)]),
+            ] {
+                let literal: String = rows.iter().map(|(a, b)| format!("[{a},{b}],")).collect();
+                db.run_script(
+                    &format!("?[a, b] <- [{literal}] :create {name} {{a, b}}"),
+                    no_params(),
+                )
+                .expect("create");
+            }
+            let script = "
+                pt[y, x] := *addr_of[y, x]
+                pt[y, x] := *assign[y, z], pt[z, x]
+                pt[y, w] := *load[y, x], helper[x, z], pt[z, w]
+                pt[z, w] := *store[y, x], pt[y, z], pt[x, w]
+                helper[a, b] := *baseh[a, b]
+                helper[a, b] := *linkh[a, c], helper[c, b]
+                ?[y, x] := pt[y, x]
+            ";
+            let got = int_rows(&db.run_script(script, no_params()).expect("query"));
+            assert_eq!(
+                got, expected,
+                "helper-inside-self-join must match the oracle"
+            );
+
+            let syms = sorted_syms(&db, script);
+            assert!(
+                syms.iter()
+                    .filter(|s| s.starts_with("pt|M"))
+                    .eq(["pt|Mff"].iter()),
+                "pt must collapse to its one Magic variant (a `pt|S…` supplementary relation \
+                 feeding helper's bound join is fine); got {syms:?}"
+            );
+            assert!(
+                syms.iter().any(|s| s.starts_with("helper|Mb")),
+                "helper must keep its genuinely-needed bound variant, reachable through pt's \
+                 surviving ff copy of the load rule; got {syms:?}"
+            );
+        }
     }
 }

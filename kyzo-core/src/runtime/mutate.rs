@@ -25,14 +25,11 @@
  *   it makes the ratified "parsed substances in the catalog" end state a
  *   wire-format decision rather than a performance one — FLAG(catalog
  *   tier): stored parsed substances with provenance remain the end state.
- * - **Index maintenance is a typed seam.** Plain projection indices
- *   (`IndexKind::Plain`) are maintained here, resolved BY REFERENCE
- *   through the catalog (the landed `IndexRef` model — no embedded handle
- *   copies). The manifest kinds (HNSW/FTS/LSH) are unreachable until the
- *   operator tier lands (`create_relation` cannot attach them) and hit the
- *   typed [`ManifestIndexNotLanded`] refusal, never silent corruption:
- *   when the operator tier lands, it replaces that arm with the real
- *   put/del hooks (upstream's `update_in_hnsw`/`put_in_fts`/`put_in_lsh`).
+ * - **Index maintenance is a typed seam.** Every index kind is maintained
+ *   here, resolved BY REFERENCE through the catalog (the landed `IndexRef`
+ *   model — no embedded handle copies): plain projection indices and
+ *   temporal posting indices directly, manifest kinds (HNSW/FTS/LSH)
+ *   through `apply_manifest_index`'s per-engine put/del hooks.
  * - Law 5: the original's `rmp_serde::from_slice(..).unwrap()` on the old
  *   value in `update_in_relation` is a fallible decode; `unreachable!()`
  *   on collected tuples is a typed invariant error.
@@ -87,16 +84,6 @@ pub(crate) struct TransactAssertionFailure {
     key: Vec<DataValue>,
     notice: String,
 }
-
-/// SEAM(operator tier): a manifest-backed index (HNSW/FTS/LSH) appeared on
-/// a relation before the operator tier that maintains it has landed. This
-/// is unreachable today — nothing can attach one — and the refusal exists
-/// so that WHEN they land, forgetting to replace this arm is a loud typed
-/// error on the first mutation, never a silently stale index.
-#[derive(Debug, Error, Diagnostic)]
-#[error("index '{0}' on relation '{1}' needs the index-operator tier, which has not landed")]
-#[diagnostic(code(tx::manifest_index_not_landed))]
-pub(crate) struct ManifestIndexNotLanded(pub(crate) String, pub(crate) String);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("replace op in trigger is not allowed: {0}")]
@@ -960,8 +947,9 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Maintain every index attached to `relation_store` for one row
     /// transition: `old_kv` deleted (if given), `new_kv` inserted (if
-    /// given). Plain indices are handled here; manifest kinds are the
-    /// operator tier's typed seam.
+    /// given). Plain and Temporal indices — both scan-shaped, both
+    /// maintained through the same mirror-row seam below — are handled
+    /// here; manifest kinds are the operator tier's typed seam.
     fn update_indices(
         &mut self,
         relation_store: &RelationHandle,
@@ -998,6 +986,60 @@ impl<T: WriteTx> SessionTx<T> {
                         )?;
                     }
                 }
+                IndexKind::Temporal => {
+                    let idx_handle =
+                        self.get_relation(&index.relation_name(&relation_store.name))?;
+                    // Postings mirror the base's EVENT, never a Plain-style
+                    // transition. `Plain` fires both `old` (Retract) and
+                    // `new` (Assert) because its mirror row is payload-
+                    // mapped: the two can carry different data and land at
+                    // DIFFERENT mirror keys (the mapper can include
+                    // non-key columns). A posting's key is base-key-only
+                    // (`temporal_posting_tuple` never looks past
+                    // `row[..keys_len]`), and every call site here resolves
+                    // `old_kv` at THIS WRITE'S OWN `valid` — so whenever
+                    // both are `Some` (a `:put` overwrite or `:update` on
+                    // an existing key), `old` and `new` compose to the
+                    // IDENTICAL posting key at the IDENTICAL coordinate.
+                    // Firing both would silently let the Assert clobber
+                    // the Retract inside this same transaction — a wasted,
+                    // SSI-tracked write, not two events (hostile-review
+                    // finding, story #62). The base itself writes exactly
+                    // ONE row per mutation: Assert for put/update (the
+                    // prior payload just becomes an older SYS version of
+                    // the same instant, never a second event), Retract for
+                    // remove — so the posting mirrors exactly that one
+                    // event, unconditionally on `new_kv`'s presence. This
+                    // single-fire shape is a write-AMPLIFICATION invariant
+                    // (content-equivalent to the old dual-fire shape under
+                    // the caller invariants above, so no byte-content test
+                    // can guard it): the guard is the write-count law test
+                    // `temporal_index_write_count_law_holds_for_every_mutation_kind`.
+                    match new_kv {
+                        Some(new) => {
+                            self.temporal_index_write(
+                                relation_store,
+                                &idx_handle,
+                                new,
+                                ClaimPolarity::Assert,
+                                valid,
+                                stamp,
+                            )?;
+                        }
+                        None => {
+                            if let Some(old) = old_kv {
+                                self.temporal_index_write(
+                                    relation_store,
+                                    &idx_handle,
+                                    old,
+                                    ClaimPolarity::Retract,
+                                    valid,
+                                    stamp,
+                                )?;
+                            }
+                        }
+                    }
+                }
                 IndexKind::Hnsw(..) | IndexKind::Fts(..) | IndexKind::Lsh { .. } => {
                     let ctx = self.manifest_index_ctx(relation_store, index)?;
                     self.apply_manifest_index(relation_store, &ctx, new_kv, old_kv)?;
@@ -1009,12 +1051,37 @@ impl<T: WriteTx> SessionTx<T> {
 }
 
 impl<T: WriteTx> SessionTx<T> {
+    /// The maintenance seam shared by every scan-shaped index kind
+    /// (`Plain`, `Temporal`): write one already-composed index row
+    /// bitemporally at the base write's own coordinate (valid AND system,
+    /// both — a `@`-carrying base write's index mirror must share its
+    /// exact coordinate, not just its system stamp) with the base write's
+    /// polarity, so as-of reads through the index answer exactly like
+    /// as-of reads of the base. Only the ROW composition differs between
+    /// index kinds (a mapper projection for `Plain`, the
+    /// leading-Validity posting shape for `Temporal`) — never the write
+    /// path itself.
+    fn index_write_row(
+        &mut self,
+        idx_handle: &RelationHandle,
+        idx_tup: &[DataValue],
+        polarity: ClaimPolarity,
+        valid: ValidityTs,
+        stamp: ValidityTs,
+    ) -> Result<()> {
+        let span = SourceSpan::default();
+        let key = idx_handle.encode_bitemporal_key_for_store(idx_tup, valid, stamp, span)?;
+        let val = idx_handle.encode_bitemporal_val_for_store(idx_tup, polarity, span)?;
+        // The index relation is a mutated relation in its own right: its
+        // segment watermark must bump with this commit, or a served index
+        // segment silently outlives the write (hostile-review finding,
+        // demonstrated stale reads on `*t:by_v{..}` after a base `:put`).
+        self.touched_relations.insert(idx_handle.id);
+        self.put_routed(idx_handle.is_temp, &key, &val)
+    }
+
     /// One plain-index mirror row: the base row projected through the
-    /// mapper, written bitemporally at the base write's own coordinate
-    /// (valid AND system, both — a `@`-carrying base write's index mirror
-    /// must share its exact coordinate, not just its system stamp) with
-    /// the base write's polarity — so as-of reads through the index
-    /// answer exactly like as-of reads of the base.
+    /// mapper.
     #[allow(clippy::too_many_arguments)]
     fn plain_index_write(
         &mut self,
@@ -1026,17 +1093,57 @@ impl<T: WriteTx> SessionTx<T> {
         valid: ValidityTs,
         stamp: ValidityTs,
     ) -> Result<()> {
-        let span = SourceSpan::default();
         let idx_tup: Tuple = project_mapper(mapper, row, base)?;
-        let key = idx_handle.encode_bitemporal_key_for_store(&idx_tup, valid, stamp, span)?;
-        let val = idx_handle.encode_bitemporal_val_for_store(&idx_tup, polarity, span)?;
-        // The index relation is a mutated relation in its own right: its
-        // segment watermark must bump with this commit, or a served index
-        // segment silently outlives the write (hostile-review finding,
-        // demonstrated stale reads on `*t:by_v{..}` after a base `:put`).
-        self.touched_relations.insert(idx_handle.id);
-        self.put_routed(idx_handle.is_temp, &key, &val)
+        self.index_write_row(idx_handle, &idx_tup, polarity, valid, stamp)
     }
+
+    /// One posting row: the write's own valid instant as a leading data
+    /// column, followed by the base relation's key columns — see
+    /// [`IndexKind::Temporal`]'s doc comment for the key layout and why a
+    /// `Plain` mapper cannot express this composition.
+    fn temporal_index_write(
+        &mut self,
+        base: &RelationHandle,
+        idx_handle: &RelationHandle,
+        row: &[DataValue],
+        polarity: ClaimPolarity,
+        valid: ValidityTs,
+        stamp: ValidityTs,
+    ) -> Result<()> {
+        let idx_tup = temporal_posting_tuple(base, row, valid)?;
+        self.index_write_row(idx_handle, &idx_tup, polarity, valid, stamp)
+    }
+}
+
+/// A row shorter than the base relation's own key arity reaching temporal
+/// index composition. Nothing today can produce one — `update_indices`'s
+/// `old_kv`/`new_kv` are always full logical rows, and backfill slices
+/// exactly `keys_len` columns off the base's own stored keys — but this
+/// stays a typed refusal rather than an indexing panic (Law 5), the same
+/// posture as `project_mapper`'s `StaleIndexMapper`.
+#[derive(Debug, Error, Diagnostic)]
+#[error("temporal index row for '{0}' is shorter than the base relation's key arity")]
+#[diagnostic(code(tx::short_temporal_index_row))]
+struct ShortTemporalIndexRow(String);
+
+/// The temporal posting index's key composer: `[Validity(valid) as a
+/// leading data column][base key columns…]`. The leading column is the
+/// write's OWN coordinate — never a position in `row` — which is exactly
+/// what a `Plain` mapper (a permutation of positions already in the row)
+/// cannot express.
+fn temporal_posting_tuple(
+    base: &RelationHandle,
+    row: &[DataValue],
+    valid: ValidityTs,
+) -> Result<Tuple> {
+    let keys_len = base.metadata.keys.len();
+    if row.len() < keys_len {
+        bail!(ShortTemporalIndexRow(base.name.to_string()));
+    }
+    let mut out = Vec::with_capacity(1 + keys_len);
+    out.push(crate::data::value::StoredValiditySlot::new(valid).as_datavalue());
+    out.extend_from_slice(&row[..keys_len]);
+    Ok(out)
 }
 
 /// Project a full row through a plain index's column mapper. A mapper
@@ -1271,9 +1378,9 @@ impl<T: WriteTx> SessionTx<T> {
         }
         let idx = self.get_relation(&idx_name)?;
         let ctx = match &index.kind {
-            IndexKind::Plain { .. } => {
+            IndexKind::Plain { .. } | IndexKind::Temporal => {
                 bail!(IndexLifecycleError(format!(
-                    "index '{}' is a plain index; it has no manifest context",
+                    "index '{}' is a plain or temporal index; it has no manifest context",
                     index.name
                 )))
             }
@@ -1417,11 +1524,13 @@ impl<T: WriteTx> SessionTx<T> {
                 base.name, index_ref.name
             )));
         }
-        // A plain index mirrors its base's facts bitemporally; every
-        // manifest index keyspace is the algorithm's own current-only
-        // state.
+        // A plain or temporal index mirrors its base's facts bitemporally
+        // (a posting IS a bitemporal fact — its own as-of reads are how
+        // window scans see corrections, per issue #62's design ruling);
+        // every manifest index keyspace is the algorithm's own
+        // current-only state.
         let kind = match &index_ref.kind {
-            IndexKind::Plain { .. } => KeyspaceKind::Facts,
+            IndexKind::Plain { .. } | IndexKind::Temporal => KeyspaceKind::Facts,
             _ => KeyspaceKind::AlgorithmState,
         };
         for (name, metadata) in index_metas {
@@ -1440,11 +1549,71 @@ impl<T: WriteTx> SessionTx<T> {
         base.indices.sort_by(|a, b| a.name.cmp(&b.name));
         self.write_relation_row(&base)?;
 
+        const BACKFILL_BATCH: usize = 4096;
+
+        // Temporal backfill is NOT "index the current rows": a posting
+        // exists per POINT EVENT, so an index attached after N base
+        // writes must reproduce the exact posting keyspace an index live
+        // since the first write would hold (backfill-equals-incremental,
+        // the rebuildability law) — every stored version of every fact,
+        // each posted at its own original (valid, sys) and polarity, not
+        // "now". That is a raw walk of the base's whole keyspace, not the
+        // as-of skip-scan the Plain/manifest path below uses.
+        if matches!(index_ref.kind, IndexKind::Temporal) {
+            let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
+            let keys_len = base.metadata.keys.len();
+            let upper = (base.id.0 + 1).to_be_bytes();
+            let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
+            loop {
+                let batch: Vec<(Vec<u8>, Vec<u8>)> = self
+                    .store
+                    .range_scan(&lower, &upper)
+                    .take(BACKFILL_BATCH)
+                    .try_collect()?;
+                let Some((last_key, _)) = batch.last() else {
+                    break;
+                };
+                let mut succ = last_key.clone();
+                succ.push(0);
+                lower = succ;
+                for (k, v) in &batch {
+                    // Every stored row here IS one point event: decode its
+                    // key columns plus its two time slots directly (no
+                    // as-of resolution — resolution is exactly what would
+                    // collapse the history this backfill must reproduce
+                    // whole), and its polarity from the value.
+                    let tuple = crate::data::tuple::decode_tuple_from_key(k, keys_len + 2)?;
+                    let polarity = crate::data::bitemporal::claim_polarity_of_value(v)?;
+                    let key_cols = &tuple[..keys_len];
+                    let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
+                        bail!(
+                            "corrupt bitemporal key: missing valid-time slot during \
+                             temporal index backfill"
+                        );
+                    };
+                    let DataValue::Validity(sys_slot) = &tuple[keys_len + 1] else {
+                        bail!(
+                            "corrupt bitemporal key: missing system-time slot during \
+                             temporal index backfill"
+                        );
+                    };
+                    self.temporal_index_write(
+                        &base,
+                        &idx_handle,
+                        key_cols,
+                        polarity,
+                        valid_slot.timestamp,
+                        sys_slot.timestamp,
+                    )?;
+                }
+            }
+            return Ok(crate::runtime::db::status_ok());
+        }
+
         // Backfill: index every existing base row, in bounded batches — the
         // scan borrows the store the puts need mutably, so each round
         // materializes at most BACKFILL_BATCH rows and resumes from the
         // strict successor of the last key (memcmp order: key ++ 0x00).
-        const BACKFILL_BATCH: usize = 4096;
         let plain = matches!(&index_ref.kind, IndexKind::Plain { .. });
         let ctx = if plain {
             None
@@ -1558,6 +1727,36 @@ impl<T: WriteTx> SessionTx<T> {
         let index_ref = IndexRef {
             name: SmartString::from(idx_name),
             kind: IndexKind::Plain { mapper },
+        };
+        let idx_rel_name = index_ref.relation_name(&base.name).to_string();
+        self.attach_and_backfill(base, index_ref, vec![(idx_rel_name, metadata)])
+    }
+
+    /// `::temporal index create` — issue #62's transposed event-posting
+    /// index: opt-in per relation, no column choice (unlike `::index
+    /// create`, a posting's whole identity is the base's own key, always
+    /// — see [`IndexKind::Temporal`]). The stored posting rows are the
+    /// write's own valid instant as a leading column, followed by the
+    /// base relation's key columns.
+    pub(crate) fn create_temporal_index(&mut self, rel: &str, idx_name: &str) -> Result<NamedRows> {
+        let base = self.get_relation(rel)?;
+        let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());
+        keys.push(crate::data::relation::ColumnDef {
+            name: SmartString::from(crate::runtime::relation::TEMPORAL_POSTING_LEADING_COLUMN),
+            typing: crate::data::relation::NullableColType {
+                coltype: crate::data::relation::ColType::Validity,
+                nullable: false,
+            },
+            default_gen: None,
+        });
+        keys.extend(base.metadata.keys.iter().cloned());
+        let metadata = crate::data::relation::StoredRelationMetadata {
+            keys,
+            non_keys: vec![],
+        };
+        let index_ref = IndexRef {
+            name: SmartString::from(idx_name),
+            kind: IndexKind::Temporal,
         };
         let idx_rel_name = index_ref.relation_name(&base.name).to_string();
         self.attach_and_backfill(base, index_ref, vec![(idx_rel_name, metadata)])
@@ -1850,5 +2049,559 @@ mod bulk_write_tests {
              transaction that reached the reserved instant on row 2 was never \
              committed"
         );
+    }
+}
+
+/// Issue #62's transposed event-posting index — the write side only (the
+/// read-side RA operator that serves window/stab queries over these
+/// postings is a separate chunk, see `IndexKind::Temporal`'s doc comment).
+///
+/// These tests drive `SessionTx` directly rather than through
+/// `Db::run_script`: `::temporal index create` has no parsed KyzoScript
+/// surface yet (the grammar and `SysOp` dispatch live in `parse/sys.rs`
+/// and `runtime/db.rs`, both outside this chunk's file scope — see the
+/// landing report), and `ClaimPolarity::Erase` (a system-time correction)
+/// has no scripted write surface at all today, in or out of this scope.
+/// Every function called here (`create_temporal_index`, `update_indices`,
+/// `temporal_index_write`) is the exact same code the eventual parsed
+/// surface and correction mechanism would call.
+#[cfg(test)]
+mod temporal_index_tests {
+    use std::cmp::Reverse;
+
+    use super::*;
+    use crate::data::relation::ColType;
+    use crate::data::value::{StoredValiditySlot, ValidityTs};
+    use crate::runtime::db::ScriptOptions;
+    use crate::storage::ReadTx;
+    use crate::storage::sim::SimStorage;
+
+    fn vts(t: i64) -> ValidityTs {
+        ValidityTs(Reverse(t))
+    }
+
+    fn col(name: &str) -> ColumnDef {
+        ColumnDef {
+            name: name.into(),
+            typing: NullableColType {
+                coltype: ColType::Int,
+                nullable: false,
+            },
+            default_gen: None,
+        }
+    }
+
+    /// A single-key-column base relation input: `k` is both the whole key
+    /// and the fact's whole identity, so every event below is unambiguous
+    /// without a dependent-column payload to track.
+    fn base_input(name: &str) -> InputRelationHandle {
+        InputRelationHandle {
+            name: Symbol::new(name, SourceSpan::default()),
+            metadata: StoredRelationMetadata {
+                keys: vec![col("k")],
+                non_keys: vec![],
+            },
+            key_bindings: vec![Symbol::new("k", SourceSpan::default())],
+            dep_bindings: vec![],
+            span: SourceSpan::default(),
+        }
+    }
+
+    fn open_session(db: &Db<SimStorage>) -> SessionTx<<SimStorage as Storage>::WriteTx> {
+        SessionTx::new_write(db.storage.write_tx().unwrap(), ScriptOptions::default())
+    }
+
+    /// Write one base point event directly (bypassing `execute_relation`,
+    /// which never produces `Erase`) and drive it through the exact same
+    /// `update_indices`/`temporal_index_write` seam the mutation pipeline
+    /// uses for Assert/Retract; `Erase` — a correction with no production
+    /// caller yet — goes straight to `temporal_index_write`, proving the
+    /// write PRIMITIVE composes correctly for whatever future correction
+    /// mechanism calls it.
+    ///
+    /// `reasserts_existing`: when true, an `Assert` event ALSO supplies
+    /// its own row as `old_kv` — simulating a `:put`-overwrite or
+    /// `:update` (both `old_kv` and `new_kv` present), the exact branch
+    /// story #62's hostile review found unguarded. `Temporal` discards
+    /// payload, so `old` and `new` compose to the IDENTICAL posting
+    /// regardless of content — this flag exercises that both-`Some` path
+    /// without needing a dependent column to vary.
+    #[allow(clippy::too_many_arguments)]
+    fn write_base_event(
+        stx: &mut SessionTx<<SimStorage as Storage>::WriteTx>,
+        base: &RelationHandle,
+        idx_handle: &RelationHandle,
+        k: i64,
+        valid: i64,
+        sys: i64,
+        polarity: ClaimPolarity,
+        reasserts_existing: bool,
+    ) {
+        let span = SourceSpan::default();
+        let row = vec![DataValue::from(k)];
+        let key = base
+            .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)
+            .unwrap();
+        let val = base
+            .encode_bitemporal_val_for_store(&row, polarity, span)
+            .unwrap();
+        stx.put_routed(false, &key, &val).unwrap();
+        match polarity {
+            ClaimPolarity::Assert => {
+                let old = reasserts_existing.then_some(row.as_slice());
+                stx.update_indices(base, Some(&row), old, vts(valid), vts(sys))
+                    .unwrap();
+            }
+            ClaimPolarity::Retract => {
+                stx.update_indices(base, None, Some(&row), vts(valid), vts(sys))
+                    .unwrap();
+            }
+            ClaimPolarity::Erase => {
+                stx.temporal_index_write(
+                    base,
+                    idx_handle,
+                    &row,
+                    ClaimPolarity::Erase,
+                    vts(valid),
+                    vts(sys),
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    /// One decoded posting row, in the form every assertion below compares
+    /// against: `(leading valid ts, base key, tail valid ts, tail sys ts,
+    /// polarity)`.
+    type DecodedPosting = (i64, i64, i64, i64, ClaimPolarity);
+
+    fn scan_postings(tx: &impl ReadTx, idx_handle: &RelationHandle) -> Vec<DecodedPosting> {
+        let lower: Vec<u8> = Tuple::default()
+            .encode_as_key(idx_handle.id)
+            .as_ref()
+            .to_vec();
+        let upper = (idx_handle.id.0 + 1).to_be_bytes().to_vec();
+        tx.range_scan(&lower, &upper)
+            .map(|r| {
+                let (k, v) = r.expect("posting row decodes cleanly");
+                let tup = crate::data::tuple::decode_tuple_from_key(&k, 4)
+                    .expect("posting key decodes cleanly");
+                let leading = match &tup[0] {
+                    DataValue::Validity(vv) => vv.timestamp.0.0,
+                    other => panic!("expected the leading Validity column, got {other:?}"),
+                };
+                let key_col = tup[1].get_int().expect("int base key column");
+                let tail_valid = match &tup[2] {
+                    DataValue::Validity(vv) => vv.timestamp.0.0,
+                    other => panic!("expected the tail valid slot, got {other:?}"),
+                };
+                let tail_sys = match &tup[3] {
+                    DataValue::Validity(vv) => vv.timestamp.0.0,
+                    other => panic!("expected the tail sys slot, got {other:?}"),
+                };
+                let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
+                    .expect("posting value decodes cleanly");
+                (leading, key_col, tail_valid, tail_sys, polarity)
+            })
+            .collect()
+    }
+
+    /// One decoded BASE row, in the SAME `DecodedPosting` shape as
+    /// [`scan_postings`] (a base row's own valid instant fills both the
+    /// "leading" and "tail valid" fields), so the two scans compare
+    /// directly for the bijection tests below. Every base relation in
+    /// this module has exactly one Int key column.
+    fn scan_base_rows(tx: &impl ReadTx, base: &RelationHandle) -> Vec<DecodedPosting> {
+        let lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
+        let upper = (base.id.0 + 1).to_be_bytes().to_vec();
+        tx.range_scan(&lower, &upper)
+            .map(|r| {
+                let (k, v) = r.expect("base row decodes cleanly");
+                let tup = crate::data::tuple::decode_tuple_from_key(&k, 3)
+                    .expect("base key decodes cleanly");
+                let key_col = tup[0].get_int().expect("int base key column");
+                let valid = match &tup[1] {
+                    DataValue::Validity(vv) => vv.timestamp.0.0,
+                    other => panic!("expected the valid slot, got {other:?}"),
+                };
+                let sys = match &tup[2] {
+                    DataValue::Validity(vv) => vv.timestamp.0.0,
+                    other => panic!("expected the sys slot, got {other:?}"),
+                };
+                let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
+                    .expect("base value decodes cleanly");
+                (valid, key_col, valid, sys, polarity)
+            })
+            .collect()
+    }
+
+    /// `ClaimPolarity` derives `Eq` but not `Ord` (a value-side type,
+    /// never a sort key elsewhere): every bijection comparison below sorts
+    /// by this key instead of a bare `.sort()`.
+    fn decoded_posting_sort_key(r: &DecodedPosting) -> (i64, i64, i64, i64, u8) {
+        (r.0, r.1, r.2, r.3, r.4.encode())
+    }
+
+    /// Posting rows for a scripted history — assert, retract, and an
+    /// erase that corrects the SAME valid instant as the initial assert
+    /// with a newer sys (the "same-instant sys correction") — decoded and
+    /// compared field-for-field, plus one literal raw-byte check proving
+    /// the key layout claim directly: the leading Validity column really
+    /// does precede the base key bytes, not follow them.
+    #[test]
+    fn temporal_index_posting_rows_match_the_scripted_history_exactly() {
+        let db = Db::new(SimStorage::new(0x7E57_0001)).expect("db");
+        let mut stx = open_session(&db);
+        stx.create_relation(base_input("e"), KeyspaceKind::Facts)
+            .unwrap();
+        stx.create_temporal_index("e", "t").unwrap();
+        let base = stx.get_relation("e").unwrap();
+        let idx_handle = stx.get_relation("e:t").unwrap();
+
+        // (k, valid, sys, polarity). The third event corrects the FIRST
+        // one: same valid instant (10), newer sys (3) — an Erase un-
+        // recording the earlier Assert, never a new instant.
+        let events = [
+            (1i64, 10i64, 1i64, ClaimPolarity::Assert),
+            (1, 20, 2, ClaimPolarity::Retract),
+            (1, 10, 3, ClaimPolarity::Erase),
+        ];
+        for &(k, valid, sys, polarity) in &events {
+            write_base_event(&mut stx, &base, &idx_handle, k, valid, sys, polarity, false);
+        }
+        stx.store.commit().unwrap();
+
+        let tx = db.storage.read_tx().unwrap();
+        let mut got = scan_postings(&tx, &idx_handle);
+        got.sort_by_key(|r| (Reverse(r.0), r.1, Reverse(r.2), Reverse(r.3)));
+        let mut want: Vec<DecodedPosting> = events
+            .iter()
+            .map(|&(k, valid, sys, polarity)| (valid, k, valid, sys, polarity))
+            .collect();
+        want.sort_by_key(|r| (Reverse(r.0), r.1, Reverse(r.2), Reverse(r.3)));
+        assert_eq!(
+            got, want,
+            "every posting must carry exactly its base event's own \
+             (valid, sys, polarity) — mirrored, never re-stamped"
+        );
+
+        // The literal byte claim: the FIRST event's posting key is
+        // `[idx_id][Validity(10) leading][k=1][Validity(10) tail][Validity(1) tail]`
+        // — independently hand-encoded and compared byte-for-byte.
+        let expected_first_tuple = vec![
+            StoredValiditySlot::new(vts(10)).as_datavalue(),
+            DataValue::from(1i64),
+            StoredValiditySlot::new(vts(10)).as_datavalue(),
+            StoredValiditySlot::new(vts(1)).as_datavalue(),
+        ];
+        let expected_key = expected_first_tuple.encode_as_key(idx_handle.id);
+        let (got_key, _) = tx
+            .range_scan(expected_key.as_ref(), &(idx_handle.id.0 + 1).to_be_bytes())
+            .next()
+            .expect("at least one posting at or after the hand-encoded key")
+            .unwrap();
+        assert_eq!(
+            got_key,
+            expected_key.as_ref(),
+            "the hand-encoded posting key (leading Validity(10), then k=1, \
+             then the tail) must be the literal first key on disk"
+        );
+    }
+
+    /// The rebuildability law: an index attached BEFORE any base writes
+    /// (maintained incrementally, one posting per write) and the SAME
+    /// index attached AFTER those writes (backfilled by a full rescan of
+    /// the base's stored history) must produce byte-identical posting
+    /// keyspaces. Both universes create exactly the same two relations in
+    /// the same order (base, then index), so their relation ids align and
+    /// a literal raw-byte comparison — no id-prefix stripping — is valid.
+    #[test]
+    fn temporal_index_backfill_equals_incremental() {
+        // (k, valid, sys, polarity, reasserts_existing) — several keys,
+        // mixed polarities, instants not in chronological write order,
+        // several sys stamps. The `(1, 120, 14, Assert, true)` event is a
+        // real-shaped overwrite: as-of resolution AT valid=120 finds the
+        // `(1, 100, 10, Assert)` row (100 <= 120), so a real pipeline
+        // write here supplies BOTH `old_kv` and `new_kv` — the branch
+        // story #62's hostile review found unguarded, now included in the
+        // byte-identity check.
+        let events = [
+            (1i64, 100i64, 10i64, ClaimPolarity::Assert, false),
+            (2, 200, 11, ClaimPolarity::Assert, false),
+            (1, 150, 12, ClaimPolarity::Retract, false),
+            (3, 300, 13, ClaimPolarity::Assert, false),
+            (1, 120, 14, ClaimPolarity::Assert, true),
+            (2, 250, 15, ClaimPolarity::Retract, false),
+            (3, 310, 16, ClaimPolarity::Assert, false),
+        ];
+
+        // Universe A: index live from the start (incremental).
+        let db_a = Db::new(SimStorage::new(0xB0071)).expect("db a");
+        let mut stx_a = open_session(&db_a);
+        stx_a
+            .create_relation(base_input("b"), KeyspaceKind::Facts)
+            .unwrap();
+        stx_a.create_temporal_index("b", "t").unwrap();
+        let base_a = stx_a.get_relation("b").unwrap();
+        let idx_a = stx_a.get_relation("b:t").unwrap();
+        for &(k, valid, sys, polarity, reasserts_existing) in &events {
+            write_base_event(
+                &mut stx_a,
+                &base_a,
+                &idx_a,
+                k,
+                valid,
+                sys,
+                polarity,
+                reasserts_existing,
+            );
+        }
+        stx_a.store.commit().unwrap();
+
+        // Universe B: index attached AFTER the same writes (backfill).
+        // No index exists yet, so `write_base_event`'s `update_indices`
+        // call is a no-op over an empty index list — write the base rows
+        // directly instead, to keep the helper's contract ("an index is
+        // attached") honest.
+        let db_b = Db::new(SimStorage::new(0xB0072)).expect("db b");
+        let mut stx_b = open_session(&db_b);
+        stx_b
+            .create_relation(base_input("b"), KeyspaceKind::Facts)
+            .unwrap();
+        let base_b = stx_b.get_relation("b").unwrap();
+        for &(k, valid, sys, polarity, _) in &events {
+            let span = SourceSpan::default();
+            let row = vec![DataValue::from(k)];
+            let key = base_b
+                .encode_bitemporal_key_for_store(&row, vts(valid), vts(sys), span)
+                .unwrap();
+            let val = base_b
+                .encode_bitemporal_val_for_store(&row, polarity, span)
+                .unwrap();
+            stx_b.put_routed(false, &key, &val).unwrap();
+        }
+        stx_b.create_temporal_index("b", "t").unwrap();
+        let idx_b = stx_b.get_relation("b:t").unwrap();
+        stx_b.store.commit().unwrap();
+
+        assert_eq!(
+            base_a.id, base_b.id,
+            "both universes must create the same relations in the same \
+             order for the raw-byte comparison below to be valid"
+        );
+        assert_eq!(idx_a.id, idx_b.id);
+
+        let tx_a = db_a.storage.read_tx().unwrap();
+        let tx_b = db_b.storage.read_tx().unwrap();
+        let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
+        let upper = (idx_a.id.0 + 1).to_be_bytes().to_vec();
+        let raw_a: Vec<(Vec<u8>, Vec<u8>)> = tx_a
+            .range_scan(&lower, &upper)
+            .collect::<Result<_>>()
+            .unwrap();
+        let raw_b: Vec<(Vec<u8>, Vec<u8>)> = tx_b
+            .range_scan(&lower, &upper)
+            .collect::<Result<_>>()
+            .unwrap();
+        assert!(
+            !raw_a.is_empty(),
+            "the incremental universe must have posted something"
+        );
+        assert_eq!(
+            raw_a, raw_b,
+            "backfill-equals-incremental: an index attached after N base \
+             writes must reproduce the exact keyspace an index live since \
+             the first write would hold"
+        );
+    }
+
+    /// Polarity/coordinate mirroring, generalized over a scripted history:
+    /// every base row implies exactly one posting at the SAME (valid,
+    /// sys, polarity) — not merely for the byte-verified fixture above.
+    #[test]
+    fn every_base_row_mirrors_to_exactly_one_posting_at_its_own_coordinate() {
+        let db = Db::new(SimStorage::new(0x7E57_0002)).expect("db");
+        let mut stx = open_session(&db);
+        stx.create_relation(base_input("m"), KeyspaceKind::Facts)
+            .unwrap();
+        stx.create_temporal_index("m", "t").unwrap();
+        let base = stx.get_relation("m").unwrap();
+        let idx_handle = stx.get_relation("m:t").unwrap();
+
+        let events = [
+            (1i64, 5i64, 1i64, ClaimPolarity::Assert),
+            (2, 6, 2, ClaimPolarity::Assert),
+            (1, 15, 3, ClaimPolarity::Retract),
+            (2, 6, 4, ClaimPolarity::Erase),
+        ];
+        for &(k, valid, sys, polarity) in &events {
+            write_base_event(&mut stx, &base, &idx_handle, k, valid, sys, polarity, false);
+        }
+        stx.store.commit().unwrap();
+
+        let tx = db.storage.read_tx().unwrap();
+        let mut base_rows = scan_base_rows(&tx, &base);
+        let mut postings = scan_postings(&tx, &idx_handle);
+        base_rows.sort_by_key(decoded_posting_sort_key);
+        postings.sort_by_key(decoded_posting_sort_key);
+        assert_eq!(
+            base_rows, postings,
+            "the posting keyspace, read as (valid, key, valid, sys, \
+             polarity), must be a bijection with the base's own rows"
+        );
+    }
+
+    /// Hostile-review finding (story #62): `update_indices`'s `Temporal`
+    /// arm used to fire BOTH `old` (Retract) and `new` (Assert) whenever
+    /// both were `Some` — exactly the `:put`-overwrite and `:update`
+    /// shape. NEITHER prior test above drove that branch: `write_base_event`
+    /// only ever supplied one side (or, via `reasserts_existing`, a
+    /// same-content synthetic one). This test drives the REAL production
+    /// pipeline (`Db::run_script`, not the direct-write helper) through a
+    /// fresh insert, an overwrite of the SAME key, an `:update`, then a
+    /// removal — the exact previously-uncovered branch — and checks the
+    /// exact posting byte set.
+    #[test]
+    fn temporal_index_production_pipeline_mirrors_one_posting_per_base_event() {
+        let db = Db::new(SimStorage::new(0x7E57_0003)).expect("db");
+        db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
+            .expect("create");
+        {
+            // `::temporal index create` has no parsed surface yet (see
+            // the landing report); attach it directly.
+            let mut stx = open_session(&db);
+            stx.create_temporal_index("po", "t").unwrap();
+            stx.store.commit().unwrap();
+        }
+
+        db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
+            .expect("fresh insert");
+        // The overwrite: `current_row_routed` resolves at THIS write's own
+        // valid to the prior row (`old_kv = Some`), and this write
+        // supplies a new payload (`new_kv = Some`) — both `Some`, the
+        // exact branch under review.
+        db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
+            .expect("overwrite");
+        db.run_script("?[k, v] <- [[1, 300]] :update po {k, v}", BTreeMap::new())
+            .expect("update");
+        db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
+            .expect("remove");
+
+        let rtx = SessionTx::new_read(db.storage.read_tx().unwrap(), ScriptOptions::default());
+        let base = rtx.get_relation("po").unwrap();
+        let idx_handle = rtx.get_relation("po:t").unwrap();
+        let mut base_rows = scan_base_rows(&rtx.store, &base);
+        let mut postings = scan_postings(&rtx.store, &idx_handle);
+        assert_eq!(
+            base_rows.len(),
+            4,
+            "one base row per script mutation: insert, overwrite, update, remove"
+        );
+        base_rows.sort_by_key(decoded_posting_sort_key);
+        postings.sort_by_key(decoded_posting_sort_key);
+        assert_eq!(
+            base_rows, postings,
+            "every base event — insert, overwrite, update, remove alike — \
+             must mirror to EXACTLY one posting at its own coordinate; the \
+             overwrite/update events are precisely the ones a Plain-style \
+             transition mirror would have wasted a clobbered Retract \
+             write on"
+        );
+        assert_eq!(
+            postings
+                .iter()
+                .filter(|p| p.4 == ClaimPolarity::Retract)
+                .count(),
+            1,
+            "exactly one Retract posting — from the :rm — never one per \
+             overwrite/update"
+        );
+    }
+
+    /// The write-COUNT law, closing the gap the byte-content tests above
+    /// cannot: a confirmation reviewer proved that regressing the
+    /// `Temporal` arm to the old dual-fire shape (retract-old +
+    /// assert-new, unconditionally, whenever both are `Some`) is
+    /// BYTE-IDENTICAL on disk to the single-fire code above, because every
+    /// production call site resolves `old_kv` at the write's own `valid` —
+    /// so the retract and the assert always compose to the SAME posting
+    /// key at the SAME coordinate, and the assert (applied second, same
+    /// key, same in-transaction write set) clobbers the retract before
+    /// commit ever serializes a byte. No scan of the committed keyspace,
+    /// however thorough, can tell the two shapes apart. What differs is
+    /// only the number of `WriteTx::put` CALLS made getting there — the
+    /// posting index's actual law ("one posting PER BASE EVENT") is a
+    /// count claim, not a content claim, so it needs a count oracle:
+    /// `SimStorage::put_call_count`, which totals calls at the call site
+    /// (before any in-transaction collapse), not post-collapse entries.
+    ///
+    /// Drives the real production pipeline (`Db::run_script`, matching
+    /// `temporal_index_production_pipeline_mirrors_one_posting_per_base_event`
+    /// above) through the four mutation kinds and checks the EXACT put
+    /// delta each one costs: 1 base-row put (assert or retract — `:rm`
+    /// writes a Retract-flagged version, never a physical delete, so it
+    /// costs a put too) + 1 posting put, always — 2, never 3, even for
+    /// the overwrite/update calls that supply BOTH `old_kv` and `new_kv`.
+    /// `del_call_count` stays 0 throughout: this bitemporal pipeline never
+    /// calls `WriteTx::del`/`del_range` on a mutation path at all.
+    #[test]
+    fn temporal_index_write_count_law_holds_for_every_mutation_kind() {
+        let db = Db::new(SimStorage::new(0x7E57_0004)).expect("db");
+        db.run_script("?[k, v] <- [] :create po {k => v}", BTreeMap::new())
+            .expect("create");
+        {
+            let mut stx = open_session(&db);
+            stx.create_temporal_index("po", "t").unwrap();
+            stx.store.commit().unwrap();
+        }
+
+        let puts_before_all = db.storage.put_call_count();
+        let dels_before_all = db.storage.del_call_count();
+
+        let check_delta = |label: &str, puts_before: u64, dels_before: u64| {
+            let puts_after = db.storage.put_call_count();
+            let dels_after = db.storage.del_call_count();
+            assert_eq!(
+                puts_after - puts_before,
+                2,
+                "{label}: expected exactly 2 put CALLS (1 base row + 1 \
+                 posting), got {} — a dual-fired Temporal arm costs 3 on \
+                 the overwrite/update kinds even though the bytes it \
+                 lands are identical to the single-fire shape",
+                puts_after - puts_before
+            );
+            assert_eq!(
+                dels_after - dels_before,
+                0,
+                "{label}: this pipeline never physically deletes a key — \
+                 every retraction is a Retract-flagged put"
+            );
+            (puts_after, dels_after)
+        };
+
+        // :put fresh — no existing row, so `old_kv` is `None`: the branch
+        // the dual-fire mutant cannot distinguish from single-fire.
+        db.run_script("?[k, v] <- [[1, 100]] :put po {k, v}", BTreeMap::new())
+            .expect("fresh insert");
+        let (p1, d1) = check_delta("put fresh", puts_before_all, dels_before_all);
+
+        // :put overwrite — `old_kv` AND `new_kv` both `Some`: the exact
+        // branch story #62's hostile review found unguarded.
+        db.run_script("?[k, v] <- [[1, 200]] :put po {k, v}", BTreeMap::new())
+            .expect("overwrite");
+        let (p2, d2) = check_delta("put overwrite", p1, d1);
+
+        // :update — same both-`Some` shape as the overwrite.
+        db.run_script("?[k, v] <- [[1, 300]] :update po {k, v}", BTreeMap::new())
+            .expect("update");
+        let (p3, d3) = check_delta("update", p2, d2);
+
+        // :rm — `new_kv` is `None`, `old_kv` is `Some`: single-fire and
+        // the dual-fire mutant agree here too (only overwrite/update
+        // diverge), so this is the control showing the law holds
+        // everywhere, not just where the mutant happens to differ.
+        db.run_script("?[k] <- [[1]] :rm po {k}", BTreeMap::new())
+            .expect("remove");
+        check_delta("rm", p3, d3);
     }
 }

@@ -223,6 +223,19 @@ struct SimState {
     /// on this store handle. Restart with the store on crash reopen; the
     /// epoch salt keeps post-crash streams distinct regardless.
     attempts: BTreeMap<u64, u64>,
+    /// The write-count law's oracle: the running total of `put`/`del` CALLS
+    /// (not the post-collapse entry count applied to `versions`) across
+    /// every transaction that has successfully committed on this handle. A
+    /// transaction that calls `put`/`del` twice on the same key in-tx
+    /// applies as one version-chain entry — the two calls are indistinguishable
+    /// on disk — so only counting CALLS, never bytes, can catch a caller that
+    /// wastefully double-fires a write whose second call clobbers the first
+    /// (see `total_puts`/`total_dels` accessors on [`SimStorage`]).
+    /// Observation-only: read nowhere in commit/conflict/fault logic, so it
+    /// perturbs no behavior — a pure counter alongside the state it counts.
+    /// Resets on crash/power-cut reopen, matching `attempts`.
+    total_puts: u64,
+    total_dels: u64,
     /// Installed by [`run_interleaved`] for the duration of a drive.
     sched: Option<Arc<Scheduler>>,
 }
@@ -499,6 +512,8 @@ impl SimStorage {
                     commit_seq: seq,
                     synced_seq: seq,
                     attempts: BTreeMap::new(),
+                    total_puts: 0,
+                    total_dels: 0,
                     sched: None,
                 })),
                 seed,
@@ -539,6 +554,22 @@ impl SimStorage {
     /// contract promises only that the fsynced prefix survives; the sim pins
     /// exactly that promise by keeping nothing else.
     ///
+    /// The write-count law's read side: the running total of `put` CALLS
+    /// across every transaction that has committed successfully on this
+    /// handle. Observation-only — see `SimState::total_puts`. (Like the rest
+    /// of this module, reachable only from `#[cfg(test)]` code: `sim.rs`
+    /// itself is declared `#[cfg(test)]` in `storage/mod.rs`.)
+    pub(crate) fn put_call_count(&self) -> u64 {
+        self.ctx.state.lock().expect(POISONED).total_puts
+    }
+
+    /// The `del`/`del_range` counterpart of [`put_call_count`].
+    ///
+    /// [`put_call_count`]: SimStorage::put_call_count
+    pub(crate) fn del_call_count(&self) -> u64 {
+        self.ctx.state.lock().expect(POISONED).total_dels
+    }
+
     /// [`sim_crash`]: SimStorage::sim_crash
     pub(crate) fn sim_powercut(&self) -> SimStorage {
         let st = self.ctx.state.lock().expect(POISONED);
@@ -603,6 +634,8 @@ impl Storage for SimStorage {
             start_seq: st.commit_seq,
             writes: BTreeMap::new(),
             reads: Mutex::new(ReadSet::default()),
+            put_calls: 0,
+            del_calls: 0,
             ctx: self.ctx.clone(),
         })
     }
@@ -687,6 +720,14 @@ pub(crate) struct SimWriteTx {
     /// `None` = tombstone. Read-your-own-writes overlays this on `snapshot`.
     writes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
     reads: Mutex<ReadSet>,
+    /// Write-count law bookkeeping: how many `put`/`del`(-via-`del_range`)
+    /// CALLS this transaction has made, counted at the call site — so two
+    /// calls landing on the same key (the second clobbering the first in
+    /// `writes`) still count as two, never collapsed to `writes.len()`'s
+    /// one entry. Folded into `SimState::total_puts`/`total_dels` only if
+    /// this transaction's commit actually succeeds.
+    put_calls: u64,
+    del_calls: u64,
     ctx: SimCtx,
 }
 
@@ -796,6 +837,8 @@ impl SimWriteTx {
             start_seq,
             writes,
             reads,
+            put_calls,
+            del_calls,
             ctx,
         } = self;
         let reads = reads.into_inner().expect(POISONED);
@@ -860,6 +903,11 @@ impl SimWriteTx {
         }
 
         // Apply atomically at the next sequence: the buffer durability tier.
+        // The write-count law's oracle accumulates HERE, on the success
+        // path only: an aborted commit's calls never reached real storage,
+        // so they must never reach the running total either.
+        st.total_puts += put_calls;
+        st.total_dels += del_calls;
         let seq = st.commit_seq + 1;
         for (k, v) in writes {
             st.versions.entry(k).or_default().push((seq, v));
@@ -1071,12 +1119,14 @@ impl WriteTx for SimWriteTx {
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.ctx.yield_turn();
         self.writes.insert(key.to_vec(), Some(val.to_vec()));
+        self.put_calls += 1;
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
         self.ctx.yield_turn();
         self.writes.insert(key.to_vec(), None);
+        self.del_calls += 1;
         Ok(())
     }
 
@@ -1091,6 +1141,9 @@ impl WriteTx for SimWriteTx {
             .into_iter()
             .map(|(k, _)| k)
             .collect();
+        // Each doomed key is its own del CALL for the write-count law, same
+        // as a caller looping `del` over the same keys one at a time.
+        self.del_calls += doomed.len() as u64;
         for k in doomed {
             self.writes.insert(k, None);
         }
