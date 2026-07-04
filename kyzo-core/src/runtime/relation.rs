@@ -1555,6 +1555,61 @@ mod tests {
         );
     }
 
+    /// A corrupt catalog row cannot synthesize an out-of-range
+    /// `RelationId` — the exact seam the bug fix closes.
+    /// `RelationHandle::decode` is `rmp_serde::from_slice` straight over
+    /// stored bytes, so a shadow struct with `id` as a bare (unvalidated)
+    /// `u64` in place of `RelationId` stands in for what a corrupted store
+    /// could hold. The real `RelationHandle` must refuse decoding it —
+    /// typed error, never a panic, never a constructed handle.
+    #[test]
+    fn corrupt_catalog_row_refuses_out_of_range_relation_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        let handle =
+            create_relation(&mut tx, simple_input("hostile"), KeyspaceKind::Facts).unwrap();
+
+        #[derive(serde_derive::Serialize)]
+        struct ShadowHandle {
+            name: SmartString<LazyCompact>,
+            id: u64,
+            metadata: StoredRelationMetadata,
+            put_triggers: Vec<String>,
+            rm_triggers: Vec<String>,
+            replace_triggers: Vec<String>,
+            access_level: AccessLevel,
+            is_temp: bool,
+            indices: Vec<IndexRef>,
+            description: SmartString<LazyCompact>,
+            constraints: Vec<ConstraintRef>,
+            keyspace_kind: KeyspaceKind,
+        }
+
+        let shadow = ShadowHandle {
+            name: handle.name.clone(),
+            id: crate::data::tuple::MAX_RELATION_ID + 1, // out of the 48-bit bound
+            metadata: handle.metadata.clone(),
+            put_triggers: handle.put_triggers.clone(),
+            rm_triggers: handle.rm_triggers.clone(),
+            replace_triggers: handle.replace_triggers.clone(),
+            access_level: handle.access_level,
+            is_temp: handle.is_temp,
+            indices: handle.indices.clone(),
+            description: handle.description.clone(),
+            constraints: handle.constraints.clone(),
+            keyspace_kind: handle.keyspace_kind,
+        };
+        let mut bytes = vec![];
+        shadow
+            .serialize(&mut Serializer::new(&mut bytes).with_struct_map())
+            .unwrap();
+
+        // Must refuse typed, not panic and not hand back a handle carrying
+        // an out-of-range id.
+        RelationHandle::decode(&bytes).unwrap_err();
+    }
+
     /// `del_range` semantics through destroy: a relation created, filled,
     /// and destroyed within one transaction leaves nothing behind — the
     /// transaction's own writes die with the range.

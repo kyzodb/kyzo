@@ -19,6 +19,7 @@
 //! everywhere.
 
 use miette::{Result, bail, miette};
+use serde::{Deserialize, Deserializer};
 
 use crate::data::memcmp::{ENCODED_VLD_LEN, MemCmpEncoder};
 use crate::data::value::DataValue;
@@ -255,18 +256,31 @@ pub fn extend_tuple_from_v(key: &mut Tuple, val: &[u8]) -> Result<()> {
 }
 
 /// The stored-relation id: the first 8 bytes of every key.
-#[derive(
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    Debug,
-    serde_derive::Serialize,
-    serde_derive::Deserialize,
-    PartialOrd,
-    Ord,
-)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, serde_derive::Serialize, PartialOrd, Ord)]
 pub(crate) struct RelationId(pub(crate) u64);
+
+/// Deserialize is hand-written, NOT derived: a derived impl sees the wire's
+/// raw `u64` and builds a `RelationId` by direct field assignment (the
+/// field is only `pub(crate)`, but serde's derive reaches past that),
+/// bypassing the 48-bit bound entirely. `RelationId` is a field of
+/// `RelationHandle` — the on-disk catalog row (`runtime/relation.rs`),
+/// decoded straight from stored bytes via `rmp_serde::from_slice`
+/// (`RelationHandle::decode`) — so a corrupt catalog row could otherwise
+/// synthesize an out-of-range id with no error at all. Same seam as
+/// `Interval`'s hand-written `Deserialize` in `data/value.rs`: the raw
+/// field passes through serde's machinery as a plain `u64`, then
+/// [`RelationId::checked`] sees it as untrusted input, not a preexisting
+/// invariant, and refuses it with a typed error rather than the
+/// programmer-error `assert!` in [`RelationId::new`].
+impl<'de> Deserialize<'de> for RelationId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = u64::deserialize(deserializer)?;
+        RelationId::checked(raw).map_err(serde::de::Error::custom)
+    }
+}
 
 /// Relation ids occupy a 48-bit space (the upstream invariant: ids stay
 /// within 6 bytes even though the encoded prefix is 8), leaving headroom in
@@ -274,9 +288,28 @@ pub(crate) struct RelationId(pub(crate) u64);
 pub(crate) const MAX_RELATION_ID: u64 = 1 << 48;
 
 impl RelationId {
+    /// The bound check, shared by every path that must refuse rather than
+    /// panic: the wire `Deserialize` above and [`Self::raw_decode`] below.
+    /// One function is the single source of truth for the bound so the two
+    /// typed-refusal seams cannot drift apart.
+    fn checked(u: u64) -> Result<Self> {
+        if u > MAX_RELATION_ID {
+            bail!("corrupt relation id: {u} exceeds the 48-bit bound");
+        }
+        Ok(Self(u))
+    }
+
+    /// Internal-mint constructor: panics on overflow. Its only production
+    /// caller is `encode_tuple_key`'s benches-and-tooling façade, given a
+    /// literal or an already-validated id this process already holds —
+    /// never bytes read back off disk or off the wire, which route through
+    /// [`Self::raw_decode`] or the `Deserialize` impl instead and refuse
+    /// typed. An overflow reaching here is a programmer error (a caller
+    /// invented a relation id out of thin air), not corrupt data, so the
+    /// panic stays: hostile bytes cannot reach this path after the
+    /// `Deserialize` fix above.
     pub(crate) fn new(u: u64) -> Self {
-        assert!(u <= MAX_RELATION_ID, "StoredRelId overflow: {u}");
-        Self(u)
+        Self::checked(u).unwrap_or_else(|e| panic!("StoredRelId overflow: {e}"))
     }
     #[allow(dead_code)] // used by the engine layers growing around the kernel
     pub(crate) fn next(&self) -> Self {
@@ -293,13 +326,11 @@ impl RelationId {
             bail!("corrupt key: shorter than the relation-id prefix");
         };
         let u = u64::from_be_bytes(bytes.try_into().expect("length checked"));
-        // The overflow assert in `new()` guards the WRITE path; on the read
-        // path an out-of-range id is data corruption and must be an error,
-        // never a panic.
-        if u > MAX_RELATION_ID {
-            bail!("corrupt key: relation id out of range");
-        }
-        Ok(Self(u))
+        // The overflow assert in `new()` guards the internal-mint path; on
+        // the read path an out-of-range id is data corruption and must be
+        // an error, never a panic — routed through the same `checked` the
+        // `Deserialize` impl uses.
+        Self::checked(u).map_err(|_| miette!("corrupt key: relation id out of range"))
     }
 }
 
@@ -412,5 +443,47 @@ mod tests {
                 "trial {trial}: rel {rel:?} tuple {tuple:?} suffix {suffix:?}"
             );
         }
+    }
+
+    /// Valid ids round-trip byte-identically through the hand-written
+    /// `Deserialize` — the existing on-disk catalog rows every store
+    /// already holds must keep decoding exactly as before this fix.
+    #[test]
+    fn relation_id_round_trips_through_rmp_serde() {
+        for raw in [0u64, 1, 42, MAX_RELATION_ID - 1, MAX_RELATION_ID] {
+            let id = RelationId(raw);
+            let bytes = rmp_serde::to_vec(&id).unwrap();
+            let back: RelationId = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(back, id, "round-trip mismatch for {raw}");
+        }
+    }
+
+    /// The bound is inclusive at `MAX_RELATION_ID` and refuses its
+    /// successor — both through the smart constructor directly.
+    #[test]
+    fn relation_id_boundary_is_inclusive() {
+        assert!(RelationId::checked(MAX_RELATION_ID).is_ok());
+        assert!(RelationId::checked(MAX_RELATION_ID + 1).is_err());
+        assert_eq!(
+            RelationId::new(MAX_RELATION_ID),
+            RelationId(MAX_RELATION_ID)
+        );
+    }
+
+    /// The bug this fix closes: hostile wire bytes carrying an
+    /// out-of-range id must refuse with a typed error, never panic and
+    /// never construct. A newtype struct's msgpack encoding is transparent
+    /// (identical bytes to its bare inner value), so a plain `u64` over
+    /// the bound stands in for the corrupt wire form directly — no need to
+    /// reach for `RelationId`'s own (now bound-checked) `Serialize`.
+    #[test]
+    fn relation_id_deserialize_refuses_out_of_range_bytes() {
+        let hostile_raw = MAX_RELATION_ID + 1;
+        let bytes = rmp_serde::to_vec(&hostile_raw).unwrap();
+        let err = rmp_serde::from_slice::<RelationId>(&bytes).unwrap_err();
+        assert!(
+            err.to_string().contains("48-bit bound"),
+            "unexpected error: {err}"
+        );
     }
 }
