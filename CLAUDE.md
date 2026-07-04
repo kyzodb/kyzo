@@ -25,6 +25,55 @@ migration gentleness. When two designs compete, the better engine wins, even if 
   work product.
 - **Name the hard work plainly, then do it.** Never smuggle avoidance into a recommendation.
 
+## Session discipline (learned the hard way — binding)
+
+- **Verdict-first reporting.** Every status relayed to the maintainer leads with an explicit
+  SUCCESS / FAILURE / MIXED / BLOCKED / UNKNOWN and what specifically passed or failed. Vague
+  language that softens a bad result is a form of lying.
+- **The finding ladder has four rungs**: find → fix → sweep the class → **absorb into structure**
+  (the architecture changes so the class is unrepresentable). A fix that leaves the architecture
+  equally able to produce the bug has only relocated it. Guards accumulate; structure absorbs.
+- **Investigations are decision procedures, not expeditions.** Never brief an agent "investigate
+  X." The center forms hypotheses first (read the code, read the prior art — a five-minute grep
+  once killed a theory an agent would have chased for 100k tokens), then dispatches ordered
+  experiments where every branch eliminates hypotheses, with established facts the agent must not
+  re-derive and a stop condition at the first discriminator.
+- **Comments are public claims.** A stale doc comment is a false statement to every future reader
+  — external auditors have twice been misled by ours. Doc drift is a defect class, fixed on sight.
+- **Durable state lives in durable places.** Session snapshots, findings, and rulings go to issue
+  comments (the designated dumping ground) at every phase boundary — never only tmpfs or an
+  agent's context. A host crash costs a restart, not a reconstruction; an unreported result in a
+  dead agent's memory is a result that never existed.
+- **Agent dispatch hygiene**: one task = one brief's scope, and tracker descriptions must match
+  the brief (an agent once did prohibited work because the tracker's wording was broader than its
+  brief). When an agent's report is sent, its license to edit ends — further work needs a new
+  instruction. Reviewers spawn cold per review and are never re-pinged after delivery (each ping
+  replays their whole context; fresh eyes are also better adversaries). Agents must never idle
+  without reporting — the report is a deliverable, not a courtesy.
+- **The shared tree never sits unbuildable** in any feature configuration — including workspace
+  member manifests. Mid-flight breakage blocks every other builder's gate runs.
+- **Inbound defect reports get triaged the turn they arrive** — milestone, owner, attack — before
+  any process discussion they also raise. A report parked while its cover letter is discussed is
+  the "courageously documented" anti-pattern.
+- **Claims close on external verification where one exists.** A perf/regression issue opened by
+  the bench lane closes on THEIR re-measurement of the merged fix, never on our own numbers — we
+  once published a closing claim measured on a code path users never take.
+- **A claim can be true and untestable**; the honest responses are saying so in the code, or
+  building the observability that makes it testable (prefer the second — e.g. write-count laws
+  for write-amplification claims).
+- **Red-green-commit; review is a later phase.** Per build unit: build → test → red? fix →
+  green? **commit (local, never push)** → next. A commit is an unwind point, not a seal
+  (unpushed — `git reset`/`revert` fixes anything). Never advance on red. Never let the shared
+  tree become a giant uncommitted parallel-edit soup — that soup is why a full-suite run measures
+  nobody's real state (proven the hard way: the same tree gave 3 failures one run and 40 the next
+  because builders were mid-edit). Commit each unit's OWN files as they go green; do not run
+  convoy-wide verification while a builder holds shared-dependency files mid-edit. Hostile review
+  and deeper architecture bug-hunting are a SEPARATE PHASE after ALL of a milestone's build work
+  is committed-green and its build-caught bugs are fixed. Push still needs an explicit go; commits
+  do not.
+- **When a blocker clears, re-walk its queue the same turn.** A parked item whose blocker resolved
+  and then sat is deferral by neglect — the moment a dependency frees, dispatch what it unblocked.
+
 ## How we work
 
 - **Work from the board** (org project KyzoDB Migration, `gh project item-list 1 --owner kyzodb`).

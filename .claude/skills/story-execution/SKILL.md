@@ -36,17 +36,27 @@ means the world model is lost. Appearance is the enemy; reality is the only clie
    enforcement ladder: **compiler > constructor > test**; never let one descend.
 5. **Verify, never assert.** Back every claim about the code or a change with a real `cargo build` /
    `cargo test` / run, or by reading the file. No conclusions from memory.
-6. **Commits seal, they don't checkpoint.** Nothing commits until its
-   hostile pass has cleared AND its findings are fixed — one commit per
-   sealed unit. Crash protection for uncommitted work is scratchpad drafts
-   and verify-tree copies, never premature commits: a commit that precedes
-   its review puts unsealed work in history wearing a sealed commit's
-   clothes.
-7. **No landing without a hostile review.** Nothing is "done" — agent-drafted
-   or center-written alike — until an adversarial reviewer briefed to REFUTE
-   has attacked it and its findings are fixed; fixes-of-findings get their
-   own hostile pass (fixes are where regressions hide). An agent's
-   self-verification covers mechanical claims only; semantic claims are
+6. **Commit on green; review is a later phase (red-green-commit).** The cycle
+   per build unit: **build → test → red? fix → green? COMMIT (local, never
+   push) → next.** A commit is an unwind point, not a seal — unpushed, so
+   `git reset`/`revert` fixes anything. NEVER advance on red; NEVER let the
+   shared tree accumulate a giant uncommitted parallel-edit soup (that soup
+   is what makes a full-suite run measure nobody's real state — it is the
+   number-one source of integration waste). Commit each unit's OWN files as
+   they go green (`git commit <paths>`), leaving other builders' in-flight
+   work untouched. Do NOT run convoy-wide verification while a builder holds
+   shared-dependency files mid-edit — the tree is not quiescent, so the
+   result is noise. Hostile review and deeper architecture bug-hunting are a
+   SEPARATE PHASE that begins only after ALL of a milestone's build work is
+   committed-green and every build-caught bug is fixed. Nothing is PUSHED
+   without an explicit maintainer go — push stays gated even though commits
+   flow freely.
+7. **The review phase still refutes.** When the build phase is done and the
+   milestone is committed-green, the review/arch-hunt phase attacks it:
+   adversarial reviewers briefed to REFUTE, on the committed state (a stable
+   target, not a moving tree). Findings reopen their unit; fixes-of-findings
+   get their own build→test→commit-on-green. An agent's self-verification
+   covers mechanical claims only; semantic claims are
    contested territory until attacked. The center's code gets the same
    suspicion — the reviewers have caught it repeatedly.
 8. **Deferral is sabotage unless blocked.** Work may leave the current story

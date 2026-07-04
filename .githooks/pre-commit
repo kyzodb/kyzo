@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Red-green-commit enforcement: refuse a commit that doesn't build.
+# Cheap gate (build only — the full capped test suite is the committer's job,
+# too slow for a hook). Bypass for a deliberate WIP checkpoint: git commit --no-verify.
+set -euo pipefail
+if git diff --cached --name-only | grep -qE '\.rs$|Cargo\.(toml|lock)$'; then
+  echo "pre-commit: cargo build -p kyzo (red-green-commit: no committing a broken build)"
+  if ! (ulimit -v 12582912 && timeout 600 cargo build -p kyzo --release >/dev/null 2>&1); then
+    echo "REFUSED: kyzo does not build. Fix the build, or 'git commit --no-verify' for a deliberate WIP checkpoint." >&2
+    exit 1
+  fi
+fi
