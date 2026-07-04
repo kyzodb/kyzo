@@ -1,0 +1,20 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Story #81: the resonance gate — machine-checked ontology invariants over kyzo-core/kyzo-bin, run from CI. Never shipped: this crate is dev tooling, not part of the engine tree (scripts/check-pure-rust.sh only walks the kyzo/kyzo-bin dependency trees, so xtask's own dependencies — syn, quote, proc-macro2 — never touch the purity gate)."
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+# span-locations: `Span::start()` gives real file line numbers when run as a
+# plain binary (this crate, never a proc-macro) — every check reports
+# `file:line` off it.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+walkdir = "2"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"

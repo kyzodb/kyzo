@@ -1,0 +1,46 @@
+# Story #81 check 2: the panic-on-hostile-bytes lint's decode-surface
+# declaration. Each `[[surface]]` names a file that decodes untrusted bytes
+# (on disk or on the wire) and the entrypoint function(s)/method(s) where
+# hostile input first enters that file's decode path — the declared roots
+# the check closes over via same-file callee reachability. Declared, not
+# inferred: adding a new decode path means adding its entrypoint here.
+
+[[surface]]
+file = "kyzo-core/src/data/memcmp.rs"
+# `decode_bytes` decodes a memcmp-encoded byte-string group (any DataValue's
+# String/Bytes payload); `Num::decode_from_key` and `DataValue::decode_from_key`
+# (which forwards to `decode_from_key_at_depth`) decode the tagged key
+# encoding itself — the on-disk format this file's whole module doc exists
+# to protect (see .claude/rules/memcmp.md).
+entrypoints = ["decode_bytes", "Num::decode_from_key", "DataValue::decode_from_key"]
+
+[[surface]]
+file = "kyzo-core/src/data/fact_payload.rs"
+# `decode_fact_payload` is the value-side (non-key) column decode; it calls
+# `decode_fact_field` per field (picked up by same-file reachability).
+entrypoints = ["decode_fact_payload"]
+
+[[surface]]
+file = "kyzo-core/src/data/bitemporal.rs"
+# The bitemporal read paths: claim-polarity byte decode, the skip-scan's
+# key-side bitemporal resolution, the system-stamp read, and the
+# value-side extension read.
+entrypoints = [
+  "claim_polarity_of_value",
+  "check_key_for_bitemporal",
+  "system_stamp_of_key",
+  "extend_tuple_from_bitemporal_v",
+]
+
+[[surface]]
+file = "kyzo-core/src/data/tuple.rs"
+# Every public tuple decode entrypoint, plus RelationId's raw byte decode —
+# the exact seam the historical bug (assert!-bounded, fed corrupt catalog
+# bytes) lived on.
+entrypoints = [
+  "decode_tuple_from_key",
+  "decode_key_into",
+  "decode_tuple_from_kv",
+  "extend_tuple_from_v",
+  "RelationId::raw_decode",
+]
