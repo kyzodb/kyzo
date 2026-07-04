@@ -80,11 +80,9 @@ use std::ops::Bound;
 
 use miette::Result;
 
-use crate::data::bitemporal::{
-    check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
-};
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
+use crate::storage::skip_walk::{SkipSeek, SkipWalk};
 use crate::storage::{ReadTx, WriteTx};
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -147,65 +145,35 @@ impl ReadTx for TempTx {
         )
     }
 
-    /// The same seek loop as the fjall backend's `SkipIterator`, over the
-    /// map: examine the next candidate, peek its polarity from the value,
-    /// let `check_key_for_bitemporal` decide and give the re-seek bound,
-    /// then on the Ok path advance strictly past the examined key — with a
-    /// byte-successor fallback so hostile stored bytes cannot livelock the
-    /// scan. A corrupt key or value is surfaced as Err WITHOUT advancing
-    /// (the contract's rule); engine callers stop at the first Err.
+    /// The bitemporal skip-scan walk, inherited whole from
+    /// [`crate::storage::skip_walk`]: this backend contributes only the
+    /// [`SkipSeek`] impl below (a single `BTreeMap::range` probe), never the
+    /// walk itself.
     fn range_skip_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut next_bound = lower.to_vec();
-        let upper = upper.to_vec();
-        Box::new(std::iter::from_fn(move || {
-            loop {
-                if next_bound.as_slice() >= upper.as_slice() {
-                    return None;
-                }
-                let (k, v) = match self
-                    .map
-                    .range::<[u8], _>((
-                        Bound::Included(next_bound.as_slice()),
-                        Bound::Excluded(upper.as_slice()),
-                    ))
-                    .next()
-                {
-                    None => return None,
-                    Some((k, v)) => (k.clone(), v.clone()),
-                };
-                let polarity = match claim_polarity_of_value(&v) {
-                    Ok(p) => p,
-                    Err(e) => return Some(Err(e)),
-                };
-                let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, as_of, None) {
-                    Ok(pair) => pair,
-                    Err(e) => return Some(Err(e)),
-                };
-                // Strict advance past the examined key, whatever the bytes.
-                next_bound = if nxt_bound.as_slice() > k.as_slice() {
-                    nxt_bound
-                } else {
-                    let mut succ = k;
-                    succ.push(0);
-                    succ
-                };
-                if let Some(mut tup) = ret {
-                    if let Err(e) = extend_tuple_from_bitemporal_v(&mut tup, &v) {
-                        return Some(Err(e));
-                    }
-                    return Some(Ok(tup));
-                }
-            }
-        }))
+        Box::new(SkipWalk::new(self, lower, upper, as_of))
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
         Box::new(self.map.iter().map(|(k, v)| Ok((k.clone(), v.clone()))))
+    }
+}
+
+impl SkipSeek for TempTx {
+    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        if lower >= upper {
+            // Degenerate bounds denote the empty interval, same as
+            // `range_scan` above (`BTreeMap::range` would panic on start > end).
+            return None;
+        }
+        self.map
+            .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
+            .next()
+            .map(|(k, v)| Ok((k.clone(), v.clone())))
     }
 }
 

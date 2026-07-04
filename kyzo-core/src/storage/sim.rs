@@ -92,11 +92,9 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use miette::{Result, miette};
 
-use crate::data::bitemporal::{
-    check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
-};
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
+use crate::storage::skip_walk::{SkipSeek, SkipWalk};
 use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
@@ -738,9 +736,10 @@ impl SimWriteTx {
     /// `BTreeMap`, then overlay writes" `visible` used to do. That eager
     /// build cost O(range size) per call regardless of how many items the
     /// caller actually consumes — the same catastrophic shape
-    /// `SimReadTx::range_scan` had (see its doc comment): `SimSkipIter`
-    /// reopens a fresh range at every seek step and drops all but the first
-    /// item, so an O(n)-key skip scan paid O(n²) here too, on the ordinary
+    /// `SimReadTx::range_scan` had (see its doc comment): the skip walk's
+    /// `SkipSeek` impl below reopens a fresh range at every seek step and
+    /// drops all but the first item, so an O(n)-key skip scan paid O(n²)
+    /// here too, on the ordinary
     /// "insert/update from a Datalog query" write-lock script path
     /// (`runtime/db.rs` routes every write-lock script's WHOLE query body
     /// through a `SimWriteTx`, so any recursive/skip-scanning read inside
@@ -812,7 +811,7 @@ impl SimWriteTx {
     /// write set overlaid, tombstones erased. Eager (used only by
     /// `del_range`, which must collect the doomed keys before mutating
     /// `self.writes` anyway — a single pass over the range, not the
-    /// per-seek-step reopening `range_skip_scan_tuple` does).
+    /// per-seek-step reopening the skip walk's `SkipSeek` impl does).
     fn visible(&self, lower: &[u8], upper: Option<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
         self.visible_lazy(lower, upper).collect()
     }
@@ -929,56 +928,42 @@ impl SimWriteTx {
     }
 }
 
-/// The validity-aware seek loop, written once against the `ReadTx` surface:
-/// each step opens a fresh range at the bound `check_key_for_bitemporal`
-/// returns. On a write transaction each step's `range_scan` records a read
-/// range — the "conservatively coarse, one per seek step" tracking the
-/// contract documents. Same termination guard as the real backend: the seek
-/// bound advances strictly past the examined key, whatever the bytes say.
-struct SimSkipIter<'a, T: ReadTx + ?Sized> {
-    tx: &'a T,
-    upper: Vec<u8>,
-    as_of: AsOf,
-    next_bound: Vec<u8>,
+/// [`SkipSeek`] for [`SimReadTx`]: the one seam the driver needs, inlining
+/// exactly what `range_scan` already does per call (yield to the scheduler,
+/// roll the read-fault die) so the skip walk keeps participating in DST
+/// scheduling and fault injection PER SEEK STEP — losing that would silently
+/// narrow the fault surface the sim exists to stress — while no longer
+/// boxing through `range_scan` itself (issue #78's phase-2 map).
+impl SkipSeek for SimReadTx {
+    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        self.ctx.yield_turn();
+        if let Err(e) = self
+            .ctx
+            .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
+        {
+            return Some(Err(e));
+        }
+        map_range(&self.snapshot, lower, Some(upper))
+            .next()
+            .map(|(k, v)| Ok((k.clone(), v.clone())))
+    }
 }
 
-impl<T: ReadTx + ?Sized> Iterator for SimSkipIter<'_, T> {
-    type Item = Result<Tuple>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.next_bound.as_slice() >= self.upper.as_slice() {
-                return None;
-            }
-            let mut range = self.tx.range_scan(&self.next_bound, &self.upper);
-            let (k, v) = match range.next() {
-                None => return None,
-                Some(Err(e)) => return Some(Err(e)),
-                Some(Ok(kv)) => kv,
-            };
-            drop(range);
-            let polarity = match claim_polarity_of_value(&v) {
-                Ok(p) => p,
-                Err(e) => return Some(Err(e)),
-            };
-            let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, self.as_of, None) {
-                Ok(pair) => pair,
-                Err(e) => return Some(Err(e)),
-            };
-            self.next_bound = if nxt_bound.as_slice() > k.as_slice() {
-                nxt_bound
-            } else {
-                let mut succ = k.clone();
-                succ.push(0);
-                succ
-            };
-            if let Some(mut tup) = ret {
-                if let Err(e) = extend_tuple_from_bitemporal_v(&mut tup, &v) {
-                    return Some(Err(e));
-                }
-                return Some(Ok(tup));
-            }
+/// [`SkipSeek`] for [`SimWriteTx`]: same shape as [`SimReadTx`]'s plus the
+/// conservative "one per seek step" range tracking the contract documents
+/// for as-of scans inside write transactions, over the lazy visible-range
+/// cursor (snapshot merged with this transaction's own writes).
+impl SkipSeek for SimWriteTx {
+    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        self.ctx.yield_turn();
+        self.track_range(lower, Some(upper));
+        if let Err(e) = self
+            .ctx
+            .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
+        {
+            return Some(Err(e));
         }
+        self.visible_lazy(lower, Some(upper)).next().map(Ok)
     }
 }
 
@@ -1011,10 +996,10 @@ impl ReadTx for SimReadTx {
         // element as it's pulled costs O(1) amortized per item. The
         // predecessor's `.collect()` into a `Vec` up front made every call
         // O(remaining range size) regardless of how many items the caller
-        // actually consumes — catastrophic under `SimSkipIter`, which opens
-        // a fresh `range_scan` at every seek step and consumes only the
-        // FIRST item (`range.next()` then `drop(range)`): an O(n) skip
-        // scan over a range of n keys paid O(n²) total instead of O(n).
+        // actually consumes — catastrophic under the skip walk's `SkipSeek`
+        // impl below, which opens a fresh range at every seek step and
+        // consumes only the FIRST item: an O(n) skip scan over a range of
+        // n keys paid O(n²) total instead of O(n).
         Box::new(
             map_range(&self.snapshot, lower, Some(upper)).map(|(k, v)| Ok((k.clone(), v.clone()))),
         )
@@ -1026,12 +1011,7 @@ impl ReadTx for SimReadTx {
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(SimSkipIter {
-            tx: self,
-            upper: upper.to_vec(),
-            as_of,
-            next_bound: lower.to_vec(),
-        })
+        Box::new(SkipWalk::new(self, lower, upper, as_of))
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
@@ -1093,12 +1073,7 @@ impl ReadTx for SimWriteTx {
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(SimSkipIter {
-            tx: self,
-            upper: upper.to_vec(),
-            as_of,
-            next_bound: lower.to_vec(),
-        })
+        Box::new(SkipWalk::new(self, lower, upper, as_of))
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {

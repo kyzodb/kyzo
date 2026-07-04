@@ -47,11 +47,9 @@ use fjall::{
 };
 use miette::{Result, bail, miette};
 
-use crate::data::bitemporal::{
-    check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
-};
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
+use crate::storage::skip_walk::{SkipSeek, SkipWalk};
 use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
 
 const KEYSPACE_NAME: &str = "kyzo";
@@ -466,19 +464,19 @@ macro_rules! impl_read_tx {
                 upper: &[u8],
                 as_of: AsOf,
             ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-                Box::new(SkipIterator {
-                    reader: &self.$reader,
-                    ks: &self.ks,
-                    upper: upper.to_vec(),
-                    as_of,
-                    next_bound: lower.to_vec(),
-                })
+                Box::new(SkipWalk::new(self, lower, upper, as_of))
             }
 
             fn total_scan<'a>(
                 &'a self,
             ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
                 read_total_scan(&self.$reader, &self.ks)
+            }
+        }
+
+        impl SkipSeek for $ty {
+            fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+                raw_range(&self.$reader, &self.ks, lower, upper).next()
             }
         }
     };
@@ -546,65 +544,5 @@ impl WriteTx for FjallWriteTx {
         self.commit()?;
         db.persist(fjall::PersistMode::SyncAll)
             .map_err(|e| miette!("fjall sync: {e}"))
-    }
-}
-
-/// Bitemporal skip scan: seek to the next candidate key, peek the row's
-/// polarity from its value, decide with `check_key_for_bitemporal`,
-/// re-seek at the bound it returns. A corrupt key or value is surfaced as
-/// `Err` WITHOUT advancing (the contract's rule): every subsequent poll
-/// re-yields it, so the scan cannot step over bytes it could not judge.
-struct SkipIterator<'a, R: Readable> {
-    reader: &'a R,
-    ks: &'a OptimisticTxKeyspace,
-    upper: Vec<u8>,
-    as_of: AsOf,
-    next_bound: Vec<u8>,
-}
-
-impl<R: Readable> Iterator for SkipIterator<'_, R> {
-    type Item = Result<Tuple>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.next_bound.as_slice() >= self.upper.as_slice() {
-                return None;
-            }
-            let mut range = raw_range(self.reader, self.ks, &self.next_bound, &self.upper);
-            let (k, v) = match range.next() {
-                None => return None,
-                Some(Err(e)) => return Some(Err(e)),
-                Some(Ok(kv)) => kv,
-            };
-            drop(range);
-            let polarity = match claim_polarity_of_value(&v) {
-                Ok(p) => p,
-                Err(e) => return Some(Err(e)),
-            };
-            let (ret, nxt_bound) = match check_key_for_bitemporal(&k, polarity, self.as_of, None) {
-                Ok(pair) => pair,
-                Err(e) => return Some(Err(e)),
-            };
-            // Termination guarantee: the seek bound must advance STRICTLY
-            // past the key just examined, whatever the stored bytes
-            // contain. Every bound the kernel returns for a parseable key
-            // already advances strictly (its slot flags are pinned, so no
-            // stored key can equal a TERMINAL splice); the byte-successor
-            // of k (k ++ 0x00, the smallest key strictly greater) is
-            // belt-and-braces against bytes no argument anticipated.
-            self.next_bound = if nxt_bound.as_slice() > k.as_slice() {
-                nxt_bound
-            } else {
-                let mut succ = k.clone();
-                succ.push(0);
-                succ
-            };
-            if let Some(mut tup) = ret {
-                if let Err(e) = extend_tuple_from_bitemporal_v(&mut tup, &v) {
-                    return Some(Err(e));
-                }
-                return Some(Ok(tup));
-            }
-        }
     }
 }
