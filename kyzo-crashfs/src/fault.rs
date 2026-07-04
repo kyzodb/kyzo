@@ -131,6 +131,19 @@ impl Counters {
         *entry += 1;
         *entry
     }
+
+    /// Peek the current (1-indexed) count for `(path, op)` without bumping
+    /// it — `0` if it has never occurred. A campaign driver's hook: run a
+    /// fault-free recorder pass, sample this after each logical step to
+    /// learn which occurrence count coincides with which durability
+    /// barrier, then arm an exact [`Trigger`] for that count in a later,
+    /// faulted run.
+    pub fn count(&self, path: &str, op: OpKind) -> u64 {
+        self.counts
+            .get(&(path.to_string(), op))
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 /// `*`-only glob match (no `?`, no character classes — the vocabulary the

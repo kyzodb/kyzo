@@ -30,8 +30,8 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use fuser::consts::FOPEN_DIRECT_IO;
@@ -109,6 +109,26 @@ impl InodeTable {
     }
 }
 
+/// A shareable read handle onto one mount's live [`Counters`], obtained via
+/// [`PassthroughFs::shared_counters`] *before* the filesystem is handed to
+/// `fuser::spawn_mount2` (which takes it by value) — the seam a campaign
+/// driver needs to sample "how many fsyncs has this path seen so far" while
+/// a mount is running, without owning the filesystem itself.
+#[derive(Clone)]
+pub struct FaultCounters(Arc<Mutex<Counters>>);
+
+impl FaultCounters {
+    /// The current fsync count for `rel_path` (`0` if it has never fired).
+    pub fn fsync_count(&self, rel_path: &str) -> u64 {
+        self.0.lock().unwrap().count(rel_path, OpKind::Fsync)
+    }
+
+    /// The current write count for `rel_path` (`0` if it has never fired).
+    pub fn write_count(&self, rel_path: &str) -> u64 {
+        self.0.lock().unwrap().count(rel_path, OpKind::Write)
+    }
+}
+
 /// The FUSE passthrough fault injector. One instance per mount; `plan`
 /// (and therefore every fault decision made through it) is fixed for the
 /// instance's lifetime — a fresh campaign is a fresh instance.
@@ -118,7 +138,7 @@ pub struct PassthroughFs {
     inodes: Mutex<InodeTable>,
     handles: Mutex<HashMap<u64, Handle>>,
     next_fh: AtomicU64,
-    counters: Mutex<Counters>,
+    counters: Arc<Mutex<Counters>>,
 }
 
 impl PassthroughFs {
@@ -129,8 +149,19 @@ impl PassthroughFs {
             inodes: Mutex::new(InodeTable::new()),
             handles: Mutex::new(HashMap::new()),
             next_fh: AtomicU64::new(1),
-            counters: Mutex::new(Counters::default()),
+            counters: Arc::new(Mutex::new(Counters::default())),
         }
+    }
+
+    /// A cloneable read handle onto this instance's live fsync/write
+    /// counters. Call this **before** handing `self` to
+    /// `fuser::spawn_mount2` (which consumes it), so a campaign driver
+    /// retains a way to sample counts while the mount is running — the
+    /// two-pass crash-matrix design (`kyzo-core`'s `storage::crash_matrix`)
+    /// records a fault-free run's counts this way, then arms an exact
+    /// [`crate::fault::Trigger`] for a later, faulted run.
+    pub fn shared_counters(&self) -> FaultCounters {
+        FaultCounters(Arc::clone(&self.counters))
     }
 
     fn real_path(&self, rel: &Path) -> PathBuf {

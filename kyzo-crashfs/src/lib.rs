@@ -61,7 +61,8 @@
 //!    result on its own, not a reason to inflate seeds looking for a hit.
 
 pub mod fault;
+pub mod harness;
 pub mod passthrough;
 
 pub use fault::{AmbientRates, Counters, Fault, FaultPlan, OpKind, Trigger, WriteOutcome};
-pub use passthrough::PassthroughFs;
+pub use passthrough::{FaultCounters, PassthroughFs};

@@ -9,77 +9,29 @@
 //! `user_allow_other`, no setuid `fusermount` — every test in this file is
 //! skipped with a printed reason rather than failing the run, since mount
 //! availability is an environment property, not a defect in the injector.
-//! `mount_probe::can_mount` is the single detector all three tests share.
+//! [`kyzo_crashfs::harness::can_mount`] is the single detector all three
+//! tests share (moved into the library so `kyzo-core`'s crash-matrix
+//! harness, story #31 phase 2, can reuse it rather than re-implementing
+//! the same mount/skip dance).
 
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::time::Duration;
 
+use kyzo_crashfs::harness::{can_mount, mount as harness_mount, wait_for_mount};
 use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
-mod mount_probe {
-    use std::fs;
-    use std::path::Path;
-    use std::process::Command;
-
-    /// Best-effort live-mount capability check: `/dev/fuse` must exist and
-    /// be openable, and a `fusermount`-family binary must be on `PATH` (the
-    /// pure-Rust mount path tries a raw `mount(2)` first and falls back to
-    /// shelling out to the setuid helper — see `fuser`'s `fuse_pure.rs`).
-    /// Not a guarantee a real mount will succeed (namespaces, seccomp, and
-    /// AppArmor profiles can all still refuse it) — actual mount success
-    /// is re-checked per test and reported honestly either way.
-    pub fn can_mount() -> bool {
-        if !Path::new("/dev/fuse").exists() {
-            return false;
-        }
-        if fs::metadata("/dev/fuse").is_err() {
-            return false;
-        }
-        ["fusermount3", "fusermount"]
-            .iter()
-            .any(|bin| Command::new(bin).arg("-V").output().is_ok())
-    }
-}
-
+/// This file's own thin wrapper: build the fault-injecting filesystem and
+/// hand it to the shared [`harness::mount`](kyzo_crashfs::harness::mount).
 fn mount(backing: &Path, mountpoint: &Path, plan: FaultPlan) -> Option<fuser::BackgroundSession> {
-    let fs = PassthroughFs::new(backing, plan);
-    match fuser::spawn_mount2(fs, mountpoint, &[]) {
-        Ok(session) => Some(session),
-        Err(e) => {
-            eprintln!(
-                "SKIPPED (environment limitation, not an injector defect): \
-                 FUSE mount failed: {e}. This sandbox lacks live-mount \
-                 capability (no /dev/fuse access, no user_allow_other, or \
-                 policy-restricted mount(2)/fusermount) — the fault-decision \
-                 logic is proven independently by src/fault.rs's unit tests \
-                 (10/10 passing), which is the fallback path story #31 \
-                 names for exactly this situation."
-            );
-            None
-        }
-    }
-}
-
-/// Give the kernel a moment to settle the mount before the first op; a
-/// bare `spawn_mount2` return does not guarantee the mountpoint is already
-/// resolvable by a fresh process — in practice it always is on Linux, but
-/// this loop makes the test robust rather than racy.
-fn wait_for_mount(mountpoint: &Path) {
-    for _ in 0..50 {
-        if fs::read_dir(mountpoint).is_ok() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    harness_mount(PassthroughFs::new(backing, plan), mountpoint)
 }
 
 #[test]
 fn clear_cache_implements_the_power_cut_model() {
-    if !mount_probe::can_mount() {
+    if !can_mount() {
         eprintln!(
-            "SKIPPED: no live FUSE mount capability in this sandbox (see mount_probe::can_mount)."
+            "SKIPPED: no live FUSE mount capability in this sandbox (see kyzo_crashfs::harness::can_mount)."
         );
         return;
     }
@@ -132,9 +84,9 @@ fn clear_cache_implements_the_power_cut_model() {
 
 #[test]
 fn torn_op_splits_a_write_at_the_seed_dictated_point() {
-    if !mount_probe::can_mount() {
+    if !can_mount() {
         eprintln!(
-            "SKIPPED: no live FUSE mount capability in this sandbox (see mount_probe::can_mount)."
+            "SKIPPED: no live FUSE mount capability in this sandbox (see kyzo_crashfs::harness::can_mount)."
         );
         return;
     }
@@ -209,9 +161,9 @@ fn read_your_own_write_survives_pre_fsync_through_the_live_mount() {
     // durability boundary. This guards against an injector bug where the
     // read-overlay is missing and every read appears to silently rewind
     // to the last fsync even while the process is still running.
-    if !mount_probe::can_mount() {
+    if !can_mount() {
         eprintln!(
-            "SKIPPED: no live FUSE mount capability in this sandbox (see mount_probe::can_mount)."
+            "SKIPPED: no live FUSE mount capability in this sandbox (see kyzo_crashfs::harness::can_mount)."
         );
         return;
     }
