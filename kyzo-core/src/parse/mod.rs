@@ -868,6 +868,28 @@ fn skip_quoted_string(b: &[u8], mut i: usize) -> usize {
     b.len()
 }
 
+/// Skip a single-quoted string body: opener `'` at `b[i]`, terminated by
+/// an UNESCAPED `'` — `s_quoted_string`'s real semantics (never touched by
+/// story #93's fence change, since that was a `"`-vs-`raw_string`
+/// collision only; single-quoted strings share `skip_quoted_string`'s
+/// escape rule but not its terminator byte). Shared for the same reason
+/// as [`skip_raw_string`]/[`skip_quoted_string`]: one string-skip
+/// primitive per quote form, used by every scanner that needs to walk
+/// past one, so a future grammar change to what counts as an escape has
+/// exactly one place to change instead of N scanners that can silently
+/// disagree.
+fn skip_single_quoted_string(b: &[u8], mut i: usize) -> usize {
+    i += 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'\'' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    b.len()
+}
+
 /// Every comment in `src`, in source order, with its own span and literal
 /// text (delimiters included — `#...` or `/* ... */` — so a consumer never
 /// re-synthesizes comment syntax). A second, independent walk of the raw
@@ -924,17 +946,7 @@ pub(crate) fn scan_comments(src: &str) -> Vec<Comment> {
                 prev_wordish = false;
             }
             b'\'' => {
-                i += 1;
-                while i < n {
-                    match b[i] {
-                        b'\\' => i += 2,
-                        b'\'' => {
-                            i += 1;
-                            break;
-                        }
-                        _ => i += 1,
-                    }
-                }
+                i = skip_single_quoted_string(b, i);
                 prev_wordish = false;
             }
             b'"' => {
@@ -1067,18 +1079,8 @@ pub(crate) fn reject_excessive_nesting(src: &str) -> Result<(), NestingTooDeep> 
             }
             b'\'' => {
                 // Single-quoted string: backslash escapes its next char.
+                i = skip_single_quoted_string(b, i);
                 prev_wordish = false;
-                i += 1;
-                while i < n {
-                    match b[i] {
-                        b'\\' => i += 2,
-                        b'\'' => {
-                            i += 1;
-                            break;
-                        }
-                        _ => i += 1,
-                    }
-                }
             }
             b'"' => {
                 // Fenceless double-quoted string: `quoted_string` (story
