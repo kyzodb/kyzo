@@ -65,10 +65,11 @@ use base64::engine::general_purpose::STANDARD;
 use crate::data::aggr::Aggregation;
 use crate::data::expr::{Expr, LazyOp};
 use crate::data::program::{
-    DeltaAxis, FixedRuleApply, FixedRuleArg, InputAtom, InputInlineRule, InputInlineRulesOrFixed,
-    InputNamedFieldRelationApplyAtom, InputProgram, InputRelationApplyAtom, InputRelationHandle,
-    InputRuleApplyAtom, QueryAssertion, QueryOutOptions, RelationOp, ReturnMutation, SearchInput,
-    Unification, ValidityClause, WriteValidity,
+    Comment, DeltaAxis, FixedRuleApply, FixedRuleArg, InputAtom, InputInlineRule,
+    InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
+    InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
+    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, Unification, ValidityClause,
+    WriteValidity,
 };
 use crate::data::relation::ColumnDef;
 use crate::data::symb::Symbol;
@@ -78,21 +79,67 @@ use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, Num, ValidityTs, Vect
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Render one program to its canonical KyzoScript source text. The entry
-/// rule prints first (every hand-written query in this tree leads with
-/// `?` — the existing `Display for InputProgram` in `data/program.rs`
-/// prints it last, but that ordering is documented there as "cosmetic,
-/// nothing re-parses it"; this module is free to, and does, choose the
-/// more idiomatic order), then every other rule sorted by name (the
-/// `BTreeMap` this program already stores them in), then the `:options`.
+/// Whether a render also emits comment trivia. `Bare` is what
+/// [`format_program`] always uses: the trivia-blind canonical form
+/// `parse::mod`'s own guardrail test
+/// (`comments_do_not_change_a_program_s_meaning`) depends on staying
+/// byte-identical whether or not the source had comments in it — this
+/// mode must never read a `trivia` field. `WithComments`
+/// ([`format_program_with_comments`]) is the same rendering with trivia
+/// placed back where it was captured from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TriviaMode {
+    Bare,
+    WithComments,
+}
+
+/// Render one program to its canonical KyzoScript source text — comments
+/// dropped (see [`format_program_with_comments`] for the trivia-preserving
+/// twin; both share every non-trivia rendering decision below, so they can
+/// never disagree about what the *meaning* prints as). The entry rule
+/// prints first (every hand-written query in this tree leads with `?` —
+/// the existing `Display for InputProgram` in `data/program.rs` prints it
+/// last, but that ordering is documented there as "cosmetic, nothing
+/// re-parses it"; this module is free to, and does, choose the more
+/// idiomatic order), then every other rule sorted by name (the `BTreeMap`
+/// this program already stores them in), then the `:options`.
 pub(crate) fn format_program(prog: &InputProgram) -> String {
+    format_program_inner(prog, TriviaMode::Bare)
+}
+
+/// [`format_program`]'s canonical text, with every comment the parser
+/// captured ([`crate::data::program::Trivia`]) rendered back: leading
+/// comments each on their own line immediately before the rule/fixed-rule
+/// application they attached to, trailing comments appended (space-
+/// separated) on that construct's own output line, and the whole
+/// program's leading/trailing overflow trivia at the very start/end.
+pub(crate) fn format_program_with_comments(prog: &InputProgram) -> String {
+    format_program_inner(prog, TriviaMode::WithComments)
+}
+
+fn format_program_inner(prog: &InputProgram, mode: TriviaMode) -> String {
     let mut out = String::new();
-    write_ruleset(prog.entry_name(), prog.entry(), &mut out);
+    if mode == TriviaMode::WithComments {
+        write_comment_lines(&prog.leading_trivia, &mut out);
+    }
+    write_ruleset(prog.entry_name(), prog.entry(), mode, &mut out);
     for (name, ruleset) in prog.rules() {
-        write_ruleset(name, ruleset, &mut out);
+        write_ruleset(name, ruleset, mode, &mut out);
     }
     write_out_opts(prog.out_opts(), prog.disable_magic_rewrite(), &mut out);
+    if mode == TriviaMode::WithComments {
+        write_comment_lines(&prog.trailing_trivia, &mut out);
+    }
     out
+}
+
+/// Every comment, verbatim (delimiters already in `Comment::text`), one
+/// per line, in source order.
+fn write_comment_lines(comments: &[Comment], out: &mut String) {
+    for c in comments {
+        out.push_str(&c.text);
+        out.push('\n');
+    }
 }
 
 /// Render one expression alone (no program around it) — the unit the
@@ -104,15 +151,43 @@ pub(crate) fn format_expr(e: &Expr) -> String {
     out
 }
 
-fn write_ruleset(name: &Symbol, ruleset: &InputInlineRulesOrFixed, out: &mut String) {
+fn write_ruleset(
+    name: &Symbol,
+    ruleset: &InputInlineRulesOrFixed,
+    mode: TriviaMode,
+    out: &mut String,
+) {
     match ruleset {
         InputInlineRulesOrFixed::Rules { rules } => {
             for rule in rules {
+                if mode == TriviaMode::WithComments {
+                    write_comment_lines(&rule.trivia.leading, out);
+                }
                 write_inline_rule(name, rule, out);
+                finish_construct_line(mode, &rule.trivia.trailing, out);
             }
         }
-        InputInlineRulesOrFixed::Fixed { fixed } => write_fixed_rule(name, fixed, out),
+        InputInlineRulesOrFixed::Fixed { fixed } => {
+            if mode == TriviaMode::WithComments {
+                write_comment_lines(&fixed.trivia.leading, out);
+            }
+            write_fixed_rule(name, fixed, out);
+            finish_construct_line(mode, &fixed.trivia.trailing, out);
+        }
     }
+}
+
+/// Closes one rule/fixed-rule's output line: its trailing comments
+/// (space-separated, in `WithComments` mode only), then the newline every
+/// construct ends on regardless of mode.
+fn finish_construct_line(mode: TriviaMode, trailing: &[Comment], out: &mut String) {
+    if mode == TriviaMode::WithComments {
+        for c in trailing {
+            out.push(' ');
+            out.push_str(&c.text);
+        }
+    }
+    out.push('\n');
 }
 
 fn write_inline_rule(name: &Symbol, rule: &InputInlineRule, out: &mut String) {
@@ -131,7 +206,7 @@ fn write_inline_rule(name: &Symbol, rule: &InputInlineRule, out: &mut String) {
         }
         write_conjunct_member(atom, out);
     }
-    out.push_str(";\n");
+    out.push(';');
 }
 
 fn write_head_arg(head: &Symbol, aggr: Option<&(Aggregation, Vec<DataValue>)>, out: &mut String) {
@@ -179,7 +254,7 @@ fn write_fixed_rule(name: &Symbol, fixed: &FixedRuleApply, out: &mut String) {
         out.push_str(": ");
         write_expr(v, out);
     }
-    out.push_str(");\n");
+    out.push_str(");");
 }
 
 fn write_fixed_rule_arg(arg: &FixedRuleArg, out: &mut String) {

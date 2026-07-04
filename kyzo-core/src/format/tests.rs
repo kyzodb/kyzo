@@ -33,11 +33,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::data::program::Comment;
 use crate::data::value::{DataValue, current_validity};
-use crate::fixed_rule::FixedRule;
+use crate::fixed_rule::{FixedRule, SimpleFixedRule};
 use crate::parse::{Script, parse_expressions, parse_script};
 
-use super::{format_expr, format_program};
+use super::{format_expr, format_program, format_program_with_comments};
 
 // ─────────────────────────────────────────────────────────────────────────
 // splitmix64 (see module doc: independently transcribed, not reused)
@@ -147,6 +148,47 @@ fn assert_program_round_trips(src: &str) -> String {
         "round-trip changed meaning:\n{src}\n---formatted to--->\n{formatted}"
     );
     let formatted_again = format_program(&reparsed);
+    assert_eq!(
+        formatted, formatted_again,
+        "not idempotent:\n{formatted}\n---formatted again to--->\n{formatted_again}"
+    );
+    formatted
+}
+
+fn comment_texts(comments: &[Comment]) -> Vec<&str> {
+    comments.iter().map(|c| c.text.as_str()).collect()
+}
+
+/// Same shape as [`assert_program_round_trips`], but through
+/// [`format_program_with_comments`]. The derived `Debug` chain includes
+/// every `InputInlineRule`'s `trivia` field and the whole-program
+/// `leading_trivia`/`trailing_trivia`, so the same span-blind comparison
+/// that proves "same tree" for the bare formatter also proves "the same
+/// comments are attached to the same nodes" here — no separate trivia
+/// comparator needed. (`FixedRuleApply`'s hand-written `Debug` omits
+/// `trivia`, so that one node kind is NOT covered by this oracle; see
+/// `fixed_rule_trivia_round_trips` below, which checks it directly.)
+fn assert_program_with_comments_round_trips(src: &str) -> String {
+    let cur_vld = current_validity().expect("current validity");
+    let prog = match parse_script(src, &no_params(), &no_fixed_rules(), cur_vld) {
+        Ok(Script::Single(p)) => *p,
+        Ok(_) => panic!("fixture `{src}` is not a single-query script"),
+        Err(e) => panic!("fixture must itself parse: {src}\n{e}"),
+    };
+    let formatted = format_program_with_comments(&prog);
+    let reparsed = match parse_script(&formatted, &no_params(), &no_fixed_rules(), cur_vld) {
+        Ok(Script::Single(p)) => *p,
+        Ok(_) => panic!("formatter changed script species:\n{formatted}"),
+        Err(e) => panic!(
+            "format produced unparseable text for:\n{src}\n---formatted to--->\n{formatted}\n{e}"
+        ),
+    };
+    assert_eq!(
+        debug_no_spans(&format!("{prog:?}")),
+        debug_no_spans(&format!("{reparsed:?}")),
+        "round-trip changed meaning or lost/misattached a comment:\n{src}\n---formatted to--->\n{formatted}"
+    );
+    let formatted_again = format_program_with_comments(&reparsed);
     assert_eq!(
         formatted, formatted_again,
         "not idempotent:\n{formatted}\n---formatted again to--->\n{formatted_again}"
@@ -287,6 +329,146 @@ fn create_relation_option_round_trips() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Comment preservation (story #92's non-waivable DoD bullet, unblocked by
+// story #30's grammar+AST trivia capture). Each case here mirrors one of
+// `parse::mod`'s own trivia-attachment tests, checked from the OTHER end:
+// not "did the parser attach the comment correctly" (that's proven there)
+// but "does the formatter put it back exactly where it round-trips".
+// ─────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn leading_comment_round_trips() {
+    let out = assert_program_with_comments_round_trips("# a leading comment\n?[a] := *n[a];\n");
+    assert!(out.contains("# a leading comment"));
+}
+
+#[test]
+fn multiple_leading_comments_round_trip_in_order() {
+    let out = assert_program_with_comments_round_trips(
+        "# first\n# second\n/* third */\n?[a] := *n[a];\n",
+    );
+    let first = out.find("# first").expect("first comment present");
+    let second = out.find("# second").expect("second comment present");
+    let third = out.find("/* third */").expect("third comment present");
+    assert!(
+        first < second && second < third,
+        "comments out of order:\n{out}"
+    );
+}
+
+#[test]
+fn trailing_comment_round_trips_on_its_own_line() {
+    let out = assert_program_with_comments_round_trips("?[a] := *n[a]; # trailing\n");
+    assert!(out.contains("*n[a]; # trailing"), "got:\n{out}");
+}
+
+/// Two rules, each keeps only its own neighboring comments — the BTreeMap's
+/// alphabetical key order must not scramble which comment goes with which
+/// rule (the same law `parse::mod`'s `each_rule_gets_its_own_neighboring_
+/// comments` proves on the parse side).
+#[test]
+fn each_rule_keeps_its_own_comments_through_a_format_round_trip() {
+    let out = assert_program_with_comments_round_trips(
+        "# leads helper\nhelper[a] := *n[a]; # trails helper\n# leads entry\n?[a] := helper[a];\n",
+    );
+    assert!(out.contains("# leads helper"));
+    assert!(out.contains("# trails helper"));
+    assert!(out.contains("# leads entry"));
+    // "leads helper" must still precede helper's own rule DEFINITION (not
+    // the entry's "helper[a]" reference to it, which also contains the
+    // substring "helper[" and — since this formatter renders the entry
+    // FIRST — sits earlier in the output), and "leads entry" must still
+    // precede the entry: even though the formatter reorders rules, a
+    // misattachment that swapped the two comments would fail this.
+    let leads_helper = out.find("# leads helper").unwrap();
+    let helper_rule = out.find("helper[a] := *n[a]").unwrap();
+    let leads_entry = out.find("# leads entry").unwrap();
+    let entry_rule = out.find("?[a] := helper[a]").unwrap();
+    assert!(leads_helper < helper_rule, "got:\n{out}");
+    assert!(leads_entry < entry_rule, "got:\n{out}");
+}
+
+#[test]
+fn whole_program_trailing_comment_round_trips() {
+    let out = assert_program_with_comments_round_trips("?[a] := *n[a];\n# a footer comment\n");
+    assert!(
+        out.trim_end().ends_with("# a footer comment"),
+        "got:\n{out}"
+    );
+}
+
+/// The guardrail `parse::mod`'s own test pins from the parser side
+/// (`comments_do_not_change_a_program_s_meaning`): the SAME program, with
+/// and without comments, must format to byte-identical text through the
+/// trivia-BLIND [`format_program`] — this is that guarantee's mirror,
+/// checked from the formatter's own test file rather than only trusted
+/// from the parser's.
+#[test]
+fn bare_format_is_unaffected_by_comments() {
+    let bare = "h[a] := *n[a];\n?[a] := h[a];\n";
+    let commented = "# header\nh[a] := *n[a]; # trails h\n# leads entry\n?[a] := h[a];\n# footer\n";
+    let cur_vld = current_validity().expect("current validity");
+    let bare_prog = match parse_script(bare, &no_params(), &no_fixed_rules(), cur_vld) {
+        Ok(Script::Single(p)) => *p,
+        other => panic!("fixture must parse: {other:?}"),
+    };
+    let commented_prog = match parse_script(commented, &no_params(), &no_fixed_rules(), cur_vld) {
+        Ok(Script::Single(p)) => *p,
+        other => panic!("fixture must parse: {other:?}"),
+    };
+    assert_eq!(format_program(&bare_prog), format_program(&commented_prog));
+}
+
+/// `FixedRuleApply`'s hand-written `Debug` (in `data/program.rs`) omits
+/// `trivia`, so `assert_program_with_comments_round_trips`'s derived-Debug
+/// oracle cannot see this node kind at all — checked directly here
+/// instead, against a trivially-registered `SimpleFixedRule` (never
+/// actually run; parsing only needs its name and arity to resolve).
+#[test]
+fn fixed_rule_trivia_round_trips() {
+    let mut fixed_rules: BTreeMap<String, Arc<dyn FixedRule>> = BTreeMap::new();
+    fixed_rules.insert(
+        "algo".to_string(),
+        Arc::new(SimpleFixedRule::new(1, |_inputs, _opts| {
+            unreachable!("fixed rule body never runs in a parse/format/reparse test")
+        })),
+    );
+    let src = "# leads algo\nh[a] <~ algo(); # trails algo\n?[a] := h[a];\n";
+    let cur_vld = current_validity().expect("current validity");
+    let prog = match parse_script(src, &no_params(), &fixed_rules, cur_vld) {
+        Ok(Script::Single(p)) => *p,
+        other => panic!("fixture must parse: {other:?}"),
+    };
+    let formatted = format_program_with_comments(&prog);
+    assert!(formatted.contains("# leads algo"), "got:\n{formatted}");
+    assert!(formatted.contains("# trails algo"), "got:\n{formatted}");
+    let reparsed = match parse_script(&formatted, &no_params(), &fixed_rules, cur_vld) {
+        Ok(Script::Single(p)) => *p,
+        other => panic!("format produced unparseable text:\n{formatted}\n{other:?}"),
+    };
+    let trivia = |p: &crate::data::program::InputProgram| match p
+        .rules()
+        .get(&crate::data::symb::Symbol::new(
+            "h",
+            crate::data::span::SourceSpan(0, 0),
+        ))
+        .expect("rule `h` present")
+    {
+        crate::data::program::InputInlineRulesOrFixed::Fixed { fixed } => fixed.trivia.clone(),
+        other => panic!("expected `h` as a fixed rule, got {other:?}"),
+    };
+    let orig = trivia(&prog);
+    let again = trivia(&reparsed);
+    assert_eq!(comment_texts(&orig.leading), comment_texts(&again.leading));
+    assert_eq!(
+        comment_texts(&orig.trailing),
+        comment_texts(&again.trailing)
+    );
+    let formatted_again = format_program_with_comments(&reparsed);
+    assert_eq!(formatted, formatted_again, "not idempotent");
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Property tests: random expressions, and random small programs.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -411,7 +593,12 @@ fn gen_atom(rng: &mut Rng, helpers: &[(String, u64)]) -> String {
     }
 }
 
-fn gen_program_text(rng: &mut Rng) -> String {
+/// `with_comments`: when true, sprinkles a leading comment before each
+/// rule/entry, a trailing comment on its own line, and a whole-program
+/// footer comment — each independently at 1-in-2 odds, so a given
+/// iteration exercises anywhere from zero comments up to every seat trivia
+/// can attach to.
+fn gen_program_text(rng: &mut Rng, with_comments: bool) -> String {
     let mut src = String::new();
     let n_helpers = rng.below(3);
     let mut helpers: Vec<(String, u64)> = Vec::new();
@@ -419,20 +606,36 @@ fn gen_program_text(rng: &mut Rng) -> String {
         let name = format!("h{i}");
         let arity = 1 + rng.below(2);
         let head: Vec<&str> = (0..arity).map(|j| VARS[j as usize]).collect();
+        if with_comments && rng.chance(1, 2) {
+            src.push_str(&format!("# leads {name}\n"));
+        }
         src.push_str(&format!(
-            "{name}[{}] := {};\n",
+            "{name}[{}] := {}",
             head.join(", "),
             gen_body(rng, &helpers)
         ));
+        src.push(';');
+        if with_comments && rng.chance(1, 2) {
+            src.push_str(&format!(" # trails {name}"));
+        }
+        src.push('\n');
         helpers.push((name, arity));
     }
     let entry_arity = 1 + rng.below(2);
     let head: Vec<&str> = (0..entry_arity).map(|j| VARS[j as usize]).collect();
+    if with_comments && rng.chance(1, 2) {
+        src.push_str("# leads entry\n");
+    }
     src.push_str(&format!(
-        "?[{}] := {};\n",
+        "?[{}] := {}",
         head.join(", "),
         gen_body(rng, &helpers)
     ));
+    src.push(';');
+    if with_comments && rng.chance(1, 2) {
+        src.push_str(" # trails entry");
+    }
+    src.push('\n');
     if rng.chance(1, 2) {
         src.push_str(&format!(":limit {};\n", rng.below(50) + 1));
     }
@@ -443,6 +646,9 @@ fn gen_program_text(rng: &mut Rng) -> String {
         let dir = if rng.chance(1, 2) { "-" } else { "" };
         src.push_str(&format!(":order {dir}{};\n", VARS[0]));
     }
+    if with_comments && rng.chance(1, 2) {
+        src.push_str("# a footer comment\n");
+    }
     src
 }
 
@@ -450,12 +656,22 @@ fn gen_program_text(rng: &mut Rng) -> String {
 fn program_property_round_trips() {
     let mut rng = Rng::new(0xFEED_FACE_u64);
     for i in 0..300 {
-        let src = gen_program_text(&mut rng);
+        let src = gen_program_text(&mut rng, false);
         // `assert_program_round_trips` panics with the source/formatted
         // text on any failure; the iteration count is folded into that
         // panic by generating fresh (seed-derived) text each time, so a
         // failing seed is exactly the printed `src`.
         let _ = i;
         assert_program_round_trips(&src);
+    }
+}
+
+#[test]
+fn program_with_comments_property_round_trips() {
+    let mut rng = Rng::new(0xC0DE_CAFE_u64);
+    for i in 0..300 {
+        let src = gen_program_text(&mut rng, true);
+        let _ = i;
+        assert_program_with_comments_round_trips(&src);
     }
 }
