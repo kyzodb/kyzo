@@ -60,6 +60,7 @@ use crate::data::aggr::parse_aggr;
 use crate::data::program::{
     InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
     MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
+    ValidityClause,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -136,7 +137,7 @@ fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        as_of: None,
+        validity: None,
         span: sp(),
     })
 }
@@ -144,7 +145,7 @@ fn rel_atom_asof(name: &str, args: &[Symbol], as_of: AsOf) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        as_of: Some(as_of),
+        validity: Some(ValidityClause::At(as_of)),
         span: sp(),
     })
 }

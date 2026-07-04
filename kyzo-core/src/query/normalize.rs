@@ -19,10 +19,10 @@
  *    (binding-safety well-ordering), implementing the landed
  *    [`BodyNormalizer`] seam. At a later landing these re-home to
  *    `query/logical.rs` / `query/reorder.rs`; nothing about them is interim.
- *    Index-search atoms are a typed refusal until the operator tier lands
- *    ([`SearchNotLanded`]); the landed `NormalFormAtom` has no search
- *    variants yet, so the search arms of upstream reorder.rs have no
- *    descendant here (they return with the operator tier).
+ *    Index-search atoms are resolved against index manifests by
+ *    `query/search.rs` and evaluated as `Search` operators in the RA tier;
+ *    `NormalFormAtom` carries no search variant because search atoms join
+ *    the plan at the catalog boundary, not through normalization.
  * 2. The **session view** ([`SessionView`]) — the read surface the query
  *    tier consumes: catalog lookups routed store/temp, scans, and the
  *    schema and fixed-rule-input source seams the magic and eval tiers read.
@@ -61,7 +61,7 @@ use crate::data::expr::Expr;
 use crate::data::program::{
     BodyNormalizer, InputAtom, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom,
     InputRuleApplyAtom, MagicFixedRuleApply, MagicSymbol, NormalFormAtom, NormalFormInlineRule,
-    NormalFormRelationApplyAtom, NormalFormRuleApplyAtom, TempSymbGen, Unification,
+    NormalFormRelationApplyAtom, NormalFormRuleApplyAtom, TempSymbGen, Unification, ValidityClause,
 };
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
@@ -99,13 +99,6 @@ pub(crate) struct UnsafeNegation(#[label] pub(crate) SourceSpan);
 #[error("Atom contains unbound variable, or rule contains no variable at all")]
 #[diagnostic(code(eval::unbound_variable))]
 pub(crate) struct UnboundVariable(#[label] pub(crate) SourceSpan);
-
-/// SEAM(operator tier): index search atoms (`~rel:idx{…}`) resolve against
-/// index manifests, which land with the HNSW/FTS/LSH operators.
-#[derive(Diagnostic, Debug, Error)]
-#[error("index search is not available yet: the index-operator tier has not landed")]
-#[diagnostic(code(eval::search_not_landed))]
-pub(crate) struct SearchNotLanded(#[label] pub(crate) SourceSpan);
 
 /// A cross-tier invariant that construction should have made impossible.
 #[derive(Debug, Error, Diagnostic)]
@@ -400,7 +393,7 @@ fn convert_named_field_relation(
     InputNamedFieldRelationApplyAtom {
         name,
         mut args,
-        as_of,
+        validity,
         span,
     }: InputNamedFieldRelationApplyAtom,
     symb_gen: &mut TempSymbGen,
@@ -430,7 +423,7 @@ fn convert_named_field_relation(
     Ok(InputRelationApplyAtom {
         name,
         args: new_args,
-        as_of,
+        validity,
         span,
     })
 }
@@ -514,7 +507,7 @@ fn normalize_relation_apply(
     let apply = NormalFormRelationApplyAtom {
         name: atom.name,
         args,
-        as_of: atom.as_of,
+        validity: atom.validity,
         span: atom.span,
     };
     ret.push(if is_negated {
@@ -556,6 +549,9 @@ fn convert_to_well_ordered_rule(rule: NormalFormInlineRule) -> Result<NormalForm
             }
             NormalFormAtom::Relation(v) => {
                 seen_variables.extend(v.args.iter().cloned());
+                if let Some(extra) = v.validity.as_ref().and_then(ValidityClause::extra_var) {
+                    seen_variables.insert(extra.clone());
+                }
                 round_1_collected.push(NormalFormAtom::Relation(v));
             }
             NormalFormAtom::Search(sa) => {
@@ -587,6 +583,9 @@ fn convert_to_well_ordered_rule(rule: NormalFormInlineRule) -> Result<NormalForm
             }
             NormalFormAtom::Relation(v) => {
                 seen_variables.extend(v.args.iter().cloned());
+                if let Some(extra) = v.validity.as_ref().and_then(ValidityClause::extra_var) {
+                    seen_variables.insert(extra.clone());
+                }
                 collected.push(NormalFormAtom::Relation(v));
             }
             NormalFormAtom::Unification(u) => {

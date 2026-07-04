@@ -58,6 +58,61 @@
 //! is the standing enforcement; the tests here pin the transformation's
 //! structure rule by rule.
 //!
+//! **The fully-free identity theorem** (issue #68's law, a corollary of law
+//! 1 that must hold *by construction*, not merely by informal argument): for
+//! any predicate whose demand chain contains a fully-free adornment (every
+//! argument position free — the shape a query with no bound arguments
+//! anywhere seeds), the rewrite is answer- **and cost-**identical to
+//! skipping it: no supplementary relation, no input relation, no second copy
+//! of that predicate's own fixpoint survives *reachable from an
+//! always-evaluated root* on its account. This does not fall out of the
+//! adornment phase for free — sideways information passing
+//! (`NormalFormAtom::adorn`) is correct and standard, and *locally* right to
+//! adorn a self-referencing occurrence tighter when an earlier body atom
+//! happens to bind one of its arguments, even inside a rule whose own head
+//! is fully free. Andersen points-to is exactly this: `pt` occurs twice in
+//! `load`/`store`'s bodies, the first occurrence's output binds an argument
+//! the second consumes, and SIP correctly (if uselessly, here) proposes
+//! `bf`/`bb` demand for the second — while the entry (`?[y, x] := pt[y,
+//! x]`) is fully unbound and must compute the complete `pt` regardless.
+//! Answering that proposal literally — minting `pt|Mbf`/`pt|Mbb` plus their
+//! `Input`/`Sup` chain — is sound (law 1 holds; every deviation would still
+//! be a *subset* of the complete relation) but is pure waste multiplied
+//! across every self-join occurrence: three separately-fixpointed `pt`
+//! variants plus roughly twenty supplementary relations, all computing
+//! overlapping fragments of the one relation a magic-sets-free evaluator
+//! computes once.
+//!
+//! Two passes enforce the theorem, in order, and both are load-bearing:
+//! [`AdornedProgram::collapse_ff_redundant_variants`] redirects every
+//! reference to a predicate's tighter-adorned variant onto its fully-free
+//! sibling when one is demanded (sound unconditionally — a store computed
+//! in full already contains whatever a tighter join would have derived);
+//! [`AdornedProgram::sweep_unreachable`] then mark-and-sweeps the reference
+//! graph from every always-evaluated (Muggle) head and drops anything the
+//! walk never reaches. The sweep, not the redirect, is what actually proves
+//! the theorem: a redirect is local to the atom it rewrites, so if the
+//! variant it just orphaned held the *only* reference to some unrelated
+//! predicate's own tight variant, that predicate never gains a free sibling
+//! of its own and `collapse_ff_redundant_variants`'s name-keyed pass cannot
+//! see it — reachability from the roots is the actual invariant, and the
+//! sweep is what closes the whole orphan class rather than one instance of
+//! it (a hostile-review finding on an earlier version of this fix that
+//! shipped the redirect without the sweep). The planner-rule corollary
+//! falls out of both passes together, without a separate code path: a
+//! fully-free-headed entry's reachable predicates end up with exactly one
+//! (Muggle-cost) variant apiece, evaluated bottom-up with no demand
+//! machinery at all — the shape Souffle's planner reaches by recognizing
+//! "no bound arguments, no restriction to propagate" up front. The standing
+//! differential (`runtime::db::tests::magic_bypass_differential`) is this
+//! theorem's executable form: it runs a small recursive corpus — including
+//! a points-to-shaped self-join and the orphan-producing shape above —
+//! through both `Db::run_script` (this file's rewrite included) and the
+//! crate-internal bypass path (`bench_api`'s magic-sets-free compile), and
+//! asserts byte-identical answers *and* a byte-identical adorned-symbol set
+//! (one variant per reachable predicate, no `Input`/`Sup`) for every
+//! fully-unbound query in the corpus.
+//!
 //! The transformation is *visible internally and invisible at the
 //! boundary*: inside the engine, [`MagicSymbol`]'s variants carry the
 //! demand analysis in the type itself (a name proves which role its store
@@ -89,7 +144,7 @@ use crate::data::program::{
     Adornment, FixedRuleApply, FixedRuleArg, MagicAtom, MagicFixedRuleApply, MagicFixedRuleRuleArg,
     MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
     MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum,
-    StratifiedMagicProgram, StratifiedNormalFormProgram,
+    StratifiedMagicProgram, StratifiedNormalFormProgram, ValidityClause,
 };
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
@@ -241,7 +296,10 @@ impl StratifiedNormalFormProgram {
         for stratum in strata.into_iter().rev() {
             stratum.collect_magic_exemptions(disable_magic_rewrite, &mut exempt_rules);
             let cross_stratum_deps = stratum.cross_stratum_dependencies();
-            let adorned = stratum.adorn(&exempt_rules, schemas)?;
+            let adorned = stratum
+                .adorn(&exempt_rules, schemas)?
+                .collapse_ff_redundant_variants()
+                .sweep_unreachable();
             rewritten_reversed.push(adorned.magic_rewrite()?);
             exempt_rules.extend(cross_stratum_deps);
         }
@@ -559,13 +617,20 @@ impl NormalFormAtom {
                 let v = MagicRelationApplyAtom {
                     name: v.name.clone(),
                     args: v.args.clone(),
-                    as_of: v.as_of,
+                    validity: v.validity.clone(),
                     span: v.span,
                 };
                 for arg in v.args.iter() {
                     if !seen_bindings.contains(arg) {
                         seen_bindings.insert(arg.clone());
                     }
+                }
+                // `@spans`/`@delta`/`@delta_sys` bind one extra column
+                // beyond `args` (the interval or the sign) — the same
+                // "own bindings beyond the base row" shape `Search` uses
+                // for its engine-appended columns, below.
+                if let Some(extra) = v.validity.as_ref().and_then(ValidityClause::extra_var) {
+                    seen_bindings.insert(extra.clone());
                 }
                 MagicAtom::Relation(v)
             }
@@ -633,7 +698,7 @@ impl NormalFormAtom {
                 MagicAtom::NegatedRelation(MagicRelationApplyAtom {
                     name: nv.name.clone(),
                     args: nv.args.clone(),
-                    as_of: nv.as_of,
+                    validity: nv.validity.clone(),
                     span: nv.span,
                 })
             }
@@ -642,6 +707,167 @@ impl NormalFormAtom {
                 MagicAtom::Unification(u.clone())
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 1.5: collapse ff-redundant variants
+// ─────────────────────────────────────────────────────────────────────────
+
+impl AdornedProgram {
+    /// Sideways information passing (`NormalFormAtom::adorn`, above) is
+    /// standard and correct in isolation: within one rule body, a call to a
+    /// rewritten predicate is adorned bound in whichever positions an
+    /// earlier atom already bound. But when the SAME predicate also has a
+    /// fully-free ("ff": every position free) variant demanded — typically
+    /// because some consumer needs its complete, unrestricted contents —
+    /// every other adorned variant of that predicate is provably redundant:
+    /// the ff variant must already compute the complete relation, so a
+    /// tighter-adorned sibling can only ever derive a subset of it, at the
+    /// cost of running its OWN full semi-naive fixpoint plus an
+    /// Input/supplementary chain to feed it. Joining against the ff store
+    /// with the very same bound values in hand yields identical rows (join
+    /// semantics do not care whether the store being probed carries rows
+    /// beyond the ones that match), so every reference to a redundant
+    /// variant collapses onto the ff one, and the now-unreferenced variant
+    /// is dropped.
+    ///
+    /// This is issue #68's actual driver for Andersen points-to: `pt`
+    /// occurs twice in each `load`/`store` rule body, and left-to-right SIP
+    /// sees the first occurrence bind a variable the second consumes,
+    /// adorning the second `bf`/`bb` — even though the ENTRY's demand for
+    /// `pt` (`?[y, x] := pt[y, x]`) is fully unbound. Uncollapsed, that
+    /// mints THREE separately-fixpointed `pt` variants (`Mff`/`Mbf`/`Mbb`)
+    /// plus roughly twenty supplementary relations, all computing
+    /// overlapping fragments of the one relation `bench_api::points_to`'s
+    /// hand-built (magic-sets-bypassing) program computes once — measured
+    /// as the actual OOM driver (`pointsto_repro.rs`, an identical facts+
+    /// program run through the crate-internal path completes at bounded
+    /// memory while the same run through this rewrite exhausts a 12 GiB
+    /// cap in seconds).
+    ///
+    /// Sound regardless of *why* the ff variant is demanded: nothing here
+    /// assumes points-to's specific shape, only that an ff demand, once it
+    /// exists for a predicate, subsumes every other adornment of it.
+    fn collapse_ff_redundant_variants(mut self) -> Self {
+        let ff_names: BTreeSet<Symbol> = self
+            .prog
+            .keys()
+            .filter_map(|head| match head {
+                AdornedHead::Magic { inner, adornment } if !adornment.iter().any(|b| *b) => {
+                    Some(inner.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        if ff_names.is_empty() {
+            return self;
+        }
+        let redirect_to_ff = |name: &mut MagicSymbol| {
+            if let MagicSymbol::Magic { inner, adornment } = name
+                && adornment.iter().any(|b| *b)
+                && ff_names.contains(inner)
+            {
+                adornment.iter_mut().for_each(|b| *b = false);
+            }
+        };
+        for rules_or_fixed in self.prog.values_mut() {
+            if let MagicRulesOrFixed::Rules { rules } = rules_or_fixed {
+                for rule in rules.iter_mut() {
+                    for atom in rule.body.iter_mut() {
+                        match atom {
+                            MagicAtom::Rule(r) | MagicAtom::NegatedRule(r) => {
+                                redirect_to_ff(&mut r.name);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        // Dropping the now-unreferenced tight variants themselves is
+        // `sweep_unreachable`'s job, not this pass's: redirecting a
+        // predicate's OWN references onto its ff sibling can just as well
+        // orphan some UNRELATED predicate whose only referrer was the
+        // redirected variant's body — this pass, keyed on `ff_names`, has
+        // no way to see that (the orphan never gains an ff sibling of its
+        // own). Reachability from the always-evaluated roots is the actual
+        // invariant; name-matching was only ever an approximation of it.
+        self
+    }
+
+    /// Reachability mark-and-sweep over the (post-collapse) reference
+    /// graph, rooted at every always-evaluated head — the entry and every
+    /// exempt rule, stored under `AdornedHead::Muggle` keys. Hostile review
+    /// on `collapse_ff_redundant_variants` found the gap this closes: that
+    /// pass redirects references INTO a predicate's ff variant, but the
+    /// redirect is local to one atom and non-transitive — if the redirected
+    /// (now-dead) variant's body held the ONLY reference to some other
+    /// predicate's tight variant, that predicate never acquires an ff
+    /// sibling itself, so `collapse_ff_redundant_variants`'s
+    /// `ff_names`-keyed retain cannot see it, and it survives as compiled,
+    /// fixpointed dead code (with its own `Input`/`Sup` chain) reachable
+    /// from nothing. Reachability, not "does this predicate have an ff
+    /// sibling", is the actual criterion; this sweep drops anything the
+    /// walk from the roots never reaches, which subsumes
+    /// `collapse_ff_redundant_variants`'s own cleanup role (its retain step
+    /// was removed once this landed) and closes the whole orphan class, not
+    /// one instance of it.
+    fn sweep_unreachable(mut self) -> Self {
+        fn target_head(sym: &MagicSymbol) -> Option<AdornedHead> {
+            match sym {
+                MagicSymbol::Muggle { inner } => Some(AdornedHead::Muggle {
+                    inner: inner.clone(),
+                }),
+                MagicSymbol::Magic { inner, adornment } => Some(AdornedHead::Magic {
+                    inner: inner.clone(),
+                    adornment: adornment.clone(),
+                }),
+                // Cannot occur before `magic_rewrite` mints them.
+                MagicSymbol::Input { .. } | MagicSymbol::Sup { .. } => None,
+            }
+        }
+
+        let mut reachable: BTreeSet<AdornedHead> = self
+            .prog
+            .keys()
+            .filter(|head| matches!(head, AdornedHead::Muggle { .. }))
+            .cloned()
+            .collect();
+        let mut frontier: Vec<AdornedHead> = reachable.iter().cloned().collect();
+        while let Some(head) = frontier.pop() {
+            let Some(rules_or_fixed) = self.prog.get(&head) else {
+                continue;
+            };
+            let mut targets: Vec<MagicSymbol> = Vec::new();
+            match rules_or_fixed {
+                MagicRulesOrFixed::Rules { rules } => {
+                    for rule in rules {
+                        for atom in &rule.body {
+                            if let MagicAtom::Rule(r) | MagicAtom::NegatedRule(r) = atom {
+                                targets.push(r.name.clone());
+                            }
+                        }
+                    }
+                }
+                MagicRulesOrFixed::Fixed { fixed } => {
+                    for arg in &fixed.rule_args {
+                        if let MagicFixedRuleRuleArg::InMem { name, .. } = arg {
+                            targets.push(name.clone());
+                        }
+                    }
+                }
+            }
+            for sym in targets {
+                if let Some(t) = target_head(&sym)
+                    && reachable.insert(t.clone())
+                {
+                    frontier.push(t);
+                }
+            }
+        }
+        self.prog.retain(|head, _| reachable.contains(head));
+        self
     }
 }
 
@@ -795,6 +1021,9 @@ fn magic_rewrite_ruleset(
                 }
                 MagicAtom::Relation(v) => {
                     seen_bindings.extend(v.args.iter().cloned());
+                    if let Some(extra) = v.validity.as_ref().and_then(ValidityClause::extra_var) {
+                        seen_bindings.insert(extra.clone());
+                    }
                     collected_atoms.push(MagicAtom::Relation(v));
                 }
                 // SEAM: the index-search atoms (HNSW/FTS/LSH) land with the
@@ -920,7 +1149,7 @@ mod tests {
         NormalFormAtom::Relation(NormalFormRelationApplyAtom {
             name: sym(name),
             args: args.iter().map(|a| sym(a)).collect(),
-            as_of: None,
+            validity: None,
             span: SourceSpan(0, 0),
         })
     }

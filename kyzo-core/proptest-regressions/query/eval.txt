@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 15633a304e34319dbeeedacbc162df7ac558286eb9ad6290e15cde44bd2df5de # shrinks to case = GenCase { n: 2, edges: {(0, 1), (1, 0)}, seeds: {}, aggr_name: "or", self_join: false, negation: false, normal_aggr: false, mutual: false, two_dep: false }

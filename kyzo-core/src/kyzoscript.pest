@@ -139,11 +139,37 @@ fixed_named_relation_rel = {relation_ident ~ "{" ~ (fixed_named_relation_arg_pai
 fixed_named_relation_arg_pair = {ident ~ (":" ~ ident)?}
 
 validity_clause = {"@" ~ expr ~ ("," ~ expr)?}
+// story #62: interval derivation and axis-parameterized diff ride the same
+// clause seat as `@ expr` (never `validity_clause` itself — that rule stays
+// byte-identical, including on `fixed_relation_rel`/`fixed_named_relation_rel`/
+// `relation_option`, none of which reference the alternation below). Tried
+// in this order (`delta_sys` before `delta`: a prefix-string match would
+// otherwise take `@delta_sys(...)` for `@delta` plus a dangling `_sys(...)`)
+// only on the two plain stored-atom productions — `@spans`/`@delta`/
+// `@delta_sys` are reserved keywords in exactly that one grammar seat, never
+// legal as a bare `@`-expression's variable name there.
+// Atomic keyword tokens: `@{...}` suppresses the implicit whitespace a
+// plain (non-atomic) rule would otherwise insert between the literal and
+// the boundary guard — without atomicity, "@spans iv" (the legal,
+// intended form, keyword then whitespace then the bound variable) would
+// itself skip the space before checking `!XID_CONTINUE`, land on "iv"'s
+// leading "i" (an XID_CONTINUE character), and wrongly refuse the
+// legitimate input the guard exists to keep legal. Atomic, the guard
+// checks the byte immediately after the keyword with no skip: adjacent
+// XID_CONTINUE (a typo'd suffix) refuses; adjacent whitespace, `,`, or
+// `(` (every legal continuation) passes.
+spans_kw = @{"@spans" ~ !XID_CONTINUE}
+delta_sys_kw = @{"@delta_sys" ~ !XID_CONTINUE}
+delta_kw = @{"@delta" ~ !XID_CONTINUE}
+spans_clause = {spans_kw ~ var ~ ("," ~ expr)?}
+delta_sys_clause = {delta_sys_kw ~ "(" ~ expr ~ "," ~ expr ~ ")" ~ var}
+delta_clause = {delta_kw ~ "(" ~ expr ~ "," ~ expr ~ ")" ~ var}
+read_validity_clause = _{spans_clause | delta_sys_clause | delta_clause | validity_clause}
 
 rule_body = {(disjunction ~ ("," ~ disjunction)* ~ ","?)?} // [SEQ] over disjunction
 rule_apply = {underscore_ident ~ "[" ~ apply_args ~ "]"}
-relation_named_apply = {relation_ident ~ "{" ~ named_apply_args ~ validity_clause? ~ "}"}
-relation_apply = {relation_ident ~ "[" ~ apply_args ~ validity_clause? ~ "]"}
+relation_named_apply = {relation_ident ~ "{" ~ named_apply_args ~ read_validity_clause? ~ "}"}
+relation_apply = {relation_ident ~ "[" ~ apply_args ~ read_validity_clause? ~ "]"}
 search_apply = {search_index_ident ~ "{" ~ named_apply_args ~ "|" ~ (index_opt_field ~ ("," ~ index_opt_field)* ~ ","?)? ~ "}"} // [SEQ] over index_opt_field
 
 disjunction = {atom ~ (or_op ~ atom)*} // [SEQ1] over atom, separated by or_op (or_op pairs stay interleaved for the consumer)

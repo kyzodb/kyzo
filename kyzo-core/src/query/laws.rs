@@ -66,6 +66,76 @@
 //! rules are neither refused nor computed), while the oracle checks and
 //! evaluates everything, so differential harnesses must feed
 //! entry-reachable programs.
+//!
+//! ## The time-travel negation lift
+//!
+//! Story #62 first reproduced, then LIFTED, the engine's
+//! `NegationOverTimeTravelError` (`query/ra/mod.rs:260`) — here, in the
+//! oracle, which is why the shape below is legal and not in the refusal
+//! corpus.
+//!
+//! The engine's refusal is an *operator-implementation* gap, not a
+//! semantic one: `RelAlgebra::neg_join` (`query/ra/mod.rs`) refuses a
+//! `StoredWithValidity` (time-travel scan) right-hand side because its
+//! anti-join iterator has no skip-scan negation built yet — its own doc
+//! says so ("until the operator tier implements a skip-scan negation, the
+//! shape is refused… loud, typed, and at compile time"). Nothing about the
+//! SEMANTICS is in question there; it is a missing operator, scheduled
+//! (SEAM, db tier) for whenever it lands.
+//!
+//! The oracle has no such gap, and the argument that it never will is
+//! structural, not incidental: a negated [`Literal`]'s `as_of` is a
+//! [`Term`]-free [`AsOf`] — a plain, fixed pair of `i64`s, constructible
+//! only as a literal constant ([`Literal::neg_at`]), never as an
+//! expression over bound variables or anything the fixpoint itself
+//! produces. Resolving it ([`resolve_relation`]) is a pure function of the
+//! relation's raw stored events and that one fixed coordinate — the exact
+//! same shape as reading `Program::facts`, which negation has always been
+//! free to do. And a historical relation can never sit inside a
+//! stratification cycle in the first place: `check_wellformed` refuses a
+//! rule head sharing a name with a `Program::histories` entry, so a
+//! historical relation is never a `dependency_edges` target with any
+//! outgoing edge of its own — it is always a sink, exactly like an EDB
+//! fact relation, in the graph [`check_stratifiable`] walks. Negating it,
+//! at any fixed coordinate, changes nothing about that graph's safety.
+//!
+//! So the lift needed no new check to replace the one removed
+//! (`check_time_travel_negation`, deleted whole) — general safety and
+//! stratifiability already prove it sound, and did so before this story
+//! ever bolted the extra, engine-mirroring refusal on beside them. The
+//! proof is generative: this module's own
+//! `negation_over_a_fixed_as_of_historical_relation_matches_independent_
+//! complement` pins the shape by example, and `query/trials.rs`'s temporal
+//! generator differentials it at scale, combined with recursion and both
+//! aggregation families, against independently computed expectations.
+//!
+//! ## The shared reference-tier resolution helpers
+//!
+//! [`unify`]/[`ground`]/[`Bindings`] and [`HeadClass`]/[`head_classes`] used
+//! to be hand-copied, byte-for-byte, into `query/provenance.rs` and
+//! `query/trials.rs` as well — three independently-typed transcriptions of
+//! the same nested-loop unification and the same per-head aggregation
+//! classification (issue #89, surfaced by story #81's copy-detector as
+//! pre-existing drift risk: a fix to the real semantics in one copy could
+//! silently stop applying to the "independent" others). This module is the
+//! one home now: the oracle owns reference semantics, `provenance.rs` and
+//! `trials.rs` consume these `pub(crate)` items directly instead of
+//! re-deriving them.
+//!
+//! This sharing is sound *because* all three modules are reference tier —
+//! they judge the ENGINE (the compiled RA plan / semi-naive evaluator),
+//! never each other. Nothing here plays oracle-vs-independent-judge against
+//! `provenance.rs` or `trials.rs`: read every call site in both consumers
+//! before trusting that claim, `provenance.rs`'s own "independent
+//! certificate checker" (`verify_model_proof`) and `trials.rs`'s own
+//! (`verify`, formerly via a separately hand-rolled `check_unify`) re-derive
+//! *rule instantiations* from scratch over the model to double-check the
+//! *engine's* provenance machinery — they were never independent of this
+//! module's `unify`/`ground`, which is plain Datalog unification, not
+//! "eval's own reasoning." Sharing it here does not weaken either
+//! differential. The one deliberately-independent copy this consolidation
+//! does NOT touch is `query/stratify.rs::aggregation_character` — see its
+//! own doc comment for why that one stays hand-maintained.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -447,9 +517,9 @@ pub(crate) struct Literal {
     /// query-level default (`naive_eval_at`'s parameter) when present.
     /// Meaningful only on a literal reading a relation with an entry in
     /// [`Program::histories`]; `check_wellformed` refuses it elsewhere.
-    /// Negating a literal that carries one is refused
-    /// (`Rejection::NegationOverTimeTravel`), mirroring the engine's
-    /// `NegationOverTimeTravelError` (`query/ra/mod.rs:260`).
+    /// Negating a literal that carries one is LEGAL — see
+    /// [`Literal::neg_at`] and the module doc's "the time-travel negation
+    /// lift" section for why.
     pub as_of: Option<AsOf>,
 }
 
@@ -485,10 +555,14 @@ impl Literal {
             as_of: Some(at),
         }
     }
-    /// A negated body literal at its own bitemporal coordinate — refused
-    /// by [`check_time_travel_negation`], but constructible so the
-    /// refusal corpus (and this file's own refusal test) can build the
-    /// exact shape that must be rejected.
+    /// A negated body literal at its own bitemporal coordinate — LEGAL:
+    /// `at` is a fixed, compile-time-known coordinate (never derived from
+    /// the fixpoint being computed), and the historical relation it names
+    /// is a stored EDB leaf, never a rule head (`check_wellformed` refuses
+    /// that overlap) — so resolving it is a pure function of the raw
+    /// stored events and `at` alone, exactly as safe to negate as a read
+    /// of `Program::facts`. See the module doc's "the time-travel negation
+    /// lift" section for the full argument and its generative proof.
     pub(crate) fn neg_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
         Literal {
             rel,
@@ -608,10 +682,6 @@ pub(crate) enum Rejection {
     /// An aggregation failed at evaluation time (e.g. a type error inside
     /// a fold); carried as a value, never a panic.
     AggrError(String),
-    /// A negated literal carries its own as-of coordinate — mirrors the
-    /// engine's `NegationOverTimeTravelError` (`query/ra/mod.rs:260`):
-    /// negation over a time-travel scan is refused, not silently wrong.
-    NegationOverTimeTravel(&'static str),
 }
 
 fn literal_vars(l: &Literal) -> HashSet<&'static str> {
@@ -651,16 +721,26 @@ pub(crate) fn check_safety(program: &Program) -> Result<(), Rejection> {
 
 /// How a head relation aggregates, across *all* of its rules — the
 /// classification upstream `stratify.rs` derives per rule set.
+///
+/// Shared reference-tier type (issue #89): `provenance.rs` and `trials.rs`
+/// consume this directly instead of hand-copying it. `stratify.rs`'s own
+/// `aggregation_character` computes the same classification independently,
+/// on purpose — it is the ENGINE's copy, and stays that way; see its doc
+/// comment.
 #[derive(Clone, Copy)]
-struct HeadClass {
+pub(crate) struct HeadClass {
     /// Some rule of this head aggregates some position.
-    has_aggr: bool,
+    pub(crate) has_aggr: bool,
     /// It aggregates, and every aggregated position of every rule is a
     /// meet form — the only class allowed to recurse through itself.
-    is_meet: bool,
+    pub(crate) is_meet: bool,
 }
 
-fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
+/// Shared reference-tier helper (issue #89): the same classification
+/// `provenance.rs` and `trials.rs` need to reconstruct the oracle's
+/// stratification for their own harnesses, minted once here instead of
+/// three times.
+pub(crate) fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
     let mut per_head: HashMap<Rel, Vec<&Rule>> = HashMap::new();
     for rule in &program.rules {
         per_head.entry(rule.head_rel).or_default().push(rule);
@@ -761,6 +841,84 @@ fn aggr_err(e: miette::Report) -> Rejection {
     Rejection::AggrError(e.to_string())
 }
 
+/// One position in a [`Program`] that INTRODUCES a relation name into a
+/// namespace a [`Program::histories`] entry could collide with — a rule
+/// head derives one, a fixed rule's head derives one, and a fixed rule's
+/// input READS one (through `db`, the always-current map, never through
+/// `histories`). Every variant is built in exactly one place
+/// ([`name_introductions`]), so the historical-namespace law
+/// ([`check_no_historical_name_collision`]) is one predicate applied
+/// uniformly, not three separately-argued refusal loops that could drift
+/// (hostile-review finding, issue #85, sharpening issue #62 comment
+/// 4882951801's original two-loop version).
+enum NameIntroduction {
+    /// A rule's head — the derived relation it defines.
+    RuleHead(Rel),
+    /// A fixed rule's head — the derived relation it defines.
+    FixedHead(Rel),
+    /// One of a fixed rule's inputs, reported against `head` (the fixed
+    /// rule whose read would silently resolve empty if `input` collided).
+    FixedInput { head: Rel, input: Rel },
+}
+
+impl NameIntroduction {
+    /// The name being introduced — checked against `Program::histories`.
+    fn name(&self) -> Rel {
+        match self {
+            NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r,
+            NameIntroduction::FixedInput { input, .. } => input,
+        }
+    }
+    /// The relation to blame in [`Rejection::Malformed`] if `name()`
+    /// collides with a historical relation.
+    fn report(&self) -> Rel {
+        match self {
+            NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r,
+            NameIntroduction::FixedInput { head, .. } => head,
+        }
+    }
+}
+
+/// Every name-introducing position in `program`, in one fixed,
+/// deterministic order (rule heads, then each fixed rule's head followed
+/// by its inputs) — the ONE enumeration point
+/// [`check_no_historical_name_collision`] walks. A future name-
+/// introducing position added to `Program`'s shape belongs here to be
+/// checked at all: this function, not a scattered refusal loop at each
+/// call site, is where that decision gets made.
+fn name_introductions(program: &Program) -> Vec<NameIntroduction> {
+    let mut out = Vec::new();
+    for rule in &program.rules {
+        out.push(NameIntroduction::RuleHead(rule.head_rel));
+    }
+    for f in &program.fixed {
+        out.push(NameIntroduction::FixedHead(f.head_rel));
+        for &input in &f.inputs {
+            out.push(NameIntroduction::FixedInput {
+                head: f.head_rel,
+                input,
+            });
+        }
+    }
+    out
+}
+
+/// The historical-namespace law, checked once, uniformly, over every
+/// position [`name_introductions`] enumerates: introducing a name that
+/// already lives in [`Program::histories`] is refused. A historical
+/// relation is a stored EDB leaf, resolved fresh at its own coordinate by
+/// `literal_rows`/`resolve_relation` — never a target any OTHER mechanism
+/// may derive into or read through `db` (`naive_eval_at`'s always-current
+/// map).
+fn check_no_historical_name_collision(program: &Program) -> Result<(), Rejection> {
+    for intro in name_introductions(program) {
+        if program.histories.contains_key(intro.name()) {
+            return Err(Rejection::Malformed(intro.report()));
+        }
+    }
+    Ok(())
+}
+
 /// Program-shape validation the real compiler performs at parse/compile
 /// time; see [`Rejection::Malformed`] for the refused shapes.
 pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
@@ -803,24 +961,22 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
             return Err(Rejection::Malformed(rel));
         }
     }
-    // A historical relation is a stored EDB leaf, never a derivable head:
-    // a rule or fixed rule sharing its name would derive into `db` while
-    // every reader still resolves the SAME name through `histories`
-    // (`literal_rows` prefers a historical entry unconditionally, ahead
-    // of `db`) — the derivation would exist and never be seen by
-    // anything that reads it. Refused alongside the facts∩histories
-    // check above (hostile-review finding, issue #62 comment
-    // 4882951801).
-    for rule in &program.rules {
-        if program.histories.contains_key(rule.head_rel) {
-            return Err(Rejection::Malformed(rule.head_rel));
-        }
-    }
-    for f in &program.fixed {
-        if program.histories.contains_key(f.head_rel) {
-            return Err(Rejection::Malformed(f.head_rel));
-        }
-    }
+    // ONE law, checked from ONE walk (`name_introductions`): a historical
+    // relation is a stored EDB leaf, resolved fresh at its own coordinate
+    // by `literal_rows`/`resolve_relation` — never a name any OTHER
+    // mechanism may introduce. A rule head sharing the name would derive
+    // into `db` while every reader still resolves the SAME name through
+    // `histories` first (`literal_rows` prefers a historical entry
+    // unconditionally, ahead of `db`) — the derivation would exist and
+    // never be seen. A fixed rule's head is the same failure. A fixed
+    // rule's INPUT sharing the name would silently read `db`'s
+    // always-absent entry for it as an EMPTY set instead of failing — a
+    // historical relation is never inserted into `db` at all (issue #85).
+    // Three positions, one collision to refuse; see `name_introductions`'s
+    // own doc for why they are enumerated from one place instead of three
+    // separately-argued loops (hostile-review finding, issue #62 comment
+    // 4882951801, sharpened at issue #85).
+    check_no_historical_name_collision(program)?;
     // Every event of one historical relation shares one key arity, and
     // every ASSERT shares one payload arity (retract/erase carry none, by
     // construction) — a relation with inconsistent shapes across its own
@@ -940,9 +1096,20 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
     unreachable!("stratum assignment must converge on stratifiable programs");
 }
 
-type Bindings = HashMap<&'static str, DataValue>;
+/// Shared reference-tier type (issue #89): `provenance.rs` and `trials.rs`
+/// consume this directly instead of hand-copying it (their own copies
+/// happened to alias `BTreeMap` instead of `HashMap` — never load-bearing,
+/// since a `Bindings` map is only ever probed by key here or in either
+/// consumer, never iterated as a whole).
+pub(crate) type Bindings = HashMap<&'static str, DataValue>;
 
-fn unify(args: &[Term], tuple: &Tuple, bound: &Bindings) -> Option<Bindings> {
+/// Shared reference-tier helper (issue #89): plain Datalog unification of
+/// one literal's argument list against one candidate tuple, extending
+/// `bound` — the nested-loop join core both this oracle's own fixpoint and
+/// `provenance.rs`/`trials.rs`'s harnesses need. Takes `tuple` as a slice
+/// (not `&Tuple`) so it accepts any candidate row a caller has in hand,
+/// stored or derived, without a `Tuple`-specific signature.
+pub(crate) fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Option<Bindings> {
     if args.len() != tuple.len() {
         return None;
     }
@@ -966,7 +1133,9 @@ fn unify(args: &[Term], tuple: &Tuple, bound: &Bindings) -> Option<Bindings> {
     Some(out)
 }
 
-fn ground(args: &[Term], bound: &Bindings) -> Tuple {
+/// Shared reference-tier helper (issue #89): instantiate an argument list
+/// against a complete binding, the [`unify`] counterpart.
+pub(crate) fn ground(args: &[Term], bound: &Bindings) -> Tuple {
     args.iter()
         .map(|t| match t {
             Term::Const(c) => c.clone(),
@@ -1199,23 +1368,6 @@ impl MeetState {
     }
 }
 
-/// Every negated literal must resolve at a single, statically-known
-/// coordinate — never a moving target it could itself perturb. A literal
-/// carrying its own as-of coordinate is refused when negated, mirroring
-/// the engine's `NegationOverTimeTravelError` (`query/ra/mod.rs:260`):
-/// lifting this refusal (negation over a FIXED as-of snapshot is
-/// well-defined) is a later task, named but not done here.
-fn check_time_travel_negation(program: &Program) -> Result<(), Rejection> {
-    for rule in &program.rules {
-        for lit in rule.body.iter().filter(|l| l.negated) {
-            if lit.as_of.is_some() {
-                return Err(Rejection::NegationOverTimeTravel(rule.head_rel));
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Naive stratified fixpoint evaluation: the textbook algorithm extended
 /// with the aggregation and fixed-rule semantics in the module docs — the
 /// oracle for Laws 1 and 3. Validates shape, safety, and stratifiability
@@ -1239,7 +1391,6 @@ pub(crate) fn naive_eval_at(
     check_wellformed(program)?;
     check_safety(program)?;
     check_stratifiable(program)?;
-    check_time_travel_negation(program)?;
     let classes = head_classes(program);
     let strata_of = strata(program);
     let max_stratum = strata_of.values().copied().max().unwrap_or(0);
@@ -2905,6 +3056,32 @@ mod tests {
         assert_eq!(check_wellformed(&program), Err(Rejection::Malformed("h")));
     }
 
+    /// A fixed rule's INPUT (distinct from its head, checked above)
+    /// naming a historical relation is refused the same way — closing
+    /// issue #85: without this, `naive_eval_at`'s fixed-rule execution
+    /// reads `db.get("h")`, which is always absent for a historical
+    /// relation, so the input would silently resolve EMPTY instead of
+    /// refusing.
+    #[test]
+    fn fixed_rule_input_naming_a_historical_relation_is_refused() {
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert("h", vec![ev_assert(k(1), pay(1), 5, 0)]);
+        let program = Program {
+            fixed: vec![FixedRule {
+                head_rel: "fx",
+                inputs: vec!["h"],
+                eval: |_| BTreeSet::new(),
+            }],
+            histories,
+            ..Program::default()
+        };
+        assert_eq!(check_wellformed(&program), Err(Rejection::Malformed("fx")));
+        assert!(matches!(
+            naive_eval(&program),
+            Err(Rejection::Malformed("fx"))
+        ));
+    }
+
     // ── The untimed embedding ────────────────────────────────────────
 
     #[test]
@@ -2998,35 +3175,165 @@ mod tests {
         assert_eq!(db["absent"], [k(2)].into_iter().collect());
     }
 
-    // ── The typed refusal: mirrors NegationOverTimeTravelError ──────────
+    // ── The lift: negation over a fixed as-of historical relation is
+    // legal, and evaluates correctly — see the module doc's "the
+    // time-travel negation lift" section for the proof argument. This
+    // pins the EXACT shape the old, now-deleted `check_time_travel_
+    // negation` used to refuse (`base(X), NOT hist(X) @at`).
+    //
+    // What this test proves, precisely: that the evaluator's negation
+    // WIRING computes the correct set difference against whatever
+    // `literal_rows` resolves for `hist` at a coordinate — NOT that
+    // `resolve_relation`'s own resolution algebra is correct. That is a
+    // DIFFERENT claim, proven independently elsewhere
+    // (`grid_differential_derived_intervals_equal_maximal_runs`,
+    // `diff_composition_law_holds_across_axes`, and the `resolve_events`
+    // vs the real bitemporal kernel cross-check
+    // `asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture`). So the
+    // expectation below is NOT `resolve_relation(&histories["hist"], at)`
+    // filtered against `base` (that would make this test and the code
+    // under test call the identical function, blind to a shared bug in
+    // it) — it is hand-traced over the raw stored events, inline, by the
+    // same governing-version rule `resolve_events` documents (newest
+    // instant at or before `at.valid`; among that instant's versions, the
+    // newest at or before `at.sys`; `Assert` present, `Retract`/no-older
+    // `Erase` absent), written here as plain reasoning, not a second
+    // algorithm.
+    //
+    // Two DIFFERENT coordinates are checked, chosen so the correct
+    // answer differs between them AND from `AsOf::current()` — a
+    // coordinate mutant (wrong axis, or silently falling back to the
+    // query-level default instead of the literal's own `as_of`) computes
+    // a THIRD, different, wrong answer for at least one of them, so
+    // either mutation fails this test, not only the campaign below.
+    // `negation_over_fixed_as_of_matches_independent_complement_
+    // generatively` (below, past the campaign helpers this needs) proves
+    // the same law at scale, with resolve_relation as the (independently
+    // proven) resolver, so it is a differential over WIRING at scale, not
+    // a re-proof of resolution itself. ──────────────────────────────────
 
     #[test]
-    fn negation_over_time_travel_literal_is_refused() {
+    fn negation_over_a_fixed_as_of_historical_relation_matches_independent_complement() {
+        // key 1: asserted at valid=5, sys=0 — present for every valid≥5,
+        //        at every sys≥0 (never revised).
+        // key 2: asserted at valid=20, sys=0; ERASED at valid=20, sys=5 —
+        //        a same-instant system-time correction with nothing older
+        //        beneath it, so at sys≥5 key 2 is absent at every valid.
+        // key 3: never appears in `hist` at all — always absent.
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert(
+            "hist",
+            vec![
+                ev_assert(k(1), vec![], 5, 0),
+                ev_assert(k(2), vec![], 20, 0),
+                ev_erase(k(2), 20, 5),
+            ],
+        );
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("base", [k(1), k(2), k(3)].into_iter().collect());
+
+        let run_at = |at: AsOf| -> BTreeSet<Tuple> {
+            let program = Program {
+                rules: vec![Rule::plain(
+                    "out",
+                    vec![x()],
+                    vec![
+                        lit("base", vec![x()], false),
+                        lit_at("hist", vec![x()], true, at),
+                    ],
+                )],
+                facts: facts.clone(),
+                histories: histories.clone(),
+                ..Program::default()
+            };
+            naive_eval(&program)
+                .expect("negation over a fixed as-of is legal")
+                .remove("out")
+                .unwrap_or_default()
+        };
+
+        // Coordinate A = {valid:25, sys:2}. By hand: key 1's instant
+        // (5) ≤ 25 → present. Key 2's only instant ≤ 25 is 20; among its
+        // versions, sys≤2 admits only the sys=0 assert (the sys=5 erase
+        // is excluded, 5 > 2) → present. Key 3: absent (no events). So
+        // `hist` = {1, 2} and `out` = base − {1, 2} = {3}.
+        assert_eq!(
+            run_at(AsOf { valid: 25, sys: 2 }),
+            [k(3)].into_iter().collect(),
+            "coordinate A"
+        );
+
+        // Coordinate B = {valid:2, sys:25} — A's fields with valid/sys
+        // SWAPPED, chosen so an axis-swap bug on A would silently compute
+        // B's answer instead. By hand: key 1's instant (5) ≤ 2? No →
+        // absent. Key 2's instant (20) ≤ 2? No → absent. Key 3: absent.
+        // So `hist` = {} and `out` = base − {} = {1, 2, 3}.
+        assert_eq!(
+            run_at(AsOf { valid: 2, sys: 25 }),
+            [k(1), k(2), k(3)].into_iter().collect(),
+            "coordinate B"
+        );
+
+        // A silent fallback to `AsOf::current()` instead of the literal's
+        // own coordinate would compute a THIRD answer at either call
+        // above: at current (valid=sys=i64::MAX), key 1 is present
+        // (5≤MAX) and key 2's instant 20's newest version at sys≤MAX is
+        // the sys=5 ERASE, which falls through to no older instant →
+        // absent. So `hist` = {1}, `out` = {2, 3} — equal to NEITHER A's
+        // {3} nor B's {1,2,3}, so this guards that fallback too.
+        assert_eq!(
+            run_at(AsOf::current()),
+            [k(2), k(3)].into_iter().collect(),
+            "current (not what either A or B asks for — pinned so the three stay distinct)"
+        );
+    }
+
+    /// `body_bindings` reorders a rule's body (positives, then negatives)
+    /// regardless of the RULE'S OWN source order — that reordering is
+    /// exactly what makes evaluating a negated literal safe even when its
+    /// binding positive literal is written LATER in the body. Every other
+    /// negation-over-as_of fixture in this file (and every one the
+    /// generator in `query/trials.rs` builds) happens to write positives
+    /// before negatives already, so none of them would notice if that
+    /// reordering were ever deleted (`ordered` built as plain
+    /// `rule.body.iter().collect()` instead of the positives-then-
+    /// negatives split) — a coverage hole a hostile review found. This
+    /// test writes the body in the OPPOSITE order on purpose: the negated
+    /// historical literal FIRST, its binding positive literal SECOND. A
+    /// regression that evaluated literals in raw source order would try
+    /// to ground `hist`'s variable before `base` has bound it —
+    /// `ground`'s `bound[v]` panics on a `BTreeMap` key that was never
+    /// inserted — so this fails loudly, not silently, if the reordering
+    /// ever regresses.
+    #[test]
+    fn negation_over_as_of_is_correct_even_when_the_negated_literal_precedes_its_binder_in_source_order()
+     {
         let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
         histories.insert("hist", vec![ev_assert(k(1), vec![], 5, 0)]);
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("base", [k(1)].into_iter().collect());
+        facts.insert("base", [k(1), k(2)].into_iter().collect());
+        let at = AsOf { valid: 10, sys: 10 };
         let program = Program {
             rules: vec![Rule::plain(
                 "out",
                 vec![x()],
                 vec![
+                    // NEGATED, listed FIRST in source order.
+                    lit_at("hist", vec![x()], true, at),
+                    // Binds X — listed SECOND, after its negated reader.
                     lit("base", vec![x()], false),
-                    lit_at("hist", vec![x()], true, AsOf { valid: 10, sys: 10 }),
                 ],
             )],
             facts,
             histories,
             ..Program::default()
         };
-        assert_eq!(
-            naive_eval(&program),
-            Err(Rejection::NegationOverTimeTravel("out"))
+        let db = naive_eval(&program).expect(
+            "body_bindings must reorder positives before negatives regardless of source order",
         );
-        assert_eq!(
-            check_time_travel_negation(&program),
-            Err(Rejection::NegationOverTimeTravel("out"))
-        );
+        // By hand: hist@at = {1} (asserted at valid=5 ≤ 10, never
+        // revised). out = base − {1} = {2}.
+        assert_eq!(db["out"], [k(2)].into_iter().collect());
     }
 
     // ── Generative campaigns: the grid differential and the diff
@@ -3087,6 +3394,31 @@ mod tests {
             let valid = rng.range(0, 6);
             let sys = rng.range(0, 6);
             history.push(ev_assert(k(999), pay(rng.range(0, 3)), valid, sys));
+        }
+        history
+    }
+
+    /// [`gen_history`]'s existential twin: EMPTY payload (arity 0), so the
+    /// full governing tuple is the key alone — the shape a negation probe
+    /// with exactly the key's own variables needs (`gen_history`'s payload
+    /// column would otherwise leave that variable unbound at the negated
+    /// literal). Same polarity mix and collision-prone coordinate range.
+    fn gen_existential_history(rng: &mut Rng, key: &Tuple) -> Vec<Event> {
+        let n = rng.range(1, 10);
+        let polarities = [
+            ClaimPolarity::Assert,
+            ClaimPolarity::Retract,
+            ClaimPolarity::Erase,
+        ];
+        let mut history = Vec::new();
+        for _ in 0..n {
+            let valid = rng.range(0, 6);
+            let sys = rng.range(0, 6);
+            match rng.one_of(&polarities) {
+                ClaimPolarity::Assert => history.push(ev_assert(key.clone(), vec![], valid, sys)),
+                ClaimPolarity::Retract => history.push(ev_retract(key.clone(), valid, sys)),
+                ClaimPolarity::Erase => history.push(ev_erase(key.clone(), valid, sys)),
+            }
         }
         history
     }
@@ -3234,6 +3566,95 @@ mod tests {
         assert!(
             cases >= 500,
             "expected hundreds of composition cases, ran {cases}"
+        );
+    }
+
+    /// The lift's WIRING proof, generative and at scale: over generated
+    /// histories (`gen_existential_history`'s discipline, the
+    /// empty-payload twin of `gen_history` shared with the
+    /// grid-differential campaign above — an empty payload keeps the
+    /// governing tuple down to the key alone, matching the negation
+    /// probe's single variable), swept across that history's own complete
+    /// grid on both axes, negation over `hist@at` matches the plain-set
+    /// complement of `resolve_relation(&history, at)` against `base`.
+    ///
+    /// This is a differential over the evaluator's negation WIRING, not a
+    /// second proof of `resolve_relation` itself: both sides call
+    /// `resolve_relation` (the evaluator internally, via `literal_rows`;
+    /// this test directly, to build `expected`), so a bug shared by both
+    /// call sites — a `resolve_relation`/`resolve_events` correctness bug
+    /// — would NOT be caught here. That correctness is proven
+    /// independently by `grid_differential_derived_intervals_equal_
+    /// maximal_runs`, `diff_composition_law_holds_across_axes`, and
+    /// `asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture` (which
+    /// cross-checks `resolve_events` against the real bitemporal kernel).
+    /// What this campaign DOES prove, at 34000+ cases: that negation's
+    /// set-difference wiring is right for every one of them, given
+    /// whatever `resolve_relation` returns — coordinate/axis-handling
+    /// bugs in HOW that coordinate reaches the negated literal are
+    /// exactly what this catches; the truly independent, hand-traced
+    /// single-fixture proof is
+    /// `negation_over_a_fixed_as_of_historical_relation_matches_
+    /// independent_complement`, above.
+    #[test]
+    fn negation_over_fixed_as_of_matches_independent_complement_generatively() {
+        let mut cases = 0usize;
+        for seed in 0..500u64 {
+            let mut rng = Rng::new(0x4E6A_7104_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let key = k(1);
+            let history = gen_existential_history(&mut rng, &key);
+            let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+            histories.insert("hist", history.clone());
+            let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+            // `base` ranges over the history's own key plus two neighbors
+            // it never claims, so the complement is non-trivial on both
+            // sides.
+            facts.insert("base", [k(1), k(2), k(3)].into_iter().collect());
+
+            for &sys_pt in &grid(&history, Axis::Sys) {
+                for &valid_pt in &grid(&history, Axis::Valid) {
+                    let at = AsOf {
+                        valid: valid_pt,
+                        sys: sys_pt,
+                    };
+                    let program = Program {
+                        rules: vec![Rule::plain(
+                            "out",
+                            vec![x()],
+                            vec![
+                                lit("base", vec![x()], false),
+                                lit_at("hist", vec![x()], true, at),
+                            ],
+                        )],
+                        facts: facts.clone(),
+                        histories: histories.clone(),
+                        ..Program::default()
+                    };
+                    let db = naive_eval(&program).expect("negation over a fixed as-of is legal");
+
+                    // Expectation: `base` minus `hist`'s `resolve_relation`
+                    // snapshot at `at`, called directly rather than
+                    // through the program/evaluator — this checks the
+                    // NEGATION WIRING against that snapshot, not
+                    // `resolve_relation` itself (see the doc comment
+                    // above).
+                    let hist_at = resolve_relation(&history, at);
+                    let expected: BTreeSet<Tuple> = facts["base"]
+                        .iter()
+                        .filter(|t| !hist_at.contains(*t))
+                        .cloned()
+                        .collect();
+                    assert_eq!(
+                        db["out"], expected,
+                        "seed {seed}: at={at:?} history={history:?}"
+                    );
+                    cases += 1;
+                }
+            }
+        }
+        assert!(
+            cases > 5000,
+            "expected a rich negation-over-as-of campaign, ran {cases}"
         );
     }
 }

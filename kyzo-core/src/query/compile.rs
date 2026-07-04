@@ -143,7 +143,7 @@ use crate::data::aggr::Aggregation;
 use crate::data::expr::Expr;
 use crate::data::program::{
     MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed, MagicSymbol,
-    StratifiedMagicProgram,
+    StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
@@ -512,13 +512,26 @@ pub(crate) fn compile_magic_rule_body(
                     }
                 }
 
-                let chosen_index = store.choose_index(&join_indices, rel_app.as_of.is_some());
+                // `@spans`/`@delta`/`@delta_sys` always scan the base
+                // relation directly: they need its own keyspace (the raw
+                // multi-version history, or the plain as-of resolution
+                // `skip_scan_all` already gives), never a plain index's
+                // mirrored one — accelerating them through an index is
+                // chunk 4's posting-index work, not this one's.
+                let chosen_index = match &rel_app.validity {
+                    Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
+                    _ => store.choose_index(&join_indices, rel_app.validity.is_some()),
+                };
 
                 match chosen_index {
                     None => {
                         // scan the base relation
-                        let right =
-                            RelAlgebra::relation(right_vars, store, rel_app.span, rel_app.as_of)?;
+                        let right = RelAlgebra::relation(
+                            right_vars,
+                            store,
+                            rel_app.span,
+                            rel_app.validity.clone(),
+                        )?;
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret = ret.join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }
@@ -546,7 +559,7 @@ pub(crate) fn compile_magic_rule_body(
                                 new_right_vars,
                                 idx_store,
                                 rel_app.span,
-                                rel_app.as_of,
+                                rel_app.validity.clone(),
                             )?;
                             debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                             ret =
@@ -581,7 +594,7 @@ pub(crate) fn compile_magic_rule_body(
                                     index_vars.clone(),
                                     idx_store,
                                     rel_app.span,
-                                    rel_app.as_of,
+                                    rel_app.validity.clone(),
                                 )?;
                                 ret = ret.join(index, left_keys, right_keys, rel_app.span)?;
                             }
@@ -599,7 +612,7 @@ pub(crate) fn compile_magic_rule_body(
                                     right_vars,
                                     store,
                                     rel_app.span,
-                                    rel_app.as_of,
+                                    rel_app.validity.clone(),
                                 )?;
                                 ret = ret.join(relation, left_keys, right_keys, rel_app.span)?;
                             }
@@ -717,15 +730,28 @@ pub(crate) fn compile_magic_rule_body(
                     }
                 }
 
-                let chosen_index = store.choose_index(&join_indices, rel_app.as_of.is_some());
+                // Same short-circuit as the positive arm: a temporal
+                // clause always scans the base relation (and, either way,
+                // `neg_join` below refuses a `Spans`/`Delta` right side
+                // exactly like an as-of scan — negation over a
+                // time-travel-flavored read has no well-defined skip-scan
+                // form).
+                let chosen_index = match &rel_app.validity {
+                    Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
+                    _ => store.choose_index(&join_indices, rel_app.validity.is_some()),
+                };
 
                 match chosen_index {
                     // No usable index, or one that would need a back-join
                     // (useless under negation: the anti-join needs the
                     // base rows themselves): scan the base relation.
                     None | Some((_, true)) => {
-                        let right =
-                            RelAlgebra::relation(right_vars, store, rel_app.span, rel_app.as_of)?;
+                        let right = RelAlgebra::relation(
+                            right_vars,
+                            store,
+                            rel_app.span,
+                            rel_app.validity.clone(),
+                        )?;
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
@@ -750,7 +776,7 @@ pub(crate) fn compile_magic_rule_body(
                             new_right_vars,
                             idx_store,
                             rel_app.span,
-                            rel_app.as_of,
+                            rel_app.validity.clone(),
                         )?;
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
@@ -1118,7 +1144,7 @@ mod tests {
         MagicAtom::Relation(MagicRelationApplyAtom {
             name: sym(name),
             args: args.to_vec(),
-            as_of: None,
+            validity: None,
             span: sp(),
         })
     }
@@ -1126,7 +1152,7 @@ mod tests {
         MagicAtom::NegatedRelation(MagicRelationApplyAtom {
             name: sym(name),
             args: args.to_vec(),
-            as_of: None,
+            validity: None,
             span: sp(),
         })
     }
@@ -1345,7 +1371,9 @@ mod tests {
             RelAlgebra::Fixed(_)
             | RelAlgebra::TempStore(_)
             | RelAlgebra::Stored(_)
-            | RelAlgebra::StoredWithValidity(_) => {}
+            | RelAlgebra::StoredWithValidity(_)
+            | RelAlgebra::Spans(_)
+            | RelAlgebra::Delta(_) => {}
         }
     }
 

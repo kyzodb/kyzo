@@ -68,7 +68,8 @@ use std::sync::Arc;
 
 use miette::Result;
 
-use crate::data::aggr::parse_aggr;
+use crate::data::aggr::{MeetAggrObj, parse_aggr};
+use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -79,7 +80,11 @@ use crate::query::eval::{
     FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody, Witness, WitnessTable,
     stratified_evaluate,
 };
-use crate::query::laws::{FixedRule, HeadAggr, Literal, Program, Rel, Rule, Term, naive_eval};
+use crate::query::laws::{
+    AsOf, Axis, Bindings, Event, FixedRule, HeadAggr, Interval, Literal, OPEN_END, Program, Rel,
+    Rule, Term, compose, derive_intervals, diff, ground, head_classes, naive_eval, naive_eval_at,
+    resolve, resolve_relation, unify,
+};
 use crate::query::levels::EpochStore;
 use crate::query::temp_store::{RegularTempStore, TupleInIter};
 
@@ -143,40 +148,8 @@ fn entry_symbol() -> MagicSymbol {
     }
 }
 
-type Bindings = BTreeMap<&'static str, DataValue>;
-
-fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Option<Bindings> {
-    if args.len() != tuple.len() {
-        return None;
-    }
-    let mut out = bound.clone();
-    for (t, val) in args.iter().zip(tuple) {
-        match t {
-            Term::Const(c) => {
-                if c != val {
-                    return None;
-                }
-            }
-            Term::Var(name) => match out.get(name) {
-                Some(existing) if existing != val => return None,
-                Some(_) => {}
-                None => {
-                    out.insert(name, val.clone());
-                }
-            },
-        }
-    }
-    Some(out)
-}
-
-fn ground(args: &[Term], bound: &Bindings) -> Tuple {
-    args.iter()
-        .map(|t| match t {
-            Term::Const(c) => c.clone(),
-            Term::Var(var) => bound[var].clone(),
-        })
-        .collect()
-}
+// `Bindings`, `unify`, and `ground` are the shared reference-tier helpers
+// from `query/laws.rs` (issue #89) — this harness used to hand-copy them.
 
 struct ModelBody {
     head: Vec<Term>,
@@ -368,31 +341,8 @@ impl FixedRuleEval for ModelFixed {
 // not lean on the judge's internals. Any *valid* stratification yields the
 // oracle's fixpoint, so this recomputes one from the same edge rules.
 
-struct HeadClass {
-    has_aggr: bool,
-    is_meet: bool,
-}
-
-fn head_classes(program: &Program) -> BTreeMap<Rel, HeadClass> {
-    let mut per_head: BTreeMap<Rel, Vec<&Rule>> = BTreeMap::new();
-    for rule in &program.rules {
-        per_head.entry(rule.head_rel).or_default().push(rule);
-    }
-    per_head
-        .into_iter()
-        .map(|(rel, rules)| {
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
-            let is_meet = has_aggr
-                && rules.iter().all(|r| {
-                    r.aggr.iter().all(|a| match a {
-                        None => true,
-                        Some((aggregation, _)) => aggregation.is_meet(),
-                    })
-                });
-            (rel, HeadClass { has_aggr, is_meet })
-        })
-        .collect()
-}
+// `HeadClass`/`head_classes` are the shared reference-tier items from
+// `query/laws.rs` (issue #89) — this harness used to hand-copy them too.
 
 fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
     let classes = head_classes(program);
@@ -1330,38 +1280,24 @@ fn index_witnesses(table: &WitnessTable) -> BTreeMap<(String, Tuple), Witness> {
 
 // ── The independent checker ──────────────────────────────────────────────
 //
-// This function imports NO evaluator symbol: only the model (`Rule`,
-// `Literal`, `Term`) and plain data. It re-derives each step's binding from
-// scratch, so a corrupted proof cannot pass by echoing eval's own reasoning.
-// Its inputs are the rules (grouped per head), the ground facts, and the
-// proof; nothing else.
-
-fn check_unify(
-    args: &[Term],
-    tuple: &[DataValue],
-    bound: &mut BTreeMap<&'static str, DataValue>,
-) -> bool {
-    if args.len() != tuple.len() {
-        return false;
-    }
-    for (t, val) in args.iter().zip(tuple) {
-        match t {
-            Term::Const(c) => {
-                if c != val {
-                    return false;
-                }
-            }
-            Term::Var(name) => match bound.get(name) {
-                Some(existing) if existing != val => return false,
-                Some(_) => {}
-                None => {
-                    bound.insert(name, val.clone());
-                }
-            },
-        }
-    }
-    true
-}
+// `verify` imports no EVALUATOR symbol: only the model (`Rule`, `Literal`,
+// `Term`), the shared reference-tier `unify` (`query/laws.rs`, issue #89),
+// and plain data. It re-derives each step's binding from scratch, so a
+// corrupted proof cannot pass by echoing eval's own reasoning. Its inputs
+// are the rules (grouped per head), the ground facts, and the proof;
+// nothing else.
+//
+// This used to hand-roll its own `check_unify` — a mutate-in-place,
+// bool-returning variant, never independent of `unify` in the oracle-vs-
+// judge sense (it never checked `unify` itself; it existed only because
+// `verify` was written before this module imported the shared helper). It
+// was drift, not a deliberate second algorithm: every call site already
+// has one candidate binding to confirm, never a branching search over
+// several, so `unify`'s clone-and-return-`Option` shape costs nothing here
+// and the bespoke in-place variant bought no real independence. Removed
+// (issue #89); `verify` below folds through `unify` the same way
+// `provenance.rs`'s own independent checker (`verify_model_proof`) already
+// did.
 
 /// Verify a proof tree. `Ok(())` iff every leaf is a genuine ground fact and
 /// every step is a valid instantiation of the named rule whose positive
@@ -1411,12 +1347,15 @@ fn verify(
                 ));
             }
             // One binding must satisfy the head and every positive premise.
-            let mut bound: BTreeMap<&'static str, DataValue> = BTreeMap::new();
-            if !check_unify(&rule.head_args, tuple, &mut bound) {
-                return Err(format!(
-                    "head of rule {rule_idx} does not ground to {tuple:?}"
-                ));
-            }
+            let mut bound: Bindings = Bindings::new();
+            bound = match unify(&rule.head_args, tuple, &bound) {
+                Some(b) => b,
+                None => {
+                    return Err(format!(
+                        "head of rule {rule_idx} does not ground to {tuple:?}"
+                    ));
+                }
+            };
             for (l, child) in positives.iter().zip(premises) {
                 let (crel, ctuple) = child.head();
                 if crel != l.rel {
@@ -1425,11 +1364,14 @@ fn verify(
                         l.rel
                     ));
                 }
-                if !check_unify(&l.args, ctuple, &mut bound) {
-                    return Err(format!(
-                        "premise {crel}{ctuple:?} inconsistent with binding"
-                    ));
-                }
+                bound = match unify(&l.args, ctuple, &bound) {
+                    Some(b) => b,
+                    None => {
+                        return Err(format!(
+                            "premise {crel}{ctuple:?} inconsistent with binding"
+                        ));
+                    }
+                };
             }
             // Premises independently valid.
             for child in premises {
@@ -1755,4 +1697,1268 @@ fn generator_is_seed_reproducible() {
     // And a program of real size: thousands of EDB tuples.
     let total: usize = a.program.facts.values().map(|s| s.len()).sum();
     assert!(total > 800, "generated EDB is substantial: {total} tuples");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// CAPABILITY 3 — sys-axis generative coverage: the unified temporal
+// oracle's OWN internal consistency, generatively.
+//
+// Story #62 unified three disjoint temporal oracles into one (`laws.rs`):
+// point events, per-literal `AsOf`, `derive_intervals`, `diff`/`compose`.
+// But the generator above (`GenParams`/`generate`) only ever emits UNTIMED
+// programs — `Program::facts`, never `Program::histories` — so every
+// campaign in CAPABILITY 1 exercises the untimed half of the oracle only.
+// This section is that generator's temporal twin.
+//
+// It does NOT drive the real engine: `ModelBody`/`ModelFixed` above
+// (`rows_of`, `negated_probe_hits`) read `self.facts` only and have no
+// notion of `Program::histories` or per-literal `AsOf` at all — that seam
+// (the derivation/diff RA operators) is a later chunk of story #62, built
+// elsewhere. Every check below is ORACLE-VS-ORACLE, within `laws.rs`'s own
+// machinery, over seeded, deterministic event histories and programs
+// richer than any hand fixture (multiple relations, multiple keys,
+// negative coordinates on both axes, same-valid-instant system-version
+// corrections) — but "oracle-vs-oracle" proves different things per check,
+// worth being precise about: (a) `resolve`'s direct point resolution
+// against `derive_intervals`'s interval reconstruction are genuinely TWO
+// independent algorithms over the same events, so this differentials
+// resolution correctness itself; (b) `diff`/`compose`'s compositionality
+// law is a mathematical identity over `diff`'s own outputs, not an
+// independence claim; (c) `naive_eval_at`'s per-literal coordinate
+// pushdown is checked against `resolve_relation` called directly per
+// coordinate then hand-joined — this proves the PUSHDOWN WIRING (each
+// literal occurrence resolves at its OWN coordinate), not
+// `resolve_relation`'s resolution algebra, which (a) already covers.
+// ════════════════════════════════════════════════════════════════════════
+
+/// Parameters governing one generated temporal fixture: how many
+/// historical relations, how many keys each carries, how many events per
+/// key, and the half-width of the coordinate range those events are drawn
+/// from — always CENTERED ON ZERO, so every fixture straddles negative and
+/// positive coordinates on both axes rather than treating negative
+/// coordinates as a rare edge case.
+#[derive(Debug, Clone)]
+struct TemporalGenParams {
+    n_relations: usize,
+    keys_per_relation: i64,
+    events_per_key: i64,
+    coord_span: i64,
+}
+
+fn gen_temporal_params(rng: &mut Rng) -> TemporalGenParams {
+    TemporalGenParams {
+        n_relations: rng.range(1, 4) as usize,
+        keys_per_relation: rng.range(1, 4),
+        events_per_key: rng.range(2, 8),
+        coord_span: rng.range(4, 20),
+    }
+}
+
+const TEMPORAL_POLARITIES: [ClaimPolarity; 3] = [
+    ClaimPolarity::Assert,
+    ClaimPolarity::Retract,
+    ClaimPolarity::Erase,
+];
+
+/// One key's event history: `events_per_key` events at coordinates drawn
+/// from `[-coord_span, coord_span]` on BOTH axes (never the reserved
+/// terminal tick — `coord_span` keeps every draw far below `i64::MAX`), a
+/// genuine mix of all three polarities, and — with even odds per event — a
+/// SAME-VALID-INSTANT system-version correction: a second event at the
+/// identical `valid` but a strictly later `sys`, the exact shape the
+/// governing-version skip-scan (`data/bitemporal.rs::check_key_for_bitemporal`,
+/// mirrored by `resolve_events`) exists to arbitrate.
+fn gen_temporal_history(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
+    let mut history = Vec::new();
+    for _ in 0..p.events_per_key {
+        let valid = rng.range(-p.coord_span, p.coord_span);
+        let sys = rng.range(-p.coord_span, p.coord_span);
+        push_temporal_event(&mut history, rng, key, valid, sys);
+        if rng.chance(2, 5) {
+            let correction_sys = sys + rng.range(1, 5);
+            push_temporal_event(&mut history, rng, key, valid, correction_sys);
+        }
+    }
+    history
+}
+
+fn push_temporal_event(history: &mut Vec<Event>, rng: &mut Rng, key: &Tuple, valid: i64, sys: i64) {
+    let event = match rng.one_of(&TEMPORAL_POLARITIES) {
+        ClaimPolarity::Assert => Event::assert(key.clone(), vec![v(rng.range(0, 5))], valid, sys),
+        ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
+        ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
+    };
+    history.push(event.expect("coord_span keeps every draw far below the reserved terminal tick"));
+}
+
+/// A bundle of several historical relations, each with several keys'
+/// independently generated histories — the raw EDB material a generated
+/// temporal `Program` is built from.
+struct TemporalHistories {
+    per_relation: BTreeMap<Rel, BTreeMap<Tuple, Vec<Event>>>,
+}
+
+/// Relation names available to the generator, in a fixed order so seed
+/// reproducibility never depends on `BTreeMap` iteration order deciding
+/// which subset gets used.
+const HIST_RELS: [&str; 3] = ["ha", "hb", "hc"];
+
+fn gen_temporal_histories(rng: &mut Rng, p: &TemporalGenParams) -> TemporalHistories {
+    let mut per_relation = BTreeMap::new();
+    for &rel in HIST_RELS.iter().take(p.n_relations) {
+        let mut per_key = BTreeMap::new();
+        for i in 0..p.keys_per_relation {
+            let key = vec![v(i)];
+            per_key.insert(key.clone(), gen_temporal_history(rng, &key, p));
+        }
+        per_relation.insert(rel, per_key);
+    }
+    TemporalHistories { per_relation }
+}
+
+impl TemporalHistories {
+    /// One relation's whole event history, every key's events flattened
+    /// together — exactly the shape `Program::histories` stores.
+    fn flat(&self, rel: Rel) -> Vec<Event> {
+        self.per_relation[rel].values().flatten().cloned().collect()
+    }
+}
+
+/// Permutes a generated rule's body literals in place, seeded by `rng`
+/// (Fisher-Yates) — deliberate coverage of a SEMANTIC property, not noise.
+///
+/// `body_bindings` (`laws.rs`, ~1120) explicitly reorders positives before
+/// negatives regardless of the rule's OWN source order — implementing the
+/// invariant that a rule's answer set never depends on its body's literal
+/// order. A hostile review's "Mutant C" (reverting that reorder to plain
+/// source order) survived every generative campaign, because every
+/// generator here — like every hand fixture — happened to always emit
+/// positives before negatives already, so the property was pinned by only
+/// ONE named regression test (`negation_over_as_of_is_correct_even_when_
+/// the_negated_literal_precedes_its_binder_in_source_order`) instead of
+/// being hunted at scale. `check_safety` and `check_wellformed` verify a
+/// rule per-literal or over the body as a SET, never positionally, so any
+/// permutation of a well-formed body is itself well-formed — a full
+/// shuffle is always legal here, not merely a special case.
+fn shuffle_body(rng: &mut Rng, body: &mut [Literal]) {
+    for i in (1..body.len()).rev() {
+        let j = rng.below((i + 1) as u64) as usize;
+        body.swap(i, j);
+    }
+}
+
+/// A generated temporal `Program`: every relation of `hist` stored as a
+/// historical EDB, one plain union rule per relation reading it untimed
+/// (`out(K,V) :- rel(K,V)`), plus — when at least two relations were
+/// generated — a genuine cross-relation join (`joined(K,V1,V2) :- ha(K,V1),
+/// hb(K,V2)`), all non-recursive and negation-free so evaluation is a
+/// single pass no fixpoint iteration is needed to reach. Every rule body is
+/// shuffled (`shuffle_body`) before being stored, so the grid differential
+/// run over this program hunts body-order sensitivity, not only the
+/// union/join wiring it was written to prove.
+fn temporal_program(rng: &mut Rng, hist: &TemporalHistories) -> Program {
+    let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+    for &rel in hist.per_relation.keys() {
+        histories.insert(rel, hist.flat(rel));
+    }
+    let mut rules: Vec<Rule> = histories
+        .keys()
+        .map(|&rel| Rule::plain("out", vec![x(), y()], vec![lit(rel, vec![x(), y()], false)]))
+        .collect();
+    if histories.contains_key("ha") && histories.contains_key("hb") {
+        rules.push(Rule::plain(
+            "joined",
+            vec![x(), y(), z()],
+            vec![
+                lit("ha", vec![x(), y()], false),
+                lit("hb", vec![x(), z()], false),
+            ],
+        ));
+    }
+    for rule in &mut rules {
+        shuffle_body(rng, &mut rule.body);
+    }
+    Program {
+        rules,
+        histories,
+        ..Program::default()
+    }
+}
+
+/// Every distinct stored coordinate of `history` on `axis`, ± one tick,
+/// plus the extremes — `laws::tests::grid`'s complete-grid pattern
+/// (private to that module's own tests), reconstructed here so this
+/// section's campaigns can apply it to GENERATED histories bundled inside
+/// a generated program, not only to one hand-picked key.
+fn program_grid(history: &[Event], axis: Axis) -> Vec<i64> {
+    let mut pts: Vec<i64> = history
+        .iter()
+        .flat_map(|e| {
+            let c = match axis {
+                Axis::Valid => e.valid,
+                Axis::Sys => e.sys,
+            };
+            [c - 1, c, c + 1]
+        })
+        .collect();
+    pts.push(i64::MIN);
+    // Not `i64::MAX` itself: it is `OPEN_END`/`AsOf::current()`'s shared
+    // sentinel, never a real stored coordinate (`Event::assert` et al.
+    // refuse it) — probing one tick short is still the complete-grid
+    // extreme for a query coordinate.
+    pts.push(i64::MAX - 1);
+    pts.sort_unstable();
+    pts.dedup();
+    pts
+}
+
+// ── (a) Snapshot-equivalence grid, generalized from one key/one history
+//    (the sealed pattern) to a generated PROGRAM's whole historical EDB —
+//    every relation, every key, both axes. ───────────────────────────────
+
+#[test]
+fn grid_differential_over_generated_temporal_programs() {
+    let mut cases = 0usize;
+    let seeds = 400u64;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0x7E57_A105_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let hist = gen_temporal_histories(&mut rng, &params);
+        let program = temporal_program(&mut rng, &hist);
+
+        for (&rel, history) in &program.histories {
+            let keys: BTreeSet<&Tuple> = history.iter().map(|e| &e.key).collect();
+            for key in keys {
+                let valid_grid = program_grid(history, Axis::Valid);
+                let sys_grid = program_grid(history, Axis::Sys);
+                for &sys_pt in &sys_grid {
+                    let ivs = derive_intervals(history, key, Axis::Valid, sys_pt);
+                    for &valid_pt in &valid_grid {
+                        let direct = resolve(
+                            history,
+                            key,
+                            AsOf {
+                                valid: valid_pt,
+                                sys: sys_pt,
+                            },
+                        );
+                        let via_intervals = ivs
+                            .iter()
+                            .find(|iv| iv.start <= valid_pt && valid_pt < iv.end)
+                            .map(|iv| iv.tuple.clone());
+                        assert_eq!(
+                            direct, via_intervals,
+                            "seed {seed} rel={rel} key={key:?}: valid axis \
+                             valid={valid_pt} sys={sys_pt}"
+                        );
+                        cases += 1;
+                    }
+                }
+                for &fixed_valid in &[history.first().map(|e| e.valid).unwrap_or(0), 0] {
+                    let ivs = derive_intervals(history, key, Axis::Sys, fixed_valid);
+                    for &sys_pt in &sys_grid {
+                        let direct = resolve(
+                            history,
+                            key,
+                            AsOf {
+                                valid: fixed_valid,
+                                sys: sys_pt,
+                            },
+                        );
+                        let via_intervals = ivs
+                            .iter()
+                            .find(|iv| iv.start <= sys_pt && sys_pt < iv.end)
+                            .map(|iv| iv.tuple.clone());
+                        assert_eq!(
+                            direct, via_intervals,
+                            "seed {seed} rel={rel} key={key:?}: sys axis \
+                             fixed_valid={fixed_valid} sys={sys_pt}"
+                        );
+                        cases += 1;
+                    }
+                }
+            }
+        }
+
+        // Program-level wiring: the whole-program answer at "current",
+        // through the real evaluator (`naive_eval_at` -> `literal_rows` ->
+        // `resolve_relation`), must equal the union/join hand-computed
+        // directly from each relation's `resolve_relation` snapshot — the
+        // generated union and join rules compose the same way the raw
+        // histories do above.
+        let db = naive_eval_at(&program, AsOf::current()).expect("well-formed generated program");
+        let mut expected_out: BTreeSet<Tuple> = BTreeSet::new();
+        for history in program.histories.values() {
+            expected_out.extend(resolve_relation(history, AsOf::current()));
+        }
+        assert_eq!(
+            db.get("out").cloned().unwrap_or_default(),
+            expected_out,
+            "seed {seed}: union wiring"
+        );
+        cases += 1;
+        if let (Some(ha), Some(hb)) = (program.histories.get("ha"), program.histories.get("hb")) {
+            let snap_a = resolve_relation(ha, AsOf::current());
+            let snap_b = resolve_relation(hb, AsOf::current());
+            let mut expected_joined: BTreeSet<Tuple> = BTreeSet::new();
+            for row_a in &snap_a {
+                for row_b in &snap_b {
+                    if row_a[0] == row_b[0] {
+                        expected_joined.insert(vec![
+                            row_a[0].clone(),
+                            row_a[1].clone(),
+                            row_b[1].clone(),
+                        ]);
+                    }
+                }
+            }
+            assert_eq!(
+                db.get("joined").cloned().unwrap_or_default(),
+                expected_joined,
+                "seed {seed}: join wiring"
+            );
+            cases += 1;
+        }
+    }
+    assert!(
+        cases > 5000,
+        "expected a rich grid campaign over generated programs, ran {cases}"
+    );
+}
+
+// ── (b) Diff-composition law, over generated histories, with RANDOMIZED
+//    a<b<c bounds on both axes (the sealed `diff_composition_law_holds_
+//    across_axes` in laws.rs pins fixed bounds 0/3/6 — this generalizes to
+//    arbitrary, seeded, negative-inclusive bounds). ───────────────────────
+
+/// Three distinct coordinates, ascending, drawn from a range wide enough
+/// to straddle the generated history's own span on both sides — `diff`
+/// composes over ANY `a<b<c`, not only bounds that happen to be stored
+/// coordinates.
+fn ordered_triple(rng: &mut Rng, span: i64) -> (i64, i64, i64) {
+    let lo = -(span * 2) - 5;
+    let hi = span * 2 + 5;
+    loop {
+        let mut xs = [rng.range(lo, hi), rng.range(lo, hi), rng.range(lo, hi)];
+        xs.sort_unstable();
+        if xs[0] < xs[1] && xs[1] < xs[2] {
+            return (xs[0], xs[1], xs[2]);
+        }
+    }
+}
+
+#[test]
+fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() {
+    let mut cases = 0usize;
+    let seeds = 400u64;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0xD1FF_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let key = vec![v(0)];
+        let history = gen_temporal_history(&mut rng, &key, &params);
+
+        let sys_now = AsOf::current().sys;
+        let (av, bv, cv) = ordered_triple(&mut rng, params.coord_span);
+        let a = AsOf {
+            valid: av,
+            sys: sys_now,
+        };
+        let b = AsOf {
+            valid: bv,
+            sys: sys_now,
+        };
+        let c = AsOf {
+            valid: cv,
+            sys: sys_now,
+        };
+        let ab = diff(&history, a, b);
+        let bc = diff(&history, b, c);
+        let ac = diff(&history, a, c);
+        assert_eq!(
+            compose(&ab, &bc),
+            ac,
+            "seed {seed}: valid axis a={av} b={bv} c={cv}"
+        );
+        cases += 1;
+
+        let fixed_valid = history.first().map(|e| e.valid).unwrap_or(0);
+        let (asys, bsys, csys) = ordered_triple(&mut rng, params.coord_span);
+        let a = AsOf {
+            valid: fixed_valid,
+            sys: asys,
+        };
+        let b = AsOf {
+            valid: fixed_valid,
+            sys: bsys,
+        };
+        let c = AsOf {
+            valid: fixed_valid,
+            sys: csys,
+        };
+        let ab = diff(&history, a, b);
+        let bc = diff(&history, b, c);
+        let ac = diff(&history, a, c);
+        assert_eq!(
+            compose(&ab, &bc),
+            ac,
+            "seed {seed}: sys axis a={asys} b={bsys} c={csys}"
+        );
+        cases += 1;
+    }
+    assert!(
+        cases >= 500,
+        "expected hundreds of randomized-bounds composition cases, ran {cases}"
+    );
+}
+
+// ── (c) Per-literal `AsOf` pushdown consistency: a generated program with
+//    TWO literals reading the SAME historical relation at two different
+//    coordinates, checked against resolving each coordinate on its own and
+//    hand-joining — the exact reading `literal_rows`'s doc comment claims
+//    ("each literal sees its own snapshot"). Precisely: this proves the
+//    PUSHDOWN wiring — that two occurrences of one literal, each carrying
+//    its own `as_of`, are each resolved at THEIR OWN coordinate rather
+//    than some shared/confused one — not `resolve_relation`'s own
+//    resolution algebra (both sides call it; that correctness is
+//    `laws.rs`'s grid differential/diff-composition law's job). ─────────
+
+fn lit_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Literal {
+    Literal::pos_at(rel, args, at)
+}
+
+/// A coordinate a tick or two off a real stored event — never the reserved
+/// terminal tick. `Event`'s own constructors already keep every STORED
+/// coordinate far below it; this only has to keep the QUERY coordinate
+/// from coincidentally landing on it too (a legitimate "read current"
+/// query bound this fixture has no interest in probing).
+fn near_coordinate(rng: &mut Rng, history: &[Event]) -> AsOf {
+    if history.is_empty() {
+        return AsOf { valid: 0, sys: 0 };
+    }
+    let events: Vec<&Event> = history.iter().collect();
+    let e = rng.one_of(&events);
+    AsOf {
+        valid: nudge(rng, e.valid),
+        sys: nudge(rng, e.sys),
+    }
+}
+
+fn nudge(rng: &mut Rng, coordinate: i64) -> i64 {
+    let out = coordinate.saturating_add(rng.range(-2, 3));
+    if out == i64::MAX { out - 1 } else { out }
+}
+
+#[test]
+fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() {
+    let mut cases = 0usize;
+    let seeds = 400u64;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0x9A5D_6E1B_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let mut history = Vec::new();
+        for i in 0..params.keys_per_relation {
+            history.extend(gen_temporal_history(&mut rng, &vec![v(i)], &params));
+        }
+
+        // Two distinct query coordinates near real generated events — the
+        // two literal-level `AsOf`s this rule's two occurrences of `hx`
+        // will each carry.
+        let c1 = near_coordinate(&mut rng, &history);
+        let c2 = near_coordinate(&mut rng, &history);
+
+        let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+        histories.insert("hx", history);
+        // out(K, V1, V2) :- hx(K, V1) @c1, hx(K, V2) @c2 — the same
+        // relation, read at two different coordinates, joined on the
+        // shared key.
+        let program = Program {
+            rules: vec![Rule::plain(
+                "out",
+                vec![x(), y(), z()],
+                vec![
+                    lit_at("hx", vec![x(), y()], c1),
+                    lit_at("hx", vec![x(), z()], c2),
+                ],
+            )],
+            histories,
+            ..Program::default()
+        };
+
+        let got = naive_eval(&program)
+            .expect("well-formed generated program")
+            .get("out")
+            .cloned()
+            .unwrap_or_default();
+
+        // Expectation: resolve each coordinate's snapshot ON ITS OWN,
+        // called directly rather than through the program/evaluator, then
+        // hand-join on the shared key — this checks the PUSHDOWN wiring
+        // against those snapshots, not `resolve_relation` itself.
+        let hx = &program.histories["hx"];
+        let snap1 = resolve_relation(hx, c1);
+        let snap2 = resolve_relation(hx, c2);
+        let mut expected: BTreeSet<Tuple> = BTreeSet::new();
+        for row1 in &snap1 {
+            for row2 in &snap2 {
+                if row1[0] == row2[0] {
+                    expected.insert(vec![row1[0].clone(), row1[1].clone(), row2[1].clone()]);
+                }
+            }
+        }
+        assert_eq!(got, expected, "seed {seed}: c1={c1:?} c2={c2:?}");
+        cases += 1;
+    }
+    assert!(
+        cases >= 300,
+        "expected hundreds of pushdown-consistency cases, ran {cases}"
+    );
+}
+
+// ── Hand mutants: three deliberate weakenings of the generator/differential
+//    code above, each shown to blind a campaign to a companion
+//    deliberately-broken oracle twin that the REAL (unweakened) generator
+//    or grid catches. ──────────────────────────────────────────────────────
+
+// Mutant 1 — dropping Erase from generation.
+
+/// The buggy twin: `Erase` settles the fact ABSENT, like `Retract`,
+/// instead of falling through to the next older instant — a bug shaped
+/// exactly like the one `data/bitemporal.rs`'s own governing-version sweep
+/// must avoid (`Erase` is transparent, never terminal). Built from
+/// `resolve`, so only the polarity handling differs from the real oracle.
+fn resolve_erase_as_retract_bug(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
+    let mut instants: Vec<i64> = history
+        .iter()
+        .filter(|e| &e.key == key && e.valid <= at.valid)
+        .map(|e| e.valid)
+        .collect();
+    instants.sort_unstable();
+    instants.dedup();
+    for instant in instants.into_iter().rev() {
+        let governing = history
+            .iter()
+            .filter(|e| &e.key == key && e.valid == instant && e.sys <= at.sys)
+            .max_by_key(|e| e.sys);
+        match governing.map(|e| e.polarity) {
+            Some(ClaimPolarity::Assert) => {
+                let e = governing.expect("just matched Some");
+                let mut t = e.key.clone();
+                t.extend(e.payload.iter().cloned());
+                return Some(t);
+            }
+            // BUG: Erase should fall through (continue the loop, `{}`),
+            // not settle absent like Retract.
+            Some(ClaimPolarity::Retract) | Some(ClaimPolarity::Erase) => return None,
+            None => {}
+        }
+    }
+    None
+}
+
+/// The mutated generator: only `Assert`/`Retract`, never `Erase`.
+fn gen_temporal_history_no_erase(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
+    let mut history = Vec::new();
+    for _ in 0..p.events_per_key {
+        let valid = rng.range(-p.coord_span, p.coord_span);
+        let sys = rng.range(-p.coord_span, p.coord_span);
+        let event = if rng.chance(1, 2) {
+            Event::assert(key.clone(), vec![v(rng.range(0, 5))], valid, sys)
+        } else {
+            Event::retract(key.clone(), valid, sys)
+        };
+        history
+            .push(event.expect("coord_span keeps every draw far below the reserved terminal tick"));
+        if rng.chance(2, 5) {
+            let correction_sys = sys + rng.range(1, 5);
+            history.push(
+                Event::assert(key.clone(), vec![v(rng.range(0, 5))], valid, correction_sys)
+                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
+            );
+        }
+    }
+    history
+}
+
+/// Does the buggy twin disagree with the real oracle anywhere on `history`'s
+/// own grid?
+fn erase_bug_manifests(history: &[Event], key: &Tuple) -> bool {
+    for &valid in &program_grid(history, Axis::Valid) {
+        for &sys in &program_grid(history, Axis::Sys) {
+            let at = AsOf { valid, sys };
+            if resolve(history, key, at) != resolve_erase_as_retract_bug(history, key, at) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[test]
+fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
+    let seeds = 300u64;
+    let key = vec![v(0)];
+
+    let mut caught_without_erase = false;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let history = gen_temporal_history_no_erase(&mut rng, &key, &params);
+        caught_without_erase |= erase_bug_manifests(&history, &key);
+    }
+    assert!(
+        !caught_without_erase,
+        "without Erase in generation, the erase-mishandling bug is structurally \
+         unreachable (Retract and the bug's mishandled Erase branch are \
+         identical) — nothing for {seeds} seeds to catch"
+    );
+
+    let mut caught_with_erase = false;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let history = gen_temporal_history(&mut rng, &key, &params); // the real generator
+        caught_with_erase |= erase_bug_manifests(&history, &key);
+    }
+    assert!(
+        caught_with_erase,
+        "the real generator (with Erase) must expose the erase-mishandling \
+         bug somewhere in {seeds} seeds"
+    );
+}
+
+// Mutant 2 — skipping negative coordinates.
+
+/// The buggy twin: sorts derived-interval breakpoints by ABSOLUTE VALUE
+/// instead of ascending — a plausible "smallest magnitude first" slip that
+/// is silently correct whenever every coordinate is non-negative (the two
+/// orders coincide) and silently wrong the instant a negative coordinate
+/// appears alongside a positive one.
+fn derive_intervals_abs_sort_bug(
+    history: &[Event],
+    key: &Tuple,
+    axis: Axis,
+    fixed: i64,
+) -> Vec<Interval> {
+    let mut breaks: Vec<i64> = history
+        .iter()
+        .filter(|e| &e.key == key)
+        .map(|e| match axis {
+            Axis::Valid => e.valid,
+            Axis::Sys => e.sys,
+        })
+        .collect();
+    breaks.sort_unstable_by_key(|b| b.unsigned_abs()); // BUG: magnitude, not ascending
+    breaks.dedup();
+    let coordinate = |pt: i64| -> AsOf {
+        match axis {
+            Axis::Valid => AsOf {
+                valid: pt,
+                sys: fixed,
+            },
+            Axis::Sys => AsOf {
+                valid: fixed,
+                sys: pt,
+            },
+        }
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < breaks.len() {
+        let start = breaks[i];
+        let Some(tuple) = resolve(history, key, coordinate(start)) else {
+            i += 1;
+            continue;
+        };
+        let mut j = i;
+        while j + 1 < breaks.len()
+            && resolve(history, key, coordinate(breaks[j + 1])) == Some(tuple.clone())
+        {
+            j += 1;
+        }
+        let end = if j + 1 < breaks.len() {
+            breaks[j + 1]
+        } else {
+            OPEN_END
+        };
+        out.push(Interval { start, end, tuple });
+        i = j + 1;
+    }
+    out
+}
+
+/// The mutated generator: coordinates drawn only from `[0, coord_span]`.
+fn gen_temporal_history_nonneg(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Vec<Event> {
+    let mut history = Vec::new();
+    for _ in 0..p.events_per_key {
+        let valid = rng.range(0, p.coord_span.max(1));
+        let sys = rng.range(0, p.coord_span.max(1));
+        push_temporal_event(&mut history, rng, key, valid, sys);
+        if rng.chance(2, 5) {
+            let correction_sys = sys + rng.range(1, 5);
+            push_temporal_event(&mut history, rng, key, valid, correction_sys);
+        }
+    }
+    history
+}
+
+fn abs_sort_bug_manifests(history: &[Event], key: &Tuple) -> bool {
+    let ivs = derive_intervals_abs_sort_bug(history, key, Axis::Valid, AsOf::current().sys);
+    for &valid in &program_grid(history, Axis::Valid) {
+        let at = AsOf {
+            valid,
+            sys: AsOf::current().sys,
+        };
+        let direct = resolve(history, key, at);
+        let via = ivs
+            .iter()
+            .find(|iv| iv.start <= valid && valid < iv.end)
+            .map(|iv| iv.tuple.clone());
+        if direct != via {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
+    let seeds = 300u64;
+    let key = vec![v(0)];
+
+    let mut caught_nonneg_only = false;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let history = gen_temporal_history_nonneg(&mut rng, &key, &params);
+        caught_nonneg_only |= abs_sort_bug_manifests(&history, &key);
+    }
+    assert!(
+        !caught_nonneg_only,
+        "without negative coordinates in generation, magnitude-order and \
+         ascending-order sorts coincide — the abs-sort bug is unreachable, \
+         nothing for {seeds} seeds to catch"
+    );
+
+    let mut caught_with_negatives = false;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let history = gen_temporal_history(&mut rng, &key, &params); // the real generator
+        caught_with_negatives |= abs_sort_bug_manifests(&history, &key);
+    }
+    assert!(
+        caught_with_negatives,
+        "the real generator (spanning negative and positive coordinates) \
+         must expose the abs-sort bug somewhere in {seeds} seeds"
+    );
+}
+
+// Mutant 3 — weakening the grid to stored coordinates only, without ±1.
+
+/// The buggy twin: every INTERIOR interval boundary closes one tick short
+/// (`breaks[j+1] - 1` instead of `breaks[j+1]`). Silent at every stored
+/// coordinate (each one is still covered by SOME interval — its own
+/// defining breakpoint, not the shortened neighbor), and wrong only at the
+/// single coordinate strictly between two stored breakpoints that differ
+/// by more than one tick — precisely the point a coordinates-only grid
+/// never probes.
+fn derive_intervals_short_end_bug(
+    history: &[Event],
+    key: &Tuple,
+    axis: Axis,
+    fixed: i64,
+) -> Vec<Interval> {
+    let mut breaks: Vec<i64> = history
+        .iter()
+        .filter(|e| &e.key == key)
+        .map(|e| match axis {
+            Axis::Valid => e.valid,
+            Axis::Sys => e.sys,
+        })
+        .collect();
+    breaks.sort_unstable();
+    breaks.dedup();
+    let coordinate = |pt: i64| -> AsOf {
+        match axis {
+            Axis::Valid => AsOf {
+                valid: pt,
+                sys: fixed,
+            },
+            Axis::Sys => AsOf {
+                valid: fixed,
+                sys: pt,
+            },
+        }
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < breaks.len() {
+        let start = breaks[i];
+        let Some(tuple) = resolve(history, key, coordinate(start)) else {
+            i += 1;
+            continue;
+        };
+        let mut j = i;
+        while j + 1 < breaks.len()
+            && resolve(history, key, coordinate(breaks[j + 1])) == Some(tuple.clone())
+        {
+            j += 1;
+        }
+        let end = if j + 1 < breaks.len() {
+            breaks[j + 1] - 1 // BUG: one tick short
+        } else {
+            OPEN_END
+        };
+        out.push(Interval { start, end, tuple });
+        i = j + 1;
+    }
+    out
+}
+
+fn short_end_bug_manifests(history: &[Event], key: &Tuple, grid: &[i64]) -> bool {
+    let ivs = derive_intervals_short_end_bug(history, key, Axis::Valid, AsOf::current().sys);
+    for &valid in grid {
+        let at = AsOf {
+            valid,
+            sys: AsOf::current().sys,
+        };
+        let direct = resolve(history, key, at);
+        let via = ivs
+            .iter()
+            .find(|iv| iv.start <= valid && valid < iv.end)
+            .map(|iv| iv.tuple.clone());
+        if direct != via {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end_boundary_bug() {
+    let seeds = 300u64;
+    let key = vec![v(0)];
+
+    // Counted, not merely booleaned: a coordinates-only grid CAN still
+    // catch this bug when two stored breakpoints happen to be exactly one
+    // tick apart (the shortened end then excludes the very breakpoint that
+    // should still be its own interval's start) — a real but incidental
+    // overlap, not the general case. The honest claim is comparative: the
+    // ±1-tick grid catches strictly MORE seeds than the coordinates-only
+    // grid, because the bug's general failure mode — wrong at the single
+    // coordinate strictly between two breakpoints more than one tick
+    // apart — is exactly what only ±1 probes.
+    let mut caught_without_ticks = 0usize;
+    let mut caught_with_ticks = 0usize;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0x9BAD_E1D0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let params = gen_temporal_params(&mut rng);
+        let history = gen_temporal_history(&mut rng, &key, &params);
+
+        // The mutated grid: stored coordinates only, no ±1, no extremes.
+        let mut stored_only: Vec<i64> = history
+            .iter()
+            .filter(|e| e.key == key)
+            .map(|e| e.valid)
+            .collect();
+        stored_only.sort_unstable();
+        stored_only.dedup();
+        if short_end_bug_manifests(&history, &key, &stored_only) {
+            caught_without_ticks += 1;
+        }
+
+        // The sealed grid: stored coordinates ± one tick, plus extremes.
+        let full_grid = program_grid(&history, Axis::Valid);
+        if short_end_bug_manifests(&history, &key, &full_grid) {
+            caught_with_ticks += 1;
+        }
+    }
+    assert!(
+        caught_with_ticks > 0,
+        "the ±1-tick grid must catch the short-end-boundary bug in at \
+         least one of {seeds} seeds"
+    );
+    assert!(
+        caught_without_ticks < caught_with_ticks,
+        "a coordinates-only grid must catch the short-end-boundary bug in \
+         STRICTLY FEWER seeds than the ±1-tick grid (without-ticks: \
+         {caught_without_ticks}, with-ticks: {caught_with_ticks} of \
+         {seeds}) — the general failure (wrong strictly between two \
+         breakpoints more than one tick apart) is exactly what only ±1 \
+         probes; any without-ticks hits are the incidental \
+         adjacent-breakpoint overlap"
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// CAPABILITY 4 — the refusal lift's generator coverage: temporal programs
+// through negation, recursion, and both aggregation families, uniformly.
+//
+// Story #62 lifted `NegationOverTimeTravelError` in the oracle (`laws.rs`):
+// negation over a historical relation at a FIXED as-of coordinate is legal
+// and well-defined (see `laws.rs`'s module doc, "the time-travel negation
+// lift"). This section's generator combines that lift with the three
+// OTHER dimensions the untimed generator (CAPABILITY 1) already covers
+// untimed — recursion, negation, and both aggregation families — but now
+// reading a HISTORICAL graph/seed relation at generated as-of coordinates
+// instead of a plain EDB.
+//
+// What this proves, precisely: that recursion, negation, and both
+// aggregation families are each correctly WIRED to whatever
+// `resolve_relation` returns at the fixture's chosen coordinates — every
+// check below calls `resolve_relation` itself to build `edge_snapshot`/
+// `seed_snapshot`, then reasons from there with an independently written
+// reference algorithm (brute-force transitive closure, plain set
+// complement, group-and-count, meet-propagation via the real landed
+// `Aggregation` meet ops — never a re-derivation of the Datalog evaluator
+// itself). So a bug PRIVATE to that RA-shape wiring (recursion over a
+// historical base, the lifted negation, either aggregation family reading
+// a historical literal) is exactly what this catches; a bug in
+// `resolve_relation`/`resolve_events`'s own resolution algebra would be
+// shared by both the program under test and this campaign's snapshots,
+// and is proven independently elsewhere (`laws.rs`'s
+// `grid_differential_derived_intervals_equal_maximal_runs`,
+// `diff_composition_law_holds_across_axes`, and the real-kernel
+// cross-check `asof_mirror_matches_bitemporal_kernel_on_a_shared_
+// fixture`).
+// ════════════════════════════════════════════════════════════════════════
+
+/// [`gen_temporal_history`]'s existential twin: EMPTY payload, so the
+/// governing tuple is the key alone — a graph edge `(a,b)` needs no
+/// payload column, and a negation probe on the SAME two columns the
+/// positive reads use needs the tuple shape to match exactly.
+fn gen_temporal_existential_history(
+    rng: &mut Rng,
+    key: &Tuple,
+    p: &TemporalGenParams,
+) -> Vec<Event> {
+    let mut history = Vec::new();
+    for _ in 0..p.events_per_key {
+        let valid = rng.range(-p.coord_span, p.coord_span);
+        let sys = rng.range(-p.coord_span, p.coord_span);
+        let event = match rng.one_of(&TEMPORAL_POLARITIES) {
+            ClaimPolarity::Assert => Event::assert(key.clone(), vec![], valid, sys),
+            ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
+            ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
+        };
+        history
+            .push(event.expect("coord_span keeps every draw far below the reserved terminal tick"));
+        if rng.chance(2, 5) {
+            let correction_sys = sys + rng.range(1, 5);
+            history.push(
+                Event::assert(key.clone(), vec![], valid, correction_sys)
+                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
+            );
+        }
+    }
+    history
+}
+
+/// A negated body literal at its own bitemporal coordinate — [`lit_at`]'s
+/// negated twin, now legal post-lift.
+fn neg_lit_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Literal {
+    Literal::neg_at(rel, args, at)
+}
+
+/// A generated "temporal reachability" fixture: a historical, existential
+/// graph (`hedge`) and a historical meet-seed relation (`hseed`), each with
+/// several keys' generated event histories on both axes, plus fixed as-of
+/// coordinates for each (drawn near real generated event coordinates, the
+/// same discipline [`near_coordinate`] already uses) and the meet lattice
+/// this fixture's seed values are typed to.
+struct ReachabilityFixture {
+    edge_history: Vec<Event>,
+    seed_history: Vec<Event>,
+    nodes: Vec<i64>,
+    c_edge: AsOf,
+    c_seed: AsOf,
+    meet_op: &'static str,
+}
+
+fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
+    let n = rng.range(3, 8);
+    let nodes: Vec<i64> = (0..n).collect();
+    let params = gen_temporal_params(rng);
+
+    // A random directed graph, EXISTENTIAL (empty payload): every (a,b)
+    // pair gets its own independently generated event history.
+    let n_edges = rng.range(1, n * 2);
+    let mut edge_history = Vec::new();
+    for _ in 0..n_edges {
+        let a = rng.range(0, n);
+        let b = rng.range(0, n);
+        edge_history.extend(gen_temporal_existential_history(
+            rng,
+            &vec![v(a), v(b)],
+            &params,
+        ));
+    }
+
+    // A seed value per node (not every node — some nodes are reachable
+    // only by propagation, never directly seeded), typed to the chosen
+    // meet lattice.
+    let meet_op = rng.one_of(&MEET_OPS);
+    let mut seed_history = Vec::new();
+    for &node in &nodes {
+        if rng.chance(2, 3) {
+            let key = vec![v(node)];
+            for _ in 0..rng.range(1, 4) {
+                let valid = rng.range(-params.coord_span, params.coord_span);
+                let sys = rng.range(-params.coord_span, params.coord_span);
+                seed_history.push(
+                    Event::assert(key.clone(), vec![meet_value(rng, meet_op)], valid, sys)
+                        .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                );
+            }
+        }
+    }
+
+    let c_edge = near_coordinate(rng, &edge_history);
+    let c_seed = near_coordinate(rng, &seed_history);
+    ReachabilityFixture {
+        edge_history,
+        seed_history,
+        nodes,
+        c_edge,
+        c_seed,
+        meet_op,
+    }
+}
+
+/// The generated program: `path` (recursion over `hedge@c_edge`),
+/// `unreachable` (negation over `hedge@c_edge` — the LIFTED shape),
+/// `deg` (normal aggregation over `hedge@c_edge`), and `m` (meet
+/// aggregation recursing `hseed@c_seed` along `hedge@c_edge`) — all four
+/// reading the SAME two historical relations, at the SAME two fixed
+/// coordinates, uniformly. Every rule body is shuffled (`shuffle_body`)
+/// before being stored — `unreachable`'s body is written positives-then-
+/// negative in source order below (`node(X), node(Y), NOT hedge(X,Y)`)
+/// purely for readability; the shuffle is what actually exercises
+/// `body_bindings`'s reordering across the mix this fixture is built to
+/// prove (negation, recursion, both aggregation families) instead of
+/// leaving it pinned to the one hand-written case in `laws.rs`.
+fn reachability_program(rng: &mut Rng, fx: &ReachabilityFixture) -> Program {
+    let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
+    histories.insert("hedge", fx.edge_history.clone());
+    histories.insert("hseed", fx.seed_history.clone());
+    let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+    facts.insert("node", fx.nodes.iter().map(|&n| vec![v(n)]).collect());
+
+    let mut rules = vec![
+        // path(X,Y) :- hedge(X,Y) @c_edge.
+        Rule::plain(
+            "path",
+            vec![x(), y()],
+            vec![lit_at("hedge", vec![x(), y()], fx.c_edge)],
+        ),
+        // path(X,Z) :- path(X,Y), hedge(Y,Z) @c_edge.
+        Rule::plain(
+            "path",
+            vec![x(), z()],
+            vec![
+                lit("path", vec![x(), y()], false),
+                lit_at("hedge", vec![y(), z()], fx.c_edge),
+            ],
+        ),
+        // unreachable(X,Y) :- node(X), node(Y), NOT hedge(X,Y) @c_edge —
+        // the exact shape `NegationOverTimeTravelError` used to refuse.
+        Rule::plain(
+            "unreachable",
+            vec![x(), y()],
+            vec![
+                lit("node", vec![x()], false),
+                lit("node", vec![y()], false),
+                neg_lit_at("hedge", vec![x(), y()], fx.c_edge),
+            ],
+        ),
+        // deg(X, count(Y)) :- hedge(X,Y) @c_edge.
+        Rule::aggregated(
+            "deg",
+            vec![x(), y()],
+            vec![None, named("count")],
+            vec![lit_at("hedge", vec![x(), y()], fx.c_edge)],
+        ),
+        // m(X,V) :- hseed(X,V) @c_seed.
+        Rule::aggregated(
+            "m",
+            vec![x(), y()],
+            vec![None, named(fx.meet_op)],
+            vec![lit_at("hseed", vec![x(), y()], fx.c_seed)],
+        ),
+        // m(Y,Z) :- hedge(X,Y) @c_edge, m(X,Z).
+        Rule::aggregated(
+            "m",
+            vec![y(), z()],
+            vec![None, named(fx.meet_op)],
+            vec![
+                lit_at("hedge", vec![x(), y()], fx.c_edge),
+                lit("m", vec![x(), z()], false),
+            ],
+        ),
+    ];
+    for rule in &mut rules {
+        shuffle_body(rng, &mut rule.body);
+    }
+    Program {
+        rules,
+        facts,
+        histories,
+        ..Program::default()
+    }
+}
+
+/// Transitive closure over `edges` (already-asserted `[a,b]` pairs), via
+/// naive fixpoint iteration — independent of any Datalog evaluator, the
+/// reference for `path`.
+fn brute_force_closure(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
+    let mut closure = edges.clone();
+    loop {
+        let mut additions = Vec::new();
+        for e1 in &closure {
+            for e2 in &closure {
+                if e1[1] == e2[0] {
+                    let candidate = vec![e1[0].clone(), e2[1].clone()];
+                    if !closure.contains(&candidate) {
+                        additions.push(candidate);
+                    }
+                }
+            }
+        }
+        if additions.is_empty() {
+            break;
+        }
+        closure.extend(additions);
+    }
+    closure
+}
+
+/// The reference for `unreachable`: every `(a,b)` pair over `nodes` NOT in
+/// `edges` — the plain set complement negation-over-as_of computes.
+fn expected_unreachable(nodes: &[i64], edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
+    let mut out = BTreeSet::new();
+    for &a in nodes {
+        for &b in nodes {
+            let t = vec![v(a), v(b)];
+            if !edges.contains(&t) {
+                out.insert(t);
+            }
+        }
+    }
+    out
+}
+
+/// The reference for `deg`: for each source column, how many rows share
+/// it.
+fn expected_degree(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
+    let mut counts: BTreeMap<DataValue, i64> = BTreeMap::new();
+    for e in edges {
+        *counts.entry(e[0].clone()).or_insert(0) += 1;
+    }
+    counts.into_iter().map(|(k, c)| vec![k, v(c)]).collect()
+}
+
+/// The reference for `m`: seed values propagated along `edges` to a
+/// fixpoint, folding with the REAL landed meet operator (`meet_op`) at
+/// every hop — reusing the exact aggregation semantics production code
+/// runs (per this module's own header doc: a bug in an aggregation must
+/// never hide behind a parallel test-only reimplementation), while the
+/// PROPAGATION LOOP itself is independent of `laws.rs`'s `MeetState`.
+fn expected_meet(
+    edges: &BTreeSet<Tuple>,
+    seeds: &BTreeSet<Tuple>,
+    meet_op: &str,
+) -> BTreeSet<Tuple> {
+    let aggregation = parse_aggr(meet_op).expect("real aggregation");
+    let mut acc: BTreeMap<DataValue, DataValue> = BTreeMap::new();
+    for row in seeds {
+        acc.insert(row[0].clone(), row[1].clone());
+    }
+    let mut steps = 0usize;
+    loop {
+        steps += 1;
+        assert!(
+            steps <= 4 * edges.len() + 4,
+            "meet propagation failed to terminate"
+        );
+        let mut changed = false;
+        for edge in edges {
+            let (a, b) = (&edge[0], &edge[1]);
+            let Some(val) = acc.get(a).cloned() else {
+                continue;
+            };
+            match acc.get(b).cloned() {
+                None => {
+                    acc.insert(b.clone(), val);
+                    changed = true;
+                }
+                Some(mut cur) => {
+                    let op: Box<dyn MeetAggrObj> =
+                        aggregation.meet_op().expect("meet-capable aggregation");
+                    if op.update(&mut cur, &val).expect("meet update") {
+                        acc.insert(b.clone(), cur);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    acc.into_iter().map(|(k, val)| vec![k, val]).collect()
+}
+
+#[test]
+fn temporal_negation_recursion_and_both_aggregation_families_match_independent_references() {
+    let mut cases = 0usize;
+    let seeds = 400u64;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(0xF00D_BA11_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let fx = gen_reachability_fixture(&mut rng);
+        let program = reachability_program(&mut rng, &fx);
+        let db = naive_eval(&program).expect(
+            "negation over a fixed as-of historical relation is legal (the lift); \
+             recursion and both aggregation families over historical leaves are well-formed",
+        );
+
+        let edge_snapshot = resolve_relation(&fx.edge_history, fx.c_edge);
+        let seed_snapshot = resolve_relation(&fx.seed_history, fx.c_seed);
+
+        let expected_path = brute_force_closure(&edge_snapshot);
+        assert_eq!(
+            db.get("path").cloned().unwrap_or_default(),
+            expected_path,
+            "seed {seed}: path (recursion over a historical base)"
+        );
+        cases += 1;
+
+        let expected_unreach = expected_unreachable(&fx.nodes, &edge_snapshot);
+        assert_eq!(
+            db.get("unreachable").cloned().unwrap_or_default(),
+            expected_unreach,
+            "seed {seed}: unreachable (the lifted negation-over-as_of shape)"
+        );
+        cases += 1;
+
+        let expected_deg = expected_degree(&edge_snapshot);
+        assert_eq!(
+            db.get("deg").cloned().unwrap_or_default(),
+            expected_deg,
+            "seed {seed}: deg (normal aggregation over a historical base)"
+        );
+        cases += 1;
+
+        let expected_m = expected_meet(&edge_snapshot, &seed_snapshot, fx.meet_op);
+        assert_eq!(
+            db.get("m").cloned().unwrap_or_default(),
+            expected_m,
+            "seed {seed}: m (meet aggregation, op={}, recursing a historical base)",
+            fx.meet_op
+        );
+        cases += 1;
+    }
+    assert!(
+        cases >= 800,
+        "expected hundreds of temporal negation/recursion/aggregation cases, ran {cases}"
+    );
 }

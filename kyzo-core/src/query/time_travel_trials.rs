@@ -45,13 +45,14 @@ use crate::data::aggr::parse_aggr;
 use crate::data::expr::Expr;
 use crate::data::functions::{OP_GE, OP_LE};
 use crate::data::program::{
-    InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
-    MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
+    DeltaAxis, InputAtom, InputInlineRulesOrFixed, InputRelationHandle, MagicAtom, MagicInlineRule,
+    MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol,
+    StoreLifetimes, StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, DataValue, ValidityTs};
+use crate::data::value::{AsOf, DataValue, Interval, MAX_VALIDITY_TS, ValidityTs};
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
@@ -118,7 +119,7 @@ fn rel_atom_at(name: &str, args: &[Symbol], at: Option<i64>) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        as_of: at.map(|t| AsOf::current(vts(t))),
+        validity: at.map(|t| ValidityClause::At(AsOf::current(vts(t)))),
         span: sp(),
     })
 }
@@ -127,7 +128,7 @@ fn neg_rel_atom_at(name: &str, args: &[Symbol], at: Option<i64>) -> MagicAtom {
     MagicAtom::NegatedRelation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        as_of: at.map(|t| AsOf::current(vts(t))),
+        validity: at.map(|t| ValidityClause::At(AsOf::current(vts(t)))),
         span: sp(),
     })
 }
@@ -816,13 +817,13 @@ fn join_two_relations_at_same_instant() {
                     MagicAtom::Relation(MagicRelationApplyAtom {
                         name: sym("ra"),
                         args: vec![k.clone(), a.clone()],
-                        as_of: Some(AsOf::current(vts(instant))),
+                        validity: Some(ValidityClause::At(AsOf::current(vts(instant)))),
                         span: sp(),
                     }),
                     MagicAtom::Relation(MagicRelationApplyAtom {
                         name: sym("rb"),
                         args: vec![k.clone(), b.clone()],
-                        as_of: Some(AsOf::current(vts(instant))),
+                        validity: Some(ValidityClause::At(AsOf::current(vts(instant)))),
                         span: sp(),
                     }),
                 ],
@@ -1239,7 +1240,7 @@ fn validity_scan_is_a_constructible_relation() {
         vec![sym("k0"), sym("val")],
         handle,
         sp(),
-        Some(AsOf::current(vts(20))),
+        Some(ValidityClause::At(AsOf::current(vts(20)))),
     )
     .expect("a validity scan is constructible");
     assert!(
@@ -1367,7 +1368,7 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
                 vec![MagicAtom::Relation(MagicRelationApplyAtom {
                     name: sym("hist"),
                     args: vec![k0, val],
-                    as_of: Some(as_of),
+                    validity: Some(ValidityClause::At(as_of)),
                     span: sp(),
                 })],
             )],
@@ -1439,4 +1440,809 @@ fn naive_transitive_closure(edges: &BTreeSet<(i64, i64)>) -> BTreeSet<Tuple> {
         }
     }
     reach.into_iter().map(|(a, b)| vec![v(a), v(b)]).collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Story #62 chunk 3: `@spans`/`@delta`/`@delta_sys` end to end — real
+// storage, real compile → RA → semi-naive eval, `query::laws`'s
+// `derive_intervals`/`diff` as judge. Follows this file's own structure:
+// `write_history`-style fact injection, `program_of`/`plain_rule`-style
+// program construction, `compile_and_run` as the engine path.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Like [`write_history`], but ONE transaction per version — every version
+/// gets a genuinely distinct, monotonically increasing REAL system stamp
+/// (the engine's own clock, `WriteTx::system_stamp`), returned in write
+/// order. Interval derivation and diff both read real system stamps
+/// (`SpansRA`'s fixed snapshot, `DeltaRA`'s two coordinates), so the
+/// oracle side of this file's differentials must be built from the exact
+/// stamps the engine actually minted, not a synthetic index — unlike
+/// [`write_history`]'s single-transaction batch (adequate for as-of reads
+/// at the CURRENT system snapshot, where every version's real stamp is
+/// equally visible regardless of relative order).
+fn write_history_multi_tx(
+    db: &FjallStorage,
+    name: &str,
+    key_arity: usize,
+    val_names: &[&str],
+    versions: &[Version],
+) -> Vec<i64> {
+    let keys: Vec<ColumnDef> = (0..key_arity)
+        .map(|i| col(&format!("k{i}"), ColType::Int))
+        .collect();
+    let non_keys: Vec<ColumnDef> = val_names.iter().map(|n| col(n, ColType::Any)).collect();
+    let key_bindings = keys.iter().map(|c| sym(&c.name)).collect();
+    let dep_bindings = non_keys.iter().map(|c| sym(&c.name)).collect();
+    let input = InputRelationHandle {
+        name: sym(name),
+        metadata: StoredRelationMetadata { keys, non_keys },
+        key_bindings,
+        dep_bindings,
+        span: sp(),
+    };
+    let handle = {
+        let mut tx = db.write_tx().expect("write tx");
+        let handle = create_relation(&mut tx, input, KeyspaceKind::Facts).expect("create relation");
+        tx.commit().expect("commit");
+        handle
+    };
+    let mut sys_stamps = Vec::with_capacity(versions.len());
+    for ver in versions {
+        let mut tx = db.write_tx().expect("write tx");
+        sys_stamps.push(tx.system_stamp().0.0);
+        let key_cols: Tuple = ver.key.iter().copied().map(v).collect();
+        if ver.assert {
+            let mut row = key_cols;
+            row.extend(ver.vals.iter().cloned());
+            handle
+                .put_fact(&mut tx, &row, vts(ver.ts), sp())
+                .expect("put version");
+        } else {
+            handle
+                .retract_fact(&mut tx, &key_cols, vts(ver.ts), sp())
+                .expect("retract version");
+        }
+        tx.commit().expect("commit");
+    }
+    sys_stamps
+}
+
+/// `versions` + their real system stamps (from
+/// [`write_history_multi_tx`]), as `laws::Event`s — the exact bridge
+/// between this file's `Version` fixture shape and the oracle's own
+/// history type, sys taken from the engine's real clock rather than a
+/// synthetic write-order index.
+fn events_of(versions: &[Version], sys_stamps: &[i64]) -> Vec<laws::Event> {
+    assert_eq!(versions.len(), sys_stamps.len());
+    versions
+        .iter()
+        .zip(sys_stamps.iter())
+        .map(|(ver, &sys)| {
+            let key: Tuple = ver.key.iter().copied().map(v).collect();
+            if ver.assert {
+                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
+            } else {
+                laws::Event::retract(key, ver.ts, sys)
+            }
+            .expect("fixture valid instants are never the reserved terminal tick")
+        })
+        .collect()
+}
+
+fn distinct_keys(versions: &[Version]) -> Vec<Tuple> {
+    let mut ks: Vec<Tuple> = versions
+        .iter()
+        .map(|ver| ver.key.iter().copied().map(v).collect())
+        .collect();
+    ks.sort();
+    ks.dedup();
+    ks
+}
+
+/// `*rel{args...} @spans iv[, sys]` as a `MagicAtom`.
+fn spans_atom(name: &str, args: &[Symbol], sys: Option<i64>, iv: Symbol) -> MagicAtom {
+    MagicAtom::Relation(MagicRelationApplyAtom {
+        name: sym(name),
+        args: args.to_vec(),
+        validity: Some(ValidityClause::Spans {
+            sys: sys.map(vts).unwrap_or(MAX_VALIDITY_TS),
+            var: iv,
+        }),
+        span: sp(),
+    })
+}
+
+/// `*rel{args...} @delta(from, to) sgn` / `@delta_sys(from, to) sgn` as a
+/// `MagicAtom`.
+fn delta_atom(
+    name: &str,
+    args: &[Symbol],
+    axis: DeltaAxis,
+    from: i64,
+    to: i64,
+    sgn: Symbol,
+) -> MagicAtom {
+    MagicAtom::Relation(MagicRelationApplyAtom {
+        name: sym(name),
+        args: args.to_vec(),
+        validity: Some(ValidityClause::Delta {
+            axis,
+            from: vts(from),
+            to: vts(to),
+            var: sgn,
+        }),
+        span: sp(),
+    })
+}
+
+/// The oracle's derived intervals for every fact key in `events`, at fixed
+/// system snapshot `fixed_sys`, as engine-shaped rows (`key ++ payload ++
+/// Interval`) — what `SpansRA`'s output must equal exactly.
+fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTreeSet<Tuple> {
+    let mut want = BTreeSet::new();
+    for key in keys {
+        for iv in laws::derive_intervals(events, key, laws::Axis::Valid, fixed_sys) {
+            let mut row = iv.tuple.clone();
+            row.push(DataValue::Interval(
+                Interval::new(iv.start, iv.end).expect("derive_intervals proves start < end"),
+            ));
+            want.insert(row);
+        }
+    }
+    want
+}
+
+/// The oracle's signed diff, as engine-shaped rows (`key ++ payload ++
+/// sign`) — what `DeltaRA`'s output must equal exactly (order-independent;
+/// both sides are compared as sets).
+fn oracle_delta(events: &[laws::Event], from: laws::AsOf, to: laws::AsOf) -> BTreeSet<Tuple> {
+    laws::diff(events, from, to)
+        .into_iter()
+        .map(|sf| match sf {
+            laws::SignedFact::Plus(mut t) => {
+                t.push(v(1));
+                t
+            }
+            laws::SignedFact::Minus(mut t) => {
+                t.push(v(-1));
+                t
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn spans_engine_matches_the_unified_oracle_generatively() {
+    let mut cases = 0usize;
+    for seed in 0..300u64 {
+        let mut rng = BridgeRng::new(0x5FA5FA_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 4);
+        let n_events = rng.range(1, 15) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let sys_stamps = write_history_multi_tx(&db, "spans_src", 1, &["val"], &versions);
+        let events = events_of(&versions, &sys_stamps);
+        let keys = distinct_keys(&versions);
+
+        let (k0, val, iv) = (sym("k0"), sym("val"), sym("iv"));
+        for fixed_sys in [None, Some(sys_stamps[sys_stamps.len() / 2])] {
+            let prog = program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[k0.clone(), val.clone(), iv.clone()],
+                    vec![spans_atom(
+                        "spans_src",
+                        &[k0.clone(), val.clone()],
+                        fixed_sys,
+                        iv.clone(),
+                    )],
+                )],
+            )]]);
+            let got = compile_and_run(&db, prog);
+            let want = oracle_spans(&events, &keys, fixed_sys.unwrap_or(i64::MAX));
+            assert_eq!(
+                got, want,
+                "seed {seed} fixed_sys={fixed_sys:?}: versions={versions:?} sys_stamps={sys_stamps:?}"
+            );
+            cases += 1;
+        }
+    }
+    assert!(cases >= 300, "expected a rich spans campaign, ran {cases}");
+}
+
+/// Story #62 ruling item 3 ("as-of over a derived relation pushes down to
+/// that subtree's stored leaves — the only compositional reading"):
+/// verified as a PROPERTY of this design rather than built as a separate
+/// feature. Both the oracle and the engine refuse a coordinate anywhere
+/// but a literal reading a stored/historical relation directly
+/// (`laws.rs::check_wellformed`'s "`as_of` valid only if
+/// `histories.contains_key(lit.rel)`" invariant; mirrored here by
+/// `MagicRuleApplyAtom`/`NormalFormRuleApplyAtom`/`InputRuleApplyAtom`
+/// never gaining a `validity` field alongside `MagicRelationApplyAtom`'s)
+/// — so "push to stored leaves" is DEFINITIONAL: the only place a clause
+/// can ever be written already IS the leaf. What remains to prove is that
+/// composition actually works: an inner rule wraps a `@spans` read of a
+/// stored leaf; an outer rule joins/filters the inner rule's output — two
+/// levels of ordinary rule nesting over a temporal read, composing
+/// exactly like any other relation.
+#[test]
+fn spans_composes_through_ordinary_rule_nesting() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_compose_src",
+        1,
+        &["val"],
+        &[
+            ver(&[1], 10, true, &[v(100)]),
+            ver(&[1], 20, true, &[v(200)]),
+        ],
+    );
+
+    let (k0, val, iv) = (sym("k0"), sym("val"), sym("iv"));
+    let inner_rule = plain_rule(
+        &[k0.clone(), val.clone(), iv.clone()],
+        vec![spans_atom(
+            "sp_compose_src",
+            &[k0.clone(), val.clone()],
+            None,
+            iv.clone(),
+        )],
+    );
+    let outer_rule = plain_rule(
+        &[k0.clone(), val.clone(), iv.clone()],
+        vec![
+            MagicAtom::Rule(MagicRuleApplyAtom {
+                name: muggle("sp_inner"),
+                args: vec![k0.clone(), val.clone(), iv.clone()],
+                span: sp(),
+            }),
+            pred_ge("val", 150),
+        ],
+    );
+    let prog = program_of(vec![
+        vec![(muggle("sp_inner"), vec![inner_rule])],
+        vec![(entry_symbol(), vec![outer_rule])],
+    ]);
+    let got = compile_and_run(&db, prog);
+    assert_eq!(
+        got,
+        BTreeSet::from([one_interval(1, 200, 20, i64::MAX)]),
+        "the outer rule's filter must see the inner rule's derived interval row"
+    );
+}
+
+#[test]
+fn delta_engine_matches_the_unified_oracle_generatively_both_axes() {
+    let mut cases = 0usize;
+    for seed in 0..300u64 {
+        let mut rng = BridgeRng::new(0xDE17AD_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 4);
+        let n_events = rng.range(1, 15) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        let sys_stamps = write_history_multi_tx(&db, "delta_src", 1, &["val"], &versions);
+        let events = events_of(&versions, &sys_stamps);
+
+        let (k0, val, sgn) = (sym("k0"), sym("val"), sym("sgn"));
+        for valid_at in -1..=9i64 {
+            for valid_to in -1..=9i64 {
+                let prog = program_of(vec![vec![(
+                    entry_symbol(),
+                    vec![plain_rule(
+                        &[k0.clone(), val.clone(), sgn.clone()],
+                        vec![delta_atom(
+                            "delta_src",
+                            &[k0.clone(), val.clone()],
+                            DeltaAxis::Valid,
+                            valid_at,
+                            valid_to,
+                            sgn.clone(),
+                        )],
+                    )],
+                )]]);
+                let got = compile_and_run(&db, prog);
+                let want = oracle_delta(
+                    &events,
+                    laws::AsOf {
+                        valid: valid_at,
+                        sys: i64::MAX,
+                    },
+                    laws::AsOf {
+                        valid: valid_to,
+                        sys: i64::MAX,
+                    },
+                );
+                assert_eq!(
+                    got, want,
+                    "seed {seed} valid axis {valid_at}->{valid_to}: versions={versions:?}"
+                );
+                cases += 1;
+            }
+        }
+        let sys_lo = sys_stamps.iter().copied().min().unwrap_or(0) - 1;
+        let sys_hi = sys_stamps.iter().copied().max().unwrap_or(0) + 1;
+        for sys_at in [sys_lo, sys_stamps[sys_stamps.len() / 2], sys_hi] {
+            for sys_to in [sys_lo, sys_stamps[sys_stamps.len() / 2], sys_hi] {
+                let prog = program_of(vec![vec![(
+                    entry_symbol(),
+                    vec![plain_rule(
+                        &[k0.clone(), val.clone(), sgn.clone()],
+                        vec![delta_atom(
+                            "delta_src",
+                            &[k0.clone(), val.clone()],
+                            DeltaAxis::Sys,
+                            sys_at,
+                            sys_to,
+                            sgn.clone(),
+                        )],
+                    )],
+                )]]);
+                let got = compile_and_run(&db, prog);
+                let want = oracle_delta(
+                    &events,
+                    laws::AsOf {
+                        valid: i64::MAX,
+                        sys: sys_at,
+                    },
+                    laws::AsOf {
+                        valid: i64::MAX,
+                        sys: sys_to,
+                    },
+                );
+                assert_eq!(
+                    got, want,
+                    "seed {seed} sys axis {sys_at}->{sys_to}: versions={versions:?} sys_stamps={sys_stamps:?}"
+                );
+                cases += 1;
+            }
+        }
+    }
+    assert!(cases >= 300, "expected a rich delta campaign, ran {cases}");
+}
+
+/// `diff(a,c) == diff(a,b) ⊕ diff(b,c)` through the REAL engine: three
+/// independent `DeltaRA` evaluations, composed by `laws::compose` (the
+/// executable law), must equal the direct `a->c` evaluation. Spot-checks
+/// the compositionality law end to end rather than only inside the oracle
+/// (already proven there, `laws.rs`'s own tests).
+#[test]
+fn delta_composition_law_holds_through_the_real_engine() {
+    for seed in 0..80u64 {
+        let mut rng = BridgeRng::new(0xC02EC0_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
+        let n_keys = rng.range(1, 3);
+        let n_events = rng.range(2, 12) as usize;
+        let versions = gen_versions(&mut rng, n_keys, n_events);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+        write_history_multi_tx(&db, "compose_src", 1, &["val"], &versions);
+
+        let (k0, val, sgn) = (sym("k0"), sym("val"), sym("sgn"));
+        let run_delta = |from: i64, to: i64| -> BTreeSet<Tuple> {
+            let prog = program_of(vec![vec![(
+                entry_symbol(),
+                vec![plain_rule(
+                    &[k0.clone(), val.clone(), sgn.clone()],
+                    vec![delta_atom(
+                        "compose_src",
+                        &[k0.clone(), val.clone()],
+                        DeltaAxis::Valid,
+                        from,
+                        to,
+                        sgn.clone(),
+                    )],
+                )],
+            )]]);
+            compile_and_run(&db, prog)
+        };
+        let to_signed = |rows: BTreeSet<Tuple>| -> BTreeSet<laws::SignedFact> {
+            rows.into_iter()
+                .map(|mut row| {
+                    let sgn = row.pop().expect("row carries a sign column");
+                    match sgn.get_int() {
+                        Some(1) => laws::SignedFact::Plus(row),
+                        Some(-1) => laws::SignedFact::Minus(row),
+                        other => panic!("unexpected sign column: {other:?}"),
+                    }
+                })
+                .collect()
+        };
+        for (a, b, c) in [(-1, 3, 9), (0, 0, 5), (2, 2, 2), (-1, 9, -1)] {
+            let ab = to_signed(run_delta(a, b));
+            let bc = to_signed(run_delta(b, c));
+            let ac = to_signed(run_delta(a, c));
+            let composed = laws::compose(&ab, &bc);
+            assert_eq!(
+                composed, ac,
+                "seed {seed} a={a} b={b} c={c}: diff(a,c) != diff(a,b)⊕diff(b,c)"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Degenerate cases from the ruling's table, named individually (each also
+// covered by the generative campaigns above, but pinned here by name so a
+// regression fails with a readable label rather than only a seed).
+// ─────────────────────────────────────────────────────────────────────────
+
+fn spans_of(db: &FjallStorage, name: &str, sys: Option<i64>) -> BTreeSet<Tuple> {
+    let (k0, val, iv) = (sym("k0"), sym("val"), sym("iv"));
+    let prog = program_of(vec![vec![(
+        entry_symbol(),
+        vec![plain_rule(
+            &[k0.clone(), val.clone(), iv.clone()],
+            vec![spans_atom(
+                name,
+                &[k0.clone(), val.clone()],
+                sys,
+                iv.clone(),
+            )],
+        )],
+    )]]);
+    compile_and_run(db, prog)
+}
+
+fn one_interval(k: i64, val: i64, start: i64, end: i64) -> Tuple {
+    vec![
+        v(k),
+        v(val),
+        DataValue::Interval(Interval::new(start, end).unwrap()),
+    ]
+}
+
+#[test]
+fn spans_double_assert_same_payload_is_idempotent_one_interval() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_double_assert",
+        1,
+        &["val"],
+        &[
+            ver(&[1], 10, true, &[v(100)]),
+            ver(&[1], 20, true, &[v(100)]),
+        ],
+    );
+    assert_eq!(
+        spans_of(&db, "sp_double_assert", None),
+        BTreeSet::from([one_interval(1, 100, 10, i64::MAX)])
+    );
+}
+
+#[test]
+fn spans_payload_split_produces_two_intervals() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_payload_split",
+        1,
+        &["val"],
+        &[
+            ver(&[1], 10, true, &[v(100)]),
+            ver(&[1], 20, true, &[v(200)]),
+        ],
+    );
+    assert_eq!(
+        spans_of(&db, "sp_payload_split", None),
+        BTreeSet::from([
+            one_interval(1, 100, 10, 20),
+            one_interval(1, 200, 20, i64::MAX)
+        ])
+    );
+}
+
+#[test]
+fn spans_dangling_retract_holds_nowhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_dangling_retract",
+        1,
+        &["val"],
+        &[ver(&[1], 10, false, &[])],
+    );
+    assert_eq!(spans_of(&db, "sp_dangling_retract", None), BTreeSet::new());
+}
+
+#[test]
+fn spans_assert_after_retract_opens_a_new_interval() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_reopen",
+        1,
+        &["val"],
+        &[
+            ver(&[1], 10, true, &[v(100)]),
+            ver(&[1], 20, false, &[]),
+            ver(&[1], 30, true, &[v(100)]),
+        ],
+    );
+    assert_eq!(
+        spans_of(&db, "sp_reopen", None),
+        BTreeSet::from([
+            one_interval(1, 100, 10, 20),
+            one_interval(1, 100, 30, i64::MAX)
+        ])
+    );
+}
+
+#[test]
+fn spans_no_zero_width_intervals_ever() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_no_zero_width",
+        1,
+        &["val"],
+        &[
+            ver(&[1], 10, true, &[v(100)]),
+            ver(&[1], 10, true, &[v(200)]),
+        ],
+    );
+    for row in spans_of(&db, "sp_no_zero_width", None) {
+        let DataValue::Interval(iv) = row.last().unwrap() else {
+            panic!("expected an interval column: {row:?}")
+        };
+        assert!(iv.start() < iv.end(), "zero-width interval: {iv:?}");
+    }
+}
+
+#[test]
+fn spans_at_write_op_is_refused_at_parse() {
+    // `@spans`/`@delta`/`@delta_sys` ride the read-side grammar seat only
+    // (`read_validity_clause`, referenced from `relation_apply`/
+    // `relation_named_apply`); `relation_option` (the write-op clause)
+    // still references plain `validity_clause` alone, so this is a hard
+    // grammar-level refusal — the construct is unparseable, not merely
+    // semantically rejected.
+    let err = crate::parse::parse_script(
+        ":create sp_write_refused {k: Int, val: Any} @spans iv",
+        &Default::default(),
+        &Default::default(),
+        vts(0),
+    )
+    .expect_err("`@spans` on a write op must not parse");
+    let msg = err.to_string();
+    assert!(
+        !msg.is_empty(),
+        "expected a parse error for `@spans` on a write op"
+    );
+}
+
+#[test]
+fn validity_clause_on_a_rule_application_is_refused_at_parse() {
+    // `rule_apply` (`ident[args…]`, no `*` sigil) has no `@`/`@spans`/
+    // `@delta` production at all — the ONLY grammar seat for any
+    // validity/temporal clause is a stored-relation atom
+    // (`relation_apply`/`relation_named_apply`, both `*`-sigiled). A
+    // coordinate on a rule application is therefore unparseable, not
+    // merely semantically refused — confirming story #62 ruling item 3
+    // ("as-of over IDB pushes to stored leaves") is structural: there is
+    // no OTHER place to write one.
+    let err = crate::parse::parse_script(
+        "r[x] := *base_rel[x]; ?[x] := r[x] @ 5",
+        &Default::default(),
+        &Default::default(),
+        vts(0),
+    )
+    .expect_err("`@` on a rule application must not parse");
+    assert!(!err.to_string().is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Textual parse coverage for `@spans`/`@delta`/`@delta_sys` (hostile-review
+// finding: every other test in this file builds `MagicAtom`s directly,
+// never exercising `kyzoscript.pest`/`parse::query.rs` themselves — the
+// keyword-boundary bug below lived in exactly that unexercised seam).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Parse `script` and return the entry rule's first body atom's
+/// `InputRelationApplyAtom`/`InputNamedFieldRelationApplyAtom` validity
+/// clause — the shape both positive and refusal tests below inspect.
+fn parsed_validity_clause(script: &str) -> ValidityClause {
+    let prog = crate::parse::parse_script(script, &Default::default(), &Default::default(), vts(0))
+        .expect("expected a successful parse")
+        .get_single_program()
+        .expect("single program");
+    let InputInlineRulesOrFixed::Rules { rules } = prog.entry() else {
+        panic!("expected an inline-rule entry")
+    };
+    let atom = rules[0].body.first().expect("one body atom");
+    match atom {
+        InputAtom::Relation { inner } => inner
+            .validity
+            .clone()
+            .expect("expected a validity clause on the atom"),
+        other => panic!("expected a stored-relation atom, got {other:?}"),
+    }
+}
+
+#[test]
+fn spans_clause_parses_through_real_script_text() {
+    match parsed_validity_clause("?[x, v, iv] := *base_rel[x, v @spans iv]") {
+        ValidityClause::Spans { sys, var } => {
+            assert_eq!(sys, MAX_VALIDITY_TS, "default sys is the current snapshot");
+            assert_eq!(var.name, "iv");
+        }
+        other => panic!("expected a Spans clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn spans_clause_with_explicit_sys_parses_through_real_script_text() {
+    match parsed_validity_clause("?[x, v, iv] := *base_rel[x, v @spans iv, 5]") {
+        ValidityClause::Spans { sys, var } => {
+            assert_eq!(sys, vts(5));
+            assert_eq!(var.name, "iv");
+        }
+        other => panic!("expected a Spans clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn delta_clause_parses_through_real_script_text() {
+    match parsed_validity_clause("?[x, v, sgn] := *base_rel[x, v @delta(0, 10) sgn]") {
+        ValidityClause::Delta {
+            axis,
+            from,
+            to,
+            var,
+        } => {
+            assert_eq!(axis, DeltaAxis::Valid);
+            assert_eq!(from, vts(0));
+            assert_eq!(to, vts(10));
+            assert_eq!(var.name, "sgn");
+        }
+        other => panic!("expected a Delta clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn delta_sys_clause_parses_through_real_script_text() {
+    match parsed_validity_clause("?[x, v, sgn] := *base_rel[x, v @delta_sys(0, 10) sgn]") {
+        ValidityClause::Delta {
+            axis,
+            from,
+            to,
+            var,
+        } => {
+            assert_eq!(axis, DeltaAxis::Sys);
+            assert_eq!(from, vts(0));
+            assert_eq!(to, vts(10));
+            assert_eq!(var.name, "sgn");
+        }
+        other => panic!("expected a Delta clause, got {other:?}"),
+    }
+}
+
+/// Hostile-review finding (CONFIRMED, reproduced): `spans_clause`'s
+/// `"@spans"` literal had no keyword-boundary guard, so `@spansX` parsed
+/// as `@spans` with `X` silently bound as the interval variable —
+/// `kyzoscript.pest`'s own convention for `not`/`in`/`or` is `"kw" ~
+/// !XID_CONTINUE`, which `@spans`/`@delta`/`@delta_sys` now all carry
+/// too. With the guard, `@spansX` falls through to the byte-identical
+/// `@ expr` clause, where `spansX` is a free variable — refused, because
+/// a read-side `@` coordinate must be a compile-time constant
+/// (`parse_at_expr_clause`'s `eval_to_const`). This is the test a mutant
+/// reverting the guard must fail: without it, this parses successfully
+/// (as a working-but-wrong `@spans` derivation) instead of refusing.
+#[test]
+fn spans_keyword_requires_a_boundary_not_just_a_prefix_match() {
+    let err = crate::parse::parse_script(
+        "?[x, v] := *base_rel[x, v @spansX]",
+        &Default::default(),
+        &Default::default(),
+        vts(0),
+    )
+    .expect_err("`@spansX` must not silently parse as `@spans` with `X` as its interval variable");
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn delta_keyword_requires_a_boundary_not_just_a_prefix_match() {
+    let err = crate::parse::parse_script(
+        "?[x, v] := *base_rel[x, v @deltafoo]",
+        &Default::default(),
+        &Default::default(),
+        vts(0),
+    )
+    .expect_err("`@deltafoo` must not silently parse as `@delta` plus a mistyped tail");
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn delta_sys_keyword_requires_a_boundary_not_just_a_prefix_match() {
+    let err = crate::parse::parse_script(
+        "?[x, v] := *base_rel[x, v @delta_sysX]",
+        &Default::default(),
+        &Default::default(),
+        vts(0),
+    )
+    .expect_err("`@delta_sysX` must not silently parse as `@delta_sys` plus a mistyped tail");
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn negation_over_spans_refuses_like_negation_over_time_travel() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "sp_neg",
+        1,
+        &["val"],
+        &[ver(&[1], 10, true, &[v(100)])],
+    );
+
+    let (k0, val, iv) = (sym("k0"), sym("val"), sym("iv"));
+    let prog = program_of(vec![vec![(
+        entry_symbol(),
+        vec![plain_rule(
+            std::slice::from_ref(&k0),
+            vec![MagicAtom::NegatedRelation(MagicRelationApplyAtom {
+                name: sym("sp_neg"),
+                args: vec![k0.clone(), val.clone()],
+                validity: Some(ValidityClause::Spans {
+                    sys: MAX_VALIDITY_TS,
+                    var: iv.clone(),
+                }),
+                span: sp(),
+            })],
+        )],
+    )]]);
+    let err = compile_err(&db, prog);
+    assert!(
+        err.downcast_ref::<NegationOverTimeTravelError>().is_some(),
+        "expected NegationOverTimeTravelError, got {err:?}"
+    );
+}
+
+#[test]
+fn negation_over_delta_refuses_like_negation_over_time_travel() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    write_history_multi_tx(
+        &db,
+        "delta_neg",
+        1,
+        &["val"],
+        &[ver(&[1], 10, true, &[v(100)])],
+    );
+
+    let (k0, val, sgn) = (sym("k0"), sym("val"), sym("sgn"));
+    let prog = program_of(vec![vec![(
+        entry_symbol(),
+        vec![plain_rule(
+            std::slice::from_ref(&k0),
+            vec![MagicAtom::NegatedRelation(MagicRelationApplyAtom {
+                name: sym("delta_neg"),
+                args: vec![k0.clone(), val.clone()],
+                validity: Some(ValidityClause::Delta {
+                    axis: DeltaAxis::Valid,
+                    from: vts(0),
+                    to: vts(20),
+                    var: sgn.clone(),
+                }),
+                span: sp(),
+            })],
+        )],
+    )]]);
+    let err = compile_err(&db, prog);
+    assert!(
+        err.downcast_ref::<NegationOverTimeTravelError>().is_some(),
+        "expected NegationOverTimeTravelError, got {err:?}"
+    );
 }

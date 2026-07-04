@@ -414,7 +414,9 @@ impl InnerJoin {
             RelAlgebra::Join(_)
             | RelAlgebra::Filter(_)
             | RelAlgebra::Unification(_)
-            | RelAlgebra::Search(_) => "generic_mat_join",
+            | RelAlgebra::Search(_)
+            | RelAlgebra::Spans(_)
+            | RelAlgebra::Delta(_) => "generic_mat_join",
             // Refused at construction by `RelAlgebra::join` (the original
             // `panic!`d here).
             RelAlgebra::Reorder(_) | RelAlgebra::NegJoin(_) => {

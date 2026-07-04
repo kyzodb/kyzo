@@ -134,6 +134,23 @@ impl NormalFormAtom {
 /// every rule uses a meet form — the one class whose self-recursion is
 /// evaluable (the fold is a semilattice meet, sound while the fixpoint
 /// still grows). Non-aggregated positions do not disqualify a meet head.
+///
+/// **Deliberately independent of `query/laws.rs::head_classes`, and this is
+/// load-bearing (issue #89's ruling).** This is the ENGINE's classification
+/// — it feeds the real stratifier that gates what the compiler will
+/// actually evaluate — while `head_classes` is the ORACLE's twin, feeding
+/// `naive_eval`. Story #89 consolidated the reference-tier triplication of
+/// this same classification (`laws.rs`/`provenance.rs`/`trials.rs`, three
+/// copies judging the engine, never each other, so sharing among them cost
+/// nothing) but explicitly did NOT fold this one in with them: the whole
+/// point of `the_oracle_refusal_corpus_is_refused` (this module's test
+/// suite) is that the refusal BOUNDARY this function helps compute and the
+/// oracle's independently-computed boundary agree despite being two
+/// separately hand-maintained implementations. Sharing this function with
+/// `head_classes` would collapse that differential into a tautology — a
+/// bug in the shared logic would silently pass both "independent" checks at
+/// once. Keep every future edit here hand-applied, never routed through the
+/// oracle's copy.
 fn aggregation_character(rules: &[NormalFormInlineRule]) -> (bool, bool) {
     let has_aggr = rules
         .iter()

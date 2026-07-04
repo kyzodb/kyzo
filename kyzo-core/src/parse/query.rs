@@ -47,15 +47,16 @@ use thiserror::Error;
 use crate::data::aggr::{Aggregation, parse_aggr};
 use crate::data::expr::Expr;
 use crate::data::program::{
-    FixedRule, FixedRuleApply, FixedRuleArg, FixedRuleHandle, InputAtom, InputInlineRule,
-    InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
+    DeltaAxis, FixedRule, FixedRuleApply, FixedRuleArg, FixedRuleHandle, InputAtom,
+    InputInlineRule, InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
     InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
-    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Unification, WriteValidity,
+    QueryOutOptions, RelationOp, ReturnMutation, SearchInput, SortDir, Unification, ValidityClause,
+    WriteValidity,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::value::{AsOf, DataValue, ValidityTs};
+use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, ValidityTs};
 use crate::parse::expr::build_expr;
 use crate::parse::schema::parse_schema;
 use crate::parse::{
@@ -891,12 +892,12 @@ fn parse_atom(
                 .into_inner()
                 .map(|v| build_expr(v, param_pool))
                 .try_collect()?;
-            let as_of = parse_validity_clause(src.next(), param_pool, cur_vld)?;
+            let validity = parse_validity_clause(src.next(), param_pool, cur_vld, ignored_counter)?;
             InputAtom::Relation {
                 inner: InputRelationApplyAtom {
                     name: Symbol::new(strip_sigil(&name, '*')?, name.extract_span()),
                     args,
-                    as_of,
+                    validity,
                     span,
                 },
             }
@@ -947,13 +948,13 @@ fn parse_atom(
                 .into_inner()
                 .map(|arg| extract_named_apply_arg(arg, param_pool))
                 .try_collect()?;
-            let as_of = parse_validity_clause(src.next(), param_pool, cur_vld)?;
+            let validity = parse_validity_clause(src.next(), param_pool, cur_vld, ignored_counter)?;
             InputAtom::NamedFieldRelation {
                 inner: InputNamedFieldRelationApplyAtom {
                     name,
                     args,
                     span,
-                    as_of,
+                    validity,
                 },
             }
         }
@@ -976,31 +977,92 @@ fn unify_binding_symbol(var: &Pair<'_>, ignored_counter: &mut u32) -> Symbol {
     }
 }
 
-/// An optional trailing `@ expr` validity clause.
+/// The plain `@ expr` / `@ system, valid` clause (`Rule::validity_clause`),
+/// resolved to its one bitemporal coordinate. Shared by
+/// [`parse_validity_clause`] (the stored-atom seat, where it is one of
+/// several alternatives) and the fixed-rule relation-argument productions
+/// (`fixed_relation_rel`/`fixed_named_relation_rel`), which reference
+/// `validity_clause` directly and never the temporal alternatives — a
+/// fixed rule's input is a complete relation, not a row-multiplying read.
+fn parse_at_expr_clause(
+    clause: Pair<'_>,
+    param_pool: &BTreeMap<String, DataValue>,
+    cur_vld: ValidityTs,
+) -> Result<AsOf> {
+    let mut coords = clause.children();
+    let first = expr2vld_spec(
+        build_expr(coords.expect("the as-of expression")?, param_pool)?,
+        cur_vld,
+    )?;
+    Ok(match coords.next() {
+        // `@ valid`: the record's current belief about that instant.
+        None => AsOf::current(first),
+        // `@ system, valid`: what the record said at `system` about the
+        // world at `valid`.
+        Some(second) => AsOf {
+            sys: first,
+            valid: expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?,
+        },
+    })
+}
+
+/// An optional trailing `@` clause on a stored-relation atom: the
+/// pre-existing point-in-time read (`@ expr`, unchanged), or one of story
+/// #62's derivation/diff clauses (`@spans`/`@delta`/`@delta_sys`) — all one
+/// grammar seat (`read_validity_clause` in `kyzoscript.pest`), dispatched
+/// here by which alternative matched.
 fn parse_validity_clause(
     clause: Option<Pair<'_>>,
     param_pool: &BTreeMap<String, DataValue>,
     cur_vld: ValidityTs,
-) -> Result<Option<AsOf>> {
-    match clause {
-        None => Ok(None),
-        Some(vld_clause) => {
-            let mut coords = vld_clause.children();
-            let first = expr2vld_spec(
-                build_expr(coords.expect("the as-of expression")?, param_pool)?,
+    ignored_counter: &mut u32,
+) -> Result<Option<ValidityClause>> {
+    let Some(clause) = clause else {
+        return Ok(None);
+    };
+    match clause.as_rule() {
+        Rule::validity_clause => Ok(Some(ValidityClause::At(parse_at_expr_clause(
+            clause, param_pool, cur_vld,
+        )?))),
+        Rule::spans_clause => {
+            let mut children = clause.children();
+            children.expect("the `@spans` keyword")?; // spans_kw, discarded
+            let var_pair = children.expect("`@spans`'s bound interval variable")?;
+            let var = unify_binding_symbol(&var_pair, ignored_counter);
+            let sys = match children.next() {
+                // Default: the record's current belief (every stored
+                // system version is visible).
+                None => MAX_VALIDITY_TS,
+                Some(sys_expr) => expr2vld_spec(build_expr(sys_expr, param_pool)?, cur_vld)?,
+            };
+            Ok(Some(ValidityClause::Spans { sys, var }))
+        }
+        Rule::delta_clause | Rule::delta_sys_clause => {
+            let axis = if clause.as_rule() == Rule::delta_sys_clause {
+                DeltaAxis::Sys
+            } else {
+                DeltaAxis::Valid
+            };
+            let mut children = clause.children();
+            children.expect("the `@delta`/`@delta_sys` keyword")?; // discarded
+            let from = expr2vld_spec(
+                build_expr(children.expect("`@delta`'s FROM instant")?, param_pool)?,
                 cur_vld,
             )?;
-            Ok(Some(match coords.next() {
-                // `@ valid`: the record's current belief about that instant.
-                None => AsOf::current(first),
-                // `@ system, valid`: what the record said at `system`
-                // about the world at `valid`.
-                Some(second) => AsOf {
-                    sys: first,
-                    valid: expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?,
-                },
+            let to = expr2vld_spec(
+                build_expr(children.expect("`@delta`'s TO instant")?, param_pool)?,
+                cur_vld,
+            )?;
+            let var_pair = children.expect("`@delta`'s bound sign variable")?;
+            let var = unify_binding_symbol(&var_pair, ignored_counter);
+            Ok(Some(ValidityClause::Delta {
+                axis,
+                from,
+                to,
+                var,
             }))
         }
+        _ => Err(unexpected("a validity/temporal clause", &clause)),
     }
 }
 
@@ -1164,7 +1226,7 @@ fn parse_fixed_rule(
                                     }
                                 }
                                 Rule::validity_clause => {
-                                    as_of = parse_validity_clause(Some(v), param_pool, cur_vld)?;
+                                    as_of = Some(parse_at_expr_clause(v, param_pool, cur_vld)?);
                                 }
                                 _ => {
                                     return Err(unexpected("a binding or validity clause", &v));
@@ -1206,7 +1268,7 @@ fn parse_fixed_rule(
                                     bindings.insert(k, v);
                                 }
                                 Rule::validity_clause => {
-                                    as_of = parse_validity_clause(Some(p), param_pool, cur_vld)?;
+                                    as_of = Some(parse_at_expr_clause(p, param_pool, cur_vld)?);
                                 }
                                 _ => {
                                     return Err(unexpected("a field pair or validity clause", &p));

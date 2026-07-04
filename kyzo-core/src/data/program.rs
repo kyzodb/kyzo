@@ -746,13 +746,73 @@ pub(crate) struct InputRuleApplyAtom {
     pub(crate) span: SourceSpan,
 }
 
+/// Which axis an [`ValidityClause::Delta`] varies, the other held at the
+/// record's current belief — mirrors [`crate::query::laws::Axis`], the
+/// oracle's own copy of this same distinction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeltaAxis {
+    /// `@delta(a, b)`: valid-time net diff at the current system snapshot.
+    Valid,
+    /// `@delta_sys(a, b)`: system-time net diff at the current valid
+    /// instant — "how did the record's belief about right now change".
+    Sys,
+}
+
+/// A stored-relation atom's trailing `@` clause, in the ONE grammar seat
+/// (issue #62's ratified surface decision: derivation and diff change row
+/// multiplicity, so they ride the atom-level clause that already changes
+/// what a stored atom yields, never a new top-level construct or an
+/// expression function).
+///
+/// `At` is the pre-existing point-in-time read, byte-identical to before
+/// this story. `Spans` and `Delta` each bind one EXTRA trailing column
+/// beyond the atom's own `args` — the interval or the signed-fact marker
+/// — the same shape [`crate::query::search::SearchAtom::own_bindings`]
+/// already uses for a search's engine-appended columns; the resolver
+/// (`compile.rs`) appends it to the atom's bindings rather than folding it
+/// into `args`, so relation arity checks against `args` stay exactly what
+/// they were.
+#[derive(Clone, Debug)]
+pub(crate) enum ValidityClause {
+    /// `@ expr` (one or two coordinates): resolve at this bitemporal
+    /// coordinate. Unchanged surface and unchanged meaning.
+    At(AsOf),
+    /// `@spans var[, sys_expr]`: derive maximal equal-payload half-open
+    /// runs along the valid axis at a fixed system snapshot (`sys`,
+    /// default the record's current belief) — one output row per run,
+    /// `var` bound to the produced [`crate::data::value::Interval`].
+    Spans { sys: ValidityTs, var: Symbol },
+    /// `@delta(a, b) var` / `@delta_sys(a, b) var`: the axis-parameterized
+    /// net diff between two coordinates on `axis` (the other axis fixed at
+    /// current) — one signed row per changed fact, `var` bound to the
+    /// sign.
+    Delta {
+        axis: DeltaAxis,
+        from: ValidityTs,
+        to: ValidityTs,
+        var: Symbol,
+    },
+}
+
+impl ValidityClause {
+    /// The one extra binding this clause produces beyond the atom's own
+    /// `args` — `None` for the plain point-in-time read, which binds
+    /// nothing new.
+    pub(crate) fn extra_var(&self) -> Option<&Symbol> {
+        match self {
+            ValidityClause::At(_) => None,
+            ValidityClause::Spans { var, .. } | ValidityClause::Delta { var, .. } => Some(var),
+        }
+    }
+}
+
 /// A stored-relation application addressed by named fields:
 /// `*name{field: expr, …}`.
 #[derive(Clone, Debug)]
 pub(crate) struct InputNamedFieldRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: BTreeMap<SmartString<LazyCompact>, Expr>,
-    pub(crate) as_of: Option<AsOf>,
+    pub(crate) validity: Option<ValidityClause>,
     pub(crate) span: SourceSpan,
 }
 
@@ -761,7 +821,7 @@ pub(crate) struct InputNamedFieldRelationApplyAtom {
 pub(crate) struct InputRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Expr>,
-    pub(crate) as_of: Option<AsOf>,
+    pub(crate) validity: Option<ValidityClause>,
     pub(crate) span: SourceSpan,
 }
 
@@ -1212,13 +1272,13 @@ pub(crate) struct NormalFormRuleApplyAtom {
     pub(crate) span: SourceSpan,
 }
 
-/// A stored-relation application over plain symbols, optionally as-of a
-/// validity timestamp (time travel).
+/// A stored-relation application over plain symbols, optionally carrying a
+/// [`ValidityClause`] (time travel, interval derivation, or diff).
 #[derive(Clone, Debug)]
 pub(crate) struct NormalFormRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Symbol>,
-    pub(crate) as_of: Option<AsOf>,
+    pub(crate) validity: Option<ValidityClause>,
     pub(crate) span: SourceSpan,
 }
 
@@ -1691,7 +1751,7 @@ pub(crate) struct MagicRuleApplyAtom {
 pub(crate) struct MagicRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Symbol>,
-    pub(crate) as_of: Option<AsOf>,
+    pub(crate) validity: Option<ValidityClause>,
     pub(crate) span: SourceSpan,
 }
 

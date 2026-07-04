@@ -52,7 +52,9 @@ use crate::query::eval::{
     PremiseSource, Premises, ProvNode, ProvenanceUnsupported, RowLimit, RuleBody, provenance_graph,
     stratified_evaluate_with_stores,
 };
-use crate::query::laws::{HeadAggr, Literal, Program, Rel, Rule, Term, naive_eval};
+use crate::query::laws::{
+    Bindings, HeadAggr, Literal, Program, Rel, Rule, Term, ground, head_classes, naive_eval, unify,
+};
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{
     Boolean, Cost, Derivation, DerivationGraph, ProofNode, ProvenanceLimitExceeded, Semiring,
@@ -112,40 +114,8 @@ fn entry_symbol() -> MagicSymbol {
     }
 }
 
-type Bindings = BTreeMap<&'static str, DataValue>;
-
-fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Option<Bindings> {
-    if args.len() != tuple.len() {
-        return None;
-    }
-    let mut out = bound.clone();
-    for (t, val) in args.iter().zip(tuple) {
-        match t {
-            Term::Const(c) => {
-                if c != val {
-                    return None;
-                }
-            }
-            Term::Var(name) => match out.get(name) {
-                Some(existing) if existing != val => return None,
-                Some(_) => {}
-                None => {
-                    out.insert(name, val.clone());
-                }
-            },
-        }
-    }
-    Some(out)
-}
-
-fn ground(args: &[Term], bound: &Bindings) -> Tuple {
-    args.iter()
-        .map(|t| match t {
-            Term::Const(c) => c.clone(),
-            Term::Var(var) => bound[var].clone(),
-        })
-        .collect()
-}
+// `Bindings`, `unify`, and `ground` are the shared reference-tier helpers
+// from `query/laws.rs` (issue #89) — this harness used to hand-copy them.
 
 struct ModelBody {
     head: Vec<Term>,
@@ -355,31 +325,8 @@ impl FixedRuleEval for NoFixed {
 // oracle's own `strata` is private; any valid stratification yields the
 // oracle's fixpoint) ─────────────────────────────────────────────────────
 
-struct HeadClass {
-    has_aggr: bool,
-    is_meet: bool,
-}
-
-fn head_classes(program: &Program) -> BTreeMap<Rel, HeadClass> {
-    let mut per_head: BTreeMap<Rel, Vec<&Rule>> = BTreeMap::new();
-    for rule in &program.rules {
-        per_head.entry(rule.head_rel).or_default().push(rule);
-    }
-    per_head
-        .into_iter()
-        .map(|(rel, rules)| {
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
-            let is_meet = has_aggr
-                && rules.iter().all(|r| {
-                    r.aggr.iter().all(|a| match a {
-                        None => true,
-                        Some((aggregation, _)) => aggregation.is_meet(),
-                    })
-                });
-            (rel, HeadClass { has_aggr, is_meet })
-        })
-        .collect()
-}
+// `HeadClass`/`head_classes` are the shared reference-tier items from
+// `query/laws.rs` (issue #89) — this harness used to hand-copy them too.
 
 fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
     let classes = head_classes(program);

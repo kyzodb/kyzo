@@ -110,7 +110,7 @@ fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
     MagicAtom::Relation(MagicRelationApplyAtom {
         name: sym(name),
         args: args.to_vec(),
-        as_of: None,
+        validity: None,
         span: sp(),
     })
 }

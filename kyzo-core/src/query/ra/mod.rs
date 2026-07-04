@@ -144,11 +144,11 @@ use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
 use crate::data::expr::{Bytecode, Expr, eval_bytecode_pred};
-use crate::data::program::MagicSymbol;
+use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
-use crate::data::value::{AsOf, DataValue};
+use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -167,6 +167,7 @@ pub(crate) mod neg;
 pub(crate) mod search;
 pub(crate) mod stored;
 pub(crate) mod temp;
+pub(crate) mod temporal;
 pub(crate) mod transform;
 
 pub(crate) use fixed::InlineFixedRA;
@@ -176,6 +177,7 @@ pub(crate) use neg::{NegJoin, NegRight};
 pub(crate) use search::SearchRA;
 pub(crate) use stored::{StoredRA, StoredWithValidityRA};
 pub(crate) use temp::TempStoreRA;
+pub(crate) use temporal::{DeltaRA, SpansRA};
 pub(crate) use transform::{FilteredRA, ReorderRA, UnificationRA};
 
 /// A lazy stream of fallible tuples: what iterating an operator yields.
@@ -295,9 +297,9 @@ pub(crate) fn epoch_store_of<'m>(
 /// One node of a compiled rule body. See the module docs for the essence;
 /// see each payload type for its semantics.
 ///
-/// SEAM (index-operator tier): the `HnswSearch`, `FtsSearch` and
-/// `LshSearch` variants of the original land here together with their
-/// `MagicAtom` variants and manifests — each is a parent plus its own
+/// Index search (HNSW/FTS/LSH) is the landed `Search` variant below —
+/// upstream's three per-engine node kinds collapsed into one node holding
+/// a resolved `SearchRA` (query/search.rs): a parent plus its own
 /// bindings, mapping every parent tuple to the search results seeded by
 /// one bound column.
 pub(crate) enum RelAlgebra {
@@ -328,6 +330,12 @@ pub(crate) enum RelAlgebra {
     /// query expression, run the engine's pure search once, and append each
     /// result row (base row + the engine's extra columns).
     Search(Box<SearchRA>),
+    /// `@spans`: derived maximal-run intervals over a stored relation's
+    /// full bitemporal history, at a fixed system snapshot (story #62).
+    Spans(SpansRA),
+    /// `@delta`/`@delta_sys`: axis-parameterized net diff between two
+    /// bitemporal coordinates on a stored relation (story #62).
+    Delta(DeltaRA),
 }
 
 impl RelAlgebra {
@@ -343,6 +351,8 @@ impl RelAlgebra {
             RelAlgebra::Unification(i) => i.span,
             RelAlgebra::StoredWithValidity(i) => i.span,
             RelAlgebra::Search(i) => i.atom.span,
+            RelAlgebra::Spans(i) => i.span,
+            RelAlgebra::Delta(i) => i.span,
         }
     }
 
@@ -353,6 +363,10 @@ impl RelAlgebra {
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
         match self {
             RelAlgebra::Fixed(_) => {}
+            // Neither carries an expression to resolve: `Spans`'s fixed
+            // system snapshot and `Delta`'s two coordinates are already
+            // plain `i64`/`AsOf` values by construction, never `Expr`.
+            RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
             RelAlgebra::Search(s) => {
                 s.fill_binding_indices_and_compile()?;
             }
@@ -428,17 +442,24 @@ impl RelAlgebra {
         })
     }
 
-    /// A scan of a stored relation, optionally at an explicit [`AsOf`]
-    /// coordinate. Any facts relation time-travels — bitemporality is
-    /// the storage format, not a schema property, so construction checks
-    /// nothing about the columns.
+    /// A scan of a stored relation, optionally carrying a [`ValidityClause`]
+    /// (a point-in-time read, a derivation, or a diff). Any facts relation
+    /// time-travels — bitemporality is the storage format, not a schema
+    /// property, so construction checks nothing about the columns.
+    ///
+    /// `bindings` is the base relation's own key/payload columns; a
+    /// `Spans`/`Delta` clause's one extra trailing binding (the interval
+    /// or the sign) is appended here, never folded into the base columns
+    /// (see `data::program::ValidityClause`'s doc) — callers pass
+    /// `right_vars` unchanged and this constructor pushes the clause's
+    /// `var` itself.
     pub(crate) fn relation(
-        bindings: Vec<Symbol>,
+        mut bindings: Vec<Symbol>,
         storage: RelationHandle,
         span: SourceSpan,
-        as_of: Option<AsOf>,
+        validity: Option<ValidityClause>,
     ) -> Result<Self> {
-        match as_of {
+        match validity {
             None => Ok(Self::Stored(StoredRA {
                 bindings,
                 storage,
@@ -446,7 +467,7 @@ impl RelAlgebra {
                 filters_bytecodes: vec![],
                 span,
             })),
-            Some(vld) => {
+            Some(ValidityClause::At(vld)) => {
                 // Every facts relation is bitemporal in the one universal
                 // format: any relation time-travels, no schema opt-in.
                 Ok(Self::StoredWithValidity(StoredWithValidityRA {
@@ -455,6 +476,37 @@ impl RelAlgebra {
                     filters: vec![],
                     filters_bytecodes: vec![],
                     as_of: vld,
+                    span,
+                }))
+            }
+            Some(ValidityClause::Spans { sys, var }) => {
+                bindings.push(var);
+                Ok(Self::Spans(SpansRA {
+                    bindings,
+                    storage,
+                    sys: sys.0.0,
+                    span,
+                }))
+            }
+            Some(ValidityClause::Delta {
+                axis,
+                from,
+                to,
+                var,
+            }) => {
+                bindings.push(var);
+                let (from, to) = match axis {
+                    DeltaAxis::Valid => (AsOf::current(from), AsOf::current(to)),
+                    DeltaAxis::Sys => (
+                        AsOf::at(from, MAX_VALIDITY_TS),
+                        AsOf::at(to, MAX_VALIDITY_TS),
+                    ),
+                };
+                Ok(Self::Delta(DeltaRA {
+                    bindings,
+                    storage,
+                    from,
+                    to,
                     span,
                 }))
             }
@@ -470,11 +522,18 @@ impl RelAlgebra {
 
     pub(crate) fn filter(self, filter: Expr) -> Result<Self> {
         Ok(match self {
+            // `Spans`/`Delta` carry no `filters` field of their own (chunk
+            // 3's naive scope: pushdown into the temporal scan is chunk
+            // 4's posting-index work) — a residual predicate wraps them
+            // exactly like a `Search` result, same as every other operator
+            // with nothing to push into.
             s @ (RelAlgebra::Fixed(_)
             | RelAlgebra::Reorder(_)
             | RelAlgebra::NegJoin(_)
             | RelAlgebra::Unification(_)
-            | RelAlgebra::Search(_)) => {
+            | RelAlgebra::Search(_)
+            | RelAlgebra::Spans(_)
+            | RelAlgebra::Delta(_)) => {
                 let span = filter.span();
                 RelAlgebra::Filter(FilteredRA {
                     parent: Box::new(s),
@@ -679,6 +738,22 @@ impl RelAlgebra {
                     span
                 ))
             }
+            // Same refusal, same reason: a derived-interval or diff scan
+            // is exactly as time-travel-flavored as a plain as-of scan —
+            // "not *rel{..} @spans iv" or "not *rel{..} @delta(a,b) sgn"
+            // has no well-defined skip-scan negation either.
+            RelAlgebra::Spans(v) => {
+                bail!(NegationOverTimeTravelError(
+                    v.storage.name.to_string(),
+                    span
+                ))
+            }
+            RelAlgebra::Delta(v) => {
+                bail!(NegationOverTimeTravelError(
+                    v.storage.name.to_string(),
+                    span
+                ))
+            }
             _ => bail!(PlanInvariantError(
                 "the right side of a negation must be a rule or stored-relation scan"
             )),
@@ -703,6 +778,8 @@ impl RelAlgebra {
             RelAlgebra::TempStore(_r) => Ok(()),
             RelAlgebra::Stored(_v) => Ok(()),
             RelAlgebra::StoredWithValidity(_v) => Ok(()),
+            RelAlgebra::Spans(_v) => Ok(()),
+            RelAlgebra::Delta(_v) => Ok(()),
             RelAlgebra::Join(r) => r.do_eliminate_temp_vars(used),
             RelAlgebra::Reorder(r) => r.relation.eliminate_temp_vars(used),
             RelAlgebra::Filter(r) => r.do_eliminate_temp_vars(used),
@@ -720,6 +797,8 @@ impl RelAlgebra {
             RelAlgebra::TempStore(_) => None,
             RelAlgebra::Stored(_) => None,
             RelAlgebra::StoredWithValidity(_) => None,
+            RelAlgebra::Spans(_) => None,
+            RelAlgebra::Delta(_) => None,
             RelAlgebra::Join(r) => Some(&r.to_eliminate),
             RelAlgebra::Reorder(_) => None,
             RelAlgebra::Filter(r) => Some(&r.to_eliminate),
@@ -749,6 +828,8 @@ impl RelAlgebra {
             RelAlgebra::TempStore(d) => d.bindings.clone(),
             RelAlgebra::Stored(v) => v.bindings.clone(),
             RelAlgebra::StoredWithValidity(v) => v.bindings.clone(),
+            RelAlgebra::Spans(v) => v.bindings.clone(),
+            RelAlgebra::Delta(v) => v.bindings.clone(),
             RelAlgebra::Join(j) => j.bindings(),
             RelAlgebra::Reorder(r) => r.bindings(),
             RelAlgebra::Filter(r) => r.parent.bindings_after_eliminate(),
@@ -789,6 +870,8 @@ impl RelAlgebra {
             RelAlgebra::NegJoin(n) => n.iter_batched(tx, delta_rule, stores, segments),
             RelAlgebra::StoredWithValidity(v) => v.iter_batched(tx),
             RelAlgebra::Search(r) => r.iter_batched(tx, delta_rule, stores, segments),
+            RelAlgebra::Spans(v) => v.iter_batched(tx),
+            RelAlgebra::Delta(v) => v.iter_batched(tx),
         }
     }
 }
@@ -849,6 +932,19 @@ impl Debug for RelAlgebra {
                 .field(&r.storage.name)
                 .field(&r.filters)
                 .field(&r.as_of)
+                .finish(),
+            RelAlgebra::Spans(r) => f
+                .debug_tuple("Spans")
+                .field(&bindings)
+                .field(&r.storage.name)
+                .field(&r.sys)
+                .finish(),
+            RelAlgebra::Delta(r) => f
+                .debug_tuple("Delta")
+                .field(&bindings)
+                .field(&r.storage.name)
+                .field(&r.from)
+                .field(&r.to)
                 .finish(),
             RelAlgebra::Join(r) => {
                 if r.left.is_unit() {
@@ -1252,7 +1348,7 @@ mod tests {
                 vec![sym("k"), sym("v")],
                 handle.clone(),
                 sp(),
-                Some(AsOf::current(ValidityTs(Reverse(ts)))),
+                Some(ValidityClause::At(AsOf::current(ValidityTs(Reverse(ts))))),
             )
             .unwrap();
             rows_of(&ra, &rtx, &stores)
@@ -1323,7 +1419,7 @@ mod tests {
             vec![sym("k"), sym("at")],
             handle,
             sp(),
-            Some(AsOf::current(ValidityTs(Reverse(0)))),
+            Some(ValidityClause::At(AsOf::current(ValidityTs(Reverse(0))))),
         )
         .unwrap();
         let err = RelAlgebra::unit(sp())

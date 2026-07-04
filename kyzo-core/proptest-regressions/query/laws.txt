@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 50851e00e5cd466c8c8aa9909b96a6bc8a43565e775ae7de716743b3723c5d6b # shrinks to case = MeetCase { aggr_name: "or", edges: {(0, 1)}, seeds: {0: false} }
