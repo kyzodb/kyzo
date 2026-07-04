@@ -29,8 +29,9 @@
 use super::*;
 
 use ndarray::arr1;
+use proptest::prelude::*;
 
-use crate::data::functions::{OP_LT, OP_MOD};
+use crate::data::functions::{OP_GE, OP_LT, OP_MOD};
 use crate::data::program::InputRelationHandle;
 use crate::data::symb::Symbol;
 use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
@@ -213,10 +214,15 @@ fn hsetup(
 enum FilterSpec {
     /// `k < threshold` — selectivity `threshold/n`; correlates with key order
     /// (exercises prefix-sample bias, design Q1).
-    KeyLessThan { threshold: i64 },
+    LessThan { threshold: i64 },
     /// `(k mod modulus) < accept` — selectivity `accept/modulus`, uncorrelated
     /// with key order (the unbiased band generator).
-    KeyModLessThan { modulus: i64, accept: i64 },
+    ModLessThan { modulus: i64, accept: i64 },
+    /// `k >= threshold` — the tail complement of `LessThan`. Used to carve out
+    /// a match set that sits in a specific key range (e.g. a translated
+    /// cluster appended at the end of a corpus), never sampled by a modulus
+    /// stripe.
+    AtLeast { threshold: i64 },
 }
 
 impl FilterSpec {
@@ -224,8 +230,9 @@ impl FilterSpec {
     fn passes(&self, row: &[DataValue]) -> bool {
         let k = row[0].get_int().expect("key is int");
         match *self {
-            FilterSpec::KeyLessThan { threshold } => k < threshold,
-            FilterSpec::KeyModLessThan { modulus, accept } => k.rem_euclid(modulus) < accept,
+            FilterSpec::LessThan { threshold } => k < threshold,
+            FilterSpec::ModLessThan { modulus, accept } => k.rem_euclid(modulus) < accept,
+            FilterSpec::AtLeast { threshold } => k >= threshold,
         }
     }
 
@@ -235,7 +242,7 @@ impl FilterSpec {
         let span = SourceSpan(0, 0);
         let k = Symbol::new("k", span);
         let code = match *self {
-            FilterSpec::KeyLessThan { threshold } => vec![
+            FilterSpec::LessThan { threshold } => vec![
                 Bytecode::Binding {
                     var: k,
                     tuple_pos: Some(0),
@@ -250,7 +257,7 @@ impl FilterSpec {
                     span,
                 },
             ],
-            FilterSpec::KeyModLessThan { modulus, accept } => vec![
+            FilterSpec::ModLessThan { modulus, accept } => vec![
                 Bytecode::Binding {
                     var: k,
                     tuple_pos: Some(0),
@@ -274,6 +281,21 @@ impl FilterSpec {
                     span,
                 },
             ],
+            FilterSpec::AtLeast { threshold } => vec![
+                Bytecode::Binding {
+                    var: k,
+                    tuple_pos: Some(0),
+                },
+                Bytecode::Const {
+                    val: DataValue::from(threshold),
+                    span,
+                },
+                Bytecode::Apply {
+                    op: &OP_GE,
+                    arity: 2,
+                    span,
+                },
+            ],
         };
         (code, span)
     }
@@ -291,19 +313,19 @@ impl FilterSpec {
 
 /// Sweep generator: a filter whose true selectivity is `target`
 /// (granularity 0.1%). `striped` picks the accepted-set SHAPE — a
-/// `KeyModLessThan` stripe (accepted keys spread uniformly) or a
-/// `KeyLessThan` prefix (accepted keys contiguous). The selector must
+/// `ModLessThan` stripe (accepted keys spread uniformly) or a
+/// `LessThan` prefix (accepted keys contiguous). The selector must
 /// hold on both distributions: a contiguous accepted range clusters in
 /// the graph exactly where a striped one does not.
 fn filter_at_selectivity(target: f64, striped: bool) -> FilterSpec {
     let modulus = 1000i64;
     let accept = (target * modulus as f64).round() as i64;
     if striped {
-        FilterSpec::KeyModLessThan { modulus, accept }
+        FilterSpec::ModLessThan { modulus, accept }
     } else {
         // Keys are 0..n; a threshold at target*n accepts the same
         // fraction, contiguously. The harness fixtures use n = 1000.
-        FilterSpec::KeyLessThan { threshold: accept }
+        FilterSpec::LessThan { threshold: accept }
     }
 }
 
@@ -501,7 +523,7 @@ fn oracle_is_exact_and_total_ordered() {
         ],
     ];
     let q = Vector::F32(arr1(&[0.0, 0.0]));
-    let even = FilterSpec::KeyModLessThan {
+    let even = FilterSpec::ModLessThan {
         modulus: 2,
         accept: 1,
     }; // keeps even keys 0,2,4
@@ -770,6 +792,16 @@ fn fallback_is_load_bearing_and_exact() {
 /// mutation that deletes the `if hits.len() < k { scan }` branch in
 /// `hnsw_knn_filtered` makes THIS bite (where `fallback_is_load_bearing_and_exact`,
 /// which routes through the forced helper, would not).
+///
+/// The count and a HashSet-membership recall are not enough: a mutation that
+/// CONCATENATES the graph's short partial with the scan's full result and
+/// truncates to `k` (instead of replacing the partial with the scan) also
+/// lands on `hits.len() == k`, and a membership-based recall over-counts a
+/// duplicated true positive as an independent hit — so it would pass both of
+/// the old assertions while returning a corrupt, duplicate-laden set. The
+/// no-duplicates check and the exact-set-equals-oracle check below are what
+/// catch that (see `min_k_matches_law_generative`'s pinned low-ef band and the
+/// splice mutant proven against both in the story #87 fix round).
 #[test]
 fn production_fallback_repairs_starved_real_search() {
     let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
@@ -798,6 +830,29 @@ fn production_fallback_repairs_starved_real_search() {
         (recall_at_k(&keys_of(&hits), &truth, P2_K) - 1.0).abs() < 1e-9,
         "the production fallback (exact scan) must be perfectly accurate"
     );
+
+    // No duplicates: a naive "concat the partial with the scan, then
+    // truncate" repair would double-count whatever the partial already
+    // found.
+    let mut ekeys = keys_of(&hits);
+    let before = ekeys.len();
+    ekeys.sort_unstable();
+    ekeys.dedup();
+    assert_eq!(
+        ekeys.len(),
+        before,
+        "the repaired result must not contain duplicate keys"
+    );
+    // Exact set equality with the independent oracle: not just "k rows, all
+    // individually plausible" but "precisely the true top-k set", which a
+    // duplicate-corrupted concat-then-truncate would generally miss (the
+    // duplicated slots displace a genuine match from the true top-k).
+    let mut sorted_truth = truth.clone();
+    sorted_truth.sort_unstable();
+    assert_eq!(
+        ekeys, sorted_truth,
+        "the repaired result must equal the independent oracle's exact top-k set, not merely have the right length"
+    );
 }
 
 /// The engine's result ordering is a TOTAL order under equal distances: with a
@@ -825,7 +880,7 @@ fn engine_ordering_is_total_under_ties() {
     let rtx = db.read_tx().unwrap();
     let q = Vector::F32(arr1(&vec![0.0f32; dim]));
     // A filter that passes every row: (k mod 1) < 1 is always true.
-    let f = FilterSpec::KeyModLessThan {
+    let f = FilterSpec::ModLessThan {
         modulus: 1,
         accept: 1,
     };
@@ -835,6 +890,595 @@ fn engine_ordering_is_total_under_ties() {
         vec![0, 1, 2, 3, 4],
         "under exact ties the smallest keys win, deterministically"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Story #87 — the min(k, matches) law, generatively and adversarially, plus
+// the thread-count determinism obligation and the filter-matches-everything
+// differential against the unfiltered baseline (the "old post-filter path,
+// proven answer-identical" requirement).
+// ---------------------------------------------------------------------------
+
+/// THE LAW, generatively: for any filter and any `k`, a filtered search
+/// returns exactly `min(k, M)` rows and every returned row satisfies the
+/// filter — over hundreds of randomly generated `(k, modulus, accept)`
+/// bands on one real corpus. A mutation that weakens the count guarantee to
+/// best-effort (e.g. disabling the fallback, or capping the graph beam
+/// without a repair) makes this bite across many cases, not just the
+/// hand-picked ones below.
+#[test]
+fn min_k_matches_law_generative() {
+    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    let q = seeded_query(P2_DIM, P2_QUERY_SEED);
+
+    // A PINNED low-ef band, inside the sweep, that is guaranteed (not merely
+    // hoped) to exercise the production fallback with a NON-EMPTY partial
+    // graph result: the random (k, modulus, accept, ef=P2_EF) draws above
+    // never land here because ef is fixed generous, so the graph walk either
+    // fills completely or (rarely) comes back empty — never "found some,
+    // not enough". This band pins ef=1 at a 50%-selectivity filter (the same
+    // conditions `production_fallback_repairs_starved_real_search` uses),
+    // and asserts the partial is non-empty-but-short BEFORE trusting the
+    // repaired result, so the case is provably exercised every run, not just
+    // statistically likely. A "concat partial + scan, truncate to k" splice
+    // mutant produces duplicate keys / a wrong exact set here even though it
+    // preserves `hits.len() == k` and even a membership-based recall.
+    {
+        let pinned_ef = 1usize;
+        let pinned_f = filter_at_selectivity(0.50, true);
+        let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, pinned_ef, &pinned_f).unwrap();
+        assert!(
+            matches!(plan, SearchPlan::Graph { .. }),
+            "pinned band precondition: selector must pick Graph, got {plan:?}"
+        );
+        let fb = pinned_f.bytecode();
+        let params = knn_params_p2(P2_K, pinned_ef);
+        let mut stack = vec![];
+        let partial = hnsw_knn_forced(
+            &rtx, &q, &m, &base, &idx, &params, &fb, &mut stack, plan, false,
+        )
+        .unwrap();
+        assert!(
+            !partial.is_empty() && partial.len() < P2_K,
+            "pinned band precondition: the raw graph walk must be a NON-EMPTY \
+             partial (got {} of {}) so the fallback repair is genuinely \
+             exercised, not a no-op or a from-scratch scan",
+            partial.len(),
+            P2_K
+        );
+
+        let truth = brute_force_filtered_knn(&q, P2_K, &pinned_f, &rows, &m);
+        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, pinned_ef, &pinned_f);
+        assert_eq!(
+            hits.len(),
+            P2_K,
+            "pinned band: the production fallback must repair the non-empty \
+             partial to exactly k rows"
+        );
+        let mut ekeys = keys_of(&hits);
+        let before = ekeys.len();
+        ekeys.sort_unstable();
+        ekeys.dedup();
+        assert_eq!(
+            ekeys.len(),
+            before,
+            "pinned band: the repaired result must not contain duplicate keys"
+        );
+        let mut sorted_truth = truth.clone();
+        sorted_truth.sort_unstable();
+        assert_eq!(
+            ekeys, sorted_truth,
+            "pinned band: the repaired result must equal the independent \
+             oracle's exact top-k set"
+        );
+    }
+
+    proptest!(ProptestConfig::with_cases(64), |(k in 1usize..=15, modulus in 2i64..=64, accept_raw in 0i64..64)| {
+        let accept = accept_raw % modulus;
+        let f = FilterSpec::ModLessThan { modulus, accept };
+        let matches = f.true_match_count(&rows);
+        let hits = filtered_search(&rtx, &q, &m, &base, &idx, k, P2_EF, &f);
+        prop_assert_eq!(
+            hits.len(),
+            k.min(matches),
+            "k={} modulus={} accept={} matches={}: got {} rows",
+            k, modulus, accept, matches, hits.len()
+        );
+        for h in &hits {
+            prop_assert!(f.passes(h), "returned row {h:?} fails its own filter");
+        }
+        // No duplicates: every returned key is distinct.
+        let mut ekeys = keys_of(&hits);
+        let before = ekeys.len();
+        ekeys.sort_unstable();
+        ekeys.dedup();
+        prop_assert_eq!(ekeys.len(), before, "duplicate keys in one result set");
+    });
+}
+
+/// Adversarial: match sets of exactly 1, 2, and 3 rows (well below any
+/// reasonable `k`). So few matches means the selector's estimate always
+/// lands in the exact-scan regime, so BOTH the count and the ranking must be
+/// exact — the sharpest form of the law.
+#[test]
+fn min_k_matches_tiny_match_sets() {
+    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    let q = seeded_query(P2_DIM, P2_QUERY_SEED);
+
+    for threshold in [1i64, 2, 3] {
+        let f = FilterSpec::LessThan { threshold };
+        let matches = f.true_match_count(&rows);
+        assert_eq!(matches, threshold as usize, "keys are dense 0..n");
+        let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
+        let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+        let ekeys = keys_of(&hits);
+        assert_eq!(
+            hits.len(),
+            P2_K.min(matches),
+            "threshold={threshold}: expected min(k, {matches}) rows, got {}",
+            hits.len()
+        );
+        assert_eq!(
+            recall_at_k(&ekeys, &truth, P2_K),
+            1.0,
+            "threshold={threshold}: a {matches}-row match set must be exact"
+        );
+    }
+}
+
+/// A corpus of two well-separated clusters: keys `0..half` are a "near"
+/// cluster around the origin, keys `half..n` are the SAME random spread
+/// translated `+40` in every dimension — a "far" cluster with no vector-space
+/// overlap with the near one. Returns `(n, half, rows)`.
+fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
+    let n = P2_N;
+    let half = n / 2;
+    let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
+    let rows: Vec<Tuple> = (0..n)
+        .map(|k| {
+            let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
+            let v = if k < half {
+                comps
+            } else {
+                comps.iter().map(|c| c + 40.0).collect()
+            };
+            vec![DataValue::from(k), DataValue::Vec(Vector::F32(arr1(&v)))]
+        })
+        .collect();
+    (n, half, rows)
+}
+
+/// Adversarial: the match set is a cluster translated far away in vector
+/// space from the query's natural region, at 50% selectivity (squarely the
+/// Graph plan's regime, not the Scan fallback's). This is the starvation
+/// scenario the design's full-graph routing exists for: a filtered walk that
+/// only expands through filter-PASSING nodes would need to already be near
+/// the far cluster to find it, and a naive implementation gives up as soon
+/// as the near cluster it entered through is exhausted. The full-graph
+/// routing (traverse every edge regardless of the endpoint's filter
+/// verdict) is what lets the walk cross from the near cluster to the far
+/// one; the exact-scan fallback is the backstop if it still falls short.
+#[test]
+fn min_k_matches_disconnected_from_entry_region() {
+    let dim = 16;
+    let (n, half, rows) = near_far_cluster_corpus(dim);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    // The query sits in the NEAR cluster's region (untranslated), so an
+    // unfiltered search would settle near the origin — the far cluster is
+    // reachable only by traversing edges through it.
+    let q = seeded_query(dim, P2_QUERY_SEED);
+
+    let f = FilterSpec::AtLeast { threshold: half }; // matches only the far cluster
+    let matches = f.true_match_count(&rows);
+    assert_eq!(matches, (n - half) as usize);
+    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
+    let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+    let ekeys = keys_of(&hits);
+
+    assert_eq!(
+        hits.len(),
+        P2_K.min(matches),
+        "disconnected match set: expected min(k, {matches}), got {}",
+        hits.len()
+    );
+    for k in &ekeys {
+        assert!(*k >= half, "returned key {k} is not in the far cluster");
+    }
+    let cr = count_recall(&ekeys, &truth, P2_K);
+    assert_eq!(
+        cr, 1.0,
+        "the count guarantee must hold even for a disconnected match set"
+    );
+    // Ranking quality is measured, not assumed: report it rather than gate
+    // on an arbitrary threshold (the fallback backstops the COUNT, not the
+    // graph walk's ranking quality when it fills to k without falling back).
+    let r = recall_at_k(&ekeys, &truth, P2_K);
+    eprintln!("disconnected-cluster recall@k = {r:.3} (count_recall = {cr:.3})");
+}
+
+/// The GRAPH WALK ITSELF (fallback disabled, ordinary — not artificially
+/// starved — beam width) must cross from the near cluster it enters through
+/// to the disconnected far cluster and find matches there. This isolates the
+/// traversal's own routing from the scan fallback's backstop: the fallback
+/// would repair a starved walk's COUNT regardless, so a mutation that stops
+/// expansion at filter-failing nodes (confining the walk to the near cluster
+/// forever, since every near-cluster node fails the far-cluster filter)
+/// would otherwise go undetected — the fallback silently fixes the count and
+/// every count/recall assertion elsewhere still passes. Forcing the plan
+/// with `fallback: false` removes that safety net so THIS test bites.
+#[test]
+fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() {
+    let dim = 16;
+    let (_n, half, rows) = near_far_cluster_corpus(dim);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    let q = seeded_query(dim, P2_QUERY_SEED);
+    let f = FilterSpec::AtLeast { threshold: half };
+    let matches = f.true_match_count(&rows);
+    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
+
+    // An ordinary beam width (the selector would pick something in this
+    // ballpark at 50% selectivity) — no artificial starvation, so ANY
+    // shortfall here comes from the routing itself, not a beam too narrow to
+    // finish the job.
+    let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
+    let params = knn_params_p2(P2_K, P2_EF);
+    let fb = f.bytecode();
+    let mut stack = vec![];
+    let hits = hnsw_knn_forced(
+        &rtx, &q, &m, &base, &idx, &params, &fb, &mut stack, plan, false,
+    )
+    .unwrap();
+    let ekeys = keys_of(&hits);
+
+    assert_eq!(
+        hits.len(),
+        P2_K.min(matches),
+        "the graph walk alone (no fallback) must reach the disconnected far \
+         cluster and seat min(k, matches) rows, got {}",
+        hits.len()
+    );
+    for k in &ekeys {
+        assert!(
+            *k >= half,
+            "returned key {k} is not in the far cluster — the walk never crossed"
+        );
+    }
+    assert_eq!(
+        count_recall(&ekeys, &truth, P2_K),
+        1.0,
+        "the unaided graph walk must find the full disconnected match set"
+    );
+}
+
+/// Adversarial: zero matches. The filter rejects every row; the search must
+/// return an empty result, not an error and not a panic.
+#[test]
+fn min_k_matches_zero_matches() {
+    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    let q = seeded_query(P2_DIM, P2_QUERY_SEED);
+
+    let f = FilterSpec::LessThan { threshold: 0 }; // keys are 0..n, so nothing passes
+    assert_eq!(f.true_match_count(&rows), 0);
+    let hits = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+    assert!(hits.is_empty(), "zero matches must yield an empty result");
+}
+
+/// Adversarial: the filter matches EVERY row. The filtered path (selector,
+/// full-graph traversal admitting everything, or the scan) must return
+/// EXACTLY what the plain unfiltered `hnsw_knn` returns — the differential
+/// proof that filtering-during-traversal is not a second, divergent search
+/// algorithm wearing the unfiltered one's clothes; it is the same graph, the
+/// same total order, with an admission gate that happens to always open.
+#[test]
+fn min_k_matches_filter_matching_everything_equals_unfiltered() {
+    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    let q = seeded_query(P2_DIM, P2_QUERY_SEED);
+
+    let f = FilterSpec::ModLessThan {
+        modulus: 1,
+        accept: 1,
+    }; // (k mod 1) < 1 is always true
+    assert_eq!(f.true_match_count(&rows), rows.len());
+
+    let params = knn_params_p2(P2_K, P2_EF);
+    let mut stack = vec![];
+    let unfiltered = hnsw_knn(
+        &rtx,
+        &q,
+        &m,
+        &base,
+        &idx,
+        &params,
+        &None,
+        &mut stack,
+        &crate::fixed_rule::CancelFlag::default(),
+    )
+    .unwrap();
+    let filtered = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+
+    assert_eq!(
+        keys_of(&filtered),
+        keys_of(&unfiltered),
+        "an always-true filter must return exactly the unfiltered top-k, same order"
+    );
+    assert_eq!(
+        filtered, unfiltered,
+        "an always-true filter must be byte-identical to the unfiltered search, \
+         appended columns included"
+    );
+}
+
+/// Determinism: the filtered search is a pure function of the read snapshot
+/// with no thread-local or global mutable state (the reservoir sample seed,
+/// the beam, and the `(distance, key)` total order are all pure), so its
+/// result is byte-identical no matter how many threads are available to the
+/// process — rayon pool sizes 1/2/4/8, and genuinely concurrent OS threads
+/// racing on the same read transaction.
+#[test]
+fn filtered_search_is_thread_count_invariant() {
+    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED);
+    let q = seeded_query(P2_DIM, P2_QUERY_SEED);
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+
+    let run_under_pool = |n_threads: usize| -> Vec<Vec<Tuple>> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(n_threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            SELECTIVITY_BANDS
+                .iter()
+                .map(|&t| {
+                    filtered_search(
+                        &rtx,
+                        &q,
+                        &m,
+                        &base,
+                        &idx,
+                        P2_K,
+                        P2_EF,
+                        &filter_at_selectivity(t, true),
+                    )
+                })
+                .collect()
+        })
+    };
+    let baseline = run_under_pool(1);
+    for n in [2usize, 4, 8] {
+        let got = run_under_pool(n);
+        assert_eq!(
+            baseline, got,
+            "rayon pool size {n}: results diverged from the 1-thread baseline"
+        );
+    }
+
+    // Genuinely concurrent: every band searched from its own OS thread at
+    // once, sharing one read transaction.
+    let concurrent: Vec<Vec<Tuple>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = SELECTIVITY_BANDS
+            .iter()
+            .map(|&t| {
+                let rtx = &rtx;
+                let q = &q;
+                let m = &m;
+                let base = &base;
+                let idx = &idx;
+                scope.spawn(move || {
+                    filtered_search(
+                        rtx,
+                        q,
+                        m,
+                        base,
+                        idx,
+                        P2_K,
+                        P2_EF,
+                        &filter_at_selectivity(t, true),
+                    )
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(
+        baseline, concurrent,
+        "concurrent OS threads diverged from the sequential baseline"
+    );
+}
+
+/// Adversarial: `k` exceeds the ENTIRE population — not merely the match
+/// count, the whole corpus. A filtered search asking for far more rows than
+/// exist anywhere in the index must still return exactly `min(k, M) = M`
+/// rows: the whole matching set, in full, with no attempt to conjure rows
+/// that do not exist and no panic on the size mismatch.
+#[test]
+fn min_k_matches_k_exceeds_entire_population() {
+    let rows = seeded_rows(P2_N, P2_DIM, P2_CORPUS_SEED); // N = 4000
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, P2_DIM, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    let q = seeded_query(P2_DIM, P2_QUERY_SEED);
+
+    let k = rows.len() * 10; // an order of magnitude past the whole corpus
+    let f = filter_at_selectivity(0.10, true); // a genuine subset, M = 400
+    let matches = f.true_match_count(&rows);
+    assert!(
+        matches < rows.len(),
+        "sanity: the filter must be a proper subset of the corpus"
+    );
+    let truth = brute_force_filtered_knn(&q, k, &f, &rows, &m);
+    let hits = filtered_search(&rtx, &q, &m, &base, &idx, k, P2_EF, &f);
+    let mut ekeys = keys_of(&hits);
+
+    assert_eq!(
+        hits.len(),
+        matches,
+        "k={k} exceeds the whole population ({}); expected exactly the \
+         match set ({matches} rows)",
+        rows.len()
+    );
+    let before = ekeys.len();
+    ekeys.sort_unstable();
+    ekeys.dedup();
+    assert_eq!(
+        ekeys.len(),
+        before,
+        "duplicate keys when k exceeds the population"
+    );
+    let mut sorted_truth = truth.clone();
+    sorted_truth.sort_unstable();
+    assert_eq!(
+        ekeys, sorted_truth,
+        "must equal the exact match set — no more, no less — when k exceeds it"
+    );
+
+    // And k exceeding the corpus even when the filter matches EVERY row (so
+    // M = N < k too): the whole corpus must come back, once each.
+    let f_all = FilterSpec::ModLessThan {
+        modulus: 1,
+        accept: 1,
+    };
+    let hits_all = filtered_search(&rtx, &q, &m, &base, &idx, k, P2_EF, &f_all);
+    let mut all_keys = keys_of(&hits_all);
+    assert_eq!(
+        hits_all.len(),
+        rows.len(),
+        "k exceeds N with an all-matching filter: expected every row exactly once"
+    );
+    let before_all = all_keys.len();
+    all_keys.sort_unstable();
+    all_keys.dedup();
+    assert_eq!(
+        all_keys.len(),
+        before_all,
+        "duplicate keys when k exceeds N with an all-matching filter"
+    );
+}
+
+/// The engine's total order under equal distances holds under the GRAPH
+/// plan too, not just Scan — `engine_ordering_is_total_under_ties` uses a
+/// 12-row corpus small enough that the selector always picks Scan, so it
+/// never actually exercised the graph traversal's tie-break. This test uses
+/// the same axis-unit-vector tie construction at a corpus size and
+/// selectivity that forces `SearchPlan::Graph`, checks the result matches
+/// the independent oracle's tie-break EXACTLY (not just in count), and that
+/// the tie-break is thread-count invariant — a "drop the tie-break" or a
+/// hash-order-leaking mutation would either diverge from the oracle or
+/// diverge across thread counts (or both).
+#[test]
+fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
+    let dim = 16;
+    let n = P2_N;
+    let rows: Vec<Tuple> = (0..n)
+        .map(|i| {
+            let mut comps = vec![0.0f32; dim];
+            comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
+            vec![
+                DataValue::from(i),
+                DataValue::Vec(Vector::F32(arr1(&comps))),
+            ]
+        })
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let db = new_fjall_storage(dir.path()).unwrap();
+    let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
+    let rtx = db.read_tx().unwrap();
+    // Every row is EXACTLY equidistant (squared L2 = 1.0, bit-exact) from the
+    // all-zero query, so only the `(distance, encoded-key)` tie-break decides
+    // the k survivors.
+    let q = Vector::F32(arr1(&vec![0.0f32; dim]));
+    // Even keys only (`k mod 2 == 0 < 1`): a genuine filter (not
+    // all-matching), ~half the corpus — enough matches (~2000) to force the
+    // Graph plan, not Scan.
+    let f = FilterSpec::ModLessThan {
+        modulus: 2,
+        accept: 1,
+    };
+
+    let plan = selected_plan(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f).unwrap();
+    assert!(
+        matches!(plan, SearchPlan::Graph { .. }),
+        "precondition: this corpus/filter must select Graph, got {plan:?}"
+    );
+
+    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
+    // Under exact ties among even keys, ascending-key order wins: 0, 2, 4, ...
+    assert_eq!(
+        truth,
+        vec![0, 2, 4, 6, 8, 10, 12, 14, 16, 18],
+        "sanity: the oracle's own tie-break must be the smallest even keys"
+    );
+
+    let baseline = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+    assert_eq!(
+        keys_of(&baseline),
+        truth,
+        "under the GRAPH plan, exact ties must still resolve to the smallest \
+         matching keys, deterministically"
+    );
+
+    // Thread-count invariance of that same tie-break: rayon pools of
+    // 1/2/4/8 and genuinely concurrent OS threads must all agree.
+    let run_under_pool = |n_threads: usize| -> Vec<Tuple> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(n_threads)
+            .build()
+            .unwrap();
+        pool.install(|| filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f))
+    };
+    for n_threads in [1usize, 2, 4, 8] {
+        let got = run_under_pool(n_threads);
+        assert_eq!(
+            got, baseline,
+            "rayon pool size {n_threads}: the graph-plan tie-break diverged \
+             from the 1-thread baseline"
+        );
+    }
+    let concurrent: Vec<Vec<Tuple>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let rtx = &rtx;
+                let q = &q;
+                let m = &m;
+                let base = &base;
+                let idx = &idx;
+                let f = &f;
+                scope.spawn(move || filtered_search(rtx, q, m, base, idx, P2_K, P2_EF, f))
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for got in concurrent {
+        assert_eq!(
+            got, baseline,
+            "a concurrent OS thread's graph-plan tie-break diverged from the baseline"
+        );
+    }
 }
 
 /// Measurement rig (opt-in): print the filter-aware recall table for the report.

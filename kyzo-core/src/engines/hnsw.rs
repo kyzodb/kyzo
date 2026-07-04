@@ -89,11 +89,20 @@
 //! - **`InnerProduct` is `1 - a·b`**, unbounded below for un-normalized
 //!   data.
 //!
-//! ## Search result contract (post-filter semantics — user-visible)
+//! ## Search result contract — exact `min(k, matches)` (user-visible)
 //!
-//! [`hnsw_knn`] applies its filter AFTER graph traversal. See its docs: a
-//! filtered search can return FEWER than `k` rows even when `k` matching
-//! rows exist in the index.
+//! A filtered [`hnsw_knn`] search returns exactly `min(k, M)` rows, nearest
+//! first, where `M` is the number of index rows satisfying the filter (and
+//! the `radius`, when set) — never fewer. The filter runs DURING traversal,
+//! not after it: cardinality-based strategy selection ([`select_strategy`])
+//! routes a selective filter to an exact O(N) scan and a permissive one to a
+//! filter-aware graph walk (Design V — full-graph routing so a filtered-out
+//! node is still traversed, never a dead end) with a widened beam; if that
+//! walk under-delivers, the exact scan repairs the count. See [`hnsw_knn`]'s
+//! own docs for the full argument; `hnsw_filter_harness` is the proof (the
+//! `min(k, matches)` law, generatively, plus adversarial tiny/disconnected/
+//! zero/all-match filters, determinism, and a recall table against ground
+//! truth).
 //!
 //! ## Seams
 //!
@@ -108,9 +117,9 @@
 //!
 //! ## Ceiling (recorded, bench-gated — not this file's scope)
 //!
-//! Filter-aware traversal with cardinality-based strategy selection,
-//! quantization with oversample+rescore, and graph healing over tombstones
+//! Quantization with oversample+rescore and graph healing over tombstones
 //! are the ratified roadmap items layered on these bones (story #3).
+//! Filter-aware traversal itself is landed (story #87), not a ceiling item.
 
 use std::cmp::{Reverse, max};
 use std::collections::BinaryHeap;
@@ -1828,11 +1837,11 @@ pub(crate) fn hnsw_knn(
             .then_with(|| a.field.cmp(&b.field))
             .then_with(|| a.sub.cmp(&b.sub))
     });
-    // No residual filter: keep the k nearest by the total order. With a filter,
-    // `k` counts MATCHING rows, so truncation waits until after it runs.
-    if filter_bytecode.is_none() {
-        ranked.truncate(params.k);
-    }
+    // A filtered search already returned via `hnsw_knn_filtered` above; past
+    // this point `filter_bytecode` is always `None`, so the k nearest by the
+    // total order ARE the answer — no residual post-filter truncation-then-
+    // filter dance (the old post-filter path; removed, see the module docs).
+    ranked.truncate(params.k);
 
     let key_len = base.metadata.keys.len();
     let mut ret = vec![];
@@ -1912,11 +1921,6 @@ pub(crate) fn hnsw_knn(
             cand_tuple.push(vec);
         }
 
-        if let Some((code, span)) = filter_bytecode
-            && !eval_bytecode_pred(code, &cand_tuple, stack, *span)?
-        {
-            continue;
-        }
         ret.push(cand_tuple);
         if ret.len() >= params.k {
             break;
