@@ -107,6 +107,17 @@ impl InodeTable {
     fn path_for(&self, ino: u64) -> Option<PathBuf> {
         self.ino_to_path.get(&ino).cloned()
     }
+
+    /// Migrate an inode's recorded path after a successful backing-file
+    /// rename. A no-op if `old` was never looked up (no inode minted for
+    /// it yet) — a later `lookup` on `new` simply mints a fresh one, which
+    /// is fine, since nothing upstream is holding the stale inode number.
+    fn rename(&mut self, old: &Path, new: &Path) {
+        if let Some(ino) = self.path_to_ino.remove(old) {
+            self.path_to_ino.insert(new.to_path_buf(), ino);
+            self.ino_to_path.insert(ino, new.to_path_buf());
+        }
+    }
 }
 
 /// A shareable read handle onto one mount's live [`Counters`], obtained via
@@ -625,5 +636,63 @@ impl Filesystem for PassthroughFs {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(io_errno(e)),
         }
+    }
+
+    /// Atomic rename — the pointer-swap pattern a real LSM keyspace uses to
+    /// publish a new manifest/`current` file (write the new file, fsync it,
+    /// then rename it over the old pointer): plain `fs::rename`, ignoring
+    /// `flags` (`RENAME_NOREPLACE`/`RENAME_EXCHANGE`), since no scenario
+    /// this injector drives requests them. Structural, like `mkdir`/
+    /// `unlink` above — not part of the buffered-write/fsync durability
+    /// model this crate faults, so it is never itself a fault target.
+    fn rename(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        newparent: u64,
+        newname: &OsStr,
+        _flags: u32,
+        reply: ReplyEmpty,
+    ) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let Some(newparent_rel) = self.inodes.lock().unwrap().path_for(newparent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let old_rel = parent_rel.join(name);
+        let new_rel = newparent_rel.join(newname);
+        if let Err(e) = fs::rename(self.real_path(&old_rel), self.real_path(&new_rel)) {
+            reply.error(io_errno(e));
+            return;
+        }
+        self.inodes.lock().unwrap().rename(&old_rel, &new_rel);
+        reply.ok();
+    }
+
+    /// Grant every lock/unlock request unconditionally. This injector's
+    /// fault surface is write()/fsync() durability, never lock contention
+    /// (every test scenario is single-writer), and `fuser`'s default reply
+    /// here is `ENOSYS` — which real callers do hit: `fjall`'s own
+    /// `LockedFileGuard::create_new` calls `File::try_lock()` on its `lock`
+    /// file at every open, and a real database (phase 2's whole point) must
+    /// be able to open through this mount at all.
+    fn setlk(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        _start: u64,
+        _end: u64,
+        _typ: i32,
+        _pid: u32,
+        _sleep: bool,
+        reply: ReplyEmpty,
+    ) {
+        reply.ok();
     }
 }
