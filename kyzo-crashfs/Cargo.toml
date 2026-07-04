@@ -1,0 +1,20 @@
+[package]
+name = "kyzo-crashfs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Story #31: a pure-Rust FUSE passthrough fault injector (LazyFS-model torn-seq/torn-op/clear-cache) for seed-deterministic crash-recovery campaigns. Test tooling only: never shipped, not a kyzo-core dependency."
+
+[dependencies]
+# default-features = false is load-bearing: on Linux this selects fuser's
+# `fuser_mount_impl = "pure-rust"` build path (raw mount(2)/fusermount, no
+# libfuse .so, no pkg-config C probe — see build.rs). The default `libfuse`
+# feature would link a real C library, which a test-tooling crate has no
+# reason to pull in even though the kyzo-core purity gate doesn't scan it.
+fuser = { version = "0.15", default-features = false }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

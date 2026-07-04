@@ -1,0 +1,598 @@
+//! The passthrough filesystem itself: every op forwards to a backing
+//! directory except where the [`FaultPlan`](crate::fault::FaultPlan) says
+//! to corrupt.
+//!
+//! ## The write-buffer model (why this is not a one-line `pwrite` shim)
+//!
+//! A plain passthrough that calls `pwrite` on every `write()` has nothing
+//! for a fault to act on: the bytes are already on the backing filesystem
+//! the instant the syscall returns, indistinguishable from durable. The
+//! LazyFS model this crate implements requires an actual write-buffer tier
+//! standing in for the OS page cache: `write()` only appends to an
+//! in-memory `pending` list on the open [`Handle`]; a read through the same
+//! handle overlays that list atop the backing file's real bytes (so a live
+//! writer sees exactly what it wrote — ordinary page-cache read-your-write
+//! semantics); and only `fsync()` walks `pending` and actually lands bytes
+//! on the backing file, one entry at a time, each subject to whatever
+//! [`WriteOutcome`](crate::fault::WriteOutcome) was decided for it back
+//! when it was buffered. A crash between two `fsync`s is exactly "the
+//! `pending` list for every open handle evaporates" — which is what
+//! [`Fault::ClearCache`](crate::fault::Fault::ClearCache) does directly,
+//! and what a torn `fsync` (some pending entries `Dropped` or `Split`)
+//! approximates for the entries that *were* being flushed.
+//!
+//! `FOPEN_DIRECT_IO` is set on every open file so every read/write syscall
+//! reaches this filesystem — the kernel page cache never shortcuts around
+//! the injector and silently serves a cached page instead.
+
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs::{self, File, OpenOptions};
+use std::os::unix::fs::{FileExt, MetadataExt};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, UNIX_EPOCH};
+
+use fuser::consts::FOPEN_DIRECT_IO;
+use fuser::{
+    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
+    ReplyEntry, ReplyOpen, ReplyWrite, Request,
+};
+use libc::{EBADF, EIO, ENOENT};
+
+use crate::fault::{
+    Counters, Fault, FaultPlan, OpKind, WriteOutcome, decide_write_outcome, resolve_trigger,
+};
+
+const ROOT_INO: u64 = 1;
+const TTL_ZERO: Duration = Duration::from_secs(0);
+
+struct PendingWrite {
+    offset: u64,
+    data: Vec<u8>,
+    outcome: WriteOutcome,
+}
+
+struct Handle {
+    rel_path: PathBuf,
+    file: File,
+    pending: Vec<PendingWrite>,
+}
+
+impl Handle {
+    /// The file's length as a live reader through this handle would see
+    /// it: the backing file's real length, extended by whatever pending
+    /// writes reach past it. Pending writes never shrink the reported
+    /// length (a real OS write-buffer doesn't retract a prior extend
+    /// either), matching ordinary page-cache size semantics.
+    fn logical_len(&self, backing_len: u64) -> u64 {
+        self.pending
+            .iter()
+            .map(|pw| pw.offset + pw.data.len() as u64)
+            .fold(backing_len, u64::max)
+    }
+}
+
+#[derive(Default)]
+struct InodeTable {
+    path_to_ino: HashMap<PathBuf, u64>,
+    ino_to_path: HashMap<u64, PathBuf>,
+    next_ino: u64,
+}
+
+impl InodeTable {
+    fn new() -> Self {
+        let mut t = InodeTable {
+            path_to_ino: HashMap::new(),
+            ino_to_path: HashMap::new(),
+            next_ino: ROOT_INO + 1,
+        };
+        t.path_to_ino.insert(PathBuf::new(), ROOT_INO);
+        t.ino_to_path.insert(ROOT_INO, PathBuf::new());
+        t
+    }
+
+    fn ino_for(&mut self, rel: &Path) -> u64 {
+        if let Some(&ino) = self.path_to_ino.get(rel) {
+            return ino;
+        }
+        let ino = self.next_ino;
+        self.next_ino += 1;
+        self.path_to_ino.insert(rel.to_path_buf(), ino);
+        self.ino_to_path.insert(ino, rel.to_path_buf());
+        ino
+    }
+
+    fn path_for(&self, ino: u64) -> Option<PathBuf> {
+        self.ino_to_path.get(&ino).cloned()
+    }
+}
+
+/// The FUSE passthrough fault injector. One instance per mount; `plan`
+/// (and therefore every fault decision made through it) is fixed for the
+/// instance's lifetime — a fresh campaign is a fresh instance.
+pub struct PassthroughFs {
+    backing_root: PathBuf,
+    plan: FaultPlan,
+    inodes: Mutex<InodeTable>,
+    handles: Mutex<HashMap<u64, Handle>>,
+    next_fh: AtomicU64,
+    counters: Mutex<Counters>,
+}
+
+impl PassthroughFs {
+    pub fn new(backing_root: impl Into<PathBuf>, plan: FaultPlan) -> Self {
+        PassthroughFs {
+            backing_root: backing_root.into(),
+            plan,
+            inodes: Mutex::new(InodeTable::new()),
+            handles: Mutex::new(HashMap::new()),
+            next_fh: AtomicU64::new(1),
+            counters: Mutex::new(Counters::default()),
+        }
+    }
+
+    fn real_path(&self, rel: &Path) -> PathBuf {
+        self.backing_root.join(rel)
+    }
+
+    fn rel_key(rel: &Path) -> String {
+        rel.to_string_lossy().into_owned()
+    }
+
+    fn alloc_fh(&self) -> u64 {
+        self.next_fh.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn attr_from_metadata(ino: u64, meta: &fs::Metadata, logical_size: u64) -> FileAttr {
+        let kind = if meta.is_dir() {
+            FileType::Directory
+        } else if meta.file_type().is_symlink() {
+            FileType::Symlink
+        } else {
+            FileType::RegularFile
+        };
+        FileAttr {
+            ino,
+            size: logical_size,
+            blocks: logical_size.div_ceil(512),
+            atime: meta.accessed().unwrap_or(UNIX_EPOCH),
+            mtime: meta.modified().unwrap_or(UNIX_EPOCH),
+            ctime: meta.modified().unwrap_or(UNIX_EPOCH),
+            crtime: meta.created().unwrap_or(UNIX_EPOCH),
+            kind,
+            perm: (meta.mode() & 0o7777) as u16,
+            nlink: meta.nlink() as u32,
+            uid: meta.uid(),
+            gid: meta.gid(),
+            rdev: meta.rdev() as u32,
+            blksize: 4096,
+            flags: 0,
+        }
+    }
+
+    fn stat_entry(&self, ino: u64, rel: &Path) -> Result<FileAttr, i32> {
+        let meta = fs::symlink_metadata(self.real_path(rel)).map_err(io_errno)?;
+        Ok(Self::attr_from_metadata(ino, &meta, meta.len()))
+    }
+}
+
+fn io_errno(err: std::io::Error) -> i32 {
+    err.raw_os_error().unwrap_or(EIO)
+}
+
+impl Filesystem for PassthroughFs {
+    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let child_rel = parent_rel.join(name);
+        let mut inodes = self.inodes.lock().unwrap();
+        let ino = inodes.ino_for(&child_rel);
+        drop(inodes);
+        match self.stat_entry(ino, &child_rel) {
+            Ok(attr) => reply.entry(&TTL_ZERO, &attr, 0),
+            Err(errno) => reply.error(errno),
+        }
+    }
+
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let meta = match fs::symlink_metadata(self.real_path(&rel)) {
+            Ok(m) => m,
+            Err(e) => {
+                reply.error(io_errno(e));
+                return;
+            }
+        };
+        let logical_size = match fh.and_then(|fh| {
+            self.handles
+                .lock()
+                .unwrap()
+                .get(&fh)
+                .map(|h| h.logical_len(meta.len()))
+        }) {
+            Some(size) => size,
+            None => meta.len(),
+        };
+        reply.attr(
+            &TTL_ZERO,
+            &Self::attr_from_metadata(ino, &meta, logical_size),
+        );
+    }
+
+    fn setattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _mode: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
+        size: Option<u64>,
+        _atime: Option<fuser::TimeOrNow>,
+        _mtime: Option<fuser::TimeOrNow>,
+        _ctime: Option<std::time::SystemTime>,
+        fh: Option<u64>,
+        _crtime: Option<std::time::SystemTime>,
+        _chgtime: Option<std::time::SystemTime>,
+        _bkuptime: Option<std::time::SystemTime>,
+        _flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
+            reply.error(ENOENT);
+            return;
+        };
+        if let Some(new_len) = size {
+            // Truncation is a structural op, applied immediately to the
+            // backing file (it is not part of the buffered-write/fsync
+            // durability model this crate exists to fault-inject).
+            if let Err(e) = (|| -> std::io::Result<()> {
+                let f = OpenOptions::new().write(true).open(self.real_path(&rel))?;
+                f.set_len(new_len)
+            })() {
+                reply.error(io_errno(e));
+                return;
+            }
+            if let Some(fh) = fh
+                && let Some(handle) = self.handles.lock().unwrap().get_mut(&fh)
+            {
+                handle.pending.retain(|pw| pw.offset < new_len);
+            }
+        }
+        match self.stat_entry(ino, &rel) {
+            Ok(attr) => reply.attr(&TTL_ZERO, &attr),
+            Err(errno) => reply.error(errno),
+        }
+    }
+
+    fn create(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        _flags: i32,
+        reply: ReplyCreate,
+    ) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let child_rel = parent_rel.join(name);
+        let real = self.real_path(&child_rel);
+        let file = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&real)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                reply.error(io_errno(e));
+                return;
+            }
+        };
+        let ino = self.inodes.lock().unwrap().ino_for(&child_rel);
+        let attr = match self.stat_entry(ino, &child_rel) {
+            Ok(a) => a,
+            Err(errno) => {
+                reply.error(errno);
+                return;
+            }
+        };
+        let fh = self.alloc_fh();
+        self.handles.lock().unwrap().insert(
+            fh,
+            Handle {
+                rel_path: child_rel,
+                file,
+                pending: Vec::new(),
+            },
+        );
+        reply.created(&TTL_ZERO, &attr, 0, fh, FOPEN_DIRECT_IO);
+    }
+
+    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let file = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.real_path(&rel))
+        {
+            Ok(f) => f,
+            Err(e) => {
+                reply.error(io_errno(e));
+                return;
+            }
+        };
+        let fh = self.alloc_fh();
+        self.handles.lock().unwrap().insert(
+            fh,
+            Handle {
+                rel_path: rel,
+                file,
+                pending: Vec::new(),
+            },
+        );
+        reply.opened(fh, FOPEN_DIRECT_IO);
+    }
+
+    fn read(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyData,
+    ) {
+        let handles = self.handles.lock().unwrap();
+        let Some(handle) = handles.get(&fh) else {
+            reply.error(EBADF);
+            return;
+        };
+        let offset = offset as u64;
+        let want_end = offset + u64::from(size);
+        let mut buf = vec![0u8; size as usize];
+        let mut filled = handle.file.read_at(&mut buf, offset).unwrap_or(0);
+        for pw in &handle.pending {
+            let pw_end = pw.offset + pw.data.len() as u64;
+            let ov_start = pw.offset.max(offset);
+            let ov_end = pw_end.min(want_end);
+            if ov_start < ov_end {
+                let dst = (ov_start - offset) as usize;
+                let src = (ov_start - pw.offset) as usize;
+                let len = (ov_end - ov_start) as usize;
+                buf[dst..dst + len].copy_from_slice(&pw.data[src..src + len]);
+                filled = filled.max(dst + len);
+            }
+        }
+        buf.truncate(filled);
+        reply.data(&buf);
+    }
+
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
+        let mut handles = self.handles.lock().unwrap();
+        let Some(handle) = handles.get_mut(&fh) else {
+            reply.error(EBADF);
+            return;
+        };
+        let rel_key = Self::rel_key(&handle.rel_path);
+        let count = self.counters.lock().unwrap().bump(&rel_key, OpKind::Write);
+        let outcome = decide_write_outcome(
+            &self.plan,
+            &rel_key,
+            offset as u64,
+            data.len() as u64,
+            count,
+        );
+        handle.pending.push(PendingWrite {
+            offset: offset as u64,
+            data: data.to_vec(),
+            outcome,
+        });
+        // ClearCache is an immediate event, not a per-write outcome tag:
+        // the power cut lands right after this write, wiping everything
+        // buffered for this handle — including the write that triggered it.
+        if resolve_trigger(&self.plan, &rel_key, OpKind::Write, count) == Some(Fault::ClearCache) {
+            handle.pending.clear();
+        }
+        reply.written(data.len() as u32);
+    }
+
+    fn fsync(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        let mut handles = self.handles.lock().unwrap();
+        let Some(handle) = handles.get_mut(&fh) else {
+            reply.error(EBADF);
+            return;
+        };
+        let rel_key = Self::rel_key(&handle.rel_path);
+        let count = self.counters.lock().unwrap().bump(&rel_key, OpKind::Fsync);
+        if resolve_trigger(&self.plan, &rel_key, OpKind::Fsync, count) == Some(Fault::ClearCache) {
+            // The power cut lands at this fsync boundary: nothing queued
+            // since the last real fsync reaches the backing file.
+            handle.pending.clear();
+            reply.ok();
+            return;
+        }
+        for pw in handle.pending.drain(..) {
+            let write_result = match pw.outcome {
+                WriteOutcome::Clean => handle.file.write_at(&pw.data, pw.offset),
+                WriteOutcome::Dropped => Ok(0),
+                WriteOutcome::Split { split_at } => handle
+                    .file
+                    .write_at(&pw.data[..split_at as usize], pw.offset),
+            };
+            if let Err(e) = write_result {
+                reply.error(io_errno(e));
+                return;
+            }
+        }
+        if let Err(e) = handle.file.sync_all() {
+            reply.error(io_errno(e));
+            return;
+        }
+        reply.ok();
+    }
+
+    fn flush(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        reply: ReplyEmpty,
+    ) {
+        // flush() (close(2)/dup path) carries no durability guarantee in
+        // POSIX and none in this model either: only fsync materializes.
+        reply.ok();
+    }
+
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        // Any writes still pending here were never fsynced: exactly like a
+        // real OS, they are not guaranteed to survive and this model does
+        // not materialize them.
+        self.handles.lock().unwrap().remove(&fh);
+        reply.ok();
+    }
+
+    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, reply: ReplyOpen) {
+        reply.opened(0, 0);
+    }
+
+    fn readdir(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let real_dir = self.real_path(&rel);
+        let entries = match fs::read_dir(&real_dir) {
+            Ok(rd) => rd,
+            Err(e) => {
+                reply.error(io_errno(e));
+                return;
+            }
+        };
+        let mut all: Vec<(u64, FileType, std::ffi::OsString)> =
+            vec![(ino, FileType::Directory, ".".into())];
+        let parent_ino = if rel.as_os_str().is_empty() {
+            ROOT_INO
+        } else {
+            self.inodes
+                .lock()
+                .unwrap()
+                .ino_for(rel.parent().unwrap_or(Path::new("")))
+        };
+        all.push((parent_ino, FileType::Directory, "..".into()));
+        for entry in entries.flatten() {
+            let child_rel = rel.join(entry.file_name());
+            let child_ino = self.inodes.lock().unwrap().ino_for(&child_rel);
+            let kind = if entry.path().is_dir() {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            };
+            all.push((child_ino, kind, entry.file_name()));
+        }
+        for (idx, (ino, kind, name)) in all.into_iter().enumerate().skip(offset as usize) {
+            if reply.add(ino, (idx + 1) as i64, kind, &name) {
+                break;
+            }
+        }
+        reply.ok();
+    }
+
+    fn mkdir(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        reply: ReplyEntry,
+    ) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        let child_rel = parent_rel.join(name);
+        if let Err(e) = fs::create_dir(self.real_path(&child_rel)) {
+            reply.error(io_errno(e));
+            return;
+        }
+        let ino = self.inodes.lock().unwrap().ino_for(&child_rel);
+        match self.stat_entry(ino, &child_rel) {
+            Ok(attr) => reply.entry(&TTL_ZERO, &attr, 0),
+            Err(errno) => reply.error(errno),
+        }
+    }
+
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        match fs::remove_dir(self.real_path(&parent_rel.join(name))) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(io_errno(e)),
+        }
+    }
+
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
+            reply.error(ENOENT);
+            return;
+        };
+        match fs::remove_file(self.real_path(&parent_rel.join(name))) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(io_errno(e)),
+        }
+    }
+}
