@@ -447,6 +447,53 @@ pub(crate) struct DivisionByZero {
     pub(crate) op: &'static str,
 }
 
+/// An argument fell outside a partial math op's domain: `sqrt` of a
+/// negative, `ln`/`log2`/`log10` of a non-positive, `asin`/`acos` outside
+/// `[-1, 1]`, `acosh` below `1`, `atanh` outside `(-1, 1)`, `pow` with a
+/// negative base and fractional exponent or a zero base and negative
+/// exponent. The same silent-poison shape as [`DivisionByZero`]: the raw
+/// `f64` method would return `NaN`, or at an excluded boundary an infinity,
+/// instead of failing loudly — one typed refusal for every partial math op,
+/// parameterized only by name.
+#[derive(Debug, Error, Diagnostic)]
+#[error("'{op}' is undefined for the given argument")]
+#[diagnostic(code(eval::domain_error))]
+#[diagnostic(help(
+    "This op is partial: some inputs have no real, finite result. Check the \
+     argument lies within the function's mathematical domain before calling it."
+))]
+pub(crate) struct DomainError {
+    pub(crate) op: &'static str,
+}
+
+/// Backstop for the partial math ops below: even after the domain guard
+/// each one runs before computing, a scalar result of `NaN` is refused the
+/// same way. No math op may hand back a poison value, whether or not its
+/// domain was characterized exhaustively enough to catch it up front.
+fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
+    if x.is_nan() {
+        bail!(DomainError { op });
+    }
+    Ok(DataValue::Num(Num::Float(x)))
+}
+
+/// The vector-lane counterpart of [`no_nan`]: an element-wise result with
+/// any `NaN` left in it is refused rather than returned poisoned.
+fn no_nan_vec_f32(op: &'static str, v: ndarray::Array1<f32>) -> Result<DataValue> {
+    if v.iter().any(|x| x.is_nan()) {
+        bail!(DomainError { op });
+    }
+    Ok(DataValue::Vec(Vector::F32(v)))
+}
+
+/// See [`no_nan_vec_f32`].
+fn no_nan_vec_f64(op: &'static str, v: ndarray::Array1<f64>) -> Result<DataValue> {
+    if v.iter().any(|x| x.is_nan()) {
+        bail!(DomainError { op });
+    }
+    Ok(DataValue::Vec(Vector::F64(v)))
+}
+
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     let mut i_accum = 0i64;
     let mut f_accum = 0.0f64;
@@ -874,14 +921,26 @@ pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.ln()))));
+            if v.iter().any(|x| *x <= 0.0) {
+                bail!(DomainError { op: "ln" });
+            }
+            return no_nan_vec_f32("ln", v.mapv(|x| x.ln()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.ln()))));
+            if v.iter().any(|x| *x <= 0.0) {
+                bail!(DomainError { op: "ln" });
+            }
+            return no_nan_vec_f64("ln", v.mapv(|x| x.ln()));
         }
         _ => bail!("'ln' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.ln())))
+    // `ln` is defined only for positive reals: zero diverges to `-inf` and a
+    // negative argument has no real logarithm (`NaN`) — both are silent
+    // poison values, refused up front rather than returned.
+    if a <= 0.0 {
+        bail!(DomainError { op: "ln" });
+    }
+    no_nan("ln", a.ln())
 }
 
 define_op!(OP_LOG2, 1, false, true);
@@ -890,14 +949,24 @@ pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.log2()))));
+            if v.iter().any(|x| *x <= 0.0) {
+                bail!(DomainError { op: "log2" });
+            }
+            return no_nan_vec_f32("log2", v.mapv(|x| x.log2()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.log2()))));
+            if v.iter().any(|x| *x <= 0.0) {
+                bail!(DomainError { op: "log2" });
+            }
+            return no_nan_vec_f64("log2", v.mapv(|x| x.log2()));
         }
         _ => bail!("'log2' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.log2())))
+    // Same domain as `ln`: only positive reals have a base-2 logarithm.
+    if a <= 0.0 {
+        bail!(DomainError { op: "log2" });
+    }
+    no_nan("log2", a.log2())
 }
 
 define_op!(OP_LOG10, 1, false, true);
@@ -906,14 +975,24 @@ pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.log10()))));
+            if v.iter().any(|x| *x <= 0.0) {
+                bail!(DomainError { op: "log10" });
+            }
+            return no_nan_vec_f32("log10", v.mapv(|x| x.log10()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.log10()))));
+            if v.iter().any(|x| *x <= 0.0) {
+                bail!(DomainError { op: "log10" });
+            }
+            return no_nan_vec_f64("log10", v.mapv(|x| x.log10()));
         }
         _ => bail!("'log10' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.log10())))
+    // Same domain as `ln`: only positive reals have a base-10 logarithm.
+    if a <= 0.0 {
+        bail!(DomainError { op: "log10" });
+    }
+    no_nan("log10", a.log10())
 }
 
 define_op!(OP_SIN, 1, false, true);
@@ -970,14 +1049,25 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.asin()))));
+            if v.iter().any(|x| !(-1.0..=1.0).contains(&(*x as f64))) {
+                bail!(DomainError { op: "asin" });
+            }
+            return no_nan_vec_f32("asin", v.mapv(|x| x.asin()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.asin()))));
+            if v.iter().any(|x| !(-1.0..=1.0).contains(x)) {
+                bail!(DomainError { op: "asin" });
+            }
+            return no_nan_vec_f64("asin", v.mapv(|x| x.asin()));
         }
         _ => bail!("'asin' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.asin())))
+    // `asin` is defined only on [-1, 1]; outside it the raw `f64` method
+    // returns `NaN`.
+    if !(-1.0..=1.0).contains(&a) {
+        bail!(DomainError { op: "asin" });
+    }
+    no_nan("asin", a.asin())
 }
 
 define_op!(OP_ACOS, 1, false, true);
@@ -986,14 +1076,25 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.acos()))));
+            if v.iter().any(|x| !(-1.0..=1.0).contains(&(*x as f64))) {
+                bail!(DomainError { op: "acos" });
+            }
+            return no_nan_vec_f32("acos", v.mapv(|x| x.acos()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.acos()))));
+            if v.iter().any(|x| !(-1.0..=1.0).contains(x)) {
+                bail!(DomainError { op: "acos" });
+            }
+            return no_nan_vec_f64("acos", v.mapv(|x| x.acos()));
         }
         _ => bail!("'acos' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.acos())))
+    // `acos` is defined only on [-1, 1]; outside it the raw `f64` method
+    // returns `NaN`.
+    if !(-1.0..=1.0).contains(&a) {
+        bail!(DomainError { op: "acos" });
+    }
+    no_nan("acos", a.acos())
 }
 
 define_op!(OP_ATAN, 1, false, true);
@@ -1098,14 +1199,25 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.acosh()))));
+            if v.iter().any(|x| (*x as f64) < 1.0) {
+                bail!(DomainError { op: "acosh" });
+            }
+            return no_nan_vec_f32("acosh", v.mapv(|x| x.acosh()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.acosh()))));
+            if v.iter().any(|x| *x < 1.0) {
+                bail!(DomainError { op: "acosh" });
+            }
+            return no_nan_vec_f64("acosh", v.mapv(|x| x.acosh()));
         }
         _ => bail!("'acosh' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.acosh())))
+    // `acosh` is defined only on [1, +inf); below 1 the raw `f64` method
+    // returns `NaN`.
+    if a < 1.0 {
+        bail!(DomainError { op: "acosh" });
+    }
+    no_nan("acosh", a.acosh())
 }
 
 define_op!(OP_ATANH, 1, false, true);
@@ -1114,14 +1226,26 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.atanh()))));
+            if v.iter().any(|x| (*x as f64).abs() >= 1.0) {
+                bail!(DomainError { op: "atanh" });
+            }
+            return no_nan_vec_f32("atanh", v.mapv(|x| x.atanh()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.atanh()))));
+            if v.iter().any(|x| x.abs() >= 1.0) {
+                bail!(DomainError { op: "atanh" });
+            }
+            return no_nan_vec_f64("atanh", v.mapv(|x| x.atanh()));
         }
         _ => bail!("'atanh' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.atanh())))
+    // `atanh` is defined only on the open interval (-1, 1): outside it the
+    // raw `f64` method returns `NaN`, and at either endpoint it diverges to
+    // an infinity — just as much a silent poison value.
+    if a.abs() >= 1.0 {
+        bail!(DomainError { op: "atanh" });
+    }
+    no_nan("atanh", a.atanh())
 }
 
 define_op!(OP_SQRT, 1, false, true);
@@ -1130,14 +1254,33 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.sqrt()))));
+            if v.iter().any(|x| *x < 0.0) {
+                bail!(DomainError { op: "sqrt" });
+            }
+            return no_nan_vec_f32("sqrt", v.mapv(|x| x.sqrt()));
         }
         DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.sqrt()))));
+            if v.iter().any(|x| *x < 0.0) {
+                bail!(DomainError { op: "sqrt" });
+            }
+            return no_nan_vec_f64("sqrt", v.mapv(|x| x.sqrt()));
         }
         _ => bail!("'sqrt' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.sqrt())))
+    // `sqrt` is defined only for non-negative reals; a negative argument has
+    // no real square root and the raw `f64` method returns `NaN`.
+    if a < 0.0 {
+        bail!(DomainError { op: "sqrt" });
+    }
+    no_nan("sqrt", a.sqrt())
+}
+
+/// `a.powf(b)` is partial in two ways: a negative base raised to a
+/// fractional exponent has no real result (`NaN` — e.g. `(-1)^0.5`), and a
+/// zero base raised to a negative exponent diverges to an infinity (e.g.
+/// `0^-1`, the same shape as a division by zero expressed through `pow`).
+fn pow_out_of_domain(a: f64, b: f64) -> bool {
+    (a < 0.0 && b.fract() != 0.0) || (a == 0.0 && b < 0.0)
 }
 
 define_op!(OP_POW, 2, false, true);
@@ -1149,13 +1292,19 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
             let b = args[1]
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.powf(b as f32)))));
+            if v.iter().any(|x| pow_out_of_domain(*x as f64, b)) {
+                bail!(DomainError { op: "pow" });
+            }
+            return no_nan_vec_f32("pow", v.mapv(|x| x.powf(b as f32)));
         }
         DataValue::Vec(Vector::F64(v)) => {
             let b = args[1]
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.powf(b)))));
+            if v.iter().any(|x| pow_out_of_domain(*x, b)) {
+                bail!(DomainError { op: "pow" });
+            }
+            return no_nan_vec_f64("pow", v.mapv(|x| x.powf(b)));
         }
         _ => bail!("'pow' requires numbers"),
     };
@@ -1164,7 +1313,10 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         _ => bail!("'pow' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.powf(b))))
+    if pow_out_of_domain(a, b) {
+        bail!(DomainError { op: "pow" });
+    }
+    no_nan("pow", a.powf(b))
 }
 
 define_op!(OP_MOD, 2, false, true);

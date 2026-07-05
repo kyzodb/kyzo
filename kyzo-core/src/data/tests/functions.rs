@@ -638,6 +638,76 @@ fn test_inv_trig() {
     ));
 }
 
+/// The same silent-poison shape `DivisionByZero` fixed for `div`/`mod`:
+/// every partial math op with a restricted domain now refuses an
+/// out-of-domain input with a typed `domain_error`, never a quiet `NaN`
+/// (or, at a domain boundary that diverges, a quiet infinity).
+#[test]
+fn test_math_domain_errors_typed() {
+    for res in [
+        op_sqrt(&[DataValue::from(-1)]),
+        op_ln(&[DataValue::from(0)]),
+        op_ln(&[DataValue::from(-1)]),
+        op_log2(&[DataValue::from(-1)]),
+        op_log10(&[DataValue::from(-1)]),
+        op_asin(&[DataValue::from(2)]),
+        op_acos(&[DataValue::from(2)]),
+        op_acosh(&[DataValue::from(0)]),
+        op_atanh(&[DataValue::from(2)]),
+        // `atanh` also diverges to an infinity at either open-interval
+        // boundary, exactly the poison shape `div`/`mod` were fixed for.
+        op_atanh(&[DataValue::from(1)]),
+        op_atanh(&[DataValue::from(-1)]),
+        // `pow`: a negative base with a fractional exponent has no real
+        // result, and a zero base with a negative exponent diverges to an
+        // infinity (the same shape as a division by zero, expressed
+        // through `pow`).
+        op_pow(&[DataValue::from(-1.0), DataValue::from(0.5)]),
+        op_pow(&[DataValue::from(0.0), DataValue::from(-1.0)]),
+    ] {
+        let err = res.expect_err("out-of-domain math input must be a typed Err, not Ok(NaN)");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("domain_error"),
+            "expected the domain-error diagnostic code, got: {msg}"
+        );
+    }
+}
+
+/// The vector lane of the same ops must refuse an out-of-domain element
+/// too, rather than poisoning the whole vector with a `NaN` at that
+/// position.
+#[test]
+fn test_math_domain_errors_vector() {
+    let has_negative = Vector::F64(ndarray::arr1(&[1.0, -1.0, 4.0]));
+    assert!(op_sqrt(&[DataValue::Vec(has_negative)]).is_err());
+
+    let has_out_of_range = Vector::F32(ndarray::arr1(&[0.0f32, 2.0]));
+    assert!(op_asin(&[DataValue::Vec(has_out_of_range)]).is_err());
+
+    let has_non_positive = Vector::F64(ndarray::arr1(&[1.0, 0.0]));
+    assert!(op_ln(&[DataValue::Vec(has_non_positive)]).is_err());
+}
+
+/// Valid, in-domain inputs to the same ops still compute the correct
+/// value — the domain guard must not reject anything it shouldn't.
+#[test]
+fn test_math_valid_inputs_unaffected() {
+    assert_eq!(
+        op_sqrt(&[DataValue::from(4)]).unwrap(),
+        DataValue::from(2.0)
+    );
+    assert_eq!(op_ln(&[DataValue::from(1)]).unwrap(), DataValue::from(0.0));
+    assert_eq!(
+        op_asin(&[DataValue::from(0)]).unwrap(),
+        DataValue::from(0.0)
+    );
+    assert_eq!(
+        op_acos(&[DataValue::from(1)]).unwrap(),
+        DataValue::from(0.0)
+    );
+}
+
 #[test]
 fn test_pow() {
     assert_eq!(
