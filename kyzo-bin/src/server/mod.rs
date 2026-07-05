@@ -95,6 +95,7 @@ mod changes;
 mod pages;
 mod query;
 mod rules;
+mod standing;
 
 use std::collections::BTreeMap;
 use std::net::{Ipv6Addr, SocketAddr};
@@ -241,6 +242,7 @@ pub(crate) async fn server_main(args: ServerArgs) {
         )
         .route("/backup", post(bulk::backup))
         .route("/changes/{relation}", get(changes::observe_changes))
+        .route("/standing", get(standing::observe_standing))
         .route("/rules/{name}", get(rules::register_rule))
         .route(
             "/rule-result/{id}",

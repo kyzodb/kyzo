@@ -68,6 +68,7 @@ use std::sync::mpsc::Receiver;
 
 use miette::{Result, miette};
 
+use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
 use crate::data::value::{DataValue, current_validity};
@@ -80,6 +81,17 @@ use crate::runtime::callback::{CallbackEvent, CallbackOp};
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::Storage;
+
+/// KyzoScript's own canonical name for the entry relation — the same
+/// identity `InputProgram::entry_name` carries and this module's
+/// translator preserves through `MagicSymbol`'s unadorned rendering
+/// (entry rules are never magic-set adorned, since nothing "demands"
+/// them). Minted fresh per call rather than cached: cheap (one short
+/// `SmartString`), and it keeps `Symbol` construction in exactly one
+/// place instead of `Symbol::new("?", …)` recurring at every call site.
+fn entry_symbol() -> Symbol {
+    Symbol::new("?", SourceSpan::default())
+}
 
 /// One EDB dependency's live subscription: the callback id (for
 /// [`StandingQuery::teardown`]) and the receiver it delivers on.
@@ -171,6 +183,19 @@ impl<S: Storage> StandingQuery<S> {
         self.state.get(rel)
     }
 
+    /// The standing query's OWN answer set — the entry relation (`?`,
+    /// KyzoScript's own canonical name for it, the same identity
+    /// `InputProgram`'s `entry_name` field carries and this module's
+    /// translator preserves through `MagicSymbol`'s unadorned rendering)
+    /// — without the caller ever needing to construct a `Symbol` just to
+    /// read back the one relation almost every caller wants. `current`
+    /// is still there for a caller that knows a specific intermediate
+    /// dependency's own `Symbol` and wants ITS state instead.
+    pub fn current_answer(&self) -> &BTreeSet<Tuple> {
+        static EMPTY: BTreeSet<Tuple> = BTreeSet::new();
+        self.current(&entry_symbol()).unwrap_or(&EMPTY)
+    }
+
     /// Drain every subscribed relation's pending callback events, fold
     /// them into one signed EDB patch, and apply it — returning the
     /// signed delta every relation (EDB and IDB alike) underwent. An
@@ -218,6 +243,15 @@ impl<S: Storage> StandingQuery<S> {
                 .map_err(|e| miette!("{e}"))?;
         self.state = new_state;
         Ok(deltas)
+    }
+
+    /// [`apply_pending`](Self::apply_pending), returning only the entry
+    /// relation's own signed delta — the `Symbol`-free counterpart of
+    /// [`current_answer`](Self::current_answer), for a caller that only
+    /// cares about the query's own answer changing, not an intermediate
+    /// dependency's.
+    pub fn apply_pending_answer(&mut self) -> Result<BTreeSet<SignedFact>> {
+        Ok(self.apply_pending()?.remove(&entry_symbol()).unwrap_or_default())
     }
 
     /// Unregister every underlying per-relation callback. A `StandingQuery`
@@ -293,7 +327,6 @@ mod tests {
         MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRulesOrFixed,
         MagicSymbol, StratifiedMagicProgram,
     };
-    use crate::data::span::SourceSpan;
     use crate::data::value::{DataValue, Num};
     use crate::storage::fjall::new_fjall_storage;
 
@@ -400,6 +433,32 @@ mod tests {
             sq.current(&sym("?")).cloned().unwrap_or_default(),
             [vec![v(1)]].into_iter().collect()
         );
+
+        sq.teardown();
+    }
+
+    /// `current_answer`/`apply_pending_answer` — the `Symbol`-free
+    /// entry-relation accessors an HTTP handler or any other caller
+    /// without a `Symbol` in hand needs — agree exactly with the
+    /// `Symbol`-keyed calls at every step.
+    #[test]
+    fn current_answer_and_apply_pending_answer_match_the_symbol_keyed_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(":create p {x: Int =>}", no_params()).unwrap();
+        db.run_script(":create r {x: Int =>}", no_params()).unwrap();
+        db.run_script("?[x] <- [[1]] :put p {x}", no_params()).unwrap();
+
+        let mut sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
+        assert_eq!(
+            sq.current_answer().clone(),
+            sq.current(&sym("?")).cloned().unwrap_or_default()
+        );
+
+        db.run_script("?[x] <- [[1]] :put r {x}", no_params()).unwrap();
+        let answer_delta = sq.apply_pending_answer().unwrap();
+        assert_eq!(answer_delta, [SignedFact::Minus(vec![v(1)])].into_iter().collect());
+        assert!(sq.current_answer().is_empty());
 
         sq.teardown();
     }
