@@ -1554,6 +1554,13 @@ pub(crate) fn naive_eval_at(
 //   reason: this landing proves the negation+retraction core (the
 //   corner #61 names as the hard one) before extending to aggregation,
 //   rather than shipping both half-proven.
+// - FIXED RULES (`Program::fixed`, opaque graph algorithms) are refused
+//   outright: a `FixedRule::eval` is a black-box function from its
+//   inputs to an output set, with no delta of its own this module could
+//   ask for — silently treating its head as an ordinary IDB relation
+//   with zero matching rules would produce an empty delta regardless of
+//   what actually changed, exactly the wrong-answer class this whole
+//   module exists to refuse instead of risk.
 //
 // The algorithm, per relation, in topological order (an EDB relation's
 // delta is simply its slice of the input patch, filtered for
@@ -1896,6 +1903,18 @@ pub(crate) fn incremental_eval(
         return Err(Rejection::Malformed(
             "incremental maintenance does not yet cover aggregation — refused, not silently \
              wrong; recompute this program in full instead",
+        ));
+    }
+    if !program.fixed.is_empty() {
+        // A fixed rule is an opaque function (`fn(&[BTreeSet<Tuple>]) ->
+        // BTreeSet<Tuple>`, `FixedRule::eval`) — this module has no way to
+        // ask it for its own delta, and treating its head as an ordinary
+        // IDB relation with zero matching `Rule`s (the `else` branch
+        // below) would silently produce an EMPTY delta regardless of what
+        // actually changed. A typed refusal, not a wrong answer.
+        return Err(Rejection::Malformed(
+            "incremental maintenance does not cover fixed rules (opaque graph algorithms) — \
+             refused, not silently wrong; recompute this program in full instead",
         ));
     }
 
@@ -4394,6 +4413,27 @@ mod tests {
             facts,
         );
         let patch = patch_of(vec![("p", SignedFact::Plus(vec![v(1), v(30)]))]);
+        let err = incremental_eval(&program, &patch).unwrap_err();
+        assert!(matches!(err, Rejection::Malformed(_)));
+    }
+
+    /// A fixed rule (opaque graph algorithm) is refused too — without
+    /// this, its head would silently fall to the IDB "zero matching
+    /// rules" branch and produce an empty delta no matter what changed.
+    #[test]
+    fn incremental_refuses_fixed_rules() {
+        let facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        let program = Program {
+            rules: vec![],
+            fixed: vec![FixedRule {
+                head_rel: "constant",
+                inputs: vec![],
+                eval: |_| [vec![v(1)]].into_iter().collect(),
+            }],
+            facts,
+            histories: BTreeMap::new(),
+        };
+        let patch: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
         let err = incremental_eval(&program, &patch).unwrap_err();
         assert!(matches!(err, Rejection::Malformed(_)));
     }
