@@ -157,9 +157,13 @@ use crate::storage::ReadTx;
 /// earlier only (`Minus`) — the production twin of `query/laws.rs`'s
 /// oracle-only `SignedFact`. `Ord` is derived in variant-then-payload
 /// order, matching the oracle type exactly, so a `BTreeSet<SignedFact>`
-/// here and one built from `laws::SignedFact` sort identically.
+/// here and one built from `laws::SignedFact` sort identically. `pub`
+/// (not `pub(crate)`): story #61's `Db::register_standing` surfaces
+/// this directly as `StandingQuery::apply_pending`'s delta vocabulary —
+/// the one name for "a signed delta fact" in this engine, not
+/// duplicated under a second, standing-query-specific name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SignedFact {
+pub enum SignedFact {
     Plus(Tuple),
     Minus(Tuple),
 }

@@ -131,14 +131,12 @@ pub(crate) mod graph;
 // written twin of `laws::incremental_eval`, proven equal to it by
 // differential (this module's own test suite). Its lifecycle caller is
 // `standing` below.
-#[allow(dead_code)]
 pub(crate) mod incremental;
 // Story #61's standing-query lifecycle (registration, snapshot-consistent
 // init, patch application, teardown) on `runtime::callback`'s existing
-// per-relation commit-notification seam. No production caller yet (that
-// is the next unit — a real `Db` entry point) — dead in lib builds until
-// it lands, like `eval` above.
-#[allow(dead_code)]
+// per-relation commit-notification seam. `Db::register_standing` (defined
+// here, re-exported at the crate root as `StandingQuery`) is the real,
+// live production entry point.
 pub(crate) mod standing;
 // The provenance trials: semiring axiom, oracle-differential, certificate,
 // and thread-determinism tests over the eval seams. Test-only, like `laws`.

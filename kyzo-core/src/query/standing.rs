@@ -62,16 +62,22 @@
 //! event contributes `Minus` from "old" only; "new" is never a fact.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 
 use miette::{Result, miette};
 
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
+use crate::data::value::{DataValue, current_validity};
+use crate::fixed_rule::CancelFlag;
+use crate::parse::{Script, parse_script};
 use crate::query::incremental::{self, IncrementalProgram, MaintainedState};
+use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::temporal::SignedFact;
 use crate::runtime::callback::{CallbackEvent, CallbackOp};
-use crate::runtime::db::Db;
+use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::Storage;
 
@@ -84,10 +90,12 @@ struct Subscription {
 
 /// A live standing query: a translated program, its persistently
 /// maintained state, and one subscription per EDB relation it depends
-/// on. Construction (via [`StandingQuery::register`]) is the only way to
-/// get one — there is no bare-fields constructor, so a `StandingQuery`
-/// that exists is always both subscribed and snapshot-initialized.
-pub(crate) struct StandingQuery<S: Storage> {
+/// on. Construction (via [`Db::register_standing`], the public entry
+/// point, or [`StandingQuery::register`] for an already-compiled
+/// program) is the only way to get one — there is no bare-fields
+/// constructor, so a `StandingQuery` that exists is always both
+/// subscribed and snapshot-initialized.
+pub struct StandingQuery<S: Storage> {
     db: Db<S>,
     program: IncrementalProgram,
     state: MaintainedState,
@@ -95,10 +103,14 @@ pub(crate) struct StandingQuery<S: Storage> {
 }
 
 impl<S: Storage> StandingQuery<S> {
-    /// Register a standing query: translate the compiled program, then
-    /// subscribe to and snapshot every EDB relation it depends on, in
-    /// that order (the snapshot-consistency argument in the module doc
-    /// depends on this order — subscribe first, read second).
+    /// Register a standing query from an already magic-set-rewritten
+    /// compiled program: translate it, then subscribe to and snapshot
+    /// every EDB relation it depends on, in that order (the
+    /// snapshot-consistency argument in the module doc depends on this
+    /// order — subscribe first, read second). [`Db::register_standing`]
+    /// is the public entry point most callers want; this is its
+    /// internal-facing half, exposed for callers that already hold a
+    /// compiled [`StratifiedMagicProgram`](crate::data::program::StratifiedMagicProgram).
     pub(crate) fn register(
         db: &Db<S>,
         magic: crate::data::program::StratifiedMagicProgram,
@@ -155,7 +167,7 @@ impl<S: Storage> StandingQuery<S> {
     /// The standing query's current answer set for `rel` (its own head,
     /// or any relation in its dependency chain) — `None` if `rel` is not
     /// part of this program at all.
-    pub(crate) fn current(&self, rel: &Symbol) -> Option<&BTreeSet<Tuple>> {
+    pub fn current(&self, rel: &Symbol) -> Option<&BTreeSet<Tuple>> {
         self.state.get(rel)
     }
 
@@ -163,7 +175,7 @@ impl<S: Storage> StandingQuery<S> {
     /// them into one signed EDB patch, and apply it — returning the
     /// signed delta every relation (EDB and IDB alike) underwent. An
     /// empty return means nothing was pending.
-    pub(crate) fn apply_pending(&mut self) -> Result<BTreeMap<Symbol, BTreeSet<SignedFact>>> {
+    pub fn apply_pending(&mut self) -> Result<BTreeMap<Symbol, BTreeSet<SignedFact>>> {
         let mut edb_patch: BTreeMap<Symbol, BTreeSet<SignedFact>> = BTreeMap::new();
         for (rel, sub) in &self.subscriptions {
             let entry = edb_patch.entry(rel.clone()).or_default();
@@ -214,10 +226,63 @@ impl<S: Storage> StandingQuery<S> {
     /// (`runtime/callback.rs`'s "lossy by disconnect" contract) — this
     /// method just makes the teardown immediate and explicit instead of
     /// waiting on that.
-    pub(crate) fn teardown(self) {
+    pub fn teardown(self) {
         for sub in self.subscriptions.into_values() {
             self.db.unregister_callback(sub.id);
         }
+    }
+}
+
+impl<S: Storage> Db<S> {
+    /// Register a standing query from a real KyzoScript read query — the
+    /// public entry point: a user hands this a query string, exactly as
+    /// they would to [`Db::run_script`], and gets back a live
+    /// [`StandingQuery`] whose [`apply_pending`](StandingQuery::apply_pending)
+    /// stays correct across every commit from here on.
+    ///
+    /// Runs the SAME prefix `compile_and_eval` runs for an ordinary read
+    /// query — parse, normalize, stratify, magic-sets rewrite — over one
+    /// shared read snapshot, then stops there and hands the result to
+    /// [`StandingQuery::register`] instead of continuing on to
+    /// `stratified_magic_compile`'s RA lowering (which is exactly the
+    /// erasure this story's translator cannot afford — see
+    /// `query::incremental`'s module doc on why `MagicAtom`, not
+    /// `RelAlgebra`, is the translation source).
+    pub fn register_standing(
+        &self,
+        query: &str,
+        params: BTreeMap<String, DataValue>,
+    ) -> Result<StandingQuery<S>> {
+        let cur_vld = current_validity()?;
+        let fixed = self.fixed_rules();
+        let program = match parse_script(query, &params, &fixed, cur_vld)? {
+            Script::Single(prog) => *prog,
+            Script::Sys(_) | Script::Imperative(_) => {
+                return Err(miette!(
+                    "register_standing needs a single read query, not a system op or an \
+                     imperative script"
+                ));
+            }
+        };
+        if program.out_opts().store_relation.is_some() {
+            return Err(miette!(
+                "register_standing needs a pure read query, not a mutation — a standing query \
+                 maintains its OWN state from EDB commits, it does not write one"
+            ));
+        }
+
+        let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
+        let view = SessionView {
+            store: &tx.store,
+            temp: &tx.temp,
+        };
+        let cancel = CancelFlag(Arc::new(AtomicBool::new(false)));
+        let mut normalizer = SessionNormalizer::new(view, cancel);
+        let (nf, _out_opts) = program.into_normalized_program(&mut normalizer)?;
+        let (strat, _lifetimes) = nf.into_stratified_program()?;
+        let magic = strat.magic_sets_rewrite(&view)?;
+
+        StandingQuery::register(self, magic)
     }
 }
 
@@ -357,6 +422,116 @@ mod tests {
         }
     }
 
+    /// `register_standing`'s translator (`incremental::translate`) does
+    /// not itself re-check for recursion — `incremental_eval`'s own
+    /// `has_any_cycle` refusal, run as part of `register`'s initial
+    /// bootstrap evaluation, is the ONE place that check lives. This
+    /// proves the chain actually reaches it end to end through the
+    /// public surface on a REAL recursive KyzoScript query (transitive
+    /// closure) — a typed `Err`, never a panic or a silently wrong
+    /// (e.g. empty) standing query.
+    #[test]
+    fn register_standing_refuses_a_real_recursive_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(":create edge {a: Int, b: Int =>}", no_params())
+            .unwrap();
+        let query = "path[a, b] := *edge[a, b]\npath[a, b] := *edge[a, c], path[c, b]\n?[a, b] := path[a, b]";
+        let err = match db.register_standing(query, no_params()) {
+            Err(e) => e,
+            Ok(_) => panic!("expected a recursion refusal, got a successful registration"),
+        };
+        assert!(
+            err.to_string().to_lowercase().contains("recursive"),
+            "expected a recursion refusal, got: {err}"
+        );
+    }
+
+    /// The full public surface, end to end, on a REAL aggregating query:
+    /// `Db::register_standing` on a real KyzoScript string (not a
+    /// hand-built `StratifiedMagicProgram`), driven by real `:put`/`:rm`
+    /// commits, its running answer checked at every step against a fresh
+    /// `Db::run_script` of the SAME query text (the real production
+    /// evaluator, not a second registration) — and hitting every
+    /// aggregation hard case along the way: the current min surviving an
+    /// unrelated assertion, the current min itself being retracted (a
+    /// rescan, not a signed tally), a group's last member vanishing, and
+    /// a brand new group appearing.
+    #[test]
+    fn register_standing_maintains_a_real_aggregating_query_across_real_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(":create p {x: Int, y: Int =>}", no_params())
+            .unwrap();
+        db.run_script("?[x, y] <- [[1, 10], [1, 20]] :put p {x, y}", no_params())
+            .unwrap();
+
+        let query = "?[x, min(y)] := *p[x, y]";
+        let mut sq = db.register_standing(query, no_params()).unwrap();
+        let real = || -> BTreeSet<Tuple> {
+            db.run_script(query, no_params())
+                .unwrap()
+                .rows
+                .into_iter()
+                .collect()
+        };
+
+        assert_eq!(
+            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            [vec![v(1), v(10)]].into_iter().collect(),
+            "initial snapshot: min(y) for x=1 is 10"
+        );
+        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+
+        // An unrelated assertion (a new, larger y for the same group)
+        // must NOT disturb the current min.
+        db.run_script("?[x, y] <- [[1, 30]] :put p {x, y}", no_params())
+            .unwrap();
+        sq.apply_pending().unwrap();
+        assert_eq!(
+            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            [vec![v(1), v(10)]].into_iter().collect(),
+            "min(y) unchanged by a larger sibling"
+        );
+        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+
+        // Retracting the CURRENT min: no per-kind formula covers this,
+        // only a re-derivation from the group's remaining members {20, 30}.
+        db.run_script("?[x, y] <- [[1, 10]] :rm p {x, y}", no_params())
+            .unwrap();
+        sq.apply_pending().unwrap();
+        assert_eq!(
+            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            [vec![v(1), v(20)]].into_iter().collect(),
+            "min(y) rescans to the new minimum, 20"
+        );
+        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+
+        // A brand new group appears.
+        db.run_script("?[x, y] <- [[2, 5]] :put p {x, y}", no_params())
+            .unwrap();
+        sq.apply_pending().unwrap();
+        assert_eq!(
+            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            [vec![v(1), v(20)], vec![v(2), v(5)]].into_iter().collect(),
+            "a new group appears with its own min"
+        );
+        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+
+        // Retracting a group's LAST member: the group vanishes entirely.
+        db.run_script("?[x, y] <- [[2, 5]] :rm p {x, y}", no_params())
+            .unwrap();
+        sq.apply_pending().unwrap();
+        assert_eq!(
+            sq.current(&sym("?")).cloned().unwrap_or_default(),
+            [vec![v(1), v(20)]].into_iter().collect(),
+            "the emptied group's row vanishes, not just its value"
+        );
+        assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
+
+        sq.teardown();
+    }
+
     // ── The real-commit differential (issue #61's DoD, distinct from the
     // in-memory generative campaigns in laws.rs/incremental.rs): drive a
     // RANDOM SEQUENCE of REAL committed mutations through a REAL Db, and
@@ -367,92 +542,47 @@ mod tests {
     // storage. Any divergence is a real bug, not an artifact of one
     // algorithm checking itself. ─────────────────────────────────────────
 
-    fn rule_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
-        let atom = crate::data::program::MagicRuleApplyAtom {
-            name: MagicSymbol::Muggle { inner: sym(name) },
-            args: args.into_iter().map(sym).collect(),
-            span: SourceSpan::default(),
-        };
-        if negated {
-            MagicAtom::NegatedRule(atom)
-        } else {
-            MagicAtom::Rule(atom)
-        }
-    }
-
-    /// One shape's EDB relations, each with its arity (in var-count terms
-    /// — every EDB relation here is all-key, no value columns, matching
-    /// `hard_corner_program`'s own convention).
+    /// One shape's EDB relations (each with its arity, in `k0..kN`
+    /// column-name terms matching `tuple_script`'s convention) and its
+    /// REAL KyzoScript query text — registered through
+    /// [`Db::register_standing`] and recomputed through
+    /// [`Db::run_script`], the SAME public entry points a real user
+    /// drives, not a hand-built `StratifiedMagicProgram` fed to a SECOND
+    /// internal `StandingQuery::register` call. That distinction is not
+    /// pedantry: a translation bug (`translate()` mistranslating the
+    /// compiled query) would be invisible to a differential where BOTH
+    /// sides run through `translate()` — recomputing via the real query
+    /// engine is what actually proves "the maintained answer equals the
+    /// query's own answer," not merely "two runs of the SAME translation
+    /// agree with each other."
     struct Shape {
-        program: fn() -> StratifiedMagicProgram,
+        query: &'static str,
         edb: &'static [(&'static str, usize)],
     }
 
-    fn shapes() -> [Shape; 3] {
-        // ?(x) :- p(x, y), not r(x)
-        fn shape_a() -> StratifiedMagicProgram {
-            one_stratum_program(vec![(
-                "?",
-                vec![magic_inline(
-                    vec!["X"],
-                    vec![
-                        rel_atom("p", vec!["X", "Y"], false),
-                        rel_atom("r", vec!["X"], true),
-                    ],
-                )],
-            )])
-        }
-        // mid(x) :- p(x, y), not r(x)
-        // ?(x) :- mid(x), not s(x)
-        fn shape_b() -> StratifiedMagicProgram {
-            one_stratum_program(vec![
-                (
-                    "mid",
-                    vec![magic_inline(
-                        vec!["X"],
-                        vec![
-                            rel_atom("p", vec!["X", "Y"], false),
-                            rel_atom("r", vec!["X"], true),
-                        ],
-                    )],
-                ),
-                (
-                    "?",
-                    vec![magic_inline(
-                        vec!["X"],
-                        vec![
-                            rule_atom("mid", vec!["X"], false),
-                            rel_atom("s", vec!["X"], true),
-                        ],
-                    )],
-                ),
-            ])
-        }
-        // ?(x, y) :- p(x, y), r2(x, y)
-        fn shape_c() -> StratifiedMagicProgram {
-            one_stratum_program(vec![(
-                "?",
-                vec![magic_inline(
-                    vec!["X", "Y"],
-                    vec![
-                        rel_atom("p", vec!["X", "Y"], false),
-                        rel_atom("r2", vec!["X", "Y"], false),
-                    ],
-                )],
-            )])
-        }
+    fn shapes() -> [Shape; 4] {
         [
+            // ?(k0) :- p(k0, k1), not r(k0)
             Shape {
-                program: shape_a,
+                query: "?[k0] := *p[k0, k1], not *r[k0]",
                 edb: &[("p", 2), ("r", 1)],
             },
+            // mid(k0) :- p(k0, k1), not r(k0); ?(k0) :- mid(k0), not s(k0)
             Shape {
-                program: shape_b,
+                query: "mid[k0] := *p[k0, k1], not *r[k0]\n?[k0] := mid[k0], not *s[k0]",
                 edb: &[("p", 2), ("r", 1), ("s", 1)],
             },
+            // ?(k0, k1) :- p(k0, k1), r2(k0, k1)
             Shape {
-                program: shape_c,
+                query: "?[k0, k1] := *p[k0, k1], *r2[k0, k1]",
                 edb: &[("p", 2), ("r2", 2)],
+            },
+            // ?(k0, min(k1)) :- p(k0, k1) — aggregation, `min` deliberately
+            // (the hardest kind: retracting the current min has no
+            // per-kind incremental formula, only a group re-derivation).
+            Shape {
+                query: "?[k0, min(k1)] := *p[k0, k1]",
+                edb: &[("p", 2)],
             },
         ]
     }
@@ -510,7 +640,7 @@ mod tests {
                     live.insert(rel, rows);
                 }
 
-                let mut incremental = StandingQuery::register(&db, (shape.program)()).unwrap();
+                let mut incremental = db.register_standing(shape.query, no_params()).unwrap();
 
                 for _commit in 0..5 {
                     let (rel, arity) = shape.edb[next_range(shape.edb.len() as u64) as usize];
@@ -528,23 +658,24 @@ mod tests {
                     }
 
                     incremental.apply_pending().unwrap();
-                    let fresh = StandingQuery::register(&db, (shape.program)()).unwrap();
-
-                    let rel_names: BTreeSet<Symbol> = incremental
-                        .state
-                        .keys()
-                        .chain(fresh.state.keys())
-                        .cloned()
+                    // The REAL recompute: the SAME query text through the
+                    // real production evaluator (parse -> normalize ->
+                    // stratify -> magic -> compile -> RA eval), never a
+                    // second `register_standing`/`translate()` call — see
+                    // the module-level note on `Shape` for why that
+                    // distinction is load-bearing.
+                    let recomputed: BTreeSet<Tuple> = db
+                        .run_script(shape.query, no_params())
+                        .unwrap()
+                        .rows
+                        .into_iter()
                         .collect();
-                    for r in rel_names {
-                        assert_eq!(
-                            incremental.current(&r).cloned().unwrap_or_default(),
-                            fresh.current(&r).cloned().unwrap_or_default(),
-                            "shape {:?}, commit {_commit}: mismatch on relation '{r}'",
-                            shape.edb,
-                        );
-                    }
-                    fresh.teardown();
+                    assert_eq!(
+                        incremental.current(&sym("?")).cloned().unwrap_or_default(),
+                        recomputed,
+                        "shape '{}', commit {_commit}: mismatch on the entry relation",
+                        shape.query,
+                    );
                     cases += 1;
                 }
                 incremental.teardown();

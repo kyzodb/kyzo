@@ -32,12 +32,15 @@
 //!
 //! Identical to `laws::incremental_eval`, for identical reasons (see its
 //! module doc): RECURSION is refused outright (DRed — retraction through
-//! a recursive derivation — is separate, harder scope); AGGREGATION is
-//! refused for now (a follow-up unit, not silently dropped); FIXED RULES
-//! have no representation here at all (this module's [`Rule`] has no
+//! a recursive derivation — is separate, harder scope); FIXED RULES have
+//! no representation here at all (this module's [`Rule`] has no
 //! opaque-function variant) — there is nothing to refuse because nothing
 //! constructs one, the same "unrepresentable, not merely refused" posture
 //! the type system prefers over a runtime check where it can have it.
+//! AGGREGATION is fully covered, not refused — see
+//! [`eval_aggregating_head_incremental`]'s doc for the algorithm, the
+//! same group-level candidates-then-verify extension `laws.rs` proves
+//! first (`eval_aggregating_head_incremental` there).
 //!
 //! ## The algorithm
 //!
@@ -58,11 +61,18 @@
 //!    OLD state (`MaintainedState`, read-only) versus the NEW state
 //!    (built up alongside it in the same topological pass) — only a real
 //!    truth-value flip becomes a `Plus`/`Minus`.
+//!
+//! An aggregating head extends this one level ([`collect_affected_groups`]
+//! / [`eval_one_group`] / [`eval_aggregating_head_incremental`]): find
+//! affected GROUPS instead of tuples, then fully re-derive each group's
+//! aggregate row directly, rather than maintaining a per-kind signed
+//! delta (which does not exist in general — see that function's doc).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Error, Result};
 
+use crate::data::aggr::{Aggregation, NormalAggrObj};
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
@@ -83,14 +93,23 @@ pub(crate) struct Literal {
     pub(crate) negated: bool,
 }
 
-/// One derivation rule: `head_rel(head_args) :- body`. No aggregation
-/// signature and no fixed-rule variant — both are unrepresentable here
-/// (see the module doc's scope section), not merely refused at runtime.
+/// One head position's aggregation, if any — the REAL landed
+/// [`Aggregation`] from `data/aggr.rs`, the same type `laws::HeadAggr`
+/// wraps: both tiers fold through exactly the code users get, never a
+/// second hand-rolled implementation of "sum" or "min".
+pub(crate) type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+
+/// One derivation rule: `head_rel(head_args) :- body`. `aggr` is always
+/// the same length as `head_args`; all-`None` marks an ordinary
+/// (non-aggregating) rule, matching `laws::Rule`'s own convention. No
+/// fixed-rule variant: that stays unrepresentable (see the module doc's
+/// scope section), not merely refused at runtime.
 #[derive(Debug, Clone)]
 pub(crate) struct Rule {
     pub(crate) head_rel: Symbol,
     pub(crate) head_args: Vec<Term>,
     pub(crate) body: Vec<Literal>,
+    pub(crate) aggr: Vec<HeadAggr>,
 }
 
 /// A standing query's rule set. Unlike `laws::Program`, there is no
@@ -476,9 +495,6 @@ use crate::data::program::{
 /// a silently wrong or partial `IncrementalProgram`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
 pub(crate) enum TranslationRejection {
-    #[error("standing queries do not cover aggregation yet — refused, not silently wrong")]
-    #[diagnostic(code(incremental::translate::aggregation))]
-    Aggregation,
     #[error("standing queries do not cover fixed rules (opaque graph algorithms)")]
     #[diagnostic(code(incremental::translate::fixed_rule))]
     FixedRule,
@@ -530,15 +546,14 @@ fn substitute(v: &Symbol, subst: &BTreeMap<Symbol, DataValue>) -> Term {
     }
 }
 
-/// Translate one magic-tier rule (already a single, un-aggregated
-/// `MagicInlineRule` for the head `head_sym`) into this module's [`Rule`].
+/// Translate one magic-tier rule (for the head `head_sym`) into this
+/// module's [`Rule`]. `MagicInlineRule::aggr` is already exactly this
+/// module's `HeadAggr` shape (`Option<(Aggregation, Vec<DataValue>)>`) —
+/// carried straight through, not re-derived.
 fn translate_rule(
     head_sym: &MagicSymbol,
     rule: &MagicInlineRule,
 ) -> Result<Rule, TranslationRejection> {
-    if rule.aggr.iter().any(Option::is_some) {
-        return Err(TranslationRejection::Aggregation);
-    }
     let subst = collect_const_substitutions(&rule.body)?;
     let mut body = Vec::new();
     for atom in &rule.body {
@@ -566,6 +581,7 @@ fn translate_rule(
         head_rel: magic_symbol_to_symbol(head_sym),
         head_args,
         body,
+        aggr: rule.aggr.clone(),
     })
 }
 
@@ -573,10 +589,13 @@ fn translate_rule(
 /// module's [`IncrementalProgram`] — the missing piece between a real
 /// KyzoScript query and [`incremental_eval`]: a caller no longer has to
 /// hand-author a `Rule`/`Literal` set the way this module's own tests
-/// do. Refuses (never silently drops or mis-translates) aggregation,
-/// fixed rules, predicates, index searches, and non-constant
-/// unifications — every one of those has no representation in this
-/// module's `Rule`/`Literal`/`Term` today.
+/// do. `MagicInlineRule::aggr` carries straight through (it is already
+/// this module's exact `HeadAggr` shape) — [`incremental_eval`] fully
+/// covers aggregation, so there is nothing to refuse there. Still
+/// refuses (never silently drops or mis-translates) fixed rules,
+/// predicates, index searches, and non-constant unifications — every
+/// one of those has no representation in this module's
+/// `Rule`/`Literal`/`Term` today.
 pub(crate) fn translate(
     program: StratifiedMagicProgram,
 ) -> Result<IncrementalProgram, TranslationRejection> {
@@ -596,14 +615,185 @@ pub(crate) fn translate(
     Ok(IncrementalProgram { rules })
 }
 
+/// For an aggregating head, the GROUP KEYS (projections onto the
+/// non-aggregated head positions) any of `rules`'s candidate
+/// re-derivations touch. Reuses [`collect_candidates`] UNCHANGED, same
+/// reasoning as `laws::collect_affected_groups`: a "candidate" there is
+/// a raw, pre-fold ground head row, so projecting it onto the key
+/// positions is exactly "which group might have gained or lost a member
+/// this round."
+fn collect_affected_groups(
+    rules: &[&Rule],
+    state: &MaintainedState,
+    rel_deltas: &BTreeMap<Symbol, BTreeSet<SignedFact>>,
+    key_positions: &[usize],
+) -> BTreeSet<Tuple> {
+    let mut raw_candidates = BTreeSet::new();
+    for rule in rules {
+        collect_candidates(rule, state, rel_deltas, &mut raw_candidates);
+    }
+    raw_candidates
+        .iter()
+        .map(|row| key_positions.iter().map(|i| row[*i].clone()).collect())
+        .collect()
+}
+
+/// Fully re-derive one group's aggregate row from CURRENT (post-patch)
+/// state — the production twin of `laws::eval_one_group`, same
+/// reasoning: bounded by one group's own body cost via a targeted join
+/// seeded from the group's own key values, never a full relation
+/// re-derivation. `None` means the group has no members left, UNLESS
+/// `key_positions` is empty (a single global aggregate), which folds
+/// zero rows into the identity row instead of vanishing.
+fn eval_one_group(
+    rules: &[&Rule],
+    state: &MaintainedState,
+    key_positions: &[usize],
+    val_positions: &[(usize, &Aggregation, &[DataValue])],
+    signature_len: usize,
+    group_key: &Tuple,
+) -> Result<Option<Tuple>> {
+    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>> {
+        val_positions
+            .iter()
+            .map(|(_, aggr, args)| aggr.normal_op(args))
+            .collect()
+    };
+    let mut ops: Option<Vec<Box<dyn NormalAggrObj>>> = None;
+    for rule in rules {
+        let mut seed = Bindings::new();
+        let mut consistent = true;
+        for (slot, &pos) in key_positions.iter().enumerate() {
+            match &rule.head_args[pos] {
+                Term::Const(c) => {
+                    if *c != group_key[slot] {
+                        consistent = false;
+                        break;
+                    }
+                }
+                Term::Var(name) => {
+                    seed.insert(name.clone(), group_key[slot].clone());
+                }
+            }
+        }
+        if !consistent {
+            continue;
+        }
+        for binding in body_bindings_from(rule, state, seed) {
+            let row = ground(&rule.head_args, &binding);
+            let ops = ops.get_or_insert(fresh_ops()?);
+            for (op, (i, _, _)) in ops.iter_mut().zip(val_positions) {
+                op.set(&row[*i])?;
+            }
+        }
+    }
+    match ops {
+        None if key_positions.is_empty() => {
+            let mut row = vec![DataValue::Null; signature_len];
+            for (op, (i, _, _)) in fresh_ops()?.iter().zip(val_positions) {
+                row[*i] = op.get()?;
+            }
+            Ok(Some(row))
+        }
+        None => Ok(None),
+        Some(ops) => {
+            let mut row = vec![DataValue::Null; signature_len];
+            for (slot, &i) in key_positions.iter().enumerate() {
+                row[i] = group_key[slot].clone();
+            }
+            for (op, (i, _, _)) in ops.iter().zip(val_positions) {
+                row[*i] = op.get()?;
+            }
+            Ok(Some(row))
+        }
+    }
+}
+
+/// The incremental-maintenance law for an aggregating head, production
+/// twin of `laws::eval_aggregating_head_incremental` — same algorithm
+/// (candidates-then-verify extended one level: find affected GROUPS,
+/// fully re-derive each one directly), same reason it is sound uniformly
+/// across every aggregation kind without a per-kind delta formula (see
+/// that function's doc). Reuses the REAL landed `Aggregation::normal_op`
+/// directly, never a second hand-rolled fold.
+fn eval_aggregating_head_incremental(
+    rules: &[&Rule],
+    state: &MaintainedState,
+    new_state: &MaintainedState,
+    rel_deltas: &BTreeMap<Symbol, BTreeSet<SignedFact>>,
+    old_rows: &BTreeSet<Tuple>,
+) -> Result<BTreeSet<SignedFact>> {
+    let signature = &rules[0].aggr;
+    let key_positions: Vec<usize> = signature
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .collect();
+
+    let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
+        .iter()
+        .map(|row| {
+            let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
+            (key, row.clone())
+        })
+        .collect();
+
+    let mut affected = collect_affected_groups(rules, state, rel_deltas, &key_positions);
+    // The global (no GROUP BY) special case: a pre-existing global
+    // aggregate must be re-checked whenever ANY dependency had ANY delta
+    // at all, even with zero raw candidates — its last remaining member
+    // could have just been retracted (`collect_candidates` DOES surface
+    // that: a `Minus` is as valid a driver as a `Plus`), so this only
+    // matters when NO dependency had a delta, in which case there is
+    // nothing to re-check anyway.
+    if key_positions.is_empty() && rel_deltas.values().any(|d| !d.is_empty()) {
+        affected.insert(Vec::new());
+    }
+
+    let mut delta = BTreeSet::new();
+    for group_key in &affected {
+        let new_row = eval_one_group(
+            rules,
+            new_state,
+            &key_positions,
+            &val_positions,
+            signature.len(),
+            group_key,
+        )?;
+        let old_row = old_by_key.get(group_key).cloned();
+        match (old_row, new_row) {
+            (Some(old), Some(new)) if old != new => {
+                delta.insert(SignedFact::Minus(old));
+                delta.insert(SignedFact::Plus(new));
+            }
+            (Some(old), None) => {
+                delta.insert(SignedFact::Minus(old));
+            }
+            (None, Some(new)) => {
+                delta.insert(SignedFact::Plus(new));
+            }
+            _ => {}
+        }
+    }
+    Ok(delta)
+}
+
 /// The production incremental-maintenance law (issue #61): given a signed
 /// patch to `program`'s EDB and its CURRENT [`MaintainedState`], the
 /// signed patch every relation (EDB and IDB alike) undergoes, computed
 /// WITHOUT re-evaluating the whole program — and the NEW state, for the
 /// caller to persist as this round's [`MaintainedState`] going forward.
-/// Refuses (never silently wrong) recursion; aggregation and fixed rules
-/// have no representation in [`IncrementalProgram`] at all, so there is
-/// nothing to refuse for them here — see the module doc's scope section.
+/// Refuses (never silently wrong) recursion; fixed rules have no
+/// representation in [`IncrementalProgram`] at all, so there is nothing
+/// to refuse for them here. Aggregation (normal or meet form) is fully
+/// covered via [`eval_aggregating_head_incremental`] — see the module
+/// doc's scope section.
 pub(crate) fn incremental_eval(
     program: &IncrementalProgram,
     state: &MaintainedState,
@@ -650,25 +840,45 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let mut candidates = BTreeSet::new();
-            for rule in &rules {
-                collect_candidates(rule, state, &rel_deltas, &mut candidates);
-            }
-            let mut delta = BTreeSet::new();
+            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(Option::is_some));
+            let delta = if has_aggr {
+                eval_aggregating_head_incremental(
+                    &rules,
+                    state,
+                    &new_state,
+                    &rel_deltas,
+                    &old_rows,
+                )?
+            } else {
+                let mut candidates = BTreeSet::new();
+                for rule in &rules {
+                    collect_candidates(rule, state, &rel_deltas, &mut candidates);
+                }
+                let mut delta = BTreeSet::new();
+                for candidate in candidates {
+                    let was = old_rows.contains(&candidate);
+                    let now = head_is_derivable(&rules, &new_state, &candidate);
+                    match (was, now) {
+                        (false, true) => {
+                            delta.insert(SignedFact::Plus(candidate));
+                        }
+                        (true, false) => {
+                            delta.insert(SignedFact::Minus(candidate));
+                        }
+                        _ => {}
+                    }
+                }
+                delta
+            };
             let mut new_rows = old_rows.clone();
-            for candidate in candidates {
-                let was = old_rows.contains(&candidate);
-                let now = head_is_derivable(&rules, &new_state, &candidate);
-                match (was, now) {
-                    (false, true) => {
-                        delta.insert(SignedFact::Plus(candidate.clone()));
-                        new_rows.insert(candidate);
+            for fact in &delta {
+                match fact {
+                    SignedFact::Plus(t) => {
+                        new_rows.insert(t.clone());
                     }
-                    (true, false) => {
-                        delta.insert(SignedFact::Minus(candidate.clone()));
-                        new_rows.remove(&candidate);
+                    SignedFact::Minus(t) => {
+                        new_rows.remove(t);
                     }
-                    _ => {}
                 }
             }
             (delta, new_rows)
@@ -706,10 +916,12 @@ mod tests {
         }
     }
     fn rule(head_rel: &str, head_args: Vec<Term>, body: Vec<Literal>) -> Rule {
+        let aggr = vec![None; head_args.len()];
         Rule {
             head_rel: sym(head_rel),
             head_args,
             body,
+            aggr,
         }
     }
     fn state_of(entries: Vec<(&str, Vec<Tuple>)>) -> MaintainedState {
@@ -857,6 +1069,7 @@ mod tests {
             head_rel: sym(r.head_rel),
             head_args: r.head_args.iter().map(conv_term).collect(),
             body: r.body.iter().map(conv_literal).collect(),
+            aggr: r.aggr.clone(),
         }
     }
     fn conv_program(p: &laws::Program) -> IncrementalProgram {
@@ -974,7 +1187,27 @@ mod tests {
                 ],
             )]
         }
-        let shapes: [fn() -> Vec<laws::Rule>; 3] = [shape_a, shape_b, shape_c];
+        // Shape D: `q(x, min(y)) :- p(x, y)` — aggregation, `min`
+        // deliberately (the hardest kind: no per-kind incremental
+        // formula covers retracting the current min).
+        fn shape_d() -> Vec<laws::Rule> {
+            vec![laws::Rule::aggregated(
+                "q",
+                vec![laws::Term::Var("X"), laws::Term::Var("Y")],
+                vec![
+                    None,
+                    Some((
+                        crate::data::aggr::parse_aggr("min").expect("real aggregation exists"),
+                        vec![],
+                    )),
+                ],
+                vec![laws::Literal::pos(
+                    "p",
+                    vec![laws::Term::Var("X"), laws::Term::Var("Y")],
+                )],
+            )]
+        }
+        let shapes: [fn() -> Vec<laws::Rule>; 4] = [shape_a, shape_b, shape_c, shape_d];
 
         let mut state: u64 = 0xFEED_FACE_C0FF_EE01;
         let mut next_u64 = move || {
@@ -1185,16 +1418,20 @@ mod tests {
         assert_eq!(rule.body[0].args, vec![x(), Term::Const(v(42))]);
     }
 
+    /// `MagicInlineRule::aggr` is carried straight through translation
+    /// (it is already this module's exact `HeadAggr` shape) — never
+    /// refused.
     #[test]
-    fn translate_refuses_aggregation() {
-        let mut inline = magic_inline(vec!["X"], vec![rel_atom("p", vec!["X"], false)]);
-        inline.aggr = vec![Some((
-            crate::data::aggr::parse_aggr("count").expect("real aggregation exists"),
-            vec![],
-        ))];
+    fn translate_carries_aggregation_through() {
+        let mut inline = magic_inline(vec!["X", "Y"], vec![rel_atom("p", vec!["X", "Y"], false)]);
+        let sum = crate::data::aggr::parse_aggr("sum").expect("real aggregation exists");
+        inline.aggr = vec![None, Some((sum, vec![]))];
         let magic = one_stratum_program(vec![("?", vec![inline])]);
-        let err = translate(magic).unwrap_err();
-        assert_eq!(err, TranslationRejection::Aggregation);
+        let program = translate(magic).expect("translation succeeds");
+        let rule = &program.rules[0];
+        assert_eq!(rule.aggr.len(), 2);
+        assert!(rule.aggr[0].is_none());
+        assert_eq!(rule.aggr[1].as_ref().unwrap().0, sum);
     }
 
     #[test]

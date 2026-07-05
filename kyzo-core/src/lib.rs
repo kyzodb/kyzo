@@ -117,6 +117,16 @@
 //! derivation of each admitted tuple is witnessed at the barrier in canonical
 //! order; the off-state is the `()` sink, compiled away.
 //!
+//! [`Db::register_standing`] answers the same query LIVE: the compiled
+//! `StratifiedMagicProgram` (the `?` proven present, negation's meaning
+//! still `Symbol`-level, not yet the column-index/`NegJoin` form RA
+//! lowering produces) translates into a small maintained-IVM program, and
+//! [`StandingQuery::apply_pending`] keeps its answer correct across every
+//! commit by finding affected candidates (or, for an aggregating head,
+//! affected GROUPS) and re-deriving each directly from current state —
+//! never a per-tuple or per-kind signed delta formula, which does not
+//! exist in general (retracting the current `min`/`max` is the reason).
+//!
 //! ## Runtime — the session tier (`runtime`)
 //!
 //! Everything between a caller and the engine organs: the [`Db`] entrypoint
@@ -276,6 +286,9 @@ pub use fixed_rule::{
 pub use runtime::callback::{CallbackEvent, CallbackOp};
 pub use runtime::db::{Db, ScriptOptions};
 pub use runtime::verify::VerifyOutcome;
+
+pub use query::ra::temporal::SignedFact;
+pub use query::standing::StandingQuery;
 
 // A curated, opaque façade over the crate-internal query pipeline
 // (compile → bind → semi-naive eval), for the RA-layer criterion benches.
