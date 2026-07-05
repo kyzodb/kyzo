@@ -10,11 +10,14 @@
  * (MPL-2.0). The load-bearing changes:
  *
  * - **The stored-input seam.** The original payload held a live
- *   `&SessionTx` and read stored relations from it directly. The runtime
- *   tier has not landed, so the transaction-facing arm is abstracted
- *   behind [`StoredInputSource`]; in-memory inputs (`EpochStore`-backed)
- *   work fully now, and `SessionTx` implements the trait when it lands.
- *   No algorithm sees the seam — they consume [`FixedRulePayload`] /
+ *   `&SessionTx` and read stored relations from it directly. The
+ *   transaction-facing arm is abstracted behind [`StoredInputSource`];
+ *   `query/normalize.rs`'s `SessionView` (the runtime tier's query-time
+ *   view) now implements it for real, so both in-memory inputs
+ *   (`EpochStore`-backed) and stored/validity reads work in production.
+ *   [`NoStoredInputs`] is the pre-runtime placeholder it superseded, kept
+ *   only for its own regression test. No algorithm sees the seam — they
+ *   consume [`FixedRulePayload`] /
  *   [`FixedRuleInputRelation`] exactly as before (one lifetime instead of
  *   the original's two, since the `SessionTx<'b>` lifetime is erased by
  *   the trait object).
@@ -168,14 +171,16 @@ impl CancelFlag {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// SEAM: stored-relation input (lands with the runtime tier)
+// SEAM: stored-relation input (landed with the runtime tier)
 // ─────────────────────────────────────────────────────────────────────────
 
 /// What the payload needs from the transaction in order to serve a
 /// `MagicFixedRuleRuleArg::Stored` input: arity lookup and (validity-
-/// aware) scans. `SessionTx` implements this when the runtime tier lands;
-/// until then [`NoStoredInputs`] refuses with a typed error. Algorithms
-/// never see this trait — it exists so their code is final now.
+/// aware) scans. `query/normalize.rs`'s `SessionView` implements this in
+/// production, so a fixed rule reading a stored (including historical)
+/// relation runs for real; [`NoStoredInputs`] is the superseded pre-runtime
+/// placeholder, kept only for its own regression test. Algorithms never see
+/// this trait — it exists so their code is final now.
 pub(crate) trait StoredInputSource {
     fn stored_arity(&self, name: &Symbol) -> Result<usize>;
     /// Scan the whole relation, as-of `as_of` if given.
@@ -189,12 +194,15 @@ pub(crate) trait StoredInputSource {
     ) -> Result<TupleIter<'a>>;
 }
 
+/// [`NoStoredInputs`]'s refusal. In production, `SessionView` serves
+/// stored/validity reads for real and this error never fires; it is
+/// reachable only through the pre-runtime placeholder's own test.
 #[derive(Debug, Error, Diagnostic)]
 #[error("Stored relation '{name}' is not available to fixed rules yet")]
 #[diagnostic(code(algo::stored_input_unavailable))]
 #[diagnostic(help(
-    "Reading stored relations from a fixed rule requires the runtime tier, \
-     which has not landed in this build"
+    "this refusal is the pre-runtime StoredInputSource placeholder \
+     (NoStoredInputs); the live runtime tier serves stored reads instead"
 ))]
 pub(crate) struct StoredInputUnavailable {
     name: String,
@@ -202,9 +210,10 @@ pub(crate) struct StoredInputUnavailable {
     span: SourceSpan,
 }
 
-/// The pre-runtime state of the [`StoredInputSource`] seam: every stored
-/// read refuses, typed. Deleted (or kept for tx-less contexts) when
-/// `SessionTx` lands.
+/// The pre-runtime [`StoredInputSource`] placeholder: every stored read
+/// refuses, typed. Superseded in production by `query/normalize.rs`'s
+/// `SessionView`, which implements the trait for real; kept here only for
+/// its own regression test (`fixed_rule_stored_input_is_a_refusing_seam`).
 pub(crate) struct NoStoredInputs;
 
 impl NoStoredInputs {

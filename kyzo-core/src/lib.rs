@@ -241,18 +241,22 @@ pub(crate) mod engines;
 // exercised in-file by its own property-test suite, dead in the lib build.
 #[allow(dead_code)]
 pub(crate) mod format;
-// The fixed-rule tier's consumer (the runtime evaluator, which drives
-// `run` and merges the output stores) lands later. Same dead-code posture
-// as `parse`: partially exercised by in-file tests, dead in the lib build.
+// The fixed-rule tier's consumer (runtime/db.rs::compile_and_eval, via
+// `query/normalize.rs`'s `SessionFixedRule` bridging `MagicFixedRuleApply`
+// to `FixedRule::run`) has landed: registration, evaluation, and the
+// stored-input seam (`StoredInputSource`, served for real by
+// `SessionView`) all run in production. `#[allow(dead_code)]` stays for the
+// residual items no production path reaches yet (the pre-runtime
+// `NoStoredInputs`/`StoredInputUnavailable` placeholders it superseded,
+// kept live only by their own regression test — see `fixed_rule/mod.rs`).
 #[allow(dead_code)]
 pub(crate) mod fixed_rule;
-// The fts tier's consumers (the operator tier: fts/indexing.rs and
-// runtime/db.rs) land later. Same dead-code posture as `parse`: fully dead
-// in the lib build, partially exercised by in-file tests.
-// The parse tier's consumers (runtime/db.rs) land later. In the lib build
-// the whole module is dead (expect); in test builds the in-file tests
-// exercise the parsers but not every AST field a runtime consumer reads,
-// so a plain `allow` covers the remainder until the runtime tier lands.
+// The parse tier's production consumer (runtime/db.rs, via
+// `parse::parse_script`) has landed for the query and system genera, which
+// `run_script` executes. `#[allow(dead_code)]` stays because the
+// `Script::Imperative` genus is a typed refusal, never executed (see
+// `runtime/db.rs`'s own note), so that genus's AST fields stay dead in a
+// release build; the in-file tests exercise them regardless.
 #[allow(dead_code)]
 pub(crate) mod parse;
 pub(crate) mod query;

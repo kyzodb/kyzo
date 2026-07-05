@@ -83,15 +83,16 @@
 //!   stores them as parsed substances with provenance once the parse tier's
 //!   program types are consumable here (Phase C).
 //! - **Index manifests** (HNSW / FTS / LSH) are operator-tier substances
-//!   that have not landed. [`IndexKind`]'s non-plain variants are the typed
-//!   attachment points; they gain manifest payloads when the operator tier
-//!   lands, which is a catalog wire-format change that the pinned-bytes
-//!   test below forces to be deliberate.
+//!   that have landed: [`IndexKind::Hnsw`]/`Fts`/`Lsh` carry their real
+//!   manifest payloads (`runtime/mutate.rs`'s `::hnsw|fts|lsh create`
+//!   populates them), which was the catalog wire-format change the
+//!   pinned-bytes test below forces to be deliberate.
 //! - **`as_named_rows`** (the original's handle-to-`NamedRows` view) lands
 //!   with the runtime tier that owns `NamedRows`.
 //! - **[`IndexPositionUse`]** is a compile-tier concept, homed here
-//!   provisionally because `query/compile.rs` has not landed; it moves
-//!   there unchanged when it does.
+//!   provisionally. `query/compile.rs` has since landed and imports it
+//!   directly from this module (`use crate::runtime::relation::{..,
+//!   IndexPositionUse, ..}`); it has not been physically relocated there.
 //!
 //! ## Wire format
 //!

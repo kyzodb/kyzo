@@ -1270,13 +1270,13 @@ fn negation_over_asof_non_prefix_join_matches_independent_complement() {
     assert_eq!(got, BTreeSet::from([vec![v(999)]]));
 }
 
-/// Fixed rules reading stored relations (validity-keyed or not) are a seam:
-/// the only `StoredInputSource` in this build is `NoStoredInputs`, which
-/// refuses every stored read with a typed, spanned `StoredInputUnavailable`.
-/// A fixed rule consuming a validity relation is therefore a typed refusal
-/// today — NOT a silent wrong answer — pending the runtime tier. The as-of
-/// argument (`as_of`) is threaded to `stored_scan_all` at both the magic
-/// tier and the fixed-rule arg tier; only the concrete reader is absent.
+/// Fixed rules reading stored relations (validity-keyed or not) go through
+/// the `StoredInputSource` seam. In production `query/normalize.rs`'s
+/// `SessionView` implements it for real, so a fixed rule consuming a
+/// validity relation actually reads it. `NoStoredInputs` — exercised below
+/// — is the superseded pre-runtime placeholder that refuses every stored
+/// read with a typed, spanned `StoredInputUnavailable`; this test pins ONLY
+/// that placeholder's own behavior, not current production semantics.
 #[test]
 fn fixed_rule_stored_input_is_a_refusing_seam() {
     use crate::fixed_rule::NoStoredInputs;

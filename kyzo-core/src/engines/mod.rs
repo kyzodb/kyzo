@@ -15,10 +15,12 @@
 //! into every index read path. The three engines all decode stored rows; they
 //! all name this one error, so it is defined once, here.
 
-// Engines whose `db.rs` surface has not landed are lib-dead by
-// construction (their creation op is a typed refusal until the operator
-// lands); their in-file tests keep them live under test, so a plain
-// `allow` covers the remainder.
+// `fts`/`hnsw`/`lsh`'s `db.rs` surface has landed (`::fts|hnsw|lsh
+// create/drop` in `runtime/mutate.rs` dispatch to the real creation/
+// backfill tier, tested end to end in `runtime/db.rs`), so neither carries
+// `#[allow(dead_code)]` any more. `gazetteer`/`sparse`/`spatial` below have
+// no `db.rs` surface yet and are still lib-dead by construction; their
+// in-file tests keep them live under test, so a plain `allow` covers them.
 pub(crate) mod fts;
 #[allow(dead_code)]
 pub(crate) mod gazetteer;
@@ -27,8 +29,10 @@ mod gazetteer_hostile;
 pub(crate) mod hnsw;
 pub(crate) mod lsh;
 /// Columnar current-state segments: rebuildable typed-column mirrors of a
-/// relation's plain scan, watermark-guarded (wiring into the scan path
-/// lands with the batch-native operator completion).
+/// relation's plain scan, watermark-guarded. Wiring into the scan path has
+/// landed (`query/ra/stored.rs`'s scan reads real segments, driven by
+/// `runtime/db.rs`'s read path); `#[allow(dead_code)]` stays only for the
+/// one residual unused helper (`SegmentEngine::is_empty`).
 #[allow(dead_code)]
 pub(crate) mod segments;
 #[allow(dead_code)]
