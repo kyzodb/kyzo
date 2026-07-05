@@ -468,6 +468,35 @@ fn scan_full_histories(
     Ok(histories)
 }
 
+/// The oracle's own [`laws::naive_eval_at_budgeted`] budget, built from the
+/// SAME [`ScriptOptions`] the production side already used for
+/// [`Db::compile_and_eval`] — the epoch/derived-tuple ceilings and
+/// `:timeout`/`timeout_secs` deadline apply to the reference path exactly
+/// as they do to production's, so a hostile or merely large query cannot
+/// OOM or hang `::verify` even though it runs BOTH evaluators. No kill flag
+/// (the verify path has no live session to cancel it from).
+fn oracle_budget(options: &ScriptOptions) -> Result<crate::query::eval::Budget> {
+    // Mirrors runtime/db.rs's own DEFAULT_EPOCH_CEILING (private to that
+    // file); a shared literal, not shared logic, so no visibility widening
+    // was needed for it.
+    const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
+    let ceiling = options
+        .epoch_ceiling
+        .unwrap_or(DEFAULT_EPOCH_CEILING)
+        .max(1);
+    let ceiling = std::num::NonZeroU32::new(ceiling).expect("max(1) is nonzero");
+    let mut budget = crate::query::eval::Budget::new(ceiling);
+    if let Some(n) = options.derived_tuple_ceiling {
+        budget = budget.with_derived_tuple_ceiling(n);
+    }
+    if let Some(secs) = options.timeout_secs.filter(|s| *s > 0.0) {
+        let duration = std::time::Duration::try_from_secs_f64(secs)
+            .map_err(|_| miette::miette!("timeout {secs} is not a usable duration"))?;
+        budget = budget.with_timeout(duration);
+    }
+    Ok(budget)
+}
+
 impl<S: Storage> Db<S> {
     /// Run `payload` through both the production evaluator and the sealed
     /// naive oracle against one shared snapshot, reporting agreement,
@@ -591,7 +620,8 @@ impl<S: Storage> Db<S> {
         oracle_program.facts = facts;
         oracle_program.histories = histories;
 
-        match laws::naive_eval(&oracle_program) {
+        let budget = oracle_budget(options)?;
+        match laws::naive_eval_at_budgeted(&oracle_program, laws::AsOf::current(), &budget) {
             Ok(db) => {
                 let oracle = db.get(translated.entry_rel).cloned().unwrap_or_default();
                 if oracle == production {
@@ -918,11 +948,18 @@ mod tests {
             no_params(),
         )
         .expect("create at valid=100");
-        db.run_script("?[k, v] <- [[1, 'b']] :put hist {k => v} @ 200", no_params())
-            .expect("put at valid=200");
+        db.run_script(
+            "?[k, v] <- [[1, 'b']] :put hist {k => v} @ 200",
+            no_params(),
+        )
+        .expect("put at valid=200");
 
         let at_100 = db
-            .verify_script("?[k, v] := *hist[k, v @ 100]", no_params(), ScriptOptions::default())
+            .verify_script(
+                "?[k, v] := *hist[k, v @ 100]",
+                no_params(),
+                ScriptOptions::default(),
+            )
             .expect("verify_script runs");
         match at_100 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
@@ -930,7 +967,11 @@ mod tests {
         }
 
         let at_200 = db
-            .verify_script("?[k, v] := *hist[k, v @ 200]", no_params(), ScriptOptions::default())
+            .verify_script(
+                "?[k, v] := *hist[k, v @ 200]",
+                no_params(),
+                ScriptOptions::default(),
+            )
             .expect("verify_script runs");
         match at_200 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
@@ -939,7 +980,11 @@ mod tests {
 
         // Before the fact existed at all: empty, not a refusal.
         let at_50 = db
-            .verify_script("?[k, v] := *hist[k, v @ 50]", no_params(), ScriptOptions::default())
+            .verify_script(
+                "?[k, v] := *hist[k, v @ 50]",
+                no_params(),
+                ScriptOptions::default(),
+            )
             .expect("verify_script runs");
         match at_50 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 0),
@@ -1016,6 +1061,64 @@ mod tests {
                 );
             }
             other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Budgeted oracle execution (story #80 DoD item 2, additive): the SAME
+    // ScriptOptions ceiling production already respects now bounds the
+    // oracle's naive fixpoint too, so ::verify cannot hang or OOM on a
+    // hostile/large query.
+    // ════════════════════════════════════════════════════════════════════
+
+    /// A real recursive program under a deliberately starved epoch ceiling:
+    /// `::verify` applies ONE caller-given `ScriptOptions` ceiling to BOTH
+    /// evaluators (by design — a caller who asked for a tight budget wants
+    /// it enforced everywhere, not just on the side that happens to hit it
+    /// first), so here production's own budget (`Db::compile_and_eval`,
+    /// unchanged, already ceiling-checked) refuses before the oracle
+    /// comparison ever runs — an ordinary, correctly propagated `Err`, not
+    /// a silent hang or a wrong answer. The oracle's OWN budget mechanism
+    /// in isolation (a case where the oracle alone starves) is proven
+    /// directly against `naive_eval_at_budgeted` in `query/laws.rs`'s test
+    /// module, where production's independent budget cannot confound it.
+    #[test]
+    fn verify_propagates_a_starved_epoch_ceiling_as_an_ordinary_refusal() {
+        let db = seeded_db();
+        // A ceiling of 1 refuses every non-empty program deterministically
+        // (Budget::new's own doc: one round derives, a second observes the
+        // empty delta) — the recursive TRANSITIVE_CLOSURE program needs
+        // several, on EITHER evaluator.
+        let options = ScriptOptions {
+            epoch_ceiling: Some(1),
+            ..ScriptOptions::default()
+        };
+        let err = db
+            .verify_script(TRANSITIVE_CLOSURE, no_params(), options)
+            .expect_err("a starved ceiling must refuse, not hang or silently truncate");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("epoch") || msg.contains("Epochs"),
+            "expected an epoch-ceiling refusal, got: {msg}"
+        );
+    }
+
+    /// A generous ceiling on the SAME program still matches — the budget
+    /// changes nothing about the answer when it is never crossed.
+    #[test]
+    fn verify_still_matches_under_a_generous_budget() {
+        let db = seeded_db();
+        let options = ScriptOptions {
+            epoch_ceiling: Some(1_000),
+            derived_tuple_ceiling: Some(10_000),
+            ..ScriptOptions::default()
+        };
+        let outcome = db
+            .verify_script(TRANSITIVE_CLOSURE, no_params(), options)
+            .expect("verify_script runs");
+        match outcome {
+            VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
+            other => panic!("expected Match, got {other:?}"),
         }
     }
 }

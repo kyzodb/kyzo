@@ -148,6 +148,7 @@ use crate::data::aggr::{Aggregation, MeetAggrObj, NormalAggrObj};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::query::eval::Budget;
 
 pub(crate) type Rel = &'static str;
 
@@ -686,6 +687,12 @@ pub(crate) enum Rejection {
     /// An aggregation failed at evaluation time (e.g. a type error inside
     /// a fold); carried as a value, never a panic.
     AggrError(String),
+    /// [`naive_eval_at_budgeted`]'s budget ran out (epoch ceiling, deadline,
+    /// or kill) — never raised by the unbudgeted [`naive_eval_at`]/
+    /// [`naive_eval`], whose whole reason to exist is the unbounded true
+    /// reference answer. Carries the real `eval::LimitExceeded`/`Killed`
+    /// message, not a re-derived one.
+    BudgetExceeded(String),
 }
 
 fn literal_vars(l: &Literal) -> HashSet<&'static str> {
@@ -1406,6 +1413,86 @@ pub(crate) fn naive_eval_at(
     program: &Program,
     default_as_of: AsOf,
 ) -> Result<BTreeMap<Rel, BTreeSet<Tuple>>, Rejection> {
+    naive_eval_at_impl(program, default_as_of, None)
+}
+
+/// [`naive_eval_at`], additionally bounded by `budget` — story #80's
+/// `::verify` needs this so a hostile or merely large query cannot OOM or
+/// hang the reference path. ADDITIVE, never a replacement: every existing
+/// unbudgeted caller (the differentials, the gauntlet, `incremental.rs`'s
+/// own ground truth, ~65 sites in this tree) keeps calling
+/// [`naive_eval`]/[`naive_eval_at`] and stays genuinely unbounded — the
+/// naive oracle's whole reason to exist is the TRUE answer, and a mandatory
+/// ceiling would put a second, lesser claim in its place. Checked at the
+/// SAME barrier granularity `naive_eval_at`'s own loop already has (once
+/// per stratum, once per fixpoint round) — no per-rule in-flight ticker:
+/// that finer guard exists in `eval.rs` to bound rayon's mid-epoch
+/// parallel materialization, a concern this single-threaded reference loop
+/// does not have. A budget hit returns [`Rejection::BudgetExceeded`], which
+/// `runtime/verify.rs` reports as `VerifyOutcome::OracleRefused` — an
+/// honest "couldn't verify," never a wrong MATCH.
+pub(crate) fn naive_eval_at_budgeted(
+    program: &Program,
+    default_as_of: AsOf,
+    budget: &Budget,
+) -> Result<BTreeMap<Rel, BTreeSet<Tuple>>, Rejection> {
+    naive_eval_at_impl(program, default_as_of, Some(budget))
+}
+
+/// One barrier check: user kill / deadline (via `Budget::check_interrupt`,
+/// the same call production makes at its own barriers), the epoch ceiling
+/// (`rounds`, reset each stratum exactly as `naive_eval_at_impl`'s own loop
+/// already resets it), and the derived-tuple ceiling (the oracle's total
+/// admitted so far, summed across every relation `db` holds — the naive
+/// model's own analog of production's admitted-tuple count). Every refusal
+/// carries the real `eval::LimitExceeded`'s message, not a re-derived one.
+fn check_oracle_budget(
+    budget: &Budget,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rounds: usize,
+) -> Result<(), Rejection> {
+    use crate::query::eval::{BudgetDimension, LimitExceeded};
+
+    budget
+        .check_interrupt()
+        .map_err(|e| Rejection::BudgetExceeded(e.to_string()))?;
+
+    let epoch_ceiling = budget.epoch_ceiling().get() as usize;
+    if rounds > epoch_ceiling {
+        return Err(Rejection::BudgetExceeded(
+            LimitExceeded {
+                dimension: BudgetDimension::Epochs,
+                spent: rounds as u64,
+                ceiling: epoch_ceiling as u64,
+                rule: None,
+                span: None,
+            }
+            .to_string(),
+        ));
+    }
+    if let Some(ceiling) = budget.derived_tuple_ceiling() {
+        let spent: u64 = db.values().map(|rows| rows.len() as u64).sum();
+        if spent > ceiling {
+            return Err(Rejection::BudgetExceeded(
+                LimitExceeded {
+                    dimension: BudgetDimension::DerivedTuples,
+                    spent,
+                    ceiling,
+                    rule: None,
+                    span: None,
+                }
+                .to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn naive_eval_at_impl(
+    program: &Program,
+    default_as_of: AsOf,
+    budget: Option<&Budget>,
+) -> Result<BTreeMap<Rel, BTreeSet<Tuple>>, Rejection> {
     check_wellformed(program)?;
     check_safety(program)?;
     check_stratifiable(program)?;
@@ -1416,6 +1503,9 @@ pub(crate) fn naive_eval_at(
     let mut db = program.facts.clone();
 
     for stratum in 0..=max_stratum {
+        if let Some(b) = budget {
+            check_oracle_budget(b, &db, 0)?;
+        }
         // Fixed rules run first and exactly once: stratification forces
         // their inputs strictly below (complete) and their readers
         // strictly above.
@@ -1477,6 +1567,9 @@ pub(crate) fn naive_eval_at(
                 rounds <= 100_000,
                 "fixpoint bound exceeded: non-termination"
             );
+            if let Some(b) = budget {
+                check_oracle_budget(b, &db, rounds)?;
+            }
             let mut changed = false;
             for rule in program
                 .rules
@@ -2485,6 +2578,44 @@ mod tests {
             .map(|(a, b)| vec![v(a), v(b)])
             .collect();
         assert_eq!(db["path"], want);
+    }
+
+    // ── Budgeted execution (story #80): additive, ~65 unbudgeted callers
+    // above and below this point are unaffected — they never pass a
+    // budget, so `naive_eval_at_impl`'s `budget: None` path is exactly
+    // their old behavior, unchanged. ──
+
+    #[test]
+    fn budgeted_eval_refuses_under_a_starved_epoch_ceiling() {
+        let program = Program {
+            rules: transitive_closure(),
+            facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
+            ..Program::default()
+        };
+        let budget = Budget::new(std::num::NonZeroU32::new(1).unwrap());
+        let err = naive_eval_at_budgeted(&program, AsOf::current(), &budget)
+            .expect_err("a ceiling of 1 must refuse a real recursive program");
+        assert!(
+            matches!(err, Rejection::BudgetExceeded(_)),
+            "expected BudgetExceeded, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn budgeted_eval_matches_the_unbudgeted_oracle_under_a_generous_budget() {
+        let program = Program {
+            rules: transitive_closure(),
+            facts: edge_facts(&[(1, 2), (2, 3), (3, 4)]),
+            ..Program::default()
+        };
+        let budget = Budget::new(std::num::NonZeroU32::new(1_000).unwrap());
+        let budgeted = naive_eval_at_budgeted(&program, AsOf::current(), &budget)
+            .expect("a generous budget never refuses");
+        let unbudgeted = naive_eval(&program).expect("the unbudgeted oracle always runs");
+        assert_eq!(
+            budgeted, unbudgeted,
+            "a budget that is never crossed must change nothing"
+        );
     }
 
     #[test]
