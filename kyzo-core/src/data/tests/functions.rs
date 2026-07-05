@@ -706,6 +706,82 @@ fn test_math_valid_inputs_unaffected() {
         op_acos(&[DataValue::from(1)]).unwrap(),
         DataValue::from(0.0)
     );
+    // Boundary lock: the exact edges the domain guards must NOT refuse, so a
+    // later tightening of a guard (e.g. `<` slipping to `<=`, or a closed
+    // interval narrowed to open) is caught. sqrt/asin/acos domains are
+    // closed; acosh is closed at 1; atanh is open, so a value just inside it
+    // must still compute; a negative base with an integral exponent is a real
+    // power `pow` must not refuse.
+    assert_eq!(
+        op_sqrt(&[DataValue::from(0)]).unwrap(),
+        DataValue::from(0.0)
+    );
+    assert_eq!(
+        op_acosh(&[DataValue::from(1)]).unwrap(),
+        DataValue::from(0.0)
+    );
+    assert!(
+        op_asin(&[DataValue::from(1)]).is_ok(),
+        "asin(+1) is in domain"
+    );
+    assert!(
+        op_asin(&[DataValue::from(-1)]).is_ok(),
+        "asin(-1) is in domain"
+    );
+    assert!(
+        op_acos(&[DataValue::from(-1)]).is_ok(),
+        "acos(-1) is in domain"
+    );
+    assert!(
+        op_atanh(&[DataValue::from(0.5)]).is_ok(),
+        "atanh(0.5) is strictly inside the open interval"
+    );
+    assert_eq!(
+        op_pow(&[DataValue::from(-2.0), DataValue::from(3.0)]).unwrap(),
+        DataValue::from(-8.0),
+        "a negative base with an integral exponent is a real power"
+    );
+}
+
+/// The same silent-NaN class the partial scalar ops were swept for also
+/// lived in two vector-distance ops: cosine distance and L2 normalization
+/// both divide by a vector norm, so a zero vector yielded `0/0 = NaN`
+/// (or an infinity) with no diagnostic. Both now refuse with the same typed
+/// `domain_error`, on both the F32 and F64 lanes, while non-degenerate
+/// vectors still compute.
+#[test]
+fn test_vector_distance_domain_errors() {
+    use ndarray::arr1;
+
+    let zero = DataValue::Vec(Vector::F64(arr1(&[0.0, 0.0])));
+    let unit = DataValue::Vec(Vector::F64(arr1(&[1.0, 1.0])));
+
+    for res in [
+        op_cos_dist(&[zero.clone(), unit.clone()]),
+        op_cos_dist(&[unit.clone(), zero.clone()]),
+        op_l2_normalize(&[zero.clone()]),
+    ] {
+        let err = res.expect_err("a zero vector has no defined direction — must be a typed Err");
+        assert!(
+            format!("{err:?}").contains("domain_error"),
+            "expected the domain-error diagnostic code"
+        );
+    }
+
+    // Non-degenerate vectors still compute: cos_dist of a vector with itself
+    // is 0, and normalization succeeds.
+    assert_eq!(
+        op_cos_dist(&[unit.clone(), unit.clone()]).unwrap(),
+        DataValue::from(0.0)
+    );
+    assert!(op_l2_normalize(&[unit]).is_ok());
+
+    // The F32 lane is guarded identically.
+    let zero32 = DataValue::Vec(Vector::F32(arr1(&[0.0f32, 0.0])));
+    let unit32 = DataValue::Vec(Vector::F32(arr1(&[1.0f32, 1.0])));
+    assert!(op_cos_dist(&[zero32.clone(), unit32.clone()]).is_err());
+    assert!(op_l2_normalize(&[zero32]).is_err());
+    assert!(op_cos_dist(&[unit32.clone(), unit32]).is_ok());
 }
 
 #[test]

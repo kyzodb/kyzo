@@ -189,3 +189,30 @@ fn modulo_by_zero_never_panics() {
     let res = db.run_script("?[x] := x = 1 % 0", no_params());
     let _: miette::Result<kyzo::NamedRows> = res;
 }
+
+/// A partial math op fed an out-of-domain value must surface a typed refusal
+/// through the *query* surface — not bind a silent `NaN` into the answer
+/// set. This locks the whole silent-NaN class (scalar domain ops and the
+/// vector-distance ops) at the level a user actually observes, exercising
+/// the row evaluator end-to-end, while an in-domain call still answers.
+#[test]
+fn math_domain_error_surfaces_through_query() {
+    let db = fresh_db();
+    for script in [
+        "?[x] := x = sqrt(-1.0)",
+        "?[x] := x = ln(0.0)",
+        "?[x] := x = cos_dist([0.0, 0.0], [1.0, 1.0])",
+        "?[x] := x = l2_normalize([0.0, 0.0])",
+    ] {
+        let res = db.run_script(script, no_params());
+        assert!(
+            res.is_err(),
+            "out-of-domain math through a query must be a typed Err, not Ok(NaN): {script} => {res:?}"
+        );
+    }
+    // An in-domain call still answers with the right value.
+    let ok = db
+        .run_script("?[x] := x = sqrt(4.0)", no_params())
+        .expect("in-domain sqrt must answer");
+    assert_eq!(ok.rows, vec![vec![DataValue::from(2.0)]]);
+}

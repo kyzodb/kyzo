@@ -2442,11 +2442,17 @@ pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
     match a {
         DataValue::Vec(Vector::F32(a)) => {
             let norm = a.dot(a).sqrt();
-            Ok(DataValue::Vec(Vector::F32(a / norm)))
+            if norm == 0.0 {
+                bail!(DomainError { op: "l2_normalize" });
+            }
+            no_nan_vec_f32("l2_normalize", a / norm)
         }
         DataValue::Vec(Vector::F64(a)) => {
             let norm = a.dot(a).sqrt();
-            Ok(DataValue::Vec(Vector::F64(a / norm)))
+            if norm == 0.0 {
+                bail!(DomainError { op: "l2_normalize" });
+            }
+            no_nan_vec_f64("l2_normalize", a / norm)
         }
         _ => bail!("'l2_normalize' requires a vector"),
     }
@@ -2509,8 +2515,11 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             }
             let a_norm = a.dot(a) as f64;
             let b_norm = b.dot(b) as f64;
+            if a_norm == 0.0 || b_norm == 0.0 {
+                bail!(DomainError { op: "cos_dist" });
+            }
             let dot = a.dot(b) as f64;
-            Ok(DataValue::from(1. - dot / (a_norm * b_norm).sqrt()))
+            no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())
         }
         (DataValue::Vec(Vector::F64(a)), DataValue::Vec(Vector::F64(b))) => {
             if a.len() != b.len() {
@@ -2518,8 +2527,11 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             }
             let a_norm = a.dot(a);
             let b_norm = b.dot(b);
+            if a_norm == 0.0 || b_norm == 0.0 {
+                bail!(DomainError { op: "cos_dist" });
+            }
             let dot = a.dot(b);
-            Ok(DataValue::from(1. - dot / (a_norm * b_norm).sqrt()))
+            no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())
         }
         _ => bail!("'cos_dist' requires two vectors of the same type"),
     }
