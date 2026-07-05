@@ -51,11 +51,13 @@ store, one transaction model, and one memcomparable keyspace, measured five ways
 
 ## One query, all of memory
 
-Here is the shape nothing stitched together can match. A vector neighborhood, a recursive graph
-reach, and a provenance join, evaluated at one transactional cut *in the past*, under a budget that
-can refuse:
+Here is the shape nothing stitched together can match: a recursive graph reach, a semantic vector
+search *restricted to* that reach, and a provenance join, evaluated at one transactional cut *in the
+past*, under a budget that can refuse. Below, a clinical agent asks it as one question, before it
+recommends a drug: which known adverse events resemble this patient's symptom, among only the drugs
+they are on or interact with, with the evidence exactly as the record stood at admission:
 
-<p align="center"><img src="static/repl_hero.svg" width="860" alt="A KyzoDB query: a recursive graph reach, a semantic vector search restricted to that reach, and a provenance join, all evaluated at one past instant."></p>
+<p align="center"><img src="static/repl_hero.svg" width="860" alt="A KyzoDB clinical-safety query: interaction-graph recursion finds the drugs at risk, a semantic vector search of adverse events is restricted to them, and each event's evidence is read as the record stood at admission, all in one query."></p>
 
 One language, one snapshot, one answer, and if the traversal overspends its budget, one typed
 refusal naming exactly what it hit. That single block *is* the thesis: retrieval that is composable
@@ -86,25 +88,26 @@ track each one.
 The retrieval paths a knowledge system usually spreads across five services are ordinary relations
 here, so they combine in a single query.
 
-Take documents that carry a title and a vector embedding, plus a relation recording which document
-cites which:
+Take an agent's memory of past incidents, each carrying a short summary and a vector embedding, plus a
+relation recording which incident cites which runbook:
 
-<p align="center"><img src="static/repl_setup.svg" width="860" alt="A KyzoDB REPL session creating a doc relation of titles and embeddings and a cites relation, each returning status OK."></p>
+<p align="center"><img src="static/repl_setup.svg" width="860" alt="A KyzoDB REPL session creating an incident relation of summaries and embeddings and a references relation of which incident cites which runbook, each returning status OK."></p>
 
 Then index that one relation three ways: dense vectors with HNSW, full text, and near-duplicates with
 MinHash-LSH.
 
-<p align="center"><img src="static/repl_indexes.svg" width="860" alt="A KyzoDB REPL session creating an HNSW vector index, a full-text index, and a MinHash-LSH near-duplicate index over the same relation, each returning status OK."></p>
+<p align="center"><img src="static/repl_indexes.svg" width="860" alt="A KyzoDB REPL session creating an HNSW vector index, a full-text index, and a MinHash-LSH near-duplicate index over the same incident relation, each returning status OK."></p>
 
 A nearest-neighbour search binds with `~` and unifies like any other relation. Joined straight to
-`cites`, one query performs semantic recall and then follows the relationships of whatever it finds:
+`references`, one query recalls the incidents that most resemble a live alert and then follows to the
+runbooks they cite:
 
-<p align="center"><img src="static/repl_retrieval.svg" width="820" alt="A KyzoDB REPL session: a nearest-neighbour vector search joined to the cites graph returns datalog then graph-db and graph-db then mvcc."></p>
+<p align="center"><img src="static/repl_retrieval.svg" width="820" alt="A KyzoDB REPL session: a nearest-neighbour search over incident memories joined to the references graph returns INC-204 with runbook RB-pool-sizing and INC-231 with RB-threadpool-tuning."></p>
 
-Full text answers `~doc:text{id, title | query: 'graph', k: 5}` and near-duplicates answer
-`~doc:lsh{id | query: 'Graph databases', k: 5}`; in every case the search result is a relation you can
-join, filter, negate, and recurse over. Hybrid retrieval is a query, not a pipeline: there is no
-fan-out layer, no re-ranking glue service, and no copy of your data waiting to drift.
+Full text answers `~incident:txt{id | query: 'pool', k: 5}` and near-duplicates answer
+`~incident:sim{id | query: 'Redis pool exhausted under load', k: 5}`; in every case the search result is
+a relation you can join, filter, negate, and recurse over. Hybrid retrieval is a query, not a pipeline:
+there is no fan-out layer, no re-ranking glue service, and no copy of your data waiting to drift.
 
 And because search here is an engine capability rather than a bolted-on service, it makes guarantees
 that services do not make:
@@ -151,16 +154,17 @@ If you can write a SQL join, the rule form below is a day's acclimation, and the
 first time a query that would have been an eleven-line recursive CTE is three lines that read top to
 bottom.
 
-Here `*route` is a small relation of airport-to-airport routes and `FRA` is Frankfurt. Every airport
-reachable from Frankfurt, by any number of stops, is three lines, and the second rule feeds on itself:
+Here `*can_access` is an access graph: which principal can reach which resource. Every resource a
+compromised service account can reach, by any number of hops, is three lines, and the second rule
+feeds on itself. That set is the blast radius, and it names the crown-jewel database at the end of it:
 
-<p align="center"><img src="static/repl_recursion.svg" width="820" alt="A KyzoDB REPL session: a three-line recursive rule returns every airport reachable from Frankfurt: JFK, LHR, YPO."></p>
+<p align="center"><img src="static/repl_recursion.svg" width="820" alt="A KyzoDB REPL session: a three-line recursive rule returns every resource reachable from a compromised service account: db-customers, kms-signing, role-deploy, role-prod-ro, s3-artifacts."></p>
 
 For the recursions that graph analysis reaches for constantly, the engine ships whole-graph algorithms
 (PageRank, community detection, shortest paths, centralities, max-flow, k-core, maximal cliques, and
 more) as built-in rules over your relations, with no export to a graph runtime and back:
 
-<p align="center"><img src="static/repl_dijkstra.svg" width="820" alt="A KyzoDB REPL session: the built-in ShortestPathDijkstra rule returns the shortest FRA→YPO path at distance 7660."></p>
+<p align="center"><img src="static/repl_dijkstra.svg" width="820" alt="A KyzoDB REPL session: the built-in ShortestPathDijkstra rule returns the cheapest privilege-escalation path from svc-ci-deploy to db-customers at cost 4."></p>
 
 And because vector and text search results are relations too, they feed these same recursions: a
 similarity hit can seed a graph traversal in the query that found it.
@@ -176,7 +180,7 @@ both: `@ instant` asks what currently-believed facts held at an instant; `@ syst
 what the record itself said at a past moment about that instant. *"What did we know on Tuesday?"* is a
 parameter of the read, not an archaeology project over change-data-capture logs.
 
-<p align="center"><img src="static/repl_timetravel.svg" width="820" alt="A KyzoDB REPL session: two dated writes to a price, then two as-of reads returning 100 for mid-2023 and 150 for mid-2024."></p>
+<p align="center"><img src="static/repl_timetravel.svg" width="820" alt="A KyzoDB REPL session: an agent records a customer's coverage as trial, later corrects it to enterprise, then two as-of reads return trial for the incident date and enterprise for today."></p>
 
 Under the hood, both timestamps live in the storage key itself, so an as-of read is an ordinary
 seek-based ordered scan, not a reconstruction, and it composes: joins, recursion, negation, and

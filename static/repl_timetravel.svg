@@ -1,24 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 322" width="860" height="322" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: two dated writes to a price, then two as-of reads that return 100 for mid-2023 and 150 for mid-2024.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 322" width="860" height="322" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: an agent records a customer's coverage as trial, later corrects it to enterprise, then two as-of reads return trial for the incident date and enterprise for today.">
   <rect x="1" y="1" width="858" height="320" rx="3" fill="#0f1713" stroke="#26362d"/>
   <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
   <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
   <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
   <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
   <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
-  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · the record keeps every version, ask what was true and when</text>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · what did the agent believe was true, and when</text>
 
-  <text x="22" y="64" font-size="13" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[item, amount] </tspan><tspan fill="#5fc492">&lt;- </tspan><tspan fill="#c9d6cc">[[</tspan><tspan fill="#a9cf9e">'widget'</tspan><tspan fill="#c9d6cc">, </tspan><tspan fill="#8fb5d6">100</tspan><tspan fill="#c9d6cc">]] </tspan><tspan fill="#5fc492">:put </tspan><tspan fill="#7fa6bf">price </tspan><tspan fill="#c9d6cc">{item, amount} </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2023-01-01'</tspan></text>
-  <text x="22" y="84" font-size="13" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[item, amount] </tspan><tspan fill="#5fc492">&lt;- </tspan><tspan fill="#c9d6cc">[[</tspan><tspan fill="#a9cf9e">'widget'</tspan><tspan fill="#c9d6cc">, </tspan><tspan fill="#8fb5d6">150</tspan><tspan fill="#c9d6cc">]] </tspan><tspan fill="#5fc492">:put </tspan><tspan fill="#7fa6bf">price </tspan><tspan fill="#c9d6cc">{item, amount} </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2024-01-01'</tspan></text>
+  <text x="22" y="62" font-size="12" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[customer, tier] </tspan><tspan fill="#5fc492">&lt;- </tspan><tspan fill="#c9d6cc">[[</tspan><tspan fill="#a9cf9e">'C-77', 'trial'</tspan><tspan fill="#c9d6cc">]] </tspan><tspan fill="#5fc492">:create </tspan><tspan fill="#7fa6bf">coverage </tspan><tspan fill="#c9d6cc">{customer </tspan><tspan fill="#5fc492">=&gt;</tspan><tspan fill="#c9d6cc"> tier} </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2024-01-01T00:00:00Z'</tspan></text>
+  <text x="22" y="82" font-size="12" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[customer, tier] </tspan><tspan fill="#5fc492">&lt;- </tspan><tspan fill="#c9d6cc">[[</tspan><tspan fill="#a9cf9e">'C-77', 'enterprise'</tspan><tspan fill="#c9d6cc">]] </tspan><tspan fill="#5fc492">:put </tspan><tspan fill="#7fa6bf">coverage </tspan><tspan fill="#c9d6cc">{customer </tspan><tspan fill="#5fc492">=&gt;</tspan><tspan fill="#c9d6cc"> tier} </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2024-05-01T00:00:00Z'</tspan></text>
 
-  <text x="22" y="124" font-size="13" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[amount] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">price</tspan><tspan fill="#c9d6cc">{item, amount </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2023-06-01T00:00:00Z'</tspan><tspan fill="#c9d6cc">}</tspan><tspan fill="#5f7266">   // mid-2023?</tspan></text>
-  <text x="22" y="144" font-size="13" fill="#7c8f83" xml:space="preserve"> amount</text>
-  <text x="22" y="160" font-size="13" fill="#35443b" xml:space="preserve">────────</text>
-  <text x="22" y="180" font-size="13" fill="#c9d6cc" xml:space="preserve"> 100</text>
+  <text x="22" y="122" font-size="12" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[tier] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">coverage</tspan><tspan fill="#c9d6cc">{customer, tier </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2024-03-15T00:00:00Z'</tspan><tspan fill="#c9d6cc">}</tspan><tspan fill="#5f7266">   // on the incident date?</tspan></text>
+  <text x="22" y="142" font-size="12" fill="#7c8f83" xml:space="preserve"> tier</text>
+  <text x="22" y="158" font-size="12" fill="#35443b" xml:space="preserve">────────────</text>
+  <text x="22" y="178" font-size="12" fill="#c9d6cc" xml:space="preserve"> trial</text>
 
-  <text x="22" y="222" font-size="13" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[amount] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">price</tspan><tspan fill="#c9d6cc">{item, amount </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2024-06-01T00:00:00Z'</tspan><tspan fill="#c9d6cc">}</tspan><tspan fill="#5f7266">   // and mid-2024?</tspan></text>
-  <text x="22" y="242" font-size="13" fill="#7c8f83" xml:space="preserve"> amount</text>
-  <text x="22" y="258" font-size="13" fill="#35443b" xml:space="preserve">────────</text>
-  <text x="22" y="278" font-size="13" fill="#c9d6cc" xml:space="preserve"> 150</text>
+  <text x="22" y="220" font-size="12" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[tier] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">coverage</tspan><tspan fill="#c9d6cc">{customer, tier </tspan><tspan fill="#5fc492">@ </tspan><tspan fill="#a9cf9e">'2024-06-01T00:00:00Z'</tspan><tspan fill="#c9d6cc">}</tspan><tspan fill="#5f7266">   // and today?</tspan></text>
+  <text x="22" y="240" font-size="12" fill="#7c8f83" xml:space="preserve"> tier</text>
+  <text x="22" y="256" font-size="12" fill="#35443b" xml:space="preserve">────────────</text>
+  <text x="22" y="276" font-size="12" fill="#c9d6cc" xml:space="preserve"> enterprise</text>
 
-  <text x="22" y="308" font-size="11.5" fill="#6d8074" xml:space="preserve">same query, one parameter changed. no change-log replay, just a seek.</text>
+  <text x="22" y="308" font-size="11.5" fill="#6d8074" xml:space="preserve">same query, one instant changed. no change-log replay, just a seek: acting on Tuesday's truth, not today's.</text>
 </svg>

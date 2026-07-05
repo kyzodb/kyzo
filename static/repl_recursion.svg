@@ -1,21 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 262" width="860" height="262" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: a three-line recursive rule computing every airport reachable from Frankfurt, returning JFK, LHR, YPO.">
-  <rect x="1" y="1" width="858" height="260" rx="3" fill="#0f1713" stroke="#26362d"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 314" width="860" height="314" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: a three-line recursive rule computes every resource a compromised service account can reach, returning db-customers, kms-signing, role-deploy, role-prod-ro, and s3-artifacts.">
+  <rect x="1" y="1" width="858" height="312" rx="3" fill="#0f1713" stroke="#26362d"/>
   <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
   <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
   <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
   <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
   <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
-  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · transitive reachability, recursion in three lines</text>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · every resource a compromised account can reach, transitively</text>
 
-  <text x="22" y="66" font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">reachable[to] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">route</tspan><tspan fill="#c9d6cc">{fr: </tspan><tspan fill="#a9cf9e">'FRA'</tspan><tspan fill="#c9d6cc">, to}</tspan></text>
-  <text x="22" y="88" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      reachable[to] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#c9d6cc">reachable[stop], </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">route</tspan><tspan fill="#c9d6cc">{fr: stop, to}</tspan></text>
-  <text x="22" y="110" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      ?[to] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#c9d6cc">reachable[to]</tspan></text>
+  <text x="22" y="66" font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">reach[r] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">can_access</tspan><tspan fill="#c9d6cc">{src: </tspan><tspan fill="#a9cf9e">'svc-ci-deploy'</tspan><tspan fill="#c9d6cc">, dst: r}</tspan></text>
+  <text x="22" y="88" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      reach[r] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#c9d6cc">reach[m], </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">can_access</tspan><tspan fill="#c9d6cc">{src: m, dst: r}</tspan></text>
+  <text x="22" y="110" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      ?[resource] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#c9d6cc">reach[resource]</tspan></text>
 
-  <text x="22" y="150" font-size="13.5" fill="#7c8f83" xml:space="preserve"> to</text>
-  <text x="22" y="168" font-size="13.5" fill="#35443b" xml:space="preserve">──────</text>
-  <text x="22" y="190" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> JFK</text>
-  <text x="22" y="212" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> LHR</text>
-  <text x="22" y="234" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> YPO</text>
+  <text x="22" y="150" font-size="13.5" fill="#7c8f83" xml:space="preserve"> resource</text>
+  <text x="22" y="168" font-size="13.5" fill="#35443b" xml:space="preserve">──────────────</text>
+  <text x="22" y="190" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> db-customers</text>
+  <text x="22" y="212" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> kms-signing</text>
+  <text x="22" y="234" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> role-deploy</text>
+  <text x="22" y="256" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> role-prod-ro</text>
+  <text x="22" y="278" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> s3-artifacts</text>
 
-  <text x="22" y="252" font-size="11.5" xml:space="preserve"><tspan fill="#5f7266">(3 rows)</tspan><tspan fill="#6d8074">   every airport reachable from Frankfurt, at any number of hops</tspan></text>
+  <text x="22" y="302" font-size="11.5" xml:space="preserve"><tspan fill="#5f7266">(5 rows)</tspan><tspan fill="#6d8074">   the full blast radius of one identity, at any number of hops</tspan></text>
 </svg>
