@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 280" width="760" height="280" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Every generated program is answered by both the optimized engine and the naive oracle; the answers must be byte-identical or the defect is pinned as a regression forever.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7FA08C"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2F7E52"/>
+    </marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7A2E2E"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="758" height="278" rx="16" fill="#FBFAF6" stroke="#E4E7E2"/>
+
+  <!-- generated programs -->
+  <rect x="24" y="104" width="150" height="72" rx="12" fill="#2F7E52"/>
+  <text x="99" y="134" text-anchor="middle" font-size="12.5" font-weight="600" fill="#FFFFFF">generated</text>
+  <text x="99" y="152" text-anchor="middle" font-size="12.5" font-weight="600" fill="#FFFFFF">programs</text>
+
+  <!-- split arrows -->
+  <path d="M174,128 C200,128 202,66 226,66" fill="none" stroke="#7FA08C" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M174,152 C200,152 202,214 226,214" fill="none" stroke="#7FA08C" stroke-width="1.6" marker-end="url(#a)"/>
+
+  <!-- optimized engine -->
+  <rect x="230" y="38" width="196" height="58" rx="12" fill="#E8F0EB" stroke="#7FA08C"/>
+  <text x="328" y="62" text-anchor="middle" font-size="12.5" font-weight="600" fill="#17271F">optimized engine</text>
+  <text x="328" y="80" text-anchor="middle" font-size="10.5" fill="#5A6B62">semi-naive · magic sets</text>
+
+  <!-- reference oracle -->
+  <rect x="230" y="186" width="196" height="58" rx="12" fill="#F3EFE2" stroke="#B08B2E"/>
+  <text x="328" y="208" text-anchor="middle" font-size="12.5" font-weight="600" fill="#5A4A1E">reference oracle</text>
+  <text x="328" y="226" text-anchor="middle" font-size="10.5" fill="#7A6633">naive · obviously correct</text>
+
+  <!-- to gate -->
+  <path d="M426,67 C470,67 486,120 505,132" fill="none" stroke="#7FA08C" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M426,215 C470,215 486,160 505,148" fill="none" stroke="#7FA08C" stroke-width="1.6" marker-end="url(#a)"/>
+
+  <!-- gate diamond -->
+  <polygon points="565,90 630,140 565,190 500,140" fill="#F3EFE2" stroke="#B08B2E" stroke-width="1.5"/>
+  <text x="565" y="136" text-anchor="middle" font-size="11" font-weight="600" fill="#5A4A1E">byte-identical</text>
+  <text x="565" y="152" text-anchor="middle" font-size="11" font-weight="600" fill="#5A4A1E">answers?</text>
+
+  <!-- yes -->
+  <path d="M600,116 C650,90 660,78 690,78" fill="none" stroke="#2F7E52" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="648" y="80" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2F7E52">yes</text>
+  <rect x="690" y="52" width="58" height="52" rx="12" fill="#1E4D33"/>
+  <text x="719" y="76" text-anchor="middle" font-size="11" font-weight="600" fill="#FFFFFF">law</text>
+  <text x="719" y="90" text-anchor="middle" font-size="11" font-weight="600" fill="#FFFFFF">holds</text>
+
+  <!-- no -->
+  <path d="M600,164 C650,190 660,202 690,202" fill="none" stroke="#7A2E2E" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="648" y="204" text-anchor="middle" font-size="10.5" font-weight="700" fill="#7A2E2E">no</text>
+  <rect x="642" y="176" width="106" height="52" rx="12" fill="#7A2E2E"/>
+  <text x="695" y="199" text-anchor="middle" font-size="10.5" font-weight="600" fill="#FFFFFF">defect found —</text>
+  <text x="695" y="215" text-anchor="middle" font-size="10.5" font-weight="600" fill="#FFFFFF">pinned forever</text>
+
+  <text x="380" y="266" text-anchor="middle" font-size="10.5" fill="#8A968E">the optimized engine must equal the naive fixpoint of the logic program — on every generated workload</text>
+</svg>

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 388" width="860" height="388" role="img" aria-label="KyzoDB benchmark panel: five public yardsticks (ANN-Benchmarks, BEIR, LDBC SNB, OpenRuleBench, YCSB), each reading TBD until measured.">
+  <defs>
+    <style>
+      .sans { font-family: ui-sans-serif, 'IBM Plex Sans', system-ui, sans-serif; }
+      .mono { font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <!-- instrument panel: dark ground, hairline edge, near-square, hard offset shadow -->
+  <rect x="6" y="6" width="846" height="376" rx="3" fill="#0e140f"/>
+  <rect x="2" y="2" width="846" height="376" rx="3" fill="#0c1310" stroke="#263229"/>
+  <!-- fern joint: the single structural accent -->
+  <rect x="2" y="2" width="3" height="376" fill="#2F7E52"/>
+
+  <text x="28" y="42" class="sans" font-size="21" font-weight="600" fill="#eef3ef">Benchmarks</text>
+  <text x="28" y="64" class="sans" font-size="13" fill="#7c8f83">One engine, five public yardsticks — measured, never asserted.</text>
+
+  <!-- column headers -->
+  <text x="28"  y="102" class="mono" font-size="10.5" letter-spacing="0.8" fill="#5d6f64">ACCESS PATTERN</text>
+  <text x="300" y="102" class="mono" font-size="10.5" letter-spacing="0.8" fill="#5d6f64">PUBLIC YARDSTICK</text>
+  <text x="520" y="102" class="mono" font-size="10.5" letter-spacing="0.8" fill="#5d6f64">METRIC</text>
+  <text x="828" y="102" class="mono" font-size="10.5" letter-spacing="0.8" fill="#5d6f64" text-anchor="end">KYZODB</text>
+  <line x1="28" y1="112" x2="832" y2="112" stroke="#263229"/>
+
+  <!-- rows -->
+  <g>
+    <!-- row 1 -->
+    <text x="28"  y="146" class="sans" font-size="13.5" fill="#a9baaf">Approximate vector search</text>
+    <text x="300" y="146" class="mono" font-size="12" fill="#a9cf9e">ANN-Benchmarks</text>
+    <text x="520" y="146" class="mono" font-size="12" fill="#7c8f83">Recall@10 · QPS</text>
+    <rect x="742" y="132" width="90" height="21" rx="2" fill="none" stroke="#35443b"/>
+    <text x="787" y="147" class="mono" font-size="11" fill="#5b7590" text-anchor="middle">TBD</text>
+    <line x1="28" y1="166" x2="832" y2="166" stroke="#1b2620"/>
+
+    <!-- row 2 -->
+    <text x="28"  y="200" class="sans" font-size="13.5" fill="#a9baaf">Full-text &amp; hybrid retrieval</text>
+    <text x="300" y="200" class="mono" font-size="12" fill="#a9cf9e">BEIR</text>
+    <text x="520" y="200" class="mono" font-size="12" fill="#7c8f83">nDCG@10</text>
+    <rect x="742" y="186" width="90" height="21" rx="2" fill="none" stroke="#35443b"/>
+    <text x="787" y="201" class="mono" font-size="11" fill="#5b7590" text-anchor="middle">TBD</text>
+    <line x1="28" y1="220" x2="832" y2="220" stroke="#1b2620"/>
+
+    <!-- row 3 -->
+    <text x="28"  y="254" class="sans" font-size="13.5" fill="#a9baaf">Graph queries</text>
+    <text x="300" y="254" class="mono" font-size="12" fill="#a9cf9e">LDBC Social Network</text>
+    <text x="520" y="254" class="mono" font-size="12" fill="#7c8f83">queries/sec</text>
+    <rect x="742" y="240" width="90" height="21" rx="2" fill="none" stroke="#35443b"/>
+    <text x="787" y="255" class="mono" font-size="11" fill="#5b7590" text-anchor="middle">TBD</text>
+    <line x1="28" y1="274" x2="832" y2="274" stroke="#1b2620"/>
+
+    <!-- row 4 -->
+    <text x="28"  y="308" class="sans" font-size="13.5" fill="#a9baaf">Recursive Datalog</text>
+    <text x="300" y="308" class="mono" font-size="12" fill="#a9cf9e">OpenRuleBench</text>
+    <text x="520" y="308" class="mono" font-size="12" fill="#7c8f83">wall-clock</text>
+    <rect x="742" y="294" width="90" height="21" rx="2" fill="none" stroke="#35443b"/>
+    <text x="787" y="309" class="mono" font-size="11" fill="#5b7590" text-anchor="middle">TBD</text>
+    <line x1="28" y1="328" x2="832" y2="328" stroke="#1b2620"/>
+
+    <!-- row 5 -->
+    <text x="28"  y="362" class="sans" font-size="13.5" fill="#a9baaf">Transactional throughput</text>
+    <text x="300" y="362" class="mono" font-size="12" fill="#a9cf9e">YCSB</text>
+    <text x="520" y="362" class="mono" font-size="12" fill="#7c8f83">ops/sec · p99</text>
+    <rect x="742" y="348" width="90" height="21" rx="2" fill="none" stroke="#35443b"/>
+    <text x="787" y="363" class="mono" font-size="11" fill="#5b7590" text-anchor="middle">TBD</text>
+  </g>
+</svg>

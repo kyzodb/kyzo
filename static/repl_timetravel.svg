@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 322" width="860" height="322" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: two dated writes to a price, then two as-of reads that return 100 for mid-2023 and 150 for mid-2024 — time as a query parameter.">
+  <rect x="1" y="1" width="858" height="320" rx="12" fill="#0E1512" stroke="#26302A"/>
+  <path d="M1,13 A12,12 0 0 1 13,1 L847,1 A12,12 0 0 1 859,13 L859,34 L1,34 Z" fill="#161D18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#E06C75"/>
+  <circle cx="41" cy="18" r="5.5" fill="#E5C07B"/>
+  <circle cx="60" cy="18" r="5.5" fill="#98C379"/>
+  <text x="430" y="22" text-anchor="middle" font-size="11.5" fill="#5C6B62">kyzo · the record keeps every version — ask what was true, when</text>
+
+  <!-- writes -->
+  <text x="22" y="64" font-size="13" xml:space="preserve"><tspan fill="#98C379">kyzo&gt; </tspan><tspan fill="#9AA5AD">?[item, amount] </tspan><tspan fill="#56B6C2">&lt;- </tspan><tspan fill="#9AA5AD">[[</tspan><tspan fill="#D19A66">'widget', 100</tspan><tspan fill="#9AA5AD">]] </tspan><tspan fill="#C678DD">:put </tspan><tspan fill="#61AFEF">price </tspan><tspan fill="#9AA5AD">{item, amount} </tspan><tspan fill="#C678DD">@ </tspan><tspan fill="#D19A66">'2023-01-01'</tspan></text>
+  <text x="22" y="84" font-size="13" xml:space="preserve"><tspan fill="#98C379">kyzo&gt; </tspan><tspan fill="#9AA5AD">?[item, amount] </tspan><tspan fill="#56B6C2">&lt;- </tspan><tspan fill="#9AA5AD">[[</tspan><tspan fill="#D19A66">'widget', 150</tspan><tspan fill="#9AA5AD">]] </tspan><tspan fill="#C678DD">:put </tspan><tspan fill="#61AFEF">price </tspan><tspan fill="#9AA5AD">{item, amount} </tspan><tspan fill="#C678DD">@ </tspan><tspan fill="#D19A66">'2024-01-01'</tspan></text>
+
+  <!-- read 1 -->
+  <text x="22" y="124" font-size="13" xml:space="preserve"><tspan fill="#98C379">kyzo&gt; </tspan><tspan fill="#9AA5AD">?[amount] </tspan><tspan fill="#56B6C2">:= </tspan><tspan fill="#C678DD">*</tspan><tspan fill="#61AFEF">price</tspan><tspan fill="#9AA5AD">{item, amount </tspan><tspan fill="#C678DD">@ </tspan><tspan fill="#D19A66">'2023-06-01T00:00:00Z'</tspan><tspan fill="#9AA5AD">}</tspan><tspan fill="#4E5D54">   -- mid-2023?</tspan></text>
+  <text x="22" y="144" font-size="13" fill="#7FA08C" xml:space="preserve"> amount</text>
+  <text x="22" y="160" font-size="13" fill="#37463E" xml:space="preserve">────────</text>
+  <text x="22" y="180" font-size="13" fill="#E5C07B" xml:space="preserve"> 100</text>
+
+  <!-- read 2 -->
+  <text x="22" y="222" font-size="13" xml:space="preserve"><tspan fill="#98C379">kyzo&gt; </tspan><tspan fill="#9AA5AD">?[amount] </tspan><tspan fill="#56B6C2">:= </tspan><tspan fill="#C678DD">*</tspan><tspan fill="#61AFEF">price</tspan><tspan fill="#9AA5AD">{item, amount </tspan><tspan fill="#C678DD">@ </tspan><tspan fill="#D19A66">'2024-06-01T00:00:00Z'</tspan><tspan fill="#9AA5AD">}</tspan><tspan fill="#4E5D54">   -- and mid-2024?</tspan></text>
+  <text x="22" y="242" font-size="13" fill="#7FA08C" xml:space="preserve"> amount</text>
+  <text x="22" y="258" font-size="13" fill="#37463E" xml:space="preserve">────────</text>
+  <text x="22" y="278" font-size="13" fill="#E5C07B" xml:space="preserve"> 150</text>
+
+  <text x="22" y="308" font-size="11.5" fill="#5C6B62" xml:space="preserve">same query, one parameter changed — no change-log replay, just a seek</text>
+</svg>
