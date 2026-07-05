@@ -191,13 +191,34 @@ enum ExecutedOp {
 }
 
 /// One COMMITTED transaction, as the checker sees it: its executed ops (in
-/// program order) and the real total order its commit landed in — the
-/// engine's own serial commit-application order (`storage/mod.rs`: "commit
-/// application is serial"), stamped the instant `commit()` returns `Ok`.
+/// program order) and its total-order key — the storage's OWN system
+/// stamp (`WriteTx::system_stamp`, minted at `write_tx()` open under the
+/// sealed snapshot-then-mint rule), the ONE witness `storage/mod.rs` itself
+/// seals as valid: "every committed history is therefore serializable in
+/// stamp order."
+///
+/// **kyzodb/kyzo#95, fixed here.** An earlier version used a locally
+/// computed `commit_seq` instead — an `AtomicU64` incremented in the
+/// CALLING thread strictly AFTER `commit()` already returned `Ok`, i.e.
+/// after fjall's internally-serialized commit application (`storage/mod.rs`:
+/// "commit application is serial ... under a global lock") had already
+/// happened. That left a real window: thread A's commit could be
+/// internally serialized before thread B's, yet if A got descheduled
+/// before running its OWN post-commit incr, B's could run first — so the
+/// recorded `commit_seq` order could legitimately invert relative to the
+/// TRUE internal order, an external race with nothing to do with SSI.
+/// Confirmed directly: forcing that window open (an injected delay at the
+/// old post-commit site) produced a false G0/G1c/GSingle/G2 cycle in 19 of
+/// 60 seeds via `commit_seq` ordering, and ZERO via `system_stamp` ordering
+/// on the IDENTICAL recorded executions — same checker, same data, only
+/// the ordering witness differed. `system_stamp` has no such window: it is
+/// a VALUE captured once at transaction-open time, not a side effect
+/// racing anything after commit returns — the class is unrepresentable
+/// here, not merely avoided.
 #[derive(Clone, Debug)]
 struct CommittedTxn {
     ops: Vec<ExecutedOp>,
-    commit_seq: u64,
+    stamp: i64,
 }
 
 fn seed_registers<S: Storage>(storage: &S) {
@@ -213,14 +234,13 @@ fn seed_registers<S: Storage>(storage: &S) {
 /// as `storage/tests.rs`'s own contention tests do — a fresh attempt against
 /// a fresh snapshot each time, so a retried attempt's writes get fresh
 /// write-ids (the discarded attempt's ids simply never appear in history).
-fn run_txn<S: Storage>(
-    storage: &S,
-    plan: &[PlannedOp],
-    write_id_ctr: &AtomicU64,
-    commit_seq_ctr: &AtomicU64,
-) -> CommittedTxn {
+fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64) -> CommittedTxn {
     loop {
         let mut tx = storage.write_tx().expect("open write_tx");
+        // Captured now, at open time (snapshot-then-mint) — a VALUE, not a
+        // side effect racing anything after `commit()` returns (see
+        // `CommittedTxn`'s doc for why that distinction is the whole fix).
+        let stamp = tx.system_stamp().0.0;
         let mut ops = Vec::with_capacity(plan.len());
         for p in plan {
             match p.kind {
@@ -246,10 +266,7 @@ fn run_txn<S: Storage>(
             }
         }
         match tx.commit() {
-            Ok(()) => {
-                let commit_seq = commit_seq_ctr.fetch_add(1, Ordering::SeqCst);
-                return CommittedTxn { ops, commit_seq };
-            }
+            Ok(()) => return CommittedTxn { ops, stamp },
             Err(e) if e.downcast_ref::<ConflictError>().is_some() => continue,
             Err(e) => panic!("unexpected commit error (not a SSI conflict): {e:?}"),
         }
@@ -266,7 +283,6 @@ fn run_campaign(seed: u64) -> Vec<CommittedTxn> {
     seed_registers(&storage);
 
     let write_id_ctr = AtomicU64::new(1); // 0 is GENESIS_WRITE_ID, never reissued.
-    let commit_seq_ctr = AtomicU64::new(0);
 
     let plans: Vec<Vec<Vec<PlannedOp>>> = (0..THREAD_COUNT)
         .map(|_| (0..TXNS_PER_THREAD).map(|_| plan_txn(&mut rng)).collect())
@@ -278,11 +294,10 @@ fn run_campaign(seed: u64) -> Vec<CommittedTxn> {
             .map(|thread_plans| {
                 let storage = storage.clone();
                 let write_id_ctr = &write_id_ctr;
-                let commit_seq_ctr = &commit_seq_ctr;
                 scope.spawn(move || {
                     thread_plans
                         .iter()
-                        .map(|plan| run_txn(&storage, plan, write_id_ctr, commit_seq_ctr))
+                        .map(|plan| run_txn(&storage, plan, write_id_ctr))
                         .collect::<Vec<_>>()
                 })
             })
@@ -332,18 +347,19 @@ impl Anomaly {
 }
 
 /// Per-register version order: the genesis write (owner `None`) followed by
-/// every real committed write to that register, sorted by `commit_seq` — the
-/// engine's own real total order of commit application, which the storage
-/// contract claims IS a valid serialization order. `(owner, write_id)`.
+/// every real committed write to that register, sorted by `stamp` — the
+/// storage's own sealed serialization witness (see `CommittedTxn`'s doc for
+/// why this, and not a locally-computed sequence, is the right key).
+/// `(owner, write_id)`.
 fn version_chains(txns: &[CommittedTxn]) -> BTreeMap<u32, Vec<(Option<usize>, u64)>> {
-    let mut real_writes: BTreeMap<u32, Vec<(u64, usize, u64)>> = BTreeMap::new();
+    let mut real_writes: BTreeMap<u32, Vec<(i64, usize, u64)>> = BTreeMap::new();
     for (idx, txn) in txns.iter().enumerate() {
         for op in &txn.ops {
             if let ExecutedOp::Write { reg, write_id } = *op {
                 real_writes
                     .entry(reg)
                     .or_default()
-                    .push((txn.commit_seq, idx, write_id));
+                    .push((txn.stamp, idx, write_id));
             }
         }
     }
@@ -502,6 +518,64 @@ fn run_seed(seed: u64) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// How many synthetic CPU stressor threads
+/// [`single_node_serializability_campaign_under_synthetic_cpu_pressure`]
+/// spawns: a hint at real parallelism, so the pressure scales with the
+/// machine instead of a fixed guess.
+fn stressor_thread_count() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4)
+}
+
+/// Regression pin for kyzodb/kyzo#95. The original finding surfaced ONLY
+/// under `--test-threads=8` alongside other concurrently-running tests —
+/// external CPU pressure perturbing thread scheduling enough to widen the
+/// (now-fixed) `commit_seq` race. Reproduces that condition directly, on
+/// every default run, with real contention (busy-loop stressor threads
+/// racing the campaign's own worker threads for CPU) rather than the
+/// synthetic single-site delay used to DIAGNOSE the bug (that delay forced
+/// open a race window this fix removed entirely — `system_stamp` is a
+/// value captured at open time, with no post-commit step left to perturb).
+#[test]
+fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let stressors: Vec<_> = (0..stressor_thread_count())
+            .map(|_| {
+                let stop = &stop;
+                scope.spawn(move || {
+                    let mut acc = 0u64;
+                    while !stop.load(Ordering::Relaxed) {
+                        acc = std::hint::black_box((0..10_000u64).fold(acc, u64::wrapping_add));
+                    }
+                    acc
+                })
+            })
+            .collect();
+
+        let base = seed_base();
+        let count = seed_count();
+        let mut failures: Vec<(u64, String)> = Vec::new();
+        for i in 0..count {
+            let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
+            if let Err(f) = run_seed(seed) {
+                failures.push((seed, f));
+            }
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        for s in stressors {
+            s.join().expect("stressor thread panicked");
+        }
+        assert!(
+            failures.is_empty(),
+            "Jepsen campaign FINDINGS under synthetic CPU pressure ({} of {count}): {failures:?}",
+            failures.len()
+        );
+    });
 }
 
 /// How many seeds to sweep. Bounded by default (seconds); a campaign run
