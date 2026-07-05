@@ -133,4 +133,31 @@ mod tests {
         let out = db.run_script_json("?[x] <- [[1]]", &json!([1, 2, 3]));
         assert_eq!(out["ok"], json!(false));
     }
+
+    /// Story #80's product-surface claim, proven at THIS seam rather than
+    /// asserted: `run_script_json` is the one entry point every binding
+    /// (kyzo-bin's `POST /text-query`, its REPL, WASM, the C ABI) already
+    /// calls for arbitrary script text — it does not special-case any
+    /// `SysOp`. So `::verify { ... }` needs no new kyzo-bin code at all to
+    /// reach HTTP or the CLI; it rides this seam like any other script the
+    /// moment `SysOp::Verify` exists in `kyzo-core`.
+    #[test]
+    fn run_script_json_carries_the_verify_directive_for_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(
+            "?[a, b] <- [[1, 2], [2, 3]] :create edge {a, b}",
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let out = db.run_script_json(
+            "::verify { path[x, y] := *edge[x, y]
+             path[x, z] := path[x, y], *edge[y, z]
+             ?[x, y] := path[x, y] }",
+            &json!({}),
+        );
+        assert_eq!(out["ok"], json!(true));
+        assert_eq!(out["headers"], json!(["status", "summary", "detail"]));
+        assert_eq!(out["rows"][0][0], json!("match"));
+    }
 }
