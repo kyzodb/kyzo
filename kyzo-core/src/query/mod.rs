@@ -58,7 +58,20 @@
 //!    *Enforcement:* query-level tests exercising each operator inside
 //!    joins, negation, and recursion, landing with the operators.
 
-#[cfg(test)]
+// The naive reference oracle. Test-only until story #80 ("ship the
+// judge"): `::verify` (`runtime/verify.rs`) is production code that calls
+// `naive_eval`/`naive_eval_at` directly — the issue's own telos is a
+// "shipped reference evaluator," so the oracle is no longer test-only by
+// construction. Its own `#[cfg(test)] mod tests` and every OTHER harness
+// that drives it (`trials.rs`, `provenance.rs`, `time_travel_trials.rs`,
+// `dst_query.rs`, `time_travel_script_laws.rs`, `gauntlet.rs`) stay
+// test-only regardless — only this declaration's own gate changes.
+// `::verify`'s translator covers one language fragment today (see
+// `runtime/verify.rs`'s module docs), so most of the oracle's timed-axis
+// and bitemporal-history surface (used by the test harnesses above but not
+// yet by `::verify`) is dead in a plain release build — same posture as
+// `parse`/`fixed_rule` in `lib.rs`.
+#[allow(dead_code)]
 pub(crate) mod laws;
 
 // Trial (issue #29): the SQLancer-class metamorphic logic-bug gauntlet —
@@ -111,11 +124,17 @@ pub(crate) mod eval;
 pub(crate) mod graph;
 // Story #61's production incremental-maintenance engine: an independently-
 // written twin of `laws::incremental_eval`, proven equal to it by
-// differential (this module's own test suite). No lifecycle caller yet
-// (that is the next unit — registration/init/teardown on the runtime
-// callback seam) — dead in lib builds until it lands, like `eval` above.
+// differential (this module's own test suite). Its lifecycle caller is
+// `standing` below.
 #[allow(dead_code)]
 pub(crate) mod incremental;
+// Story #61's standing-query lifecycle (registration, snapshot-consistent
+// init, patch application, teardown) on `runtime::callback`'s existing
+// per-relation commit-notification seam. No production caller yet (that
+// is the next unit — a real `Db` entry point) — dead in lib builds until
+// it lands, like `eval` above.
+#[allow(dead_code)]
+pub(crate) mod standing;
 // The provenance trials: semiring axiom, oracle-differential, certificate,
 // and thread-determinism tests over the eval seams. Test-only, like `laws`.
 #[cfg(test)]

@@ -182,6 +182,13 @@ fn literal_rows(state: &MaintainedState, lit: &Literal) -> BTreeSet<Tuple> {
 /// empty delta) — the SAME bug this now guards against a second way
 /// (this module's own differential caught a relation the rule set never
 /// mentions being silently dropped entirely, not just misclassified).
+/// [`edb_relations`], for a caller with no patch yet (registration: the
+/// static EDB set a compiled program's rules name, before any commit has
+/// arrived to patch).
+pub(crate) fn edb_relations_pub(program: &IncrementalProgram) -> BTreeSet<Symbol> {
+    edb_relations(program, &BTreeSet::new())
+}
+
 fn edb_relations(program: &IncrementalProgram, patched: &BTreeSet<Symbol>) -> BTreeSet<Symbol> {
     let idb: BTreeSet<Symbol> = program.rules.iter().map(|r| r.head_rel.clone()).collect();
     let mentioned: BTreeSet<Symbol> = program
