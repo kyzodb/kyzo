@@ -109,6 +109,13 @@ pub(crate) mod ra;
 #[allow(dead_code)]
 pub(crate) mod eval;
 pub(crate) mod graph;
+// Story #61's production incremental-maintenance engine: an independently-
+// written twin of `laws::incremental_eval`, proven equal to it by
+// differential (this module's own test suite). No lifecycle caller yet
+// (that is the next unit — registration/init/teardown on the runtime
+// callback seam) — dead in lib builds until it lands, like `eval` above.
+#[allow(dead_code)]
+pub(crate) mod incremental;
 // The provenance trials: semiring axiom, oracle-differential, certificate,
 // and thread-determinism tests over the eval seams. Test-only, like `laws`.
 #[cfg(test)]
