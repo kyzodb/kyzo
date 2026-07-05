@@ -4,7 +4,7 @@
 
 <h1 align="center">KyzoDB</h1>
 
-<p align="center"><em>One deterministic substrate for facts, graphs, vectors, text, and all of time —<br>where every answer can be replayed, explained, or refused, exactly.</em></p>
+<p align="center"><em>One deterministic substrate for facts, graphs, vectors, text, and all of time,<br>where every answer can be replayed, explained, or refused, exactly.</em></p>
 
 <p align="center">
   <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-MPL--2.0-2F7E52" alt="License: MPL-2.0"></a>
@@ -14,12 +14,12 @@
 </p>
 
 > [!NOTE]
-> **0.9.0 — the first public release.** Feature-complete and correctness-proven; pre-1.0 by design —
+> **0.9.0: the first public release.** Feature-complete and correctness-proven; pre-1.0 by design:
 > the public API is not frozen and performance is not yet verified at scale (see
 > [VERSIONING.md](VERSIONING.md)). The [board](https://github.com/kyzodb/kyzo/issues) is the live status.
 
 When software remembers something and acts on it, the next question is always the same: **can you
-prove why?** Not "did the vector search return something relevant" — *which* facts, which
+prove why?** Not "did the vector search return something relevant": *which* facts, which
 relationships, which evidence, as things stood at which instant, and would the same question get the
 same answer tomorrow. Systems assembled from a vector database, a graph store, a search engine, a
 relational store, and an audit log cannot answer that question, because the answer lives in the seams
@@ -27,7 +27,7 @@ between them.
 
 KyzoDB is the substrate that can. It holds knowledge as facts, relationships, vectors, text,
 provenance, and history in **one deterministic database**, so a single query composes across all of
-them at one transactional instant — and every answer either replays byte-for-byte, names the premises
+them at one transactional instant, and every answer either replays byte-for-byte, names the premises
 that entailed it, or refuses with a typed reason. It runs embedded like SQLite, or in a browser tab,
 with no C or C++ anywhere in its build.
 
@@ -39,12 +39,12 @@ with no C or C++ anywhere in its build.
 
 ## Benchmarks
 
-KyzoDB will be measured on the same public yardsticks its neighbours publish — one per access pattern
+KyzoDB will be measured on the same public yardsticks its neighbours publish, one per access pattern
 it collapses into a single engine. Numbers land here as they are measured, with methodology, hardware,
 seeds, and the losing runs alongside the winning ones. Nothing enters this table that has not been
 reproduced.
 
-<p align="center"><img src="static/benchmarks.svg" width="860" alt="KyzoDB benchmark panel: five public yardsticks — ANN-Benchmarks, BEIR, LDBC SNB, OpenRuleBench, YCSB — each reading TBD until measured."></p>
+<p align="center"><img src="static/benchmarks.svg" width="860" alt="KyzoDB benchmark panel: five public yardsticks (ANN-Benchmarks, BEIR, LDBC SNB, OpenRuleBench, YCSB), each reading TBD until measured."></p>
 
 The point of one engine is that these are not five products' scores stapled together: they are one
 store, one transaction model, and one memcomparable keyspace, measured five ways.
@@ -52,7 +52,7 @@ store, one transaction model, and one memcomparable keyspace, measured five ways
 ## One query, all of memory
 
 Here is the shape nothing stitched together can match. A vector neighborhood, a recursive graph
-reach, and a provenance join — evaluated at one transactional cut *in the past*, under a budget that
+reach, and a provenance join, evaluated at one transactional cut *in the past*, under a budget that
 can refuse:
 
 ```prolog
@@ -68,7 +68,7 @@ reach[e] := reach[m], *edge{from: m, to: e}
     *provenance{claim, evidence @ '2026-03-03T00:00:00Z'}
 ```
 
-One language, one snapshot, one answer — and if the traversal overspends its budget, one typed
+One language, one snapshot, one answer, and if the traversal overspends its budget, one typed
 refusal naming exactly what it hit. That single block *is* the thesis: retrieval that is composable
 and auditable, not a fan-out pipeline whose five copies of the truth drift apart. Everything below is
 the set of decisions that make that query honest, because you cannot evaluate an engine from its
@@ -208,9 +208,9 @@ first time a query that would have been an eleven-line recursive CTE is three li
 bottom.
 
 Here `*route` is a small relation of airport-to-airport routes and `FRA` is Frankfurt. Every airport
-reachable from Frankfurt, by any number of stops, is three lines — the second rule feeds on itself:
+reachable from Frankfurt, by any number of stops, is three lines, and the second rule feeds on itself:
 
-<p align="center"><img src="static/repl_recursion.svg" width="820" alt="A KyzoDB REPL session: a three-line recursive rule returns every airport reachable from Frankfurt — JFK, LHR, YPO."></p>
+<p align="center"><img src="static/repl_recursion.svg" width="820" alt="A KyzoDB REPL session: a three-line recursive rule returns every airport reachable from Frankfurt: JFK, LHR, YPO."></p>
 
 For the recursions that graph analysis reaches for constantly, the engine ships whole-graph algorithms
 (PageRank, community detection, shortest paths, centralities, max-flow, k-core, maximal cliques, and
@@ -223,19 +223,19 @@ similarity hit can seed a graph traversal in the query that found it.
 
 ## Time is a coordinate, not a feature
 
-Every relation is bitemporal — not as an option, but as the format. Writes never destroy: an
+Every relation is bitemporal, not as an option but as the format. Writes never destroy: an
 update supersedes, a deletion retracts, and a correction revises the record without erasing what it
 used to say. Two time axes ride in every stored fact: *valid time* (when the fact holds in the
 world, assertable per row, including retroactively) and *system time* (when the record came to say
 so, engine-stamped, with no API that can forge it). Any query can then be evaluated *as of* either or
-both — `@ instant` asks what currently-believed facts held at an instant; `@ system, instant` asks
+both: `@ instant` asks what currently-believed facts held at an instant; `@ system, instant` asks
 what the record itself said at a past moment about that instant. *"What did we know on Tuesday?"* is a
 parameter of the read, not an archaeology project over change-data-capture logs.
 
 <p align="center"><img src="static/repl_timetravel.svg" width="820" alt="A KyzoDB REPL session: two dated writes to a price, then two as-of reads returning 100 for mid-2023 and 150 for mid-2024."></p>
 
 Under the hood, both timestamps live in the storage key itself, so an as-of read is an ordinary
-seek-based ordered scan, not a reconstruction — and it composes: joins, recursion, negation, and
+seek-based ordered scan, not a reconstruction, and it composes: joins, recursion, negation, and
 aggregation all evaluate at a coordinate, and plain indexes carry the same coordinates as their base
 rows, so an as-of read through an index answers exactly like the base.
 
@@ -244,7 +244,7 @@ wounds the SQL:2011 lineage documented for a generation: a write covering part o
 splits one row into three, coalescing is optional so two identical histories differ byte-wise, and a
 `PERIOD` is not a value so temporal meaning dies at the first projection. KyzoDB stores only point
 events; an interval is *derived at read time* as the maximal constant runs of the resolution
-function. Coalescing is therefore not an operation that can be forgotten — it is the definition, and
+function. Coalescing is therefore not an operation that can be forgotten: it is the definition, and
 un-coalesced output cannot exist. Intervals surface as first-class values that survive projection
 through rules, with Allen's relations as ordinary predicates, and a diff between two instants obeys an
 algebraic law (`diff(a,c) = diff(a,b) ⊕ diff(b,c)`) that runs in the test suite.
@@ -256,23 +256,23 @@ knowledge over time, that distinction is the difference between a memory and a c
 ## The engine keeps its word
 
 These are the properties that separate a component you build on from a component you babysit. Each is
-a capability you get; the line under it is the mechanism that makes it true — because a guarantee no
+a capability you get; the line under it is the mechanism that makes it true, because a guarantee no
 one enforces is a wish.
 
-- **Determinism — a query is a test.** The same facts, the same query, and the same budget produce
+- **Determinism: a query is a test.** The same facts, the same query, and the same budget produce
   identical answers *and* identical refusals, on every run, at any thread count, on any machine.
   *Enforced by* seeded campaigns that evaluate generated programs (deep recursion, negation,
   aggregation lattices) at 1, 2, 4, and 8 threads and demand byte-identical answers, witness tables,
-  and refusals — the build goes red otherwise. This is what lets a fixture assert an exact answer in
+  and refusals; the build goes red otherwise. This is what lets a fixture assert an exact answer in
   CI forever, and lets a production incident replay exactly.
-- **Refusals that explain themselves.** Ask a question the data cannot safely answer — a wrong query,
-  an exceeded budget, an unsafe program shape — and you get a *typed* error naming the reason and
+- **Refusals that explain themselves.** Ask a question the data cannot safely answer (a wrong query,
+  an exceeded budget, an unsafe program shape) and you get a *typed* error naming the reason and
   pointing at the exact span of the script, never a panic and never a wrong row. *Enforced by* a
   refusal corpus run against the real stratifier and compiler, and by generative fuzzing that assumes
   a brilliant, adversarial, unbounded caller. An error message is an interface, and increasingly its
   reader is a program.
-- **Budgeted execution.** Evaluation runs under explicit ceilings — epochs, derived tuples, in-flight
-  materialization, deadlines — and exceeding one yields a typed, deterministic refusal that names the
+- **Budgeted execution.** Evaluation runs under explicit ceilings (epochs, derived tuples, in-flight
+  materialization, deadlines) and exceeding one yields a typed, deterministic refusal that names the
   budget it hit, rather than a runaway query or a silent kill. A runaway traversal cannot take down a
   shared runtime; a plan limit surfaces as an inspectable, replayable statement of what was exceeded.
 - **Answers that show their work.** Provenance is built into evaluation, not bolted on: a derived
@@ -290,8 +290,8 @@ ambiguous is what makes the intelligence above it affordable.
 ## Why you can believe all of that
 
 Every claim above is a testable law, and the centerpiece of the enforcement is differential: KyzoDB
-ships **its own adversary.** Inside it lives a second, deliberately naive evaluator — too slow to ever
-be worth optimizing, and therefore easy to audit — that speaks the *entire* language: recursion,
+ships **its own adversary.** Inside it lives a second, deliberately naive evaluator (too slow to ever
+be worth optimizing, and therefore easy to audit) that speaks the *entire* language: recursion,
 stratified negation, aggregation, and time. Every generated workload is answered twice, and the two
 answers must be byte-identical.
 
@@ -334,7 +334,7 @@ The rest of the machinery holds them to it:
   the time-travel key encoding; the resolution restored exact behavior rather than documenting the
   drift.
 - **Generative fuzzing** of the parser and query language, and a **defect ledger**: dozens of defects
-  inherited from the fork base — including silent-wrong-answer bugs in recursive evaluation — were
+  inherited from the fork base, including silent-wrong-answer bugs in recursive evaluation, were
   found by these instruments, fixed, and pinned as regression tests rather than carried forward.
 
 Performance numbers will be published the same way: with methodology, hardware, seeds, and the losing
@@ -355,7 +355,7 @@ a pure-Rust LSM store. Rows are encoded with a
 binary blobs whose lexicographic order *is* their semantic order. That single invariant is why one
 dumb ordered store can serve relational scans, graph traversals, vector and text index lookups, and
 time travel uniformly: every access path above is just a range scan below. Break the order embedding
-anywhere and joins silently return wrong rows — no error, no panic, just wrong — so the encoding is
+anywhere and joins silently return wrong rows (no error, no panic, just wrong), so the encoding is
 the most heavily attacked code we have, and any change to it is a versioned format migration that
 stores and dumps refuse to cross.
 
@@ -368,16 +368,16 @@ Java (jni), Node (neon), Swift (swift-bridge), WASM (wasm-bindgen).
 
 ## Pure Rust is operational, not aesthetic
 
-The whole engine and server build as **pure Rust, with no C or C++ anywhere in the toolchain** —
+The whole engine and server build as **pure Rust, with no C or C++ anywhere in the toolchain**:
 enforced in CI as a class ban on the dependency tree, not a lint: a dependency that brings in a C
 compiler fails the build. The payoff is concrete. One `cargo build` on any platform Rust supports.
 One compiler's memory model, one supply chain to audit, no vendored C++ submodule breaking on next
 year's compiler, and backups in a pure-Rust portable format. Fuzzers and sanitizers see every
 instruction; there is no FFI shadow where the interesting bugs hide. And the same engine, byte for
 byte, runs as a server, embedded, in a browser tab against OPFS, and on edge runtimes where
-deterministic replay of the event log *is* the persistence layer — which is why "runs identically on
+deterministic replay of the event log *is* the persistence layer, which is why "runs identically on
 a Raspberry Pi" is a test we automate, not a demo we rehearse. (When the time library's platform
-stack — an Apple C shim, Android's libc bindings, the windows-core family — turned up in the
+stack (an Apple C shim, Android's libc bindings, the windows-core family) turned up in the
 dependency lock, it was migrated out to pure-Rust replacements, every behavior delta pinned as a
 permanent regression fixture.)
 
@@ -403,7 +403,7 @@ Three properties already in the engine make that topology cheap:
 Query composition across graphs is direction, not shipped capability, and the line of ownership is
 drawn now: the *meaning* of a cross-graph query belongs to this engine, in the open. How graphs are
 addressed, how answers compose, what determinism and provenance guarantee when a derivation crosses a
-graph boundary — these are engine semantics, and they will be specified, law-tested, and documented
+graph boundary: these are engine semantics, and they will be specified, law-tested, and documented
 here the same way the seven engine laws are. An open protocol is what makes a federated graph
 trustworthy; a graph you can only interpret through one vendor's fabric is not federated, it is
 captured.
@@ -414,16 +414,16 @@ KyzoDB is not where you put petabyte-scale analytics; columnar warehouses own th
 distributed OLTP system; it scales like the excellent embedded engines do, not like a cluster. And if
 all you need is a key-value cache or a single denormalized table, this is more machine than the job
 requires. KyzoDB is for the case where one body of knowledge must answer as facts, as a graph, as
-similarity, as text, and as history — consistently, accountably, and in one place.
+similarity, as text, and as history, consistently, accountably, and in one place.
 
 ## Status
 
 KyzoDB's first public release is **0.9.0**. The engine is feature-complete for its scope and its core
 guarantees are proven: serializable transactions, crash- and power-cut recovery, an oracle-verified
 query semantics across relational, graph, vector, full-text, and bitemporal queries, a shipped
-`::verify` self-check, and live standing views — the full surface answers end-to-end on the real
+`::verify` self-check, and live standing views: the full surface answers end-to-end on the real
 server. It is still pre-1.0 and under active development, so expect churn: the public API is not
-frozen and performance is not yet verified at scale — which is exactly why this is 0.9.0 and not 1.0.
+frozen and performance is not yet verified at scale, which is exactly why this is 0.9.0 and not 1.0.
 See [VERSIONING.md](VERSIONING.md). The [board](https://github.com/kyzodb/kyzo/issues) is the live
 status.
 
@@ -446,6 +446,6 @@ attribution live in [FORK.md](FORK.md).
 KyzoDB is licensed under [**MPL-2.0**](LICENSE.txt). Every license header and copyright notice from the
 work it builds on is preserved, and incorporated contributor fixes keep their original authorship; see
 [FORK.md](FORK.md) for the project's origins. Issues and bug reports are welcome; the project is not
-accepting external code contributions right now — see [CONTRIBUTING.md](CONTRIBUTING.md).
+accepting external code contributions right now; see [CONTRIBUTING.md](CONTRIBUTING.md).
 </content>
 </invoke>

@@ -13,7 +13,7 @@ Why: KyzoDB is a massively-diverged fork. The storage backend is different (fjal
 RocksDB/SQLite), the on-disk format is different, the storage contract is rebuilt, and large parts of
 the query engine were re-derived from first principles against an independent oracle. Reusing
 upstream's numbers would claim a compatibility promise this project does not make. Lineage and credit
-belong in [FORK.md](FORK.md) and the source headers, verbatim — not in the version string.
+belong in [FORK.md](FORK.md) and the source headers, verbatim, not in the version string.
 
 ## SemVer 2.0, pre-1.0 semantics
 
@@ -30,11 +30,11 @@ Depend on an exact version (`=0.9.0`) if you need stability across an upgrade yo
 ## Why 0.9.0 and not 1.0.0
 
 0.9.0 is an honest number. The engine is feature-complete for its scope and its correctness is
-proven — serializable transactions, crash recovery, an oracle-verified query semantics, bitemporal
+proven: serializable transactions, crash recovery, an oracle-verified query semantics, bitemporal
 time travel, a shipped `::verify` self-check. But **1.0.0 is an earned commitment, not a feature
 count**, and two of its conditions are not yet met:
 
-- the **public API is not frozen** — it is young and still moving;
+- the **public API is not frozen**: it is young and still moving;
 - **performance is not yet verified at scale** on current code against the public benchmarks.
 
 1.0.0 ships only when the API is frozen (breaking changes then require `2.0.0`), performance is
@@ -45,11 +45,11 @@ readiness statement it stands behind. Until then we stay on `0.Y.Z`.
 
 These move on their own axes; do not infer one from another.
 
-- **Crate SemVer** (`0.9.0`) — the public Rust/language API surface.
-- **FormatVersion** (an integer, currently **4**) — the on-disk key/value format. Bumped *only* on a
+- **Crate SemVer** (`0.9.0`): the public Rust/language API surface.
+- **FormatVersion** (an integer, currently **4**): the on-disk key/value format. Bumped *only* on a
   format change, and only with round-trip and ordering tests before and after. A crate minor bump
   does not imply a format change.
-- **MSRV** — the minimum supported Rust version, declared in the workspace manifest.
+- **MSRV**: the minimum supported Rust version, declared in the workspace manifest.
 
 ## Releases come only from green main
 

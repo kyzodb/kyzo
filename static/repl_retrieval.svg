@@ -1,23 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 250" width="860" height="250" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: a nearest-neighbour vector search joined to the cites graph, and the two-row result table it returns.">
-  <!-- window -->
-  <rect x="1" y="1" width="858" height="248" rx="12" fill="#0E1512" stroke="#26302A"/>
-  <!-- title bar -->
-  <path d="M1,13 A12,12 0 0 1 13,1 L847,1 A12,12 0 0 1 859,13 L859,34 L1,34 Z" fill="#161D18"/>
-  <circle cx="22" cy="18" r="5.5" fill="#E06C75"/>
-  <circle cx="41" cy="18" r="5.5" fill="#E5C07B"/>
-  <circle cx="60" cy="18" r="5.5" fill="#98C379"/>
-  <text x="430" y="22" text-anchor="middle" font-size="11.5" fill="#5C6B62">kyzo · nearest-neighbour search, joined straight to the graph</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 250" width="860" height="250" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: a nearest-neighbour vector search joined to the cites graph, returning datalog and graph-db.">
+  <rect x="1" y="1" width="858" height="248" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · nearest-neighbour search, joined straight to the graph</text>
 
-  <!-- query -->
-  <text x="22" y="66" font-size="13.5" xml:space="preserve"><tspan fill="#98C379">kyzo&gt; </tspan><tspan fill="#C8CED4">?[hit, title, cited] </tspan><tspan fill="#56B6C2">:= </tspan><tspan fill="#C678DD">~</tspan><tspan fill="#61AFEF">doc:emb</tspan><tspan fill="#9AA5AD">{id: hit, title </tspan><tspan fill="#C678DD">| </tspan><tspan fill="#9AA5AD">query: q, k: </tspan><tspan fill="#D19A66">2</tspan><tspan fill="#9AA5AD">, ef: </tspan><tspan fill="#D19A66">20</tspan><tspan fill="#9AA5AD">},</tspan></text>
-  <text x="22" y="88" font-size="13.5" xml:space="preserve"><tspan fill="#9AA5AD">      </tspan><tspan fill="#C678DD">*</tspan><tspan fill="#61AFEF">cites</tspan><tspan fill="#9AA5AD">{from: hit, to: cited},</tspan></text>
-  <text x="22" y="110" font-size="13.5" xml:space="preserve"><tspan fill="#9AA5AD">      q = </tspan><tspan fill="#61AFEF">vec</tspan><tspan fill="#9AA5AD">([</tspan><tspan fill="#D19A66">0.12, 0.88</tspan><tspan fill="#9AA5AD">])</tspan></text>
+  <text x="22" y="66" font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[hit, title, cited] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">~</tspan><tspan fill="#7fa6bf">doc:emb</tspan><tspan fill="#c9d6cc">{id: hit, title </tspan><tspan fill="#5fc492">| </tspan><tspan fill="#c9d6cc">query: q, k: </tspan><tspan fill="#8fb5d6">2</tspan><tspan fill="#c9d6cc">, ef: </tspan><tspan fill="#8fb5d6">20</tspan><tspan fill="#c9d6cc">},</tspan></text>
+  <text x="22" y="88" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">cites</tspan><tspan fill="#c9d6cc">{from: hit, to: cited},</tspan></text>
+  <text x="22" y="110" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      q = </tspan><tspan fill="#d6ca8a">vec</tspan><tspan fill="#c9d6cc">([</tspan><tspan fill="#8fb5d6">0.12, 0.88</tspan><tspan fill="#c9d6cc">])</tspan></text>
 
-  <!-- result table (psql-style, monospace-aligned) -->
-  <text x="22" y="150" font-size="13.5" fill="#7FA08C" xml:space="preserve"> hit       │ title                  │ cited</text>
-  <text x="22" y="168" font-size="13.5" fill="#37463E" xml:space="preserve">───────────┼────────────────────────┼──────────</text>
-  <text x="22" y="190" font-size="13.5" xml:space="preserve"><tspan fill="#E5C07B"> datalog   </tspan><tspan fill="#37463E">│</tspan><tspan fill="#C8CED4"> Datalog and recursion  </tspan><tspan fill="#37463E">│</tspan><tspan fill="#C8CED4"> graph-db</tspan></text>
-  <text x="22" y="212" font-size="13.5" xml:space="preserve"><tspan fill="#E5C07B"> graph-db  </tspan><tspan fill="#37463E">│</tspan><tspan fill="#C8CED4"> Graph databases        </tspan><tspan fill="#37463E">│</tspan><tspan fill="#C8CED4"> mvcc</tspan></text>
+  <text x="22" y="150" font-size="13.5" fill="#7c8f83" xml:space="preserve"> hit       │ title                  │ cited</text>
+  <text x="22" y="168" font-size="13.5" fill="#35443b" xml:space="preserve">───────────┼────────────────────────┼──────────</text>
+  <text x="22" y="190" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc"> datalog   </tspan><tspan fill="#35443b">│</tspan><tspan fill="#c9d6cc"> Datalog and recursion  </tspan><tspan fill="#35443b">│</tspan><tspan fill="#c9d6cc"> graph-db</tspan></text>
+  <text x="22" y="212" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc"> graph-db  </tspan><tspan fill="#35443b">│</tspan><tspan fill="#c9d6cc"> Graph databases        </tspan><tspan fill="#35443b">│</tspan><tspan fill="#c9d6cc"> mvcc</tspan></text>
 
-  <text x="22" y="238" font-size="11.5" fill="#5C6B62" xml:space="preserve"><tspan fill="#4E5D54">(2 rows)</tspan>   semantic recall and a graph hop, one query, one snapshot</text>
+  <text x="22" y="238" font-size="11.5" xml:space="preserve"><tspan fill="#5f7266">(2 rows)</tspan><tspan fill="#6d8074">   semantic recall and a graph hop, one query, one snapshot</tspan></text>
 </svg>

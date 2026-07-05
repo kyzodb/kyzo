@@ -9,19 +9,19 @@
   <rect x="2" y="2" width="3" height="476" fill="#2F7E52"/>
 
   <text x="28" y="42" class="sans" font-size="21" font-weight="600" fill="#eef3ef">At a glance</text>
-  <text x="28" y="64" class="sans" font-size="13" fill="#7c8f83">What the engine gives you — and why you can believe it.</text>
+  <text x="28" y="64" class="sans" font-size="13" fill="#7c8f83">What the engine gives you, and why you can believe it.</text>
   <line x1="28" y1="82" x2="832" y2="82" stroke="#263229"/>
 
   <!-- row 1 -->
   <text x="28"  y="114" class="sans" font-size="13.5" font-weight="600" fill="#eef3ef">One engine, five models</text>
-  <text x="250" y="112" class="sans" font-size="12.5" fill="#a9baaf">Facts, graph, vectors, full-text, and bitemporal time answer together — one</text>
+  <text x="250" y="112" class="sans" font-size="12.5" fill="#a9baaf">Facts, graph, vectors, full-text, and bitemporal time answer together in one</text>
   <text x="250" y="130" class="sans" font-size="12.5" fill="#a9baaf">language, one transaction. A vector search is a join; a graph walk is recursion.</text>
   <line x1="28" y1="148" x2="832" y2="148" stroke="#1b2620"/>
 
   <!-- row 2 -->
   <text x="28"  y="180" class="sans" font-size="13.5" font-weight="600" fill="#eef3ef">Every answer accountable</text>
   <text x="250" y="178" class="sans" font-size="12.5" fill="#a9baaf">It replays byte-identically, names the premises that entailed it, or refuses</text>
-  <text x="250" y="196" class="sans" font-size="12.5" fill="#a9baaf">with a typed reason — never a panic, never a silent wrong row.</text>
+  <text x="250" y="196" class="sans" font-size="12.5" fill="#a9baaf">with a typed reason. Never a panic, never a silent wrong row.</text>
   <line x1="28" y1="214" x2="832" y2="214" stroke="#1b2620"/>
 
   <!-- row 3 -->
@@ -32,7 +32,7 @@
 
   <!-- row 4 -->
   <text x="28"  y="312" class="sans" font-size="13.5" font-weight="600" fill="#eef3ef">Runs everywhere, identically</text>
-  <text x="250" y="310" class="sans" font-size="12.5" fill="#a9baaf">Pure Rust, zero C/C++ — the same engine, the same bytes, as a server,</text>
+  <text x="250" y="310" class="sans" font-size="12.5" fill="#a9baaf">Pure Rust, zero C/C++: the same engine, the same bytes, as a server,</text>
   <text x="250" y="328" class="sans" font-size="12.5" fill="#a9baaf">embedded, in a browser tab, or on the edge.</text>
   <line x1="28" y1="346" x2="832" y2="346" stroke="#1b2620"/>
 
@@ -44,6 +44,6 @@
 
   <!-- row 6 -->
   <text x="28"  y="440" class="sans" font-size="13.5" font-weight="600" fill="#eef3ef">Proven, not asserted</text>
-  <text x="250" y="438" class="sans" font-size="12.5" fill="#a9baaf">Every generated query is answered twice — optimized engine vs. an independent</text>
-  <text x="250" y="456" class="sans" font-size="12.5" fill="#a9baaf">naive oracle — and must match byte for byte.</text>
+  <text x="250" y="438" class="sans" font-size="12.5" fill="#a9baaf">Every generated query is answered twice: optimized engine vs. an independent</text>
+  <text x="250" y="456" class="sans" font-size="12.5" fill="#a9baaf">naive oracle, and must match byte for byte.</text>
 </svg>

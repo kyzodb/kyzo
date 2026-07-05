@@ -1,20 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 262" width="860" height="262" font-family="ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: a three-line recursive rule computing every airport reachable from Frankfurt, returning JFK, LHR, YPO.">
-  <rect x="1" y="1" width="858" height="260" rx="12" fill="#0E1512" stroke="#26302A"/>
-  <path d="M1,13 A12,12 0 0 1 13,1 L847,1 A12,12 0 0 1 859,13 L859,34 L1,34 Z" fill="#161D18"/>
-  <circle cx="22" cy="18" r="5.5" fill="#E06C75"/>
-  <circle cx="41" cy="18" r="5.5" fill="#E5C07B"/>
-  <circle cx="60" cy="18" r="5.5" fill="#98C379"/>
-  <text x="430" y="22" text-anchor="middle" font-size="11.5" fill="#5C6B62">kyzo · transitive reachability — recursion is three lines</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 262" width="860" height="262" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session: a three-line recursive rule computing every airport reachable from Frankfurt, returning JFK, LHR, YPO.">
+  <rect x="1" y="1" width="858" height="260" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · transitive reachability, recursion in three lines</text>
 
-  <text x="22" y="66" font-size="13.5" xml:space="preserve"><tspan fill="#98C379">kyzo&gt; </tspan><tspan fill="#61AFEF">reachable</tspan><tspan fill="#9AA5AD">[to] </tspan><tspan fill="#56B6C2">:= </tspan><tspan fill="#C678DD">*</tspan><tspan fill="#61AFEF">route</tspan><tspan fill="#9AA5AD">{fr: </tspan><tspan fill="#D19A66">'FRA'</tspan><tspan fill="#9AA5AD">, to}</tspan></text>
-  <text x="22" y="88" font-size="13.5" xml:space="preserve"><tspan fill="#9AA5AD">      </tspan><tspan fill="#61AFEF">reachable</tspan><tspan fill="#9AA5AD">[to] </tspan><tspan fill="#56B6C2">:= </tspan><tspan fill="#61AFEF">reachable</tspan><tspan fill="#9AA5AD">[stop], </tspan><tspan fill="#C678DD">*</tspan><tspan fill="#61AFEF">route</tspan><tspan fill="#9AA5AD">{fr: stop, to}</tspan></text>
-  <text x="22" y="110" font-size="13.5" xml:space="preserve"><tspan fill="#9AA5AD">      ?[to] </tspan><tspan fill="#56B6C2">:= </tspan><tspan fill="#61AFEF">reachable</tspan><tspan fill="#9AA5AD">[to]</tspan></text>
+  <text x="22" y="66" font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">reachable[to] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">route</tspan><tspan fill="#c9d6cc">{fr: </tspan><tspan fill="#a9cf9e">'FRA'</tspan><tspan fill="#c9d6cc">, to}</tspan></text>
+  <text x="22" y="88" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      reachable[to] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#c9d6cc">reachable[stop], </tspan><tspan fill="#5fc492">*</tspan><tspan fill="#7fa6bf">route</tspan><tspan fill="#c9d6cc">{fr: stop, to}</tspan></text>
+  <text x="22" y="110" font-size="13.5" xml:space="preserve"><tspan fill="#c9d6cc">      ?[to] </tspan><tspan fill="#5fc492">:= </tspan><tspan fill="#c9d6cc">reachable[to]</tspan></text>
 
-  <text x="22" y="150" font-size="13.5" fill="#7FA08C" xml:space="preserve"> to</text>
-  <text x="22" y="168" font-size="13.5" fill="#37463E" xml:space="preserve">──────</text>
-  <text x="22" y="190" font-size="13.5" fill="#E5C07B" xml:space="preserve"> JFK</text>
-  <text x="22" y="212" font-size="13.5" fill="#E5C07B" xml:space="preserve"> LHR</text>
-  <text x="22" y="234" font-size="13.5" fill="#E5C07B" xml:space="preserve"> YPO</text>
+  <text x="22" y="150" font-size="13.5" fill="#7c8f83" xml:space="preserve"> to</text>
+  <text x="22" y="168" font-size="13.5" fill="#35443b" xml:space="preserve">──────</text>
+  <text x="22" y="190" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> JFK</text>
+  <text x="22" y="212" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> LHR</text>
+  <text x="22" y="234" font-size="13.5" fill="#c9d6cc" xml:space="preserve"> YPO</text>
 
-  <text x="22" y="252" font-size="11.5" xml:space="preserve"><tspan fill="#4E5D54">(3 rows)</tspan>   every airport reachable from Frankfurt, at any number of hops</text>
+  <text x="22" y="252" font-size="11.5" xml:space="preserve"><tspan fill="#5f7266">(3 rows)</tspan><tspan fill="#6d8074">   every airport reachable from Frankfurt, at any number of hops</tspan></text>
 </svg>

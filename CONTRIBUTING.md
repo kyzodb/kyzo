@@ -1,14 +1,14 @@
 # Contributing to KyzoDB
 
-Thank you for your interest in KyzoDB. This page explains how the project accepts help — and, just as
+Thank you for your interest in KyzoDB. This page explains how the project accepts help, and, just as
 importantly, how it currently doesn't.
 
 ## Issues are welcome, and valued
 
 Bug reports, questions, and feature requests are genuinely useful, and the best way to help the
 project today. If something is wrong, unclear, or missing, please
-[open an issue](https://github.com/kyzodb/kyzo/issues). A strong bug report — a minimal KyzoScript
-reproduction, what you expected, what you actually got, and your platform — is one of the most
+[open an issue](https://github.com/kyzodb/kyzo/issues). A strong bug report: a minimal KyzoScript
+reproduction, what you expected, what you actually got, and your platform, is one of the most
 valuable things you can send.
 
 ## We are not accepting code contributions right now

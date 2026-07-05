@@ -13,7 +13,7 @@
   <rect x="2" y="2" width="3" height="376" fill="#2F7E52"/>
 
   <text x="28" y="42" class="sans" font-size="21" font-weight="600" fill="#eef3ef">Benchmarks</text>
-  <text x="28" y="64" class="sans" font-size="13" fill="#7c8f83">One engine, five public yardsticks — measured, never asserted.</text>
+  <text x="28" y="64" class="sans" font-size="13" fill="#7c8f83">One engine, five public yardsticks. Measured, never asserted.</text>
 
   <!-- column headers -->
   <text x="28"  y="102" class="mono" font-size="10.5" letter-spacing="0.8" fill="#5d6f64">ACCESS PATTERN</text>
