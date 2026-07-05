@@ -331,6 +331,16 @@ impl Budget {
         self.derived_tuple_ceiling
     }
 
+    /// The fixpoint-epoch ceiling. `pub(crate)` (story #80): `laws.rs`'s
+    /// naive oracle threads the same `Budget` through its own, simpler
+    /// stratum/round loop (barrier-only, no per-rule in-flight ticker —
+    /// that granularity is a production-only concern for bounding rayon's
+    /// mid-epoch parallel materialization) and needs its ceiling to check
+    /// against directly.
+    pub(crate) fn epoch_ceiling(&self) -> NonZeroU32 {
+        self.epoch_ceiling
+    }
+
     pub(crate) fn with_derived_tuple_ceiling(mut self, ceiling: u64) -> Self {
         self.derived_tuple_ceiling = Some(ceiling);
         self
@@ -354,7 +364,10 @@ impl Budget {
 
     /// The interrupt check: user kill, then deadline. Called at every
     /// epoch barrier and, via [`InterruptTicker`], inside rule iteration.
-    fn check_interrupt(&self) -> Result<()> {
+    /// `pub(crate)` (story #80): `laws.rs`'s naive oracle calls this
+    /// directly at its own barrier points (visibility only; the check
+    /// itself is unchanged).
+    pub(crate) fn check_interrupt(&self) -> Result<()> {
         if let Some(kill) = &self.kill
             && kill.load(Ordering::Relaxed)
         {
