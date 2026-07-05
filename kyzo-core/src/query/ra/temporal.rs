@@ -257,11 +257,19 @@ const SIGN_MINUS: i64 = -1;
 /// resolving it against any coordinate: the valid instant, the system
 /// version, the claim polarity, and (for [`ClaimPolarity::Assert`] only)
 /// the row's non-key payload columns.
-struct RawVersion {
-    valid: i64,
-    sys: i64,
-    polarity: ClaimPolarity,
-    payload: Tuple,
+///
+/// `pub(crate)` (story #80): `runtime/verify.rs`'s `::verify` oracle-feed
+/// needs a relation's FULL version history (every assert/retract/erase, not
+/// one resolved snapshot) to populate `laws::Program::histories` for
+/// as-of/validity queries — this is the one primitive that decodes raw
+/// bitemporal rows without resolving them, so it is reused, not
+/// re-derived, exactly as this module's own doc argues for itself.
+/// Visibility only; the decode logic is unchanged.
+pub(crate) struct RawVersion {
+    pub(crate) valid: i64,
+    pub(crate) sys: i64,
+    pub(crate) polarity: ClaimPolarity,
+    pub(crate) payload: Tuple,
 }
 
 /// The relation's whole keyspace, as raw byte bounds. Duplicates
@@ -272,7 +280,7 @@ struct RawVersion {
 /// relation id's raw prefix as the exclusive upper bound) is a few lines
 /// of the same public encoding API every caller of this module already
 /// uses.
-fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
+pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
     let lower = Tuple::default().encode_as_key(storage.id).into_vec();
     let upper = (storage.id.0 + 1).to_be_bytes().to_vec();
     (lower, upper)
@@ -283,7 +291,7 @@ fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
 /// key arity — used both as a decode-size hint and to prove the decoded
 /// key matches the relation's own shape (a mismatch is corruption, refused
 /// rather than trusted).
-fn decode_raw_version(
+pub(crate) fn decode_raw_version(
     key: &[u8],
     val: &[u8],
     key_len: usize,
