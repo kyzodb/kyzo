@@ -163,6 +163,27 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                 frame.clear();
                 frame.extend(arg_cols.iter().map(|c| c.values[i].clone()));
                 match (op.inner)(&frame) {
+                    // THE columnar-lane checkpoint (row path's counterpart
+                    // is `data::expr::apply_op`): a `NaN` float or
+                    // vector-lane result is refused here regardless of
+                    // whether the op itself remembered its own `no_nan`
+                    // guard, so no op — present or future — can hand a
+                    // poison value out of this evaluator either. Same typed
+                    // diagnostic, same text, as if the op had refused it
+                    // directly, which keeps this lane observationally
+                    // identical to the row evaluator per this module's law.
+                    Ok(v) if crate::data::functions::result_has_nan(&v) => {
+                        use crate::data::expr::{EvalRaisedError, op_display_name};
+                        use crate::data::functions::DomainError;
+                        let span = *span;
+                        let op_name = op_display_name(op.name);
+                        #[allow(clippy::cast_possible_truncation)]
+                        state.errors.offer(row as u32, apply_node, || {
+                            EvalRaisedError(span, DomainError { op: op_name.into() }.to_string())
+                                .into()
+                        });
+                        out.push(DataValue::Null);
+                    }
                     Ok(v) => out.push(v),
                     Err(err) => {
                         use crate::data::expr::EvalRaisedError;

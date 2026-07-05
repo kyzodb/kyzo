@@ -894,10 +894,7 @@ fn write_call(name: &str, args: &[Expr], out: &mut String) {
 /// time, so the pattern prints as the user wrote it (and re-parsing
 /// re-applies the identical wrap unconditionally).
 fn write_apply_call(op_name: &'static str, args: &[Expr], out: &mut String) {
-    let name = op_name
-        .strip_prefix("OP_")
-        .unwrap_or(op_name)
-        .to_lowercase();
+    let name = crate::data::expr::op_display_name(op_name);
     out.push_str(&name);
     out.push('(');
     for (i, a) in args.iter().enumerate() {

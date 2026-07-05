@@ -412,7 +412,7 @@ pub fn eval_bytecode(
                     "application consumes more values than the stack holds",
                 ))?;
                 let args_frame = &stack[frame_start..];
-                let result = (op.inner)(args_frame)
+                let result = apply_op(op, args_frame)
                     .map_err(|err| EvalRaisedError(*span, err.to_string()))?;
                 stack.truncate(frame_start);
                 stack.push(result);
@@ -1066,7 +1066,7 @@ impl Expr {
                     .iter()
                     .map(|v| v.eval(bindings.as_ref()))
                     .try_collect()?;
-                Ok((op.inner)(&args)
+                Ok(apply_op(op, &args)
                     .map_err(|err| EvalRaisedError(self.span(), err.to_string()))?)
             }
             Expr::Cond { clauses, .. } => {
@@ -1341,6 +1341,36 @@ pub struct Op {
     /// The implementation. Total: returns a value or an error for any
     /// argument slice satisfying the declared arity; never panics.
     pub(crate) inner: fn(&[DataValue]) -> Result<DataValue>,
+}
+
+/// The KyzoScript-facing spelling of an op: [`Op::name`] is the
+/// screaming-case Rust const identifier (`"OP_ADD"`, guaranteed by
+/// `define_op!`'s `stringify!`), never what a user typed or should read.
+/// Every place that shows an op's name to a user needs this same transform
+/// (strip the `OP_` prefix, lowercase); one shared function so the
+/// pretty-printer (`format.rs`) and the op-application NaN checkpoints
+/// below can never drift apart on it.
+pub(crate) fn op_display_name(name: &'static str) -> String {
+    name.strip_prefix("OP_").unwrap_or(name).to_lowercase()
+}
+
+/// THE enforced checkpoint every row-path op application routes through —
+/// the bytecode VM's `Apply` instruction and the tree-walking `Expr::Apply`
+/// arm alike. Calls the op, then refuses a `NaN` float or vector-lane
+/// result the same way regardless of whether the op remembered its own
+/// `no_nan` guard: the per-op guards in `data/functions.rs` stay as a
+/// belt-and-suspenders first line (they carry a more specific domain
+/// diagnosis before the result even exists), but no op — present or
+/// future — can bypass this backstop and hand a poison value to a caller.
+/// Structural absorption for story #62's silent-NaN class.
+pub(crate) fn apply_op(op: &Op, args: &[DataValue]) -> Result<DataValue> {
+    let result = (op.inner)(args)?;
+    if crate::data::functions::result_has_nan(&result) {
+        bail!(DomainError {
+            op: op_display_name(op.name).into()
+        });
+    }
+    Ok(result)
 }
 
 /// Used as `Arc<dyn CustomOp>`

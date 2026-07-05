@@ -33,6 +33,7 @@
 //! `deterministic = false` and are therefore never constant-folded — they
 //! evaluate per row at runtime.
 
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::ops::{Div, Rem};
@@ -463,7 +464,14 @@ pub(crate) struct DivisionByZero {
      argument lies within the function's mathematical domain before calling it."
 ))]
 pub(crate) struct DomainError {
-    pub(crate) op: &'static str,
+    /// Borrowed for every existing per-op guard's `&'static str` literal;
+    /// owned for the op-application CHECKPOINTS (`data::expr::apply_op`,
+    /// `query::vm`'s columnar kernel), which only have `Op::name` — the
+    /// screaming-case Rust const identifier — and must render it through
+    /// [`crate::data::expr::op_display_name`] first. One error type either
+    /// way: the checkpoints are a backstop for the SAME domain violation a
+    /// guard would have caught, never a different concept.
+    pub(crate) op: Cow<'static, str>,
 }
 
 /// Backstop for the partial math ops below: even after the domain guard
@@ -472,7 +480,7 @@ pub(crate) struct DomainError {
 /// domain was characterized exhaustively enough to catch it up front.
 fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
     if x.is_nan() {
-        bail!(DomainError { op });
+        bail!(DomainError { op: op.into() });
     }
     Ok(DataValue::Num(Num::Float(x)))
 }
@@ -481,7 +489,7 @@ fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
 /// any `NaN` left in it is refused rather than returned poisoned.
 fn no_nan_vec_f32(op: &'static str, v: ndarray::Array1<f32>) -> Result<DataValue> {
     if v.iter().any(|x| x.is_nan()) {
-        bail!(DomainError { op });
+        bail!(DomainError { op: op.into() });
     }
     Ok(DataValue::Vec(Vector::F32(v)))
 }
@@ -489,9 +497,29 @@ fn no_nan_vec_f32(op: &'static str, v: ndarray::Array1<f32>) -> Result<DataValue
 /// See [`no_nan_vec_f32`].
 fn no_nan_vec_f64(op: &'static str, v: ndarray::Array1<f64>) -> Result<DataValue> {
     if v.iter().any(|x| x.is_nan()) {
-        bail!(DomainError { op });
+        bail!(DomainError { op: op.into() });
     }
     Ok(DataValue::Vec(Vector::F64(v)))
+}
+
+/// Whether a function-op's result is carrying a poison `NaN` — as the
+/// scalar float itself, or as any lane of a vector result. This is the
+/// predicate the STRUCTURAL op-application checkpoints test on every op
+/// result (the row evaluator's `data::expr::apply_op` and the columnar
+/// kernel in `query::vm`), so a `NaN` escapes neither evaluator regardless
+/// of whether the producing op remembered to route its own result through
+/// [`no_nan`]/[`no_nan_vec_f32`]/[`no_nan_vec_f64`]. Those per-op guards
+/// stay exactly as they are — belt-and-suspenders, and the only thing that
+/// can turn a domain violation into a *targeted* diagnostic before the
+/// generic result ever reaches this backstop. Infinity is untouched: it is
+/// a legitimate result (e.g. `pow` saturating), never poison.
+pub(crate) fn result_has_nan(v: &DataValue) -> bool {
+    match v {
+        DataValue::Num(Num::Float(x)) => x.is_nan(),
+        DataValue::Vec(Vector::F32(arr)) => arr.iter().any(|x| x.is_nan()),
+        DataValue::Vec(Vector::F64(arr)) => arr.iter().any(|x| x.is_nan()),
+        _ => false,
+    }
 }
 
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
@@ -922,13 +950,13 @@ pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "ln" });
+                bail!(DomainError { op: "ln".into() });
             }
             return no_nan_vec_f32("ln", v.mapv(|x| x.ln()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "ln" });
+                bail!(DomainError { op: "ln".into() });
             }
             return no_nan_vec_f64("ln", v.mapv(|x| x.ln()));
         }
@@ -938,7 +966,7 @@ pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
     // negative argument has no real logarithm (`NaN`) — both are silent
     // poison values, refused up front rather than returned.
     if a <= 0.0 {
-        bail!(DomainError { op: "ln" });
+        bail!(DomainError { op: "ln".into() });
     }
     no_nan("ln", a.ln())
 }
@@ -950,13 +978,13 @@ pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "log2" });
+                bail!(DomainError { op: "log2".into() });
             }
             return no_nan_vec_f32("log2", v.mapv(|x| x.log2()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "log2" });
+                bail!(DomainError { op: "log2".into() });
             }
             return no_nan_vec_f64("log2", v.mapv(|x| x.log2()));
         }
@@ -964,7 +992,7 @@ pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
     };
     // Same domain as `ln`: only positive reals have a base-2 logarithm.
     if a <= 0.0 {
-        bail!(DomainError { op: "log2" });
+        bail!(DomainError { op: "log2".into() });
     }
     no_nan("log2", a.log2())
 }
@@ -976,13 +1004,13 @@ pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "log10" });
+                bail!(DomainError { op: "log10".into() });
             }
             return no_nan_vec_f32("log10", v.mapv(|x| x.log10()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
-                bail!(DomainError { op: "log10" });
+                bail!(DomainError { op: "log10".into() });
             }
             return no_nan_vec_f64("log10", v.mapv(|x| x.log10()));
         }
@@ -990,7 +1018,7 @@ pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
     };
     // Same domain as `ln`: only positive reals have a base-10 logarithm.
     if a <= 0.0 {
-        bail!(DomainError { op: "log10" });
+        bail!(DomainError { op: "log10".into() });
     }
     no_nan("log10", a.log10())
 }
@@ -1050,13 +1078,13 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(&(*x as f64))) {
-                bail!(DomainError { op: "asin" });
+                bail!(DomainError { op: "asin".into() });
             }
             return no_nan_vec_f32("asin", v.mapv(|x| x.asin()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(x)) {
-                bail!(DomainError { op: "asin" });
+                bail!(DomainError { op: "asin".into() });
             }
             return no_nan_vec_f64("asin", v.mapv(|x| x.asin()));
         }
@@ -1065,7 +1093,7 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
     // `asin` is defined only on [-1, 1]; outside it the raw `f64` method
     // returns `NaN`.
     if !(-1.0..=1.0).contains(&a) {
-        bail!(DomainError { op: "asin" });
+        bail!(DomainError { op: "asin".into() });
     }
     no_nan("asin", a.asin())
 }
@@ -1077,13 +1105,13 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(&(*x as f64))) {
-                bail!(DomainError { op: "acos" });
+                bail!(DomainError { op: "acos".into() });
             }
             return no_nan_vec_f32("acos", v.mapv(|x| x.acos()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(x)) {
-                bail!(DomainError { op: "acos" });
+                bail!(DomainError { op: "acos".into() });
             }
             return no_nan_vec_f64("acos", v.mapv(|x| x.acos()));
         }
@@ -1092,7 +1120,7 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
     // `acos` is defined only on [-1, 1]; outside it the raw `f64` method
     // returns `NaN`.
     if !(-1.0..=1.0).contains(&a) {
-        bail!(DomainError { op: "acos" });
+        bail!(DomainError { op: "acos".into() });
     }
     no_nan("acos", a.acos())
 }
@@ -1200,13 +1228,13 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| (*x as f64) < 1.0) {
-                bail!(DomainError { op: "acosh" });
+                bail!(DomainError { op: "acosh".into() });
             }
             return no_nan_vec_f32("acosh", v.mapv(|x| x.acosh()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| *x < 1.0) {
-                bail!(DomainError { op: "acosh" });
+                bail!(DomainError { op: "acosh".into() });
             }
             return no_nan_vec_f64("acosh", v.mapv(|x| x.acosh()));
         }
@@ -1215,7 +1243,7 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     // `acosh` is defined only on [1, +inf); below 1 the raw `f64` method
     // returns `NaN`.
     if a < 1.0 {
-        bail!(DomainError { op: "acosh" });
+        bail!(DomainError { op: "acosh".into() });
     }
     no_nan("acosh", a.acosh())
 }
@@ -1227,13 +1255,13 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| (*x as f64).abs() >= 1.0) {
-                bail!(DomainError { op: "atanh" });
+                bail!(DomainError { op: "atanh".into() });
             }
             return no_nan_vec_f32("atanh", v.mapv(|x| x.atanh()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| x.abs() >= 1.0) {
-                bail!(DomainError { op: "atanh" });
+                bail!(DomainError { op: "atanh".into() });
             }
             return no_nan_vec_f64("atanh", v.mapv(|x| x.atanh()));
         }
@@ -1243,7 +1271,7 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
     // raw `f64` method returns `NaN`, and at either endpoint it diverges to
     // an infinity — just as much a silent poison value.
     if a.abs() >= 1.0 {
-        bail!(DomainError { op: "atanh" });
+        bail!(DomainError { op: "atanh".into() });
     }
     no_nan("atanh", a.atanh())
 }
@@ -1255,13 +1283,13 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(Num::Float(f)) => *f,
         DataValue::Vec(Vector::F32(v)) => {
             if v.iter().any(|x| *x < 0.0) {
-                bail!(DomainError { op: "sqrt" });
+                bail!(DomainError { op: "sqrt".into() });
             }
             return no_nan_vec_f32("sqrt", v.mapv(|x| x.sqrt()));
         }
         DataValue::Vec(Vector::F64(v)) => {
             if v.iter().any(|x| *x < 0.0) {
-                bail!(DomainError { op: "sqrt" });
+                bail!(DomainError { op: "sqrt".into() });
             }
             return no_nan_vec_f64("sqrt", v.mapv(|x| x.sqrt()));
         }
@@ -1270,7 +1298,7 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
     // `sqrt` is defined only for non-negative reals; a negative argument has
     // no real square root and the raw `f64` method returns `NaN`.
     if a < 0.0 {
-        bail!(DomainError { op: "sqrt" });
+        bail!(DomainError { op: "sqrt".into() });
     }
     no_nan("sqrt", a.sqrt())
 }
@@ -1293,7 +1321,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
             if v.iter().any(|x| pow_out_of_domain(*x as f64, b)) {
-                bail!(DomainError { op: "pow" });
+                bail!(DomainError { op: "pow".into() });
             }
             return no_nan_vec_f32("pow", v.mapv(|x| x.powf(b as f32)));
         }
@@ -1302,7 +1330,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
             if v.iter().any(|x| pow_out_of_domain(*x, b)) {
-                bail!(DomainError { op: "pow" });
+                bail!(DomainError { op: "pow".into() });
             }
             return no_nan_vec_f64("pow", v.mapv(|x| x.powf(b)));
         }
@@ -1314,7 +1342,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
         _ => bail!("'pow' requires numbers"),
     };
     if pow_out_of_domain(a, b) {
-        bail!(DomainError { op: "pow" });
+        bail!(DomainError { op: "pow".into() });
     }
     no_nan("pow", a.powf(b))
 }
@@ -2443,14 +2471,18 @@ pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Vec(Vector::F32(a)) => {
             let norm = a.dot(a).sqrt();
             if norm == 0.0 {
-                bail!(DomainError { op: "l2_normalize" });
+                bail!(DomainError {
+                    op: "l2_normalize".into()
+                });
             }
             no_nan_vec_f32("l2_normalize", a / norm)
         }
         DataValue::Vec(Vector::F64(a)) => {
             let norm = a.dot(a).sqrt();
             if norm == 0.0 {
-                bail!(DomainError { op: "l2_normalize" });
+                bail!(DomainError {
+                    op: "l2_normalize".into()
+                });
             }
             no_nan_vec_f64("l2_normalize", a / norm)
         }
@@ -2516,7 +2548,9 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             let a_norm = a.dot(a) as f64;
             let b_norm = b.dot(b) as f64;
             if a_norm == 0.0 || b_norm == 0.0 {
-                bail!(DomainError { op: "cos_dist" });
+                bail!(DomainError {
+                    op: "cos_dist".into()
+                });
             }
             let dot = a.dot(b) as f64;
             no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())
@@ -2528,7 +2562,9 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             let a_norm = a.dot(a);
             let b_norm = b.dot(b);
             if a_norm == 0.0 || b_norm == 0.0 {
-                bail!(DomainError { op: "cos_dist" });
+                bail!(DomainError {
+                    op: "cos_dist".into()
+                });
             }
             let dot = a.dot(b);
             no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())

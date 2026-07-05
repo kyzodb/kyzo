@@ -216,3 +216,56 @@ fn math_domain_error_surfaces_through_query() {
         .expect("in-domain sqrt must answer");
     assert_eq!(ok.rows, vec![vec![DataValue::from(2.0)]]);
 }
+
+/// Story #62's structural checkpoint, not another op-specific guard: an op
+/// with NO domain check of its own — `to_float`'s string branch — still
+/// cannot hand back `Ok(NaN)` through a query, because the checkpoint sits
+/// at the shared op-application site every op routes through, not inside
+/// individual ops. `to_float` is a real, previously-unguarded example:
+/// its special-cased `'NAN'` literal and (falling through to
+/// `f64::from_str`, whose grammar is case-insensitive) `'nan'`/`'NaN'`
+/// spellings alike used to answer `Ok(NaN)` silently.
+///
+/// USER-OBSERVABLE BEHAVIOR CHANGE, pinned here: `to_float('nan')` (and
+/// every case spelling of it) now refuses with a typed refusal instead of
+/// silently answering with a poisoned float. This is the correct,
+/// deliberate outcome per the engine's no-silent-poison ethos — not a
+/// regression.
+#[test]
+fn to_float_nan_is_now_a_typed_refusal() {
+    let db = fresh_db();
+    for text in ["'NAN'", "'nan'", "'NaN'"] {
+        let script = format!("?[x] := x = to_float({text})");
+        let res = db.run_script(&script, no_params());
+        assert!(
+            res.is_err(),
+            "to_float({text}) must refuse the NaN it used to answer silently: {res:?}"
+        );
+    }
+    // Non-poison strings are unaffected.
+    let ok = db
+        .run_script("?[x] := x = to_float('3.5')", no_params())
+        .expect("in-domain to_float must still answer");
+    assert_eq!(ok.rows, vec![vec![DataValue::from(3.5)]]);
+}
+
+/// The row evaluator's checkpoint is proven above through expressions a
+/// compile-time constant fold could evaluate directly; the COLUMNAR
+/// evaluator (`query::vm`) needs its own proof, from a `NaN` that only
+/// exists at RUNTIME, over a value bound from a stored relation (so
+/// `partial_eval` cannot fold it away at compile time and the batch
+/// machinery genuinely has to run the op). A stored float large enough
+/// that `* 10.0` overflows to `+inf` (legitimate, never refused), then
+/// `inf - inf`, is the same unguarded `op_mul`/`op_sub` shape as the
+/// scalar case — caught here only by the columnar checkpoint.
+#[test]
+fn columnar_path_refuses_a_runtime_produced_nan() {
+    let db = fresh_db();
+    db.run_script("?[x] <- [[1e308]] :create huge {x}", no_params())
+        .expect("seed relation");
+    let res = db.run_script("?[y] := *huge[x], y = (x * 10.0) - (x * 10.0)", no_params());
+    assert!(
+        res.is_err(),
+        "a runtime inf-minus-inf must be a typed Err through the columnar evaluator: {res:?}"
+    );
+}

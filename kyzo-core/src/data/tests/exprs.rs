@@ -14,9 +14,9 @@
  * and deserialized expressions and bytecode re-prove their arity.
  */
 
-use crate::data::expr::{Bytecode, Expr, eval_bytecode};
+use crate::data::expr::{Bytecode, Expr, Op, apply_op, eval_bytecode};
 use crate::data::functions::{OP_ADD, OP_EQ, OP_NOW, OP_RAND_FLOAT};
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Vector};
 
 fn cnst(val: impl Into<DataValue>) -> Expr {
     Expr::Const {
@@ -77,6 +77,76 @@ fn conditional_without_catch_all() {
     let compiled = all_false.compile().unwrap();
     let mut stack = vec![];
     assert!(eval_bytecode(&compiled, vec![], &mut stack).is_err());
+}
+
+// ─── The op-application NaN checkpoint (story #62's structural absorption
+// of the silent-NaN class) ───────────────────────────────────────────────
+//
+// A synthetic op stands in for ANY op — present or future — whose own
+// `no_nan`/`no_nan_vec_f32`/`no_nan_vec_f64` guard is missing or has a gap:
+// its `inner` hands back a bare, unrefused `NaN` unconditionally. The
+// checkpoint (`apply_op`, the single site both `Expr::eval` and
+// `eval_bytecode` route every application through) must refuse it exactly
+// like a real op's own domain guard would — independent of the synthetic
+// op ever having a guard of its own. This is what proves the class is
+// unrepresentable at the BOUNDARY, not merely guarded case by case.
+
+const POISONED_SCALAR: Op = Op {
+    name: "OP_POISONED_SCALAR_TEST_ONLY",
+    min_arity: 0,
+    vararg: true,
+    deterministic: true,
+    inner: |_| Ok(DataValue::from(f64::NAN)),
+};
+
+const POISONED_VECTOR: Op = Op {
+    name: "OP_POISONED_VECTOR_TEST_ONLY",
+    min_arity: 0,
+    vararg: true,
+    deterministic: true,
+    inner: |_| {
+        Ok(DataValue::Vec(Vector::F32(ndarray::arr1(&[
+            1.0f32,
+            f32::NAN,
+        ]))))
+    },
+};
+
+fn assert_domain_refusal(res: miette::Result<DataValue>) {
+    let err = res.expect_err("a NaN op result must be a typed Err, not Ok(NaN)");
+    assert_eq!(
+        err.code().map(|c| c.to_string()),
+        Some("eval::domain_error".to_string()),
+        "expected the domain_error diagnostic code, got: {err:?}"
+    );
+}
+
+#[test]
+fn apply_op_checkpoint_refuses_scalar_nan_independent_of_the_op() {
+    assert_domain_refusal(apply_op(&POISONED_SCALAR, &[]));
+}
+
+#[test]
+fn apply_op_checkpoint_refuses_vector_nan_lane_independent_of_the_op() {
+    assert_domain_refusal(apply_op(&POISONED_VECTOR, &[]));
+}
+
+// The checkpoint's refusal still surfaces (as a typed `Err`, wrapped in
+// `EvalRaisedError` — see `math_domain_error_surfaces_through_query` in
+// `tests/adversarial_robustness.rs` for the query-surface view) through
+// BOTH evaluators the application sites route through: the tree walker
+// and the compiled bytecode machine.
+#[test]
+fn poisoned_op_is_refused_through_both_machines() {
+    let e = Expr::Apply {
+        op: &POISONED_SCALAR,
+        args: Box::new([]),
+        span: Default::default(),
+    };
+    assert!(e.eval(&[] as &[DataValue]).is_err());
+    let compiled = e.compile().unwrap();
+    let mut stack = vec![];
+    assert!(eval_bytecode(&compiled, &[] as &[DataValue], &mut stack).is_err());
 }
 
 #[test]
