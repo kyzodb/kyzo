@@ -1178,10 +1178,24 @@ fn body_bindings(
     db: &BTreeMap<Rel, BTreeSet<Tuple>>,
     default_as_of: AsOf,
 ) -> Vec<Bindings> {
+    body_bindings_from(rule, program, db, default_as_of, Bindings::new())
+}
+
+/// [`body_bindings`], seeded from an already-known partial binding
+/// (issue #61's [`head_is_derivable`]: seed from a target head tuple's
+/// own values, then ask whether any body binding completes it) instead
+/// of always starting empty.
+fn body_bindings_from(
+    rule: &Rule,
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+    initial: Bindings,
+) -> Vec<Bindings> {
     let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
     ordered.extend(rule.body.iter().filter(|l| l.negated));
 
-    let mut frontier: Vec<Bindings> = vec![Bindings::new()];
+    let mut frontier: Vec<Bindings> = vec![initial];
     for lit in ordered {
         let rows = literal_rows(program, db, lit, default_as_of);
         let mut next = Vec::new();
@@ -1512,6 +1526,455 @@ pub(crate) fn naive_eval_at(
         }
     }
     Ok(db)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Incremental maintenance (story #61): the reference law for standing
+// queries. Given a signed patch to the program's EDB (the relations in
+// `Program::facts`/`Program::histories`), compute the signed patch every
+// derived (IDB) relation undergoes — WITHOUT re-evaluating the whole
+// program from scratch. `naive_eval` (full recompute) is the ground truth
+// this is checked against; the differential in this module's own test
+// suite (below) proves [`incremental_eval`]'s output equals
+// recompute-then-diff on every generated case, per issue #61's
+// non-negotiable DoD.
+//
+// Scope, honestly stated (typed refusal, never a wrong answer, for
+// anything outside it):
+// - RECURSION is refused outright, unconditionally — not just the
+//   stratification-illegal cycles `check_stratifiable` already catches,
+//   but EVERY cycle in the dependency graph, forcing or not. Retraction
+//   propagating soundly through a recursive derivation is DRed
+//   (Delete-Rederive) territory — a materially harder, separate
+//   algorithm this story does not attempt. A non-recursive dependency
+//   graph is a DAG, which is what makes the rest of this algorithm
+//   sound: every relation is computed in ONE topological pass, never a
+//   fixpoint, so there is no iteration to reconcile signed deltas across.
+// - AGGREGATION (any head with `has_aggr`) is refused for the same
+//   reason: this landing proves the negation+retraction core (the
+//   corner #61 names as the hard one) before extending to aggregation,
+//   rather than shipping both half-proven.
+//
+// The algorithm, per relation, in topological order (an EDB relation's
+// delta is simply its slice of the input patch, filtered for
+// redundancy; an IDB relation's delta is computed in two phases):
+//
+// **Phase 1 — candidates.** [`collect_candidates`] finds every grounded
+// head tuple ANY rule of this head could possibly produce a NEW or LOST
+// derivation for: every non-empty subset of body positions whose
+// relation has a delta this round becomes a "driver" (iterate its delta
+// tuples, unify to bind variables), joined against the REMAINING body
+// positions at the OLD (pre-patch) total — ordinary positive joins, and
+// negation gates evaluated against that same stable OLD total (sound
+// because the topological order guarantees a negated literal's
+// relation, always strictly below head in a non-recursive DAG, is fully
+// resolved before this rule runs). A head tuple with zero touched
+// derivations cannot possibly have changed and is never a candidate —
+// this is what keeps the whole algorithm delta-bounded rather than a
+// full relation scan.
+//
+// **Phase 2 — verify.** A Datalog rule head has SET semantics: a tuple
+// can have MULTIPLE independent derivations (different variable
+// bindings, or different rules of the same head), and it is TRUE iff
+// AT LEAST ONE survives — so Phase 1 finding that ONE derivation
+// changed does NOT mean the TUPLE changed (an untouched second
+// derivation can still hold it up). [`head_is_derivable`] answers the
+// real question directly for each candidate: was it derivable from
+// `old_total` (a plain set lookup — `old_total` is already the correct
+// full old state) versus a `new_total` map built up alongside it in the
+// SAME topological pass (every dependency of this rule, being strictly
+// earlier in topological order, already has its correct new state) — a
+// TARGETED join seeded from the candidate's own head bindings, not a
+// full relation re-derivation. Only a candidate whose truth value
+// actually flips becomes a `Plus`/`Minus` in the relation's delta.
+//
+// This phase split is exactly where the multilinear "subset expansion"
+// approach a first draft tried (tallying signed contributions directly,
+// the same shape as [`compose`]) went wrong: it is the correct algebra
+// for MULTISET/Z-set semantics, but Datalog derivation is SET semantics
+// — the generative differential below (this module's own test suite,
+// issue #61's non-negotiable DoD) caught this the first time it ran, on
+// a two-derivation case (`q(x) :- p(x,y), not r(x)` with two `y` values
+// for the same `x`, only one of which was touched) — the sign-tally
+// approach retracted `q(x)` on the touched derivation's say-so alone,
+// when the untouched second derivation still held it up.
+// Candidates-then-verify cannot make that mistake: verification always
+// asks the WHOLE rule set, not
+// one driver's slice of it.
+//
+// This is still exactly where retraction meeting stratified negation
+// gets its correct handling: a negated literal's OWN delta drives
+// Phase 1's candidate search (a `P` retraction makes `¬P` a candidate
+// driver just as a `P` assertion does — the driver step never inspects
+// sign, only which tuples changed), and Phase 2's real join naturally
+// evaluates the gate correctly in whichever direction actually holds.
+
+/// Every relation this program treats as EDB: mentioned anywhere (a rule
+/// head or body, a fixed rule's head or input, or a bare `facts`/
+/// `histories` key) but never a RULE head or FIXED-rule head (both are
+/// derived, never EDB). Deliberately NOT "has a `facts`/`histories`
+/// entry" — a relation a query reads with zero initial rows (never
+/// inserted as a key at all) is still EDB, and treating it as
+/// IDB-with-no-rules silently drops its own patch entries into an empty
+/// delta (the bug this distinction exists to prevent).
+fn edb_relations(program: &Program) -> BTreeSet<Rel> {
+    let idb: BTreeSet<Rel> = program
+        .rules
+        .iter()
+        .map(|r| r.head_rel)
+        .chain(program.fixed.iter().map(|f| f.head_rel))
+        .collect();
+    let mentioned: BTreeSet<Rel> = program
+        .facts
+        .keys()
+        .copied()
+        .chain(program.histories.keys().copied())
+        .chain(
+            program
+                .rules
+                .iter()
+                .flat_map(|r| std::iter::once(r.head_rel).chain(r.body.iter().map(|l| l.rel))),
+        )
+        .chain(
+            program
+                .fixed
+                .iter()
+                .flat_map(|f| std::iter::once(f.head_rel).chain(f.inputs.iter().copied())),
+        )
+        .collect();
+    mentioned.difference(&idb).copied().collect()
+}
+
+/// A full topological order over EVERY dependency edge (not just the
+/// stratification-forcing ones [`strata`] tracks) — sound only because
+/// [`incremental_eval`] has already refused any program with a cycle at
+/// all. Relations with no rule (EDB leaves) sort first automatically:
+/// they have no outgoing dependency edges to violate.
+fn topological_order(program: &Program) -> Vec<Rel> {
+    let edges = dependency_edges(program);
+    let mut all_rels: BTreeSet<Rel> = edb_relations(program);
+    for rule in &program.rules {
+        all_rels.insert(rule.head_rel);
+        for lit in &rule.body {
+            all_rels.insert(lit.rel);
+        }
+    }
+    for f in &program.fixed {
+        all_rels.insert(f.head_rel);
+        for input in &f.inputs {
+            all_rels.insert(*input);
+        }
+    }
+    let mut depends_on: HashMap<Rel, HashSet<Rel>> = HashMap::new();
+    for (head, dep, _) in &edges {
+        depends_on.entry(*head).or_default().insert(*dep);
+    }
+    // Kahn's algorithm over "depends_on": a relation is ready once every
+    // relation it depends on has already been placed.
+    let mut placed: BTreeSet<Rel> = BTreeSet::new();
+    let mut order = Vec::with_capacity(all_rels.len());
+    while placed.len() < all_rels.len() {
+        let mut progressed = false;
+        for &rel in &all_rels {
+            if placed.contains(rel) {
+                continue;
+            }
+            let ready = depends_on
+                .get(rel)
+                .is_none_or(|deps| deps.iter().all(|d| placed.contains(d)));
+            if ready {
+                order.push(rel);
+                placed.insert(rel);
+                progressed = true;
+            }
+        }
+        assert!(
+            progressed,
+            "topological_order called on a cyclic program: incremental_eval must refuse first"
+        );
+    }
+    order
+}
+
+/// Does `program`'s dependency graph contain a cycle at all (forcing or
+/// not)? [`check_stratifiable`] only refuses FORCING cycles (negation,
+/// non-meet aggregation, fixed rules) — a plain positive recursive rule
+/// (e.g. ordinary transitive closure) passes it but is exactly the
+/// recursion [`incremental_eval`] refuses, since retraction through it is
+/// DRed territory, not this story's scope.
+fn has_any_cycle(program: &Program) -> bool {
+    let edges = dependency_edges(program);
+    let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
+    for (head, dep, _) in &edges {
+        adjacency.entry(*head).or_default().insert(*dep);
+    }
+    let reaches = |from: Rel, to: Rel| -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![from];
+        while let Some(r) = stack.pop() {
+            if r == to {
+                return true;
+            }
+            if seen.insert(r) {
+                stack.extend(adjacency.get(r).into_iter().flatten().copied());
+            }
+        }
+        false
+    };
+    edges.iter().any(|(head, dep, _)| reaches(*dep, *head))
+}
+
+/// Every grounded head tuple ONE rule could possibly have gained or lost
+/// a derivation for this round: every non-empty subset of body positions
+/// whose relation has a delta becomes a "driver" (iterate its delta
+/// tuples, unify — sign is irrelevant here, only WHICH tuples touched a
+/// position matters), joined against the REMAINING body positions at
+/// `total` (positive joins, negation gates). `total` is the OLD
+/// (pre-patch) fully-resolved database; `rel_deltas` carries every
+/// relation's delta already computed this round (topological order
+/// guarantees every body relation with its own rules was processed
+/// first). Sign-agnostic on purpose — see the module doc above for why
+/// a signed tally is the WRONG algebra for Datalog's SET semantics.
+fn collect_candidates(
+    rule: &Rule,
+    program: &Program,
+    total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    default_as_of: AsOf,
+    candidates: &mut BTreeSet<Tuple>,
+) {
+    let varying: Vec<usize> = rule
+        .body
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| rel_deltas.get(l.rel).is_some_and(|d| !d.is_empty()))
+        .map(|(i, _)| i)
+        .collect();
+    if varying.is_empty() {
+        return;
+    }
+    let n = varying.len();
+    for mask in 1u32..(1u32 << n) {
+        let subset: Vec<usize> = (0..n)
+            .filter(|b| mask & (1 << b) != 0)
+            .map(|b| varying[b])
+            .collect();
+        contribute_candidates_subset(
+            rule,
+            program,
+            total,
+            rel_deltas,
+            &subset,
+            default_as_of,
+            candidates,
+        );
+    }
+}
+
+/// One non-empty subset of body positions treated as this pass's
+/// "drivers" (iterate their delta tuples' bindings, regardless of
+/// sign); every other position is a plain join (positive) or gate
+/// (negated) against `total`, the stable old state. Adds every
+/// surviving grounded head row into `candidates`.
+#[allow(clippy::too_many_arguments)]
+fn contribute_candidates_subset(
+    rule: &Rule,
+    program: &Program,
+    total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    subset: &[usize],
+    default_as_of: AsOf,
+    candidates: &mut BTreeSet<Tuple>,
+) {
+    let mut frontier: Vec<Bindings> = vec![Bindings::new()];
+    for &pos in subset {
+        let lit = &rule.body[pos];
+        let deltas = &rel_deltas[lit.rel];
+        let mut next = Vec::new();
+        for bound in &frontier {
+            for fact in deltas {
+                let tuple = match fact {
+                    SignedFact::Plus(t) | SignedFact::Minus(t) => t,
+                };
+                if let Some(b) = unify(&lit.args, tuple, bound) {
+                    next.push(b);
+                }
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            return;
+        }
+    }
+
+    // Remaining (non-driver) positions, positive first then negated —
+    // the same ordering `body_bindings` uses, so every negated gate's
+    // variables are already bound (rule safety guarantees this once
+    // positives, drivers included, have all run).
+    let remaining_positive = rule
+        .body
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| !subset.contains(i) && !l.negated)
+        .map(|(_, l)| l);
+    let remaining_negated = rule
+        .body
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| !subset.contains(i) && l.negated)
+        .map(|(_, l)| l);
+    for lit in remaining_positive.chain(remaining_negated) {
+        let rows = literal_rows(program, total, lit, default_as_of);
+        let mut next = Vec::new();
+        for bound in &frontier {
+            if lit.negated {
+                let probe = ground(&lit.args, bound);
+                if !rows.contains(&probe) {
+                    next.push(bound.clone());
+                }
+            } else {
+                for tuple in &rows {
+                    if let Some(b) = unify(&lit.args, tuple, bound) {
+                        next.push(b);
+                    }
+                }
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            return;
+        }
+    }
+
+    for bound in &frontier {
+        candidates.insert(ground(&rule.head_args, bound));
+    }
+}
+
+/// Is `target` derivable from ANY of `rules` (every rule of one head),
+/// evaluated against `db`? Seeds the search from `target`'s own values
+/// unified against each rule's head arguments (refusing outright if
+/// `target` cannot even match the head's constant positions), then an
+/// ordinary body join from there — a TARGETED check bounded by one
+/// relation's body cost, never a full relation re-derivation.
+fn head_is_derivable(
+    rules: &[&Rule],
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+    target: &Tuple,
+) -> bool {
+    rules.iter().any(|rule| {
+        let Some(seed) = unify(&rule.head_args, target, &Bindings::new()) else {
+            return false;
+        };
+        !body_bindings_from(rule, program, db, default_as_of, seed).is_empty()
+    })
+}
+
+/// The reference incremental-maintenance law (issue #61): given a signed
+/// patch to `program`'s EDB, the signed patch every relation (EDB and
+/// IDB alike) undergoes, computed WITHOUT a full re-evaluation. Refuses
+/// (never silently wrong) recursion or any aggregation — see the module
+/// doc above for exactly why those are out of this landing's scope.
+pub(crate) fn incremental_eval(
+    program: &Program,
+    edb_patch: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+) -> Result<BTreeMap<Rel, BTreeSet<SignedFact>>, Rejection> {
+    check_wellformed(program)?;
+    check_safety(program)?;
+    check_stratifiable(program)?;
+    if has_any_cycle(program) {
+        return Err(Rejection::Unstratifiable(
+            "incremental maintenance refuses any recursive dependency, not just the \
+             stratification-illegal ones — retraction through recursion is DRed territory, \
+             out of this story's scope",
+        ));
+    }
+    let classes = head_classes(program);
+    if classes.values().any(|c| c.has_aggr) {
+        return Err(Rejection::Malformed(
+            "incremental maintenance does not yet cover aggregation — refused, not silently \
+             wrong; recompute this program in full instead",
+        ));
+    }
+
+    let old_total = naive_eval(program)?;
+    let order = topological_order(program);
+    let edb = edb_relations(program);
+    let mut rel_deltas: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
+    let mut new_total: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+
+    for rel in order {
+        let old_rows = old_total.get(rel).cloned().unwrap_or_default();
+        let (delta, new_rows) = if edb.contains(rel) {
+            // A redundant patch entry (asserting a fact already present,
+            // retracting one already absent) is a no-op on the SET, even
+            // though it's a real byte written to the log — recompute's
+            // diff-of-two-snapshots would never surface it, so forwarding
+            // it verbatim here would be a real, observable disagreement
+            // with the ground truth (caught by the differential: a
+            // `Plus` for an already-present fact showed up as a phantom
+            // EDB delta with nothing on the recompute side to match).
+            let filtered: BTreeSet<SignedFact> = edb_patch
+                .get(rel)
+                .into_iter()
+                .flatten()
+                .filter(|fact| match fact {
+                    SignedFact::Plus(t) => !old_rows.contains(t),
+                    SignedFact::Minus(t) => old_rows.contains(t),
+                })
+                .cloned()
+                .collect();
+            let mut new_rows = old_rows.clone();
+            for fact in &filtered {
+                match fact {
+                    SignedFact::Plus(t) => {
+                        new_rows.insert(t.clone());
+                    }
+                    SignedFact::Minus(t) => {
+                        new_rows.remove(t);
+                    }
+                }
+            }
+            (filtered, new_rows)
+        } else {
+            let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
+            let mut candidates = BTreeSet::new();
+            for rule in &rules {
+                collect_candidates(
+                    rule,
+                    program,
+                    &old_total,
+                    &rel_deltas,
+                    AsOf::current(),
+                    &mut candidates,
+                );
+            }
+            let mut delta = BTreeSet::new();
+            let mut new_rows = old_rows.clone();
+            for candidate in candidates {
+                let was = old_rows.contains(&candidate);
+                let now =
+                    head_is_derivable(&rules, program, &new_total, AsOf::current(), &candidate);
+                match (was, now) {
+                    (false, true) => {
+                        delta.insert(SignedFact::Plus(candidate.clone()));
+                        new_rows.insert(candidate);
+                    }
+                    (true, false) => {
+                        delta.insert(SignedFact::Minus(candidate.clone()));
+                        new_rows.remove(&candidate);
+                    }
+                    _ => {}
+                }
+            }
+            (delta, new_rows)
+        };
+        new_total.insert(rel, new_rows);
+        rel_deltas.insert(rel, delta);
+    }
+    Ok(rel_deltas)
 }
 
 /// The corpus of programs the compiler must refuse — shared between the
@@ -3659,6 +4122,400 @@ mod tests {
         assert!(
             cases > 5000,
             "expected a rich negation-over-as-of campaign, ran {cases}"
+        );
+    }
+
+    // ── Incremental maintenance (story #61): the non-negotiable
+    // differential — `incremental_eval` on a patch must equal
+    // recompute-then-diff, on every generated case. ─────────────────────
+
+    /// Apply a signed patch to a plain (untimed) EDB in place.
+    fn apply_patch(
+        facts: &mut BTreeMap<Rel, BTreeSet<Tuple>>,
+        patch: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    ) {
+        for (rel, changes) in patch {
+            let entry = facts.entry(rel).or_default();
+            for fact in changes {
+                match fact {
+                    SignedFact::Plus(t) => {
+                        entry.insert(t.clone());
+                    }
+                    SignedFact::Minus(t) => {
+                        entry.remove(t);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The ground truth: full recompute before and after the patch,
+    /// diffed relation-by-relation — what [`incremental_eval`] must equal
+    /// without ever doing this much work.
+    fn recompute_patch(
+        program: &Program,
+        edb_patch: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    ) -> BTreeMap<Rel, BTreeSet<SignedFact>> {
+        let old_total = naive_eval(program).expect("old program evaluates");
+        let mut new_program = program.clone();
+        apply_patch(&mut new_program.facts, edb_patch);
+        let new_total = naive_eval(&new_program).expect("patched program evaluates");
+        let rels: BTreeSet<Rel> = old_total.keys().chain(new_total.keys()).copied().collect();
+        rels.into_iter()
+            .map(|rel| {
+                let old_set = old_total.get(rel).cloned().unwrap_or_default();
+                let new_set = new_total.get(rel).cloned().unwrap_or_default();
+                let mut d = BTreeSet::new();
+                for t in old_set.difference(&new_set) {
+                    d.insert(SignedFact::Minus(t.clone()));
+                }
+                for t in new_set.difference(&old_set) {
+                    d.insert(SignedFact::Plus(t.clone()));
+                }
+                (rel, d)
+            })
+            .collect()
+    }
+
+    /// The law: `incremental_eval` and `recompute_patch` agree, relation
+    /// by relation (a relation absent from one side is the same as an
+    /// empty delta on the other — both mean "unchanged").
+    fn assert_incremental_matches_recompute(
+        program: &Program,
+        edb_patch: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+        ctx: &str,
+    ) {
+        let expected = recompute_patch(program, edb_patch);
+        let got = incremental_eval(program, edb_patch).expect("incremental_eval succeeds");
+        let rels: BTreeSet<Rel> = expected.keys().chain(got.keys()).copied().collect();
+        for rel in rels {
+            let e = expected.get(rel).cloned().unwrap_or_default();
+            let g = got.get(rel).cloned().unwrap_or_default();
+            assert_eq!(e, g, "{ctx}: mismatch on relation '{rel}'");
+        }
+    }
+
+    fn patch_of(entries: Vec<(Rel, SignedFact)>) -> BTreeMap<Rel, BTreeSet<SignedFact>> {
+        let mut out: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
+        for (rel, fact) in entries {
+            out.entry(rel).or_default().insert(fact);
+        }
+        out
+    }
+
+    /// The hard corner, smallest possible case: `q(x) :- p(x), not r(x)`.
+    /// Retracting `r(1)` while `p(1)` already holds must make `q(1)`
+    /// newly true — a Plus at `q` driven ENTIRELY by a negated literal's
+    /// own delta, with no change to any positive literal at all.
+    #[test]
+    fn incremental_retraction_through_negation_produces_a_new_fact() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1)]].into_iter().collect());
+        facts.insert("r", [vec![v(1)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![Rule::plain(
+                "q",
+                vec![x()],
+                vec![lit("p", vec![x()], false), lit("r", vec![x()], true)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
+        assert_incremental_matches_recompute(&program, &patch, "retract through negation");
+        // Spelled out, not just differentialed: q(1) must appear as Plus.
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["q"],
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
+        );
+    }
+
+    /// The mirror: ASSERTING into the negated relation must RETRACT the
+    /// dependent fact — `q(1)` disappears (Minus) when `r(1)` newly holds.
+    #[test]
+    fn incremental_assertion_into_negation_retracts_the_dependent_fact() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![Rule::plain(
+                "q",
+                vec![x()],
+                vec![lit("p", vec![x()], false), lit("r", vec![x()], true)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("r", SignedFact::Plus(vec![v(1)]))]);
+        assert_incremental_matches_recompute(&program, &patch, "assert into negation");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["q"],
+            [SignedFact::Minus(vec![v(1)])].into_iter().collect()
+        );
+    }
+
+    /// Negation stacked two strata deep: `mid(x) :- p(x), not r(x)`;
+    /// `q(x) :- mid(x), not s(x)`. A single retraction at the BOTTOM
+    /// (`r`) must propagate its sign flip through `mid` and then again
+    /// through `q`'s own negation — two sign flips, ending back at Plus.
+    #[test]
+    fn incremental_negation_propagates_through_two_strata() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1)]].into_iter().collect());
+        facts.insert("r", [vec![v(1)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![
+                Rule::plain(
+                    "mid",
+                    vec![x()],
+                    vec![lit("p", vec![x()], false), lit("r", vec![x()], true)],
+                ),
+                Rule::plain(
+                    "q",
+                    vec![x()],
+                    vec![lit("mid", vec![x()], false), lit("s", vec![x()], true)],
+                ),
+            ],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
+        assert_incremental_matches_recompute(&program, &patch, "two-stratum negation chain");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["mid"],
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
+        );
+        assert_eq!(
+            got["q"],
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
+        );
+    }
+
+    /// Two body relations changing simultaneously in one commit-shaped
+    /// patch — the subset-expansion path with `|varying| == 2`:
+    /// `q(x,y) :- p(x,y), r2(x,y)`, patching BOTH `p` and `r2` at once.
+    #[test]
+    fn incremental_two_simultaneously_varying_relations() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1), v(10)]].into_iter().collect());
+        facts.insert("r2", [vec![v(2), v(20)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![Rule::plain(
+                "q",
+                vec![x(), y()],
+                vec![
+                    lit("p", vec![x(), y()], false),
+                    lit("r2", vec![x(), y()], false),
+                ],
+            )],
+            vec![],
+            facts,
+        );
+        // Both patched to newly agree on (2, 20): p gains it, r2 already
+        // has it — q must gain (2, 20). p ALSO loses (1, 10) (r2 never
+        // had it, so that alone changes nothing at q).
+        let patch = patch_of(vec![
+            ("p", SignedFact::Plus(vec![v(2), v(20)])),
+            ("p", SignedFact::Minus(vec![v(1), v(10)])),
+        ]);
+        assert_incremental_matches_recompute(&program, &patch, "two simultaneously varying");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["q"],
+            [SignedFact::Plus(vec![v(2), v(20)])].into_iter().collect()
+        );
+    }
+
+    /// A payload change (Minus old + Plus new at the same key) propagated
+    /// through a positive join — never treated as "modified", always the
+    /// Minus/Plus pair the rest of the engine already commits to.
+    #[test]
+    fn incremental_payload_change_through_a_join() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1), v(100)]].into_iter().collect());
+        facts.insert("r2", [vec![v(1)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![Rule::plain(
+                "q",
+                vec![x(), y()],
+                vec![lit("p", vec![x(), y()], false), lit("r2", vec![x()], false)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![
+            ("p", SignedFact::Minus(vec![v(1), v(100)])),
+            ("p", SignedFact::Plus(vec![v(1), v(200)])),
+        ]);
+        assert_incremental_matches_recompute(&program, &patch, "payload change through join");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["q"],
+            [
+                SignedFact::Minus(vec![v(1), v(100)]),
+                SignedFact::Plus(vec![v(1), v(200)])
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    /// Recursion is refused outright, unconditionally — not just the
+    /// stratification-illegal cycles, a perfectly legal (positive,
+    /// stratifiable) recursive rule too, since retraction through it is
+    /// explicitly out of this landing's scope.
+    #[test]
+    fn incremental_refuses_recursion_even_when_perfectly_stratifiable() {
+        let program = Program::untimed(transitive_closure(), vec![], edge_facts(&[(1, 2), (2, 3)]));
+        let patch = patch_of(vec![("edge", SignedFact::Plus(vec![v(3), v(4)]))]);
+        let err = incremental_eval(&program, &patch).unwrap_err();
+        assert!(matches!(err, Rejection::Unstratifiable(_)));
+    }
+
+    /// Aggregation is refused outright too, for now — a typed refusal,
+    /// never a silently wrong incremental answer.
+    #[test]
+    fn incremental_refuses_aggregation() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert(
+            "p",
+            [vec![v(1), v(10)], vec![v(1), v(20)]].into_iter().collect(),
+        );
+        let program = Program::untimed(
+            vec![Rule::aggregated(
+                "total",
+                vec![x(), y()],
+                vec![None, named("sum")],
+                vec![lit("p", vec![x(), y()], false)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("p", SignedFact::Plus(vec![v(1), v(30)]))]);
+        let err = incremental_eval(&program, &patch).unwrap_err();
+        assert!(matches!(err, Rejection::Malformed(_)));
+    }
+
+    /// The generative campaign: several rule-set shapes stressing
+    /// negation over joins and chains, each swept across many seeded
+    /// random EDBs and random signed patches (assertions, retractions,
+    /// and payload changes drawn from the CURRENT EDB so a Minus always
+    /// removes something real) — `incremental_eval` must equal
+    /// `recompute_patch` on every one.
+    #[test]
+    fn incremental_matches_recompute_generatively() {
+        // Shape A: q(x) :- p(x,y), not r(x)  — negation on a projected var.
+        fn shape_a() -> Vec<Rule> {
+            vec![Rule::plain(
+                "q",
+                vec![x()],
+                vec![lit("p", vec![x(), y()], false), lit("r", vec![x()], true)],
+            )]
+        }
+        // Shape B: two-stratum negation chain (mid then q).
+        fn shape_b() -> Vec<Rule> {
+            vec![
+                Rule::plain(
+                    "mid",
+                    vec![x()],
+                    vec![lit("p", vec![x(), y()], false), lit("r", vec![x()], true)],
+                ),
+                Rule::plain(
+                    "q",
+                    vec![x()],
+                    vec![lit("mid", vec![x()], false), lit("s", vec![x()], true)],
+                ),
+            ]
+        }
+        // Shape C: a positive two-relation join, no negation at all — the
+        // subset-expansion path exercised without a negation sign flip.
+        fn shape_c() -> Vec<Rule> {
+            vec![Rule::plain(
+                "q",
+                vec![x(), y()],
+                vec![
+                    lit("p", vec![x(), y()], false),
+                    lit("r2", vec![x(), y()], false),
+                ],
+            )]
+        }
+        let shapes: [fn() -> Vec<Rule>; 3] = [shape_a, shape_b, shape_c];
+
+        let mut rng = Rng::new(0xC0DE_D15C_1234_5678);
+        let mut cases = 0;
+        for shape in shapes {
+            for _ in 0..80 {
+                let rules = shape();
+                // Random small EDB over p, r, r2, s (whichever the shape
+                // reads) — universe kept small so collisions (and hence
+                // both Assert and Retract landing meaningfully) are
+                // common.
+                let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+                for rel in ["p", "r", "r2", "s"] {
+                    let n = rng.range(0, 6);
+                    let mut set = BTreeSet::new();
+                    for _ in 0..n {
+                        let a = v(rng.range(0, 4));
+                        if rel == "p" || rel == "r2" {
+                            set.insert(vec![a, v(rng.range(0, 4))]);
+                        } else {
+                            set.insert(vec![a]);
+                        }
+                    }
+                    facts.insert(rel, set);
+                }
+                let program = Program::untimed(rules, vec![], facts.clone());
+
+                // A random patch: a mix of retractions of EXISTING facts
+                // and assertions of fresh (possibly colliding) ones,
+                // across one or two relations at once.
+                let mut patch: BTreeMap<Rel, BTreeSet<SignedFact>> = BTreeMap::new();
+                let touched: Vec<Rel> = {
+                    let all = ["p", "r", "r2", "s"];
+                    let k = 1 + rng.below(2) as usize;
+                    let mut chosen = Vec::new();
+                    while chosen.len() < k {
+                        let rel = rng.one_of(&all);
+                        if !chosen.contains(&rel) {
+                            chosen.push(rel);
+                        }
+                    }
+                    chosen
+                };
+                for rel in touched {
+                    let existing: Vec<Tuple> = facts[rel].iter().cloned().collect();
+                    if !existing.is_empty() && rng.below(2) == 0 {
+                        let victim = existing[rng.below(existing.len() as u64) as usize].clone();
+                        patch
+                            .entry(rel)
+                            .or_default()
+                            .insert(SignedFact::Minus(victim));
+                    } else {
+                        let a = v(rng.range(0, 4));
+                        let t = if rel == "p" || rel == "r2" {
+                            vec![a, v(rng.range(0, 4))]
+                        } else {
+                            vec![a]
+                        };
+                        patch.entry(rel).or_default().insert(SignedFact::Plus(t));
+                    }
+                }
+                if patch.values().all(BTreeSet::is_empty) {
+                    continue;
+                }
+                assert_incremental_matches_recompute(
+                    &program,
+                    &patch,
+                    &format!("generative case {cases}"),
+                );
+                cases += 1;
+            }
+        }
+        assert!(
+            cases > 100,
+            "expected a rich generative campaign, ran {cases}"
         );
     }
 }
