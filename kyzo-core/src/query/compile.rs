@@ -142,7 +142,7 @@ use thiserror::Error;
 use crate::data::aggr::Aggregation;
 use crate::data::expr::Expr;
 use crate::data::program::{
-    MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed, MagicSymbol,
+    DeltaAxis, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed, MagicSymbol,
     StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::span::SourceSpan;
@@ -156,7 +156,7 @@ use crate::query::levels::EpochStore;
 use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
 use crate::query::temp_store::RegularTempStore;
 use crate::runtime::relation::{
-    AccessLevel, IndexKind, IndexPositionUse, InsufficientAccessLevel, get_relation,
+    AccessLevel, IndexKind, IndexPositionUse, InsufficientAccessLevel, RelationHandle, get_relation,
 };
 use crate::storage::ReadTx;
 
@@ -390,6 +390,34 @@ pub(crate) fn stratified_magic_compile(
         .try_collect()
 }
 
+/// Resolve the `IndexKind::Temporal` posting index for a `Valid`-axis
+/// `@delta` clause, if the base relation has one attached — story #62
+/// chunk 4's read-side seam. `None` for every other clause shape
+/// (`@delta_sys`, `@spans`, a plain read, or a `Valid`-axis `@delta` whose
+/// base relation has no posting index yet): `DeltaRA::iter_batched` falls
+/// back to the naive full-snapshot diff in every one of those cases, so
+/// returning `None` here is never a correctness gap, only a missed
+/// acceleration.
+fn resolve_delta_posting_index(
+    tx: &impl ReadTx,
+    store: &RelationHandle,
+    validity: &Option<ValidityClause>,
+) -> Result<Option<RelationHandle>> {
+    let Some(ValidityClause::Delta {
+        axis: DeltaAxis::Valid,
+        ..
+    }) = validity
+    else {
+        return Ok(None);
+    };
+    store
+        .indices
+        .iter()
+        .find(|idx_ref| matches!(idx_ref.kind, IndexKind::Temporal))
+        .map(|idx_ref| get_relation(tx, &idx_ref.relation_name(&store.name)))
+        .transpose()
+}
+
 /// Compile one rule body into its operator tree. `ret_vars` is the rule's
 /// head: the plan's output frame is proven equal to it (unbound head
 /// symbols refused, columns reordered to match).
@@ -516,8 +544,10 @@ pub(crate) fn compile_magic_rule_body(
                 // relation directly: they need its own keyspace (the raw
                 // multi-version history, or the plain as-of resolution
                 // `skip_scan_all` already gives), never a plain index's
-                // mirrored one — accelerating them through an index is
-                // chunk 4's posting-index work, not this one's.
+                // mirrored one. A `Valid`-axis `@delta` gets its OWN
+                // acceleration below instead (story #62 chunk 4's posting
+                // index) — a different mechanism from `choose_index`,
+                // since a posting index has no `Plain` mapper shape.
                 let chosen_index = match &rel_app.validity {
                     Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => None,
                     _ => store.choose_index(&join_indices, rel_app.validity.is_some()),
@@ -526,12 +556,19 @@ pub(crate) fn compile_magic_rule_body(
                 match chosen_index {
                     None => {
                         // scan the base relation
-                        let right = RelAlgebra::relation(
+                        let delta_posting =
+                            resolve_delta_posting_index(tx, &store, &rel_app.validity)?;
+                        let mut right = RelAlgebra::relation(
                             right_vars,
                             store,
                             rel_app.span,
                             rel_app.validity.clone(),
                         )?;
+                        if let (RelAlgebra::Delta(delta), Some(idx_store)) =
+                            (&mut right, delta_posting)
+                        {
+                            delta.posting = Some(idx_store);
+                        }
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret = ret.join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
                     }
@@ -746,12 +783,19 @@ pub(crate) fn compile_magic_rule_body(
                     // (useless under negation: the anti-join needs the
                     // base rows themselves): scan the base relation.
                     None | Some((_, true)) => {
-                        let right = RelAlgebra::relation(
+                        let delta_posting =
+                            resolve_delta_posting_index(tx, &store, &rel_app.validity)?;
+                        let mut right = RelAlgebra::relation(
                             right_vars,
                             store,
                             rel_app.span,
                             rel_app.validity.clone(),
                         )?;
+                        if let (RelAlgebra::Delta(delta), Some(idx_store)) =
+                            (&mut right, delta_posting)
+                        {
+                            delta.posting = Some(idx_store);
+                        }
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
                             ret.neg_join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;

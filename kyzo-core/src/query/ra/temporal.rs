@@ -57,14 +57,14 @@
 //! as the set difference of two already-RESOLVED snapshots
 //! (`laws::diff`'s own shape), and each snapshot is exactly what the
 //! existing `RelationHandle::skip_scan_all` as-of scan already produces —
-//! reused here unchanged. This chunk's diff is deliberately naive (two
-//! full snapshots, materialized, differenced) per the ruling; the
-//! O(changes) transposed posting-index acceleration is chunk 4, and the
-//! SEAM for it is exactly this operator's constructor: when that index
-//! lands, `DeltaRA::iter_batched` gains an index-probe fast path ahead of
-//! the full-snapshot fallback below, with identical output — nothing
-//! about `DeltaRA`'s bindings, `from`/`to` coordinates, or its place in
-//! the `RelAlgebra` tree needs to change.
+//! reused here unchanged, as `patch_naive`'s fallback below. Story #62
+//! chunk 3 landed this diff deliberately naive per its own ruling (two
+//! full snapshots, materialized, differenced); chunk 4's O(changes)
+//! transposed posting-index acceleration has since landed at exactly the
+//! seam chunk 3 reserved — this operator's constructor — described in its
+//! own section further down this doc. Nothing about `DeltaRA`'s bindings,
+//! `from`/`to` coordinates, or its place in the `RelAlgebra` tree changed
+//! to add it.
 //!
 //! ## The signed-fact currency (story #77)
 //!
@@ -82,13 +82,62 @@
 //!
 //! [`compose`] is proven here — differentialed against `laws.rs::compose`
 //! on real engine output, both directions of the cancellation law, in
-//! `query/time_travel_trials.rs` — but has NO production caller yet:
-//! nothing in this engine composes two already-computed diffs today (a
-//! single `DeltaRA` evaluation only ever produces one diff, never reuses
-//! another). It is the tested law, awaiting its consumer, not a
-//! production-exercised accelerator — that consumer is #62 chunk 4's
-//! posting-index seam (already reserved at this operator's constructor,
-//! see above) or #61's standing-query patch application, not this story.
+//! `query/time_travel_trials.rs` — and, as of story #62 chunk 4, has its
+//! first real production caller: [`DeltaRA::iter_batched`]'s posting-index
+//! fast path (below) builds a `Minus`-tagged patch from every candidate
+//! key's `from` row and a `Plus`-tagged patch from every candidate's `to`
+//! row, then `compose`s the two together in one call — the same
+//! cancellation `laws::diff` itself is defined through. #61's
+//! standing-query patch application is still a future consumer, not this
+//! one.
+//!
+//! ## The posting-index fast path (story #62 chunk 4)
+//!
+//! When the compile tier resolves an `IndexKind::Temporal` posting index
+//! for this relation (`query/compile.rs`, the `Delta`-clause arm — the
+//! `Valid` axis only; `@delta_sys` has no posting to accelerate off,
+//! since the posting's leading column orders by valid instant, not
+//! system version), `DeltaRA.posting` is `Some`, and `iter_batched` takes
+//! a fundamentally different route than the full-snapshot fallback the
+//! rest of this module doc describes:
+//!
+//! 1. Scan the posting index's own keyspace bounded to exactly the valid
+//!    instants that could possibly matter — `(lo, hi]` where `lo`/`hi` are
+//!    `from`/`to`'s valid instants in numeric order (an event AT `lo`
+//!    itself is already baked into both endpoints' resolutions; an event
+//!    outside the window cannot change either). The posting's leading
+//!    column is a `Validity` value, which encodes NEWEST-FIRST (see
+//!    `data/memcmp.rs`'s bit-flip), so ascending byte order visits `hi`
+//!    down to (not including) `lo` — the bound computation in
+//!    [`posting_window_bounds`] is this fast path's one genuinely
+//!    load-bearing piece of key-encoding reasoning, verified against the
+//!    corpus's own ordering fixture, not re-derived from scratch.
+//! 2. Decode every posting row's base-key columns (dropping its leading
+//!    valid column and bitemporal tail) into a `BTreeSet<Tuple>` of
+//!    CANDIDATE keys — a key with zero postings in the window cannot have
+//!    changed between `from` and `to`, so it is never a false negative to
+//!    omit; a key that DID have a correction-only posting (no net change)
+//!    is a false positive the next step resolves away for free.
+//! 3. For each candidate key only (never the whole relation), resolve its
+//!    row at `from` and at `to` through [`RelationHandle::current_row`] —
+//!    the storage kernel's own point read, O(log relation) each — building
+//!    two mini-patches (every candidate's `from`-row tagged `Minus`, every
+//!    candidate's `to`-row tagged `Plus`). ONE call to [`compose`] combines
+//!    them: a candidate whose row is identical at both endpoints (a
+//!    redundant re-assert, or a correction with no net effect — exactly
+//!    why the candidate set can have false positives) contributes
+//!    `Minus(f)` and `Plus(f)` for the same tuple, which `compose` cancels
+//!    to nothing, the same guarantee the naive path's set-difference gives
+//!    by construction — `compose` finally has its first real production
+//!    caller instead of being the tested-but-unused law story #77 left it
+//!    as.
+//!
+//! Output is IDENTICAL to the full-snapshot path by construction (the
+//! differential in `query/time_travel_trials.rs` proves fast-path output
+//! and full-snapshot output are the same `BTreeSet<SignedFact>` over a
+//! seeded generative history) — only the WORK done to reach it differs:
+//! O(changes in the window) postings scanned plus O(candidates) point
+//! reads, instead of O(whole relation) twice.
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Result, bail, miette};
@@ -99,7 +148,7 @@ use crate::data::bitemporal::{
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
-use crate::data::value::{AsOf, DataValue, Interval};
+use crate::data::value::{AsOf, DataValue, Interval, StoredValiditySlot, ValidityTs};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -190,6 +239,13 @@ pub(crate) struct DeltaRA {
     pub(crate) from: AsOf,
     pub(crate) to: AsOf,
     pub(crate) span: SourceSpan,
+    /// The `IndexKind::Temporal` posting index attached to `storage`, if
+    /// the compile tier found and resolved one for this clause (`Valid`
+    /// axis only — see the module doc's "posting-index fast path"
+    /// section). `None` for every other case, including a fresh
+    /// relation with no posting index attached yet: `iter_batched` falls
+    /// back to the naive two-snapshot diff exactly as before this chunk.
+    pub(crate) posting: Option<RelationHandle>,
 }
 
 /// `+1`: the fact holds at `to` but not at `from`.
@@ -471,31 +527,21 @@ impl<'a> Iterator for SpansScanBatches<'a> {
 }
 
 impl DeltaRA {
-    /// Naive by design (per the ruling — the O(changes) posting-index
-    /// acceleration is chunk 4): resolve both endpoints as full snapshots
-    /// through the existing as-of scan, and set-difference them. `from`
-    /// governs `Minus` facts (present there, gone at `to`); `to` governs
-    /// `Plus` facts (absent there, present at `to`) — a payload change is
-    /// therefore both a `Minus` (old payload) and a `Plus` (new payload)
-    /// fact at the same key, never a "modified" kind — the exact
+    /// `from` governs `Minus` facts (present there, gone at `to`); `to`
+    /// governs `Plus` facts (absent there, present at `to`) — a payload
+    /// change is therefore both a `Minus` (old payload) and a `Plus` (new
+    /// payload) fact at the same key, never a "modified" kind — the exact
     /// `SignedFact` shape this module's doc names, computed here through
     /// the production type rather than a bare sign column built ad hoc.
+    /// Two routes to the same `BTreeSet<SignedFact>`: the posting-index
+    /// fast path when `self.posting` is attached (module doc's "posting-
+    /// index fast path" section), the naive full-snapshot diff otherwise —
+    /// see [`Self::patch_naive`]/[`Self::patch_via_posting`].
     pub(crate) fn iter_batched<'a>(&'a self, tx: &'a impl ReadTx) -> Result<BatchIter<'a>> {
-        let mut from_set: BTreeSet<Tuple> = BTreeSet::new();
-        for t in self.storage.skip_scan_all(tx, self.from) {
-            from_set.insert(t?);
-        }
-        let mut to_set: BTreeSet<Tuple> = BTreeSet::new();
-        for t in self.storage.skip_scan_all(tx, self.to) {
-            to_set.insert(t?);
-        }
-        let mut patch: BTreeSet<SignedFact> = BTreeSet::new();
-        for t in from_set.difference(&to_set) {
-            patch.insert(SignedFact::Minus(t.clone()));
-        }
-        for t in to_set.difference(&from_set) {
-            patch.insert(SignedFact::Plus(t.clone()));
-        }
+        let patch = match &self.posting {
+            Some(posting) => self.patch_via_posting(tx, posting)?,
+            None => self.patch_naive(tx)?,
+        };
         let mut rows: Vec<Tuple> = patch
             .into_iter()
             .map(|fact| {
@@ -514,6 +560,121 @@ impl DeltaRA {
             rows: rows.into_iter(),
         }))
     }
+
+    /// Naive by design (per the ruling that landed this operator — the
+    /// O(changes) posting-index acceleration was always chunk 4's scope):
+    /// resolve both endpoints as full snapshots through the existing as-of
+    /// scan, and set-difference them. O(whole relation), twice.
+    fn patch_naive(&self, tx: &impl ReadTx) -> Result<BTreeSet<SignedFact>> {
+        let mut from_set: BTreeSet<Tuple> = BTreeSet::new();
+        for t in self.storage.skip_scan_all(tx, self.from) {
+            from_set.insert(t?);
+        }
+        let mut to_set: BTreeSet<Tuple> = BTreeSet::new();
+        for t in self.storage.skip_scan_all(tx, self.to) {
+            to_set.insert(t?);
+        }
+        let mut patch: BTreeSet<SignedFact> = BTreeSet::new();
+        for t in from_set.difference(&to_set) {
+            patch.insert(SignedFact::Minus(t.clone()));
+        }
+        for t in to_set.difference(&from_set) {
+            patch.insert(SignedFact::Plus(t.clone()));
+        }
+        Ok(patch)
+    }
+
+    /// O(changes): every candidate key comes from a bounded scan of the
+    /// posting index (module doc), never a scan of `self.storage` itself;
+    /// each candidate is then resolved at both endpoints through
+    /// [`RelationHandle::current_row`] — a point read, not a scan. The two
+    /// endpoints' results become two mini-patches (every candidate's
+    /// `from`-row tagged `Minus`, every candidate's `to`-row tagged
+    /// `Plus`), combined with exactly ONE call to [`compose`] — the same
+    /// cancellation algebra `laws::diff` itself is defined through,
+    /// finally given a real production caller: a candidate whose row is
+    /// IDENTICAL at both endpoints (a redundant re-assert, or an
+    /// Erase-transparent correction with no net effect) contributes
+    /// `Minus(f)` and `Plus(f)` for the same tuple `f`, which `compose`'s
+    /// tally cancels to nothing — exactly what the naive path's
+    /// `from_set.difference(to_set)`/`to_set.difference(from_set)` pair
+    /// achieves by construction, here achieved through the shared algebra
+    /// instead of a second hand-rolled implementation of it.
+    fn patch_via_posting(
+        &self,
+        tx: &impl ReadTx,
+        posting: &RelationHandle,
+    ) -> Result<BTreeSet<SignedFact>> {
+        let from_valid = self.from.valid.0.0;
+        let to_valid = self.to.valid.0.0;
+        let lo = from_valid.min(to_valid);
+        let hi = from_valid.max(to_valid);
+        let base_key_len = self.storage.metadata.keys.len();
+        let candidates = candidate_keys_from_posting(tx, posting, base_key_len, lo, hi)?;
+
+        let mut from_patch: BTreeSet<SignedFact> = BTreeSet::new();
+        let mut to_patch: BTreeSet<SignedFact> = BTreeSet::new();
+        for key in &candidates {
+            if let Some(f) = self.storage.current_row(tx, key, self.from, self.span)? {
+                from_patch.insert(SignedFact::Minus(f));
+            }
+            if let Some(t) = self.storage.current_row(tx, key, self.to, self.span)? {
+                to_patch.insert(SignedFact::Plus(t));
+            }
+        }
+        Ok(compose(&from_patch, &to_patch))
+    }
+}
+
+/// The posting index's own byte bounds for "every posting whose leading
+/// valid-instant column lies in `(lo, hi]`" — see the module doc's
+/// "posting-index fast path" section for the derivation. `Validity`
+/// encodes newest-first (bit-flipped, `data/memcmp.rs`), so the numerically
+/// LARGER endpoint (`hi`) is the ASCENDING-byte-order LOWER bound
+/// (inclusive), and the smaller endpoint (`lo`) is the upper bound
+/// (exclusive) — backwards from what plain integer bounds would suggest,
+/// which is exactly why this is factored out and named rather than inlined.
+fn posting_window_bounds(posting: &RelationHandle, lo: i64, hi: i64) -> (Vec<u8>, Vec<u8>) {
+    let col_at =
+        |ts: i64| vec![StoredValiditySlot::new(ValidityTs(std::cmp::Reverse(ts))).as_datavalue()];
+    let lower = col_at(hi).encode_as_key(posting.id).into_vec();
+    let upper = col_at(lo).encode_as_key(posting.id).into_vec();
+    (lower, upper)
+}
+
+/// Every DISTINCT base key with at least one posting in `(lo, hi]` — the
+/// candidate set the fast path resolves at both endpoints. `lo == hi`
+/// (identical snapshots) is the empty window, correctly producing no
+/// candidates and hence no patch, matching the naive path's
+/// `diff_identical_snapshots_is_empty` law.
+fn candidate_keys_from_posting(
+    tx: &impl ReadTx,
+    posting: &RelationHandle,
+    base_key_len: usize,
+    lo: i64,
+    hi: i64,
+) -> Result<BTreeSet<Tuple>> {
+    if lo >= hi {
+        return Ok(BTreeSet::new());
+    }
+    let (lower, upper) = posting_window_bounds(posting, lo, hi);
+    let mut keys = BTreeSet::new();
+    for row in tx.range_scan(&lower, &upper) {
+        let (k, _v) = row?;
+        // The posting's own declared key arity is `1 (leading valid) +
+        // base_key_len`; `decode_tuple_from_key` wants that plus the two
+        // mandatory bitemporal tail slots every Facts key carries.
+        let full = decode_tuple_from_key(&k, 1 + base_key_len + 2)?;
+        if full.len() != 1 + base_key_len + 2 {
+            bail!(
+                "corrupt posting key: decoded {} columns, expected {}",
+                full.len(),
+                1 + base_key_len + 2
+            );
+        }
+        keys.insert(full[1..1 + base_key_len].to_vec());
+    }
+    Ok(keys)
 }
 
 /// Packs an already-materialized, already-ordered row sequence into
@@ -798,12 +959,23 @@ mod tests {
         from: AsOf,
         to: AsOf,
     ) -> Vec<(i64, i64, i64)> {
+        delta_rows_with_posting(db, handle, from, to, None)
+    }
+
+    fn delta_rows_with_posting(
+        db: &crate::storage::fjall::FjallStorage,
+        handle: &RelationHandle,
+        from: AsOf,
+        to: AsOf,
+        posting: Option<RelationHandle>,
+    ) -> Vec<(i64, i64, i64)> {
         let ra = DeltaRA {
             bindings: vec![sym("k"), sym("val"), sym("sgn")],
             storage: handle.clone(),
             from,
             to,
             span: sp(),
+            posting,
         };
         let rtx = db.read_tx().expect("read tx");
         let mut out = vec![];
@@ -878,5 +1050,249 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // The posting-index fast path (story #62 chunk 4): every test below
+    // proves `DeltaRA` with `posting: Some(idx_handle)` produces the
+    // IDENTICAL `BTreeSet<SignedFact>` (via `delta_rows`'s already-sorted
+    // output) as `posting: None` — the correctness-first requirement the
+    // acceleration is worthless without. `assert_at`/`retract_at` above
+    // cannot be reused here: they write straight through `RelationHandle`
+    // (`put_fact`/`retract_fact`), which never calls `update_indices`, so
+    // a posting index attached to their relation would silently stay
+    // empty. These tests drive `SessionTx` directly instead — the same
+    // level `runtime/mutate.rs`'s own `temporal_index_tests` module
+    // drives it at, `update_indices` widened to `pub(crate)` for exactly
+    // this cross-module reuse.
+    // ─────────────────────────────────────────────────────────────────
+
+    use crate::runtime::db::{ScriptOptions, SessionTx};
+    use crate::runtime::relation::get_relation;
+
+    /// A one-key relation with a temporal posting index attached,
+    /// returning `(base handle, posting handle)` — both already resolved,
+    /// ready to feed a fresh write session or `DeltaRA` directly.
+    fn make_indexed_relation(
+        db: &crate::storage::fjall::FjallStorage,
+        name: &str,
+    ) -> (RelationHandle, RelationHandle) {
+        let mut stx =
+            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::default());
+        let input = crate::data::program::InputRelationHandle {
+            name: sym(name),
+            metadata: StoredRelationMetadata {
+                keys: vec![col("k")],
+                non_keys: vec![col("val")],
+            },
+            key_bindings: vec![sym("k")],
+            dep_bindings: vec![sym("val")],
+            span: sp(),
+        };
+        stx.create_relation(input, KeyspaceKind::Facts)
+            .expect("create base relation");
+        stx.create_temporal_index(name, "t")
+            .expect("create temporal index");
+        stx.store.commit().expect("commit setup");
+        let rtx = db.read_tx().expect("read tx");
+        let base = get_relation(&rtx, name).expect("base handle");
+        let idx = get_relation(&rtx, &format!("{name}:t")).expect("index handle");
+        (base, idx)
+    }
+
+    /// One event, its own fresh write session (so it mints its own
+    /// distinct system stamp, exactly like `assert_at`/`retract_at`
+    /// above) — writes the base row AND maintains every attached index
+    /// through the real `update_indices` seam, so the posting index and
+    /// the base relation advance in lockstep.
+    fn write_indexed_event(
+        db: &crate::storage::fjall::FjallStorage,
+        base: &RelationHandle,
+        key: i64,
+        valid: i64,
+        val: Option<i64>,
+    ) {
+        let mut stx =
+            SessionTx::new_write(db.write_tx().expect("write tx"), ScriptOptions::default());
+        let sys = stx.store.system_stamp();
+        let key_cols = vec![v(key)];
+        match val {
+            Some(payload) => {
+                let full = vec![v(key), v(payload)];
+                let enc_key = base
+                    .encode_bitemporal_key_for_store(&key_cols, vts(valid), sys, sp())
+                    .expect("encode key");
+                let enc_val = base
+                    .encode_bitemporal_val_for_store(&full, ClaimPolarity::Assert, sp())
+                    .expect("encode assert value");
+                stx.put_routed(base.is_temp, enc_key.as_bytes(), &enc_val)
+                    .expect("put base row");
+                stx.update_indices(base, Some(&full), None, vts(valid), sys)
+                    .expect("maintain indices");
+            }
+            None => {
+                let enc_key = base
+                    .encode_bitemporal_key_for_store(&key_cols, vts(valid), sys, sp())
+                    .expect("encode key");
+                let enc_val = base
+                    .encode_bitemporal_val_for_store(&key_cols, ClaimPolarity::Retract, sp())
+                    .expect("encode retract value");
+                stx.put_routed(base.is_temp, enc_key.as_bytes(), &enc_val)
+                    .expect("put base row");
+                stx.update_indices(base, None, Some(&key_cols), vts(valid), sys)
+                    .expect("maintain indices");
+            }
+        }
+        stx.store.commit().expect("commit event");
+    }
+
+    /// Both paths on the SAME two coordinates: the naive full-snapshot
+    /// diff (`posting: None`) and the posting-index fast path
+    /// (`posting: Some`) MUST agree — `delta_rows`'s output is already
+    /// canonically sorted by `DeltaRA::iter_batched` itself, so direct
+    /// `Vec` equality is the whole law.
+    fn assert_paths_agree(
+        db: &crate::storage::fjall::FjallStorage,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        from: AsOf,
+        to: AsOf,
+    ) {
+        let naive = delta_rows(db, base, from, to);
+        let fast = delta_rows_with_posting(db, base, from, to, Some(idx.clone()));
+        assert_eq!(
+            naive, fast,
+            "fast path disagreed with the naive path at from={from:?} to={to:?}"
+        );
+    }
+
+    #[test]
+    fn posting_fast_path_matches_naive_on_a_new_assertion() {
+        let db = new_fjall_storage(tempfile_dir()).expect("storage");
+        let (base, idx) = make_indexed_relation(&db, "posting_new");
+        write_indexed_event(&db, &base, 1, 10, Some(100));
+        assert_paths_agree(
+            &db,
+            &base,
+            &idx,
+            AsOf::current(vts(5)),
+            AsOf::current(vts(20)),
+        );
+    }
+
+    #[test]
+    fn posting_fast_path_matches_naive_on_a_payload_change() {
+        let db = new_fjall_storage(tempfile_dir()).expect("storage");
+        let (base, idx) = make_indexed_relation(&db, "posting_change");
+        write_indexed_event(&db, &base, 1, 10, Some(100));
+        write_indexed_event(&db, &base, 1, 20, Some(200));
+        assert_paths_agree(
+            &db,
+            &base,
+            &idx,
+            AsOf::current(vts(15)),
+            AsOf::current(vts(25)),
+        );
+    }
+
+    #[test]
+    fn posting_fast_path_matches_naive_on_identical_snapshots() {
+        let db = new_fjall_storage(tempfile_dir()).expect("storage");
+        let (base, idx) = make_indexed_relation(&db, "posting_identical");
+        write_indexed_event(&db, &base, 1, 10, Some(100));
+        assert_paths_agree(
+            &db,
+            &base,
+            &idx,
+            AsOf::current(vts(20)),
+            AsOf::current(vts(20)),
+        );
+    }
+
+    #[test]
+    fn posting_fast_path_matches_naive_on_a_retraction() {
+        let db = new_fjall_storage(tempfile_dir()).expect("storage");
+        let (base, idx) = make_indexed_relation(&db, "posting_retract");
+        write_indexed_event(&db, &base, 1, 10, Some(100));
+        write_indexed_event(&db, &base, 1, 20, None);
+        assert_paths_agree(
+            &db,
+            &base,
+            &idx,
+            AsOf::current(vts(15)),
+            AsOf::current(vts(25)),
+        );
+        // A window entirely BEFORE any event: empty candidate set either way.
+        assert_paths_agree(
+            &db,
+            &base,
+            &idx,
+            AsOf::current(vts(1)),
+            AsOf::current(vts(5)),
+        );
+    }
+
+    #[test]
+    fn posting_fast_path_matches_naive_on_a_backward_diff() {
+        // `to` earlier than `from`: `lo`/`hi` still resolve correctly
+        // since the fast path takes them by numeric min/max, not by
+        // positional role.
+        let db = new_fjall_storage(tempfile_dir()).expect("storage");
+        let (base, idx) = make_indexed_relation(&db, "posting_backward");
+        write_indexed_event(&db, &base, 1, 10, Some(100));
+        assert_paths_agree(
+            &db,
+            &base,
+            &idx,
+            AsOf::current(vts(20)),
+            AsOf::current(vts(5)),
+        );
+    }
+
+    /// A seeded generative campaign (xorshift64*, the same dependency-free
+    /// deterministic PRNG `query/ra/stored.rs`'s own accelerated-vs-
+    /// unaccelerated differential uses): many keys, many random
+    /// assert/retract events, many random coordinate pairs — the two
+    /// production paths must agree on every one.
+    #[test]
+    fn posting_fast_path_matches_naive_generatively() {
+        let db = new_fjall_storage(tempfile_dir()).expect("storage");
+        let (base, idx) = make_indexed_relation(&db, "posting_generative");
+
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next_u64 = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut next_range = |n: u64| next_u64() % n;
+
+        const N_EVENTS: usize = 60;
+        const N_KEYS: i64 = 5;
+        const MAX_VALID: i64 = 40;
+        for _ in 0..N_EVENTS {
+            let key = next_range(N_KEYS as u64) as i64;
+            let valid = next_range(MAX_VALID as u64) as i64;
+            if next_range(4) == 0 {
+                write_indexed_event(&db, &base, key, valid, None);
+            } else {
+                let payload = next_range(1000) as i64;
+                write_indexed_event(&db, &base, key, valid, Some(payload));
+            }
+        }
+
+        const N_PAIRS: usize = 40;
+        for _ in 0..N_PAIRS {
+            let from = next_range(MAX_VALID as u64 + 2) as i64;
+            let to = next_range(MAX_VALID as u64 + 2) as i64;
+            assert_paths_agree(
+                &db,
+                &base,
+                &idx,
+                AsOf::current(vts(from)),
+                AsOf::current(vts(to)),
+            );
+        }
     }
 }

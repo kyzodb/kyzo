@@ -950,7 +950,14 @@ impl<T: WriteTx> SessionTx<T> {
     /// given). Plain and Temporal indices — both scan-shaped, both
     /// maintained through the same mirror-row seam below — are handled
     /// here; manifest kinds are the operator tier's typed seam.
-    fn update_indices(
+    ///
+    /// `pub(crate)`, not merely `fn`: story #62 chunk 4's read-side
+    /// differential (`query/ra/temporal.rs`'s test module) drives this
+    /// exact primitive directly, the same way this file's own
+    /// `temporal_index_tests` already does — one write-side seam, called
+    /// from wherever a test needs a base relation and its posting index
+    /// to advance in lockstep, not a second hand-rolled maintenance path.
+    pub(crate) fn update_indices(
         &mut self,
         relation_store: &RelationHandle,
         new_kv: Option<&[DataValue]>,

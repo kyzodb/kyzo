@@ -498,6 +498,11 @@ impl RelAlgebra {
                     from,
                     to,
                     span,
+                    // Resolved separately, after this constructor returns
+                    // (it needs catalog access this constructor does not
+                    // have) — see `query/compile.rs`'s Delta-clause arm and
+                    // `DeltaRA::posting`'s own doc.
+                    posting: None,
                 }))
             }
         }
