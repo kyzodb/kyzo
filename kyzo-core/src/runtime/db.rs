@@ -187,17 +187,64 @@ pub(crate) struct InvalidTimeout(pub(crate) f64);
 /// this engine has met, small enough that no scan is unbounded.
 const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = NonZeroU64::new(1 << 32).unwrap();
 
-/// Per-script evaluation controls. Default is "run to the fixpoint within the
-/// deterministic epoch ceiling, no deadline". These are the knobs that turn
-/// a budget into a refusal; they are deterministic (epoch/derived-tuple
-/// ceilings) except the wall-clock `timeout`.
+/// The deterministic default ceiling on total derived tuples admitted across
+/// one query (`eval::BudgetDimension::DerivedTuples`, summed over EVERY
+/// store the query touches — a plain `?[x] := r[x]` entry rule copies its
+/// source's admissions into the output store too, so a query's true spend is
+/// commonly ~2x the size of its "answer"), applied when
+/// [`ScriptOptions::derived_tuple_ceiling`] is `None`. Closes the gap a live
+/// server hit: a value-generating recursion with no fixpoint (e.g.
+/// `f[x] := x = 1; f[x] := f[y], x = y + 1`) was bounded ONLY by
+/// [`DEFAULT_EPOCH_CEILING`], and a rule whose OUTPUT WIDENS per epoch (a
+/// join that fans out, not merely a slow successor chain) can exhaust memory
+/// in a handful of epochs — far before any epoch ceiling would ever fire,
+/// since that ceiling bounds iteration count, not per-iteration volume.
+///
+/// `50_000_000` is not a round guess:
+/// - it is the EXACT ceiling `bench_api.rs`'s own `generous_budget()`
+///   already arms for bulk bench workloads in this engine — reused, not
+///   reinvented;
+/// - it is verified against this engine's own real-world ceiling: the
+///   `kyzo-bench` sibling lane's actual runner
+///   (`benches/datalog/kyzo-runner/src/main.rs`) calls `Db::run_script` with
+///   NO `ScriptOptions` override at all, so every recorded datalog result
+///   ran (and must keep running) under exactly this default. The largest
+///   already-published, real-graph result is `tc/snap-p2p-Gnutella08`
+///   (6.3k nodes, 20.8k real edges): 13_148_244 answer rows, ~26.3M true
+///   spend after the entry-copy doubling — `50_000_000` clears it with
+///   ~1.9x headroom, and clears `tc/snap-wiki-Vote`'s 11_947_132 rows
+///   (~23.9M spend) the same way. A smaller "fast-refusing" ceiling was
+///   considered and rejected: it would have silently regressed these
+///   exact already-recorded benchmarks — a real terminating query on a
+///   real graph, exactly what "zero friction" must protect;
+/// - it is still ~14,000x the largest volume this codebase's OWN test
+///   suite derives under default options (a few thousand rows), so it adds
+///   no friction there either.
+///
+/// A query that never reaches a fixpoint (admits at least one net-new tuple
+/// every epoch, by definition) is *structurally guaranteed* to cross this
+/// ceiling — and be refused with a named, typed dimension — at or before
+/// [`DEFAULT_EPOCH_CEILING`]'s own limit, so no such query can run
+/// unbounded; a WIDENING one (many new tuples per epoch) crosses it within a
+/// handful of epochs, catching the class an epoch ceiling alone cannot
+/// bound at all. Overridable per script through
+/// [`ScriptOptions::derived_tuple_ceiling`]; a caller with a genuinely
+/// larger legitimate workload raises it explicitly.
+const DEFAULT_DERIVED_TUPLE_CEILING: u64 = 50_000_000;
+
+/// Per-script evaluation controls. Default is "run to the fixpoint within
+/// the deterministic epoch and derived-tuple ceilings, no deadline". These
+/// are the knobs that turn a budget into a refusal; they are deterministic
+/// (epoch/derived-tuple ceilings) except the wall-clock `timeout`.
 #[derive(Clone, Debug, Default)]
 pub struct ScriptOptions {
     /// Override the epoch (semi-naive iteration) ceiling. `None` uses
     /// [`DEFAULT_EPOCH_CEILING`].
     pub epoch_ceiling: Option<u32>,
-    /// A deterministic ceiling on the number of derived tuples. `None` is
-    /// unbounded. Refusal is exact and reproducible.
+    /// A deterministic ceiling on the number of derived tuples. `None` uses
+    /// [`DEFAULT_DERIVED_TUPLE_CEILING`] — never unbounded, so a
+    /// value-generating recursion that never reaches a fixpoint always
+    /// refuses instead of running away. Refusal is exact and reproducible.
     pub derived_tuple_ceiling: Option<u64>,
     /// A wall-clock deadline in seconds. `None` is no deadline. The query's
     /// own `:timeout` option, if smaller, wins.
@@ -839,9 +886,10 @@ fn build_budget(
     let ceiling = options.epoch_ceiling.unwrap_or(DEFAULT_EPOCH_CEILING);
     let ceiling = NonZeroU32::new(ceiling.max(1)).expect("max(1) is nonzero");
     let mut budget = Budget::new(ceiling).with_kill_flag(kill);
-    if let Some(n) = options.derived_tuple_ceiling {
-        budget = budget.with_derived_tuple_ceiling(n);
-    }
+    let derived_tuple_ceiling = options
+        .derived_tuple_ceiling
+        .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING);
+    budget = budget.with_derived_tuple_ceiling(derived_tuple_ceiling);
     // The tighter of the caller's deadline and the query's own :timeout.
     let deadline = [options.timeout_secs, out_opts.timeout]
         .into_iter()
@@ -2085,6 +2133,156 @@ mod tests {
             )
             .expect("default budget completes");
         assert_eq!(ok.rows.len(), 12);
+    }
+
+    /// Story #68 / issue #1: a value-generating recursion with NO fixpoint
+    /// (`f[x] := f[y], x = y + 1` — every epoch derives exactly one new,
+    /// never-before-seen `x`) used to be bounded ONLY by the epoch ceiling;
+    /// measured directly on this tree, driving it to the full
+    /// 1,000,000-epoch default takes ~30s of CPU per request — cheap enough
+    /// to hammer a live server with concurrently, expensive enough per
+    /// request to be a real denial-of-service surface. A small EXPLICIT
+    /// derived-tuple ceiling must refuse it instantly, naming the
+    /// `derived tuples` dimension (not `epochs`) — proving the NEW ceiling,
+    /// not the pre-existing one, is what catches it.
+    #[test]
+    fn runaway_value_generating_recursion_refuses_under_explicit_ceiling() {
+        let db = Db::new(SimStorage::new(11)).unwrap();
+        let opts = ScriptOptions {
+            derived_tuple_ceiling: Some(10),
+            ..Default::default()
+        };
+        let err = db
+            .run_script_with(
+                "
+                f[x] := x = 1
+                f[x] := f[y], x = y + 1
+                ?[x] := f[x]
+                ",
+                no_params(),
+                opts,
+            )
+            .expect_err("a recursion with no fixpoint must refuse, never hang");
+        let refusal: &crate::query::eval::LimitExceeded = err
+            .downcast_ref()
+            .expect("typed budget refusal, not a panic or a hang");
+        assert_eq!(
+            refusal.dimension,
+            crate::query::eval::BudgetDimension::DerivedTuples,
+            "must name the derived-tuple dimension specifically"
+        );
+        assert_eq!(refusal.ceiling, 10);
+    }
+
+    /// A WIDENING value-generating recursion — every epoch's join fans out
+    /// (`x = y*2` AND `x = y*2+1` from the same `y`, a binary tree over the
+    /// unbounded positive integers with no fixpoint) — under COMPLETELY
+    /// DEFAULT [`ScriptOptions`] (no explicit ceiling of any kind). This is
+    /// the class [`DEFAULT_DERIVED_TUPLE_CEILING`] exists for: an epoch
+    /// ceiling alone bounds ITERATION COUNT, not per-iteration volume, so it
+    /// cannot stop a rule whose output doubles every epoch from exhausting
+    /// memory in a couple dozen epochs — far short of
+    /// `DEFAULT_EPOCH_CEILING`'s 1,000,000. Before this fix
+    /// `derived_tuple_ceiling` defaulted to `None` (truly unbounded); it must
+    /// now refuse on the `derived tuples` dimension, naming the default
+    /// ceiling exactly. (Measured: ~30s to the typed refusal at ~50M rows
+    /// admitted, peak RSS ~2.4GB — bounded and finite, never a silent hang
+    /// or an unbounded climb; this is the one deliberately expensive test in
+    /// this file, verifying the actual compiled-in default end to end.)
+    #[test]
+    fn widening_value_generating_recursion_refuses_under_default_budget() {
+        let db = Db::new(SimStorage::new(12)).unwrap();
+        let err = db
+            .run_script(
+                "
+                f[x] := x = 1
+                f[x] := f[y], x = y * 2
+                f[x] := f[y], x = y * 2 + 1
+                ?[x] := f[x]
+                ",
+                no_params(),
+            )
+            .expect_err("the DEFAULT budget alone must refuse a fixpoint-less, widening recursion");
+        let refusal: &crate::query::eval::LimitExceeded = err
+            .downcast_ref()
+            .expect("typed budget refusal, not a panic or a hang");
+        assert_eq!(
+            refusal.dimension,
+            crate::query::eval::BudgetDimension::DerivedTuples,
+            "the default derived-tuple ceiling, not the pre-existing epoch ceiling, must be \
+             what catches this — a fall-through to Epochs would mean the fix did nothing for \
+             a widening recursion, which can exhaust memory in far fewer than 1,000,000 epochs"
+        );
+        assert_eq!(refusal.ceiling, DEFAULT_DERIVED_TUPLE_CEILING);
+    }
+
+    /// Raising `derived_tuple_ceiling` through [`ScriptOptions`] lets a
+    /// bigger — but genuinely terminating — query run. A 1000-node path's
+    /// full transitive closure admits `999 + 998 + ... + 1 = 499_500` pairs
+    /// into `path`, and the entry rule `?[a, b] := path[a, b]` admits the
+    /// same 499_500 again into the output store — `DerivedTuples` sums
+    /// admissions across every store for the whole query (`eval.rs`), so the
+    /// true spend is ~999_000 (confirmed empirically: an explicit ceiling of
+    /// 999_000 completes, 900_000 still refuses). Two EXPLICIT ceilings
+    /// (never the compiled-in default, so this test is independent of its
+    /// exact value) bracket that true spend: a low one must refuse, a
+    /// higher one must admit the whole, finite, correct answer — this is not
+    /// runaway, it is a normal terminating recursion whose answer is simply
+    /// large, and the override path must not turn any ceiling into a hard
+    /// cap on legitimate work.
+    #[test]
+    fn raising_derived_tuple_ceiling_admits_a_larger_terminating_query() {
+        let db = Db::new(SimStorage::new(13)).unwrap();
+        let mut edges = String::from("?[a, b] <- [");
+        for i in 0..999 {
+            edges.push_str(&format!("[{i}, {}],", i + 1));
+        }
+        edges.push_str("] :create edge {a, b}");
+        db.run_script(&edges, no_params()).expect("create edges");
+
+        let q = "
+            path[a, b] := *edge[a, b]
+            path[a, b] := *edge[a, c], path[c, b]
+            ?[a, b] := path[a, b]
+            ";
+
+        // A low explicit ceiling (well under the true ~999_000 spend)
+        // refuses — a single epoch's join here materializes rows faster
+        // than the epoch barrier, so the mid-epoch `InFlightDerivations`
+        // guard (checked every `INTERRUPT_STRIDE` derivations, see
+        // `eval::InterruptTicker`) trips first; either way it is the SAME
+        // armed derived-tuple ceiling that stops it, never a silent hang.
+        let low_opts = ScriptOptions {
+            derived_tuple_ceiling: Some(200_000),
+            ..Default::default()
+        };
+        let err = db
+            .run_script_with(q, no_params(), low_opts)
+            .expect_err("~999_000 true spend must exceed a 200_000 ceiling");
+        let refusal: &crate::query::eval::LimitExceeded =
+            err.downcast_ref().expect("typed budget refusal");
+        assert!(
+            matches!(
+                refusal.dimension,
+                crate::query::eval::BudgetDimension::DerivedTuples
+                    | crate::query::eval::BudgetDimension::InFlightDerivations
+            ),
+            "expected a derived-tuple-ceiling refusal, got {:?}",
+            refusal.dimension
+        );
+        assert_eq!(refusal.ceiling, 200_000);
+
+        // Raising the ceiling admits the whole (finite, correct) answer.
+        // True total spend across `path` + the entry store is ~999_000
+        // (measured); 1_100_000 gives real headroom.
+        let high_opts = ScriptOptions {
+            derived_tuple_ceiling: Some(1_100_000),
+            ..Default::default()
+        };
+        let ok = db
+            .run_script_with(q, no_params(), high_opts)
+            .expect("a raised ceiling must let the larger terminating query complete");
+        assert_eq!(ok.rows.len(), 499_500);
     }
 
     /// Exercises the normalizer paths the recursive-join test does not: a
