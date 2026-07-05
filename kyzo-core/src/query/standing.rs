@@ -203,7 +203,31 @@ impl<S: Storage> StandingQuery<S> {
     pub fn apply_pending(&mut self) -> Result<BTreeMap<Symbol, BTreeSet<SignedFact>>> {
         let mut edb_patch: BTreeMap<Symbol, BTreeSet<SignedFact>> = BTreeMap::new();
         for (rel, sub) in &self.subscriptions {
-            let entry = edb_patch.entry(rel.clone()).or_default();
+            // Net each tuple's signed multiplicity IN COMMIT ORDER
+            // (`try_recv`'s own FIFO order) before this relation's patch
+            // ever reaches `incremental_eval` — draining more than one
+            // queued commit's worth of events in a single pass (the
+            // whole point of a pull-based drive model: poll less often
+            // than every commit) means the SAME tuple can appear as
+            // both a `Plus` and a `Minus` across DIFFERENT events
+            // (assert-then-retract, retract-then-reassert, or two puts
+            // of DIFFERENT values at the SAME key). A flat
+            // `BTreeSet<SignedFact>` cannot represent that cancellation
+            // — `Plus(t)` and `Minus(t)` are distinct set elements, so
+            // both survive into the patch — and `incremental_eval`'s
+            // redundancy filter, which only ever sees the state from
+            // BEFORE this whole batch, has no way to recover it:
+            // whichever side happens to already match pre-batch state
+            // survives, the other is silently dropped. In the
+            // key-value-relation case that means two puts of the same
+            // key can leave BOTH values in the maintained state at
+            // once — a structural key-uniqueness violation that
+            // poisons every downstream rule (0.9.0 adversarial review,
+            // confirmed; see this module's own repro test). Netting
+            // first turns whatever `incremental_eval` receives back
+            // into an actually well-formed single patch, which its
+            // filter already handles correctly.
+            let mut net: BTreeMap<Tuple, i64> = BTreeMap::new();
             while let Ok((op, new, old)) = sub.receiver.try_recv() {
                 match op {
                     CallbackOp::Put => {
@@ -213,15 +237,15 @@ impl<S: Storage> StandingQuery<S> {
                         // test fixtures below) — net effect is no change,
                         // not a Minus-then-filtered-Plus pair. Computing
                         // the difference here, not raw per-set facts, is
-                        // what keeps that case from ever reaching
-                        // `incremental_eval` as a spurious `Minus`.
+                        // what keeps that case from ever contributing a
+                        // spurious `Minus`.
                         let new_set: BTreeSet<Tuple> = new.rows.into_iter().collect();
                         let old_set: BTreeSet<Tuple> = old.rows.into_iter().collect();
                         for row in new_set.difference(&old_set) {
-                            entry.insert(SignedFact::Plus(row.clone()));
+                            *net.entry(row.clone()).or_default() += 1;
                         }
                         for row in old_set.difference(&new_set) {
-                            entry.insert(SignedFact::Minus(row.clone()));
+                            *net.entry(row.clone()).or_default() -= 1;
                         }
                     }
                     CallbackOp::Rm => {
@@ -229,9 +253,26 @@ impl<S: Storage> StandingQuery<S> {
                         // real row this program's arity matches — only
                         // `old` (the full removed row) is a fact.
                         for row in old.rows {
-                            entry.insert(SignedFact::Minus(row));
+                            *net.entry(row).or_default() -= 1;
                         }
                     }
+                }
+            }
+            let entry = edb_patch.entry(rel.clone()).or_default();
+            for (row, n) in net {
+                match n.cmp(&0) {
+                    std::cmp::Ordering::Greater => {
+                        entry.insert(SignedFact::Plus(row));
+                    }
+                    std::cmp::Ordering::Less => {
+                        entry.insert(SignedFact::Minus(row));
+                    }
+                    // A net-zero tuple never had a real effect across
+                    // this whole batch (assert-then-retract, or the
+                    // reverse) — dropped here, not merely filtered
+                    // later, so it never even looks like a candidate
+                    // patch entry.
+                    std::cmp::Ordering::Equal => {}
                 }
             }
         }
@@ -469,6 +510,116 @@ mod tests {
         assert!(sq.current_answer().is_empty());
 
         sq.teardown();
+    }
+
+    /// The multi-commit-drain bug (0.9.0 adversarial review, confirmed):
+    /// `apply_pending` used to union raw signed facts from EVERY queued
+    /// event into one `BTreeSet<SignedFact>` before ever calling
+    /// `incremental_eval` — a set that cannot represent "assert then
+    /// retract" of the SAME tuple across two different queued events.
+    /// `incremental_eval`'s redundancy filter then resolved each raw
+    /// fact against the state from BEFORE the whole batch, with no
+    /// notion of commit order within it: whichever side happened to
+    /// already match pre-batch state survived, the other was silently
+    /// dropped. Three repros, each two real commits then ONE
+    /// `apply_pending` (never one per commit — the real-commit
+    /// differential above always drains one-per-commit, which is
+    /// exactly why this hid from it).
+    #[test]
+    fn apply_pending_nets_multiple_queued_commits_before_evaluating() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+
+        // Repro 1: put-then-rm of the same absent key nets to no change.
+        db.run_script(":create p {x: Int =>}", no_params()).unwrap();
+        db.run_script(":create r {x: Int =>}", no_params()).unwrap();
+        let mut sq = db
+            .register_standing("?[x] := *p[x], not *r[x]", no_params())
+            .unwrap();
+        assert!(sq.current_answer().is_empty());
+        db.run_script("?[x] <- [[1]] :put p {x}", no_params())
+            .unwrap();
+        db.run_script("?[x] <- [[1]] :rm p {x}", no_params())
+            .unwrap();
+        let delta = sq.apply_pending_answer().unwrap();
+        assert!(
+            delta.is_empty(),
+            "put-then-rm in one drain must net to no change, got {delta:?}"
+        );
+        assert!(sq.current_answer().is_empty());
+        let real: BTreeSet<Tuple> = db
+            .run_script("?[x] := *p[x], not *r[x]", no_params())
+            .unwrap()
+            .rows
+            .into_iter()
+            .collect();
+        assert_eq!(sq.current_answer().clone(), real);
+        sq.teardown();
+
+        // Repro 2: p(1) already present; rm-then-put in one drain nets to
+        // no change (it stays present).
+        let dir2 = tempfile::tempdir().unwrap();
+        let db2 = Db::new(new_fjall_storage(dir2.path()).unwrap()).unwrap();
+        db2.run_script(":create p {x: Int =>}", no_params())
+            .unwrap();
+        db2.run_script(":create r {x: Int =>}", no_params())
+            .unwrap();
+        db2.run_script("?[x] <- [[1]] :put p {x}", no_params())
+            .unwrap();
+        let mut sq2 = db2
+            .register_standing("?[x] := *p[x], not *r[x]", no_params())
+            .unwrap();
+        assert_eq!(
+            sq2.current_answer().clone(),
+            [vec![v(1)]].into_iter().collect()
+        );
+        db2.run_script("?[x] <- [[1]] :rm p {x}", no_params())
+            .unwrap();
+        db2.run_script("?[x] <- [[1]] :put p {x}", no_params())
+            .unwrap();
+        let delta2 = sq2.apply_pending_answer().unwrap();
+        assert!(
+            delta2.is_empty(),
+            "rm-then-put in one drain must net to no change, got {delta2:?}"
+        );
+        assert_eq!(
+            sq2.current_answer().clone(),
+            [vec![v(1)]].into_iter().collect()
+        );
+        sq2.teardown();
+
+        // Repro 3, the worst: a KEY-VALUE relation, two puts of the SAME
+        // key with DIFFERENT values in one drain must never leave both
+        // rows in the maintained state — a structural key-uniqueness
+        // violation that poisons every downstream rule.
+        let dir3 = tempfile::tempdir().unwrap();
+        let db3 = Db::new(new_fjall_storage(dir3.path()).unwrap()).unwrap();
+        db3.run_script(":create q {k: Int => val: Int}", no_params())
+            .unwrap();
+        let mut sq3 = db3
+            .register_standing("?[k, val] := *q[k, val]", no_params())
+            .unwrap();
+        assert!(sq3.current_answer().is_empty());
+        db3.run_script("?[k, val] <- [[1, 20]] :put q {k, val}", no_params())
+            .unwrap();
+        db3.run_script("?[k, val] <- [[1, 30]] :put q {k, val}", no_params())
+            .unwrap();
+        sq3.apply_pending().unwrap();
+        let maintained = sq3.current_answer().clone();
+        assert_eq!(
+            maintained.len(),
+            1,
+            "key 1 must appear exactly once, got {maintained:?}"
+        );
+        let real3: BTreeSet<Tuple> = db3
+            .run_script("?[k, val] := *q[k, val]", no_params())
+            .unwrap()
+            .rows
+            .into_iter()
+            .collect();
+        assert_eq!(maintained, real3);
+        assert_eq!(maintained, [vec![v(1), v(30)]].into_iter().collect());
+        sq3.teardown();
     }
 
     #[test]
@@ -751,6 +902,120 @@ mod tests {
         assert!(
             cases > 100,
             "expected a real generative campaign, ran {cases}"
+        );
+    }
+
+    /// The test gap the 0.9.0 adversarial review named directly: every
+    /// OTHER real-commit differential in this module calls
+    /// `apply_pending` once PER commit, so events never accumulate —
+    /// exactly the one path `apply_pending`'s pull-based design exists
+    /// to support (poll less often than every commit) was never
+    /// exercised. This campaign issues a random BATCH of 1-4 real
+    /// commits — puts of new keys, puts that CHANGE an existing key's
+    /// value (the repro-3 worst case), and retractions, all mixed
+    /// together and free to touch the SAME key more than once in one
+    /// batch — before a single `apply_pending`, then checks the
+    /// maintained answer against a fresh `db.run_script` recompute. Runs
+    /// against a genuine key-VALUE relation (none of `shapes()`'s EDB
+    /// relations have value columns at all, so none of them could have
+    /// caught the worst repro) with both a plain projection and an
+    /// aggregation over it.
+    #[test]
+    fn apply_pending_matches_recompute_across_batched_multi_commit_drains() {
+        let mut rng: u64 = 0xBADD_ECAF_5EED_1234;
+        let mut next_u64 = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let mut next_range = |n: u64| next_u64() % n;
+
+        let queries = ["?[k, val] := *q[k, val]", "?[k, sum(val)] := *q[k, val]"];
+
+        let mut cases = 0;
+        for query in queries {
+            for _iteration in 0..20 {
+                let dir = tempfile::tempdir().unwrap();
+                let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+                db.run_script(":create q {k: Int => val: Int}", no_params())
+                    .unwrap();
+
+                // `live`: the CURRENT key -> value mapping, mirrored
+                // in-process (a key-value relation has at most one row
+                // per key, unlike the key-only `live` sets elsewhere in
+                // this module).
+                let mut live: BTreeMap<u64, u64> = BTreeMap::new();
+                for _ in 0..next_range(4) {
+                    let k = next_range(3);
+                    let v = next_range(5);
+                    db.run_script(
+                        &format!("?[k, val] <- [[{k}, {v}]] :put q {{k, val}}"),
+                        no_params(),
+                    )
+                    .unwrap();
+                    live.insert(k, v);
+                }
+
+                let mut sq = db.register_standing(query, no_params()).unwrap();
+
+                for _batch in 0..8 {
+                    let batch_size = 1 + next_range(4);
+                    for _op in 0..batch_size {
+                        let k = next_range(3);
+                        if live.contains_key(&k) && next_range(3) == 0 {
+                            db.run_script(&format!("?[k] <- [[{k}]] :rm q {{k}}"), no_params())
+                                .unwrap();
+                            live.remove(&k);
+                        } else {
+                            let v = next_range(5);
+                            db.run_script(
+                                &format!("?[k, val] <- [[{k}, {v}]] :put q {{k, val}}"),
+                                no_params(),
+                            )
+                            .unwrap();
+                            live.insert(k, v);
+                        }
+                    }
+
+                    sq.apply_pending().unwrap();
+                    let recomputed: BTreeSet<Tuple> = db
+                        .run_script(query, no_params())
+                        .unwrap()
+                        .rows
+                        .into_iter()
+                        .collect();
+                    let maintained = sq.current_answer().clone();
+                    assert_eq!(
+                        maintained, recomputed,
+                        "query '{query}', batch {_batch}: mismatch after a {batch_size}-commit \
+                         drain (live keys: {live:?})",
+                    );
+                    // The structural property repro 3 broke, checked
+                    // directly rather than only through equality with
+                    // `recomputed` (which could coincidentally still
+                    // hold if the real answer also happened to have a
+                    // duplicate key — it never will, but this is the
+                    // property actually being defended): the plain
+                    // projection can never carry two rows for the same
+                    // key.
+                    if query == queries[0] {
+                        let keys: BTreeSet<&DataValue> =
+                            maintained.iter().map(|row| &row[0]).collect();
+                        assert_eq!(
+                            keys.len(),
+                            maintained.len(),
+                            "duplicate key in maintained state: {maintained:?}"
+                        );
+                    }
+                    cases += 1;
+                }
+                sq.teardown();
+            }
+        }
+        assert!(
+            cases > 100,
+            "expected a rich batched-drain campaign, ran {cases}"
         );
     }
 }
