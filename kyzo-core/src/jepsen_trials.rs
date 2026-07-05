@@ -613,5 +613,69 @@ fn single_node_serializability_campaign() {
     );
 }
 
+/// Falsification seal for kyzo#95's fix, mandatory per the finding's own
+/// discipline: removing a false positive is only correct if the checker
+/// hasn't ALSO gone blind to a true one — "0 cycles" must mean "the engine
+/// is correct," never "the checker is now vacuous." Hand-built history, no
+/// real storage involved (the two witnesses this issue was ever about,
+/// `commit_seq` and `stamp`, do not even enter into it): two transactions
+/// each read the OTHER's register at its GENESIS value and write their OWN
+/// — the classic write-skew shape (each is consistent run alone; run
+/// together, both cannot be, since each's read is stale by the time the
+/// other's write lands) — which produces exactly two anti-dependency
+/// (`Rw`) edges forming a 2-cycle: the canonical G2. `check_history` (the
+/// SAME function `run_seed` calls, completely unmodified by this fix) must
+/// still report it under the now-stamp-ordered `CommittedTxn` shape.
+#[test]
+fn check_history_still_flags_a_genuine_write_skew_g2_cycle() {
+    const REG_A: u32 = 0;
+    const REG_B: u32 = 1;
+    let txns = vec![
+        CommittedTxn {
+            // T0: reads B at its genesis value, writes A.
+            ops: vec![
+                ExecutedOp::Read {
+                    reg: REG_B,
+                    write_id: GENESIS_WRITE_ID,
+                },
+                ExecutedOp::Write {
+                    reg: REG_A,
+                    write_id: 100,
+                },
+            ],
+            stamp: 10,
+        },
+        CommittedTxn {
+            // T1: reads A at its genesis value, writes B.
+            ops: vec![
+                ExecutedOp::Read {
+                    reg: REG_A,
+                    write_id: GENESIS_WRITE_ID,
+                },
+                ExecutedOp::Write {
+                    reg: REG_B,
+                    write_id: 200,
+                },
+            ],
+            stamp: 20,
+        },
+    ];
+    let check = check_history(&txns);
+    assert!(
+        check.integrity_findings.is_empty(),
+        "no integrity findings expected in this hand-built history: {:?}",
+        check.integrity_findings
+    );
+    let (anomaly, cycle) = check
+        .cycle
+        .expect("a genuine write-skew history must be flagged, never silently accepted");
+    assert_eq!(
+        anomaly,
+        Anomaly::G2,
+        "two independent anti-dependency edges (each txn reads the other's stale value) \
+         is the canonical G2 shape, got {anomaly:?}: {cycle:?}"
+    );
+}
+
 // Regression pins for seeds a campaign has surfaced go here, each as a named
 // test asserting `run_seed(SEED).is_ok()`. None to date.
