@@ -439,6 +439,156 @@ pub(crate) enum IncrementalRejection {
     Recursive,
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Translation: a real compiled query -> this module's IR
+// ─────────────────────────────────────────────────────────────────────────
+//
+// `data::program::MagicAtom` (the magic-set-rewritten tier, one stratum
+// short of the final `RelAlgebra` lowering) is the right source, not
+// `RelAlgebra` itself: by the time atoms reach `RelAlgebra`, negation has
+// become `NegJoin`, every variable has become a resolved column INDEX,
+// and `Symbol`s are gone — there is nothing left to translate. `MagicAtom`
+// still names its variables by `Symbol` and already separates
+// `Rule`/`NegatedRule` and `Relation`/`NegatedRelation` as distinct
+// variants, matching this module's `Literal.negated` directly.
+//
+// One real subtlety, not a free structural match: after the magic
+// rewrite, a CONSTANT never appears inline in a `Relation`/`Rule` atom's
+// argument list — it is hoisted into a separate `Unification{binding,
+// expr: Expr::Const{..}}` atom instead. [`translate_rule`] below collects
+// every constant-valued `Unification` atom into a substitution map
+// first, then applies it to every other atom's (and the head's) `Symbol`
+// arguments, folding `Term::Var` back into `Term::Const` wherever the
+// rewrite split them apart.
+
+use crate::data::program::{
+    MagicAtom, MagicInlineRule, MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
+};
+
+/// A compiled query this module cannot translate — a typed refusal, never
+/// a silently wrong or partial `IncrementalProgram`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub(crate) enum TranslationRejection {
+    #[error("standing queries do not cover aggregation yet — refused, not silently wrong")]
+    #[diagnostic(code(incremental::translate::aggregation))]
+    Aggregation,
+    #[error("standing queries do not cover fixed rules (opaque graph algorithms)")]
+    #[diagnostic(code(incremental::translate::fixed_rule))]
+    FixedRule,
+    #[error("standing queries do not cover {0} yet — refused, not silently wrong")]
+    #[diagnostic(code(incremental::translate::unsupported))]
+    Unsupported(&'static str),
+}
+
+/// The canonical `Symbol` identity of a `MagicSymbol` — its own `Debug`
+/// rendering already encodes the adornment (`path`, `path|Mbf`,
+/// `path|Ibf`, `path|S.0.1bf`, …) uniquely per distinct derived relation,
+/// so reusing it (rather than inventing a second encoding) keeps two
+/// differently-adorned versions of the same rule name the DISTINCT
+/// relations they are.
+fn magic_symbol_to_symbol(m: &MagicSymbol) -> Symbol {
+    Symbol::new(format!("{m:?}"), m.as_plain_symbol().span)
+}
+
+/// Fold every constant-valued `Unification` atom in `body` into a
+/// substitution map, keyed by the `Symbol` it binds. A non-constant
+/// `Unification` (a computed expression, not a plain constant) has no
+/// representation in this module's `Term` and is refused, named.
+fn collect_const_substitutions(
+    body: &[MagicAtom],
+) -> Result<BTreeMap<Symbol, DataValue>, TranslationRejection> {
+    let mut subst = BTreeMap::new();
+    for atom in body {
+        if let MagicAtom::Unification(u) = atom {
+            if !u.is_const() {
+                return Err(TranslationRejection::Unsupported(
+                    "a non-constant unification",
+                ));
+            }
+            let crate::data::expr::Expr::Const { val, .. } = &u.expr else {
+                unreachable!("Unification::is_const just proved this is Expr::Const");
+            };
+            subst.insert(u.binding.clone(), val.clone());
+        }
+    }
+    Ok(subst)
+}
+
+/// Apply a constant substitution to one `Symbol` argument, producing the
+/// `Term` it should become in this module's IR.
+fn substitute(v: &Symbol, subst: &BTreeMap<Symbol, DataValue>) -> Term {
+    match subst.get(v) {
+        Some(c) => Term::Const(c.clone()),
+        None => Term::Var(v.clone()),
+    }
+}
+
+/// Translate one magic-tier rule (already a single, un-aggregated
+/// `MagicInlineRule` for the head `head_sym`) into this module's [`Rule`].
+fn translate_rule(
+    head_sym: &MagicSymbol,
+    rule: &MagicInlineRule,
+) -> Result<Rule, TranslationRejection> {
+    if rule.aggr.iter().any(Option::is_some) {
+        return Err(TranslationRejection::Aggregation);
+    }
+    let subst = collect_const_substitutions(&rule.body)?;
+    let mut body = Vec::new();
+    for atom in &rule.body {
+        let (rel, args, negated) = match atom {
+            MagicAtom::Relation(r) => (r.name.clone(), &r.args, false),
+            MagicAtom::NegatedRelation(r) => (r.name.clone(), &r.args, true),
+            MagicAtom::Rule(r) => (magic_symbol_to_symbol(&r.name), &r.args, false),
+            MagicAtom::NegatedRule(r) => (magic_symbol_to_symbol(&r.name), &r.args, true),
+            MagicAtom::Unification(_) => continue, // already folded into `subst`
+            MagicAtom::Predicate(_) => {
+                return Err(TranslationRejection::Unsupported("a predicate filter"));
+            }
+            MagicAtom::Search(_) => {
+                return Err(TranslationRejection::Unsupported("an index search"));
+            }
+        };
+        body.push(Literal {
+            rel,
+            args: args.iter().map(|v| substitute(v, &subst)).collect(),
+            negated,
+        });
+    }
+    let head_args = rule.head.iter().map(|v| substitute(v, &subst)).collect();
+    Ok(Rule {
+        head_rel: magic_symbol_to_symbol(head_sym),
+        head_args,
+        body,
+    })
+}
+
+/// Translate a real compiled, magic-set-rewritten query into this
+/// module's [`IncrementalProgram`] — the missing piece between a real
+/// KyzoScript query and [`incremental_eval`]: a caller no longer has to
+/// hand-author a `Rule`/`Literal` set the way this module's own tests
+/// do. Refuses (never silently drops or mis-translates) aggregation,
+/// fixed rules, predicates, index searches, and non-constant
+/// unifications — every one of those has no representation in this
+/// module's `Rule`/`Literal`/`Term` today.
+pub(crate) fn translate(
+    program: StratifiedMagicProgram,
+) -> Result<IncrementalProgram, TranslationRejection> {
+    let mut rules = Vec::new();
+    for stratum in program.into_strata() {
+        for (head_sym, def) in stratum.prog {
+            match def {
+                MagicRulesOrFixed::Fixed { .. } => return Err(TranslationRejection::FixedRule),
+                MagicRulesOrFixed::Rules { rules: magic_rules } => {
+                    for magic_rule in &magic_rules {
+                        rules.push(translate_rule(&head_sym, magic_rule)?);
+                    }
+                }
+            }
+        }
+    }
+    Ok(IncrementalProgram { rules })
+}
+
 /// The production incremental-maintenance law (issue #61): given a signed
 /// patch to `program`'s EDB and its CURRENT [`MaintainedState`], the
 /// signed patch every relation (EDB and IDB alike) undergoes, computed
@@ -890,6 +1040,250 @@ mod tests {
         assert!(
             cases > 100,
             "expected a rich production-vs-oracle campaign, ran {cases}"
+        );
+    }
+
+    // ── Translation: a real (hand-built, but exactly the compiler's own
+    // magic-tier shape) StratifiedMagicProgram -> IncrementalProgram. ──
+
+    use crate::data::program::{
+        MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, Unification,
+    };
+
+    fn muggle(name: &str) -> MagicSymbol {
+        MagicSymbol::Muggle { inner: sym(name) }
+    }
+    fn rel_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
+        let atom = MagicRelationApplyAtom {
+            name: sym(name),
+            args: args.into_iter().map(sym).collect(),
+            validity: None,
+            span: SourceSpan::default(),
+        };
+        if negated {
+            MagicAtom::NegatedRelation(atom)
+        } else {
+            MagicAtom::Relation(atom)
+        }
+    }
+    fn rule_atom(name: &str, args: Vec<&str>, negated: bool) -> MagicAtom {
+        let atom = MagicRuleApplyAtom {
+            name: muggle(name),
+            args: args.into_iter().map(sym).collect(),
+            span: SourceSpan::default(),
+        };
+        if negated {
+            MagicAtom::NegatedRule(atom)
+        } else {
+            MagicAtom::Rule(atom)
+        }
+    }
+    fn const_unif(binding: &str, val: DataValue) -> MagicAtom {
+        MagicAtom::Unification(Unification {
+            binding: sym(binding),
+            expr: crate::data::expr::Expr::Const {
+                val,
+                span: SourceSpan::default(),
+            },
+            one_many_unif: false,
+            span: SourceSpan::default(),
+        })
+    }
+    fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
+        let aggr = vec![None; head.len()];
+        MagicInlineRule {
+            head: head.into_iter().map(sym).collect(),
+            aggr,
+            body,
+        }
+    }
+    fn one_stratum_program(defs: Vec<(&str, Vec<MagicInlineRule>)>) -> StratifiedMagicProgram {
+        let prog = defs
+            .into_iter()
+            .map(|(head, rules)| (muggle(head), MagicRulesOrFixed::Rules { rules }))
+            .collect();
+        StratifiedMagicProgram::from_execution_order(vec![MagicProgram { prog }])
+            .expect("test strata are well-formed")
+    }
+
+    #[test]
+    fn translate_a_plain_positive_and_negated_rule() {
+        let magic = one_stratum_program(vec![(
+            "?",
+            vec![magic_inline(
+                vec!["X"],
+                vec![
+                    rel_atom("p", vec!["X"], false),
+                    rel_atom("r", vec!["X"], true),
+                ],
+            )],
+        )]);
+        let program = translate(magic).expect("translation succeeds");
+        assert_eq!(program.rules.len(), 1);
+        let rule = &program.rules[0];
+        assert_eq!(rule.head_rel, sym("?"));
+        assert_eq!(rule.head_args, vec![x()]);
+        assert_eq!(rule.body.len(), 2);
+        assert_eq!(rule.body[0].rel, sym("p"));
+        assert!(!rule.body[0].negated);
+        assert_eq!(rule.body[1].rel, sym("r"));
+        assert!(rule.body[1].negated);
+    }
+
+    /// A rule reference (not a stored relation) uses the referenced
+    /// rule's OWN MagicSymbol identity — its canonical Debug rendering,
+    /// which is unique per adornment, not just the plain inner name.
+    #[test]
+    fn translate_a_rule_reference_uses_the_magic_symbol_identity() {
+        let magic = one_stratum_program(vec![
+            (
+                "mid",
+                vec![magic_inline(
+                    vec!["X"],
+                    vec![rel_atom("p", vec!["X"], false)],
+                )],
+            ),
+            (
+                "?",
+                vec![magic_inline(
+                    vec!["X"],
+                    vec![rule_atom("mid", vec!["X"], false)],
+                )],
+            ),
+        ]);
+        let program = translate(magic).expect("translation succeeds");
+        let entry_rule = program
+            .rules
+            .iter()
+            .find(|r| r.head_rel == sym("?"))
+            .expect("entry rule present");
+        assert_eq!(entry_rule.body[0].rel, sym(&format!("{:?}", muggle("mid"))));
+    }
+
+    /// A constant hoisted into a `Unification` atom folds back into
+    /// `Term::Const` on every literal (and the head) that shares its
+    /// bound variable.
+    #[test]
+    fn translate_folds_a_constant_unification_into_term_const() {
+        let magic = one_stratum_program(vec![(
+            "?",
+            vec![magic_inline(
+                vec!["X", "Y"],
+                vec![rel_atom("p", vec!["X", "Y"], false), const_unif("Y", v(42))],
+            )],
+        )]);
+        let program = translate(magic).expect("translation succeeds");
+        let rule = &program.rules[0];
+        assert_eq!(rule.head_args, vec![x(), Term::Const(v(42))]);
+        assert_eq!(rule.body[0].args, vec![x(), Term::Const(v(42))]);
+    }
+
+    #[test]
+    fn translate_refuses_aggregation() {
+        let mut inline = magic_inline(vec!["X"], vec![rel_atom("p", vec!["X"], false)]);
+        inline.aggr = vec![Some((
+            crate::data::aggr::parse_aggr("count").expect("real aggregation exists"),
+            vec![],
+        ))];
+        let magic = one_stratum_program(vec![("?", vec![inline])]);
+        let err = translate(magic).unwrap_err();
+        assert_eq!(err, TranslationRejection::Aggregation);
+    }
+
+    #[test]
+    fn translate_refuses_fixed_rules() {
+        use crate::fixed_rule::{FixedRuleHandle, SimpleFixedRule};
+        let fixed_impl: std::sync::Arc<dyn crate::fixed_rule::FixedRule> =
+            std::sync::Arc::new(SimpleFixedRule::new(0, |_, _| {
+                Ok(crate::fixed_rule::NamedRows::new(vec![], vec![]))
+            }));
+        let fixed = crate::data::program::MagicFixedRuleApply {
+            fixed_handle: FixedRuleHandle::new("?", SourceSpan::default()),
+            rule_args: vec![],
+            options: std::sync::Arc::new(BTreeMap::new()),
+            span: SourceSpan::default(),
+            arity: 1,
+            fixed_impl,
+        };
+        let prog = BTreeMap::from([(muggle("?"), MagicRulesOrFixed::Fixed { fixed })]);
+        let magic = StratifiedMagicProgram::from_execution_order(vec![MagicProgram { prog }])
+            .expect("test strata are well-formed");
+        let err = translate(magic).unwrap_err();
+        assert_eq!(err, TranslationRejection::FixedRule);
+    }
+
+    #[test]
+    fn translate_refuses_predicates_and_index_searches() {
+        let magic_pred = one_stratum_program(vec![(
+            "?",
+            vec![magic_inline(
+                vec!["X"],
+                vec![
+                    rel_atom("p", vec!["X"], false),
+                    MagicAtom::Predicate(crate::data::expr::Expr::Const {
+                        val: DataValue::Bool(true),
+                        span: SourceSpan::default(),
+                    }),
+                ],
+            )],
+        )]);
+        let err = translate(magic_pred).unwrap_err();
+        assert_eq!(err, TranslationRejection::Unsupported("a predicate filter"));
+    }
+
+    /// A non-constant unification (a computed expression) has no
+    /// representation in this module's `Term` and is refused, named.
+    #[test]
+    fn translate_refuses_non_constant_unification() {
+        let magic = one_stratum_program(vec![(
+            "?",
+            vec![magic_inline(
+                vec!["X", "Y"],
+                vec![
+                    rel_atom("p", vec!["X"], false),
+                    MagicAtom::Unification(Unification {
+                        binding: sym("Y"),
+                        expr: crate::data::expr::Expr::Apply {
+                            op: &crate::data::functions::OP_ADD,
+                            args: Box::new([]),
+                            span: SourceSpan::default(),
+                        },
+                        one_many_unif: false,
+                        span: SourceSpan::default(),
+                    }),
+                ],
+            )],
+        )]);
+        let err = translate(magic).unwrap_err();
+        assert_eq!(
+            err,
+            TranslationRejection::Unsupported("a non-constant unification")
+        );
+    }
+
+    /// End to end: translate, then run the SAME hard-corner scenario
+    /// (retraction through negation) through `incremental_eval` on the
+    /// translated program — proving translate() and incremental_eval()
+    /// compose correctly, not just each in isolation.
+    #[test]
+    fn translated_program_runs_through_incremental_eval() {
+        let magic = one_stratum_program(vec![(
+            "?",
+            vec![magic_inline(
+                vec!["X"],
+                vec![
+                    rel_atom("p", vec!["X"], false),
+                    rel_atom("r", vec!["X"], true),
+                ],
+            )],
+        )]);
+        let program = translate(magic).expect("translation succeeds");
+        let state = state_of(vec![("p", vec![vec![v(1)]]), ("r", vec![vec![v(1)]])]);
+        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
+        let (deltas, _new_state) = incremental_eval(&program, &state, &patch).unwrap();
+        assert_eq!(
+            deltas[&sym("?")],
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
         );
     }
 }
