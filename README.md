@@ -254,14 +254,15 @@ The rest of the machinery holds them to it:
   query through both evaluators against one snapshot and returns a match, a budgeted refusal, or a
   reproducible mismatch bundle. A database that can be *asked to prove an answer* is the next table
   stake. We are setting it.
-- **Proofs checked by an outsider.** From the provenance campaign in the test suite:
+- **Proofs checked by an outsider.** A derived fact names the rules and ground facts that entailed
+  it, verified by a checker that imports nothing from the evaluator. On a determination an agent
+  cannot afford to get wrong, that reads like this (the values illustrate the shape your own rules
+  would fill in):
 
-  <img src="static/repl_provenance.svg" width="820" alt="A KyzoDB provenance proof tree: labeled[1,100] derived from path and tag down to a ground edge, verified Ok by an independent checker.">
+  <img src="static/repl_provenance.svg" width="820" alt="A KyzoDB provenance proof: swap SWAP-88421 must be centrally cleared under EMIR, derived from the trade, the clearing obligation, and the counterparty's gross notional exceeding the threshold, verified Ok by an independent checker.">
 
-
-  That tree was reconstructed from the evaluator's own witnesses, then verified by a checker that
-  imports nothing from the evaluator. It rejects corrupted proofs, and its structure cannot represent
-  a cyclic one.
+  The proof is reconstructed from the evaluator's own witnesses and re-derived independently. The
+  checker rejects corrupted proofs, and its structure cannot represent a cyclic one.
 - **Deterministic simulation testing** (`storage/sim.rs`): a second implementation of the storage
   contract in which thread interleavings, injected faults, crashes, and power cuts are all a pure
   function of one `u64` seed. A failing campaign prints its seed; rerunning replays the failure
