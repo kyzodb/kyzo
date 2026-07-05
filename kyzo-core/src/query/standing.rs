@@ -251,7 +251,10 @@ impl<S: Storage> StandingQuery<S> {
     /// cares about the query's own answer changing, not an intermediate
     /// dependency's.
     pub fn apply_pending_answer(&mut self) -> Result<BTreeSet<SignedFact>> {
-        Ok(self.apply_pending()?.remove(&entry_symbol()).unwrap_or_default())
+        Ok(self
+            .apply_pending()?
+            .remove(&entry_symbol())
+            .unwrap_or_default())
     }
 
     /// Unregister every underlying per-relation callback. A `StandingQuery`
@@ -447,7 +450,8 @@ mod tests {
         let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
         db.run_script(":create p {x: Int =>}", no_params()).unwrap();
         db.run_script(":create r {x: Int =>}", no_params()).unwrap();
-        db.run_script("?[x] <- [[1]] :put p {x}", no_params()).unwrap();
+        db.run_script("?[x] <- [[1]] :put p {x}", no_params())
+            .unwrap();
 
         let mut sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
         assert_eq!(
@@ -455,9 +459,13 @@ mod tests {
             sq.current(&sym("?")).cloned().unwrap_or_default()
         );
 
-        db.run_script("?[x] <- [[1]] :put r {x}", no_params()).unwrap();
+        db.run_script("?[x] <- [[1]] :put r {x}", no_params())
+            .unwrap();
         let answer_delta = sq.apply_pending_answer().unwrap();
-        assert_eq!(answer_delta, [SignedFact::Minus(vec![v(1)])].into_iter().collect());
+        assert_eq!(
+            answer_delta,
+            [SignedFact::Minus(vec![v(1)])].into_iter().collect()
+        );
         assert!(sq.current_answer().is_empty());
 
         sq.teardown();

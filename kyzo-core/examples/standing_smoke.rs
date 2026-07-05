@@ -4,7 +4,7 @@
 //! tests. Proves a real aggregating standing query stays correct across real
 //! committed mutations, including the hard min-under-retraction rescan.
 
-use kyzo::{new_fjall_storage, DataValue, Db};
+use kyzo::{DataValue, Db, new_fjall_storage};
 use std::collections::BTreeMap;
 
 fn no_params() -> BTreeMap<String, DataValue> {
