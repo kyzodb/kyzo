@@ -34,3 +34,4 @@ pub(crate) mod json;
 pub(crate) mod mutate;
 #[allow(dead_code)]
 pub(crate) mod relation;
+pub(crate) mod verify;

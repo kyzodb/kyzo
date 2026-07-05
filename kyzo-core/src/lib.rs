@@ -275,6 +275,7 @@ pub use fixed_rule::{
 };
 pub use runtime::callback::{CallbackEvent, CallbackOp};
 pub use runtime::db::{Db, ScriptOptions};
+pub use runtime::verify::VerifyOutcome;
 
 // A curated, opaque façade over the crate-internal query pipeline
 // (compile → bind → semi-naive eval), for the RA-layer criterion benches.
