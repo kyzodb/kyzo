@@ -799,6 +799,35 @@ pub(crate) fn incremental_eval(
     state: &MaintainedState,
     edb_patch: &BTreeMap<Symbol, BTreeSet<SignedFact>>,
 ) -> Result<(BTreeMap<Symbol, BTreeSet<SignedFact>>, MaintainedState)> {
+    // A well-formed signed patch never claims BOTH a gain and a loss of the
+    // SAME tuple in one round — that would mean "this fact just became true
+    // AND just became false," which no caller can coherently mean. Callers
+    // (`standing.rs::apply_pending`) are required to NET raw callback events
+    // down to one sign per tuple before calling in here; this is the
+    // 0.9.0-review bug's own invariant, checked at the one seam every caller
+    // must cross, not re-derived at every call site.
+    debug_assert!(
+        edb_patch.values().all(|facts| {
+            let pluses: BTreeSet<&Tuple> = facts
+                .iter()
+                .filter_map(|f| match f {
+                    SignedFact::Plus(t) => Some(t),
+                    SignedFact::Minus(_) => None,
+                })
+                .collect();
+            let minuses: BTreeSet<&Tuple> = facts
+                .iter()
+                .filter_map(|f| match f {
+                    SignedFact::Minus(t) => Some(t),
+                    SignedFact::Plus(_) => None,
+                })
+                .collect();
+            pluses.is_disjoint(&minuses)
+        }),
+        "incremental_eval received a patch with both Plus(t) and Minus(t) for the same t — \
+         the caller must net raw events by tuple before calling in, exactly the bug \
+         apply_pending's netting step (standing.rs) exists to prevent"
+    );
     if has_any_cycle(program) {
         return Err(Error::from(IncrementalRejection::Recursive));
     }

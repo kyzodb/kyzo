@@ -96,6 +96,24 @@ where
         for val in self.as_ref().iter() {
             ret.encode_datavalue(val);
         }
+        // `memcmp.rs`'s law 1 (decode(encode(v)) == v), checked cheaply right
+        // here where the original tuple is already in hand — every real key
+        // write passes through this one function, so this is the single
+        // seam to catch a codec bug (new tag, new variant, a byte-order slip)
+        // before it ever reaches disk, without re-deriving the generative
+        // property tests' whole corpus. Value-level comparison, not a raw
+        // byte comparison: some values (e.g. `Json`) can legitimately
+        // re-serialize to different bytes that still decode back equal.
+        #[cfg(debug_assertions)]
+        {
+            let decoded = decode_tuple_bare(&ret[EncodedKey::RELATION_PREFIX_LEN..])
+                .expect("bytes this function just encoded must decode");
+            debug_assert_eq!(
+                decoded.as_slice(),
+                self.as_ref(),
+                "memcmp round-trip violated: decode(encode(tuple)) != tuple"
+            );
+        }
         EncodedKey(ret)
     }
 }

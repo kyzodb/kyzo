@@ -1044,7 +1044,17 @@ pub(crate) fn stratified_evaluate_with_stores<R: RuleBody, F: FixedRuleEval>(
                 EvalDefinition::Rules(rule_set) => EpochStore::new_normal(rule_set.arity()),
                 EvalDefinition::Fixed { arity, .. } => EpochStore::new_normal(*arity),
             };
-            stores.insert(name.clone(), store);
+            let clobbered = stores.insert(name.clone(), store);
+            // Stratification (`stratify.rs`) places every rule name into
+            // EXACTLY ONE stratum — a second definition of the same store
+            // showing up here would mean two strata both claim to define
+            // `name`, silently overwriting whichever one ran first with an
+            // empty store.
+            debug_assert!(
+                clobbered.is_none(),
+                "stratum {stratum_idx} redefines store {name:?}, which a prior stratum already \
+                 defined — a rule name must belong to exactly one stratum"
+            );
         }
         limited = evaluate_stratum(
             &stratum.defs,

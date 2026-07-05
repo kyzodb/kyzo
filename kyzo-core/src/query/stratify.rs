@@ -440,6 +440,22 @@ impl NormalFormProgram {
                 && let Some(fr_exec_stratum) = exec_stratum_of.get(fr_component)
             {
                 for to in tos.keys() {
+                    // Stratum ordering, checked at the one place every
+                    // dependency edge passes through: `to` (the dependency,
+                    // read by `fr`'s body) must execute AT OR BEFORE `fr`
+                    // (the dependent) — Kahn walked backward from the entry
+                    // to its dependencies, so `to`'s execution-order index
+                    // can never exceed `fr`'s. A violation here would mean a
+                    // rule reading state that has not been computed yet.
+                    debug_assert!(
+                        invert_indices
+                            .get(to)
+                            .and_then(|to_component| exec_stratum_of.get(to_component))
+                            .is_none_or(|to_exec_stratum| *to_exec_stratum <= *fr_exec_stratum),
+                        "stratum ordering violated: dependency {to:?} (stratum {:?}) executes \
+                         after its dependent {fr:?} (stratum {fr_exec_stratum})",
+                        invert_indices.get(to).and_then(|c| exec_stratum_of.get(c))
+                    );
                     store_lifetimes.note_use(
                         MagicSymbol::Muggle {
                             inner: (*to).clone(),

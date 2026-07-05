@@ -98,6 +98,40 @@ fn entry_symbol() -> Symbol {
 struct Subscription {
     id: u32,
     receiver: Receiver<CallbackEvent>,
+    /// This relation's key-column count (`StoredRelationMetadata::keys.len()`
+    /// at registration time), cached so [`StandingQuery::apply_pending`]
+    /// never needs a second storage round-trip just to re-derive it — used
+    /// only by the debug-only duplicate-key invariant check below.
+    key_arity: usize,
+}
+
+/// Debug-only invariant: a key-valued relation's maintained row set never
+/// holds two rows sharing the same key-column prefix — the exact structural
+/// violation the multi-commit-drain bug (0.9.0 adversarial review, this
+/// module's own repro 3 above) produced. `Tuple`'s `Ord` is lexicographic by
+/// column position with key columns first (the storage layer's own
+/// convention: a `RelationHandle`'s columns are `keys` then `non_keys`, in
+/// that order), so two rows sharing a key prefix are always ADJACENT in a
+/// `BTreeSet<Tuple>`'s iteration order — an O(n) adjacent-pair scan suffices,
+/// no need to build a separate key-only index. `key_arity` of `0` means
+/// every row IS the key: trivially duplicate-free once `BTreeSet` has
+/// already deduplicated identical rows.
+fn no_duplicate_key_prefix(rows: &BTreeSet<Tuple>, key_arity: usize) -> bool {
+    if key_arity == 0 {
+        return true;
+    }
+    let mut prev: Option<&Tuple> = None;
+    for row in rows {
+        if let Some(p) = prev
+            && p.len() >= key_arity
+            && row.len() >= key_arity
+            && p[..key_arity] == row[..key_arity]
+        {
+            return false;
+        }
+        prev = Some(row);
+    }
+    true
 }
 
 /// A live standing query: a translated program, its persistently
@@ -133,14 +167,34 @@ impl<S: Storage> StandingQuery<S> {
         let mut subscriptions = BTreeMap::new();
         for rel in &edb {
             let (id, receiver) = db.register_callback(rel.name.as_str());
-            subscriptions.insert(rel.clone(), Subscription { id, receiver });
+            // `key_arity` is filled in below, once the same relation's
+            // handle is fetched to snapshot its rows — a placeholder here
+            // would just be the same lookup done twice.
+            subscriptions.insert(
+                rel.clone(),
+                Subscription {
+                    id,
+                    receiver,
+                    key_arity: 0,
+                },
+            );
         }
 
         let tx = db.storage.read_tx()?;
         let mut state: MaintainedState = BTreeMap::new();
         for rel in &edb {
             let handle = get_relation(&tx, rel.name.as_str())?;
+            let key_arity = handle.metadata.keys.len();
             let rows: BTreeSet<Tuple> = handle.scan_all(&tx).collect::<Result<_>>()?;
+            debug_assert!(
+                no_duplicate_key_prefix(&rows, key_arity),
+                "relation {rel:?}'s freshly-scanned rows already have a duplicate key at \
+                 registration time (key_arity {key_arity}): {rows:?}"
+            );
+            subscriptions
+                .get_mut(rel)
+                .expect("just inserted above")
+                .key_arity = key_arity;
             state.insert(rel.clone(), rows);
         }
         drop(tx);
@@ -282,6 +336,15 @@ impl<S: Storage> StandingQuery<S> {
         let (deltas, new_state) =
             incremental::incremental_eval(&self.program, &self.state, &edb_patch)
                 .map_err(|e| miette!("{e}"))?;
+        debug_assert!(
+            self.subscriptions.iter().all(|(rel, sub)| {
+                new_state
+                    .get(rel)
+                    .is_none_or(|rows| no_duplicate_key_prefix(rows, sub.key_arity))
+            }),
+            "apply_pending produced a duplicate key in a maintained EDB relation's row set — \
+             the exact structural violation the netting step above exists to prevent"
+        );
         self.state = new_state;
         Ok(deltas)
     }
