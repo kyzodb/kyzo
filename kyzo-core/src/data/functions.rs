@@ -433,6 +433,20 @@ pub(crate) struct IntegerOverflow {
     pub(crate) op: &'static str,
 }
 
+/// A zero divisor was offered to `div` or `mod`, integer or float alike. A
+/// silent `Infinity`/`NaN` is a poison value that buries the caller's logic
+/// bug; this engine refuses instead, the same way `mod` always has and `div`
+/// now does too — one typed shape for both ops, parameterized only by name.
+#[derive(Debug, Error, Diagnostic)]
+#[error("'{op}' requires a non-zero divisor")]
+#[diagnostic(code(eval::division_by_zero))]
+#[diagnostic(help(
+    "Division and modulo both refuse a zero divisor rather than returning infinity or NaN."
+))]
+pub(crate) struct DivisionByZero {
+    pub(crate) op: &'static str,
+}
+
 pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     let mut i_accum = 0i64;
     let mut f_accum = 0.0f64;
@@ -685,15 +699,27 @@ define_op!(OP_DIV, 2, false, true);
 pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
         (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Int(b))) => {
+            if *b == 0 {
+                bail!(DivisionByZero { op: "div" })
+            }
             DataValue::Num(Num::Float((*a as f64) / (*b as f64)))
         }
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Float(b))) => {
+            if *b == 0.0 {
+                bail!(DivisionByZero { op: "div" })
+            }
             DataValue::Num(Num::Float(*a / *b))
         }
         (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Float(b))) => {
+            if *b == 0.0 {
+                bail!(DivisionByZero { op: "div" })
+            }
             DataValue::Num(Num::Float((*a as f64) / b))
         }
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Int(b))) => {
+            if *b == 0 {
+                bail!(DivisionByZero { op: "div" })
+            }
             DataValue::Num(Num::Float(a / (*b as f64)))
         }
         (DataValue::Vec(a), DataValue::Vec(b)) => match (a, b) {
@@ -1146,7 +1172,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
         (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Int(b))) => {
             if *b == 0 {
-                bail!("'mod' requires non-zero divisor")
+                bail!(DivisionByZero { op: "mod" })
             }
             // `i64::MIN % -1` is the one other input pair `Rem` can't
             // service: the mathematical quotient (`i64::MIN / -1`)
@@ -1159,12 +1185,21 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             }
         }
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Float(b))) => {
+            if *b == 0.0 {
+                bail!(DivisionByZero { op: "mod" })
+            }
             DataValue::Num(Num::Float(a.rem(*b)))
         }
         (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Float(b))) => {
+            if *b == 0.0 {
+                bail!(DivisionByZero { op: "mod" })
+            }
             DataValue::Num(Num::Float((*a as f64).rem(b)))
         }
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Int(b))) => {
+            if *b == 0 {
+                bail!(DivisionByZero { op: "mod" })
+            }
             DataValue::Num(Num::Float(a.rem(*b as f64)))
         }
         _ => bail!("'mod' requires numbers"),

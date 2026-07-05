@@ -152,7 +152,28 @@ fn test_div() {
         op_div(&[DataValue::from(7.0), DataValue::from(0.5)]).unwrap(),
         DataValue::from(14.0)
     );
-    assert!(op_div(&[DataValue::from(1), DataValue::from(0)]).is_ok());
+}
+
+/// Division and modulo by zero must both raise the same typed refusal,
+/// integer or float, never a silent `Infinity`/`NaN`. `1 / 0` and `1 % 0`
+/// used to disagree (`div` float-promoted to `Infinity`, `mod` alone
+/// refused); this locks the two to one consistent typed error.
+#[test]
+fn test_div_mod_by_zero_typed_error() {
+    for res in [
+        op_div(&[DataValue::from(1), DataValue::from(0)]),
+        op_div(&[DataValue::from(1.0), DataValue::from(0.0)]),
+        op_div(&[DataValue::from(0.0), DataValue::from(0.0)]),
+        op_div(&[DataValue::from(-1), DataValue::from(0)]),
+        op_mod(&[DataValue::from(1), DataValue::from(0)]),
+    ] {
+        let err = res.expect_err("division/modulo by zero must be a typed Err, not Ok");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("division_by_zero"),
+            "expected the division-by-zero diagnostic code, got: {msg}"
+        );
+    }
 }
 
 #[test]
@@ -640,9 +661,13 @@ fn test_mod() {
         op_mod(&[DataValue::from(-10), DataValue::from(7)]).unwrap(),
         DataValue::from(-3)
     );
-    assert!(op_mod(&[DataValue::from(5), DataValue::from(0.)]).is_ok());
-    assert!(op_mod(&[DataValue::from(5.), DataValue::from(0.)]).is_ok());
-    assert!(op_mod(&[DataValue::from(5.), DataValue::from(0)]).is_ok());
+    // A zero divisor is refused the same way regardless of which operand
+    // (or both) is float: `mod` never silently promotes to a NaN any more
+    // than `div` may silently promote to `Infinity` — same typed error,
+    // integer or float divisor.
+    assert!(op_mod(&[DataValue::from(5), DataValue::from(0.)]).is_err());
+    assert!(op_mod(&[DataValue::from(5.), DataValue::from(0.)]).is_err());
+    assert!(op_mod(&[DataValue::from(5.), DataValue::from(0)]).is_err());
     assert!(op_mod(&[DataValue::from(5), DataValue::from(0)]).is_err());
     // Boundary: i64::MIN % -1 is the one nonzero divisor `Rem` still can't
     // service (the implied i64::MIN / -1 doesn't fit in i64) — distinct
