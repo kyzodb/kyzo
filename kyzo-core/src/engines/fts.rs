@@ -114,8 +114,10 @@ use crate::storage::{ReadTx, WriteTx};
 // ---------------------------------------------------------------------------
 
 /// How [`fts_search`] scores a matched document. The engine's own type: the
-/// RA-tier search config (`data/program.rs`) lands later and will map onto
-/// this. **Not BM25** — see the module docs.
+/// RA-tier search config maps onto it — `query/search.rs` resolves the
+/// `score_kind` search param (`tf`/`tf_idf`) to a variant, and
+/// `query/ra/search.rs` reads it back off `FtsSearchParams`. **Not BM25** —
+/// see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FtsScoreKind {
     /// `term_frequency * booster`.

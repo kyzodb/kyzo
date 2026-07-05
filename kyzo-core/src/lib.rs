@@ -214,8 +214,12 @@
 //! the public surface is the kernel re-exports plus the [`Db`] session
 //! entrypoint below; the tiers between (parse, query, engines, runtime,
 //! fixed_rule) stay `pub(crate)` — internal organs, not API. Remaining
-//! `allow(dead_code)` attributes below mark surface whose consuming operator
-//! has not landed; each is removed as its consumer arrives. What refuses *today*,
+//! `allow(dead_code)` attributes below mark either surface whose consuming
+//! operator has not landed yet (`format`, awaiting the LSP tier) or the
+//! residual unused items behind an already-landed tier (e.g. the provenance
+//! plumbing in `query::eval`, the `Script::Imperative` AST in `parse`); each
+//! module's own comment says which, and each attribute narrows or vanishes
+//! as its items gain a caller. What refuses *today*,
 //! typed and (where it has a source location) spanned: malformed query text
 //! (parser), unstratifiable programs (stratifier), budget exhaustion,
 //! fixed-rule arity mismatch, format-version mismatch, and transaction
