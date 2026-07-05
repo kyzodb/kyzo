@@ -55,18 +55,7 @@ Here is the shape nothing stitched together can match. A vector neighborhood, a 
 reach, and a provenance join, evaluated at one transactional cut *in the past*, under a budget that
 can refuse:
 
-```prolog
-# everything reachable from the account, per the graph
-reach[e] := *edge{from: 'acme', to: e}
-reach[e] := reach[m], *edge{from: m, to: e}
-
-# semantic neighbours of the question, restricted to that reach,
-# with their evidence, as the record stood on March 3rd
-?[claim, evidence] :=
-    ~claims:semantic{claim, entity | query: $q, k: 8},
-    reach[entity],
-    *provenance{claim, evidence @ '2026-03-03T00:00:00Z'}
-```
+<p align="center"><img src="static/repl_hero.svg" width="860" alt="A KyzoDB query: a recursive graph reach, a semantic vector search restricted to that reach, and a provenance join, all evaluated at one past instant."></p>
 
 One language, one snapshot, one answer, and if the traversal overspends its budget, one typed
 refusal naming exactly what it hit. That single block *is* the thesis: retrieval that is composable
@@ -78,36 +67,15 @@ feature list, and we would not ask you to.
 
 ## Using KyzoDB
 
-It runs embedded: in your process, like SQLite, no server and no setup. Open a database and query it
-in a couple of lines:
+It runs embedded: in your process, like SQLite, no server and no setup. Add the dependency and open a
+database in a couple of lines:
 
-```rust
-use kyzo::{Db, new_fjall_storage};
-use std::collections::BTreeMap;
+<p align="center"><img src="static/embed.svg" width="860" alt="Rust: add kyzo as a git dependency, then open a database with Db::new and new_fjall_storage and run a KyzoScript query with run_script."></p>
 
-let db = Db::new(new_fjall_storage("./knowledge.kyzo")?)?;
-let out = db.run_script(
-    "?[to] := *route{fr: 'FRA', to}",
-    BTreeMap::new(),
-)?;
-// out.rows holds the answer set
-```
+That path is a durable, crash-safe store; point it at a fresh temp directory for an ephemeral one. To
+build the workspace itself (stable Rust, nothing else):
 
-That path is a durable, crash-safe store; point it at a fresh temp directory for an ephemeral one.
-To depend on KyzoDB from a Rust project:
-
-```toml
-kyzo = { git = "https://github.com/kyzodb/kyzo", package = "kyzo" }
-```
-
-To build the workspace itself (stable Rust, nothing else):
-
-```bash
-git clone https://github.com/kyzodb/kyzo
-cd kyzo
-cargo build -p kyzo --release
-cargo test  -p kyzo --release
-```
+<p align="center"><img src="static/shell.svg" width="860" alt="Shell: git clone the kyzo repo, then cargo build and cargo test the kyzo package in release mode."></p>
 
 Language bindings (C, Python, Java, Node, Swift, WASM, with Go, Clojure, and Android in separate
 repos) are being ported and published under KyzoDB; the [issues](https://github.com/kyzodb/kyzo/issues)
@@ -121,46 +89,22 @@ here, so they combine in a single query.
 Take documents that carry a title and a vector embedding, plus a relation recording which document
 cites which:
 
-```prolog
-?[id, title, emb] <- [
-    ['graph-db',   'Graph databases',       [0.1,  0.9]],
-    ['vec-search', 'Vector search',         [0.9,  0.1]],
-    ['datalog',    'Datalog and recursion', [0.15, 0.85]],
-    ['mvcc',       'Transactions and MVCC', [0.85, 0.2]]
-]
-:create doc {id: String => title: String, emb: <F32; 2>}
+<p align="center"><img src="static/repl_setup.svg" width="860" alt="A KyzoDB REPL session creating a doc relation of titles and embeddings and a cites relation, each returning status OK."></p>
 
-?[from, to] <- [['datalog', 'graph-db'], ['graph-db', 'mvcc'], ['vec-search', 'datalog']]
-:create cites {from: String, to: String}
-```
+Then index that one relation three ways: dense vectors with HNSW, full text, and near-duplicates with
+MinHash-LSH.
 
-Index the embeddings with HNSW:
-
-```prolog
-::hnsw create doc:emb {dim: 2, dtype: F32, fields: [emb], distance: L2, m: 50, ef_construction: 20}
-```
+<p align="center"><img src="static/repl_indexes.svg" width="860" alt="A KyzoDB REPL session creating an HNSW vector index, a full-text index, and a MinHash-LSH near-duplicate index over the same relation, each returning status OK."></p>
 
 A nearest-neighbour search binds with `~` and unifies like any other relation. Joined straight to
 `cites`, one query performs semantic recall and then follows the relationships of whatever it finds:
 
-<p align="center"><img src="static/repl_retrieval.svg" width="820" alt="A KyzoDB REPL session: a nearest-neighbour vector search joined to the cites graph returns datalog→graph-db and graph-db→mvcc."></p>
+<p align="center"><img src="static/repl_retrieval.svg" width="820" alt="A KyzoDB REPL session: a nearest-neighbour vector search joined to the cites graph returns datalog then graph-db and graph-db then mvcc."></p>
 
-Full-text and near-duplicate search take the same shape. A full-text index over the same titles:
-
-```prolog
-::fts create doc:text {extractor: title, tokenizer: Simple, filters: [Lowercase, Stemmer('English'), Stopwords('en')]}
-```
-
-answers `~doc:text{id, title | query: 'graph', k: 5}`. A MinHash-LSH index for
-near-duplicates:
-
-```prolog
-::lsh create doc:lsh {extractor: title, tokenizer: NGram, n_gram: 3, target_threshold: 0.5}
-```
-
-answers `~doc:lsh{id | query: 'Graph databases', k: 5}`. In every case the search result is a relation
-you can join, filter, negate, and recurse over. Hybrid retrieval is a query, not a pipeline: there is
-no fan-out layer, no re-ranking glue service, and no copy of your data waiting to drift.
+Full text answers `~doc:text{id, title | query: 'graph', k: 5}` and near-duplicates answer
+`~doc:lsh{id | query: 'Graph databases', k: 5}`; in every case the search result is a relation you can
+join, filter, negate, and recurse over. Hybrid retrieval is a query, not a pipeline: there is no
+fan-out layer, no re-ranking glue service, and no copy of your data waiting to drift.
 
 And because search here is an engine capability rather than a bolted-on service, it makes guarantees
 that services do not make:
@@ -312,11 +256,8 @@ The rest of the machinery holds them to it:
   stake. We are setting it.
 - **Proofs checked by an outsider.** From the provenance campaign in the test suite:
 
-      labeled[1,100] <- path[1,4], tag[4,100]
-        path[1,4] <- edge[1,2], path[2,4]
-          path[2,4] <- edge[2,3], path[3,4]
-            path[3,4] <- edge[3,4]   (ground)
-      checker verdict: Ok
+  <img src="static/repl_provenance.svg" width="820" alt="A KyzoDB provenance proof tree: labeled[1,100] derived from path and tag down to a ground edge, verified Ok by an independent checker.">
+
 
   That tree was reconstructed from the evaluator's own witnesses, then verified by a checker that
   imports nothing from the evaluator. It rejects corrupted proofs, and its structure cannot represent

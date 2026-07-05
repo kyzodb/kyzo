@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 170" width="860" height="170" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="Shell: git clone the kyzo repo, then cargo build and cargo test the kyzo package in release mode.">
+  <rect x="1" y="1" width="858" height="168" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">build the workspace: stable Rust, nothing else</text>
+
+  <text x="22" y="66"  font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">$ </tspan><tspan fill="#d6ca8a">git </tspan><tspan fill="#c9d6cc">clone https://github.com/kyzodb/kyzo</tspan></text>
+  <text x="22" y="90"  font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">$ </tspan><tspan fill="#d6ca8a">cd </tspan><tspan fill="#c9d6cc">kyzo</tspan></text>
+  <text x="22" y="114" font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">$ </tspan><tspan fill="#d6ca8a">cargo </tspan><tspan fill="#c9d6cc">build -p kyzo </tspan><tspan fill="#6d8074">--release</tspan></text>
+  <text x="22" y="138" font-size="13.5" xml:space="preserve"><tspan fill="#6FAE8B">$ </tspan><tspan fill="#d6ca8a">cargo </tspan><tspan fill="#c9d6cc">test  -p kyzo </tspan><tspan fill="#6d8074">--release</tspan></text>
+</svg>

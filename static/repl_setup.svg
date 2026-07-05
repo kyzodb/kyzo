@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 316" width="860" height="316" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="A KyzoDB REPL session creating a doc relation of titles and embeddings and a cites relation, each returning status OK.">
+  <rect x="1" y="1" width="858" height="314" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · documents with an embedding, and who cites whom</text>
+
+  <text x="22" y="60"  font-size="12.5" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[id, title, emb] </tspan><tspan fill="#5fc492">&lt;- </tspan><tspan fill="#c9d6cc">[</tspan></text>
+  <text x="22" y="78"  font-size="12.5" xml:space="preserve"><tspan fill="#c9d6cc">        [</tspan><tspan fill="#a9cf9e">'graph-db'</tspan><tspan fill="#c9d6cc">,   </tspan><tspan fill="#a9cf9e">'Graph databases'</tspan><tspan fill="#c9d6cc">,       [</tspan><tspan fill="#8fb5d6">0.1,  0.9</tspan><tspan fill="#c9d6cc">]],</tspan></text>
+  <text x="22" y="96"  font-size="12.5" xml:space="preserve"><tspan fill="#c9d6cc">        [</tspan><tspan fill="#a9cf9e">'vec-search'</tspan><tspan fill="#c9d6cc">, </tspan><tspan fill="#a9cf9e">'Vector search'</tspan><tspan fill="#c9d6cc">,         [</tspan><tspan fill="#8fb5d6">0.9,  0.1</tspan><tspan fill="#c9d6cc">]],</tspan></text>
+  <text x="22" y="114" font-size="12.5" xml:space="preserve"><tspan fill="#c9d6cc">        [</tspan><tspan fill="#a9cf9e">'datalog'</tspan><tspan fill="#c9d6cc">,    </tspan><tspan fill="#a9cf9e">'Datalog and recursion'</tspan><tspan fill="#c9d6cc">, [</tspan><tspan fill="#8fb5d6">0.15, 0.85</tspan><tspan fill="#c9d6cc">]],</tspan></text>
+  <text x="22" y="132" font-size="12.5" xml:space="preserve"><tspan fill="#c9d6cc">        [</tspan><tspan fill="#a9cf9e">'mvcc'</tspan><tspan fill="#c9d6cc">,       </tspan><tspan fill="#a9cf9e">'Transactions and MVCC'</tspan><tspan fill="#c9d6cc">, [</tspan><tspan fill="#8fb5d6">0.85, 0.2</tspan><tspan fill="#c9d6cc">]]</tspan></text>
+  <text x="22" y="150" font-size="12.5" xml:space="preserve"><tspan fill="#c9d6cc">      ] </tspan><tspan fill="#5fc492">:create </tspan><tspan fill="#7fa6bf">doc </tspan><tspan fill="#c9d6cc">{id: </tspan><tspan fill="#7fa6bf">String </tspan><tspan fill="#5fc492">=&gt; </tspan><tspan fill="#c9d6cc">title: </tspan><tspan fill="#7fa6bf">String</tspan><tspan fill="#c9d6cc">, emb: </tspan><tspan fill="#7fa6bf">&lt;F32; 2&gt;</tspan><tspan fill="#c9d6cc">}</tspan></text>
+  <text x="22" y="168" font-size="12.5" fill="#7c8f83" xml:space="preserve"> status     OK</text>
+
+  <text x="22" y="206" font-size="12.5" xml:space="preserve"><tspan fill="#6FAE8B">kyzo&gt; </tspan><tspan fill="#c9d6cc">?[from, to] </tspan><tspan fill="#5fc492">&lt;- </tspan><tspan fill="#c9d6cc">[[</tspan><tspan fill="#a9cf9e">'datalog','graph-db'</tspan><tspan fill="#c9d6cc">], [</tspan><tspan fill="#a9cf9e">'graph-db','mvcc'</tspan><tspan fill="#c9d6cc">], [</tspan><tspan fill="#a9cf9e">'vec-search','datalog'</tspan><tspan fill="#c9d6cc">]]</tspan></text>
+  <text x="22" y="224" font-size="12.5" xml:space="preserve"><tspan fill="#c9d6cc">      </tspan><tspan fill="#5fc492">:create </tspan><tspan fill="#7fa6bf">cites </tspan><tspan fill="#c9d6cc">{from: </tspan><tspan fill="#7fa6bf">String</tspan><tspan fill="#c9d6cc">, to: </tspan><tspan fill="#7fa6bf">String</tspan><tspan fill="#c9d6cc">}</tspan></text>
+  <text x="22" y="242" font-size="12.5" fill="#7c8f83" xml:space="preserve"> status     OK</text>
+
+  <text x="22" y="292" font-size="11.5" fill="#6d8074" xml:space="preserve">two ordinary relations: one carries a vector, one is a graph edge</text>
+</svg>

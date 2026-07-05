@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 250" width="860" height="250" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="Rust: add kyzo as a git dependency, open a database with Db::new and new_fjall_storage, and run a KyzoScript query with run_script.">
+  <rect x="1" y="1" width="858" height="248" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">embed it in your process, like SQLite · Rust</text>
+
+  <text x="22" y="62"  font-size="13" xml:space="preserve"><tspan fill="#5f7266"># Cargo.toml</tspan></text>
+  <text x="22" y="80"  font-size="13" xml:space="preserve"><tspan fill="#c9d6cc">kyzo = { git = </tspan><tspan fill="#a9cf9e">"https://github.com/kyzodb/kyzo"</tspan><tspan fill="#c9d6cc">, package = </tspan><tspan fill="#a9cf9e">"kyzo"</tspan><tspan fill="#c9d6cc"> }</tspan></text>
+
+  <text x="22" y="118" font-size="13" xml:space="preserve"><tspan fill="#5fc492">use </tspan><tspan fill="#7fa6bf">kyzo</tspan><tspan fill="#c9d6cc">::{</tspan><tspan fill="#7fa6bf">Db</tspan><tspan fill="#c9d6cc">, </tspan><tspan fill="#d6ca8a">new_fjall_storage</tspan><tspan fill="#c9d6cc">};</tspan></text>
+  <text x="22" y="136" font-size="13" xml:space="preserve"><tspan fill="#5fc492">use </tspan><tspan fill="#7fa6bf">std</tspan><tspan fill="#c9d6cc">::collections::</tspan><tspan fill="#7fa6bf">BTreeMap</tspan><tspan fill="#c9d6cc">;</tspan></text>
+
+  <text x="22" y="174" font-size="13" xml:space="preserve"><tspan fill="#5fc492">let </tspan><tspan fill="#c9d6cc">db  = </tspan><tspan fill="#7fa6bf">Db</tspan><tspan fill="#c9d6cc">::</tspan><tspan fill="#d6ca8a">new</tspan><tspan fill="#c9d6cc">(</tspan><tspan fill="#d6ca8a">new_fjall_storage</tspan><tspan fill="#c9d6cc">(</tspan><tspan fill="#a9cf9e">"./knowledge.kyzo"</tspan><tspan fill="#c9d6cc">)?)?;</tspan></text>
+  <text x="22" y="192" font-size="13" xml:space="preserve"><tspan fill="#5fc492">let </tspan><tspan fill="#c9d6cc">out = db.</tspan><tspan fill="#d6ca8a">run_script</tspan><tspan fill="#c9d6cc">(</tspan><tspan fill="#a9cf9e">"?[to] := *route{fr: 'FRA', to}"</tspan><tspan fill="#c9d6cc">, </tspan><tspan fill="#7fa6bf">BTreeMap</tspan><tspan fill="#c9d6cc">::</tspan><tspan fill="#d6ca8a">new</tspan><tspan fill="#c9d6cc">())?;</tspan></text>
+  <text x="22" y="210" font-size="13" xml:space="preserve"><tspan fill="#5f7266">// out.rows holds the answer set</tspan></text>
+
+  <text x="22" y="238" font-size="11.5" fill="#6d8074" xml:space="preserve">no server, no setup: a database is a file handle in your process</text>
+</svg>

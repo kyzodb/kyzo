@@ -1,15 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 300" width="820" height="300" font-family="ui-sans-serif, 'IBM Plex Sans', system-ui, sans-serif" role="img" aria-label="The usual stack keeps five copies of the truth, drifting; KyzoDB collapses them to one language, one transaction.">
   <rect x="1" y="1" width="818" height="298" rx="3" fill="#0c1310" stroke="#263229"/>
 
-  <!-- LEFT: the usual stack -->
-  <rect x="18" y="24" width="352" height="252" rx="3" fill="#121a16" stroke="#263229"/>
-  <text x="194" y="48" text-anchor="middle" font-size="12.5" font-weight="600" fill="#7c8f83" letter-spacing="0.3">The usual stack: five copies of the truth</text>
+  <!-- LEFT: the usual stack (the painful side, in clay) -->
+  <rect x="18" y="24" width="352" height="252" rx="3" fill="#141210" stroke="#5a382e"/>
+  <text x="194" y="48" text-anchor="middle" font-size="12.5" font-weight="600" fill="#c07a68" letter-spacing="0.3">The usual stack: five copies of the truth</text>
 
-  <!-- product node (near-square, not a pill) -->
   <rect x="139" y="62" width="110" height="27" rx="2" fill="#18221c" stroke="#35443b"/>
   <text x="194" y="79.5" text-anchor="middle" font-size="12" font-weight="600" fill="#a9baaf">your product</text>
 
-  <g stroke="#35443b" stroke-width="1">
+  <g stroke="#4a3a34" stroke-width="1">
     <line x1="194" y1="89" x2="66"  y2="150"/>
     <line x1="194" y1="89" x2="128" y2="150"/>
     <line x1="194" y1="89" x2="190" y2="150"/>
@@ -17,38 +16,38 @@
     <line x1="194" y1="89" x2="314" y2="150"/>
   </g>
 
-  <!-- five store cylinders -->
+  <!-- five store cylinders, names in clay -->
   <g>
-    <path d="M38,150 L38,184 A28,7 0 0 0 94,184 L94,150"  fill="#18221c" stroke="#35443b"/>
-    <ellipse cx="66" cy="150" rx="28" ry="7" fill="#1e2a23" stroke="#35443b"/>
-    <text x="66" y="172" text-anchor="middle" font-size="10.5" fill="#a9baaf">facts</text>
+    <path d="M38,150 L38,184 A28,7 0 0 0 94,184 L94,150"  fill="#241a17" stroke="#6b4238"/>
+    <ellipse cx="66" cy="150" rx="28" ry="7" fill="#2b1f1b" stroke="#6b4238"/>
+    <text x="66" y="172" text-anchor="middle" font-size="10.5" fill="#cf7e6b">facts</text>
 
-    <path d="M100,150 L100,184 A28,7 0 0 0 156,184 L156,150" fill="#18221c" stroke="#35443b"/>
-    <ellipse cx="128" cy="150" rx="28" ry="7" fill="#1e2a23" stroke="#35443b"/>
-    <text x="128" y="172" text-anchor="middle" font-size="10.5" fill="#a9baaf">vectors</text>
+    <path d="M100,150 L100,184 A28,7 0 0 0 156,184 L156,150" fill="#241a17" stroke="#6b4238"/>
+    <ellipse cx="128" cy="150" rx="28" ry="7" fill="#2b1f1b" stroke="#6b4238"/>
+    <text x="128" y="172" text-anchor="middle" font-size="10.5" fill="#cf7e6b">vectors</text>
 
-    <path d="M162,150 L162,184 A28,7 0 0 0 218,184 L218,150" fill="#18221c" stroke="#35443b"/>
-    <ellipse cx="190" cy="150" rx="28" ry="7" fill="#1e2a23" stroke="#35443b"/>
-    <text x="190" y="172" text-anchor="middle" font-size="10.5" fill="#a9baaf">graph</text>
+    <path d="M162,150 L162,184 A28,7 0 0 0 218,184 L218,150" fill="#241a17" stroke="#6b4238"/>
+    <ellipse cx="190" cy="150" rx="28" ry="7" fill="#2b1f1b" stroke="#6b4238"/>
+    <text x="190" y="172" text-anchor="middle" font-size="10.5" fill="#cf7e6b">graph</text>
 
-    <path d="M224,150 L224,184 A28,7 0 0 0 280,184 L280,150" fill="#18221c" stroke="#35443b"/>
-    <ellipse cx="252" cy="150" rx="28" ry="7" fill="#1e2a23" stroke="#35443b"/>
-    <text x="252" y="172" text-anchor="middle" font-size="10.5" fill="#a9baaf">text</text>
+    <path d="M224,150 L224,184 A28,7 0 0 0 280,184 L280,150" fill="#241a17" stroke="#6b4238"/>
+    <ellipse cx="252" cy="150" rx="28" ry="7" fill="#2b1f1b" stroke="#6b4238"/>
+    <text x="252" y="172" text-anchor="middle" font-size="10.5" fill="#cf7e6b">text</text>
 
-    <path d="M286,150 L286,184 A28,7 0 0 0 342,184 L342,150" fill="#18221c" stroke="#35443b"/>
-    <ellipse cx="314" cy="150" rx="28" ry="7" fill="#1e2a23" stroke="#35443b"/>
-    <text x="314" y="172" text-anchor="middle" font-size="10.5" fill="#a9baaf">history</text>
+    <path d="M286,150 L286,184 A28,7 0 0 0 342,184 L342,150" fill="#241a17" stroke="#6b4238"/>
+    <ellipse cx="314" cy="150" rx="28" ry="7" fill="#2b1f1b" stroke="#6b4238"/>
+    <text x="314" y="172" text-anchor="middle" font-size="10.5" fill="#cf7e6b">history</text>
   </g>
 
-  <!-- drift: the pain, in muted clay -->
-  <g stroke="#9c5342" stroke-width="1.2" stroke-dasharray="3 3">
-    <line x1="94"  y1="196" x2="100" y2="196"/>
-    <line x1="156" y1="196" x2="162" y2="196"/>
-    <line x1="218" y1="196" x2="224" y2="196"/>
-    <line x1="280" y1="196" x2="286" y2="196"/>
+  <!-- drift: the pain, stronger clay -->
+  <g stroke="#b0503b" stroke-width="2" stroke-dasharray="4 3">
+    <line x1="92"  y1="196" x2="102" y2="196"/>
+    <line x1="154" y1="196" x2="164" y2="196"/>
+    <line x1="216" y1="196" x2="226" y2="196"/>
+    <line x1="278" y1="196" x2="288" y2="196"/>
   </g>
-  <text x="194" y="222" text-anchor="middle" font-size="11" font-style="italic" fill="#9c5342">drift</text>
-  <text x="194" y="252" text-anchor="middle" font-size="10.5" fill="#5d6f64">keeping them in sync is the second product no user asked for</text>
+  <text x="194" y="224" text-anchor="middle" font-size="12" font-style="italic" font-weight="600" fill="#cf6f56">drift</text>
+  <text x="194" y="252" text-anchor="middle" font-size="10.5" fill="#8a6a60">keeping them in sync is the second product no user asked for</text>
 
   <!-- CENTER -->
   <text x="415" y="135" text-anchor="middle" font-size="11" font-weight="600" fill="#7c8f83">collapses to</text>
@@ -59,18 +58,24 @@
     </marker>
   </defs>
 
-  <!-- RIGHT: KyzoDB -->
-  <rect x="462" y="24" width="340" height="252" rx="3" fill="#121a16" stroke="#2F7E52" stroke-width="1.5"/>
+  <!-- RIGHT: KyzoDB (the good side) -->
+  <rect x="462" y="24" width="340" height="252" rx="3" fill="#0e1712" stroke="#3f8a5c" stroke-width="1.5"/>
   <text x="632" y="48" text-anchor="middle" font-size="12.5" font-weight="600" fill="#eef3ef" letter-spacing="0.3">KyzoDB: one copy, one language</text>
 
   <rect x="577" y="62" width="110" height="27" rx="2" fill="#18221c" stroke="#35443b"/>
   <text x="632" y="79.5" text-anchor="middle" font-size="12" font-weight="600" fill="#a9baaf">your product</text>
 
-  <text x="662" y="116" font-size="10.5" font-style="italic" fill="#6FAE8B">one query</text>
-  <line x1="632" y1="90" x2="632" y2="150" stroke="#2F7E52" stroke-width="2.5" marker-end="url(#arrowf)"/>
+  <text x="662" y="116" font-size="10.5" font-style="italic" fill="#8fc4a6">one query</text>
+  <line x1="632" y1="90" x2="632" y2="150" stroke="#3f8a5c" stroke-width="2.5" marker-end="url(#arrowg)"/>
+  <defs>
+    <marker id="arrowg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3f8a5c"/>
+    </marker>
+  </defs>
 
-  <rect x="502" y="156" width="260" height="72" rx="3" fill="#18221c" stroke="#2F7E52" stroke-width="1.5"/>
-  <text x="632" y="186" text-anchor="middle" font-size="13" font-weight="600" fill="#eef3ef">facts · graph · vectors</text>
-  <text x="632" y="206" text-anchor="middle" font-size="13" font-weight="600" fill="#eef3ef">text · history</text>
-  <text x="632" y="252" text-anchor="middle" font-size="10.5" fill="#5d6f64">one transaction · one snapshot · one answer</text>
+  <!-- the unified node: solid fern, pops off the dark ground -->
+  <rect x="502" y="156" width="260" height="72" rx="3" fill="#1E4D33" stroke="#6FAE8B" stroke-width="1.5"/>
+  <text x="632" y="186" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">facts · graph · vectors</text>
+  <text x="632" y="206" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">text · history</text>
+  <text x="632" y="252" text-anchor="middle" font-size="10.5" fill="#6d8a7a">one transaction · one snapshot · one answer</text>
 </svg>
