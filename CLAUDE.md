@@ -2,7 +2,8 @@
 
 Pure-Rust fork of [CozoDB](https://github.com/cozodb/cozo): one Datalog (KyzoScript) over
 relational, graph, vector, and full-text data, with time travel, on one memcomparable transactional
-KV substrate (`fjall`). `README.md` is the product; `REFACTOR.md` is the plan.
+KV substrate (`fjall`). `README.md` is the product; the board (org project KyzoDB Migration)
+carries the plan, one story at a time.
 
 ## The prime directive
 
