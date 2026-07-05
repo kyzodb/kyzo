@@ -131,7 +131,7 @@ pub fn new_fjall_storage_with(
     let ks = db
         .keyspace(KEYSPACE_NAME, KeyspaceCreateOptions::default)
         .map_err(|e| miette!("opening fjall keyspace: {e}"))?;
-    let now = crate::data::value::current_validity()?.0.0;
+    let now = crate::data::value::current_validity()?.raw();
     let watermark = match meta
         .get(SYSTEM_CLOCK_WATERMARK_KEY)
         .map_err(|e| miette!("reading system clock watermark: {e}"))?
@@ -193,10 +193,10 @@ impl FjallStorage {
             .watermark_lock
             .lock()
             .map_err(|_| miette!("watermark lock poisoned"))?;
-        let now = crate::data::value::current_validity()?.0.0;
+        let now = crate::data::value::current_validity()?.raw();
         let stamp = self.clock.stamp(now);
         self.meta
-            .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.0.0.to_be_bytes())
+            .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())
             .map_err(|e| miette!("persisting system clock watermark: {e}"))?;
         Ok(stamp)
     }
@@ -211,7 +211,7 @@ impl Storage for FjallStorage {
     }
 
     fn clock_floor(&self) -> Result<ValidityTs> {
-        Ok(ValidityTs(std::cmp::Reverse(self.clock.floor())))
+        Ok(ValidityTs::from_raw(self.clock.floor()))
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
@@ -219,7 +219,7 @@ impl Storage for FjallStorage {
             .watermark_lock
             .lock()
             .map_err(|_| miette!("watermark lock poisoned"))?;
-        self.clock.raise_floor(floor.0.0);
+        self.clock.raise_floor(floor.raw());
         // Persist the CLOCK's floor, not the argument: raise_floor is a
         // max, so a stale (lower) argument must not regress the disk.
         self.meta

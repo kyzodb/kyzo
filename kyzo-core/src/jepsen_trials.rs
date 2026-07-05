@@ -240,7 +240,7 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
         // Captured now, at open time (snapshot-then-mint) — a VALUE, not a
         // side effect racing anything after `commit()` returns (see
         // `CommittedTxn`'s doc for why that distinction is the whole fix).
-        let stamp = tx.system_stamp().0.0;
+        let stamp = tx.system_stamp().raw();
         let mut ops = Vec::with_capacity(plan.len());
         for p in plan {
             match p.kind {

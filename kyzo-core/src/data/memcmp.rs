@@ -169,7 +169,7 @@ pub(crate) trait MemCmpEncoder: Write {
                 // versions sort FIRST among keys sharing a tuple prefix:
                 // that is what makes the as-of seek land on the newest
                 // eligible version.
-                let ts = vld.timestamp.0.0;
+                let ts = vld.timestamp.raw();
                 let ts_flipped = !order_encode_i64(ts);
                 self.write_u8(VLD_TAG).unwrap();
                 self.write_u64::<BigEndian>(ts_flipped).unwrap();
@@ -511,7 +511,7 @@ impl DataValue {
                 let is_assert = is_assert_byte[0] == 0;
                 (
                     DataValue::Validity(Validity {
-                        timestamp: ValidityTs(Reverse(ts)),
+                        timestamp: ValidityTs::from_raw(ts),
                         is_assert: Reverse(is_assert),
                     }),
                     rest,

@@ -1707,7 +1707,7 @@ fn test_pre_epoch_timestamps() {
     assert!(secs < 0.);
 
     let vld = str2vld("1969-07-20T20:17:00Z").unwrap();
-    assert!(vld.0.0 < 0);
+    assert!(vld.raw() < 0);
 
     // The schema boundary obeys the same law: coercing a pre-epoch validity
     // string yields negative microseconds.
@@ -1718,11 +1718,11 @@ fn test_pre_epoch_timestamps() {
     let coerced = typing
         .coerce(
             DataValue::Str("1969-07-20T20:17:00Z".into()),
-            ValidityTs(std::cmp::Reverse(0)),
+            ValidityTs::from_raw(0),
         )
         .unwrap();
     match coerced {
-        DataValue::Validity(vld) => assert!(vld.timestamp.0.0 < 0),
+        DataValue::Validity(vld) => assert!(vld.timestamp.raw() < 0),
         v => panic!("expected a validity, got {v:?}"),
     }
 }
@@ -1880,19 +1880,18 @@ fn parse_secs(s: &str) -> Result<f64, String> {
 }
 // `str2vld` -> signed microseconds.
 fn vld_micros(s: &str) -> Result<i64, String> {
-    str2vld(s).map(|v| v.0.0).map_err(|e| e.to_string())
+    str2vld(s).map(|v| v.raw()).map_err(|e| e.to_string())
 }
 // Validity coercion path (`data/relation.rs`) -> (micros, is_assert).
 fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
-    use std::cmp::Reverse;
     let typing = NullableColType {
         coltype: ColType::Validity,
         nullable: false,
     };
     typing
-        .coerce(DataValue::Str(s.into()), ValidityTs(Reverse(999)))
+        .coerce(DataValue::Str(s.into()), ValidityTs::from_raw(999))
         .map(|v| match v {
-            DataValue::Validity(vld) => (vld.timestamp.0.0, vld.is_assert.0),
+            DataValue::Validity(vld) => (vld.timestamp.raw(), vld.is_assert.0),
             other => panic!("expected Validity, got {other:?}"),
         })
         .map_err(|e| e.to_string())
@@ -1936,7 +1935,7 @@ fn format_timestamp_validity_input_agreed() {
     use std::cmp::Reverse;
     let f = |micros: i64| {
         let vld = DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(micros)),
+            timestamp: ValidityTs::from_raw(micros),
             is_assert: Reverse(true),
         });
         fmt(&[vld]).unwrap()

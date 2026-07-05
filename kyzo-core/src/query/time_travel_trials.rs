@@ -23,7 +23,7 @@
  * as-of programs on top.
  *
  * Pinned boundary semantics (verified here, and traceable to
- * `data/tuple.rs::check_key_for_bitemporal` + the `ValidityTs(Reverse(_))`
+ * `data/tuple.rs::check_key_for_bitemporal` + the `ValidityTs::from_raw(_)`
  * ordering): an as-of read AT instant T is INCLUSIVE — it returns the newest
  * stored version whose real timestamp is <= T. At the same instant, an
  * assertion beats a retraction (assert encodes to byte 0x00, retract to 0x01,
@@ -35,7 +35,6 @@
 #![cfg(test)]
 
 use crate::engines::segments::Segments;
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
@@ -82,7 +81,7 @@ fn s(x: &str) -> DataValue {
     DataValue::from(x)
 }
 fn vts(ts: i64) -> ValidityTs {
-    ValidityTs(Reverse(ts))
+    ValidityTs::from_raw(ts)
 }
 fn muggle(rel: &str) -> MagicSymbol {
     MagicSymbol::Muggle { inner: sym(rel) }
@@ -323,7 +322,7 @@ fn stored_plain(db: &FjallStorage, name: &str, arity: usize, rows: &[Vec<i64>]) 
     for r in rows {
         let row: Tuple = r.iter().copied().map(v).collect();
         handle
-            .put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+            .put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
             .expect("put row");
     }
     tx.commit().expect("commit");
@@ -1561,7 +1560,7 @@ fn write_history_multi_tx(
     let mut sys_stamps = Vec::with_capacity(versions.len());
     for ver in versions {
         let mut tx = db.write_tx().expect("write tx");
-        sys_stamps.push(tx.system_stamp().0.0);
+        sys_stamps.push(tx.system_stamp().raw());
         let key_cols: Tuple = ver.key.iter().copied().map(v).collect();
         if ver.assert {
             let mut row = key_cols;

@@ -1866,12 +1866,12 @@ mod tests {
             .put_fact(
                 &mut tx,
                 &[DataValue::from(1), DataValue::from("retro")],
-                crate::data::value::ValidityTs(std::cmp::Reverse(150)),
+                crate::data::value::ValidityTs::from_raw(150),
                 SourceSpan(0, 0),
             )
             .unwrap();
         tx.commit().unwrap();
-        let now = crate::data::value::current_validity().unwrap().0.0;
+        let now = crate::data::value::current_validity().unwrap().raw();
 
         // (sys=now, valid=200): the record NOW says the fact held at 200.
         let rows = db

@@ -68,7 +68,7 @@ fn compile(
         dict.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+            crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -460,7 +460,7 @@ fn law5_corrupt_dictionary_sweep_never_panics() {
                 dict.put_fact(
                     &mut tx,
                     &row,
-                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    crate::data::value::ValidityTs::from_raw(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();
@@ -498,7 +498,7 @@ fn probe_big_surface_scaling() {
         dict.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+            crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

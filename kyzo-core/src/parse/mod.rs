@@ -1269,7 +1269,6 @@ pub fn parse_script(
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Reverse;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -1278,7 +1277,7 @@ mod tests {
     use crate::data::symb::Symbol;
 
     fn vld() -> ValidityTs {
-        ValidityTs(Reverse(0))
+        ValidityTs::from_raw(0)
     }
 
     fn parse(src: &str) -> Result<Script> {

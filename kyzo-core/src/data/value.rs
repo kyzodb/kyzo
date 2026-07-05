@@ -109,6 +109,21 @@ impl PartialOrd for RegexWrapper {
 /// The temporal coordinate of a validity claim: microseconds since epoch,
 /// wrapped in `Reverse` so newer moments sort first among a fact's versions
 /// — which is what lets an as-of seek land on the newest eligible version.
+///
+/// The tuple field is private. `i64::MAX` is a legitimate `ValidityTs` —
+/// it is [`MAX_VALIDITY_TS`], the open-end sentinel every derived interval
+/// and open-end read relies on — so a blanket ban on that value would be
+/// wrong; only a USER-ASSERTED write validity may never land there (issue
+/// #62's ruling). Two constructors say which case a caller is in:
+/// [`Self::from_raw`] for any read-side/internal construction (the sentinel
+/// const, decode-from-stored, system-stamp resolution, open-end reads, an
+/// embedder's own `AsOf` coordinate — every `i64` is fine), and
+/// [`Self::for_assertion`] for a user-write instant, the one path that
+/// refuses `i64::MAX`. A raw `ValidityTs(Reverse(x))` literal is no longer
+/// buildable anywhere outside this module — every external and internal
+/// caller alike goes through one of the two named constructors above, so a
+/// future user-write path that skips `for_assertion` is a compile error,
+/// not a bug waiting for a test to catch it.
 #[derive(
     Copy,
     Clone,
@@ -121,7 +136,67 @@ impl PartialOrd for RegexWrapper {
     Hash,
     Debug,
 )]
-pub struct ValidityTs(pub Reverse<i64>);
+pub struct ValidityTs(Reverse<i64>);
+
+/// `valid = i64::MAX` (`'END'`, or the literal microsecond itself) is the
+/// reserved terminal tick every open-end sentinel depends on being
+/// unwritable (issue #62's ruling: the temporal oracle and the `Interval`
+/// `DataValue` both read "no stored event governs past here" as "still
+/// open" — a fact actually stored AT that instant would collide with that
+/// reading and derive as a zero-width interval). `@ 'END'` stays legal on
+/// the READ side (`data_value_to_vld_spec`'s "as of the end of time");
+/// this refusal is write-only, raised by [`ValidityTs::for_assertion`] —
+/// the single diagnostic shared by every user-write call site (the parse-time
+/// constant `@` coordinate and the per-row `@` coordinate alike), so the two
+/// near-duplicate error types this codebase used to carry (one per call
+/// site) collapse to the one constructor that actually owns the rule.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error(
+    "the valid instant `i64::MAX` (`'END'`) is reserved as the open-end sentinel and cannot be written to; name a concrete instant, or omit `@` (every row lands at the transaction's own stamp)"
+)]
+#[diagnostic(code(data::write_validity_at_terminal_instant))]
+pub(crate) struct WriteValidityAtTerminalInstant(#[label] pub(crate) crate::data::span::SourceSpan);
+
+impl ValidityTs {
+    /// Construction from an already-known raw microsecond coordinate: the
+    /// sentinel const, decode-from-stored keys, system-stamp resolution,
+    /// open-end reads, and any embedder building a read-side `AsOf`
+    /// coordinate — every context that legitimately needs a `ValidityTs`
+    /// carrying `i64::MAX` (or any other `i64`). Public because `ValidityTs`
+    /// and `AsOf` are themselves part of this crate's public read API
+    /// (`lib.rs`'s re-export list); NOT for a user-asserted WRITE validity —
+    /// that path is [`Self::for_assertion`], the only constructor that
+    /// refuses the sentinel, and it stays `pub(crate)` because the write
+    /// coordinate type (`data::program::WriteValidity`) that consumes it is
+    /// itself `pub(crate)` — a script is the only way to assert a write
+    /// validity, so there is no public constructor to seal against.
+    pub const fn from_raw(micros: i64) -> Self {
+        ValidityTs(Reverse(micros))
+    }
+
+    /// The raw microsecond coordinate — the read counterpart to
+    /// [`Self::from_raw`], for consumers (key/value encoding, arithmetic,
+    /// formatting, diagnostics, and any embedder reading a resolved `AsOf`
+    /// coordinate back out) that need it back out.
+    pub const fn raw(&self) -> i64 {
+        self.0.0
+    }
+
+    /// Smart constructor for a USER-ASSERTED write validity: refuses
+    /// `i64::MAX`, the reserved open-end sentinel, as a typed diagnostic
+    /// rather than a value a caller must remember to equality-check after
+    /// the fact. Parse, don't validate — every `ValidityTs` this returns
+    /// carries proof it isn't the sentinel.
+    pub(crate) fn for_assertion(
+        instant: i64,
+        span: crate::data::span::SourceSpan,
+    ) -> miette::Result<Self> {
+        if instant == i64::MAX {
+            miette::bail!(WriteValidityAtTerminalInstant(span));
+        }
+        Ok(ValidityTs(Reverse(instant)))
+    }
+}
 
 /// A time-stamped existence claim — the last slot of a versioned fact's key.
 /// Assertion states the fact exists from this moment; retraction is a
@@ -148,7 +223,7 @@ pub struct Validity {
 impl From<(i64, bool)> for Validity {
     fn from(value: (i64, bool)) -> Self {
         Self {
-            timestamp: ValidityTs(Reverse(value.0)),
+            timestamp: ValidityTs::from_raw(value.0),
             is_assert: Reverse(value.1),
         }
     }
@@ -214,7 +289,7 @@ pub fn current_validity() -> miette::Result<ValidityTs> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| miette::miette!("host clock reports a time before 1970"))?
         .as_micros() as i64;
-    Ok(ValidityTs(Reverse(ts_micros)))
+    Ok(ValidityTs::from_raw(ts_micros))
 }
 
 /// A bitemporal read coordinate: WHERE in recorded history a query
@@ -253,9 +328,9 @@ impl AsOf {
     }
 }
 
-pub(crate) const MAX_VALIDITY_TS: ValidityTs = ValidityTs(Reverse(i64::MAX));
+pub(crate) const MAX_VALIDITY_TS: ValidityTs = ValidityTs::from_raw(i64::MAX);
 pub(crate) const TERMINAL_VALIDITY: Validity = Validity {
-    timestamp: ValidityTs(Reverse(i64::MIN)),
+    timestamp: ValidityTs::from_raw(i64::MIN),
     is_assert: Reverse(false),
 };
 
@@ -939,7 +1014,7 @@ impl Display for DataValue {
             DataValue::Bot => write!(f, "null"),
             DataValue::Validity(v) => f
                 .debug_struct("Validity")
-                .field("timestamp", &v.timestamp.0)
+                .field("timestamp", &v.timestamp.raw())
                 .field("is_assert", &v.is_assert.0)
                 .finish(),
             DataValue::Interval(iv) => write!(f, "make_interval({}, {})", iv.start(), iv.end()),
@@ -1124,7 +1199,6 @@ mod interval_deserialize_tests {
 mod stored_validity_slot_and_as_of_constructor_tests {
     use super::{AsOf, MAX_VALIDITY_TS, StoredValiditySlot, Validity, ValidityTs};
     use crate::data::value::DataValue;
-    use std::cmp::Reverse;
 
     /// The whole point of the type: every timestamp it is handed, however
     /// extreme, comes out pinned `is_assert == true`. There is no
@@ -1133,14 +1207,14 @@ mod stored_validity_slot_and_as_of_constructor_tests {
     #[test]
     fn stored_validity_slot_always_pins_assert_true() {
         for ts in [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX] {
-            let slot = StoredValiditySlot::new(ValidityTs(Reverse(ts)));
+            let slot = StoredValiditySlot::new(ValidityTs::from_raw(ts));
             match slot.as_datavalue() {
                 DataValue::Validity(Validity {
                     timestamp,
                     is_assert,
                 }) => {
                     assert!(is_assert.0, "slot for ts={ts} was not pinned to assert");
-                    assert_eq!(timestamp, ValidityTs(Reverse(ts)));
+                    assert_eq!(timestamp, ValidityTs::from_raw(ts));
                 }
                 other => panic!("expected DataValue::Validity, got {other:?}"),
             }
@@ -1154,7 +1228,7 @@ mod stored_validity_slot_and_as_of_constructor_tests {
     #[test]
     fn as_of_current_is_at_with_max_system_coordinate() {
         for v in [i64::MIN, -100, -1, 0, 1, 100, i64::MAX] {
-            let valid = ValidityTs(Reverse(v));
+            let valid = ValidityTs::from_raw(v);
             assert_eq!(AsOf::current(valid), AsOf::at(MAX_VALIDITY_TS, valid));
         }
     }
@@ -1164,9 +1238,42 @@ mod stored_validity_slot_and_as_of_constructor_tests {
     /// every call site, never a narrower or reordered surface.
     #[test]
     fn as_of_at_matches_the_raw_struct_literal_it_replaces() {
-        let sys = ValidityTs(Reverse(42));
-        let valid = ValidityTs(Reverse(-7));
+        let sys = ValidityTs::from_raw(42);
+        let valid = ValidityTs::from_raw(-7);
         let literal = AsOf { sys, valid };
         assert_eq!(AsOf::at(sys, valid), literal);
+    }
+
+    /// The smart constructor at the enforcement-ladder boundary: the
+    /// reserved terminal tick is refused as a typed diagnostic, not a
+    /// panic, and the message names it "reserved" (the substring every
+    /// end-to-end write-path test asserts on).
+    #[test]
+    fn for_assertion_refuses_the_sentinel() {
+        let span = crate::data::span::SourceSpan(0, 0);
+        let err = ValidityTs::for_assertion(i64::MAX, span).expect_err("must refuse i64::MAX");
+        assert!(err.to_string().contains("reserved"), "got: {err}");
+    }
+
+    /// Every other instant, including the signed extremes short of the
+    /// sentinel, is accepted unchanged.
+    #[test]
+    fn for_assertion_accepts_every_non_sentinel_instant() {
+        let span = crate::data::span::SourceSpan(0, 0);
+        for ts in [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1] {
+            let vld = ValidityTs::for_assertion(ts, span).expect("must accept non-sentinel");
+            assert_eq!(vld, ValidityTs::from_raw(ts));
+        }
+    }
+
+    /// `from_raw`/`raw` round-trip: the internal-construction path is not
+    /// merely permissive, it is lossless — the read counterpart to
+    /// `from_raw` recovers exactly the instant handed in, sentinel
+    /// included.
+    #[test]
+    fn from_raw_and_raw_round_trip_including_the_sentinel() {
+        for ts in [i64::MIN, -1, 0, 1, i64::MAX] {
+            assert_eq!(ValidityTs::from_raw(ts).raw(), ts);
+        }
     }
 }

@@ -489,7 +489,6 @@ impl Iterator for SegmentScanBatches {
 // ─────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod segment_gate_tests {
-    use std::cmp::Reverse;
 
     use smartstring::SmartString;
 
@@ -590,7 +589,7 @@ mod segment_gate_tests {
     ) {
         let mut wtx = db.write_tx().unwrap();
         handle
-            .put_fact(&mut wtx, &[v(k), v(val)], ValidityTs(Reverse(0)), sp())
+            .put_fact(&mut wtx, &[v(k), v(val)], ValidityTs::from_raw(0), sp())
             .unwrap();
         // Writers bump BEFORE commit (`engines/segments.rs` module doc's
         // soundness pairing) — mirrors exactly what `runtime/db.rs`'s

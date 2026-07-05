@@ -190,7 +190,7 @@ fn hsetup(
         base.put_fact(
             &mut tx,
             r,
-            crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+            crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

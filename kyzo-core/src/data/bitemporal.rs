@@ -234,7 +234,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn vts(t: i64) -> ValidityTs {
-        ValidityTs(Reverse(t))
+        ValidityTs::from_raw(t)
     }
 
     fn zero_as_of() -> AsOf {

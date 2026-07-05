@@ -66,7 +66,6 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
-use std::cmp::Reverse;
 
 use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::query::compile::{
@@ -217,7 +216,7 @@ fn stored_relation<S: Storage>(db: &S, name: &str, arity: usize, rows: &[Tuple])
     let mut tx = db.write_tx()?;
     let handle = create_relation(&mut tx, input, KeyspaceKind::Facts)?;
     for row in rows {
-        handle.put_fact(&mut tx, row, ValidityTs(Reverse(0)), sp())?;
+        handle.put_fact(&mut tx, row, ValidityTs::from_raw(0), sp())?;
     }
     tx.commit()?;
     Ok(())
@@ -693,7 +692,7 @@ fn crash_consistency_is_query_visible() {
         .unwrap();
         let put = |tx: &mut crate::storage::sim::SimWriteTx, a: i64, b: i64| {
             let row = vec![v(a), v(b)];
-            h.put_fact(tx, &row, ValidityTs(Reverse(0)), sp()).unwrap();
+            h.put_fact(tx, &row, ValidityTs::from_raw(0), sp()).unwrap();
         };
         put(&mut tx, 1, 2);
         put(&mut tx, 2, 3);
@@ -802,7 +801,7 @@ fn crash_recovery_under_faults_never_tears() {
             )?;
             for (a, b) in [(1, 2), (2, 3)] {
                 let row = vec![v(a), v(b)];
-                h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())?;
+                h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())?;
             }
             tx.commit_durable()?;
             Ok(h)
@@ -823,7 +822,7 @@ fn crash_recovery_under_faults_never_tears() {
         // not commit, which is one of the two legal recovered states.
         if let Ok(mut tx) = db.write_tx() {
             let row = vec![v(3), v(4)];
-            if h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+            if h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
                 .is_ok()
             {
                 let _ = tx.commit(); // buffer tier; ignore fault
@@ -887,7 +886,7 @@ fn snapshot_isolation_holds_at_answer_level() {
         .unwrap();
         for (slot, num) in [(0i64, 0i64), (1, C)] {
             let row = vec![v(slot), v(num)];
-            h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+            h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
                 .unwrap();
         }
         tx.commit().unwrap();
@@ -928,7 +927,7 @@ fn snapshot_isolation_holds_at_answer_level() {
                         // Same valid instant every round: each atomic pair
                         // update is a system-time correction of the pair,
                         // and the current read resolves to the newest one.
-                        if h.put_fact(&mut tx, &row, ValidityTs(Reverse(0)), sp())
+                        if h.put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
                             .is_err()
                         {
                             good = false;
@@ -1009,9 +1008,9 @@ fn time_travel_under_faults_answers_or_errors() {
         ] {
             if assertive {
                 let row = vec![v(id), DataValue::Str(SmartString::from(state))];
-                h.put_fact(&mut tx, &row, ValidityTs(Reverse(at)), sp())?;
+                h.put_fact(&mut tx, &row, ValidityTs::from_raw(at), sp())?;
             } else {
-                h.retract_fact(&mut tx, &[v(id)], ValidityTs(Reverse(at)), sp())?;
+                h.retract_fact(&mut tx, &[v(id)], ValidityTs::from_raw(at), sp())?;
             }
         }
         tx.commit()
@@ -1028,7 +1027,7 @@ fn time_travel_under_faults_answers_or_errors() {
                 vec![rel_atom_asof(
                     "hist",
                     &[id, state],
-                    AsOf::current(ValidityTs(std::cmp::Reverse(at))),
+                    AsOf::current(ValidityTs::from_raw(at)),
                 )],
             )],
         )]])

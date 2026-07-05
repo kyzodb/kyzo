@@ -624,12 +624,12 @@ impl Storage for SimStorage {
 
     fn clock_floor(&self) -> Result<ValidityTs> {
         let st = self.ctx.state.lock().expect(POISONED);
-        Ok(ValidityTs(std::cmp::Reverse(st.next_system_stamp)))
+        Ok(ValidityTs::from_raw(st.next_system_stamp))
     }
 
     fn raise_clock_floor(&self, floor: ValidityTs) -> Result<()> {
         let mut st = self.ctx.state.lock().expect(POISONED);
-        st.next_system_stamp = st.next_system_stamp.max(floor.0.0);
+        st.next_system_stamp = st.next_system_stamp.max(floor.raw());
         Ok(())
     }
 
@@ -646,7 +646,7 @@ impl Storage for SimStorage {
         self.ctx.yield_turn();
         let mut st = self.ctx.state.lock().expect(POISONED);
         st.next_system_stamp += 1;
-        let stamp = ValidityTs(std::cmp::Reverse(st.next_system_stamp));
+        let stamp = ValidityTs::from_raw(st.next_system_stamp);
         Ok(SimWriteTx {
             snapshot: snapshot_at(&st, st.commit_seq),
             stamp,

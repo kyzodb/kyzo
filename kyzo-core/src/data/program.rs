@@ -172,37 +172,22 @@ impl WriteValidity {
                 let span = expr.span();
                 let val = expr.eval(row)?;
                 let vld = crate::data::functions::data_value_to_vld_spec(val, span, cur_vld)?;
-                // `parse::query::resolve_write_validity` refuses the
-                // reserved terminal tick (`i64::MAX` / `'END'`) at parse
-                // time for the `Fixed` coordinate, but a `PerRow` clause's
-                // instant comes out of THIS row's own data — parse time
-                // only proved the expression names one of the mutation's
-                // output columns, never what value that column will hold
-                // for any given row. Refuse it here, per row, identically:
-                // issue #62's ruling reserves `i64::MAX` as non-writable
-                // because it is the instant every open-end sentinel (the
-                // temporal oracle, the Interval `DataValue`) reads as
-                // "still open."
-                if vld == crate::data::value::MAX_VALIDITY_TS {
-                    bail!(WriteValidityAtTerminalInstant(span));
-                }
-                Ok(vld)
+                // `parse::query::resolve_write_validity` proves the same
+                // thing for the `Fixed` coordinate at parse time, but a
+                // `PerRow` clause's instant comes out of THIS row's own
+                // data — parse time only proved the expression names one
+                // of the mutation's output columns, never what value that
+                // column will hold for any given row. Re-prove it here,
+                // per row, through the same smart constructor: a
+                // USER-ASSERTED write validity can never be the reserved
+                // terminal tick (`i64::MAX` / `'END'`, issue #62's ruling),
+                // the instant every open-end sentinel and derived interval
+                // reads as "still open."
+                crate::data::value::ValidityTs::for_assertion(vld.raw(), span)
             }
         }
     }
 }
-
-/// The `PerRow` twin of `parse::query`'s parse-time
-/// `WriteValidityAtTerminalInstant`: same reservation, enforced where a
-/// per-row coordinate is actually known — after evaluating this row's own
-/// data, not at parse time. `@ 'END'` stays legal on the READ side; this is
-/// write-only.
-#[derive(Debug, Error, Diagnostic)]
-#[error(
-    "a per-row `@` clause resolved to the reserved valid instant `i64::MAX` (`'END'`), which cannot be written to; the terminal tick is the open-end sentinel every derived interval relies on staying unwritten"
-)]
-#[diagnostic(code(runtime::write_validity_at_terminal_instant))]
-pub(crate) struct WriteValidityAtTerminalInstant(#[label] SourceSpan);
 
 /// The output stored relation as the query *declares* it: name, declared
 /// schema, and which head bindings feed the key and non-key columns.
@@ -346,7 +331,7 @@ impl Display for QueryOutOptions {
             write!(f, "}}")?;
             match write_vld {
                 WriteValidity::Now => {}
-                WriteValidity::Fixed(ts) => write!(f, " @ {}", ts.0.0)?,
+                WriteValidity::Fixed(ts) => write!(f, " @ {}", ts.raw())?,
                 WriteValidity::PerRow(expr) => write!(f, " @ {expr}")?,
             }
             writeln!(f, ";")?;

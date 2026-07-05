@@ -1791,8 +1791,6 @@ mod tests {
     /// original panicked on.
     #[test]
     fn time_travel_requires_a_validity_keyed_relation() {
-        use std::cmp::Reverse;
-
         use crate::data::value::ValidityTs;
 
         struct NoRule;
@@ -1821,7 +1819,7 @@ mod tests {
             rule_args: vec![FixedRuleArg::Stored {
                 name: sym("edges"),
                 bindings: vec![sym("x")],
-                as_of: Some(AsOf::current(ValidityTs(Reverse(0)))),
+                as_of: Some(AsOf::current(ValidityTs::from_raw(0))),
                 span: SourceSpan(0, 0),
             }],
             options: Arc::new(BTreeMap::new()),

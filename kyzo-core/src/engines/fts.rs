@@ -784,7 +784,7 @@ mod tests {
             base.put_fact(
                 &mut tx,
                 &row,
-                crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -1142,7 +1142,7 @@ mod tests {
         base.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+            crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();

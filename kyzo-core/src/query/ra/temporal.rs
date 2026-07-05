@@ -337,8 +337,8 @@ pub(crate) fn decode_raw_version(
         key[..prefix_len].to_vec(),
         full,
         RawVersion {
-            valid: valid_slot.timestamp.0.0,
-            sys: sys_slot.timestamp.0.0,
+            valid: valid_slot.timestamp.raw(),
+            sys: sys_slot.timestamp.raw(),
             polarity,
             payload,
         },
@@ -617,8 +617,8 @@ impl DeltaRA {
         tx: &impl ReadTx,
         posting: &RelationHandle,
     ) -> Result<BTreeSet<SignedFact>> {
-        let from_valid = self.from.valid.0.0;
-        let to_valid = self.to.valid.0.0;
+        let from_valid = self.from.valid.raw();
+        let to_valid = self.to.valid.raw();
         let lo = from_valid.min(to_valid);
         let hi = from_valid.max(to_valid);
         let base_key_len = self.storage.metadata.keys.len();
@@ -647,8 +647,7 @@ impl DeltaRA {
 /// (exclusive) — backwards from what plain integer bounds would suggest,
 /// which is exactly why this is factored out and named rather than inlined.
 fn posting_window_bounds(posting: &RelationHandle, lo: i64, hi: i64) -> (Vec<u8>, Vec<u8>) {
-    let col_at =
-        |ts: i64| vec![StoredValiditySlot::new(ValidityTs(std::cmp::Reverse(ts))).as_datavalue()];
+    let col_at = |ts: i64| vec![StoredValiditySlot::new(ValidityTs::from_raw(ts)).as_datavalue()];
     let lower = col_at(hi).encode_as_key(posting.id).into_vec();
     let upper = col_at(lo).encode_as_key(posting.id).into_vec();
     (lower, upper)
@@ -723,7 +722,6 @@ mod tests {
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
     use itertools::Itertools;
-    use std::cmp::Reverse;
 
     fn sp() -> SourceSpan {
         SourceSpan(0, 0)
@@ -735,7 +733,7 @@ mod tests {
         DataValue::from(i)
     }
     fn vts(t: i64) -> ValidityTs {
-        ValidityTs(Reverse(t))
+        ValidityTs::from_raw(t)
     }
     fn col(name: &str) -> ColumnDef {
         ColumnDef {

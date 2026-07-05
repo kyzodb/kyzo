@@ -105,9 +105,9 @@ impl Default for TempTx {
         static TEMP_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
         TempTx {
             map: BTreeMap::new(),
-            stamp: ValidityTs(std::cmp::Reverse(
+            stamp: ValidityTs::from_raw(
                 TEMP_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
-            )),
+            ),
         }
     }
 }
@@ -236,7 +236,7 @@ mod tests {
     fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
         let slot = |ts: i64| {
             DataValue::Validity(Validity {
-                timestamp: ValidityTs(Reverse(ts)),
+                timestamp: ValidityTs::from_raw(ts),
                 is_assert: Reverse(true),
             })
         };
@@ -267,14 +267,14 @@ mod tests {
     /// fails fast rather than merely hanging.
     fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Vec<(i64, i64)> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf::at(ValidityTs(Reverse(sys)), ValidityTs(Reverse(valid)));
+        let as_of = AsOf::at(ValidityTs::from_raw(sys), ValidityTs::from_raw(valid));
         t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
                 let tup = r.expect("engine-shaped rows decode cleanly");
                 let x = tup[0].get_int().expect("int key column");
                 let version_ts = match &tup[1] {
-                    DataValue::Validity(v) => v.timestamp.0.0,
+                    DataValue::Validity(v) => v.timestamp.raw(),
                     other => panic!("expected a valid-instant slot, got {other:?}"),
                 };
                 (x, version_ts)
@@ -406,7 +406,7 @@ mod tests {
         let mut t = TempTx::default();
         t.put(&bk(1, 5, 1), &bv(ClaimPolarity::Assert)).unwrap();
         let (lo, hi) = rel_bounds();
-        let at = AsOf::current(ValidityTs(Reverse(10)));
+        let at = AsOf::current(ValidityTs::from_raw(10));
         assert_eq!(t.range_skip_scan_tuple(&hi, &lo, at).count(), 0, "inverted");
         assert_eq!(t.range_skip_scan_tuple(&lo, &lo, at).count(), 0, "equal");
     }
@@ -726,7 +726,7 @@ mod tests {
             }
             for sys in &sys_queries {
                 for ts in &queries {
-                    let at = AsOf::at(ValidityTs(Reverse(*sys)), ValidityTs(Reverse(*ts)));
+                    let at = AsOf::at(ValidityTs::from_raw(*sys), ValidityTs::from_raw(*ts));
                     let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));
@@ -734,7 +734,7 @@ mod tests {
                     assert_eq!(a, c, "skip scan temp vs sim: {label}, sys {sys}, ts {ts}");
                 }
             }
-            let at = AsOf::current(ValidityTs(Reverse(5)));
+            let at = AsOf::current(ValidityTs::from_raw(5));
             assert_eq!(temp_tx.range_skip_scan_tuple(&upper, &lower, at).count(), 0);
             assert_eq!(temp_tx.range_skip_scan_tuple(&lower, &lower, at).count(), 0);
         }

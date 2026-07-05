@@ -306,7 +306,7 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
         }
         DataValue::Json(j) => j.0.clone(),
         DataValue::Validity(vld) => {
-            json!([vld.timestamp.0, vld.is_assert.0])
+            json!([vld.timestamp.raw(), vld.is_assert.0])
         }
         DataValue::Interval(iv) => {
             json!([iv.start(), iv.end()])
@@ -2269,7 +2269,7 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("The string cannot be interpreted as int"))?
                 .into()
         }
-        DataValue::Validity(vld) => DataValue::Num(Num::Int(vld.timestamp.0.0)),
+        DataValue::Validity(vld) => DataValue::Num(Num::Int(vld.timestamp.raw())),
         v => bail!("'to_int' does not recognize {:?}", v),
     })
 }
@@ -2829,7 +2829,7 @@ fn format_rfc3339(ts: jiff::Timestamp, off: Offset) -> String {
 define_op!(OP_FORMAT_TIMESTAMP, 1, true, true);
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     let millis = match &args[0] {
-        DataValue::Validity(vld) => vld.timestamp.0.0 / 1000,
+        DataValue::Validity(vld) => vld.timestamp.raw() / 1000,
         v => {
             let f = v
                 .get_float()
@@ -2900,7 +2900,7 @@ pub(crate) fn str2vld(s: &str) -> Result<ValidityTs> {
     let ts: jiff::Timestamp = s.parse().map_err(|_| miette!("bad datetime: {}", s))?;
     // Same law as `op_parse_timestamp`: a pre-epoch validity is a negative
     // microsecond count, not a panic.
-    Ok(ValidityTs(Reverse(timestamp_to_micros(ts))))
+    Ok(ValidityTs::from_raw(timestamp_to_micros(ts)))
 }
 
 #[derive(Debug, Error, Diagnostic)]
@@ -2923,7 +2923,7 @@ pub(crate) fn data_value_to_vld_spec(
     match val {
         DataValue::Num(n) => {
             let microseconds = n.get_int().ok_or(BadValiditySpecification(span))?;
-            Ok(ValidityTs(Reverse(microseconds)))
+            Ok(ValidityTs::from_raw(microseconds))
         }
         DataValue::Str(s) => match &s as &str {
             "NOW" => Ok(cur_vld),
@@ -2989,7 +2989,7 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
             .ok_or_else(|| miette!("'validity' expects a boolean as second argument"))?
     };
     Ok(DataValue::Validity(Validity {
-        timestamp: ValidityTs(Reverse(ts)),
+        timestamp: ValidityTs::from_raw(ts),
         is_assert: Reverse(is_assert),
     }))
 }

@@ -431,7 +431,7 @@ mod tests {
             DataValue::Bytes(vec![0, 255, 7]),
             DataValue::List(vec![DataValue::from(1), DataValue::from("x")]),
             DataValue::Validity(Validity {
-                timestamp: ValidityTs(std::cmp::Reverse(9)),
+                timestamp: ValidityTs::from_raw(9),
                 is_assert: std::cmp::Reverse(true),
             }),
             DataValue::Bot,
@@ -488,7 +488,7 @@ mod tests {
             DataValue::Bytes(vec![0, 255, 7]),
             DataValue::List(vec![DataValue::from(1), DataValue::from("x")]),
             DataValue::Validity(Validity {
-                timestamp: ValidityTs(std::cmp::Reverse(9)),
+                timestamp: ValidityTs::from_raw(9),
                 is_assert: std::cmp::Reverse(true),
             }),
             DataValue::Bot,
@@ -594,7 +594,7 @@ mod tests {
             DataValue::List(vec![DataValue::from(1), DataValue::from("x")]),
             DataValue::List(vec![]),
             DataValue::Validity(Validity {
-                timestamp: ValidityTs(std::cmp::Reverse(9)),
+                timestamp: ValidityTs::from_raw(9),
                 is_assert: std::cmp::Reverse(true),
             }),
             DataValue::Bot,

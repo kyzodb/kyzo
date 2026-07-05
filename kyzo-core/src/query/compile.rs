@@ -1161,7 +1161,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     row,
-                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    crate::data::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .expect("put row");
@@ -2423,7 +2423,7 @@ mod tests {
             .put_fact(
                 &mut tx,
                 key_vals,
-                crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                crate::data::value::ValidityTs::from_raw(0),
                 sp(),
             )
             .expect("put truncated row");

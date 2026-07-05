@@ -395,7 +395,7 @@ impl NullableColType {
                             }
 
                             DataValue::Validity(Validity {
-                                timestamp: ValidityTs(Reverse(microseconds)),
+                                timestamp: ValidityTs::from_raw(microseconds),
                                 is_assert: Reverse(is_assert),
                             })
                         }
@@ -409,7 +409,7 @@ impl NullableColType {
                                     bail!(InvalidValidity(DataValue::List(l)))
                                 }
                                 return Ok(DataValue::Validity(Validity {
-                                    timestamp: ValidityTs(Reverse(ts)),
+                                    timestamp: ValidityTs::from_raw(ts),
                                     is_assert: Reverse(is_assert),
                                 }));
                             }
@@ -478,7 +478,7 @@ impl NullableColType {
                 }
                 DataValue::Json(j) => j.0,
                 DataValue::Validity(vld) => {
-                    json!([vld.timestamp.0, vld.is_assert.0])
+                    json!([vld.timestamp.raw(), vld.is_assert.0])
                 }
                 DataValue::Interval(iv) => {
                     json!([iv.start(), iv.end()])

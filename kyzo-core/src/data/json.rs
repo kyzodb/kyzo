@@ -142,7 +142,7 @@ impl From<&DataValue> for JsonValue {
                 Vector::F32(a) => json!(a.iter().copied().collect::<Vec<f32>>()),
                 Vector::F64(a) => json!(a.iter().copied().collect::<Vec<f64>>()),
             },
-            DataValue::Validity(v) => json!([v.timestamp.0.0, v.is_assert.0]),
+            DataValue::Validity(v) => json!([v.timestamp.raw(), v.is_assert.0]),
             DataValue::Interval(iv) => json!([iv.start(), iv.end()]),
             DataValue::Json(j) => j.0.clone(),
             // Unreachable in a correct query result (see the port note
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(JsonValue::from(&dv), json!(uuid::Uuid::nil().to_string()));
 
         let v = Validity {
-            timestamp: ValidityTs(Reverse(5)),
+            timestamp: ValidityTs::from_raw(5),
             is_assert: Reverse(true),
         };
         assert_eq!(JsonValue::from(&DataValue::Validity(v)), json!([5, true]));

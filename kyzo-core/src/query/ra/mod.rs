@@ -474,7 +474,7 @@ impl RelAlgebra {
                 Ok(Self::Spans(SpansRA {
                     bindings,
                     storage,
-                    sys: sys.0.0,
+                    sys: sys.raw(),
                     span,
                 }))
             }
@@ -1012,8 +1012,6 @@ mod tests {
         })))
     }
 
-    use std::cmp::Reverse;
-
     use smartstring::SmartString;
 
     use super::*;
@@ -1190,7 +1188,7 @@ mod tests {
             KeyspaceKind::Facts,
         )
         .unwrap();
-        let stamp = crate::data::value::ValidityTs(std::cmp::Reverse(0));
+        let stamp = crate::data::value::ValidityTs::from_raw(0);
         // left: j ∈ {7, 8, 9(no match)}; right rows (i, j): j=7 has 2000
         // rows, j=8 has 3.
         for j in [7i64, 8, 9] {
@@ -1312,7 +1310,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &row,
-                    crate::data::value::ValidityTs(std::cmp::Reverse(ts)),
+                    crate::data::value::ValidityTs::from_raw(ts),
                     sp(),
                 )
                 .unwrap();
@@ -1326,7 +1324,7 @@ mod tests {
                 vec![sym("k"), sym("v")],
                 handle.clone(),
                 sp(),
-                Some(ValidityClause::At(AsOf::current(ValidityTs(Reverse(ts))))),
+                Some(ValidityClause::At(AsOf::current(ValidityTs::from_raw(ts)))),
             )
             .unwrap();
             rows_of(&ra, &rtx, &stores)
@@ -1399,7 +1397,7 @@ mod tests {
             vec![sym("k"), sym("at")],
             handle,
             sp(),
-            Some(ValidityClause::At(AsOf::current(ValidityTs(Reverse(0))))),
+            Some(ValidityClause::At(AsOf::current(ValidityTs::from_raw(0)))),
         )
         .unwrap();
         let neg = RelAlgebra::unit(sp())
@@ -1461,7 +1459,7 @@ mod tests {
                     .put_fact(
                         &mut tx,
                         &lrow,
-                        crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                        crate::data::value::ValidityTs::from_raw(0),
                         sp(),
                     )
                     .unwrap();
@@ -1471,7 +1469,7 @@ mod tests {
                         .put_fact(
                             &mut tx,
                             &rrow,
-                            crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                            crate::data::value::ValidityTs::from_raw(0),
                             sp(),
                         )
                         .unwrap();
@@ -1541,7 +1539,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &lrow,
-                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    crate::data::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .unwrap();
@@ -1550,7 +1548,7 @@ mod tests {
                 .put_fact(
                     &mut tx,
                     &rrow,
-                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    crate::data::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .unwrap();
@@ -1703,11 +1701,11 @@ mod tests {
         for i in 0..n {
             let k = i as i64;
             left_handle
-                .put_fact(&mut tx, &[v(k)], ValidityTs(Reverse(0)), sp())
+                .put_fact(&mut tx, &[v(k)], ValidityTs::from_raw(0), sp())
                 .unwrap();
             if k % 3 == 0 {
                 right_handle
-                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs(Reverse(0)), sp())
+                    .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::from_raw(0), sp())
                     .unwrap();
                 expected.push(vec![v(k), v(k), v(k * 10)]);
             }
@@ -1784,11 +1782,11 @@ mod tests {
         let mut expected: Vec<Tuple> = Vec::new();
         for z in 0..n {
             left_handle
-                .put_fact(&mut tx, &[v(z)], ValidityTs(Reverse(0)), sp())
+                .put_fact(&mut tx, &[v(z)], ValidityTs::from_raw(0), sp())
                 .unwrap();
             for w in 0..(z % 7) {
                 right_handle
-                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs(Reverse(0)), sp())
+                    .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())
                     .unwrap();
                 expected.push(vec![v(z), v(z), v(w)]);
             }
@@ -1870,7 +1868,7 @@ mod tests {
             let z = i % N_NODES;
             let w = (i * 7 + 3) % N_NODES;
             right_handle
-                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs(Reverse(0)), sp())
+                .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())
                 .unwrap();
         }
         tx.commit().unwrap();

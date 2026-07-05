@@ -1433,7 +1433,6 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Reverse;
 
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
@@ -1550,7 +1549,7 @@ mod tests {
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(1), DataValue::from("one")];
         let mut tx = db.write_tx().unwrap();
-        a.put_fact(&mut tx, &row, ValidityTs(std::cmp::Reverse(0)), span)
+        a.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
         tx.commit().unwrap();
 
@@ -1648,7 +1647,7 @@ mod tests {
         let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(9), DataValue::from("gone")];
-        rel.put_fact(&mut tx, &row, ValidityTs(std::cmp::Reverse(0)), span)
+        rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
         destroy_relation(&mut tx, "fleeting").unwrap();
         tx.commit().unwrap();
@@ -1799,7 +1798,7 @@ mod tests {
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(5), DataValue::from("five")];
-        rel.put_fact(&mut tx, &row, ValidityTs(std::cmp::Reverse(0)), span)
+        rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
         rename_relation(
             &mut tx,
@@ -1830,7 +1829,7 @@ mod tests {
             KeyspaceKind::Facts,
         )
         .unwrap();
-        let vts_of = |ts: i64| ValidityTs(Reverse(ts));
+        let vts_of = |ts: i64| ValidityTs::from_raw(ts);
         // k=1 asserted at valid t=10, retracted at valid t=20, through
         // the handle's own fact writers.
         rel.put_fact(&mut tx, &[DataValue::from(1)], vts_of(10), SourceSpan(0, 0))
@@ -1841,7 +1840,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let at = |ts: i64| -> Vec<Tuple> {
-            rel.skip_scan_all(&rtx, AsOf::current(ValidityTs(Reverse(ts))))
+            rel.skip_scan_all(&rtx, AsOf::current(ValidityTs::from_raw(ts)))
                 .map(|t| t.unwrap())
                 .collect()
         };

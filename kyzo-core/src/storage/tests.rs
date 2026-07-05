@@ -121,15 +121,15 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Json(JsonData(serde_json::json!({"a": 1}))),
         DataValue::Json(JsonData(serde_json::json!([1, 2, 3]))),
         DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(42)),
+            timestamp: ValidityTs::from_raw(42),
             is_assert: Reverse(true),
         }),
         DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(42)),
+            timestamp: ValidityTs::from_raw(42),
             is_assert: Reverse(false),
         }),
         DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(41)),
+            timestamp: ValidityTs::from_raw(41),
             is_assert: Reverse(true),
         }),
         // Intervals: the i64::MIN/MAX boundaries, adjacent pairs (meets: end
@@ -218,7 +218,7 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         proptest::collection::vec(any::<f64>(), 0..6)
             .prop_map(|v| DataValue::Vec(Vector::F64(ndarray::Array1::from(v)))),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(ts)),
+            timestamp: ValidityTs::from_raw(ts),
             is_assert: Reverse(a),
         })),
         // Two arbitrary i64s, ordered into a valid (non-empty) interval: on
@@ -493,7 +493,7 @@ fn del_range_kills_own_writes_too() {
 fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
     let slot = |t: i64| {
         DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(t)),
+            timestamp: ValidityTs::from_raw(t),
             is_assert: Reverse(true),
         })
     };
@@ -577,7 +577,7 @@ fn time_travel_matches_naive_oracle() {
     let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
-            .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(at))))
+            .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
             .map(|r| {
                 let t = r.unwrap();
                 let name = match &t[0] {
@@ -585,7 +585,7 @@ fn time_travel_matches_naive_oracle() {
                     v => panic!("unexpected {v:?}"),
                 };
                 let ts = match &t[1] {
-                    DataValue::Validity(v) => v.timestamp.0.0,
+                    DataValue::Validity(v) => v.timestamp.raw(),
                     v => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
@@ -616,7 +616,7 @@ fn time_travel_sees_own_writes() {
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().raw_encode().to_vec();
     let got: Vec<String> = tx
-        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(5))))
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(5)))
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
             v => panic!("unexpected {v:?}"),
@@ -696,7 +696,7 @@ fn stamped_row(
     };
     let tuple: Tuple = vec![
         DataValue::Str(name.into()),
-        slot(ValidityTs(Reverse(valid_ts))),
+        slot(ValidityTs::from_raw(valid_ts)),
         slot(sys),
     ];
     (tuple.encode_as_key(rel), pol_val(rel, true))
@@ -718,9 +718,8 @@ fn dump_refuses_a_row_stamped_above_its_own_floor() {
     // Far enough in the future that it exceeds any floor a store opened
     // "now" could possibly report (mirrors the existing
     // `restore_raises_clock_floor_past_imported_stamps` convention).
-    let bad_sys = ValidityTs(Reverse(
-        crate::data::value::current_validity().unwrap().0.0 + 1_000_000_000,
-    ));
+    let bad_sys =
+        ValidityTs::from_raw(crate::data::value::current_validity().unwrap().raw() + 1_000_000_000);
     let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
 
     let mut tx = db.write_tx().unwrap();
@@ -851,9 +850,9 @@ fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers()
             if key.len() >= 8 && key[0..8] == rel_prefix {
                 let stamp = crate::data::bitemporal::system_stamp_of_key(key).unwrap();
                 assert!(
-                    stamp.0.0 <= floor,
+                    stamp.raw() <= floor,
                     "dump cycle {cycle}: row stamped {} exceeds this dump's own floor {floor}",
-                    stamp.0.0
+                    stamp.raw()
                 );
                 checked += 1;
             }
@@ -893,7 +892,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
             rel.next().raw_encode().as_ref(),
-            AsOf::current(ValidityTs(Reverse(5))),
+            AsOf::current(ValidityTs::from_raw(5)),
         )
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
@@ -922,7 +921,7 @@ fn skip_scan_hit_at_min_ts_terminates() {
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
             rel.next().raw_encode().as_ref(),
-            AsOf::current(ValidityTs(Reverse(0))),
+            AsOf::current(ValidityTs::from_raw(0)),
         )
         .map(|r| r.unwrap())
         .collect();
@@ -939,14 +938,14 @@ fn corrupt_inputs_error_never_panic() {
     let mut k = vec![0xFF; 8];
     let mut enc = vec![];
     enc.encode_datavalue(&DataValue::Validity(Validity {
-        timestamp: ValidityTs(Reverse(1)),
+        timestamp: ValidityTs::from_raw(1),
         is_assert: Reverse(true),
     }));
     k.extend(enc);
     let _ = crate::data::bitemporal::check_key_for_bitemporal(
         &k,
         crate::data::bitemporal::ClaimPolarity::Assert,
-        AsOf::current(ValidityTs(Reverse(5))),
+        AsOf::current(ValidityTs::from_raw(5)),
         None,
     );
 
@@ -1395,7 +1394,7 @@ fn inverted_ranges_under_contention_commit_clean() {
     assert_eq!(tx.range_scan(b"m", b"m").count(), 0, "empty scan");
     tx.del_range(b"z", b"a").unwrap(); // inverted del_range is a no-op
     assert_eq!(
-        tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs(Reverse(0))))
+        tx.range_skip_scan_tuple(b"z", b"a", AsOf::current(ValidityTs::from_raw(0)))
             .count(),
         0,
         "inverted skip scan"
@@ -1965,7 +1964,7 @@ fn sim_time_travel_matches_naive_oracle() {
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().raw_encode().to_vec();
     assert!(
-        tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(1))))
+        tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(1)))
             .next()
             .is_some(),
         "as-of scan must see own writes"
@@ -1975,7 +1974,7 @@ fn sim_time_travel_matches_naive_oracle() {
     let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
-            .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(at))))
+            .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
             .map(|r| {
                 let t = r.unwrap();
                 let name = match &t[0] {
@@ -1983,7 +1982,7 @@ fn sim_time_travel_matches_naive_oracle() {
                     v => panic!("unexpected {v:?}"),
                 };
                 let ts = match &t[1] {
-                    DataValue::Validity(v) => v.timestamp.0.0,
+                    DataValue::Validity(v) => v.timestamp.raw(),
                     v => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
@@ -2008,7 +2007,7 @@ fn sim_time_travel_matches_naive_oracle() {
     tx.commit().unwrap();
     let tx = db.read_tx().unwrap();
     let got = tx
-        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(5))))
+        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(5)))
         .count();
     assert_eq!(got, 1, "scan must terminate and skip the MIN-ts retraction");
 }
@@ -2460,7 +2459,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
         let tx = db.read_tx().unwrap();
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
-                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(at))))
+                .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
                 .map(|r| {
                     let t = r.unwrap();
                     let name = match &t[0] {
@@ -2468,7 +2467,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                         v => panic!("unexpected {v:?}"),
                     };
                     let ts = match &t[1] {
-                        DataValue::Validity(v) => v.timestamp.0.0,
+                        DataValue::Validity(v) => v.timestamp.raw(),
                         v => panic!("unexpected {v:?}"),
                     };
                     (name, ts)
@@ -2867,7 +2866,6 @@ fn sim_retry_liveness_escapes_injected_faults() {
 // distinct version keys — SSI must abort the second committer.
 #[test]
 fn bitemporal_fact_race_aborts_second_committer() {
-    use std::cmp::Reverse;
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let rel = RelationId::new(7);
@@ -2883,10 +2881,18 @@ fn bitemporal_fact_race_aborts_second_committer() {
     let mut b = db.write_tx().unwrap();
     // both read the fact range (the current-state probe)
     let _ = a
-        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(i64::MAX))))
+        .range_skip_scan_tuple(
+            &lower,
+            &upper,
+            AsOf::current(ValidityTs::from_raw(i64::MAX)),
+        )
         .count();
     let _ = b
-        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(i64::MAX))))
+        .range_skip_scan_tuple(
+            &lower,
+            &upper,
+            AsOf::current(ValidityTs::from_raw(i64::MAX)),
+        )
         .count();
     // both write DISTINCT version keys of the same fact
     let (ka, va) = (bitemp_key(rel, "ctr", 1, 100), pol_val(rel, true));
@@ -3022,7 +3028,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
                             .range_skip_scan_tuple(
                                 &lower,
                                 &upper,
-                                AsOf::current(ValidityTs(Reverse(i64::MAX))),
+                                AsOf::current(ValidityTs::from_raw(i64::MAX)),
                             )
                             .map(|r| r.unwrap())
                             .collect();
@@ -3046,7 +3052,11 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
 
     let rtx = db.read_tx().unwrap();
     let rows: Vec<Tuple> = rtx
-        .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs(Reverse(i64::MAX))))
+        .range_skip_scan_tuple(
+            &lower,
+            &upper,
+            AsOf::current(ValidityTs::from_raw(i64::MAX)),
+        )
         .map(|r| r.unwrap())
         .collect();
     assert_eq!(
@@ -3067,13 +3077,13 @@ fn restore_raises_clock_floor_past_imported_stamps() {
     let src = new_fjall_storage(src_dir.path()).unwrap();
     // Push the source clock far into the future, then write one row so
     // the dump carries both data and the inflated floor.
-    let far_future = crate::data::value::current_validity().unwrap().0.0 + 1_000_000_000;
-    src.raise_clock_floor(ValidityTs(Reverse(far_future)))
+    let far_future = crate::data::value::current_validity().unwrap().raw() + 1_000_000_000;
+    src.raise_clock_floor(ValidityTs::from_raw(far_future))
         .unwrap();
     {
         let mut tx = src.write_tx().unwrap();
         let stamp = tx.system_stamp();
-        assert!(stamp.0.0 > far_future, "source mints above its floor");
+        assert!(stamp.raw() > far_future, "source mints above its floor");
         let (k, v) = vld_row(RelationId::new(3), "fact", 1, true);
         tx.put(&k, &v).unwrap();
         tx.commit().unwrap();
@@ -3086,7 +3096,7 @@ fn restore_raises_clock_floor_past_imported_stamps() {
     crate::storage::backup::restore_storage(&dst, &dump).unwrap();
     let tx = dst.write_tx().unwrap();
     assert!(
-        tx.system_stamp().0.0 > far_future,
+        tx.system_stamp().raw() > far_future,
         "post-restore mints must exceed every imported instant"
     );
 }

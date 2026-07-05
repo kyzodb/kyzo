@@ -296,7 +296,7 @@ fn seed_backend<S: Storage>(store: &S, seeds: &[SeedRelation]) {
                 .put_fact(
                     &mut tx,
                     row,
-                    crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                    crate::data::value::ValidityTs::from_raw(0),
                     sp(),
                 )
                 .expect("put row");
@@ -763,7 +763,7 @@ pub fn parse_put_literal(n: usize) -> miette::Result<()> {
         &script,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+        crate::data::value::ValidityTs::from_raw(0),
     )?;
     std::hint::black_box(parsed);
     Ok(())
@@ -780,7 +780,7 @@ pub fn parse_put_param(n: usize) -> miette::Result<()> {
         PUT_PARAM_SCRIPT,
         &pool,
         &BTreeMap::new(),
-        crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+        crate::data::value::ValidityTs::from_raw(0),
     )?;
     std::hint::black_box(parsed);
     Ok(())

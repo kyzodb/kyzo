@@ -211,14 +211,14 @@ fn translate_term(sym: &Symbol) -> laws::Term {
     laws::Term::Var(intern(sym.name.as_str()))
 }
 
-/// The real bitemporal `AsOf` (`ValidityTs(Reverse(_))`, descending) into
+/// The real bitemporal `AsOf` (`ValidityTs::from_raw(_)`, descending) into
 /// the oracle's own plain-ascending `laws::AsOf` — the exact correspondence
 /// `laws.rs`'s own module doc states and
 /// `asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture` proves.
 fn to_oracle_asof(real: crate::data::value::AsOf) -> laws::AsOf {
     laws::AsOf {
-        valid: (real.valid.0).0,
-        sys: (real.sys.0).0,
+        valid: real.valid.raw(),
+        sys: real.sys.raw(),
     }
 }
 

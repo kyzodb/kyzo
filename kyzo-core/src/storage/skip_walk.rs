@@ -314,7 +314,7 @@ mod tests {
     }
 
     fn vts(t: i64) -> ValidityTs {
-        ValidityTs(Reverse(t))
+        ValidityTs::from_raw(t)
     }
 
     fn slot(t: i64) -> Validity {

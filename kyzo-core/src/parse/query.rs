@@ -687,22 +687,6 @@ struct WriteValiditySetsSystemTime(#[label] SourceSpan);
 #[diagnostic(help("drop the `@` clause; `{0}` performs no bitemporal write for it to date"))]
 struct WriteValidityOnNonWriteOp(&'static str, #[label] SourceSpan);
 
-/// `valid = i64::MAX` (`'END'`, or the literal microsecond itself) is the
-/// reserved terminal tick every open-end sentinel depends on being
-/// unwritable (issue #62's ruling: the temporal oracle and the Interval
-/// `DataValue` both read "no stored event governs past here" as "still
-/// open" — a fact actually stored AT that instant would collide with that
-/// reading and derive as a zero-width interval). `@ 'END'` stays legal on
-/// the READ side (`data_value_to_vld_spec`'s "as of the end of time"); this
-/// refusal is write-only, at the one coordinate a `@` clause resolves to a
-/// parse-time constant.
-#[derive(Debug, Error, Diagnostic)]
-#[error(
-    "the valid instant `i64::MAX` (`'END'`) is reserved as the open-end sentinel and cannot be written to; name a concrete instant, or omit `@` (every row lands at the transaction's own stamp)"
-)]
-#[diagnostic(code(parser::write_validity_at_terminal_instant))]
-struct WriteValidityAtTerminalInstant(#[label] SourceSpan);
-
 /// Stage a `relation_option`'s optional trailing `validity_clause`: refuse
 /// the two-coordinate form and any clause on `:ensure`/`:ensure_not` here
 /// (both are op/shape checks, not head-dependent), leaving only the head
@@ -760,9 +744,13 @@ fn resolve_write_validity(
                     span,
                     cur_vld,
                 )?;
-                if vld == crate::data::value::MAX_VALIDITY_TS {
-                    bail!(WriteValidityAtTerminalInstant(span));
-                }
+                // This constant `@` coordinate is a USER-ASSERTED write
+                // validity, so it is re-proven through the smart
+                // constructor rather than a separate equality check: the
+                // reserved terminal tick (`i64::MAX` / `'END'`, issue #62's
+                // ruling) is refused at the one place a `ValidityTs`
+                // becomes a write coordinate, not re-derived here.
+                let vld = crate::data::value::ValidityTs::for_assertion(vld.raw(), span)?;
                 Ok(WriteValidity::Fixed(vld))
             } else {
                 let head = prog.get_entry_out_head()?;
@@ -1528,13 +1516,11 @@ fn expr2vld_spec(expr: Expr, cur_vld: ValidityTs) -> Result<ValidityTs> {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Reverse;
-
     use super::*;
     use crate::parse::parse_script;
 
     fn vld() -> ValidityTs {
-        ValidityTs(Reverse(0))
+        ValidityTs::from_raw(0)
     }
 
     fn parse_single(src: &str) -> Result<InputProgram> {
@@ -1625,7 +1611,7 @@ mod tests {
     fn put_at_constant_is_fixed() {
         assert_eq!(
             write_vld("?[k, v] <- [[1, 'a']] :put t {k => v} @ 12345"),
-            WriteValidity::Fixed(ValidityTs(Reverse(12345)))
+            WriteValidity::Fixed(ValidityTs::from_raw(12345))
         );
     }
 
@@ -1639,7 +1625,7 @@ mod tests {
     /// review of that behavior showed it stored a fact AT the terminal
     /// instant, which derives as a zero-width interval — see
     /// `put_at_end_sentinel_is_refused` below and
-    /// `WriteValidityAtTerminalInstant`.)
+    /// `ValidityTs::for_assertion`.)
     #[test]
     fn put_at_now_sentinel_resolves() {
         assert_eq!(
@@ -1686,7 +1672,7 @@ mod tests {
     fn rm_accepts_at_clause() {
         assert_eq!(
             write_vld("?[k] <- [[1]] :rm t {k} @ 777"),
-            WriteValidity::Fixed(ValidityTs(Reverse(777)))
+            WriteValidity::Fixed(ValidityTs::from_raw(777))
         );
     }
 

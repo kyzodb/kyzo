@@ -134,7 +134,7 @@ fn gen_value(u: &mut Unstructured, depth: usize) -> arbitrary::Result<DataValue>
             DataValue::Json(JsonData(normalized))
         }
         10 => DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(i64::arbitrary(u)?)),
+            timestamp: ValidityTs::from_raw(i64::arbitrary(u)?),
             is_assert: Reverse(bool::arbitrary(u)?),
         }),
         11 => DataValue::Bot,

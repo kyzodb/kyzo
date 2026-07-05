@@ -38,7 +38,7 @@ fn key(i: u64) -> EncodedKey {
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> EncodedKey {
     let slot = |t: i64| {
         DataValue::Validity(Validity {
-            timestamp: ValidityTs(Reverse(t)),
+            timestamp: ValidityTs::from_raw(t),
             is_assert: Reverse(true),
         })
     };
@@ -177,7 +177,7 @@ fn asof(c: &mut Criterion) {
         tx.commit().unwrap();
         let lo = encode_tuple_key(9, &[]);
         let hi = encode_tuple_key(10, &[]);
-        let at = kyzo::AsOf::current(ValidityTs(Reverse(versions / 2)));
+        let at = kyzo::AsOf::current(ValidityTs::from_raw(versions / 2));
 
         let mut g = c.benchmark_group(format!("asof_{label}"));
         g.bench_function("seek_skip_scan", |b| {
@@ -206,7 +206,7 @@ fn asof(c: &mut Criterion) {
                     let name = *name;
                     // Assert polarity byte after the 8-byte value header.
                     let assert = v[8] == 0;
-                    let ts = vld.timestamp.0.0;
+                    let ts = vld.timestamp.raw();
                     if ts <= cutoff {
                         let e = newest.entry(name).or_insert((ts, assert));
                         if ts > e.0 {

@@ -54,7 +54,6 @@
 //! budget (see [`cases`]). For nightly/big runs escalate with
 //! `PROPTEST_CASES=10000 cargo test -p kyzo parse::fuzz`.
 
-use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
@@ -68,7 +67,7 @@ use crate::fixed_rule::DEFAULT_FIXED_RULES;
 use crate::parse::fts::parse_fts_query;
 
 fn vld() -> ValidityTs {
-    ValidityTs(Reverse(0))
+    ValidityTs::from_raw(0)
 }
 
 /// A terminating case that *returns* slower than this is a blowup FINDING.

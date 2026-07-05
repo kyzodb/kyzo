@@ -581,10 +581,10 @@ fn write_at_clause(as_of: &AsOf, out: &mut String) {
 
 /// A validity coordinate, canonically the raw microsecond integer — the
 /// same choice the pre-existing `WriteValidity::Fixed` rendering in
-/// `data/program.rs` makes (`ts.0.0`), which `data_value_to_vld_spec`
+/// `data/program.rs` makes (`ts.raw()`), which `data_value_to_vld_spec`
 /// accepts directly as `DataValue::Num`.
 fn write_vld(ts: ValidityTs, out: &mut String) {
-    out.push_str(&ts.0.0.to_string());
+    out.push_str(&ts.raw().to_string());
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -680,7 +680,7 @@ fn write_relation_option(
 }
 
 fn write_vld_ts(ts: ValidityTs, out: &mut String) {
-    out.push_str(&ts.0.0.to_string());
+    out.push_str(&ts.raw().to_string());
 }
 
 fn write_table_cols(cols: &[ColumnDef], bindings: &[Symbol], out: &mut String) {
@@ -1005,7 +1005,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Validity(v) => {
             out.push_str("validity(");
-            out.push_str(&v.timestamp.0.0.to_string());
+            out.push_str(&v.timestamp.raw().to_string());
             out.push_str(", ");
             out.push_str(if v.is_assert.0 { "true" } else { "false" });
             out.push(')');

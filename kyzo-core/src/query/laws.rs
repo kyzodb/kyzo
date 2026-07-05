@@ -169,8 +169,8 @@ pub(crate) enum Term {
 /// the coordinate their generated histories bridge against directly.
 ///
 /// **The exact correspondence.** `laws::AsOf { valid: v, sys: s }` is
-/// `data::value::AsOf { valid: ValidityTs(Reverse(v)), sys:
-/// ValidityTs(Reverse(s)) }` — wrap each field in `ValidityTs(Reverse(_))`
+/// `data::value::AsOf { valid: ValidityTs::from_raw(v), sys:
+/// ValidityTs::from_raw(s) }` — wrap each field in `ValidityTs::from_raw(_)`
 /// to go from this type to the real one. Because `Reverse` inverts
 /// comparison, this module's ascending `t <= v` ("instant `t` is at or
 /// before coordinate `v`") is the real type's DESCENDING `ValidityTs(t) >=
@@ -3727,7 +3727,7 @@ mod tests {
         use std::cmp::Reverse;
 
         fn vts(t: i64) -> ValidityTs {
-            ValidityTs(Reverse(t))
+            ValidityTs::from_raw(t)
         }
         fn slot(t: i64) -> Validity {
             Validity {

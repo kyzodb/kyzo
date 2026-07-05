@@ -429,7 +429,7 @@ mod tests {
             dict.put_fact(
                 &mut tx,
                 &row,
-                crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+                crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
@@ -811,7 +811,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &row,
-            crate::data::value::ValidityTs(std::cmp::Reverse(0)),
+            crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -841,7 +841,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &bad,
-            crate::data::value::ValidityTs(std::cmp::Reverse(1)),
+            crate::data::value::ValidityTs::from_raw(1),
             SourceSpan(0, 0),
         )
         .unwrap();
@@ -872,7 +872,7 @@ mod tests {
         dict.put_fact(
             &mut tx,
             &bad,
-            crate::data::value::ValidityTs(std::cmp::Reverse(1)),
+            crate::data::value::ValidityTs::from_raw(1),
             SourceSpan(0, 0),
         )
         .unwrap();

@@ -549,8 +549,7 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
         .storage
         .clock_floor()
         .expect("floor after first write")
-        .0
-        .0;
+        .raw();
 
     db.run_script(
         "?[k0, val] <- [[1, 'corrected']] :put corr {k0 => val} @ 100",
@@ -561,10 +560,9 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
         .storage
         .clock_floor()
         .expect("floor after second write")
-        .0
-        .0;
+        .raw();
 
-    // `ValidityTs` wraps `Reverse`; the raw counter (`.0.0`) increases with
+    // `ValidityTs` wraps `Reverse`; the raw counter (`.raw()`) increases with
     // wall/logical time, so a later mint reads numerically LARGER here.
     assert!(s2 > s1, "system stamps strictly increase across commits");
 

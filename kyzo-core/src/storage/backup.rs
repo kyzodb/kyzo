@@ -117,11 +117,11 @@ fn relation_prefix(key: &[u8]) -> Option<RelationId> {
 /// anomaly) from a silent lost-update into a loud, typed refusal.
 fn verify_stamp_within_floor(id: RelationId, key: &[u8], floor: ValidityTs) -> Result<()> {
     let stamp = system_stamp_of_key(key)?;
-    if stamp.0.0 > floor.0.0 {
+    if stamp.raw() > floor.raw() {
         return Err(DumpClockFloorViolation {
             relation_id: id.0,
-            stamp: stamp.0.0,
-            floor: floor.0.0,
+            stamp: stamp.raw(),
+            floor: floor.raw(),
         }
         .into());
     }
@@ -150,7 +150,7 @@ pub fn dump_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()> {
     // target, or new writes could land AT or BELOW imported instants and
     // be shadowed by history.
     let floor = floor_after_snapshot(db, &tx)?;
-    w.write_all(&floor.0.0.to_be_bytes()).into_diagnostic()?;
+    w.write_all(&floor.raw().to_be_bytes()).into_diagnostic()?;
     let kinds = relation_kinds(&tx)?;
     for pair in tx.total_scan() {
         let (k, v) = pair?;
@@ -208,9 +208,9 @@ pub fn restore_storage<S: Storage>(db: &S, path: impl AsRef<Path>) -> Result<()>
     let mut floor_bytes = [0u8; 8];
     r.read_exact(&mut floor_bytes)
         .map_err(|_| miette!("truncated dump: missing clock floor"))?;
-    db.raise_clock_floor(crate::data::value::ValidityTs(std::cmp::Reverse(
+    db.raise_clock_floor(crate::data::value::ValidityTs::from_raw(
         i64::from_be_bytes(floor_bytes),
-    )))?;
+    ))?;
     let iter = std::iter::from_fn(move || read_pair(&mut r).transpose());
     db.batch_put(Box::new(iter))?;
     db.sync()
