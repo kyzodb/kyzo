@@ -32,10 +32,20 @@ PURE_SYS='^(linux-raw-sys|windows-sys) '
 # Query each engine package separately: a cargo error must FAIL the gate (a
 # silently-empty tree reads as "clean"), while a package that simply has not
 # landed yet is reported and skipped.
+#
+# `--target=all` (issue #94): default `cargo tree` resolves ONLY the host
+# target, so a dep gated behind `cfg(target_os="macos")`/`cfg(windows)` never
+# appears on a Linux CI host — even though it's in Cargo.lock and DOES
+# compile on those platforms. Concretely: `arrow` (via arrow-array's hard
+# `chrono`+`clock` dependency) pulls `iana-time-zone` -> `core-foundation-sys`
+# on macOS and `windows-core` on Windows, invisible to a host-only resolve.
+# `--target=all` forces cross-platform resolution so every -sys/C-toolchain
+# crate any shipped platform would pull is on the scanned surface, not just
+# the CI runner's own.
 trees=""
 checked=""
 for p in kyzo kyzo-bin; do
-  if out=$(cargo tree -p "$p" -e normal,build --prefix none 2>&1); then
+  if out=$(cargo tree -p "$p" -e normal,build --target=all --prefix none 2>&1); then
     trees="$trees$out
 "
     checked="$checked $p"
