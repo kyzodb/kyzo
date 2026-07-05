@@ -103,7 +103,7 @@ use crate::storage::{ReadTx, Storage, WriteTx};
 /// iterations). High enough for real recursion over finite data; bounds a
 /// runaway fixpoint into a typed refusal at an epoch barrier rather than an
 /// unbounded loop. Overridable per script through [`ScriptOptions`].
-const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
+pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 
 /// How many times a write commit replays on a typed [`ConflictError`]
 /// before giving up. Reads never conflict. This is a liveness backstop
@@ -230,7 +230,7 @@ const DEFAULT_MERKLE_SCAN_CEILING: NonZeroU64 = NonZeroU64::new(1 << 32).unwrap(
 /// bound at all. Overridable per script through
 /// [`ScriptOptions::derived_tuple_ceiling`]; a caller with a genuinely
 /// larger legitimate workload raises it explicitly.
-const DEFAULT_DERIVED_TUPLE_CEILING: u64 = 50_000_000;
+pub(crate) const DEFAULT_DERIVED_TUPLE_CEILING: u64 = 50_000_000;
 
 /// Per-script evaluation controls. Default is "run to the fixpoint within
 /// the deterministic epoch and derived-tuple ceilings, no deadline". These

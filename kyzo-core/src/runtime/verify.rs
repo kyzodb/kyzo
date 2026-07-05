@@ -470,25 +470,31 @@ fn scan_full_histories(
 
 /// The oracle's own [`laws::naive_eval_at_budgeted`] budget, built from the
 /// SAME [`ScriptOptions`] the production side already used for
-/// [`Db::compile_and_eval`] — the epoch/derived-tuple ceilings and
-/// `:timeout`/`timeout_secs` deadline apply to the reference path exactly
-/// as they do to production's, so a hostile or merely large query cannot
-/// OOM or hang `::verify` even though it runs BOTH evaluators. No kill flag
-/// (the verify path has no live session to cancel it from).
+/// [`Db::compile_and_eval`], applying the SAME defaults when the caller
+/// leaves a dimension unset — the epoch AND derived-tuple ceilings and the
+/// `:timeout`/`timeout_secs` deadline apply to the reference path exactly as
+/// they do to production's, so a hostile or merely large query (including a
+/// widening recursion under fully default options) cannot OOM or hang
+/// `::verify` even though it runs BOTH evaluators. This does not lean on
+/// production being evaluated first: the oracle carries its own finite
+/// ceiling regardless of evaluation order. No kill flag (the verify path has
+/// no live session to cancel it from).
 fn oracle_budget(options: &ScriptOptions) -> Result<crate::query::eval::Budget> {
-    // Mirrors runtime/db.rs's own DEFAULT_EPOCH_CEILING (private to that
-    // file); a shared literal, not shared logic, so no visibility widening
-    // was needed for it.
-    const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
+    // The default ceilings are the production ones, imported (not re-declared
+    // as a local literal) so the oracle path can never silently drift from
+    // build_budget's — the exact divergence that once left this path's
+    // derived-tuple ceiling unbounded.
+    use crate::runtime::db::{DEFAULT_DERIVED_TUPLE_CEILING, DEFAULT_EPOCH_CEILING};
     let ceiling = options
         .epoch_ceiling
         .unwrap_or(DEFAULT_EPOCH_CEILING)
         .max(1);
     let ceiling = std::num::NonZeroU32::new(ceiling).expect("max(1) is nonzero");
-    let mut budget = crate::query::eval::Budget::new(ceiling);
-    if let Some(n) = options.derived_tuple_ceiling {
-        budget = budget.with_derived_tuple_ceiling(n);
-    }
+    let mut budget = crate::query::eval::Budget::new(ceiling).with_derived_tuple_ceiling(
+        options
+            .derived_tuple_ceiling
+            .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING),
+    );
     if let Some(secs) = options.timeout_secs.filter(|s| *s > 0.0) {
         let duration = std::time::Duration::try_from_secs_f64(secs)
             .map_err(|_| miette::miette!("timeout {secs} is not a usable duration"))?;
@@ -1120,5 +1126,36 @@ mod tests {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
             other => panic!("expected Match, got {other:?}"),
         }
+    }
+
+    /// Regression: the oracle's budget must carry the SAME finite
+    /// derived-tuple default the production path does when the caller leaves
+    /// it unset. This path was once unbounded — a widening recursion run
+    /// through `::verify` under default options had no derived-tuple ceiling
+    /// on the naive oracle, and did not crash only because production is
+    /// evaluated first and trips its own ceiling. The default now comes from
+    /// the one shared `db::DEFAULT_DERIVED_TUPLE_CEILING` constant, so the two
+    /// paths cannot drift apart again. Asserted at budget construction rather
+    /// than by tripping the 50M ceiling end to end (which would cost seconds
+    /// and gigabytes for no extra coverage of THIS guarantee).
+    #[test]
+    fn oracle_budget_defaults_derived_tuple_ceiling_like_production() {
+        use crate::runtime::db::DEFAULT_DERIVED_TUPLE_CEILING;
+
+        // Default options (derived_tuple_ceiling: None) → the production default.
+        let defaulted = oracle_budget(&ScriptOptions::default()).expect("budget builds");
+        assert_eq!(
+            defaulted.derived_tuple_ceiling(),
+            Some(DEFAULT_DERIVED_TUPLE_CEILING),
+            "the oracle path must default the derived-tuple ceiling, never run unbounded"
+        );
+
+        // An explicit override still wins on the oracle path.
+        let overridden = oracle_budget(&ScriptOptions {
+            derived_tuple_ceiling: Some(4_242),
+            ..ScriptOptions::default()
+        })
+        .expect("budget builds");
+        assert_eq!(overridden.derived_tuple_ceiling(), Some(4_242));
     }
 }
