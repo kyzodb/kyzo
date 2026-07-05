@@ -759,7 +759,7 @@ fn test_vector_distance_domain_errors() {
     for res in [
         op_cos_dist(&[zero.clone(), unit.clone()]),
         op_cos_dist(&[unit.clone(), zero.clone()]),
-        op_l2_normalize(&[zero.clone()]),
+        op_l2_normalize(std::slice::from_ref(&zero)),
     ] {
         let err = res.expect_err("a zero vector has no defined direction — must be a typed Err");
         assert!(
