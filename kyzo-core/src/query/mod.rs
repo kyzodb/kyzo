@@ -109,21 +109,29 @@ mod time_travel_trials;
 #[cfg(test)]
 mod time_travel_script_laws;
 
-// The plan compiler's production caller (runtime/db.rs::run_query) lands
-// later; until then its lib code (and, transitively, `ra` below) is dead in
-// lib builds, while the in-file tests (the real-storage compile-then-eval
-// queries and the RA-vs-oracle differentials) keep it live in test builds.
+// The plan compiler's production caller (runtime/db.rs::compile_and_eval)
+// has landed: `stratified_magic_compile` and `bind_for_eval` run on every
+// query. `#[allow(dead_code)]` stays for the residual items no production
+// path reaches yet (`CompiledRuleSet::arity`, the uninhabited
+// `NoFixedRules`), kept live only by this module's own tests.
 #[allow(dead_code)]
 pub(crate) mod compile;
-// The relational-algebra operators: consumed by `compile`, which is dead in
-// lib builds until db.rs lands — same pattern.
+// The relational-algebra operators: consumed by `compile`'s plans and
+// driven by `eval`'s loop, both production paths now. `#[allow(dead_code)]`
+// stays for a handful of helpers no production plan shape reaches yet
+// (`join.rs`'s `flatten_err`/`filter_iter`/`as_map`, a couple of
+// `join_type`/`join` methods on non-default join kinds), exercised only by
+// this module's own tests.
 #[allow(dead_code)]
 pub(crate) mod ra;
 
-// The evaluator's production callers (query/compile.rs, runtime/db.rs) land
-// later; until then its lib code is dead like `magic` below, while the
-// in-file tests (oracle differentials, the determinism law, budget
-// refusals) keep it live in test builds.
+// The evaluator's production caller (runtime/db.rs::compile_and_eval) has
+// landed: `stratified_evaluate` runs on every query. `#[allow(dead_code)]`
+// stays because the provenance-graph plumbing in this file
+// (`provenance_graph`, `PremiseSource`, `ProvNode`, `ProvenanceUnsupported`,
+// `Premises::Rows`, `RuleBody::premise_sources`/`entries`) has no
+// production caller yet — only the `provenance` trials exercise it, same
+// posture as `semiring` below.
 #[allow(dead_code)]
 pub(crate) mod eval;
 pub(crate) mod graph;
@@ -149,15 +157,21 @@ mod provenance;
 #[cfg_attr(not(test), expect(dead_code))]
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) mod semiring;
-// The magic tier's consumers (query/compile.rs, runtime/db.rs) land later;
-// until then its lib code is dead, like `stratify` below.
-#[allow(dead_code)]
+// The magic tier's consumer (query/compile.rs's `stratified_magic_compile`,
+// reached from runtime/db.rs::compile_and_eval) has landed: every query
+// runs `magic_sets_rewrite`. Nothing in this module is dead code in a
+// release build any more (verified: `#[allow(dead_code)]` removed here
+// produces zero warnings), so the attribute is gone.
 pub(crate) mod magic;
-// The stratifier's caller (runtime/db.rs::run_query) lands later. In the
-// lib build the module is dead (expect); in test builds the in-file tests
-// keep it live but not every item, so a plain `allow` covers the remainder
-// — the same pattern as the `parse` module in lib.rs.
-#[allow(dead_code)]
+// The stratifier's caller (runtime/db.rs::compile_and_eval's
+// `nf.into_stratified_program()`) has landed: every query is stratified
+// before magic-sets. Fully live in a release build; `#[allow(dead_code)]`
+// removed here produces zero warnings, so the attribute is gone.
+pub(crate) mod stratify;
+// The columnar execution currency (`batch_ops::Batch`): driven by every
+// `ra` operator's `iter`, which `compile`/`eval` run in production. Fully
+// live in a release build; `#[allow(dead_code)]` removed here produces
+// zero warnings, so the attribute is gone.
 pub(crate) mod batch_ops;
 pub(crate) mod levels;
 #[allow(dead_code)]
@@ -166,7 +180,5 @@ pub(crate) mod normalize;
 pub(crate) mod search;
 #[allow(dead_code)]
 pub(crate) mod sort;
-#[allow(dead_code)]
-pub(crate) mod stratify;
 pub(crate) mod temp_store;
 pub(crate) mod vm;
