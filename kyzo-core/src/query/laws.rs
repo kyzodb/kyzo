@@ -1550,10 +1550,24 @@ pub(crate) fn naive_eval_at(
 //   graph is a DAG, which is what makes the rest of this algorithm
 //   sound: every relation is computed in ONE topological pass, never a
 //   fixpoint, so there is no iteration to reconcile signed deltas across.
-// - AGGREGATION (any head with `has_aggr`) is refused for the same
-//   reason: this landing proves the negation+retraction core (the
-//   corner #61 names as the hard one) before extending to aggregation,
-//   rather than shipping both half-proven.
+// - AGGREGATION is fully covered, not refused: [`eval_aggregating_head_incremental`]
+//   extends candidates-then-verify one level — [`collect_affected_groups`]
+//   finds every GROUP (not tuple) any delta-touched candidate projects
+//   onto, then [`eval_one_group`] fully re-derives each affected group's
+//   aggregate row directly from the current (post-patch) total, exactly
+//   as [`head_is_derivable`] fully re-derives one candidate tuple's truth
+//   value for a plain rule. This is sound uniformly across every
+//   aggregation kind (count, sum, min, max, collect, …) because it never
+//   needs a per-kind incremental delta formula — min/max under
+//   retraction is the classic case with no such formula (the current
+//   min's own removal needs the group's remaining members, not a signed
+//   tally), and a full per-group re-derivation sidesteps the question
+//   entirely rather than special-casing it. Both aggregation
+//   disciplines (`AggrKind::Meet`/`AggrKind::Normal`) run through the
+//   SAME normal-fold path here, since every aggregation "also has" a
+//   normal form for use outside recursion (`Aggregation::normal_op`) and
+//   this module's scope already excludes recursion — there is no meet
+//   discipline left to distinguish.
 // - FIXED RULES (`Program::fixed`, opaque graph algorithms) are refused
 //   outright: a `FixedRule::eval` is a black-box function from its
 //   inputs to an output set, with no delta of its own this module could
@@ -1879,11 +1893,223 @@ fn head_is_derivable(
     })
 }
 
+/// For an aggregating head, the GROUP KEYS (projections onto the
+/// non-aggregated head positions) any of `rules`'s candidate
+/// re-derivations touch. Reuses [`collect_candidates`] UNCHANGED: a
+/// "candidate" there is a raw, pre-fold ground head row (aggregated
+/// positions included, since `ground(&rule.head_args, binding)` does not
+/// know or care that a position aggregates) — projecting each candidate
+/// onto the key positions is exactly "which group might have gained or
+/// lost a member this round," the group-level analog of "which tuple
+/// might have flipped" for a plain rule.
+fn collect_affected_groups(
+    rules: &[&Rule],
+    program: &Program,
+    total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    default_as_of: AsOf,
+    key_positions: &[usize],
+) -> BTreeSet<Tuple> {
+    let mut raw_candidates = BTreeSet::new();
+    for rule in rules {
+        collect_candidates(
+            rule,
+            program,
+            total,
+            rel_deltas,
+            default_as_of,
+            &mut raw_candidates,
+        );
+    }
+    raw_candidates
+        .iter()
+        .map(|row| key_positions.iter().map(|i| row[*i].clone()).collect())
+        .collect()
+}
+
+/// Fully re-derive one group's aggregate row from CURRENT (post-patch)
+/// state — the "verify" phase for aggregation, exactly analogous to
+/// [`head_is_derivable`] for a plain rule: bounded by one group's own
+/// body cost via a targeted join seeded from the group's own key values,
+/// never a full relation re-derivation. `None` means the group has no
+/// members left — UNLESS `key_positions` is empty (no GROUP BY at all,
+/// a single global aggregate), which folds zero rows into the identity
+/// row instead of vanishing (matching [`eval_normal_aggr_head`]'s own
+/// special case for the same reason: `count()` over nothing is `0`, not
+/// "no row").
+#[allow(clippy::too_many_arguments)]
+fn eval_one_group(
+    rules: &[&Rule],
+    program: &Program,
+    db: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    default_as_of: AsOf,
+    key_positions: &[usize],
+    val_positions: &[(usize, &Aggregation, &[DataValue])],
+    signature_len: usize,
+    group_key: &Tuple,
+) -> Result<Option<Tuple>, Rejection> {
+    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>, Rejection> {
+        val_positions
+            .iter()
+            .map(|(_, aggr, args)| aggr.normal_op(args).map_err(aggr_err))
+            .collect()
+    };
+    let mut ops: Option<Vec<Box<dyn NormalAggrObj>>> = None;
+    for rule in rules {
+        // Seed a binding fixing each key position's variable to this
+        // group's value; a `Const` key position that disagrees with
+        // `group_key` means this rule can never contribute to this
+        // group at all (skip it, rather than let `unify` inside
+        // `body_bindings_from` silently fail per body-position).
+        let mut seed = Bindings::new();
+        let mut consistent = true;
+        for (slot, &pos) in key_positions.iter().enumerate() {
+            match &rule.head_args[pos] {
+                Term::Const(c) => {
+                    if *c != group_key[slot] {
+                        consistent = false;
+                        break;
+                    }
+                }
+                Term::Var(name) => {
+                    seed.insert(name, group_key[slot].clone());
+                }
+            }
+        }
+        if !consistent {
+            continue;
+        }
+        for binding in body_bindings_from(rule, program, db, default_as_of, seed) {
+            let row = ground(&rule.head_args, &binding);
+            let ops = ops.get_or_insert_with(|| fresh_ops().expect("infallible fresh fold"));
+            for (op, (i, _, _)) in ops.iter_mut().zip(val_positions) {
+                op.set(&row[*i]).map_err(aggr_err)?;
+            }
+        }
+    }
+    match ops {
+        None if key_positions.is_empty() => {
+            let mut row = vec![DataValue::Null; signature_len];
+            for (op, (i, _, _)) in fresh_ops()?.iter().zip(val_positions) {
+                row[*i] = op.get().map_err(aggr_err)?;
+            }
+            Ok(Some(row))
+        }
+        None => Ok(None),
+        Some(ops) => {
+            let mut row = vec![DataValue::Null; signature_len];
+            for (slot, &i) in key_positions.iter().enumerate() {
+                row[i] = group_key[slot].clone();
+            }
+            for (op, (i, _, _)) in ops.iter().zip(val_positions) {
+                row[*i] = op.get().map_err(aggr_err)?;
+            }
+            Ok(Some(row))
+        }
+    }
+}
+
+/// The incremental-maintenance law for an aggregating head (issue #61):
+/// candidates-then-verify, extended one level — find the affected
+/// GROUPS (not tuples), then fully re-derive each affected group's
+/// aggregate row directly, exactly as [`head_is_derivable`] fully
+/// re-derives one candidate tuple's truth value for a plain rule. Sound
+/// uniformly across every aggregation kind (count, sum, min, max,
+/// collect, …) because it never touches an incremental per-kind delta
+/// formula — min/max under retraction is the classic case where such a
+/// formula does not exist (the current min's own removal needs the
+/// group's remaining members, not a signed tally), and a full per-group
+/// re-derivation sidesteps the question by never needing one.
+#[allow(clippy::too_many_arguments)]
+fn eval_aggregating_head_incremental(
+    rules: &[&Rule],
+    program: &Program,
+    old_total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    new_total: &BTreeMap<Rel, BTreeSet<Tuple>>,
+    rel_deltas: &BTreeMap<Rel, BTreeSet<SignedFact>>,
+    default_as_of: AsOf,
+    old_rows: &BTreeSet<Tuple>,
+) -> Result<BTreeSet<SignedFact>, Rejection> {
+    let signature = &rules[0].aggr;
+    let key_positions: Vec<usize> = signature
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .collect();
+
+    let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
+        .iter()
+        .map(|row| {
+            let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
+            (key, row.clone())
+        })
+        .collect();
+
+    let mut affected = collect_affected_groups(
+        rules,
+        program,
+        old_total,
+        rel_deltas,
+        default_as_of,
+        &key_positions,
+    );
+    // The global (no GROUP BY) special case: even with zero raw
+    // candidates this round, a pre-existing global aggregate must be
+    // re-checked whenever ANY dependency had ANY delta at all — its
+    // last remaining member could have just been retracted, which
+    // `collect_candidates` DOES surface as a candidate (a `Minus`
+    // fact is as valid a driver as a `Plus`), so this is only a
+    // concern when NO dependency had a delta, in which case there is
+    // nothing to re-check anyway.
+    if key_positions.is_empty() && rel_deltas.values().any(|d| !d.is_empty()) {
+        affected.insert(Vec::new());
+    }
+
+    let mut delta = BTreeSet::new();
+    for group_key in &affected {
+        let new_row = eval_one_group(
+            rules,
+            program,
+            new_total,
+            default_as_of,
+            &key_positions,
+            &val_positions,
+            signature.len(),
+            group_key,
+        )?;
+        let old_row = old_by_key.get(group_key).cloned();
+        match (old_row, new_row) {
+            (Some(old), Some(new)) if old != new => {
+                delta.insert(SignedFact::Minus(old));
+                delta.insert(SignedFact::Plus(new));
+            }
+            (Some(old), None) => {
+                delta.insert(SignedFact::Minus(old));
+            }
+            (None, Some(new)) => {
+                delta.insert(SignedFact::Plus(new));
+            }
+            _ => {}
+        }
+    }
+    Ok(delta)
+}
+
 /// The reference incremental-maintenance law (issue #61): given a signed
 /// patch to `program`'s EDB, the signed patch every relation (EDB and
 /// IDB alike) undergoes, computed WITHOUT a full re-evaluation. Refuses
-/// (never silently wrong) recursion or any aggregation — see the module
-/// doc above for exactly why those are out of this landing's scope.
+/// (never silently wrong) recursion and fixed rules; aggregation (normal
+/// or meet form — a meet form runs the normal discipline outside
+/// recursion, same as `naive_eval`) is fully covered via
+/// [`eval_aggregating_head_incremental`] — see the module doc above for
+/// exactly why recursion and fixed rules stay out of this landing's
+/// scope.
 pub(crate) fn incremental_eval(
     program: &Program,
     edb_patch: &BTreeMap<Rel, BTreeSet<SignedFact>>,
@@ -1899,12 +2125,6 @@ pub(crate) fn incremental_eval(
         ));
     }
     let classes = head_classes(program);
-    if classes.values().any(|c| c.has_aggr) {
-        return Err(Rejection::Malformed(
-            "incremental maintenance does not yet cover aggregation — refused, not silently \
-             wrong; recompute this program in full instead",
-        ));
-    }
     if !program.fixed.is_empty() {
         // A fixed rule is an opaque function (`fn(&[BTreeSet<Tuple>]) ->
         // BTreeSet<Tuple>`, `FixedRule::eval`) — this module has no way to
@@ -1959,33 +2179,54 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let mut candidates = BTreeSet::new();
-            for rule in &rules {
-                collect_candidates(
-                    rule,
+            let delta = if classes[rel].has_aggr {
+                eval_aggregating_head_incremental(
+                    &rules,
                     program,
                     &old_total,
+                    &new_total,
                     &rel_deltas,
                     AsOf::current(),
-                    &mut candidates,
-                );
-            }
-            let mut delta = BTreeSet::new();
+                    &old_rows,
+                )?
+            } else {
+                let mut candidates = BTreeSet::new();
+                for rule in &rules {
+                    collect_candidates(
+                        rule,
+                        program,
+                        &old_total,
+                        &rel_deltas,
+                        AsOf::current(),
+                        &mut candidates,
+                    );
+                }
+                let mut delta = BTreeSet::new();
+                for candidate in candidates {
+                    let was = old_rows.contains(&candidate);
+                    let now =
+                        head_is_derivable(&rules, program, &new_total, AsOf::current(), &candidate);
+                    match (was, now) {
+                        (false, true) => {
+                            delta.insert(SignedFact::Plus(candidate));
+                        }
+                        (true, false) => {
+                            delta.insert(SignedFact::Minus(candidate));
+                        }
+                        _ => {}
+                    }
+                }
+                delta
+            };
             let mut new_rows = old_rows.clone();
-            for candidate in candidates {
-                let was = old_rows.contains(&candidate);
-                let now =
-                    head_is_derivable(&rules, program, &new_total, AsOf::current(), &candidate);
-                match (was, now) {
-                    (false, true) => {
-                        delta.insert(SignedFact::Plus(candidate.clone()));
-                        new_rows.insert(candidate);
+            for fact in &delta {
+                match fact {
+                    SignedFact::Plus(t) => {
+                        new_rows.insert(t.clone());
                     }
-                    (true, false) => {
-                        delta.insert(SignedFact::Minus(candidate.clone()));
-                        new_rows.remove(&candidate);
+                    SignedFact::Minus(t) => {
+                        new_rows.remove(t);
                     }
-                    _ => {}
                 }
             }
             (delta, new_rows)
@@ -4393,10 +4634,12 @@ mod tests {
         assert!(matches!(err, Rejection::Unstratifiable(_)));
     }
 
-    /// Aggregation is refused outright too, for now — a typed refusal,
-    /// never a silently wrong incremental answer.
+    /// Aggregation is incrementalized, not refused: `total(X, sum(Y)) :-
+    /// p(X, Y)` — asserting a new row into an existing group grows the
+    /// sum by exactly that row's contribution, proven both directly and
+    /// against a full recompute.
     #[test]
-    fn incremental_refuses_aggregation() {
+    fn incremental_aggregation_sum_grows_on_assertion() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "p",
@@ -4413,8 +4656,111 @@ mod tests {
             facts,
         );
         let patch = patch_of(vec![("p", SignedFact::Plus(vec![v(1), v(30)]))]);
-        let err = incremental_eval(&program, &patch).unwrap_err();
-        assert!(matches!(err, Rejection::Malformed(_)));
+        assert_incremental_matches_recompute(&program, &patch, "aggregation sum grows");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["total"],
+            [
+                SignedFact::Minus(vec![v(1), v(30)]),
+                SignedFact::Plus(vec![v(1), v(60)]),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    /// The hard corner no per-kind incremental formula covers: retracting
+    /// the CURRENT min needs the group's remaining members, not a signed
+    /// tally. `total(X, min(Y)) :- p(X, Y)`, group X=1 holds {10, 20},
+    /// retracting (1, 10) must re-derive the new min (20) from the
+    /// group's own remaining rows, not silently drop to nothing or keep
+    /// the stale value.
+    #[test]
+    fn incremental_aggregation_min_rescans_on_retracting_the_current_min() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert(
+            "p",
+            [vec![v(1), v(10)], vec![v(1), v(20)]].into_iter().collect(),
+        );
+        let program = Program::untimed(
+            vec![Rule::aggregated(
+                "total",
+                vec![x(), y()],
+                vec![None, named("min")],
+                vec![lit("p", vec![x(), y()], false)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(1), v(10)]))]);
+        assert_incremental_matches_recompute(&program, &patch, "min retraction rescans");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["total"],
+            [
+                SignedFact::Minus(vec![v(1), v(10)]),
+                SignedFact::Plus(vec![v(1), v(20)]),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    /// Retracting a group's LAST remaining member makes the group's row
+    /// vanish entirely (a plain `Minus`, no replacement `Plus`) — the
+    /// group-level analog of a plain rule's head tuple losing its only
+    /// derivation.
+    #[test]
+    fn incremental_aggregation_group_vanishes_when_its_last_member_is_retracted() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1), v(10)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![Rule::aggregated(
+                "total",
+                vec![x(), y()],
+                vec![None, named("sum")],
+                vec![lit("p", vec![x(), y()], false)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(1), v(10)]))]);
+        assert_incremental_matches_recompute(&program, &patch, "group vanishes");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["total"],
+            [SignedFact::Minus(vec![v(1), v(10)])].into_iter().collect()
+        );
+    }
+
+    /// A GLOBAL aggregate (no GROUP BY at all) never vanishes: retracting
+    /// its last underlying row reverts it to the identity fold
+    /// (`count() = 0`), the same special case `naive_eval`'s own
+    /// `eval_normal_aggr_head` already carries for a from-scratch
+    /// evaluation.
+    #[test]
+    fn incremental_aggregation_global_count_reverts_to_identity_on_total_retraction() {
+        let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
+        facts.insert("p", [vec![v(1)]].into_iter().collect());
+        let program = Program::untimed(
+            vec![Rule::aggregated(
+                "total",
+                vec![y()],
+                vec![named("count")],
+                vec![lit("p", vec![y()], false)],
+            )],
+            vec![],
+            facts,
+        );
+        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(1)]))]);
+        assert_incremental_matches_recompute(&program, &patch, "global count reverts to identity");
+        let got = incremental_eval(&program, &patch).unwrap();
+        assert_eq!(
+            got["total"],
+            [SignedFact::Minus(vec![v(1)]), SignedFact::Plus(vec![v(0)]),]
+                .into_iter()
+                .collect()
+        );
     }
 
     /// A fixed rule (opaque graph algorithm) is refused too — without
@@ -4481,7 +4827,21 @@ mod tests {
                 ],
             )]
         }
-        let shapes: [fn() -> Vec<Rule>; 3] = [shape_a, shape_b, shape_c];
+        // Shape D: `total(x, min(y)) :- p(x, y)` — aggregation, `min`
+        // deliberately (the hardest kind: retracting the current min has
+        // no per-kind incremental formula, only a group re-derivation).
+        fn shape_d() -> Vec<Rule> {
+            vec![Rule::aggregated(
+                "q",
+                vec![x(), y()],
+                vec![
+                    None,
+                    Some((parse_aggr("min").expect("real aggregation exists"), vec![])),
+                ],
+                vec![lit("p", vec![x(), y()], false)],
+            )]
+        }
+        let shapes: [fn() -> Vec<Rule>; 4] = [shape_a, shape_b, shape_c, shape_d];
 
         let mut rng = Rng::new(0xC0DE_D15C_1234_5678);
         let mut cases = 0;
@@ -4554,7 +4914,7 @@ mod tests {
             }
         }
         assert!(
-            cases > 100,
+            cases > 150,
             "expected a rich generative campaign, ran {cases}"
         );
     }
