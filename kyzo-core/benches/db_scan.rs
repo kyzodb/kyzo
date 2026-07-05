@@ -39,16 +39,16 @@ fn bench_scans(c: &mut Criterion) {
     g.sample_size(20);
 
     for n in [50_000i64, 200_000] {
-        let db = seeded_db(n, &tmp.path().join(format!("full{n}")));
+        // One seeded store per size drives both queries: the relation is
+        // identical and the scans are read-only, so full/ and filtered/
+        // measure the same served segment — no reason to pay the seed twice.
+        let db = seeded_db(n, &tmp.path().join(format!("w{n}")));
         // Warm: the first read builds the segment.
         db.run_script("?[k, v] := *w[k, v]", no_params()).unwrap();
         g.bench_function(format!("full/{n}"), |b| {
             b.iter(|| black_box(db.run_script("?[k, v] := *w[k, v]", no_params()).unwrap()));
         });
 
-        let db = seeded_db(n, &tmp.path().join(format!("filter{n}")));
-        db.run_script("?[k, v] := *w[k, v], v > 500", no_params())
-            .unwrap();
         g.bench_function(format!("filtered/{n}"), |b| {
             b.iter(|| {
                 black_box(

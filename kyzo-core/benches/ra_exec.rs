@@ -23,10 +23,11 @@
 //!   aggregation fold.
 //!
 //! Each runs on both backends (`mem` = in-memory MVCC double, `fjall` =
-//! on-disk LSM) and both execution modes (`iter` = tuple-at-a-time, `batch`
-//! = vectorized). The iterator numbers are the pristine baseline; the batch
-//! numbers measure the prototype delta. Generators are seeded; the machine
-//! and toolchain are noted in the report, not here.
+//! on-disk LSM). A single execution path runs today; the benchmark id keeps
+//! the historical `batch` tag so criterion's stored baselines stay
+//! comparable across the iterator twin's deletion (see `bench_workload`).
+//! Generators are seeded; the machine and toolchain are noted in the
+//! report, not here.
 //!
 //! Run: `cargo bench -p kyzo --features bench-internals --bench ra_exec`.
 
