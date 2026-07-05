@@ -24,28 +24,51 @@
 //! on this side of the seam).
 //!
 //! The translator covers plain relational Datalog: rule/relation
-//! applications (positive and negated), recursion, and per-head-position
-//! aggregation. It REFUSES, typed, rather than silently mistranslating:
-//! fixed-rule applications (no generic bridge from `Arc<dyn FixedRule>` to
-//! the oracle's `fn(&[BTreeSet<Tuple>]) -> BTreeSet<Tuple>` shape),
-//! predicate/unification atoms (arbitrary `Expr` evaluation is outside the
-//! oracle's plain `Term::Var`/`Term::Const` model), index-search atoms, any
-//! relation atom carrying a validity clause (time-travel/interval/diff
-//! reads — the oracle supports the timed axis natively per story #62, but
-//! wiring `NormalFormRelationApplyAtom::validity` through is separate,
-//! named follow-on work, not attempted here), and `:order`/`:limit`/
-//! `:offset`/mutation queries (this cut compares full, unordered read-only
-//! answer sets). Every refusal is a [`VerifyOutcome::Unsupported`], never a
-//! silent pass and never a panic.
+//! applications (positive and negated), recursion, per-head-position
+//! aggregation, and point-in-time historical reads (`@ <coordinate>`,
+//! [`crate::data::program::ValidityClause::At`]). It REFUSES, typed, rather
+//! than silently mistranslating: fixed-rule applications (no generic bridge
+//! from `Arc<dyn FixedRule>` to the oracle's
+//! `fn(&[BTreeSet<Tuple>]) -> BTreeSet<Tuple>` shape), predicate/unification
+//! atoms (arbitrary `Expr` evaluation is outside the oracle's plain
+//! `Term::Var`/`Term::Const` model), index-search atoms,
+//! interval-derivation/diff reads (`@spans`/`@delta`/`@delta_sys` —
+//! these bind an EXTRA column beyond the relation's own arity, a distinct
+//! translator shape from the point-in-time `@` case just landed; named
+//! follow-on, not attempted here), and `:order`/`:limit`/`:offset`/mutation
+//! queries (this cut compares full, unordered read-only answer sets). Every
+//! refusal is a [`VerifyOutcome::Unsupported`], never a silent pass and
+//! never a panic.
+//!
+//! **A finding along the way, named rather than routed around:** a variable
+//! appearing ONLY inside a negated literal (including the `_` wildcard
+//! sugar) is refused as `Unsafe` by the oracle's `check_safety` even on
+//! programs the production compiler's OWN safety check accepts (e.g. `not
+//! *hist[k, _ @ t]` where `_` never appears elsewhere) — a real, narrower
+//! safety-notion gap between the two, distinct from the `@spans`/`@delta`
+//! boundary above. Every historical-read test in this module's `tests`
+//! module below binds every negated-literal variable positively first
+//! (unambiguously safe under either notion) to isolate the case this cut
+//! actually proves; the wildcard-in-negation gap is not otherwise routed
+//! around and is left for the corpus/refusal-fence work to characterize
+//! fully.
 //!
 //! ## The snapshot adapter
 //!
 //! One `ReadTx` is opened once and used for BOTH evaluators — the
 //! production path via [`Db::compile_and_eval`] and the oracle's EDB feed
-//! via [`StoredWithValidityRA::iter_batched`] (the exact scan operator the
-//! production compiler itself builds for a stored-relation atom, `AsOf`
-//! resolution included) — so "byte-identical state" is structural, not a
-//! hope: no second, independent scan of the same relation ever runs.
+//! via [`StoredWithValidityRA::iter_batched`] for current-state relations,
+//! or [`crate::query::ra::temporal::decode_raw_version`]'s raw multi-version
+//! scan for historical ones — the exact scan/decode primitives the
+//! production compiler itself uses for a stored-relation atom, `AsOf`
+//! resolution included — so "byte-identical state" is structural, not a
+//! hope: no second, independent scan or decode of the same relation ever
+//! runs. Consequence stated plainly: `::verify`'s temporal independence
+//! lives in the EVALUATION (the oracle's naive fixpoint vs. the production
+//! compiler's), not in the raw-version decode — a bug in
+//! `decode_raw_version` itself would be shared by both sides and could
+//! escape this check, exactly as a `range_skip_scan_tuple` bug could escape
+//! the current-state check above it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -175,6 +198,12 @@ struct Unsupported(String);
 struct Translated {
     program: laws::Program,
     edb_names: BTreeSet<laws::Rel>,
+    /// Relations read with an explicit `@` (point-in-time) validity clause
+    /// SOMEWHERE in the program — every read of these (clause-carrying or
+    /// not) resolves through `laws::Program::histories`, never `facts`
+    /// (`check_wellformed`'s XOR). `@spans`/`@delta` clauses are not in this
+    /// set — see [`translate_atom`]'s `Spans`/`Delta` arm.
+    historical_names: BTreeSet<laws::Rel>,
     entry_rel: laws::Rel,
 }
 
@@ -182,10 +211,24 @@ fn translate_term(sym: &Symbol) -> laws::Term {
     laws::Term::Var(intern(sym.name.as_str()))
 }
 
+/// The real bitemporal `AsOf` (`ValidityTs(Reverse(_))`, descending) into
+/// the oracle's own plain-ascending `laws::AsOf` — the exact correspondence
+/// `laws.rs`'s own module doc states and
+/// `asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture` proves.
+fn to_oracle_asof(real: crate::data::value::AsOf) -> laws::AsOf {
+    laws::AsOf {
+        valid: (real.valid.0).0,
+        sys: (real.sys.0).0,
+    }
+}
+
 fn translate_atom(
     atom: &NormalFormAtom,
     edb_names: &mut BTreeSet<laws::Rel>,
+    historical_names: &mut BTreeSet<laws::Rel>,
 ) -> std::result::Result<laws::Literal, Unsupported> {
+    use crate::data::program::ValidityClause;
+
     match atom {
         NormalFormAtom::Rule(a) => Ok(laws::Literal::pos(
             intern(a.name.name.as_str()),
@@ -196,34 +239,50 @@ fn translate_atom(
             a.args.iter().map(translate_term).collect(),
         )),
         NormalFormAtom::Relation(a) => {
-            if a.validity.is_some() {
-                return Err(Unsupported(format!(
-                    "relation atom '{}' carries a validity clause (time travel); \
-                     ::verify does not translate time-travel reads yet",
-                    a.name
-                )));
-            }
             let rel = intern(a.name.name.as_str());
-            edb_names.insert(rel);
-            Ok(laws::Literal::pos(
-                rel,
-                a.args.iter().map(translate_term).collect(),
-            ))
+            let args: Vec<laws::Term> = a.args.iter().map(translate_term).collect();
+            match &a.validity {
+                None => {
+                    edb_names.insert(rel);
+                    Ok(laws::Literal::pos(rel, args))
+                }
+                Some(ValidityClause::At(as_of)) => {
+                    historical_names.insert(rel);
+                    Ok(laws::Literal::pos_at(rel, args, to_oracle_asof(*as_of)))
+                }
+                Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
+                    Err(Unsupported(format!(
+                        "relation atom '{}' is an interval-derivation (@spans) or diff \
+                         (@delta/@delta_sys) read: these bind an extra column beyond the \
+                         relation's own arity, a distinct translator shape from the \
+                         point-in-time @ read just landed — not yet translated",
+                        a.name
+                    )))
+                }
+            }
         }
         NormalFormAtom::NegatedRelation(a) => {
-            if a.validity.is_some() {
-                return Err(Unsupported(format!(
-                    "relation atom '{}' carries a validity clause (time travel); \
-                     ::verify does not translate time-travel reads yet",
-                    a.name
-                )));
-            }
             let rel = intern(a.name.name.as_str());
-            edb_names.insert(rel);
-            Ok(laws::Literal::neg(
-                rel,
-                a.args.iter().map(translate_term).collect(),
-            ))
+            let args: Vec<laws::Term> = a.args.iter().map(translate_term).collect();
+            match &a.validity {
+                None => {
+                    edb_names.insert(rel);
+                    Ok(laws::Literal::neg(rel, args))
+                }
+                Some(ValidityClause::At(as_of)) => {
+                    historical_names.insert(rel);
+                    Ok(laws::Literal::neg_at(rel, args, to_oracle_asof(*as_of)))
+                }
+                Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
+                    Err(Unsupported(format!(
+                        "relation atom '{}' is an interval-derivation (@spans) or diff \
+                         (@delta/@delta_sys) read: these bind an extra column beyond the \
+                         relation's own arity, a distinct translator shape from the \
+                         point-in-time @ read just landed — not yet translated",
+                        a.name
+                    )))
+                }
+            }
         }
         NormalFormAtom::Predicate(_) => Err(Unsupported(
             "predicate (filter expression) atoms are not translated — the oracle's Term \
@@ -245,12 +304,13 @@ fn translate_inline_rule(
     head_rel: laws::Rel,
     rule: &NormalFormInlineRule,
     edb_names: &mut BTreeSet<laws::Rel>,
+    historical_names: &mut BTreeSet<laws::Rel>,
 ) -> std::result::Result<laws::Rule, Unsupported> {
     let head_args: Vec<laws::Term> = rule.head.iter().map(translate_term).collect();
     let body = rule
         .body
         .iter()
-        .map(|a| translate_atom(a, edb_names))
+        .map(|a| translate_atom(a, edb_names, historical_names))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(laws::Rule::aggregated(
         head_rel,
@@ -265,6 +325,7 @@ fn translate_def(
     def: &NormalFormRulesOrFixed,
     rules: &mut Vec<laws::Rule>,
     edb_names: &mut BTreeSet<laws::Rel>,
+    historical_names: &mut BTreeSet<laws::Rel>,
 ) -> std::result::Result<(), Unsupported> {
     match def {
         NormalFormRulesOrFixed::Fixed { fixed } => Err(Unsupported(format!(
@@ -275,7 +336,12 @@ fn translate_def(
         ))),
         NormalFormRulesOrFixed::Rules { rules: inline } => {
             for r in inline {
-                rules.push(translate_inline_rule(name_rel, r, edb_names)?);
+                rules.push(translate_inline_rule(
+                    name_rel,
+                    r,
+                    edb_names,
+                    historical_names,
+                )?);
             }
             Ok(())
         }
@@ -291,15 +357,28 @@ fn translate_def(
 fn translate(program: &crate::data::program::NormalFormProgram) -> Result<Translated> {
     let mut rules = Vec::new();
     let mut edb_names = BTreeSet::new();
+    let mut historical_names = BTreeSet::new();
 
     for (name, def) in program.rules() {
         let rel = intern(name.name.as_str());
-        translate_def(rel, def, &mut rules, &mut edb_names)
+        translate_def(rel, def, &mut rules, &mut edb_names, &mut historical_names)
             .map_err(|Unsupported(reason)| miette::miette!("{reason}"))?;
     }
     let entry_rel = intern(program.entry_name().name.as_str());
-    translate_def(entry_rel, program.entry(), &mut rules, &mut edb_names)
-        .map_err(|Unsupported(reason)| miette::miette!("{reason}"))?;
+    translate_def(
+        entry_rel,
+        program.entry(),
+        &mut rules,
+        &mut edb_names,
+        &mut historical_names,
+    )
+    .map_err(|Unsupported(reason)| miette::miette!("{reason}"))?;
+
+    // The XOR: a relation read with ANY `@` clause anywhere resolves
+    // wholly through `histories` — including its clause-less reads
+    // elsewhere, which `Literal::pos`/`neg` (as_of: None) already emit
+    // correctly, resolving via `naive_eval`'s own default coordinate.
+    edb_names.retain(|r| !historical_names.contains(r));
 
     Ok(Translated {
         program: laws::Program {
@@ -309,6 +388,7 @@ fn translate(program: &crate::data::program::NormalFormProgram) -> Result<Transl
             histories: BTreeMap::new(),
         },
         edb_names,
+        historical_names,
         entry_rel,
     })
 }
@@ -348,6 +428,44 @@ fn scan_edb_facts(
         facts.insert(rel, rows);
     }
     Ok(facts)
+}
+
+/// Scan every HISTORICAL relation's COMPLETE version history — every
+/// assert/retract/erase ever written, unresolved against any coordinate —
+/// through the exact raw decoder `query/ra/temporal.rs`'s `@spans`/`@delta`
+/// operators already use (`decode_raw_version`, story #62 chunk 3): reused,
+/// not re-derived, so a bitemporal-tail decoding bug is shared rather than
+/// independently risked twice. `tx` is the SAME shared snapshot every other
+/// scan in this module reads.
+fn scan_full_histories(
+    tx: &impl ReadTx,
+    historical_names: &BTreeSet<laws::Rel>,
+) -> Result<BTreeMap<laws::Rel, Vec<laws::Event>>> {
+    use crate::data::bitemporal::ClaimPolarity;
+    use crate::query::ra::temporal::{decode_raw_version, relation_keyspace_bounds};
+
+    let mut histories = BTreeMap::new();
+    for &rel in historical_names {
+        let handle = get_relation(tx, rel)?;
+        let key_len = handle.metadata.keys.len();
+        let (lower, upper) = relation_keyspace_bounds(&handle);
+        let mut events = Vec::new();
+        for kv in tx.range_scan(&lower, &upper) {
+            let (key, val) = kv?;
+            let (_, key_tuple, raw) = decode_raw_version(&key, &val, key_len)?;
+            let event = match raw.polarity {
+                ClaimPolarity::Assert => {
+                    laws::Event::assert(key_tuple, raw.payload, raw.valid, raw.sys)
+                }
+                ClaimPolarity::Retract => laws::Event::retract(key_tuple, raw.valid, raw.sys),
+                ClaimPolarity::Erase => laws::Event::erase(key_tuple, raw.valid, raw.sys),
+            }
+            .map_err(|e| miette::miette!("{e}"))?;
+            events.push(event);
+        }
+        histories.insert(rel, events);
+    }
+    Ok(histories)
 }
 
 impl<S: Storage> Db<S> {
@@ -468,8 +586,10 @@ impl<S: Storage> Db<S> {
         };
         let mut facts = scan_edb_facts(&tx.store, &translated.edb_names, cur_vld)?;
         sabotage_oracle_facts(&mut facts);
+        let histories = scan_full_histories(&tx.store, &translated.historical_names)?;
         let mut oracle_program = translated.program;
         oracle_program.facts = facts;
+        oracle_program.histories = histories;
 
         match laws::naive_eval(&oracle_program) {
             Ok(db) => {
@@ -669,8 +789,8 @@ mod tests {
         for seed in 0..SEEDS {
             let mut rng = Rng::new(seed);
             let (program, entries) = gen_program(&mut rng);
-            let db = Db::new(crate::storage::sim::SimStorage::new(seed))
-                .expect("open sim-backed db");
+            let db =
+                Db::new(crate::storage::sim::SimStorage::new(seed)).expect("open sim-backed db");
             for (rel, rows) in &program.facts {
                 let arity = rows.iter().next().map(|t| t.len()).unwrap_or(0);
                 db.run_script(&facts_script(rel, arity, rows), no_params())
@@ -774,5 +894,128 @@ mod tests {
             "refusal-corpus verify FINDINGS:\n{}",
             failures.join("\n")
         );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Time travel (story #80 DoD item 3, ruled required, not follow-on):
+    // point-in-time (`@ <coordinate>`) historical reads, translated through
+    // `laws::Program::histories` and the shared full-history decoder
+    // (`query/ra/temporal.rs`'s `decode_raw_version`).
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Two versions of the same fact, written at two different valid
+    /// instants: `::verify` must agree with production at EACH instant
+    /// independently — the oracle resolving from the full history, not a
+    /// single precomputed snapshot.
+    #[test]
+    fn verify_matches_a_point_in_time_historical_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let db = Db::new(storage).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
+            no_params(),
+        )
+        .expect("create at valid=100");
+        db.run_script("?[k, v] <- [[1, 'b']] :put hist {k => v} @ 200", no_params())
+            .expect("put at valid=200");
+
+        let at_100 = db
+            .verify_script("?[k, v] := *hist[k, v @ 100]", no_params(), ScriptOptions::default())
+            .expect("verify_script runs");
+        match at_100 {
+            VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
+            other => panic!("expected Match at valid=100, got {other:?}"),
+        }
+
+        let at_200 = db
+            .verify_script("?[k, v] := *hist[k, v @ 200]", no_params(), ScriptOptions::default())
+            .expect("verify_script runs");
+        match at_200 {
+            VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
+            other => panic!("expected Match at valid=200, got {other:?}"),
+        }
+
+        // Before the fact existed at all: empty, not a refusal.
+        let at_50 = db
+            .verify_script("?[k, v] := *hist[k, v @ 50]", no_params(), ScriptOptions::default())
+            .expect("verify_script runs");
+        match at_50 {
+            VerifyOutcome::Match { row_count } => assert_eq!(row_count, 0),
+            other => panic!("expected an empty Match at valid=50, got {other:?}"),
+        }
+    }
+
+    /// A negated historical read (`not *hist[... @ <coordinate>]`) — the
+    /// same `Literal::neg_at` path — still matches. Both of `hist`'s
+    /// columns are bound by a POSITIVE atom first (`*probe[k, v]`) so the
+    /// negation is unambiguously safe under any definition — a
+    /// wildcard-only-in-negation column is a distinct, separately named
+    /// boundary (see the module docs), not what this test is proving.
+    #[test]
+    fn verify_matches_a_negated_historical_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let db = Db::new(storage).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
+            no_params(),
+        )
+        .expect("create at valid=100");
+        db.run_script(
+            "?[k, v] <- [[1, 'a'], [2, 'z']] :create probe {k => v}",
+            no_params(),
+        )
+        .expect("create probe");
+
+        let outcome = db
+            .verify_script(
+                "?[k, v] := *probe[k, v], not *hist[k, v @ 50]",
+                no_params(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script runs");
+        match outcome {
+            // At valid=50 nothing existed in hist yet, so both probe pairs
+            // pass the negation.
+            VerifyOutcome::Match { row_count } => assert_eq!(row_count, 2),
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    /// The interval-derivation/diff boundary, named specifically (not a
+    /// generic "time travel unsupported"): `@spans` binds an extra column
+    /// beyond the relation's own arity, a distinct shape from the
+    /// point-in-time `@` case above.
+    #[test]
+    fn verify_refuses_a_spans_read_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_fjall_storage(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let db = Db::new(storage).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 'a']] :create hist {k => v} @ 100",
+            no_params(),
+        )
+        .expect("create at valid=100");
+
+        let outcome = db
+            .verify_script(
+                "?[k, v, iv] := *hist{k, v @spans iv}",
+                no_params(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script runs");
+        match outcome {
+            VerifyOutcome::Unsupported { reason } => {
+                assert!(
+                    reason.contains("@spans") || reason.contains("interval-derivation"),
+                    "expected an @spans-named refusal, got: {reason}"
+                );
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 }
