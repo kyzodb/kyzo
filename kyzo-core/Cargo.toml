@@ -59,6 +59,19 @@ rust-stemmers = "1.2"    # Snowball stemmers, generated Rust, no FFI
 rustc-hash = "2"         # FxHashSet for stopword sets / unique n-grams
 pest = "2"
 pest_derive = "2"
+# Arrow IPC boundary (story #77): the metadata-encoding runtime library
+# only (no code generation, no arrow crate itself, no flatc at build time) —
+# hand-encoded against Arrow's own Schema.fbs/Message.fbs table layout in
+# data/arrow_ipc.rs. Verified dependency-free on every platform, not just
+# the build host: `cargo tree -e normal,build --target=all -i flatbuffers`
+# shows only flatbuffers -> {bitflags, rustc_version -> semver}, no `-sys`
+# crate anywhere (the trap the `arrow` crate itself fell into: its own
+# `chrono` dependency needs `clock`, pulling `iana-time-zone`, which needs
+# `core-foundation-sys`/`windows-core` on macOS/Windows — invisible on a
+# Linux-only `cargo tree`, which is why depending on `arrow` directly was
+# rejected in favor of this crate; see kyzo-arrow-interop's own Cargo.toml
+# for where the real `arrow` crate is used instead, outside this tree).
+flatbuffers = { version = "25.12.19", default-features = false, features = ["std"] }
 
 # Pure Rust. The per-stratum rule batch of query/eval.rs runs on rayon
 # everywhere except wasm32, as in the CozoDB original.

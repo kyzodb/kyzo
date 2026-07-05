@@ -1,0 +1,12 @@
+[package]
+name = "kyzo-arrow-interop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Story #77's Arrow interop cross-check: kyzo-core's hand-rolled, dependency-free Arrow IPC encoder is proven against a REAL Arrow reader here, in an isolated lane that never touches the kyzo/kyzo-bin dependency tree (scripts/check-pure-rust.sh only walks those two packages, so this crate's arrow dependency never reaches the purity gate). Never shipped: dev/test tooling only, the same status as xtask."
+
+[dependencies]
+kyzo = { path = "../kyzo-core", package = "kyzo" }
+arrow = { version = "59", default-features = false, features = ["ipc"] }

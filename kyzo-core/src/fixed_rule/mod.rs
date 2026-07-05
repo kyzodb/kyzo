@@ -894,6 +894,19 @@ impl NamedRows {
             next: None,
         }
     }
+
+    /// Encode this result set as a self-contained Arrow IPC stream (story
+    /// #77's export boundary): a Schema message naming every header, one
+    /// RecordBatch message, and the end-of-stream marker — readable by any
+    /// conforming Arrow implementation, built without depending on the
+    /// `arrow` crate itself (see `data::arrow_ipc`'s module doc for why).
+    /// Refuses (never silently drops data) when a column mixes more than
+    /// one non-null kind, or a kind this encoder has no Arrow mapping for.
+    pub fn to_arrow_ipc(&self) -> Result<Vec<u8>> {
+        let batch = crate::data::batch::ColumnBatch::from_rows(&self.rows, self.headers.len());
+        let names: Vec<&str> = self.headers.iter().map(String::as_str).collect();
+        crate::data::arrow_ipc::encode_stream(&batch, &names)
+    }
 }
 
 impl IntoIterator for NamedRows {
@@ -1906,5 +1919,39 @@ mod tests {
                 "{name}: expected the typed arity refusal, got: {err}"
             );
         }
+    }
+
+    /// `to_arrow_ipc` is the actual production call site of story #77's
+    /// encoder (`data::arrow_ipc::encode_stream`) — not just a test-only
+    /// path. A real Arrow reader proves the byte layout in
+    /// `kyzo-arrow-interop`; this just proves `NamedRows` wires its own
+    /// headers/rows into that encoder correctly, including the refusal
+    /// path for a genuinely heterogeneous column.
+    #[test]
+    fn to_arrow_ipc_encodes_a_real_result_set() {
+        let named = NamedRows::new(
+            vec!["n".into(), "name".into()],
+            vec![
+                vec![DataValue::from(1), s("a")],
+                vec![DataValue::from(2), s("b")],
+            ],
+        );
+        let bytes = named
+            .to_arrow_ipc()
+            .expect("uniformly-typed columns encode");
+        assert!(bytes.len() > 16, "a real stream is more than a bare marker");
+    }
+
+    #[test]
+    fn to_arrow_ipc_refuses_a_heterogeneous_column() {
+        let named = NamedRows::new(
+            vec!["mixed".into()],
+            vec![vec![DataValue::from(1)], vec![s("x")]],
+        );
+        let err = named.to_arrow_ipc().unwrap_err();
+        assert!(
+            err.to_string().contains("more than one non-null kind"),
+            "{err}"
+        );
     }
 }

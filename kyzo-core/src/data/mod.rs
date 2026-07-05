@@ -12,6 +12,7 @@
 // aggr's expectation fired when query/eval.rs landed as its first engine
 // consumer.
 pub(crate) mod aggr;
+pub(crate) mod arrow_ipc;
 pub(crate) mod batch;
 pub(crate) mod bitemporal;
 #[expect(dead_code)]
