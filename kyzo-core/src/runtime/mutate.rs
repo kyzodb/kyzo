@@ -2058,6 +2058,99 @@ mod bulk_write_tests {
              committed"
         );
     }
+
+    /// Story #88 coverage gap: `:insert`'s duplicate-key refusal
+    /// (`put_into_relation`'s `is_insert && current.is_some()` bail,
+    /// `TransactAssertionFailure` "key exists in database") was reached by
+    /// no test anywhere in the tree — `:put` always passes `is_insert =
+    /// false`, so the whole assertion-on-existing-key branch ran zero times
+    /// in every suite run. A fresh `:insert` succeeds; a second `:insert` of
+    /// the SAME key must refuse, and (like every refused mutation) commit
+    /// nothing — the first row's value stays what the successful insert
+    /// wrote, not the value the refused one tried to place.
+    #[test]
+    fn insert_of_an_existing_key_refuses_and_commits_nothing() {
+        let db = Db::new(SimStorage::new(0xB01C_0003)).expect("db");
+        db.run_script("?[k, v] <- [] :create wi {k => v}", no_params())
+            .expect("create");
+        db.run_script("?[k, v] <- [[1, 10]] :insert wi {k => v}", no_params())
+            .expect("first insert of a fresh key succeeds");
+
+        let err = db
+            .run_script("?[k, v] <- [[1, 999]] :insert wi {k => v}", no_params())
+            .expect_err("re-inserting an existing key must refuse");
+        assert!(
+            err.to_string().contains("key exists in database"),
+            "expected the duplicate-key assertion failure, got: {err}"
+        );
+
+        let out = db
+            .run_script("?[k, v] := *wi{k, v}", no_params())
+            .expect("read back");
+        assert_eq!(
+            out.rows,
+            vec![vec![DataValue::from(1), DataValue::from(10)]],
+            "the refused insert must not overwrite the existing row"
+        );
+    }
+
+    /// Story #88 coverage gap: `:update`'s missing-key refusal
+    /// (`update_in_relation`'s `None => bail!(... "key to update does not
+    /// exist")`) was reached by no test — every existing `:update` script
+    /// updates a key it just wrote. Updating an absent key must refuse.
+    #[test]
+    fn update_of_a_missing_key_refuses() {
+        let db = Db::new(SimStorage::new(0xB01C_0004)).expect("db");
+        db.run_script("?[k, v] <- [] :create wu {k => v}", no_params())
+            .expect("create");
+        db.run_script("?[k, v] <- [[1, 10]] :put wu {k => v}", no_params())
+            .expect("seed one key");
+
+        let err = db
+            .run_script("?[k, v] <- [[2, 20]] :update wu {k => v}", no_params())
+            .expect_err("updating a key that does not exist must refuse");
+        assert!(
+            err.to_string().contains("key to update does not exist"),
+            "expected the missing-key update refusal, got: {err}"
+        );
+    }
+
+    /// Story #88 coverage gap: `:update`'s value-CARRY-FORWARD branch
+    /// (`make_update_extractors` returning `None` for a stored non-key
+    /// column the `:update` clause omits, and `update_in_relation` pushing
+    /// the row's ORIGINAL value for it) was reached by no test — every
+    /// existing `:update` names every non-key column, so the `Some` arm
+    /// always won and the carry-forward path never ran. Here a two-value
+    /// relation is updated naming only ONE of its two non-key columns; the
+    /// omitted one must retain its prior stored value, untouched.
+    #[test]
+    fn update_carries_forward_an_omitted_non_key_column() {
+        let db = Db::new(SimStorage::new(0xB01C_0005)).expect("db");
+        db.run_script("?[k, a, b] <- [] :create wc {k => a, b}", no_params())
+            .expect("create");
+        db.run_script(
+            "?[k, a, b] <- [[1, 10, 20]] :put wc {k => a, b}",
+            no_params(),
+        )
+        .expect("seed one full row");
+
+        // Update naming only `a` (omitting `b`): b must carry forward as 20.
+        db.run_script("?[k, a] <- [[1, 99]] :update wc {k => a}", no_params())
+            .expect("partial update succeeds");
+
+        let out = db
+            .run_script("?[k, a, b] := *wc{k, a, b}", no_params())
+            .expect("read back");
+        assert_eq!(
+            out.rows,
+            vec![vec![
+                DataValue::from(1),
+                DataValue::from(99),
+                DataValue::from(20)
+            ]],
+            "a is updated to 99; b (omitted from the :update) carries forward as 20"
+        );
+    }
 }
 
 /// Issue #62's transposed event-posting index — the write side only (the
