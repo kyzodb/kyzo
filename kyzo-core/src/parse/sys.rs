@@ -107,6 +107,12 @@ pub enum SysOp {
     ListFixedRules,
     KillRunning(u64),
     Explain(Box<InputProgram>),
+    /// `::verify { <query> }` (story #80): run the query through both the
+    /// production evaluator and the sealed naive oracle over one shared
+    /// snapshot. Parsed identically to [`SysOp::Explain`] — same grammar
+    /// shape, `runtime/verify.rs::Db::verify_input_program` is the
+    /// dispatcher.
+    Verify(Box<InputProgram>),
     RemoveRelation(Vec<Symbol>),
     RenameRelation(Vec<(Symbol, Symbol)>),
     ShowTrigger(Symbol),
@@ -261,6 +267,15 @@ pub(crate) fn parse_sys(
                 cur_vld,
             )?;
             SysOp::Explain(Box::new(prog))
+        }
+        Rule::verify_op => {
+            let prog = parse_query(
+                inner.children().expect("the query to verify")?.into_inner(),
+                param_pool,
+                fixed_rules,
+                cur_vld,
+            )?;
+            SysOp::Verify(Box::new(prog))
         }
         Rule::describe_relation_op => {
             let mut inner = inner.children();

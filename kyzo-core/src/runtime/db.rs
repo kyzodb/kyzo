@@ -765,6 +765,12 @@ impl<S: Storage> Db<S> {
                 ))
             }
 
+            // Story #80: the ::verify self-adversary product surface.
+            SysOp::Verify(prog) => {
+                let outcome = self.verify_input_program(*prog, cur_vld, options)?;
+                Ok(outcome.into_named_rows())
+            }
+
             // Not yet: explain, kill, and every index-operator op.
             SysOp::Explain(_) => bail!(IndexOpNotLanded("::explain")),
             SysOp::KillRunning(_) => bail!(IndexOpNotLanded("::kill")),

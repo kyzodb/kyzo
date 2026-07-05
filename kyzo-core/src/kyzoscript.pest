@@ -74,10 +74,10 @@ query_script_inner = {"{" ~ (option | rule | const_rule | fixed_rule)+ ~ "}"}
 query_script_inner_no_bracket = { (option | rule | const_rule | fixed_rule)+ }
 imperative_script = {SOI ~ imperative_stmt+ ~ EOI}
 sys_script = {SOI ~ "::" ~ (list_relations_op | list_columns_op | list_indices_op | remove_relations_op | trigger_relation_op |
-                    trigger_relation_show_op | rename_relations_op | running_op | kill_op | explain_op |
+                    trigger_relation_show_op | rename_relations_op | running_op | kill_op | explain_op | verify_op |
                     access_level_op | index_op | vec_idx_op | fts_idx_op | lsh_idx_op | constraint_op | compact_op | merkle_root_op | list_fixed_rules) ~ EOI}
 sys_script_inner = {"{" ~ "::" ~ (list_relations_op | list_columns_op | list_indices_op | remove_relations_op | trigger_relation_op |
-                    trigger_relation_show_op | rename_relations_op | running_op | kill_op | explain_op |
+                    trigger_relation_show_op | rename_relations_op | running_op | kill_op | explain_op | verify_op |
                     access_level_op | index_op | vec_idx_op | fts_idx_op | lsh_idx_op | constraint_op | compact_op | merkle_root_op | list_fixed_rules) ~ "}"}
 index_op = {"index" ~ (index_create | index_drop)}
 vec_idx_op = {"hnsw" ~ (index_create_adv | index_drop)}
@@ -92,6 +92,7 @@ list_fixed_rules = {"fixed_rules"}
 running_op = {"running"}
 kill_op = {"kill" ~ expr}
 explain_op = {"explain" ~ "{" ~ query_script_inner_no_bracket ~ "}"}
+verify_op = {"verify" ~ "{" ~ query_script_inner_no_bracket ~ "}"}
 list_relations_op = {"relations"}
 list_columns_op = {"columns" ~ compound_or_index_ident}
 list_indices_op = {"indices" ~ compound_or_index_ident}

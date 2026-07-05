@@ -78,8 +78,13 @@ pub(crate) mod laws;
 // magic-sets NoREC-analog oracle, generated programs, swept demand
 // adornment. Test-only; adds no lib code. Kept out of `trials.rs` (its own
 // module, per the design ruling) and out of `laws.rs` (reuses it instead).
+// `pub(crate)` (not private): story #80's `::verify` whole-corpus proof
+// (`runtime/verify.rs`'s test module) reuses this module's
+// `laws::Program` -> KyzoScript-text renderer and generator directly
+// rather than re-deriving a second one — the same "reused, not re-derived"
+// principle this module's own refusal-fence test states for itself.
 #[cfg(test)]
-mod gauntlet;
+pub(crate) mod gauntlet;
 
 // Deterministic simulation testing up the query path: compiled programs run
 // over the storage double under seeded fault/crash/contention plans. Test-only.

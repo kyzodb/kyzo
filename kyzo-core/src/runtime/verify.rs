@@ -91,11 +91,67 @@ pub enum VerifyOutcome {
     OracleRefused { reason: String },
 }
 
+impl VerifyOutcome {
+    /// Render as the `::verify { ... }` script directive's result table
+    /// (`SysOp::Verify`'s dispatcher, `runtime/db.rs::run_sys_op`) — the
+    /// product-surface rendering of the same outcome
+    /// [`Db::verify_script`]/[`Db::verify_input_program`] return as a typed
+    /// Rust value. One row, `["status", "summary", "detail"]`.
+    pub(crate) fn into_named_rows(self) -> crate::fixed_rule::NamedRows {
+        let headers = vec![
+            "status".to_string(),
+            "summary".to_string(),
+            "detail".to_string(),
+        ];
+        let (status, summary, detail) = match self {
+            VerifyOutcome::Match { row_count } => {
+                ("match", format!("{row_count} row(s) agree"), String::new())
+            }
+            VerifyOutcome::Mismatch {
+                program_text,
+                production,
+                oracle,
+            } => (
+                "mismatch",
+                format!(
+                    "production {} row(s) vs oracle {} row(s)",
+                    production.len(),
+                    oracle.len()
+                ),
+                format!("program:\n{program_text}\nproduction: {production:?}\noracle: {oracle:?}"),
+            ),
+            VerifyOutcome::Unsupported { reason } => ("unsupported", reason, String::new()),
+            VerifyOutcome::OracleRefused { reason } => ("oracle_refused", reason, String::new()),
+        };
+        crate::fixed_rule::NamedRows::new(
+            headers,
+            vec![vec![
+                crate::data::value::DataValue::from(status),
+                crate::data::value::DataValue::from(summary),
+                crate::data::value::DataValue::from(detail),
+            ]],
+        )
+    }
+}
+
 /// Leak-intern `s` into a genuine `&'static str`, deduplicated by content in
 /// a process-wide cache. See the module docs: this exists because
 /// `query/laws.rs`'s `Program` was built for `&'static` test literals, and
 /// growth is bounded by the distinct name vocabulary ever verified, not by
 /// call volume.
+///
+/// **Design debt, named plainly (team-lead review, story #80):** this is a
+/// bridge, not the honest end state. Bounded-by-catalog-vocabulary leaking
+/// is acceptable for this cut ONLY because `::verify` is new and the
+/// catalog is finite — but every relation and variable name a caller ever
+/// verifies leaks for the life of the process, and a caller who verifies
+/// many one-off, never-repeated names (e.g. auto-generated variable names
+/// from a query builder) would grow this cache unboundedly. The honest
+/// long-term fix is `query/laws.rs`'s `Rel`/`Term::Var` owning their
+/// strings (`Cow<'static, str>` or an interned `Symbol`, not a bare
+/// `&'static str`) so `::verify` never needs to leak-bridge at all — a
+/// `laws.rs` change (touches the sealed oracle), out of scope for this cut,
+/// tracked as follow-up work rather than silently left undocumented.
 fn intern(s: &str) -> &'static str {
     static CACHE: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashSet::new()));
@@ -305,24 +361,6 @@ impl<S: Storage> Db<S> {
         params: BTreeMap<String, crate::data::value::DataValue>,
         options: ScriptOptions,
     ) -> Result<VerifyOutcome> {
-        self.verify_script_sabotaged(payload, params, options, &|_| {})
-    }
-
-    /// [`Self::verify_script`], with a hook applied to the oracle's scanned
-    /// EDB facts just before evaluation. Production always sees the real,
-    /// unsabotaged snapshot — only the oracle's copy is perturbed. The
-    /// no-op hook (`&|_| {}`) is [`Self::verify_script`] itself; a
-    /// corrupting hook is this module's sabotage proof (`#[cfg(test)]`
-    /// below): it simulates "the oracle's snapshot adapter saw a wrong
-    /// fact" and proves the comparison surfaces it as a faithful
-    /// [`VerifyOutcome::Mismatch`] rather than silently agreeing.
-    fn verify_script_sabotaged(
-        &self,
-        payload: &str,
-        params: BTreeMap<String, crate::data::value::DataValue>,
-        options: ScriptOptions,
-        sabotage_oracle_facts: &dyn Fn(&mut BTreeMap<laws::Rel, BTreeSet<Tuple>>),
-    ) -> Result<VerifyOutcome> {
         let cur_vld = current_validity()?;
         let fixed = self.fixed_rules();
         let script = parse_script(payload, &params, &fixed, cur_vld)?;
@@ -336,6 +374,38 @@ impl<S: Storage> Db<S> {
                 });
             }
         };
+        self.verify_program(program, cur_vld, &options, &|_| {})
+    }
+
+    /// The `::verify { ... }` script directive's entry point (`parse/sys.rs`'s
+    /// `SysOp::Verify`, dispatched from `run_sys_op`): the query is already
+    /// parsed into an `InputProgram` by the time it reaches here — same
+    /// shape as `SysOp::Explain`.
+    pub(crate) fn verify_input_program(
+        &self,
+        program: InputProgram,
+        cur_vld: ValidityTs,
+        options: &ScriptOptions,
+    ) -> Result<VerifyOutcome> {
+        self.verify_program(program, cur_vld, options, &|_| {})
+    }
+
+    /// The shared core behind [`Self::verify_script`] and
+    /// [`Self::verify_input_program`], with a hook applied to the oracle's
+    /// scanned EDB facts just before evaluation. Production always sees the
+    /// real, unsabotaged snapshot — only the oracle's copy is perturbed. The
+    /// no-op hook (`&|_| {}`) is what both public entry points use; a
+    /// corrupting hook is this module's sabotage proof (`#[cfg(test)]`
+    /// below): it simulates "the oracle's snapshot adapter saw a wrong
+    /// fact" and proves the comparison surfaces it as a faithful
+    /// [`VerifyOutcome::Mismatch`] rather than silently agreeing.
+    fn verify_program(
+        &self,
+        program: InputProgram,
+        cur_vld: ValidityTs,
+        options: &ScriptOptions,
+        sabotage_oracle_facts: &dyn Fn(&mut BTreeMap<laws::Rel, BTreeSet<Tuple>>),
+    ) -> Result<VerifyOutcome> {
         if program.out_opts().store_relation.is_some() {
             return Ok(VerifyOutcome::Unsupported {
                 reason: "::verify supports pure read queries only, not mutations".to_string(),
@@ -352,6 +422,11 @@ impl<S: Storage> Db<S> {
             });
         }
 
+        // Captured before `program` is consumed below (`into_normalized_program`
+        // takes it by value): `InputProgram`'s `Display` renders it back as
+        // canonical KyzoScript, the reproduction text for a MISMATCH bundle.
+        let program_text = program.to_string();
+
         let tx = SessionTx::new_read(self.storage.read_tx()?, options.clone());
 
         // Production: the real pipeline, on this transaction's snapshot.
@@ -360,7 +435,7 @@ impl<S: Storage> Db<S> {
             &tx.temp,
             program.clone(),
             cur_vld,
-            &options,
+            options,
             crate::engines::segments::Segments(Some(&self.segments)),
         )?;
         let _ = limited;
@@ -405,7 +480,7 @@ impl<S: Storage> Db<S> {
                     })
                 } else {
                     Ok(VerifyOutcome::Mismatch {
-                        program_text: payload.to_string(),
+                        program_text,
                         production,
                         oracle,
                     })
@@ -447,6 +522,18 @@ mod tests {
          path[x, z] := path[x, y], *edge[y, z]
          ?[x, y] := path[x, y]";
 
+    /// Parse `payload` into a single read `InputProgram`, exactly as
+    /// [`Db::verify_script`] does, for tests exercising [`Db::verify_program`]
+    /// (the private core) directly.
+    fn parse_single(payload: &str) -> (InputProgram, ValidityTs) {
+        let cur_vld = current_validity().expect("mint a validity stamp");
+        let fixed = std::collections::BTreeMap::new();
+        match parse_script(payload, &no_params(), &fixed, cur_vld).expect("script parses") {
+            Script::Single(prog) => (*prog, cur_vld),
+            _ => panic!("expected a single query script"),
+        }
+    }
+
     /// The MATCH case: a real recursive query (transitive closure) agrees
     /// between the production evaluator and the oracle.
     #[test]
@@ -471,25 +558,21 @@ mod tests {
     #[test]
     fn verify_catches_a_deliberately_sabotaged_oracle_fact() {
         let db = seeded_db();
+        let (program, cur_vld) = parse_single(TRANSITIVE_CLOSURE);
         let outcome = db
-            .verify_script_sabotaged(
-                TRANSITIVE_CLOSURE,
-                no_params(),
-                ScriptOptions::default(),
-                &|facts| {
-                    // Drop one real edge from the ORACLE's view only —
-                    // production still sees the true snapshot. The oracle's
-                    // transitive closure now lacks every pair that routed
-                    // through the dropped edge (3,4): (1,4)(2,4)(3,4) go
-                    // missing from its answer, so it MUST disagree with
-                    // production's true (unsabotaged) answer.
-                    facts
-                        .get_mut("edge")
-                        .expect("edge was scanned")
-                        .remove(&vec![DataValue::from(3), DataValue::from(4)]);
-                },
-            )
-            .expect("verify_script_sabotaged runs");
+            .verify_program(program, cur_vld, &ScriptOptions::default(), &|facts| {
+                // Drop one real edge from the ORACLE's view only —
+                // production still sees the true snapshot. The oracle's
+                // transitive closure now lacks every pair that routed
+                // through the dropped edge (3,4): (1,4)(2,4)(3,4) go
+                // missing from its answer, so it MUST disagree with
+                // production's true (unsabotaged) answer.
+                facts
+                    .get_mut("edge")
+                    .expect("edge was scanned")
+                    .remove(&vec![DataValue::from(3), DataValue::from(4)]);
+            })
+            .expect("verify_program runs");
         match outcome {
             VerifyOutcome::Mismatch {
                 production, oracle, ..
@@ -530,5 +613,166 @@ mod tests {
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
+    }
+
+    /// The product surface itself: `::verify { ... }` invoked as an ordinary
+    /// KyzoScript directive through `Db::run_script` — not the Rust API —
+    /// proving `SysOp::Verify`'s grammar and dispatch end to end.
+    #[test]
+    fn verify_directive_runs_through_run_script() {
+        let db = seeded_db();
+        let rows = db
+            .run_script(
+                "::verify { path[x, y] := *edge[x, y]
+                 path[x, z] := path[x, y], *edge[y, z]
+                 ?[x, y] := path[x, y] }",
+                no_params(),
+            )
+            .expect("::verify runs as a script directive");
+        assert_eq!(rows.headers, vec!["status", "summary", "detail"]);
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows[0][0], DataValue::from("match"));
+    }
+
+    /// The directive surfaces an unsupported construct the same way the
+    /// Rust API does, reached through `::verify`'s own dispatch path
+    /// (`SysOp::Verify` -> `into_named_rows`), not `verify_program` directly.
+    #[test]
+    fn verify_directive_names_unsupported_constructs() {
+        let db = seeded_db();
+        let rows = db
+            .run_script("::verify { ?[x, y] := *edge[x, y], y > 2 }", no_params())
+            .expect("::verify runs as a script directive");
+        assert_eq!(rows.rows[0][0], DataValue::from("unsupported"));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // The whole-corpus proof (story #80 DoD): breadth, not three hand-picked
+    // cases. Reuses `query/gauntlet.rs`'s (issue #29) `laws::Program` ->
+    // KyzoScript-text generator and renderer directly — "reused, not
+    // re-derived," the same principle that module's own refusal-fence test
+    // states for itself — rather than hand-rolling a second corpus.
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Every accepted query in a wide, seeded, randomly generated corpus
+    /// (linear/self-join recursion, optional negation-over-recursion, swept
+    /// over many graph shapes) returns `Match` through `::verify`. Aggregation
+    /// is NOT exercised by this generator (`gauntlet::gen_program`'s own
+    /// documented scope) — covered separately by
+    /// `verify_matches_a_hand_written_aggregation_query` below.
+    #[test]
+    fn verify_matches_across_a_generated_corpus() {
+        use crate::query::gauntlet::{Rng, entry_line, facts_script, gen_program, rules_script};
+
+        const SEEDS: u64 = 40;
+        let mut failures = Vec::new();
+        for seed in 0..SEEDS {
+            let mut rng = Rng::new(seed);
+            let (program, entries) = gen_program(&mut rng);
+            let db = Db::new(crate::storage::sim::SimStorage::new(seed))
+                .expect("open sim-backed db");
+            for (rel, rows) in &program.facts {
+                let arity = rows.iter().next().map(|t| t.len()).unwrap_or(0);
+                db.run_script(&facts_script(rel, arity, rows), no_params())
+                    .unwrap_or_else(|e| panic!("seed {seed}: fact load for {rel}: {e}"));
+            }
+            let rules_text = rules_script(&program);
+            for (entry_rel, arity) in entries {
+                let line = entry_line(entry_rel, &vec![None; arity]);
+                let script = format!("::verify {{ {rules_text}\n{line} }}");
+                match db.run_script(&script, no_params()) {
+                    Ok(rows) if rows.rows[0][0] == DataValue::from("match") => {}
+                    Ok(rows) => failures.push(format!(
+                        "seed {seed} entry {entry_rel}: expected match, got {:?}",
+                        rows.rows[0]
+                    )),
+                    Err(e) => failures.push(format!("seed {seed} entry {entry_rel}: {e}")),
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "generated-corpus verify FINDINGS ({} of {SEEDS} seeds):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    /// Aggregation (normal + meet), the one construct `gen_program` never
+    /// emits, still `Match`es — closing the gap the generated corpus above
+    /// leaves named.
+    #[test]
+    fn verify_matches_a_hand_written_aggregation_query() {
+        let db = seeded_db();
+        let outcome = db
+            .verify_script(
+                "?[y, count(x)] := *edge[x, y]",
+                no_params(),
+                ScriptOptions::default(),
+            )
+            .expect("verify_script runs");
+        match outcome {
+            VerifyOutcome::Match { .. } => {}
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    /// The refusal-corpus proof (story #80 DoD): `laws::unstratifiable_corpus()`
+    /// — the SAME hand-built corpus `query/gauntlet.rs`'s refusal fence
+    /// already proves the real engine rejects — must never `Match` through
+    /// `::verify` either. Every entry ends in one of two honest outcomes: the
+    /// production compiler itself refuses first (a hard `Err`, propagated
+    /// before `::verify`'s own comparison ever runs), or it reaches the
+    /// comparison and is named `Unsupported`/`OracleRefused` — never silent
+    /// agreement.
+    #[test]
+    fn verify_never_matches_the_unstratifiable_corpus() {
+        use crate::query::gauntlet::{edb_relations, entry_line, facts_script, rules_script};
+        use crate::query::laws::unstratifiable_corpus;
+
+        let mut failures = Vec::new();
+        for (name, program) in unstratifiable_corpus() {
+            if !program.fixed.is_empty() {
+                // Same documented skip as gauntlet.rs's refusal fence: a
+                // fixed rule here models an opaque Rust closure with no
+                // KyzoScript syntax to invoke an unregistered algorithm.
+                continue;
+            }
+            let db = Db::new(crate::storage::sim::SimStorage::new(0xC09A))
+                .unwrap_or_else(|e| panic!("{name}: db open: {e}"));
+            for (rel, arity) in edb_relations(&program) {
+                db.run_script(&facts_script(rel, arity, &BTreeSet::new()), no_params())
+                    .unwrap_or_else(|e| panic!("{name}: create EDB {rel}: {e}"));
+            }
+            let rules_text = rules_script(&program);
+            let heads: BTreeSet<&str> = program.rules.iter().map(|r| r.head_rel).collect();
+            for rel in heads {
+                let arity = program
+                    .rules
+                    .iter()
+                    .find(|r| r.head_rel == rel)
+                    .expect("rel came from this program's own heads")
+                    .head_args
+                    .len();
+                let line = entry_line(rel, &vec![None; arity]);
+                let script = format!("::verify {{ {rules_text}\n{line} }}");
+                match db.run_script(&script, no_params()) {
+                    // The production compiler refused before ::verify's own
+                    // comparison ran — a legitimate "stays refused" outcome.
+                    Err(_) => {}
+                    Ok(rows) if rows.rows[0][0] != DataValue::from("match") => {}
+                    Ok(rows) => failures.push(format!(
+                        "{name}/{rel}: ::verify silently matched an unstratifiable \
+                         program: {:?}",
+                        rows.rows[0]
+                    )),
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "refusal-corpus verify FINDINGS:\n{}",
+            failures.join("\n")
+        );
     }
 }

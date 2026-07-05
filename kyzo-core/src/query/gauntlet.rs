@@ -100,12 +100,12 @@ use crate::storage::sim::SimStorage;
 // a new one).
 // ════════════════════════════════════════════════════════════════════════
 
-struct Rng {
+pub(crate) struct Rng {
     state: u64,
 }
 
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
@@ -216,7 +216,7 @@ fn rule_text(program: &Program, rule: &Rule) -> String {
     )
 }
 
-fn rules_script(program: &Program) -> String {
+pub(crate) fn rules_script(program: &Program) -> String {
     program
         .rules
         .iter()
@@ -225,7 +225,7 @@ fn rules_script(program: &Program) -> String {
         .join("\n")
 }
 
-fn facts_script(rel: Rel, arity: usize, rows: &BTreeSet<Tuple>) -> String {
+pub(crate) fn facts_script(rel: Rel, arity: usize, rows: &BTreeSet<Tuple>) -> String {
     let names: Vec<&str> = (0..arity).map(var).collect();
     let body: Vec<String> = rows
         .iter()
@@ -251,7 +251,7 @@ fn facts_script(rel: Rel, arity: usize, rows: &BTreeSet<Tuple>) -> String {
 /// binds it to the constant `v` (not projected) — the shape of
 /// `?[d] := path[1, d]` in `runtime/db.rs`'s own end-to-end theorem test,
 /// generalized to any arity and any subset of bound positions.
-fn entry_line(rel: Rel, bound: &[Option<i64>]) -> String {
+pub(crate) fn entry_line(rel: Rel, bound: &[Option<i64>]) -> String {
     let mut head_vars = Vec::new();
     let mut args = Vec::new();
     for (i, b) in bound.iter().enumerate() {
@@ -342,7 +342,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Db<S>, script: &str) -> Vec<MagicSymb
 // swept across graph size and edge density.
 // ════════════════════════════════════════════════════════════════════════
 
-fn gen_program(rng: &mut Rng) -> (Program, Vec<(Rel, usize)>) {
+pub(crate) fn gen_program(rng: &mut Rng) -> (Program, Vec<(Rel, usize)>) {
     let n = rng.range(4, 12);
     let self_join = rng.chance(1, 2);
     let with_negation = rng.chance(1, 2);
@@ -603,7 +603,7 @@ fn checker_detects_a_seeded_wrong_expected_answer() {
 /// so the render step must still `:create` them (with zero rows) or the
 /// real engine would refuse for "unknown relation," masking the
 /// stratification refusal this fence exists to prove.
-fn edb_relations(program: &Program) -> BTreeMap<Rel, usize> {
+pub(crate) fn edb_relations(program: &Program) -> BTreeMap<Rel, usize> {
     let heads: BTreeSet<Rel> = program.rules.iter().map(|r| r.head_rel).collect();
     let mut edb = BTreeMap::new();
     for rule in &program.rules {
