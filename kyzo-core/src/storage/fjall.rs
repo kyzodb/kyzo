@@ -76,7 +76,11 @@ const SYSTEM_CLOCK_WATERMARK_KEY: &[u8] = b"system_clock_watermark";
 /// parallelism are explicit, and `None` means fjall's documented default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StorageOptions {
-    /// Block/blob cache size in bytes.
+    /// Block/blob cache size in bytes. `None` means a 25%-of-system-RAM
+    /// floor on Linux (`quarter_system_ram_bytes`), not fjall's own tiny
+    /// stock default — an engine that owns the box should not hand back
+    /// 15/16ths of it. Falls back to the stock default off Linux (a
+    /// named platform gap; see that function's doc).
     pub cache_size_bytes: Option<u64>,
     /// Background worker threads (flush/compaction).
     pub worker_threads: Option<usize>,
@@ -262,13 +266,37 @@ pub fn new_fjall_storage(path: impl AsRef<Path>) -> Result<FjallStorage> {
     new_fjall_storage_with(path, StorageOptions::default())
 }
 
+/// A cache floor of 25% of total system RAM, for when
+/// `StorageOptions::cache_size_bytes` is left `None` — a database engine
+/// should not hand back 15/16ths of the host's memory to the OS by
+/// default (fjall's own stock default is a flat 16 MiB, sized for a
+/// library embedded in something else's memory budget, not for owning
+/// the box). Linux-only for now: reading total RAM without a new
+/// dependency and without `unsafe` (this crate is `#![forbid(unsafe_code)]`
+/// — no libc FFI, and `Cargo.toml`/the vendoring setup are out of scope
+/// for this task) means `/proc/meminfo`, which only exists on Linux.
+/// Elsewhere this returns `None` and the caller keeps fjall's stock
+/// default — a named platform gap, not a silently wrong number.
+pub(crate) fn quarter_system_ram_bytes() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kib = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))
+        .and_then(|rest| rest.trim().strip_suffix("kB"))
+        .and_then(|n| n.trim().parse::<u64>().ok())?;
+    Some((kib * 1_024) / 4)
+}
+
 /// Open (or create) a fjall-backed storage with explicit resource options.
 pub fn new_fjall_storage_with(
     path: impl AsRef<Path>,
     opts: StorageOptions,
 ) -> Result<FjallStorage> {
     let mut builder = OptimisticTxDatabase::builder(path);
-    if let Some(bytes) = opts.cache_size_bytes {
+    // Stock default only if BOTH the caller and the RAM floor come up
+    // empty (off Linux; see `quarter_system_ram_bytes`) — a named
+    // platform gap, not a silently wrong number.
+    if let Some(bytes) = opts.cache_size_bytes.or_else(quarter_system_ram_bytes) {
         builder = builder.cache_size(bytes);
     }
     if let Some(n) = opts.worker_threads {

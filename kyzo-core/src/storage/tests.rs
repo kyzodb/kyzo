@@ -3151,3 +3151,23 @@ fn truncated_dump_missing_floor_bytes_is_refused() {
     let rtx = db.read_tx().unwrap();
     assert!(rtx.total_scan().next().is_none(), "nothing imported");
 }
+
+/// Issue #118 task 4: `StorageOptions::cache_size_bytes` left `None` gets a
+/// 25%-of-system-RAM floor on Linux (`quarter_system_ram_bytes`), not
+/// fjall's own tiny stock default. On the Linux CI/dev boxes this runs on,
+/// `/proc/meminfo` is always readable, so this pins the floor is a real,
+/// positive, sane number rather than silently falling through.
+#[test]
+fn cache_floor_reads_a_real_ram_quarter_on_linux() {
+    let quarter = crate::storage::fjall::quarter_system_ram_bytes()
+        .expect("/proc/meminfo is readable on the Linux boxes this runs on");
+    assert!(quarter > 0, "a real host has nonzero RAM");
+    // Sanity band: no real host has under 64 MiB or over 1 PiB of RAM, so a
+    // quarter of it lands well inside this range — catches a unit mixup
+    // (e.g. forgetting the kB->bytes conversion) without pinning an exact
+    // host-dependent value.
+    assert!(
+        (16 * 1024 * 1024..(1u64 << 58)).contains(&quarter),
+        "quarter={quarter} outside the sane band — check the kB->bytes math"
+    );
+}
