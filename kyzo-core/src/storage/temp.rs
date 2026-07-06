@@ -78,11 +78,12 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
+use fjall::Slice;
 use miette::Result;
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ReadTx, WriteTx};
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -120,8 +121,8 @@ impl TempTx {
 }
 
 impl ReadTx for TempTx {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        Ok(self.map.get(key).cloned())
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
+        Ok(self.map.get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
@@ -132,7 +133,7 @@ impl ReadTx for TempTx {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         if lower >= upper {
             // Degenerate bounds denote the empty interval (the kernel
             // contract; BTreeMap::range would panic on start > end).
@@ -141,39 +142,67 @@ impl ReadTx for TempTx {
         Box::new(
             self.map
                 .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
-                .map(|(k, v)| Ok((k.clone(), v.clone()))),
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
     }
 
     /// The bitemporal skip-scan walk, inherited whole from
     /// [`crate::storage::skip_walk`]: this backend contributes only the
-    /// [`SkipSeek`] impl below (a single `BTreeMap::range` probe), never the
-    /// walk itself.
+    /// [`OpenSkipCursor`] impl below (one cursor over a single `BTreeMap`,
+    /// re-seeked forward once per version step), never the walk itself.
     fn range_skip_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(SkipWalk::new(self, lower, upper, as_of))
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
     }
 
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-        Box::new(self.map.iter().map(|(k, v)| Ok((k.clone(), v.clone()))))
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        Box::new(
+            self.map
+                .iter()
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+        )
     }
 }
 
-impl SkipSeek for TempTx {
-    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        if lower >= upper {
-            // Degenerate bounds denote the empty interval, same as
-            // `range_scan` above (`BTreeMap::range` would panic on start > end).
-            return None;
-        }
+/// The skip walk's cursor over a `TempTx`: the `BTreeMap` and the fixed
+/// upper bound. [`SkipWalk::next`]'s own loop guard never calls
+/// [`SkipCursor::seek`] with `target >= upper` (it returns `None` first),
+/// so every `range` call here is well-formed by construction — no
+/// degenerate-bounds check is needed at the cursor itself.
+pub(crate) struct TempSkipCursor<'a> {
+    map: &'a BTreeMap<Vec<u8>, Vec<u8>>,
+    upper: Vec<u8>,
+}
+
+impl SkipCursor for TempSkipCursor<'_> {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
         self.map
-            .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
+            .range::<[u8], _>((
+                Bound::Included(target),
+                Bound::Excluded(self.upper.as_slice()),
+            ))
             .next()
             .map(|(k, v)| Ok((k.clone(), v.clone())))
+    }
+}
+
+impl OpenSkipCursor for TempTx {
+    type Cursor<'c> = TempSkipCursor<'c>;
+
+    fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        TempSkipCursor {
+            map: &self.map,
+            upper: upper.to_vec(),
+        }
     }
 }
 
@@ -294,7 +323,7 @@ mod tests {
         t.put(b"a", b"1").unwrap();
         t.put(b"b", b"2").unwrap();
         t.put(b"c", b"3").unwrap();
-        assert_eq!(t.get(b"b").unwrap(), Some(b"2".to_vec()));
+        assert_eq!(t.get(b"b").unwrap(), Some(Slice::from(b"2")));
         assert!(t.exists(b"a").unwrap());
         // Degenerate ranges are empty, never a panic (law 5).
         assert_eq!(t.range_scan(b"z", b"a").count(), 0);
@@ -314,9 +343,9 @@ mod tests {
         let mut t = TempTx::default();
         t.put(b"k", b"first").unwrap();
         t.put(b"k", b"second").unwrap();
-        assert_eq!(t.get(b"k").unwrap(), Some(b"second".to_vec()));
+        assert_eq!(t.get(b"k").unwrap(), Some(Slice::from(b"second")));
         let rows: Vec<_> = t.total_scan().map(|kv| kv.unwrap()).collect();
-        assert_eq!(rows, vec![(b"k".to_vec(), b"second".to_vec())]);
+        assert_eq!(rows, vec![(Slice::from(b"k"), Slice::from(b"second"))]);
     }
 
     /// The skip scan honors validity semantics and its returned VALUES are
@@ -427,17 +456,19 @@ mod tests {
     const CAP: usize = 10_000;
 
     /// One observable answer, normalized. Errors compare by presence only
-    /// (messages differ per backend).
+    /// (messages differ per backend). Rows/values are `Slice` — the
+    /// storage byte currency — which compares by content across backends
+    /// exactly like `Vec<u8>` did (`Slice: PartialEq<T: AsRef<[u8]>>`).
     #[derive(Debug, PartialEq, Eq)]
     enum Obs {
-        Val(Option<Vec<u8>>),
+        Val(Option<Slice>),
         Flag(bool),
-        Rows(Vec<(Vec<u8>, Vec<u8>)>),
+        Rows(Vec<(Slice, Slice)>),
         Count(usize),
         Err,
     }
 
-    fn collect_rows(it: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + '_>) -> Obs {
+    fn collect_rows(it: Box<dyn Iterator<Item = Result<(Slice, Slice)>> + '_>) -> Obs {
         let mut rows = vec![];
         for (i, kv) in it.enumerate() {
             assert!(

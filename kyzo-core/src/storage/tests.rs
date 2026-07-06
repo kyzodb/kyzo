@@ -29,6 +29,7 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BTreeMap;
 
+use fjall::Slice;
 use proptest::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
@@ -398,7 +399,10 @@ fn kv_contract_matches_model() {
 
     let tx = db.read_tx().unwrap();
     let got: Vec<_> = tx.total_scan().map(|r| r.unwrap()).collect();
-    let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let want: Vec<_> = model
+        .iter()
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+        .collect();
     assert_eq!(got, want, "store diverged from the model oracle");
 
     // Spot-check bounded scans against the model too.
@@ -408,7 +412,7 @@ fn kv_contract_matches_model() {
         .collect();
     let want: Vec<_> = model
         .range(b"k005".to_vec()..b"k030".to_vec())
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
         .collect();
     assert_eq!(got, want);
     assert_eq!(tx.range_count(b"k005", b"k030").unwrap(), want.len());
@@ -427,8 +431,8 @@ fn mvcc_conflict_and_discard() {
     }
     let mut tx1 = db.write_tx().unwrap();
     let mut tx2 = db.write_tx().unwrap();
-    assert_eq!(tx1.get(b"counter").unwrap(), Some(b"0".to_vec()));
-    assert_eq!(tx2.get(b"counter").unwrap(), Some(b"0".to_vec()));
+    assert_eq!(tx1.get(b"counter").unwrap(), Some(Slice::from(b"0")));
+    assert_eq!(tx2.get(b"counter").unwrap(), Some(Slice::from(b"0")));
     tx1.put(b"counter", b"1").unwrap();
     tx2.put(b"counter", b"2").unwrap();
     tx1.commit().unwrap();
@@ -439,7 +443,7 @@ fn mvcc_conflict_and_discard() {
     let tx = db.read_tx().unwrap();
     assert_eq!(
         tx.get(b"counter").unwrap(),
-        Some(b"1".to_vec()),
+        Some(Slice::from(b"1")),
         "aborted transaction must leave no trace"
     );
 }
@@ -452,7 +456,7 @@ fn read_your_own_writes_and_snapshot_isolation() {
 
     let mut w = db.write_tx().unwrap();
     w.put(b"x", b"1").unwrap();
-    assert_eq!(w.get(b"x").unwrap(), Some(b"1".to_vec()), "RYOW");
+    assert_eq!(w.get(b"x").unwrap(), Some(Slice::from(b"1")), "RYOW");
     assert!(w.exists(b"x").unwrap());
     w.commit().unwrap();
 
@@ -460,7 +464,7 @@ fn read_your_own_writes_and_snapshot_isolation() {
     assert_eq!(reader_before.get(b"x").unwrap(), None, "snapshot isolation");
     // A snapshot opened after does.
     let reader_after = db.read_tx().unwrap();
-    assert_eq!(reader_after.get(b"x").unwrap(), Some(b"1".to_vec()));
+    assert_eq!(reader_after.get(b"x").unwrap(), Some(Slice::from(b"1")));
 }
 
 #[test]
@@ -483,7 +487,7 @@ fn del_range_kills_own_writes_too() {
     assert_eq!(tx.get(b"k1").unwrap(), None);
     assert_eq!(tx.get(b"k2").unwrap(), None);
     assert_eq!(tx.get(b"k3").unwrap(), None, "own writes in range die too");
-    assert_eq!(tx.get(b"z-outside").unwrap(), Some(b"stays".to_vec()));
+    assert_eq!(tx.get(b"z-outside").unwrap(), Some(Slice::from(b"stays")));
 }
 
 // ---------- time travel: seek-based scan vs naive oracle ----------
@@ -992,7 +996,7 @@ fn format_version_stamp_and_mismatch() {
     {
         let db = new_fjall_storage(&path).unwrap();
         let tx = db.read_tx().unwrap();
-        assert_eq!(tx.get(b"k").unwrap(), Some(b"v".to_vec()));
+        assert_eq!(tx.get(b"k").unwrap(), Some(Slice::from(b"v")));
     }
     // Tamper the version stamp, reopen must fail loudly.
     {
@@ -1065,17 +1069,17 @@ fn crash_consistency_process_abort() {
     let tx = db.read_tx().unwrap();
     assert_eq!(
         tx.get(b"committed").unwrap(),
-        Some(b"survives".to_vec()),
+        Some(Slice::from(b"survives")),
         "committed (unsynced) data must survive a process crash"
     );
     assert_eq!(
         tx.get(b"synced").unwrap(),
-        Some(b"survives-power-cut-too".to_vec()),
+        Some(Slice::from(b"survives-power-cut-too")),
         "synced data must survive a process crash"
     );
     assert_eq!(
         tx.get(b"durable").unwrap(),
-        Some(b"per-tx-fsync".to_vec()),
+        Some(Slice::from(b"per-tx-fsync")),
         "commit_durable data must survive a process crash"
     );
     assert_eq!(
@@ -1109,7 +1113,7 @@ fn restore_refuses_nonempty_target() {
     let fresh = new_fjall_storage(dir.path().join("fresh")).unwrap();
     restore_storage(&fresh, &dump).unwrap();
     let tx = fresh.read_tx().unwrap();
-    assert_eq!(tx.get(b"a").unwrap(), Some(b"1".to_vec()));
+    assert_eq!(tx.get(b"a").unwrap(), Some(Slice::from(b"1")));
 }
 
 /// batch_put crossing its chunk boundary: an import larger than one chunk
@@ -1128,7 +1132,7 @@ fn batch_put_crosses_chunk_boundary() {
     db.batch_put(Box::new(iter)).unwrap();
     let tx = db.read_tx().unwrap();
     assert_eq!(tx.range_count(b"k", b"l").unwrap(), n as usize);
-    assert_eq!(tx.get(b"k00039999").unwrap(), Some(b"v39999".to_vec()));
+    assert_eq!(tx.get(b"k00039999").unwrap(), Some(Slice::from(b"v39999")));
 }
 
 // ---------- true concurrency ----------
@@ -1168,7 +1172,7 @@ fn concurrent_writers_across_threads() {
                 for _ in 0..OPS {
                     loop {
                         let mut tx = db.write_tx().unwrap();
-                        let cur: u64 = String::from_utf8(tx.get(b"counter").unwrap().unwrap())
+                        let cur: u64 = std::str::from_utf8(&tx.get(b"counter").unwrap().unwrap())
                             .unwrap()
                             .parse()
                             .unwrap();
@@ -1184,7 +1188,7 @@ fn concurrent_writers_across_threads() {
     });
 
     let tx = db.read_tx().unwrap();
-    let total: u64 = String::from_utf8(tx.get(b"counter").unwrap().unwrap())
+    let total: u64 = std::str::from_utf8(&tx.get(b"counter").unwrap().unwrap())
         .unwrap()
         .parse()
         .unwrap();
@@ -1415,11 +1419,11 @@ fn inverted_ranges_under_contention_commit_clean() {
     let r = db.read_tx().unwrap();
     assert_eq!(
         r.get(b"m").unwrap(),
-        Some(b"2".to_vec()),
+        Some(Slice::from(b"2")),
         "inverted del_range must delete nothing"
     );
-    assert_eq!(r.get(b"mine").unwrap(), Some(b"x".to_vec()));
-    assert_eq!(r.get(b"after").unwrap(), Some(b"ok".to_vec()));
+    assert_eq!(r.get(b"mine").unwrap(), Some(Slice::from(b"x")));
+    assert_eq!(r.get(b"after").unwrap(), Some(Slice::from(b"ok")));
 }
 
 /// The conflict surface is READS AND WRITES (contract v2), pinned on the
@@ -1454,7 +1458,7 @@ fn write_write_race_aborts_second_committer() {
     );
     assert_eq!(
         db.read_tx().unwrap().get(b"ww").unwrap(),
-        Some(b"1".to_vec()),
+        Some(Slice::from(b"1")),
         "the aborted writer must leave no trace: first committer wins"
     );
     // The loser's rerun (fresh snapshot, per the retry contract) converges.
@@ -1465,7 +1469,7 @@ fn write_write_race_aborts_second_committer() {
         .expect("the rerun on a fresh snapshot commits");
     assert_eq!(
         db.read_tx().unwrap().get(b"ww").unwrap(),
-        Some(b"2".to_vec())
+        Some(Slice::from(b"2"))
     );
     // A blind DELETE races like a blind put: writes of both species are on
     // the conflict surface.
@@ -1488,7 +1492,7 @@ fn write_write_race_aborts_second_committer() {
     // Empty write set: commit returns before the oracle runs; the clobbered
     // read is never validated. A read-only WriteTx commit certifies nothing.
     let ro = db.write_tx().unwrap();
-    assert_eq!(ro.get(b"ww").unwrap(), Some(b"3".to_vec()));
+    assert_eq!(ro.get(b"ww").unwrap(), Some(Slice::from(b"3")));
     {
         let mut w = db.write_tx().unwrap();
         w.put(b"ww", b"4").unwrap();
@@ -1510,6 +1514,7 @@ fn conflict_is_typed_and_options_and_stats_work() {
         StorageOptions {
             cache_size_bytes: Some(8 * 1024 * 1024),
             worker_threads: Some(2),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -1601,7 +1606,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
                 for _ in 0..OPS {
                     retry_on_conflict(1_000, || {
                         let mut tx = db.write_tx()?;
-                        let cur: u64 = String::from_utf8(tx.get(b"n")?.unwrap())
+                        let cur: u64 = std::str::from_utf8(&tx.get(b"n")?.unwrap())
                             .unwrap()
                             .parse()
                             .unwrap();
@@ -1614,7 +1619,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
         }
     });
     let tx = db.read_tx().unwrap();
-    let total: u64 = String::from_utf8(tx.get(b"n").unwrap().unwrap())
+    let total: u64 = std::str::from_utf8(&tx.get(b"n").unwrap().unwrap())
         .unwrap()
         .parse()
         .unwrap();
@@ -1688,7 +1693,10 @@ fn sim_kv_contract_matches_model() {
 
     let tx = db.read_tx().unwrap();
     let got: Vec<_> = tx.total_scan().map(|r| r.unwrap()).collect();
-    let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let want: Vec<_> = model
+        .iter()
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+        .collect();
     assert_eq!(got, want, "sim diverged from the model oracle");
     let got: Vec<_> = tx
         .range_scan(b"k005", b"k030")
@@ -1696,7 +1704,7 @@ fn sim_kv_contract_matches_model() {
         .collect();
     let want: Vec<_> = model
         .range(b"k005".to_vec()..b"k030".to_vec())
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
         .collect();
     assert_eq!(got, want);
     assert_eq!(tx.range_count(b"k005", b"k030").unwrap(), want.len());
@@ -1751,7 +1759,10 @@ fn sim_write_tx_range_scan_overlay_matches_model() {
     model.remove(b"k004".as_slice());
 
     let got: Vec<_> = tx.total_scan().map(|r| r.unwrap()).collect();
-    let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let want: Vec<_> = model
+        .iter()
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+        .collect();
     assert_eq!(
         got, want,
         "total_scan mid-transaction diverged from the model"
@@ -1764,7 +1775,7 @@ fn sim_write_tx_range_scan_overlay_matches_model() {
         .collect();
     let want: Vec<_> = model
         .range(b"k001".to_vec()..b"k011".to_vec())
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
         .collect();
     assert_eq!(
         got, want,
@@ -1792,8 +1803,8 @@ fn sim_mvcc_semantics_smoke() {
     // Read-write conflict is the typed, retryable error.
     let mut tx1 = db.write_tx().unwrap();
     let mut tx2 = db.write_tx().unwrap();
-    assert_eq!(tx1.get(b"counter").unwrap(), Some(b"0".to_vec()));
-    assert_eq!(tx2.get(b"counter").unwrap(), Some(b"0".to_vec()));
+    assert_eq!(tx1.get(b"counter").unwrap(), Some(Slice::from(b"0")));
+    assert_eq!(tx2.get(b"counter").unwrap(), Some(Slice::from(b"0")));
     tx1.put(b"counter", b"1").unwrap();
     tx2.put(b"counter", b"2").unwrap();
     tx1.commit().unwrap();
@@ -1822,7 +1833,7 @@ fn sim_mvcc_semantics_smoke() {
     );
     assert_eq!(
         db.read_tx().unwrap().get(b"ww").unwrap(),
-        Some(b"1".to_vec()),
+        Some(Slice::from(b"1")),
         "the aborted writer must leave no trace: first committer wins"
     );
     let mut retry = db.write_tx().unwrap();
@@ -1859,7 +1870,7 @@ fn sim_mvcc_semantics_smoke() {
     // An empty write set commits vacuously — even when what it READ was
     // concurrently clobbered. A read-only WriteTx commit certifies nothing.
     let ro = db.write_tx().unwrap();
-    assert_eq!(ro.get(b"ww").unwrap(), Some(b"2".to_vec()));
+    assert_eq!(ro.get(b"ww").unwrap(), Some(Slice::from(b"2")));
     let mut w = db.write_tx().unwrap();
     w.put(b"ww", b"3").unwrap();
     w.commit().unwrap();
@@ -1880,13 +1891,13 @@ fn sim_mvcc_semantics_smoke() {
     let reader_before = db.read_tx().unwrap();
     let mut w = db.write_tx().unwrap();
     w.put(b"x", b"1").unwrap();
-    assert_eq!(w.get(b"x").unwrap(), Some(b"1".to_vec()), "RYOW");
+    assert_eq!(w.get(b"x").unwrap(), Some(Slice::from(b"1")), "RYOW");
     assert!(w.exists(b"x").unwrap());
     w.commit().unwrap();
     assert_eq!(reader_before.get(b"x").unwrap(), None, "snapshot isolation");
     assert_eq!(
         db.read_tx().unwrap().get(b"x").unwrap(),
-        Some(b"1".to_vec())
+        Some(Slice::from(b"1"))
     );
     // Uncommitted transactions leave no trace.
     {
@@ -1906,7 +1917,7 @@ fn sim_mvcc_semantics_smoke() {
     tx.commit().unwrap();
     let tx = db.read_tx().unwrap();
     assert_eq!(tx.get(b"k1").unwrap(), None, "own write in range dies");
-    assert_eq!(tx.get(b"z-outside").unwrap(), Some(b"stays".to_vec()));
+    assert_eq!(tx.get(b"z-outside").unwrap(), Some(Slice::from(b"stays")));
 }
 
 /// Spurious-conflict legality: with the injector at 100%, a commit with zero
@@ -2028,7 +2039,7 @@ fn sim_batch_put_atomic_chunks_and_clean_prefix() {
     db.batch_put(Box::new(iter)).unwrap();
     let tx = db.read_tx().unwrap();
     assert_eq!(tx.range_count(b"k", b"l").unwrap(), n as usize);
-    assert_eq!(tx.get(b"k00002999").unwrap(), Some(b"v2999".to_vec()));
+    assert_eq!(tx.get(b"k00002999").unwrap(), Some(Slice::from(b"v2999")));
 
     // An iterator error at item 2500 (inside the third chunk): the two
     // fully committed chunks survive, the torn chunk does not.
@@ -2067,7 +2078,11 @@ fn sim_read_faults_transient_and_deterministic() {
         (0..200)
             .map(|_| match tx.get(b"k") {
                 Ok(v) => {
-                    assert_eq!(v, Some(b"v".to_vec()), "a non-faulted read must be correct");
+                    assert_eq!(
+                        v,
+                        Some(Slice::from(b"v")),
+                        "a non-faulted read must be correct"
+                    );
                     false
                 }
                 Err(_) => true,
@@ -2120,7 +2135,7 @@ fn sim_interleaving_seed_deterministic_and_diverse() {
                     for _ in 0..2 {
                         retry_on_conflict(10_000, || {
                             let mut tx = db.write_tx()?;
-                            let mut log = tx.get(b"log")?.unwrap();
+                            let mut log = tx.get(b"log")?.unwrap().to_vec();
                             log.push(b'0' + id);
                             tx.put(b"log", &log)?;
                             tx.commit()
@@ -2131,7 +2146,7 @@ fn sim_interleaving_seed_deterministic_and_diverse() {
             })
             .collect();
         run_interleaved(&db, seed, bodies);
-        db.read_tx().unwrap().get(b"log").unwrap().unwrap()
+        db.read_tx().unwrap().get(b"log").unwrap().unwrap().to_vec()
     };
     assert_eq!(run(5), run(5), "same seed must replay the same schedule");
     let outcomes: BTreeSet<Vec<u8>> = (0..20).map(run).collect();
@@ -2180,7 +2195,7 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
                     for i in 0..OPS {
                         retry_on_conflict(10_000, || {
                             let mut tx = db.write_tx()?;
-                            let cur: u64 = String::from_utf8(tx.get(b"counter")?.unwrap())
+                            let cur: u64 = std::str::from_utf8(&tx.get(b"counter")?.unwrap())
                                 .unwrap()
                                 .parse()
                                 .unwrap();
@@ -2208,7 +2223,10 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
             .total_scan()
             .map(|r| r.unwrap())
             .collect();
-        let want: Vec<_> = model.into_iter().collect();
+        let want: Vec<_> = model
+            .into_iter()
+            .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+            .collect();
         assert_eq!(
             got, want,
             "final state diverged from the model: an increment was lost or doubled"
@@ -2272,7 +2290,10 @@ fn sim_campaign_crash_is_clean_prefix_at_every_point() {
                 .total_scan()
                 .map(|r| r.unwrap())
                 .collect();
-            let want: Vec<_> = model.into_iter().collect();
+            let want: Vec<_> = model
+                .into_iter()
+                .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+                .collect();
             assert_eq!(
                 got, want,
                 "crash after {crash_after}/{K} commits must leave exactly that prefix"
@@ -2383,7 +2404,10 @@ fn sim_campaign_durability_tiers_are_distinct() {
             .total_scan()
             .map(|r| r.unwrap())
             .collect();
-        let want_all: Vec<_> = all.into_iter().collect();
+        let want_all: Vec<_> = all
+            .into_iter()
+            .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+            .collect();
         assert_eq!(crash, want_all, "crash must keep every commit");
         let cut: Vec<_> = db
             .sim_powercut()
@@ -2392,7 +2416,10 @@ fn sim_campaign_durability_tiers_are_distinct() {
             .total_scan()
             .map(|r| r.unwrap())
             .collect();
-        let want_synced: Vec<_> = synced.into_iter().collect();
+        let want_synced: Vec<_> = synced
+            .into_iter()
+            .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+            .collect();
         assert_eq!(
             cut, want_synced,
             "power cut must keep exactly the fsynced prefix"
@@ -2496,8 +2523,8 @@ fn sim_campaign_write_skew_aborts_and_serializes() {
 
     use crate::storage::ConflictError;
 
-    let parse = |v: Option<Vec<u8>>| -> u64 {
-        String::from_utf8(v.expect("key must exist"))
+    let parse = |v: Option<Slice>| -> u64 {
+        std::str::from_utf8(&v.expect("key must exist"))
             .unwrap()
             .parse()
             .unwrap()
@@ -2629,7 +2656,7 @@ fn sim_campaign_no_lost_phantom_under_interleaving() {
             4,
             "B's phantom insert must have landed"
         );
-        let summary: usize = String::from_utf8(r.get(b"summary").unwrap().unwrap())
+        let summary: usize = std::str::from_utf8(&r.get(b"summary").unwrap().unwrap())
             .unwrap()
             .parse()
             .unwrap();
@@ -3123,4 +3150,24 @@ fn truncated_dump_missing_floor_bytes_is_refused() {
     );
     let rtx = db.read_tx().unwrap();
     assert!(rtx.total_scan().next().is_none(), "nothing imported");
+}
+
+/// Issue #118 task 4: `StorageOptions::cache_size_bytes` left `None` gets a
+/// 25%-of-system-RAM floor on Linux (`quarter_system_ram_bytes`), not
+/// fjall's own tiny stock default. On the Linux CI/dev boxes this runs on,
+/// `/proc/meminfo` is always readable, so this pins the floor is a real,
+/// positive, sane number rather than silently falling through.
+#[test]
+fn cache_floor_reads_a_real_ram_quarter_on_linux() {
+    let quarter = crate::storage::fjall::quarter_system_ram_bytes()
+        .expect("/proc/meminfo is readable on the Linux boxes this runs on");
+    assert!(quarter > 0, "a real host has nonzero RAM");
+    // Sanity band: no real host has under 64 MiB or over 1 PiB of RAM, so a
+    // quarter of it lands well inside this range — catches a unit mixup
+    // (e.g. forgetting the kB->bytes conversion) without pinning an exact
+    // host-dependent value.
+    assert!(
+        (16 * 1024 * 1024..(1u64 << 58)).contains(&quarter),
+        "quarter={quarter} outside the sane band — check the kB->bytes math"
+    );
 }

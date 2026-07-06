@@ -1013,7 +1013,7 @@ impl<T: ReadTx> SessionTx<T> {
     }
 
     /// Read one key from the store the relation lives in.
-    pub(crate) fn get_routed(&self, is_temp: bool, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    pub(crate) fn get_routed(&self, is_temp: bool, key: &[u8]) -> Result<Option<fjall::Slice>> {
         if is_temp {
             self.temp.get(key)
         } else {

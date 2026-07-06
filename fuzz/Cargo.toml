@@ -12,6 +12,23 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
+# Being a separate workspace root means the PARENT workspace's own
+# `[patch.crates-io]` (root `Cargo.toml`) never applies here: kyzo-core's
+# plain `fjall = "3.1.5"` dependency would otherwise resolve to the real,
+# unpatched crates.io release, which has none of `storage/fjall.rs`'s
+# `SeekIter`/`TrackedSeekIter`/`seek_range` additions (story #118) — kyzo
+# itself would fail to compile in this workspace at all, for every target,
+# not just the four this story adds. `lsm-tree` needs the same patch for
+# fjall's OWN internal `lsm-tree = "~3.1.5"` edge (`vendor/fjall`'s
+# `SeekableRangeIter`/`create_seekable_range` calls only exist on our
+# fork); the direct `[dependencies.lsm-tree]` path dependency below is a
+# separate edge from this crate and unifies with this patched one, so
+# there is exactly one compiled `lsm-tree`. Mirrors the root's own patch
+# table (`Cargo.toml`) for exactly the same reason.
+[patch.crates-io]
+fjall = { path = "../vendor/fjall" }
+lsm-tree = { path = "../vendor/lsm-tree" }
+
 [dependencies]
 libfuzzer-sys = "0.4"
 # Structured input generation for both targets: the memcmp target builds
@@ -32,10 +49,34 @@ ndarray = "0.17"
 # `data/fact_payload.rs`'s `FIELD_OTHER` island and `RelationHandle::decode`
 # do internally.
 rmp-serde = "1.3"
+# Pinned to the exact version kyzo-core depends on (`rand = "0.9"`):
+# data_block/index_block/table_read's seeded ping-pong generator and
+# table_read's block-size/item-count sampling both use `rand`'s
+# `SeedableRng`/`Rng` traits directly against the same major/minor line the
+# rest of the tree resolves.
+rand = "0.9"
+# The concrete deterministic RNG the ported targets seed from a fuzzer-
+# supplied `u64` (matching lsm-tree's own upstream fuzz harness, so a
+# reported seed reproduces the same sequence here as it did there).
+rand_chacha = "0.9"
+# table_read writes a real on-disk table (`lsm_tree::table::Writer` /
+# `Table::recover`) into a scratch directory per run. Pinned to the exact
+# version kyzo-core depends on (`tempfile = "3"`).
+tempfile = "3"
 
 [dependencies.kyzo]
 path = "../kyzo-core"
 features = ["fuzz-internals"]
+
+# The vendored fjall-rs/lsm-tree fork itself (story #118: we own this LSM
+# now), referenced directly by path rather than through kyzo-core's
+# re-exports: `compare_prefixed_slice`/`DataBlock`/`IndexBlock`/`Table` are
+# lsm-tree's own block- and table-level types, one layer below anything
+# `kyzo` re-exports, so these four targets build against the SAME source
+# tree `vendor/lsm-tree` compiles into the main workspace (a fix landed
+# here is a fix landed there — no separate copy to drift).
+[dependencies.lsm-tree]
+path = "../vendor/lsm-tree"
 
 [[bin]]
 name = "memcmp_codec"
@@ -54,6 +95,34 @@ bench = false
 [[bin]]
 name = "fact_payload_decode"
 path = "fuzz_targets/fact_payload_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compare_prefixed_slice"
+path = "fuzz_targets/compare_prefixed_slice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "data_block"
+path = "fuzz_targets/data_block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "index_block"
+path = "fuzz_targets/index_block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "table_read"
+path = "fuzz_targets/table_read.rs"
 test = false
 doc = false
 bench = false

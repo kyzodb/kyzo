@@ -8,80 +8,69 @@
  */
 
 //! The bitemporal skip-scan walk — ONE implementation, generic over the
-//! backend's seek primitive, replacing the three hand-copied seek loops
-//! this story found byte-for-byte identical in `storage/fjall.rs`
-//! (`SkipIterator`, lines 552-610: `raw_range(...).next()` per step),
-//! `storage/temp.rs` (`range_skip_scan_tuple`'s closure, lines 157-205:
-//! `self.map.range(...).next()` per step), and `storage/sim.rs`
-//! (`SimSkipIter`, lines 884-935: `self.tx.range_scan(...).next()` per
-//! step, boxed and dyn-dispatched through `ReadTx`). All three walk the
-//! same algorithm over `data::bitemporal::check_key_for_bitemporal` (the
-//! resolution kernel this module never reimplements, only calls): seek to
-//! the next candidate key, peek its polarity from its value, let the
-//! kernel decide (emit or not) and hand back the next seek bound, then
-//! advance strictly past the key just examined — a corrupt key or value
-//! surfaces as `Err` WITHOUT advancing, so a scan cannot step over bytes
-//! it could not judge.
+//! backend's seek primitive, driving a SINGLE positioned cursor across the
+//! whole scan rather than reopening a fresh range per version step. This
+//! module previously drove `storage/fjall.rs`, `storage/temp.rs`, and
+//! `storage/sim.rs` through a stateless `seek_first(lower, upper)` seam
+//! that each backend implemented by opening a brand-new bounded range and
+//! taking its first item — cheap for `temp`/`sim`'s `BTreeMap`, but on
+//! `fjall` a fresh range re-derives the whole read path from scratch: a
+//! version-history lock, a lookup of which runs/tables/memtables are
+//! live, and a new merge/heap/tombstone-filter stack, ALL repeated on
+//! every single version step even though the fact being resolved rarely
+//! changes. The walk over `data::bitemporal::check_key_for_bitemporal`
+//! (the resolution kernel this module never reimplements, only calls) is
+//! unchanged: seek to the next candidate key, peek its polarity from its
+//! value, let the kernel decide (emit or not) and hand back the next seek
+//! bound, then advance strictly past the key just examined — a corrupt
+//! key or value surfaces as `Err` WITHOUT advancing, so a scan cannot
+//! step over bytes it could not judge.
 //!
 //! ## The seek seam
 //!
 //! ```text
-//! pub(crate) trait SkipSeek {
-//!     fn seek_first(&self, lower: &[u8], upper: &[u8])
-//!         -> Option<Result<(Vec<u8>, Vec<u8>)>>;
+//! pub(crate) trait OpenSkipCursor {
+//!     type Cursor<'c>: SkipCursor where Self: 'c;
+//!     fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c>;
+//! }
+//!
+//! pub(crate) trait SkipCursor {
+//!     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>>;
 //! }
 //! ```
 //!
-//! "Seek to the first key at or after `lower` within `[lower, upper)` and
-//! return it, or `None` if the range is empty." That is the whole
-//! contract — deliberately not "return an iterator": every one of the
-//! three copies above calls `.next()` on a fresh range and immediately
-//! drops it (`raw_range(...).next()`; `range.next()` then `drop(range)`
-//! in fjall's `SkipIterator::next`; `range.next()` then `drop(range)` in
-//! sim's `SimSkipIter::next`) — the walk NEVER consumes a second item
-//! from one seek. Shrinking the seam to that single-item return, instead
-//! of an associated iterator type, is why this is zero-cost with no `dyn`
-//! anywhere on the hot path:
+//! `open_skip_cursor` runs EXACTLY ONCE per walk — it is where a backend
+//! pays whatever one-time cost real positioning requires (on `fjall`,
+//! that is `TreeIter`'s `SuperVersion` lookup and locating which
+//! runs/tables/memtables the scan will touch). `seek` then runs once per
+//! version step, repositioning that SAME cursor forward to the first key
+//! at or after `target` — on `fjall` this reuses the held `SuperVersion`
+//! (no relock, no re-lookup) and repositions each backing run/table/
+//! memtable through its OWN range entry point (index block, then
+//! restart-point binary search, then linear scan — never the point-get
+//! hash index; see `vendor/lsm-tree/src/range.rs`'s `TreeIter::seek`).
+//! `temp`/`sim` (`BTreeMap`-backed) have no cheaper primitive than a fresh
+//! `BTreeMap::range` call per seek — for a `BTreeMap` that call already
+//! IS the real seek (an O(log n) descent, not a rebuild of read-path
+//! machinery) — so their `SkipCursor::seek` legitimately re-derives a
+//! `Range` each call; what every backend now shares is that
+//! `open_skip_cursor` runs once, never once per version.
 //!
-//! - **No allocation beyond what each backend already pays.** The method
-//!   returns `Option<Result<(Vec<u8>, Vec<u8>)>>` by value — the SAME two
-//!   `Vec<u8>` clones every existing copy already makes turning a borrowed
-//!   key/value pair into owned bytes (fjall's `raw_range` calls
-//!   `guard.into_inner()` then `.to_vec()` twice; temp's closure calls
-//!   `.clone()` twice on the `BTreeMap` entry; sim's `map_range` clones
-//!   twice). No new heap traffic is introduced — the seam is a pass
-//!   through, not a wrapper.
-//! - **No `dyn` dispatch.** `SkipWalk<'a, S: SkipSeek + ?Sized>` is
-//!   generic over the seam, so each backend's `seek_first` monomorphizes
-//!   inline into the walk's `next()` — never boxed, never vtable-called.
-//!   This is a real fix, not a paper one: sim's CURRENT `SimSkipIter`
-//!   already calls through `self.tx.range_scan(...)`, which returns
-//!   `Box<dyn Iterator<...>>` — a heap allocation AND a dynamic dispatch
-//!   on every seek step. Phase 2 retires that box by giving `SimReadTx`/
-//!   `SimWriteTx` a direct `SkipSeek` impl that talks to their native
-//!   `map_range`/`visible_lazy` cursors, exactly as `SkipSeek::seek_first`
-//!   requires, with no detour through the boxed `ReadTx::range_scan`.
-//! - **No named associated-iterator type needed.** A GAT or
-//!   return-position-impl-trait-in-traits (RPITIT, stable on this
-//!   toolchain — `rustc 1.96.1`, workspace MSRV 1.93, edition 2024 — see
-//!   `Cargo.toml`) would ALSO have worked and would ALSO be zero-cost, but
-//!   would force every implementor to name or infer a concrete iterator
-//!   type for a value the walk never iterates past its first item. The
-//!   single-shot `Option` return is the leaner seam for the actual shape
-//!   of the algorithm; nothing here forecloses widening it later if a
-//!   consumer legitimately needs to iterate more than one step's worth of
-//!   one seek (none of the three backends do, and the whole point of a
-//!   skip scan is that most candidates are skipped, not iterated).
+//! Degenerate bounds (`lower >= upper`) never reach a cursor at all:
+//! [`SkipWalk::next`]'s own loop guard (below) returns `None` before ever
+//! calling `seek` when `next_bound >= upper`, so `open_skip_cursor` and
+//! `seek` are free to assume a well-formed, non-empty range.
 //!
 //! ## The walk (`SkipWalk`)
 //!
-//! `SkipWalk<'a, S: SkipSeek + ?Sized>` holds a borrowed seam, the
-//! (fixed) upper bound, the `AsOf` coordinate, and the mutable re-seek
-//! bound. Each `next()` call:
+//! `SkipWalk<C: SkipCursor>` OWNS the opened cursor (built once, by the
+//! backend's `range_skip_scan_tuple`, via `open_skip_cursor`), the fixed
+//! upper bound, the `AsOf` coordinate, and the mutable re-seek bound.
+//! Each `next()` call:
 //!
 //! 1. Exits if the seek bound has reached (or passed) the upper bound —
 //!    the loop's own termination for an exhausted range.
-//! 2. Calls `seek.seek_first(&next_bound, &upper)`. `None` ends the scan;
+//! 2. Calls `cursor.seek(&next_bound)`. `None` ends the scan;
 //!    `Some(Err(e))` surfaces the error WITHOUT moving `next_bound` — the
 //!    next poll re-seeks the identical (already-known-bad) range and
 //!    re-yields the same error, so a caller that keeps polling past an
@@ -111,45 +100,38 @@
 //!    non-key columns (`extend_tuple_from_bitemporal_v`) and yields it;
 //!    on a miss, loops back to step 1 with the advanced bound.
 //!
-//! ## Phase-2 map (mechanical swap per backend)
+//! ## Per-backend wiring
 //!
-//! **`storage/fjall.rs`**: delete `SkipIterator` (lines 552-610) entirely.
-//! In the `impl_read_tx!` macro, add
-//! `impl SkipSeek for $ty { fn seek_first(&self, lower, upper) { raw_range(&self.$reader, &self.ks, lower, upper).next() } }`
-//! (one impl per macro expansion, i.e. for both `FjallReadTx` and
-//! `FjallWriteTx`, reusing the existing `raw_range` helper unchanged).
-//! Replace the `range_skip_scan_tuple` body (lines 463-476) with
-//! `Box::new(SkipWalk::new(self, lower, upper, as_of))`.
+//! **`storage/fjall.rs`**: `FjallSkipCursor<S>` wraps either seek-iterator
+//! fjall hands back — a read tx's `fjall::SeekIter` (itself a thin
+//! `SnapshotNonce`-holding wrapper around `lsm_tree::SeekableRangeIter`,
+//! whose `Standard` arm is the real `TreeIter`), or a write tx's
+//! `fjall::TrackedSeekIter`, which additionally records each `seek` step's
+//! SSI read-conflict span (precise per step, promoted to one covering
+//! mark past a step-count threshold). `open_skip_cursor` guards `lower >=
+//! upper` itself (never letting an inverted range reach fjall's conflict
+//! manager, which panics on one at commit — the same guard `raw_range`
+//! already applies to the plain range-scan path) and otherwise calls
+//! `self.$reader.seek_range(..)` once; each `seek` call goes through
+//! `FjallSeekStep`, unifying both iterators' `seek` methods.
 //!
-//! **`storage/temp.rs`**: delete the `range_skip_scan_tuple` closure body
-//! (lines 157-205). Add
-//! `impl SkipSeek for TempTx { fn seek_first(&self, lower, upper) { if lower >= upper { return None } self.map.range::<[u8],_>((Included(lower), Excluded(upper))).next().map(|(k,v)| Ok((k.clone(), v.clone()))) } }`.
-//! Replace the method body with `Box::new(SkipWalk::new(self, lower, upper, as_of))`.
+//! **`storage/temp.rs`**: `TempSkipCursor` borrows the `BTreeMap` and the
+//! fixed upper bound; `seek` is `self.map.range((Included(target),
+//! Excluded(upper))).next()` — a fresh `Range` per call, which for a
+//! `BTreeMap` already is the real O(log n) seek this walk needs (there is
+//! no stable-Rust primitive to hold a `BTreeMap` cursor across calls
+//! cheaper than this).
 //!
-//! **`storage/sim.rs`**: delete `SimSkipIter` (lines 884-935) and its two
-//! call sites (`SimReadTx::range_skip_scan_tuple`, lines 975-987;
-//! `SimWriteTx::range_skip_scan_tuple`, lines 1042-1054). Add, per
-//! species:
-//! - `impl SkipSeek for SimReadTx`: `ctx.yield_turn()`, then
-//!   `ctx.check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))` —
-//!   returning `Some(Err(e))` on a fault hit — then
-//!   `map_range(&self.snapshot, lower, Some(upper)).next().map(|(k,v)| Ok((k.clone(), v.clone())))`.
-//!   This is the one backend where the seam does MORE than a bare range
-//!   probe: it inlines exactly what `range_scan` already does per call
-//!   (yield to the scheduler, roll the read-fault die) so the skip walk
-//!   keeps participating in DST scheduling and fault injection PER SEEK
-//!   STEP — losing that would silently narrow the fault surface the sim
-//!   exists to stress — while no longer boxing through `range_scan`
-//!   itself.
-//! - `impl SkipSeek for SimWriteTx`: same shape plus `track_range(lower,
-//!   Some(upper))` before the fault check (conservative per-step range
-//!   tracking, matching the contract's documented "one per seek step"
-//!   coarse tracking for as-of scans inside write transactions), then
-//!   `self.visible_lazy(lower, Some(upper)).next().map(Ok)`.
-//!
-//! In every backend the swap is purely subtractive plus one small trait
-//! impl: the walk itself, the termination guard, and the kernel call are
-//! never rewritten again.
+//! **`storage/sim.rs`**: `open_skip_cursor` itself does nothing — there is
+//! no expensive one-time setup to save for an in-memory `BTreeMap`, so
+//! this backend gets no efficiency win from the split. What matters here
+//! is fidelity, not speed: `SimReadSkipCursor`/`SimWriteSkipCursor` keep
+//! doing the DST bookkeeping (`ctx.yield_turn()`, `ctx.check_read_fault(..)`,
+//! `track_range(..)` for the write side) ONCE PER SEEK STEP, inside
+//! `seek`, exactly as the old per-step `seek_first` did — collapsing it
+//! into `open_skip_cursor` would silently narrow the fault-injection and
+//! scheduling-interleaving surface the sim exists to stress down to one
+//! decision point per walk instead of one per version step.
 
 use miette::Result;
 
@@ -159,34 +141,43 @@ use crate::data::bitemporal::{
 use crate::data::tuple::Tuple;
 use crate::data::value::AsOf;
 
-/// The seek seam a backend implements: "seek to the first key at or after
-/// `lower`, within the half-open range `[lower, upper)`, and return it —
-/// or `None` if the range holds nothing." See the module doc for why this
-/// is the whole contract (never a full iterator) and why that shape is
-/// what makes [`SkipWalk`] zero-cost over every backend.
-///
-/// Degenerate bounds (`lower >= upper`) MUST answer `None` — the storage
-/// contract's empty-range rule applies here exactly as it does to
-/// `ReadTx::range_scan`.
-pub(crate) trait SkipSeek {
-    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>>;
+/// A single positioned cursor, repositioned forward by [`Self::seek`]
+/// rather than rebuilt. `target` is always non-decreasing across calls on
+/// the same cursor (the walk only ever moves forward); a cursor may
+/// assume this and is never asked to seek backward.
+pub(crate) trait SkipCursor {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>>;
 }
 
-/// THE bitemporal skip-scan walk: generic over one backend's [`SkipSeek`],
-/// so every implementor inherits this algorithm — and, per issue #78's
-/// dictation, the property proof over it — verbatim. See the module doc
-/// for the step-by-step algorithm and the termination guard's rationale.
-pub(crate) struct SkipWalk<'a, S: SkipSeek + ?Sized> {
-    seek: &'a S,
+/// The seam a backend implements: "open one cursor over `[lower, upper)`,
+/// paying whatever one-time setup cost real positioning requires." See
+/// the module doc for why splitting this from [`SkipCursor::seek`] (which
+/// runs once per version step) is what makes a skip scan seek instead of
+/// reopen.
+pub(crate) trait OpenSkipCursor {
+    type Cursor<'c>: SkipCursor
+    where
+        Self: 'c;
+
+    fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c>;
+}
+
+/// THE bitemporal skip-scan walk: generic over one backend's
+/// [`SkipCursor`], so every implementor inherits this algorithm — and,
+/// per issue #78's dictation, the property proof over it — verbatim. See
+/// the module doc for the step-by-step algorithm and the termination
+/// guard's rationale.
+pub(crate) struct SkipWalk<C: SkipCursor> {
+    cursor: C,
     upper: Vec<u8>,
     as_of: AsOf,
     next_bound: Vec<u8>,
 }
 
-impl<'a, S: SkipSeek + ?Sized> SkipWalk<'a, S> {
-    pub(crate) fn new(seek: &'a S, lower: &[u8], upper: &[u8], as_of: AsOf) -> Self {
+impl<C: SkipCursor> SkipWalk<C> {
+    pub(crate) fn new(cursor: C, lower: &[u8], upper: &[u8], as_of: AsOf) -> Self {
         SkipWalk {
-            seek,
+            cursor,
             upper: upper.to_vec(),
             as_of,
             next_bound: lower.to_vec(),
@@ -223,7 +214,7 @@ fn advance_past(examined: &[u8], candidate_bound: Vec<u8>) -> Vec<u8> {
     }
 }
 
-impl<S: SkipSeek + ?Sized> Iterator for SkipWalk<'_, S> {
+impl<C: SkipCursor> Iterator for SkipWalk<C> {
     type Item = Result<Tuple>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -231,7 +222,7 @@ impl<S: SkipSeek + ?Sized> Iterator for SkipWalk<'_, S> {
             if self.next_bound.as_slice() >= self.upper.as_slice() {
                 return None;
             }
-            let (k, v) = match self.seek.seek_first(&self.next_bound, &self.upper) {
+            let (k, v) = match self.cursor.seek(&self.next_bound) {
                 None => return None,
                 Some(Err(e)) => return Some(Err(e)),
                 Some(Ok(kv)) => kv,
@@ -257,6 +248,7 @@ impl<S: SkipSeek + ?Sized> Iterator for SkipWalk<'_, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::cmp::Reverse;
     use std::collections::BTreeMap;
     use std::ops::Bound;
@@ -294,22 +286,44 @@ mod tests {
         assert_eq!(advance_past(b"", Vec::new()), vec![0], "empty key edge");
     }
 
-    /// The proof's own backend: nothing but a `BTreeMap`, ~20 lines,
+    /// The proof's own backend: nothing but a `BTreeMap`, ~30 lines,
     /// standing in for fjall/temp/sim so the driver is exercised with NO
-    /// dependency on any of the three production backends this story will
-    /// port onto it in phase 2.
+    /// dependency on any of the three production backends. `opens` counts
+    /// `open_skip_cursor` calls — the counter
+    /// `skip_walk_opens_exactly_one_cursor_per_walk` pins to exactly one
+    /// per walk, however many version steps the walk takes internally.
     #[derive(Default)]
-    struct MapSeek(BTreeMap<Vec<u8>, Vec<u8>>);
+    struct MapSeek {
+        map: BTreeMap<Vec<u8>, Vec<u8>>,
+        opens: Cell<usize>,
+    }
 
-    impl SkipSeek for MapSeek {
-        fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-            if lower >= upper {
-                return None;
-            }
-            self.0
-                .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
+    struct MapSeekCursor<'a> {
+        map: &'a BTreeMap<Vec<u8>, Vec<u8>>,
+        upper: Vec<u8>,
+    }
+
+    impl SkipCursor for MapSeekCursor<'_> {
+        fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+            self.map
+                .range::<[u8], _>((
+                    Bound::Included(target),
+                    Bound::Excluded(self.upper.as_slice()),
+                ))
                 .next()
                 .map(|(k, v)| Ok((k.clone(), v.clone())))
+        }
+    }
+
+    impl OpenSkipCursor for MapSeek {
+        type Cursor<'c> = MapSeekCursor<'c>;
+
+        fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+            self.opens.set(self.opens.get() + 1);
+            MapSeekCursor {
+                map: &self.map,
+                upper: upper.to_vec(),
+            }
         }
     }
 
@@ -364,7 +378,8 @@ mod tests {
     fn walk(store: &MapSeek, sys_at: i64, valid_at: i64) -> Result<Vec<Tuple>> {
         let (lo, hi) = rel_bounds();
         let as_of = AsOf::at(vts(sys_at), vts(valid_at));
-        SkipWalk::new(store, &lo, &hi, as_of).take(1000).collect()
+        let cursor = store.open_skip_cursor(&lo, &hi);
+        SkipWalk::new(cursor, &lo, &hi, as_of).take(1000).collect()
     }
 
     /// The independent reference model: for each fact, walk its stored
@@ -455,7 +470,7 @@ mod tests {
             rows.dedup_by_key(|r| (r.0, r.1, r.2));
             let mut store = MapSeek::default();
             for (f, v, s, p) in &rows {
-                store.0.insert(bikey(*f, *v, *s), bval(*p));
+                store.map.insert(bikey(*f, *v, *s), bval(*p));
             }
             for sys_at in [-40i64, -25, -5, 0, 5, 15, 25, 40] {
                 for valid_at in [-40i64, -30, -10, -3, 0, 10, 20, 30, 40] {
@@ -508,10 +523,11 @@ mod tests {
         for rows in &scenarios {
             let mut store = MapSeek::default();
             for (k, v) in rows {
-                store.0.insert(k.clone(), v.clone());
+                store.map.insert(k.clone(), v.clone());
             }
             let as_of = AsOf::current(vts(50));
-            let mut w = SkipWalk::new(&store, &lower, &upper, as_of);
+            let cursor = store.open_skip_cursor(&lower, &upper);
+            let mut w = SkipWalk::new(cursor, &lower, &upper, as_of);
             let mut saw_err = false;
             for _ in 0..1000 {
                 match w.next() {
@@ -537,22 +553,68 @@ mod tests {
     #[test]
     fn skip_walk_terminates_on_min_ts_retraction() {
         let mut store = MapSeek::default();
-        store.0.insert(bikey(1, 5, 1), bval(ClaimPolarity::Assert));
         store
-            .0
+            .map
+            .insert(bikey(1, 5, 1), bval(ClaimPolarity::Assert));
+        store
+            .map
             .insert(bikey(9, i64::MIN, i64::MIN), bval(ClaimPolarity::Retract));
         let got = facts_of(&walk(&store, i64::MAX, 10).unwrap());
         assert_eq!(got, vec![1]);
     }
 
-    /// Degenerate bounds (inverted, equal) are empty, never a panic.
+    /// Degenerate bounds (inverted, equal) are empty, never a panic — and
+    /// never even reach the cursor: `SkipWalk::next`'s own loop guard
+    /// returns `None` before calling `seek` when `next_bound >= upper`.
     #[test]
     fn skip_walk_degenerate_bounds_are_empty() {
         let mut store = MapSeek::default();
-        store.0.insert(bikey(1, 5, 1), bval(ClaimPolarity::Assert));
+        store
+            .map
+            .insert(bikey(1, 5, 1), bval(ClaimPolarity::Assert));
         let (lo, hi) = rel_bounds();
         let as_of = AsOf::current(vts(10));
-        assert_eq!(SkipWalk::new(&store, &hi, &lo, as_of).count(), 0);
-        assert_eq!(SkipWalk::new(&store, &lo, &lo, as_of).count(), 0);
+        assert_eq!(
+            SkipWalk::new(store.open_skip_cursor(&hi, &lo), &hi, &lo, as_of).count(),
+            0
+        );
+        assert_eq!(
+            SkipWalk::new(store.open_skip_cursor(&lo, &lo), &lo, &lo, as_of).count(),
+            0
+        );
+    }
+
+    /// The law this story exists to prove: however many version steps a
+    /// walk takes internally, it opens exactly ONE cursor. This is the
+    /// structural guarantee — `SkipWalk::next` has no path back to
+    /// `open_skip_cursor`, only to `cursor.seek` — pinned against
+    /// regression: a hundred facts, ten stacked versions each, driven
+    /// through to exhaustion, with the open counter checked before AND
+    /// after the walk runs.
+    #[test]
+    fn skip_walk_opens_exactly_one_cursor_per_walk() {
+        let mut store = MapSeek::default();
+        for f in 0..100i64 {
+            for v in 0..10i64 {
+                store
+                    .map
+                    .insert(bikey(f, v, v), bval(ClaimPolarity::Assert));
+            }
+        }
+        let (lo, hi) = rel_bounds();
+        let cursor = store.open_skip_cursor(&lo, &hi);
+        assert_eq!(store.opens.get(), 1, "opening the walk's cursor");
+
+        let as_of = AsOf::current(vts(1_000));
+        let results: Vec<_> = SkipWalk::new(cursor, &lo, &hi, as_of)
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(facts_of(&results).len(), 100, "every fact resolved");
+        assert_eq!(
+            store.opens.get(),
+            1,
+            "the walk drove ONE cursor across all 100 facts' version steps, never reopened"
+        );
     }
 }

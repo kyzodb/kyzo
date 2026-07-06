@@ -109,9 +109,30 @@
 //!   into a fresh store, so both backends REFUSE a non-empty target, and
 //!   restore raises the target's clock floor to the dump's before
 //!   importing (a target can never re-mint an imported instant).
+//! - **v4 — the as-of skip scan seeks one cursor per walk, never reopens
+//!   (story #118 task 1 ruling).** [`ReadTx::range_skip_scan_tuple`]'s
+//!   per-version-step behavior changed, not its resolution semantics: all
+//!   three backends now drive [`skip_walk::SkipWalk`] over one cursor
+//!   opened ONCE per walk (`OpenSkipCursor::open_skip_cursor`) and
+//!   repositioned forward per step (`SkipCursor::seek`), instead of the
+//!   previous shape of reopening a fresh bounded range per version step.
+//!   On `fjall` this is the difference between paying a `SuperVersion`
+//!   lookup and live-run/table/memtable resolution once per WALK versus
+//!   once per STEP; `temp`/`sim` see no efficiency change (a `BTreeMap`
+//!   range call already is the real O(log n) seek) but share the same
+//!   driver so the one theorem
+//!   (`skip_walk_matches_independent_oracle_over_2000_seeded_histories`,
+//!   `skip_walk_opens_exactly_one_cursor_per_walk`) covers every backend.
+//!   No caller-visible semantics moved: the resolved tuples, their order,
+//!   and the bitemporal resolution rule are unchanged; see `skip_walk.rs`'s
+//!   module doc for the full per-backend wiring and the termination
+//!   guarantee.
 
 use std::fmt;
 
+// Absolute path: this module also declares `pub(crate) mod fjall;` below,
+// which shadows the extern crate `fjall` for a plain `use fjall::...`.
+use ::fjall::Slice;
 use itertools::Itertools;
 use miette::{Result, bail, miette};
 
@@ -139,11 +160,12 @@ pub(crate) mod fjall;
 #[allow(dead_code)]
 pub(crate) mod merkle;
 pub(crate) mod retry;
-// The generic bitemporal skip-scan driver (story #78 phase 1): a NEW,
-// standalone module the three backends (fjall/temp/sim) will port onto in
-// phase 2. Not yet wired to any backend's `range_skip_scan_tuple` — that
-// swap is phase 2's job once this lands.
-#[allow(dead_code)]
+// The generic bitemporal skip-scan driver (story #78): ONE implementation
+// of the version-skip walk, generic over a backend's `OpenSkipCursor`/
+// `SkipCursor` seam; all three backends (fjall/temp/sim) drive their own
+// `range_skip_scan_tuple` through it (see the module doc for the per-
+// backend wiring and why `OpenSkipCursor::open_skip_cursor` runs once per
+// walk rather than once per version step).
 mod skip_walk;
 // With `bench-internals` on (and test off), sim.rs compiles into the lib so
 // `bench_api` can build mem-backend workloads on `SimStorage`; the module's
@@ -367,8 +389,10 @@ pub trait Storage: Send + Sync + Clone + sealed::Sealed {
 /// write transaction these same operations also see the transaction's own
 /// writes and are conflict-tracked.
 pub trait ReadTx: sealed::Sealed + Sync {
-    /// Get the value of a key.
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    /// Get the value of a key. [`Slice`] is fjall's Arc-backed byte currency
+    /// — a clone is a refcount bump, never a heap copy, so a caller that
+    /// only inspects or re-slices the bytes pays no allocation.
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>>;
 
     /// Check whether a key exists.
     fn exists(&self, key: &[u8]) -> Result<bool>;
@@ -387,9 +411,11 @@ pub trait ReadTx: sealed::Sealed + Sync {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>;
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>;
 
-    /// Scan a range, decoding each pair as a [`Tuple`].
+    /// Scan a range, decoding each pair as a [`Tuple`] straight from the
+    /// borrowed [`Slice`]s — no intermediate `Vec` copy of either key or
+    /// value sits between the backend and the decoder.
     fn range_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
@@ -399,6 +425,19 @@ pub trait ReadTx: sealed::Sealed + Sync {
             self.range_scan(lower, upper)
                 .map(|kv| kv.and_then(|(k, v)| decode_tuple_from_kv(&k, &v, None))),
         )
+    }
+
+    /// Scan a range yielding KEYS ONLY — the value is never materialized.
+    /// The default just discards `range_scan`'s value half; the fjall
+    /// backend overrides this to filter its `Guard` currency on `key()`
+    /// alone, so a caller that only needs presence or a count (see
+    /// [`range_count`](Self::range_count)) never pays for value I/O.
+    fn range_scan_keys<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+        Box::new(self.range_scan(lower, upper).map(|kv| kv.map(|(k, _)| k)))
     }
 
     /// Bitemporal as-of scan: among keys differing only in their two
@@ -424,14 +463,16 @@ pub trait ReadTx: sealed::Sealed + Sync {
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
-    /// Count the keys in `[lower, upper)`.
+    /// Count the keys in `[lower, upper)`. Goes through
+    /// [`range_scan_keys`](Self::range_scan_keys): a count never needs a
+    /// single value byte.
     fn range_count(&self, lower: &[u8], upper: &[u8]) -> Result<usize> {
-        self.range_scan(lower, upper)
+        self.range_scan_keys(lower, upper)
             .process_results(|it| it.count())
     }
 
     /// Scan the entire store in ascending order.
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>;
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>;
 }
 
 /// The write-transaction species: everything a [`ReadTx`] can do — seeing

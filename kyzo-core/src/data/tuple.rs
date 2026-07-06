@@ -401,7 +401,10 @@ impl RelationId {
         let Some(bytes) = src.get(0..8) else {
             bail!("corrupt key: shorter than the relation-id prefix");
         };
-        let u = u64::from_be_bytes(bytes.try_into().expect("length checked"));
+        let arr: [u8; 8] = bytes
+            .try_into()
+            .map_err(|_| miette!("corrupt key: relation-id prefix"))?;
+        let u = u64::from_be_bytes(arr);
         // The overflow assert in `new()` guards the internal-mint path; on
         // the read path an out-of-range id is data corruption and must be
         // an error, never a panic — routed through the same `checked` the

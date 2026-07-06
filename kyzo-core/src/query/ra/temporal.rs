@@ -140,6 +140,7 @@
 //! reads, instead of O(whole relation) twice.
 use std::collections::{BTreeMap, BTreeSet};
 
+use fjall::Slice;
 use miette::{Result, bail, miette};
 
 use crate::data::bitemporal::{
@@ -454,11 +455,11 @@ impl SpansRA {
 /// other batched operator in this crate follows (no row-at-a-time
 /// fallback, per `query/ra/mod.rs`'s module doc).
 struct SpansScanBatches<'a> {
-    raw: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
+    raw: Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>,
     /// A row already pulled from `raw` that belongs to the NEXT group
     /// (its key prefix differed from the group being collected) — carried
     /// over so each row is decoded exactly once.
-    pending_key: Option<(Vec<u8>, Vec<u8>)>,
+    pending_key: Option<(Slice, Slice)>,
     key_len: usize,
     sys_fixed: i64,
     done: bool,
@@ -470,7 +471,7 @@ impl<'a> SpansScanBatches<'a> {
     /// the NEXT group (if any) in `self.pending_key`.
     fn collect_group(
         &mut self,
-        first: (Vec<u8>, Vec<u8>),
+        first: (Slice, Slice),
     ) -> Result<(Vec<DataValue>, Vec<RawVersion>)> {
         let (prefix, key, first_ver) = decode_raw_version(&first.0, &first.1, self.key_len)?;
         let mut group = vec![first_ver];
@@ -670,8 +671,9 @@ fn candidate_keys_from_posting(
     }
     let (lower, upper) = posting_window_bounds(posting, lo, hi);
     let mut keys = BTreeSet::new();
-    for row in tx.range_scan(&lower, &upper) {
-        let (k, _v) = row?;
+    // Keys only: this scan never looks at a posting row's value.
+    for k in tx.range_scan_keys(&lower, &upper) {
+        let k = k?;
         // The posting's own declared key arity is `1 (leading valid) +
         // base_key_len`; `decode_tuple_from_key` wants that plus the two
         // mandatory bitemporal tail slots every Facts key carries.

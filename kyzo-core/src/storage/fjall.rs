@@ -28,10 +28,16 @@
 //!   read.
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
-//! - **Bitemporal as-of scans** — a seek loop: each step opens a fresh
-//!   range at the seek key computed by `check_key_for_bitemporal` (the
-//!   row's polarity peeked from its value), touching one stored version
-//!   per distinct fact in the common case.
+//! - **Bitemporal as-of scans** — a seek loop over ONE positioned cursor
+//!   (a read tx's `fjall::SeekIter`, or a write tx's SSI-conflict-tracking
+//!   `fjall::TrackedSeekIter`; opened once and re-seeked forward per step,
+//!   never reopened) at the seek key computed by `check_key_for_bitemporal`
+//!   (the row's polarity peeked from its value), touching one stored
+//!   version per distinct fact in the common case. On a write tx, each
+//!   step marks the precise sub-range it resolved rather than the whole
+//!   scan up front, promoting to one covering mark past a step-count
+//!   threshold (PostgreSQL SIREAD-lock granularity promotion — see
+//!   `fjall::TrackedSeekIter`'s doc, vendored in `vendor/fjall`).
 //!
 //! The transaction species are distinct types: [`FjallReadTx`] cannot write
 //! by construction, and committing a [`FjallWriteTx`] consumes it — writing
@@ -41,15 +47,19 @@
 use std::ops::Bound;
 use std::path::Path;
 
+use fjall::compaction::Leveled;
+use fjall::config::{
+    BlockSizePolicy, BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry, PinningPolicy,
+};
 use fjall::{
-    Conflict, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace, OptimisticWriteTx,
-    Readable, Snapshot,
+    Conflict, Guard, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace,
+    OptimisticWriteTx, Readable, Slice, Snapshot,
 };
 use miette::{Result, bail, miette};
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
 
 const KEYSPACE_NAME: &str = "kyzo";
@@ -68,10 +78,24 @@ const SYSTEM_CLOCK_WATERMARK_KEY: &[u8] = b"system_clock_watermark";
 /// parallelism are explicit, and `None` means fjall's documented default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StorageOptions {
-    /// Block/blob cache size in bytes.
+    /// Block/blob cache size in bytes. `None` means a 25%-of-system-RAM
+    /// floor on Linux (`quarter_system_ram_bytes`), not fjall's own tiny
+    /// stock default — an engine that owns the box should not hand back
+    /// 15/16ths of it. Falls back to the stock default off Linux (a
+    /// named platform gap; see that function's doc).
     pub cache_size_bytes: Option<u64>,
     /// Background worker threads (flush/compaction).
     pub worker_threads: Option<usize>,
+    /// Per-keyspace memtable flush threshold, in bytes. `None` keeps the
+    /// tuned policy's own choice (see `tuning::main_keyspace_options`).
+    /// Exposed mainly so an instrument can shrink the flush unit and make
+    /// a modest row count actually span multiple LSM levels — a
+    /// gigabyte-scale store reaches the same levels at stock size, just
+    /// over more data.
+    pub max_memtable_size_bytes: Option<u64>,
+    /// Per-keyspace compacted table target size, in bytes. `None` keeps
+    /// the tuned policy's own choice. See `max_memtable_size_bytes`.
+    pub table_target_size_bytes: Option<u64>,
 }
 
 /// Point-in-time observability counters, straight from the storage engine.
@@ -84,6 +108,177 @@ pub struct StorageStats {
     pub journal_count: usize,
 }
 
+/// LSM tuning: a model-tuned per-keyspace policy (issue #118 task 4).
+///
+/// **Design decision — one data keyspace, not a point/temporal split.** The
+/// Monkey/Dostoevsky literature assumes point-lookup data and append-heavy
+/// history live in physically distinct regions that can each get their own
+/// policy. They cannot here: every fact key ends with the validity instant
+/// and system version (`.claude/rules/storage.md`, "Time travel is
+/// bitemporal"), so a fact's current value and its whole prior history
+/// share one key prefix and sort ADJACENT to each other — the "point" row
+/// and the "temporal" rows are the same relation's rows at different key
+/// suffixes, not separable without a key-format migration (the storage
+/// contract's key encoding is sealed; CLAUDE.md, "Guardrails"). A keyspace
+/// split would need to route each write into a "current" vs "history"
+/// keyspace by recency, but recency is a moving read-time predicate (`now`
+/// advances), not a write-time fact, so yesterday's "current" row would
+/// need to physically migrate keyspaces the moment it is superseded —
+/// exactly the mid-flight format surgery the storage contract forbids.
+///
+/// So the split this model wants already exists, just one axis down: LSM
+/// **levels**, not keyspaces. Ordinary compaction ages a fact's superseded
+/// versions down into deeper levels while its current version (and hot,
+/// recently-touched history) stays shallow — the per-level knobs below are
+/// how the single mixed "kyzo" keyspace gets Monkey/Dostoevsky tuning
+/// without a physical split.
+mod tuning {
+    use super::{BlockSizePolicy, BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry};
+    use super::{KeyspaceCreateOptions, Leveled, PinningPolicy};
+
+    /// Every keyspace here is hard-capped at 7 levels (`CreateOptions::level_count`
+    /// is fixed; see `vendor/fjall/src/keyspace/options.rs`'s `from_kvs`), so every
+    /// per-level policy below has exactly 7 entries, L0 first.
+    const LEVELS: usize = 7;
+
+    /// Monkey's per-level bloom allocation: for a fixed total filter memory
+    /// budget, the false-positive rate that minimizes total disk I/O falls
+    /// off geometrically with level depth at a rate set by the LSM's level
+    /// size ratio T (Dayan, Athanassoulis & Idreos, "Monkey: Optimal
+    /// Navigable Key-Value Store"). In bits-per-key terms that is an
+    /// ARITHMETIC decrease of ~log2(T) bits per level (bits ≈
+    /// 1.44·ln(1/FPR), and FPR itself falls by a factor of T per level
+    /// under the optimal allocation). With this fork's default ratio
+    /// T=10 (`Leveled::level_ratio_policy`), that step is log2(10) ≈ 3.3
+    /// bits/level. Starting near fjall's own stock L0 rate (~19 bits/key,
+    /// their `FalsePositiveRate(0.0001)`) and stepping down by ~3.3 bits
+    /// gives shallow levels (small, checked on every read) many more bits
+    /// than deep ones (huge, and — once `expect_point_read_hits` is set —
+    /// the last level skips its filter build entirely).
+    fn monkey_bits_per_key() -> FilterPolicy {
+        FilterPolicy::new(vec![
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(20.0)), // L0
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(16.5)), // L1
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(13.5)), // L2
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(10.5)), // L3
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(8.0)),  // L4
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(6.0)),  // L5
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(4.0)), // L6 (moot: expect_point_read_hits skips it)
+        ])
+    }
+
+    /// Model-tuned policy for the main "kyzo" data keyspace: every point
+    /// get, as-of scan, and full scan this engine ever runs lands here.
+    ///
+    /// - **Monkey** filter allocation (`monkey_bits_per_key`, above), with
+    ///   the three shallowest (highest bits-per-key, cheapest in absolute
+    ///   bytes, checked on every probe) filter blocks PINNED — Monkey's
+    ///   filter-memory case for funding filters unconditionally, ahead of
+    ///   whatever is left for the shared block cache
+    ///   (`StorageOptions::cache_size_bytes`), rather than letting them
+    ///   compete with data blocks in the LRU.
+    /// - `expect_point_read_hits(true)`: a point get in KyzoDB is a lookup
+    ///   by a key the query already joined into existence (the common case
+    ///   is a hit), so the last level's filter — the biggest one, covering
+    ///   the most superseded/historical rows — is worth skipping.
+    /// - **Dostoevsky lazy leveling, via the only primitive this fork
+    ///   actually has — dialed by measurement, not by formula alone.**
+    ///   True tiered compaction is DEAD in this vendor drop:
+    ///   `vendor/lsm-tree/src/compaction/tiered.rs` exists but its module
+    ///   is commented out of the tree (`compaction/mod.rs`: `// pub(crate)
+    ///   mod tiered;`) and its `choose()` body is `unimplemented!()` —
+    ///   wiring it in would panic on the first compaction, not tune
+    ///   anything. Completing a from-scratch merge policy is out of this
+    ///   task's scope and not what "tune the knobs" means. Lazy leveling's
+    ///   actual mechanism — let several sorted runs batch before an
+    ///   expensive merge, rather than merging eagerly — already exists at
+    ///   this fork's shallowest level: `l0_threshold` is how many flushed
+    ///   runs L0 tolerates before merging into L1.
+    ///
+    ///   The bench (issue #118 task-4 commit's tuning table) tried
+    ///   `l0_threshold(8)` (stock's full double) with a growing
+    ///   `level_ratio_policy` and a 4→16 KiB block-size ramp together: it
+    ///   cost the as-of-on-dense-chains scan ~10%, for no measurable
+    ///   ingest win — batching more unmerged L0 runs makes every read
+    ///   (including as-of) check more files for whatever fraction of the
+    ///   dense chain hasn't merged down yet, and this instrument's
+    ///   foreground-latency ingest measurement can't see the background
+    ///   write-amplification saving that trade is FOR (no
+    ///   cumulative-bytes-compacted counter exists to observe it — a real
+    ///   gap, not a hidden one). Isolating each knob then placed the
+    ///   blame precisely: filters-only measured inside the stock run's
+    ///   own noise band (not the cause); block-size-only (this keyspace's
+    ///   4→8 KiB ramp, stock compaction) ALSO measured inside the stock
+    ///   band — the regression was `l0_threshold`/`level_ratio_policy`
+    ///   alone. So `level_ratio_policy` stays stock (the deeper step to
+    ///   12 in the first pass bought nothing measurable) and only
+    ///   `l0_threshold` moves, by half of the first pass's step (6, not
+    ///   8) — the smallest lazy-leveling move this primitive can make,
+    ///   landing at a measured, disclosed -6% on as-of (published as the
+    ///   losing run it is) while still being a real instantiation of
+    ///   "batch shallow writes before merging" for the append-heavy path.
+    /// - Per-level block size steps up modestly with depth (4 KiB shallow
+    ///   → 8 KiB deep, not stock's flat 4 KiB): isolated in the
+    ///   re-measurement above as a genuinely free move at this bench's
+    ///   scale (inside the stock run's noise band on every shape), so it
+    ///   stays — deeper levels are where a fact's superseded versions
+    ///   have sunk (this keyspace's bitemporal suffix keeps one fact's
+    ///   whole history key-adjacent), and a larger block amortizes the
+    ///   seek across whatever as-of/full-history reads do land that deep
+    ///   at production scale, at no measured cost here. `level_ratio_policy`
+    ///   stays stock — see above.
+    ///
+    /// `opts.max_memtable_size_bytes` / `opts.table_target_size_bytes`
+    /// override the flush/compaction unit size (both `None` in
+    /// production: fjall's stock 64 MiB serves a real store fine — an
+    /// instrument shrinks these to make a small row count actually span
+    /// levels, see `StorageOptions`).
+    pub(super) fn main_keyspace_options(opts: super::StorageOptions) -> KeyspaceCreateOptions {
+        let mut strategy = Leveled::default().with_l0_threshold(6);
+        if let Some(bytes) = opts.table_target_size_bytes {
+            strategy = strategy.with_table_target_size(bytes);
+        }
+        let mut created = KeyspaceCreateOptions::default()
+            .filter_policy(monkey_bits_per_key())
+            .filter_block_pinning_policy(PinningPolicy::new(vec![
+                true, true, true, false, false, false, false,
+            ]))
+            .expect_point_read_hits(true)
+            .compaction_strategy(std::sync::Arc::new(strategy))
+            .data_block_size_policy(BlockSizePolicy::new(vec![
+                4 * 1_024,
+                4 * 1_024,
+                4 * 1_024,
+                8 * 1_024,
+                8 * 1_024,
+                8 * 1_024,
+                8 * 1_024,
+            ]));
+        if let Some(bytes) = opts.max_memtable_size_bytes {
+            created = created.max_memtable_size(bytes);
+        }
+        created
+    }
+
+    /// Model-tuned policy for the "kyzo_meta" keyspace: two keys
+    /// (`FORMAT_VERSION_KEY`, `SYSTEM_CLOCK_WATERMARK_KEY`), read once per
+    /// open and written rarely. It will never fill a second level, so the
+    /// per-level Monkey allocation above has nothing to act on here —
+    /// there is no depth profile to exploit in a keyspace this small. The
+    /// one model-relevant fact still applies: after the first write, every
+    /// read of either key is a hit, so `expect_point_read_hits` is set for
+    /// the same reason as the main keyspace, at zero cost given the size.
+    pub(super) fn meta_keyspace_options(opts: super::StorageOptions) -> KeyspaceCreateOptions {
+        let mut created = KeyspaceCreateOptions::default().expect_point_read_hits(true);
+        if let Some(bytes) = opts.max_memtable_size_bytes {
+            created = created.max_memtable_size(bytes);
+        }
+        created
+    }
+
+    const _: () = assert!(LEVELS == 7, "policy vectors above assume 7 levels");
+}
+
 /// Open (or create) a fjall-backed storage at the given path with default
 /// options.
 ///
@@ -93,13 +288,37 @@ pub fn new_fjall_storage(path: impl AsRef<Path>) -> Result<FjallStorage> {
     new_fjall_storage_with(path, StorageOptions::default())
 }
 
+/// A cache floor of 25% of total system RAM, for when
+/// `StorageOptions::cache_size_bytes` is left `None` — a database engine
+/// should not hand back 15/16ths of the host's memory to the OS by
+/// default (fjall's own stock default is a flat 16 MiB, sized for a
+/// library embedded in something else's memory budget, not for owning
+/// the box). Linux-only for now: reading total RAM without a new
+/// dependency and without `unsafe` (this crate is `#![forbid(unsafe_code)]`
+/// — no libc FFI, and `Cargo.toml`/the vendoring setup are out of scope
+/// for this task) means `/proc/meminfo`, which only exists on Linux.
+/// Elsewhere this returns `None` and the caller keeps fjall's stock
+/// default — a named platform gap, not a silently wrong number.
+pub(crate) fn quarter_system_ram_bytes() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kib = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))
+        .and_then(|rest| rest.trim().strip_suffix("kB"))
+        .and_then(|n| n.trim().parse::<u64>().ok())?;
+    Some((kib * 1_024) / 4)
+}
+
 /// Open (or create) a fjall-backed storage with explicit resource options.
 pub fn new_fjall_storage_with(
     path: impl AsRef<Path>,
     opts: StorageOptions,
 ) -> Result<FjallStorage> {
     let mut builder = OptimisticTxDatabase::builder(path);
-    if let Some(bytes) = opts.cache_size_bytes {
+    // Stock default only if BOTH the caller and the RAM floor come up
+    // empty (off Linux; see `quarter_system_ram_bytes`) — a named
+    // platform gap, not a silently wrong number.
+    if let Some(bytes) = opts.cache_size_bytes.or_else(quarter_system_ram_bytes) {
         builder = builder.cache_size(bytes);
     }
     if let Some(n) = opts.worker_threads {
@@ -109,7 +328,7 @@ pub fn new_fjall_storage_with(
         .open()
         .map_err(|e| miette!("opening fjall database: {e}"))?;
     let meta = db
-        .keyspace(META_KEYSPACE_NAME, KeyspaceCreateOptions::default)
+        .keyspace(META_KEYSPACE_NAME, || tuning::meta_keyspace_options(opts))
         .map_err(|e| miette!("opening fjall meta keyspace: {e}"))?;
     match meta
         .get(FORMAT_VERSION_KEY)
@@ -129,7 +348,7 @@ pub fn new_fjall_storage_with(
         }
     }
     let ks = db
-        .keyspace(KEYSPACE_NAME, KeyspaceCreateOptions::default)
+        .keyspace(KEYSPACE_NAME, || tuning::main_keyspace_options(opts))
         .map_err(|e| miette!("opening fjall keyspace: {e}"))?;
     let now = crate::data::value::current_validity()?.raw();
     let watermark = match meta
@@ -286,6 +505,9 @@ impl Storage for FjallStorage {
                     "emptiness probe bound must exceed every relation-id prefix"
                 );
             }
+            // Existence alone: the raw `Guard`s are dropped unmaterialized —
+            // not even `key()` is called — so the probe costs no decode at
+            // all, just "is there a first item."
             let probe = self.db.read_tx();
             if raw_range(&probe, &self.ks, &[], &[0xff; 9])
                 .next()
@@ -380,13 +602,16 @@ impl FjallWriteTx {
 }
 
 /// Both fjall read views (`Snapshot`, `OptimisticWriteTx`) speak `Readable`;
-/// every read-side operation is written once against that.
+/// every read-side operation is written once against that. Yields fjall's
+/// own `Guard` — undecided currency: a caller materializes as much of each
+/// row as it actually needs (see [`materialize_row`], [`materialize_key`])
+/// rather than this choke point deciding for everyone.
 fn raw_range<'a, R: Readable>(
     reader: &'a R,
     ks: &'a OptimisticTxKeyspace,
     lower: &[u8],
     upper: &[u8],
-) -> impl Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a {
+) -> impl Iterator<Item = Guard> + 'a {
     // Degenerate-bounds guard, at the single choke point every range scan,
     // skip scan, and del_range pass through. The contract says `[lower,
     // upper)` with `lower >= upper` is simply EMPTY — but the bounds must
@@ -406,21 +631,36 @@ fn raw_range<'a, R: Readable>(
         .then(|| reader.range::<&[u8], _>(ks, bounds))
         .into_iter()
         .flatten()
-        .map(|guard| {
-            let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-            Ok((k.to_vec(), v.to_vec()))
-        })
+}
+
+/// A full key+value row, materialized via `into_inner_if` with an
+/// unconditionally-true predicate: the one call every row-shaped scan
+/// (`range_scan`, `total_scan`) needs, and the same path a future
+/// key-value-separated keyspace would lazily skip loading blob values
+/// through if a caller ever filtered on the key alone. `Slice` is
+/// Arc-backed, so this is a refcount bump per field, never a heap copy.
+fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
+    let (k, v) = guard
+        .into_inner_if(|_| true)
+        .map_err(|e| miette!("fjall read: {e}"))?;
+    Ok((
+        k,
+        v.expect("predicate is unconditionally true: the value is always loaded"),
+    ))
+}
+
+/// A key alone, filtering the guard on `key()` and never loading the value
+/// — the currency for existence probes and counts, which cost no value I/O.
+fn materialize_key(guard: Guard) -> Result<Slice> {
+    guard.key().map_err(|e| miette!("fjall read: {e}"))
 }
 
 fn read_get<R: Readable>(
     reader: &R,
     ks: &OptimisticTxKeyspace,
     key: &[u8],
-) -> Result<Option<Vec<u8>>> {
-    Ok(reader
-        .get(ks, key)
-        .map_err(|e| miette!("fjall read: {e}"))?
-        .map(|v| v.to_vec()))
+) -> Result<Option<Slice>> {
+    reader.get(ks, key).map_err(|e| miette!("fjall read: {e}"))
 }
 
 fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -> Result<bool> {
@@ -432,17 +672,65 @@ fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -
 fn read_total_scan<'a, R: Readable>(
     reader: &'a R,
     ks: &'a OptimisticTxKeyspace,
-) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-    Box::new(reader.iter(ks).map(|guard| {
-        let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-        Ok((k.to_vec(), v.to_vec()))
-    }))
+) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+    Box::new(reader.iter(ks).map(materialize_row))
+}
+
+/// The skip walk's cursor over one fjall reader: a single positioned
+/// cursor, re-seeked forward once per version step instead of reopened.
+/// Generic over the concrete seek-iterator type because the two readers
+/// hand back different ones: [`FjallReadTx`]'s `Snapshot` returns a bare
+/// `fjall::SeekIter` (a snapshot is read-only and never aborts, so there
+/// is nothing to conflict-track); [`FjallWriteTx`]'s `OptimisticWriteTx`
+/// returns `fjall::TrackedSeekIter`, which additionally records the
+/// walk's SSI read-conflict spans under PostgreSQL-style SIREAD
+/// granularity promotion (precise per-step ranges for a short walk,
+/// collapsed to one covering mark past a step-count threshold — see that
+/// type's doc). `Empty` is the same degenerate-bounds guard `raw_range`
+/// applies to the plain range-scan path — an inverted `[lower, upper)`
+/// must never reach fjall, whose write-transaction conflict manager
+/// replays marked ranges through `BTreeSet::range` at commit time and
+/// panics on one.
+pub(crate) enum FjallSkipCursor<S> {
+    Empty,
+    Live(S),
+}
+
+/// The one seek shape both fjall cursor types share (unified here so
+/// [`FjallSkipCursor`] can drive either without knowing which fjall
+/// transaction species produced it).
+trait FjallSeekStep {
+    fn fjall_seek(&mut self, target: &[u8]) -> Option<fjall::Result<(Slice, Slice)>>;
+}
+
+impl FjallSeekStep for fjall::SeekIter {
+    fn fjall_seek(&mut self, target: &[u8]) -> Option<fjall::Result<(Slice, Slice)>> {
+        self.seek(target)
+    }
+}
+
+impl FjallSeekStep for fjall::TrackedSeekIter<'_> {
+    fn fjall_seek(&mut self, target: &[u8]) -> Option<fjall::Result<(Slice, Slice)>> {
+        self.seek(target)
+    }
+}
+
+impl<S: FjallSeekStep> SkipCursor for FjallSkipCursor<S> {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        match self {
+            Self::Empty => None,
+            Self::Live(iter) => iter.fjall_seek(target).map(|r| {
+                let (k, v) = r.map_err(|e| miette!("fjall read: {e}"))?;
+                Ok((k.to_vec(), v.to_vec()))
+            }),
+        }
+    }
 }
 
 macro_rules! impl_read_tx {
-    ($ty:ty, $reader:ident) => {
+    ($ty:ty, $reader:ident, $seek_iter:ty) => {
         impl ReadTx for $ty {
-            fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+            fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
                 read_get(&self.$reader, &self.ks, key)
             }
 
@@ -454,8 +742,16 @@ macro_rules! impl_read_tx {
                 &'a self,
                 lower: &[u8],
                 upper: &[u8],
-            ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-                Box::new(raw_range(&self.$reader, &self.ks, lower, upper))
+            ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+                Box::new(raw_range(&self.$reader, &self.ks, lower, upper).map(materialize_row))
+            }
+
+            fn range_scan_keys<'a>(
+                &'a self,
+                lower: &[u8],
+                upper: &[u8],
+            ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+                Box::new(raw_range(&self.$reader, &self.ks, lower, upper).map(materialize_key))
             }
 
             fn range_skip_scan_tuple<'a>(
@@ -464,26 +760,37 @@ macro_rules! impl_read_tx {
                 upper: &[u8],
                 as_of: AsOf,
             ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-                Box::new(SkipWalk::new(self, lower, upper, as_of))
+                Box::new(SkipWalk::new(
+                    self.open_skip_cursor(lower, upper),
+                    lower,
+                    upper,
+                    as_of,
+                ))
             }
 
-            fn total_scan<'a>(
-                &'a self,
-            ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+            fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
                 read_total_scan(&self.$reader, &self.ks)
             }
         }
 
-        impl SkipSeek for $ty {
-            fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-                raw_range(&self.$reader, &self.ks, lower, upper).next()
+        impl OpenSkipCursor for $ty {
+            type Cursor<'c> = FjallSkipCursor<$seek_iter>;
+
+            fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+                if lower >= upper {
+                    return FjallSkipCursor::Empty;
+                }
+                FjallSkipCursor::Live(self.$reader.seek_range::<&[u8], _>(
+                    &self.ks,
+                    (Bound::Included(lower), Bound::Excluded(upper)),
+                ))
             }
         }
     };
 }
 
-impl_read_tx!(FjallReadTx, snap);
-impl_read_tx!(FjallWriteTx, tx);
+impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
+impl_read_tx!(FjallWriteTx, tx, fjall::TrackedSeekIter<'c>);
 
 impl WriteTx for FjallWriteTx {
     fn system_stamp(&self) -> ValidityTs {
@@ -510,15 +817,16 @@ impl WriteTx for FjallWriteTx {
         const CHUNK: usize = 1024;
         let mut cursor = lower.to_vec();
         loop {
-            let keys: Vec<Vec<u8>> = raw_range(&self.tx, &self.ks, &cursor, upper)
-                .map(|kv| kv.map(|(k, _)| k))
+            // Keys only: a delete never needs the value bytes.
+            let keys: Vec<Slice> = raw_range(&self.tx, &self.ks, &cursor, upper)
+                .map(materialize_key)
                 .take(CHUNK)
                 .collect::<Result<_>>()?;
             let Some(last) = keys.last() else {
                 return Ok(());
             };
             cursor = {
-                let mut succ = last.clone();
+                let mut succ = last.to_vec();
                 succ.push(0);
                 succ
             };

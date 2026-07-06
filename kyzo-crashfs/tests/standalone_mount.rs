@@ -1,3 +1,12 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 //! The phase-1 deliverable: mount the injector over a real backing
 //! directory and prove, with a plain `std::fs` writer and no knowledge of
 //! `kyzo-crashfs` internals, that it implements the power-cut and

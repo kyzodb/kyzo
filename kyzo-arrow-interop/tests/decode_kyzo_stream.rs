@@ -1,3 +1,12 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 //! Story #77's interop cross-check: a REAL Arrow reader (the `arrow` crate,
 //! never a dependency of kyzo-core) decodes what kyzo-core's own
 //! dependency-free `NamedRows::to_arrow_ipc` encoder writes. kyzo-core's
@@ -151,7 +160,11 @@ fn real_arrow_reader_decodes_a_binary_column() {
 
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None).expect("valid Arrow stream");
     let batch = reader.next().expect("one record batch").expect("readable");
-    let blob = batch.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
+    let blob = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
     assert_eq!(blob.value(0), &[0, 1, 2]);
     assert_eq!(blob.value(1), &[] as &[u8]);
     assert_eq!(blob.value(2), &[255, 254]);

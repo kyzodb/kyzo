@@ -14,6 +14,7 @@
 //! evaluator. The relational operators themselves live in `ra.rs`; what
 //! lives here is the CURRENCY HANDLING every batched operator shares.
 
+use fjall::Slice;
 use miette::Result;
 
 use crate::data::expr::Expr;
@@ -252,7 +253,7 @@ pub(crate) struct BatchScanFilter<I> {
     pub(crate) pending_err: Option<miette::Report>,
 }
 
-impl<I: Iterator<Item = Result<(Vec<u8>, Vec<u8>)>>> Iterator for BatchScanFilter<I> {
+impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I> {
     type Item = Result<Batch>;
     fn next(&mut self) -> Option<Self::Item> {
         use crate::data::tuple::{decode_key_into, extend_tuple_from_v};

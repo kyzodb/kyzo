@@ -840,7 +840,7 @@ impl RelationHandle {
     pub(crate) fn scan_all_raw<'a>(
         &self,
         tx: &'a impl ReadTx,
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    ) -> Box<dyn Iterator<Item = Result<(fjall::Slice, fjall::Slice)>> + 'a> {
         tx.range_scan(&self.keyspace_lower(), &self.keyspace_upper())
     }
 
