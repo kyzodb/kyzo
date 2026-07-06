@@ -69,6 +69,23 @@ means the world model is lost. Appearance is the enemy; reality is the only clie
 11. **Nothing public without a go.** Pushes and published packages wait for an explicit go from the
    maintainer.
 
+## Keep the tracker truthful as work lands
+The story's issue checkboxes and the board Status are live state, not a post-hoc summary. An issue
+that reads 0/6 while five tasks are done is a lie to every reader.
+- **Board Status = In Progress the moment work starts** (step 1) and stays there until the DoD is met
+  and verified. Never leave a worked story sitting in Todo; never mark it Done before the DoD holds.
+- **Check off each issue task checkbox in the same motion that completes it.** When a task's own DoD is
+  genuinely met — built, tested, green, committed — flip its box `- [ ]`→`- [x]` in the issue body
+  (`gh issue edit <n> --repo kyzodb/kyzo`), so the issue reads N/M truthfully as work lands, not 0/M
+  until the end. A checkbox maps to the STORY's tasks, never an agent's private chunk numbering; a task
+  that bundles several steps (e.g. "vendor + seek + wire + delete the seam") is checked only when ALL
+  of it is done, not when the first sub-step commits.
+- **A checked box is a claim the center verifies.** The center confirms each check against the tree
+  (the commit actually meets that task's DoD) and reopens any box that over-claims — self-certifying by
+  checking your own box is not proof (verify, never assert).
+- **Every agent brief carries this.** When dispatching a story agent, the instruction to move the board
+  to In Progress and check off each task's box on completion is part of the brief, not an afterthought.
+
 ## Dependency order
 Storage kernel (#2) -> engine (#3) -> product green (#4); every binding story depends on #4. Go (#11)
 additionally needs the C binding (#5), Clojure (#12) needs Java (#7), the Python client (#14) needs
