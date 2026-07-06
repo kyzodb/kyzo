@@ -160,7 +160,11 @@ fn real_arrow_reader_decodes_a_binary_column() {
 
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None).expect("valid Arrow stream");
     let batch = reader.next().expect("one record batch").expect("readable");
-    let blob = batch.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
+    let blob = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
     assert_eq!(blob.value(0), &[0, 1, 2]);
     assert_eq!(blob.value(1), &[] as &[u8]);
     assert_eq!(blob.value(2), &[255, 254]);
