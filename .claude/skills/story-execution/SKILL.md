@@ -86,6 +86,32 @@ that reads 0/6 while five tasks are done is a lie to every reader.
 - **Every agent brief carries this.** When dispatching a story agent, the instruction to move the board
   to In Progress and check off each task's box on completion is part of the brief, not an afterthought.
 
+## Close the escape hatches before you dispatch an agent
+An agent does the easy work and avoids the hard, scary work if any easy work is in reach. Proven the
+hard way this session: three agents burned 200k–500k tokens each and never reached the one dangerous
+task, because the brief left easy work (vendoring, comment edits) sitting in their lane. The fix is not
+a louder brief. It is removing every hiding place. Before every agent task:
+- **Do the mechanical setup yourself, first.** Vendoring, scaffolding, file moves, config a script or
+  the center can do deterministically NEVER goes to an agent — it is the token sink they drown in. Hand
+  the agent a tree where only the hard engineering remains.
+- **One agent = the single hardest thing, alone.** Strip the easy sub-tasks out of the brief (docs,
+  comment tidying, fuzz porting, flag flips, cleanup) and sequence them to the center or a later pass. A
+  brief that lists a hard task AND easy ones gets the easy ones done and then stalls.
+- **Pin the exact seam.** Name the `file:function` to change and say "grep for the rest, do not
+  explore." Exploring a large unfamiliar codebase is the other token sink.
+- **Name the fake.** Every hard task has a cheap version that compiles and accomplishes nothing (a
+  type-swap that still copies; a guard that relocates a bug; a test loosened to pass). State the fake
+  explicitly and pair the task with a forcing-function proof — a law, differential, or bench that fails
+  the fake.
+- **Forbid the sidesteps.** No `git worktree`, no stash/reset/checkout/clean, no chunk-crawl, no
+  re-planning, no re-reading what can be grepped; build/test only the touched crate; cargo piped through
+  `tail`; memory caps; push nothing.
+- **Give a hard done-condition.** "Done" is the proof passing, not the agent's say-so — name the exact
+  test/law/bench that closes the task.
+
+The test of a brief: there is nothing in it the agent can do EXCEPT the hard thing, and no way to fake
+the hard thing that the proof will not catch.
+
 ## Dependency order
 Storage kernel (#2) -> engine (#3) -> product green (#4); every binding story depends on #4. Go (#11)
 additionally needs the C binding (#5), Clojure (#12) needs Java (#7), the Python client (#14) needs
