@@ -1514,6 +1514,7 @@ fn conflict_is_typed_and_options_and_stats_work() {
         StorageOptions {
             cache_size_bytes: Some(8 * 1024 * 1024),
             worker_threads: Some(2),
+            ..Default::default()
         },
     )
     .unwrap();

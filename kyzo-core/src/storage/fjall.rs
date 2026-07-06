@@ -47,6 +47,8 @@
 use std::ops::Bound;
 use std::path::Path;
 
+use fjall::compaction::Leveled;
+use fjall::config::{BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry, PinningPolicy};
 use fjall::{
     Conflict, Guard, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace,
     OptimisticWriteTx, Readable, Slice, Snapshot,
@@ -78,6 +80,16 @@ pub struct StorageOptions {
     pub cache_size_bytes: Option<u64>,
     /// Background worker threads (flush/compaction).
     pub worker_threads: Option<usize>,
+    /// Per-keyspace memtable flush threshold, in bytes. `None` keeps the
+    /// tuned policy's own choice (see `tuning::main_keyspace_options`).
+    /// Exposed mainly so an instrument can shrink the flush unit and make
+    /// a modest row count actually span multiple LSM levels — a
+    /// gigabyte-scale store reaches the same levels at stock size, just
+    /// over more data.
+    pub max_memtable_size_bytes: Option<u64>,
+    /// Per-keyspace compacted table target size, in bytes. `None` keeps
+    /// the tuned policy's own choice. See `max_memtable_size_bytes`.
+    pub table_target_size_bytes: Option<u64>,
 }
 
 /// Point-in-time observability counters, straight from the storage engine.
@@ -88,6 +100,157 @@ pub struct StorageStats {
     pub write_buffer_size_bytes: u64,
     pub active_compactions: usize,
     pub journal_count: usize,
+}
+
+/// LSM tuning: a model-tuned per-keyspace policy (issue #118 task 4).
+///
+/// **Design decision — one data keyspace, not a point/temporal split.** The
+/// Monkey/Dostoevsky literature assumes point-lookup data and append-heavy
+/// history live in physically distinct regions that can each get their own
+/// policy. They cannot here: every fact key ends with the validity instant
+/// and system version (`.claude/rules/storage.md`, "Time travel is
+/// bitemporal"), so a fact's current value and its whole prior history
+/// share one key prefix and sort ADJACENT to each other — the "point" row
+/// and the "temporal" rows are the same relation's rows at different key
+/// suffixes, not separable without a key-format migration (the storage
+/// contract's key encoding is sealed; CLAUDE.md, "Guardrails"). A keyspace
+/// split would need to route each write into a "current" vs "history"
+/// keyspace by recency, but recency is a moving read-time predicate (`now`
+/// advances), not a write-time fact, so yesterday's "current" row would
+/// need to physically migrate keyspaces the moment it is superseded —
+/// exactly the mid-flight format surgery the storage contract forbids.
+///
+/// So the split this model wants already exists, just one axis down: LSM
+/// **levels**, not keyspaces. Ordinary compaction ages a fact's superseded
+/// versions down into deeper levels while its current version (and hot,
+/// recently-touched history) stays shallow — the per-level knobs below are
+/// how the single mixed "kyzo" keyspace gets Monkey/Dostoevsky tuning
+/// without a physical split.
+mod tuning {
+    use super::{BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry};
+    use super::{KeyspaceCreateOptions, Leveled, PinningPolicy};
+
+    /// Every keyspace here is hard-capped at 7 levels (`CreateOptions::level_count`
+    /// is fixed; see `vendor/fjall/src/keyspace/options.rs`'s `from_kvs`), so every
+    /// per-level policy below has exactly 7 entries, L0 first.
+    const LEVELS: usize = 7;
+
+    /// Monkey's per-level bloom allocation: for a fixed total filter memory
+    /// budget, the false-positive rate that minimizes total disk I/O falls
+    /// off geometrically with level depth at a rate set by the LSM's level
+    /// size ratio T (Dayan, Athanassoulis & Idreos, "Monkey: Optimal
+    /// Navigable Key-Value Store"). In bits-per-key terms that is an
+    /// ARITHMETIC decrease of ~log2(T) bits per level (bits ≈
+    /// 1.44·ln(1/FPR), and FPR itself falls by a factor of T per level
+    /// under the optimal allocation). With this fork's default ratio
+    /// T=10 (`Leveled::level_ratio_policy`), that step is log2(10) ≈ 3.3
+    /// bits/level. Starting near fjall's own stock L0 rate (~19 bits/key,
+    /// their `FalsePositiveRate(0.0001)`) and stepping down by ~3.3 bits
+    /// gives shallow levels (small, checked on every read) many more bits
+    /// than deep ones (huge, and — once `expect_point_read_hits` is set —
+    /// the last level skips its filter build entirely).
+    fn monkey_bits_per_key() -> FilterPolicy {
+        FilterPolicy::new(vec![
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(20.0)), // L0
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(16.5)), // L1
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(13.5)), // L2
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(10.5)), // L3
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(8.0)),  // L4
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(6.0)),  // L5
+            FilterPolicyEntry::Bloom(BloomConstructionPolicy::BitsPerKey(4.0)), // L6 (moot: expect_point_read_hits skips it)
+        ])
+    }
+
+    /// Model-tuned policy for the main "kyzo" data keyspace: every point
+    /// get, as-of scan, and full scan this engine ever runs lands here.
+    ///
+    /// - **Monkey** filter allocation (`monkey_bits_per_key`, above), with
+    ///   the three shallowest (highest bits-per-key, cheapest in absolute
+    ///   bytes, checked on every probe) filter blocks PINNED — Monkey's
+    ///   filter-memory case for funding filters unconditionally, ahead of
+    ///   whatever is left for the shared block cache
+    ///   (`StorageOptions::cache_size_bytes`), rather than letting them
+    ///   compete with data blocks in the LRU.
+    /// - `expect_point_read_hits(true)`: a point get in KyzoDB is a lookup
+    ///   by a key the query already joined into existence (the common case
+    ///   is a hit), so the last level's filter — the biggest one, covering
+    ///   the most superseded/historical rows — is worth skipping.
+    /// - **Dostoevsky lazy leveling, via the only primitive this fork
+    ///   actually has — dialed by measurement, not by formula alone.**
+    ///   True tiered compaction is DEAD in this vendor drop:
+    ///   `vendor/lsm-tree/src/compaction/tiered.rs` exists but its module
+    ///   is commented out of the tree (`compaction/mod.rs`: `// pub(crate)
+    ///   mod tiered;`) and its `choose()` body is `unimplemented!()` —
+    ///   wiring it in would panic on the first compaction, not tune
+    ///   anything. Completing a from-scratch merge policy is out of this
+    ///   task's scope and not what "tune the knobs" means. Lazy leveling's
+    ///   actual mechanism — let several sorted runs batch before an
+    ///   expensive merge, rather than merging eagerly — already exists at
+    ///   this fork's shallowest level: `l0_threshold` is how many flushed
+    ///   runs L0 tolerates before merging into L1.
+    ///
+    ///   The bench (issue #118 task-4 commit's tuning table) tried
+    ///   `l0_threshold(8)` (stock's full double) with a growing
+    ///   `level_ratio_policy` and a 4→16 KiB block-size ramp: it cost the
+    ///   as-of-on-dense-chains scan ~10%, for no measurable ingest win —
+    ///   batching more unmerged L0 runs makes every read (including as-of)
+    ///   check more files for whatever fraction of the dense chain hasn't
+    ///   merged down yet, and this instrument's foreground-latency ingest
+    ///   measurement can't see the background write-amplification saving
+    ///   that trade is FOR (no cumulative-bytes-compacted counter exists
+    ///   to observe it — a real gap, not a hidden one). A stock-ratio,
+    ///   stock-block-size isolation run then showed the regression was
+    ///   compaction/block-size, not the filter change: filters-only
+    ///   measured inside the stock run's own noise band. So the ratio
+    ///   growth and the block-size ramp are DROPPED (measured net loss, no
+    ///   measured offset) and only `l0_threshold` moves, by half of the
+    ///   first pass's step (6, not 8) — the smallest lazy-leveling move
+    ///   this primitive can make, landing inside noise on every measured
+    ///   shape while still being a real instantiation of "batch shallow
+    ///   writes before merging" for the append-heavy path.
+    /// - Block size and level ratio stay at fjall's stock, flat values —
+    ///   see above.
+    ///
+    /// `opts.max_memtable_size_bytes` / `opts.table_target_size_bytes`
+    /// override the flush/compaction unit size (both `None` in
+    /// production: fjall's stock 64 MiB serves a real store fine — an
+    /// instrument shrinks these to make a small row count actually span
+    /// levels, see `StorageOptions`).
+    pub(super) fn main_keyspace_options(opts: super::StorageOptions) -> KeyspaceCreateOptions {
+        let mut strategy = Leveled::default().with_l0_threshold(6);
+        if let Some(bytes) = opts.table_target_size_bytes {
+            strategy = strategy.with_table_target_size(bytes);
+        }
+        let mut created = KeyspaceCreateOptions::default()
+            .filter_policy(monkey_bits_per_key())
+            .filter_block_pinning_policy(PinningPolicy::new(vec![
+                true, true, true, false, false, false, false,
+            ]))
+            .expect_point_read_hits(true)
+            .compaction_strategy(std::sync::Arc::new(strategy));
+        if let Some(bytes) = opts.max_memtable_size_bytes {
+            created = created.max_memtable_size(bytes);
+        }
+        created
+    }
+
+    /// Model-tuned policy for the "kyzo_meta" keyspace: two keys
+    /// (`FORMAT_VERSION_KEY`, `SYSTEM_CLOCK_WATERMARK_KEY`), read once per
+    /// open and written rarely. It will never fill a second level, so the
+    /// per-level Monkey allocation above has nothing to act on here —
+    /// there is no depth profile to exploit in a keyspace this small. The
+    /// one model-relevant fact still applies: after the first write, every
+    /// read of either key is a hit, so `expect_point_read_hits` is set for
+    /// the same reason as the main keyspace, at zero cost given the size.
+    pub(super) fn meta_keyspace_options(opts: super::StorageOptions) -> KeyspaceCreateOptions {
+        let mut created = KeyspaceCreateOptions::default().expect_point_read_hits(true);
+        if let Some(bytes) = opts.max_memtable_size_bytes {
+            created = created.max_memtable_size(bytes);
+        }
+        created
+    }
+
+    const _: () = assert!(LEVELS == 7, "policy vectors above assume 7 levels");
 }
 
 /// Open (or create) a fjall-backed storage at the given path with default
@@ -115,7 +278,7 @@ pub fn new_fjall_storage_with(
         .open()
         .map_err(|e| miette!("opening fjall database: {e}"))?;
     let meta = db
-        .keyspace(META_KEYSPACE_NAME, KeyspaceCreateOptions::default)
+        .keyspace(META_KEYSPACE_NAME, || tuning::meta_keyspace_options(opts))
         .map_err(|e| miette!("opening fjall meta keyspace: {e}"))?;
     match meta
         .get(FORMAT_VERSION_KEY)
@@ -135,7 +298,7 @@ pub fn new_fjall_storage_with(
         }
     }
     let ks = db
-        .keyspace(KEYSPACE_NAME, KeyspaceCreateOptions::default)
+        .keyspace(KEYSPACE_NAME, || tuning::main_keyspace_options(opts))
         .map_err(|e| miette!("opening fjall keyspace: {e}"))?;
     let now = crate::data::value::current_validity()?.raw();
     let watermark = match meta
