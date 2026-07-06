@@ -4,7 +4,7 @@
 
 use crate::{
     batch::item::Item, snapshot_nonce::SnapshotNonce, Database, Guard, HashMap, Iter, Keyspace,
-    OwnedWriteBatch, PersistMode, Readable,
+    OwnedWriteBatch, PersistMode, Readable, SeekIter,
 };
 use lsm_tree::{AbstractTree, InternalValue, Memtable, SeqNo, UserKey, UserValue};
 use std::{ops::RangeBounds, sync::Arc};
@@ -173,6 +173,29 @@ impl BaseTransaction {
     pub(super) fn durability(mut self, mode: Option<PersistMode>) -> Self {
         self.durability = mode;
         self
+    }
+
+    /// The seekable counterpart to [`Readable::range`]: opens ONE cursor,
+    /// read-your-own-writes overlay included, that a caller re-deriving
+    /// its own lower bound many times (a skip scan) can reposition via
+    /// [`SeekIter::seek`] instead of reopening a fresh range per step.
+    pub(super) fn seek_range<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        keyspace: impl AsRef<Keyspace>,
+        range: R,
+    ) -> SeekIter {
+        let keyspace = keyspace.as_ref();
+
+        let inner = keyspace.tree.create_seekable_range(
+            range,
+            self.nonce.instant,
+            self.memtables
+                .get(keyspace)
+                .cloned()
+                .map(|mt| (mt, self.seqno)),
+        );
+
+        SeekIter::new(self.nonce.clone(), inner)
     }
 
     /// Removes an item and returns its value if it existed.

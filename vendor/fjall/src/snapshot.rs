@@ -2,7 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use crate::{snapshot_nonce::SnapshotNonce, Guard, Iter, Keyspace, Readable};
+use crate::{snapshot_nonce::SnapshotNonce, Guard, Iter, Keyspace, Readable, SeekIter};
 use lsm_tree::{AbstractTree, SeqNo, UserValue};
 use std::ops::RangeBounds;
 
@@ -101,5 +101,24 @@ impl Readable for Snapshot {
             .prefix(prefix, self.nonce.instant, None);
 
         Iter::new(self.nonce.clone(), iter)
+    }
+}
+
+impl Snapshot {
+    /// The seekable counterpart to [`Readable::range`]: opens ONE cursor
+    /// over `range` that a caller re-deriving its own lower bound many
+    /// times (a skip scan) can reposition via [`SeekIter::seek`] instead
+    /// of reopening a fresh range per step.
+    pub fn seek_range<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        keyspace: impl AsRef<Keyspace>,
+        range: R,
+    ) -> SeekIter {
+        let inner = keyspace
+            .as_ref()
+            .tree
+            .create_seekable_range(range, self.nonce.instant, None);
+
+        SeekIter::new(self.nonce.clone(), inner)
     }
 }

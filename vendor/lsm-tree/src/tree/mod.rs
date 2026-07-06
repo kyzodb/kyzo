@@ -15,6 +15,7 @@ use crate::{
     key::InternalKey,
     manifest::Manifest,
     memtable::Memtable,
+    range::TreeIter,
     slice::Slice,
     table::Table,
     value::InternalValue,
@@ -670,8 +671,8 @@ impl Tree {
         range: &'a R,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
-    ) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> + 'static {
-        use crate::range::{IterState, TreeIter};
+    ) -> TreeIter {
+        use crate::range::IterState;
         use std::ops::Bound::{self, Excluded, Included, Unbounded};
 
         let lo: Bound<UserKey> = match range.start_bound() {
@@ -691,6 +692,35 @@ impl Tree {
         let iter_state = { IterState { version, ephemeral } };
 
         TreeIter::create_range(iter_state, bounds, seqno)
+    }
+
+    /// The seekable counterpart to [`Tree::create_range`]/[`Tree::create_prefix`]:
+    /// returns the concrete, positioned [`TreeIter`] (never boxed or hidden
+    /// behind `impl Iterator`) so a caller that will re-derive its lower
+    /// bound many times over the same open version — a skip scan — can
+    /// call [`TreeIter::seek`] instead of re-deriving a fresh
+    /// `SuperVersion` (this call's own lookup, done once here) and merge
+    /// stack per step.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the version-history lock is poisoned (a prior panic while
+    /// holding it) — the same non-recoverable condition every other read
+    /// path through `version_history` assumes cannot happen in practice.
+    pub fn create_seekable_range<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        range: R,
+        seqno: SeqNo,
+        ephemeral: Option<(Arc<Memtable>, SeqNo)>,
+    ) -> TreeIter {
+        #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
+        let super_version = self
+            .version_history
+            .read()
+            .expect("lock is poisoned")
+            .get_version_for_snapshot(seqno);
+
+        Self::create_internal_range(super_version, &range, seqno, ephemeral)
     }
 
     pub(crate) fn get_internal_entry_from_version(

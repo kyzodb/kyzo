@@ -172,7 +172,7 @@ pub use {
 
 pub use {
     abstract_tree::AbstractTree,
-    any_tree::AnyTree,
+    any_tree::{AnyTree, SeekableRangeIter},
     blob_tree::BlobTree,
     cache::Cache,
     compression::CompressionType,

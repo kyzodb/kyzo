@@ -82,7 +82,7 @@ use miette::Result;
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{SkipCursor, SkipSeek, SkipWalk};
 use crate::storage::{ReadTx, WriteTx};
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -147,15 +147,20 @@ impl ReadTx for TempTx {
 
     /// The bitemporal skip-scan walk, inherited whole from
     /// [`crate::storage::skip_walk`]: this backend contributes only the
-    /// [`SkipSeek`] impl below (a single `BTreeMap::range` probe), never the
-    /// walk itself.
+    /// [`SkipSeek`] impl below (one cursor over a single `BTreeMap`,
+    /// re-seeked forward once per version step), never the walk itself.
     fn range_skip_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(SkipWalk::new(self, lower, upper, as_of))
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
@@ -163,17 +168,36 @@ impl ReadTx for TempTx {
     }
 }
 
-impl SkipSeek for TempTx {
-    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        if lower >= upper {
-            // Degenerate bounds denote the empty interval, same as
-            // `range_scan` above (`BTreeMap::range` would panic on start > end).
-            return None;
-        }
+/// The skip walk's cursor over a `TempTx`: the `BTreeMap` and the fixed
+/// upper bound. [`SkipWalk::next`]'s own loop guard never calls
+/// [`SkipCursor::seek`] with `target >= upper` (it returns `None` first),
+/// so every `range` call here is well-formed by construction — no
+/// degenerate-bounds check is needed at the cursor itself.
+pub(crate) struct TempSkipCursor<'a> {
+    map: &'a BTreeMap<Vec<u8>, Vec<u8>>,
+    upper: Vec<u8>,
+}
+
+impl SkipCursor for TempSkipCursor<'_> {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
         self.map
-            .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
+            .range::<[u8], _>((
+                Bound::Included(target),
+                Bound::Excluded(self.upper.as_slice()),
+            ))
             .next()
             .map(|(k, v)| Ok((k.clone(), v.clone())))
+    }
+}
+
+impl SkipSeek for TempTx {
+    type Cursor<'c> = TempSkipCursor<'c>;
+
+    fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        TempSkipCursor {
+            map: &self.map,
+            upper: upper.to_vec(),
+        }
     }
 }
 

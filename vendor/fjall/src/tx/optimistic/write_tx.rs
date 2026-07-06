@@ -11,7 +11,7 @@ use crate::{
         },
         write_tx::BaseTransaction,
     },
-    Database, Guard, Iter, Keyspace, PersistMode, Readable,
+    Database, Guard, Iter, Keyspace, PersistMode, Readable, SeekIter,
 };
 use lsm_tree::{Slice, UserKey, UserValue};
 use std::{
@@ -137,6 +137,31 @@ impl WriteTransaction {
     pub fn durability(mut self, mode: Option<PersistMode>) -> Self {
         self.inner = self.inner.durability(mode);
         self
+    }
+
+    /// The seekable counterpart to [`Readable::range`]: opens ONE cursor
+    /// that a caller re-deriving its own lower bound many times (a skip
+    /// scan) can reposition via [`SeekIter::seek`] instead of reopening a
+    /// fresh range per step.
+    ///
+    /// Marks the FULL `range` read for conflict tracking up front, at
+    /// cursor-open time, rather than once per seek step. This is
+    /// equivalent to (a collapse of) what N reopened `range()` calls over
+    /// shrinking sub-bounds of the same `[lower, upper)` would mark: each
+    /// such sub-range is a subset of `range` itself, so its mark is
+    /// already subsumed by this single, widest one — nothing a per-step
+    /// reopen would have caught escapes this.
+    pub fn seek_range<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        keyspace: impl AsRef<Keyspace>,
+        range: R,
+    ) -> SeekIter {
+        let start: Bound<Slice> = range.start_bound().map(|k| k.as_ref().into());
+        let end: Bound<Slice> = range.end_bound().map(|k| k.as_ref().into());
+
+        self.cm.mark_range(keyspace.as_ref().id, (start, end));
+
+        self.inner.seek_range(keyspace, range)
     }
 
     /// Removes an item and returns its value if it existed.

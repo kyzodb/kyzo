@@ -94,7 +94,7 @@ use miette::{Result, miette};
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{SkipCursor, SkipSeek, SkipWalk};
 use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
@@ -758,8 +758,8 @@ impl SimWriteTx {
     /// build cost O(range size) per call regardless of how many items the
     /// caller actually consumes — the same catastrophic shape
     /// `SimReadTx::range_scan` had (see its doc comment): the skip walk's
-    /// `SkipSeek` impl below reopens a fresh range at every seek step and
-    /// drops all but the first item, so an O(n)-key skip scan paid O(n²)
+    /// `SkipCursor` impl below reopens a fresh range at every seek step
+    /// and drops all but the first item, so an O(n)-key skip scan paid O(n²)
     /// here too, on the ordinary
     /// "insert/update from a Datalog query" write-lock script path
     /// (`runtime/db.rs` routes every write-lock script's WHOLE query body
@@ -949,42 +949,84 @@ impl SimWriteTx {
     }
 }
 
-/// [`SkipSeek`] for [`SimReadTx`]: the one seam the driver needs, inlining
-/// exactly what `range_scan` already does per call (yield to the scheduler,
-/// roll the read-fault die) so the skip walk keeps participating in DST
-/// scheduling and fault injection PER SEEK STEP — losing that would silently
-/// narrow the fault surface the sim exists to stress — while no longer
-/// boxing through `range_scan` itself (issue #78's phase-2 map).
-impl SkipSeek for SimReadTx {
-    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        self.ctx.yield_turn();
+/// The skip walk's cursor over a [`SimReadTx`]: `open_skip_cursor` does
+/// nothing (there is no expensive one-time setup to save over an
+/// in-memory `BTreeMap`) — `seek` alone carries forward exactly what
+/// `range_scan` already does per call (yield to the scheduler, roll the
+/// read-fault die), so the skip walk keeps participating in DST
+/// scheduling and fault injection PER SEEK STEP; collapsing that into
+/// `open_skip_cursor` would silently narrow the fault surface the sim
+/// exists to stress down to one decision per walk instead of one per
+/// version step.
+pub(crate) struct SimReadSkipCursor<'a> {
+    tx: &'a SimReadTx,
+    upper: Vec<u8>,
+}
+
+impl SkipCursor for SimReadSkipCursor<'_> {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        self.tx.ctx.yield_turn();
         if let Err(e) = self
+            .tx
             .ctx
-            .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
+            .check_read_fault(op_identity(TAG_RANGE, &[target, &self.upper]))
         {
             return Some(Err(e));
         }
-        map_range(&self.snapshot, lower, Some(upper))
+        map_range(&self.tx.snapshot, target, Some(&self.upper))
             .next()
             .map(|(k, v)| Ok((k.clone(), v.clone())))
     }
 }
 
-/// [`SkipSeek`] for [`SimWriteTx`]: same shape as [`SimReadTx`]'s plus the
-/// conservative "one per seek step" range tracking the contract documents
-/// for as-of scans inside write transactions, over the lazy visible-range
-/// cursor (snapshot merged with this transaction's own writes).
-impl SkipSeek for SimWriteTx {
-    fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        self.ctx.yield_turn();
-        self.track_range(lower, Some(upper));
+impl SkipSeek for SimReadTx {
+    type Cursor<'c> = SimReadSkipCursor<'c>;
+
+    fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        SimReadSkipCursor {
+            tx: self,
+            upper: upper.to_vec(),
+        }
+    }
+}
+
+/// The skip walk's cursor over a [`SimWriteTx`]: same shape as
+/// [`SimReadSkipCursor`]'s, plus the conservative "one per seek step"
+/// range tracking the contract documents for as-of scans inside write
+/// transactions, over the lazy visible-range cursor (snapshot merged with
+/// this transaction's own writes) — all still per `seek` call, not
+/// collapsed into `open_skip_cursor`.
+pub(crate) struct SimWriteSkipCursor<'a> {
+    tx: &'a SimWriteTx,
+    upper: Vec<u8>,
+}
+
+impl SkipCursor for SimWriteSkipCursor<'_> {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        self.tx.ctx.yield_turn();
+        self.tx.track_range(target, Some(&self.upper));
         if let Err(e) = self
+            .tx
             .ctx
-            .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
+            .check_read_fault(op_identity(TAG_RANGE, &[target, &self.upper]))
         {
             return Some(Err(e));
         }
-        self.visible_lazy(lower, Some(upper)).next().map(Ok)
+        self.tx
+            .visible_lazy(target, Some(&self.upper))
+            .next()
+            .map(Ok)
+    }
+}
+
+impl SkipSeek for SimWriteTx {
+    type Cursor<'c> = SimWriteSkipCursor<'c>;
+
+    fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        SimWriteSkipCursor {
+            tx: self,
+            upper: upper.to_vec(),
+        }
     }
 }
 
@@ -1017,7 +1059,7 @@ impl ReadTx for SimReadTx {
         // element as it's pulled costs O(1) amortized per item. The
         // predecessor's `.collect()` into a `Vec` up front made every call
         // O(remaining range size) regardless of how many items the caller
-        // actually consumes — catastrophic under the skip walk's `SkipSeek`
+        // actually consumes — catastrophic under the skip walk's `SkipCursor`
         // impl below, which opens a fresh range at every seek step and
         // consumes only the FIRST item: an O(n) skip scan over a range of
         // n keys paid O(n²) total instead of O(n).
@@ -1032,7 +1074,12 @@ impl ReadTx for SimReadTx {
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(SkipWalk::new(self, lower, upper, as_of))
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
@@ -1094,7 +1141,12 @@ impl ReadTx for SimWriteTx {
         upper: &[u8],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(SkipWalk::new(self, lower, upper, as_of))
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {

@@ -73,7 +73,7 @@ pub struct IterState {
 type BoxedMerge<'a> = Box<dyn DoubleEndedIterator<Item = crate::Result<InternalValue>> + Send + 'a>;
 
 self_cell!(
-    pub struct TreeIter {
+    struct MergedIter {
         owner: IterState,
 
         #[covariant]
@@ -81,7 +81,7 @@ self_cell!(
     }
 );
 
-impl Iterator for TreeIter {
+impl Iterator for MergedIter {
     type Item = crate::Result<InternalValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -89,9 +89,181 @@ impl Iterator for TreeIter {
     }
 }
 
-impl DoubleEndedIterator for TreeIter {
+impl DoubleEndedIterator for MergedIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.with_dependent_mut(|_, iter| iter.next_back())
+    }
+}
+
+/// Builds the merged, MVCC-resolved, tombstone-filtered stream over
+/// `bounds` from an ALREADY-OPEN `IterState` — no `SuperVersion` lookup,
+/// no lock, just walking the runs/tables/memtables this `IterState`
+/// already pins. This is the one place that logic lives: both the first
+/// open ([`TreeIter::create_range`]) and every later re-seek
+/// ([`TreeIter::seek`]) call it, so a re-seek pays only for repositioning
+/// each backing run/table/memtable at the new lower bound (their own
+/// range entry point: index block, then restart-point binary search,
+/// then linear scan — never the point-get hash index), not for
+/// rediscovering which runs/tables/memtables exist.
+fn build_merged(
+    lock: &IterState,
+    bounds: (Bound<UserKey>, Bound<UserKey>),
+    seqno: SeqNo,
+) -> BoxedMerge<'_> {
+    // NOTE: See memtable.rs for range explanation
+    let lo = match bounds.0 {
+        Bound::Included(key) => Bound::Included(InternalKey::new(
+            key,
+            SeqNo::MAX,
+            crate::ValueType::Tombstone,
+        )),
+        Bound::Excluded(key) => {
+            Bound::Excluded(InternalKey::new(key, 0, crate::ValueType::Tombstone))
+        }
+        Bound::Unbounded => Bound::Unbounded,
+    };
+
+    // NOTE: See memtable.rs for range explanation, this is the reverse case
+    // where we need to go all the way to the last seqno of an item
+    //
+    // Example: We search for (Unbounded..Excluded(abdef))
+    //
+    // key -> seqno
+    //
+    // a   -> 7 <<< This is the lowest key that matches the range
+    // abc -> 5
+    // abc -> 4
+    // abc -> 3 <<< This is the highest key that matches the range
+    // abcdef -> 6
+    // abcdef -> 5
+    //
+    let hi = match bounds.1 {
+        Bound::Included(key) => Bound::Included(InternalKey::new(key, 0, crate::ValueType::Value)),
+        Bound::Excluded(key) => {
+            Bound::Excluded(InternalKey::new(key, SeqNo::MAX, crate::ValueType::Value))
+        }
+        Bound::Unbounded => Bound::Unbounded,
+    };
+
+    let range = (lo, hi);
+
+    let mut iters: Vec<BoxedIterator<'_>> = Vec::with_capacity(5);
+
+    for run in lock
+        .version
+        .version
+        .iter_levels()
+        .flat_map(|lvl| lvl.iter())
+    {
+        match run.len() {
+            0 => {
+                // Do nothing
+            }
+            1 => {
+                #[expect(clippy::expect_used, reason = "we checked for length")]
+                let table = run.first().expect("should exist");
+
+                if table.check_key_range_overlap(&(
+                    range.start_bound().map(|x| &*x.user_key),
+                    range.end_bound().map(|x| &*x.user_key),
+                )) {
+                    let reader = table
+                        .range((
+                            range.start_bound().map(|x| &x.user_key).cloned(),
+                            range.end_bound().map(|x| &x.user_key).cloned(),
+                        ))
+                        .filter(move |item| match item {
+                            Ok(item) => seqno_filter(item.key.seqno, seqno),
+                            Err(_) => true,
+                        });
+
+                    iters.push(Box::new(reader));
+                }
+            }
+            _ => {
+                if let Some(reader) = RunReader::new(
+                    run.clone(),
+                    (
+                        range.start_bound().map(|x| &x.user_key).cloned(),
+                        range.end_bound().map(|x| &x.user_key).cloned(),
+                    ),
+                ) {
+                    iters.push(Box::new(reader.filter(move |item| match item {
+                        Ok(item) => seqno_filter(item.key.seqno, seqno),
+                        Err(_) => true,
+                    })));
+                }
+            }
+        }
+    }
+
+    // Sealed memtables
+    for memtable in lock.version.sealed_memtables.iter() {
+        let iter = memtable.range(range.clone());
+
+        iters.push(Box::new(
+            iter.filter(move |item| seqno_filter(item.key.seqno, seqno))
+                .map(Ok),
+        ));
+    }
+
+    // Active memtable
+    {
+        let iter = lock.version.active_memtable.range(range.clone());
+
+        iters.push(Box::new(
+            iter.filter(move |item| seqno_filter(item.key.seqno, seqno))
+                .map(Ok),
+        ));
+    }
+
+    if let Some((mt, seqno)) = &lock.ephemeral {
+        let iter = Box::new(
+            mt.range(range)
+                .filter(move |item| seqno_filter(item.key.seqno, *seqno))
+                .map(Ok),
+        );
+        iters.push(iter);
+    }
+
+    let merged = Merger::new(iters);
+    let iter = MvccStream::new(merged);
+
+    Box::new(iter.filter(|x| match x {
+        Ok(value) => !value.key.is_tombstone(),
+        Err(_) => true,
+    }))
+}
+
+/// A single positioned merge cursor over one bounded range of one open
+/// `SuperVersion` — the seekable counterpart to a plain range iterator.
+///
+/// [`TreeIter::seek`] repositions this cursor forward to a new lower
+/// bound IN PLACE: it reuses the `SuperVersion`/ephemeral memtable this
+/// `TreeIter` was opened with (no new version-history lookup, no new
+/// lock — the expensive part of "opening a fresh range"), rebuilding only
+/// the merge/heap/tombstone-filter stack from that same owner. Each
+/// backing run/table/memtable repositions itself at the new lower bound
+/// through its own range entry point (index block, then restart-point
+/// binary search, then linear scan), never through the point-get hash
+/// index.
+pub struct TreeIter {
+    inner: MergedIter,
+    upper: Bound<UserKey>,
+    seqno: SeqNo,
+}
+
+impl Iterator for TreeIter {
+    type Item = crate::Result<InternalValue>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+impl DoubleEndedIterator for TreeIter {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
     }
 }
 
@@ -101,137 +273,42 @@ impl TreeIter {
         range: R,
         seqno: SeqNo,
     ) -> Self {
-        Self::new(guard, |lock| {
-            let lo = match range.start_bound() {
-                // NOTE: See memtable.rs for range explanation
-                Bound::Included(key) => Bound::Included(InternalKey::new(
-                    key.as_ref(),
-                    SeqNo::MAX,
-                    crate::ValueType::Tombstone,
-                )),
-                Bound::Excluded(key) => Bound::Excluded(InternalKey::new(
-                    key.as_ref(),
-                    0,
-                    crate::ValueType::Tombstone,
-                )),
-                Bound::Unbounded => Bound::Unbounded,
-            };
+        let lo: Bound<UserKey> = match range.start_bound() {
+            Bound::Included(key) => Bound::Included(key.as_ref().into()),
+            Bound::Excluded(key) => Bound::Excluded(key.as_ref().into()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let hi: Bound<UserKey> = match range.end_bound() {
+            Bound::Included(key) => Bound::Included(key.as_ref().into()),
+            Bound::Excluded(key) => Bound::Excluded(key.as_ref().into()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
 
-            let hi = match range.end_bound() {
-                // NOTE: See memtable.rs for range explanation, this is the reverse case
-                // where we need to go all the way to the last seqno of an item
-                //
-                // Example: We search for (Unbounded..Excluded(abdef))
-                //
-                // key -> seqno
-                //
-                // a   -> 7 <<< This is the lowest key that matches the range
-                // abc -> 5
-                // abc -> 4
-                // abc -> 3 <<< This is the highest key that matches the range
-                // abcdef -> 6
-                // abcdef -> 5
-                //
-                Bound::Included(key) => {
-                    Bound::Included(InternalKey::new(key.as_ref(), 0, crate::ValueType::Value))
-                }
-                Bound::Excluded(key) => Bound::Excluded(InternalKey::new(
-                    key.as_ref(),
-                    SeqNo::MAX,
-                    crate::ValueType::Value,
-                )),
-                Bound::Unbounded => Bound::Unbounded,
-            };
+        let upper = hi.clone();
+        let inner = MergedIter::new(guard, |lock| build_merged(lock, (lo, hi), seqno));
 
-            let range = (lo, hi);
+        Self {
+            inner,
+            upper,
+            seqno,
+        }
+    }
 
-            let mut iters: Vec<BoxedIterator<'_>> = Vec::with_capacity(5);
+    /// Repositions this cursor forward to the first key at or after
+    /// `target`, within the range it was opened with, and returns that
+    /// key/value (or `None` if nothing remains). `target` must be
+    /// non-decreasing across calls on the same cursor — this is a
+    /// forward-only seek, not a general reposition.
+    pub fn seek(&mut self, target: &[u8]) -> Option<crate::Result<InternalValue>> {
+        let lower = Bound::Included(target.into());
+        let upper = self.upper.clone();
+        let seqno = self.seqno;
 
-            for run in lock
-                .version
-                .version
-                .iter_levels()
-                .flat_map(|lvl| lvl.iter())
-            {
-                match run.len() {
-                    0 => {
-                        // Do nothing
-                    }
-                    1 => {
-                        #[expect(clippy::expect_used, reason = "we checked for length")]
-                        let table = run.first().expect("should exist");
+        self.inner.with_dependent_mut(|lock, dependent| {
+            *dependent = build_merged(lock, (lower, upper), seqno);
+        });
 
-                        if table.check_key_range_overlap(&(
-                            range.start_bound().map(|x| &*x.user_key),
-                            range.end_bound().map(|x| &*x.user_key),
-                        )) {
-                            let reader = table
-                                .range((
-                                    range.start_bound().map(|x| &x.user_key).cloned(),
-                                    range.end_bound().map(|x| &x.user_key).cloned(),
-                                ))
-                                .filter(move |item| match item {
-                                    Ok(item) => seqno_filter(item.key.seqno, seqno),
-                                    Err(_) => true,
-                                });
-
-                            iters.push(Box::new(reader));
-                        }
-                    }
-                    _ => {
-                        if let Some(reader) = RunReader::new(
-                            run.clone(),
-                            (
-                                range.start_bound().map(|x| &x.user_key).cloned(),
-                                range.end_bound().map(|x| &x.user_key).cloned(),
-                            ),
-                        ) {
-                            iters.push(Box::new(reader.filter(move |item| match item {
-                                Ok(item) => seqno_filter(item.key.seqno, seqno),
-                                Err(_) => true,
-                            })));
-                        }
-                    }
-                }
-            }
-
-            // Sealed memtables
-            for memtable in lock.version.sealed_memtables.iter() {
-                let iter = memtable.range(range.clone());
-
-                iters.push(Box::new(
-                    iter.filter(move |item| seqno_filter(item.key.seqno, seqno))
-                        .map(Ok),
-                ));
-            }
-
-            // Active memtable
-            {
-                let iter = lock.version.active_memtable.range(range.clone());
-
-                iters.push(Box::new(
-                    iter.filter(move |item| seqno_filter(item.key.seqno, seqno))
-                        .map(Ok),
-                ));
-            }
-
-            if let Some((mt, seqno)) = &lock.ephemeral {
-                let iter = Box::new(
-                    mt.range(range)
-                        .filter(move |item| seqno_filter(item.key.seqno, *seqno))
-                        .map(Ok),
-                );
-                iters.push(iter);
-            }
-
-            let merged = Merger::new(iters);
-            let iter = MvccStream::new(merged);
-
-            Box::new(iter.filter(|x| match x {
-                Ok(value) => !value.key.is_tombstone(),
-                Err(_) => true,
-            }))
-        })
+        self.inner.next()
     }
 }
 

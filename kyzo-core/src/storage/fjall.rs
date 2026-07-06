@@ -28,10 +28,11 @@
 //!   read.
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
-//! - **Bitemporal as-of scans** — a seek loop: each step opens a fresh
-//!   range at the seek key computed by `check_key_for_bitemporal` (the
-//!   row's polarity peeked from its value), touching one stored version
-//!   per distinct fact in the common case.
+//! - **Bitemporal as-of scans** — a seek loop over ONE positioned cursor
+//!   (`fjall::SeekIter`, opened once and re-seeked forward per step,
+//!   never reopened) at the seek key computed by `check_key_for_bitemporal`
+//!   (the row's polarity peeked from its value), touching one stored
+//!   version per distinct fact in the common case.
 //!
 //! The transaction species are distinct types: [`FjallReadTx`] cannot write
 //! by construction, and committing a [`FjallWriteTx`] consumes it — writing
@@ -49,7 +50,7 @@ use miette::{Result, bail, miette};
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{SkipCursor, SkipSeek, SkipWalk};
 use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
 
 const KEYSPACE_NAME: &str = "kyzo";
@@ -439,6 +440,30 @@ fn read_total_scan<'a, R: Readable>(
     }))
 }
 
+/// The skip walk's cursor over one fjall reader: a single positioned
+/// `fjall::SeekIter`, re-seeked forward once per version step instead of
+/// reopened. `Empty` is the same degenerate-bounds guard `raw_range`
+/// applies to the plain range-scan path — an inverted `[lower, upper)`
+/// must never reach fjall, whose write-transaction conflict manager
+/// replays marked ranges through `BTreeSet::range` at commit time and
+/// panics on one.
+pub(crate) enum FjallSkipCursor {
+    Empty,
+    Live(fjall::SeekIter),
+}
+
+impl SkipCursor for FjallSkipCursor {
+    fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
+        match self {
+            Self::Empty => None,
+            Self::Live(iter) => iter.seek(target).map(|r| {
+                let (k, v) = r.map_err(|e| miette!("fjall read: {e}"))?;
+                Ok((k.to_vec(), v.to_vec()))
+            }),
+        }
+    }
+}
+
 macro_rules! impl_read_tx {
     ($ty:ty, $reader:ident) => {
         impl ReadTx for $ty {
@@ -464,7 +489,12 @@ macro_rules! impl_read_tx {
                 upper: &[u8],
                 as_of: AsOf,
             ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-                Box::new(SkipWalk::new(self, lower, upper, as_of))
+                Box::new(SkipWalk::new(
+                    self.open_skip_cursor(lower, upper),
+                    lower,
+                    upper,
+                    as_of,
+                ))
             }
 
             fn total_scan<'a>(
@@ -475,8 +505,16 @@ macro_rules! impl_read_tx {
         }
 
         impl SkipSeek for $ty {
-            fn seek_first(&self, lower: &[u8], upper: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-                raw_range(&self.$reader, &self.ks, lower, upper).next()
+            type Cursor<'c> = FjallSkipCursor;
+
+            fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+                if lower >= upper {
+                    return FjallSkipCursor::Empty;
+                }
+                FjallSkipCursor::Live(self.$reader.seek_range::<&[u8], _>(
+                    &self.ks,
+                    (Bound::Included(lower), Bound::Excluded(upper)),
+                ))
             }
         }
     };

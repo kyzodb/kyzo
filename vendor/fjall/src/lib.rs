@@ -121,6 +121,7 @@ mod path;
 mod poison_dart;
 mod readable;
 mod recovery;
+mod seek_iter;
 mod snapshot;
 mod snapshot_nonce;
 mod snapshot_tracker;
@@ -153,6 +154,7 @@ pub use {
     journal::{error::RecoveryError as JournalRecoveryError, writer::PersistMode},
     keyspace::{options::CreateOptions as KeyspaceCreateOptions, Keyspace},
     readable::Readable,
+    seek_iter::SeekIter,
     snapshot::Snapshot,
     version::FormatVersion,
 };
