@@ -5,55 +5,77 @@ built from it.
 
 ## The line is ours
 
-KyzoDB versions on its own `0.Y.Z` line, and its first public release is **0.9.0**. It does not
-track, mirror, or imply compatibility with upstream
-[CozoDB](https://github.com/cozodb/cozo)'s version numbers.
+KyzoDB versions on its own `0.Y.Z` line, starting at `0.1.0`. It does not track, mirror, or imply
+compatibility with upstream [CozoDB](https://github.com/cozodb/cozo)'s version numbers.
 
 Why: KyzoDB is a massively-diverged fork. The storage backend is different (fjall, not
-RocksDB/SQLite), the on-disk format is different, the storage contract is rebuilt, and large parts of
-the query engine were re-derived from first principles against an independent oracle. Reusing
-upstream's numbers would claim a compatibility promise this project does not make. Lineage and credit
-belong in [FORK.md](FORK.md) and the source headers, verbatim, not in the version string.
+RocksDB/SQLite), the on-disk format is different, the storage contract is rebuilt, and large parts
+of the query engine have been re-derived from first principles against an independent oracle.
+Reusing upstream's version numbers would claim a compatibility promise — "this behaves like Cozo
+vX.Y.Z" — that this project does not make and will not keep. Lineage and credit belong in
+[FORK.md](FORK.md) and the source headers, verbatim, forever. They do not belong in the version
+string.
 
 ## SemVer 2.0, pre-1.0 semantics
 
-Every crate follows [SemVer 2.0.0](https://semver.org/), with the pre-1.0 reading SemVer itself
-specifies:
+Every crate in this workspace follows [SemVer 2.0.0](https://semver.org/), with the pre-1.0 reading
+SemVer itself specifies:
 
-- **`0.Y` (minor) = breaking.** Any change to the public API, the query-language semantics, or
-  on-disk compatibility that would be a major bump after 1.0 is a minor bump before it. Pre-1.0,
-  breaking changes are expected.
-- **`0.Y.Z` (patch) = backward-compatible** fixes and additions.
+- **`0.Y` (minor) = breaking.** Any change to public API surface, query-language semantics, or
+  on-disk compatibility that would be a major bump post-1.0 is a minor bump pre-1.0. There is no
+  quiet-breaking-patch category.
+- **`0.Y.Z` (patch) = compatible.** Bug fixes, new capabilities that don't change existing behavior,
+  performance work, and documentation land as patches.
+- There is no `0.Y.Z-something` pre-release channel yet. If one is needed (a release candidate ahead
+  of a risky cut), it is named explicitly in the release notes when it happens, not assumed.
 
-Depend on an exact version (`=0.9.0`) if you need stability across an upgrade you haven't reviewed.
+## `v1.0.0` is a milestone, not a date
 
-## Why 0.9.0 and not 1.0.0
+`v1.0.0` is reserved for the completion of the [Engine v1.0
+milestone](https://github.com/orgs/kyzodb/projects/1): the full engine, standing, adversarially
+proven, with every guardrail in this repo's `CLAUDE.md` load-bearing. It is cut when that milestone
+closes, whenever that is. No calendar pressure moves this number.
 
-0.9.0 is an honest number. The engine is feature-complete for its scope and its correctness is
-proven: serializable transactions, crash recovery, an oracle-verified query semantics, bitemporal
-time travel, a shipped `::verify` self-check. But **1.0.0 is an earned commitment, not a feature
-count**, and two of its conditions are not yet met:
+## The three independent axes
 
-- the **public API is not frozen**: it is young and still moving;
-- **performance is not yet verified at scale** on current code against the public benchmarks.
+Three numbers describe a KyzoDB release, and they do not move together. Conflating any two of them
+is the mistake this section exists to prevent.
 
-1.0.0 ships only when the API is frozen (breaking changes then require `2.0.0`), performance is
-measured and published against the standard yardsticks, and the project can make a production-
-readiness statement it stands behind. Until then we stay on `0.Y.Z`.
+| Axis | Where it lives | What it promises | Who bumps it |
+|---|---|---|---|
+| **Crate SemVer** | `Cargo.toml` `version` (workspace-inherited) | API/behavior compatibility per the rules above | Every release, per the changes it carries |
+| **FormatVersion** | `kyzo_core::FormatVersion` (`kyzo-core/src/storage/mod.rs`), an integer stamped into every store at creation | On-disk byte-layout compatibility — a store written at one FormatVersion either opens at that exact version or is refused, never silently misread | Only when the on-disk encoding changes; independent of the SemVer bump size |
+| **MSRV** | `rust-version` in the workspace `Cargo.toml` (currently **1.93**) | The minimum Rust toolchain that can build this crate | Raised deliberately, stated in the release that raises it |
 
-## Three independent version numbers
-
-These move on their own axes; do not infer one from another.
-
-- **Crate SemVer** (`0.9.0`): the public Rust/language API surface.
-- **FormatVersion** (an integer, currently **4**): the on-disk key/value format. Bumped *only* on a
-  format change, and only with round-trip and ordering tests before and after. A crate minor bump
-  does not imply a format change.
-- **MSRV**: the minimum supported Rust version, declared in the workspace manifest.
+A release's notes always state all three explicitly (template in [RELEASING.md](RELEASING.md)),
+even when a given axis didn't move — "FormatVersion: 4 (unchanged)" is a claim, not a placeholder.
+There is no migration tooling for FormatVersion bumps yet: pre-1.0, a bump is a stated breaking
+change with an explicit migration stance (currently: none exists; a store must be recreated across a
+FormatVersion boundary). That stance itself is part of what a release states, and changes only when
+migration tooling lands as its own reviewed piece of work.
 
 ## Releases come only from green main
 
-A release is tagged only from a `main` commit whose CI is fully green, and only through the
-tag-triggered release pipeline, which re-verifies the pure-Rust, unsafe, fmt/clippy, and
-whole-workspace build/test gates hermetically from the tag checkout before publishing artifacts. A
-number that did not come from that pipeline is not a KyzoDB release.
+A release is a tag pointing at a commit that is:
+
+1. An ancestor of `main` (no releasing a side branch, no releasing ahead of what's actually merged).
+2. The commit CI reported green on, verified at release time, not assumed from memory. See
+   `.github/workflows/release.yml`, job `verify-provenance`.
+
+Nothing about producing a release depends on any machine but CI. A release built on a contributor's
+laptop, however green their local run, is not a release.
+
+## Cadence
+
+One release per sealed story-wave. A "wave" is the set of board stories that land together and get
+marked sealed; when a wave seals on green main, that is the trigger to cut the next `0.Y.Z`, not a
+calendar interval. See [RELEASING.md](RELEASING.md) for the operator steps.
+
+## Public interface
+
+As of this ruling, the **only** public interface to KyzoDB's history is `v0.Y.Z` git tags and their
+paired GitHub Releases (crates.io publication follows the same tags — see RELEASING.md). Dev-revision
+git SHAs are not a public interface: any pinning against a specific commit (the bench lane, a
+downstream binding, a private integration) is private coordination between teams, not something this
+project supports or stabilizes. If you depend on KyzoDB from outside this org, depend on a tag or the
+crates.io version, never a commit.

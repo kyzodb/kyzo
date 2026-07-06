@@ -1,0 +1,265 @@
+# Release pipeline: on a `v0.Y.Z` tag push, this is the ONLY way a KyzoDB release comes to exist.
+#
+# See VERSIONING.md for the ruling and RELEASING.md for the operator runbook this workflow
+# implements mechanically. The standing rule: a release built on anything but a green,
+# main-ancestor commit is worse than no release — it spends the trust the whole gate apparatus in
+# ci.yml exists to earn. So this workflow either produces a complete, correct release, or it
+# refuses loudly and produces nothing.
+#
+# Jobs, in dependency order:
+#   verify-provenance  -> the tag commit must be an ancestor of main AND CI must have reported
+#                         green on that exact commit SHA (checked live via the API, never assumed).
+#   pure-rust-gate,
+#   unsafe-audit,
+#   lint, build-test    -> a hermetic re-run of ci.yml's core gates on a FRESH checkout of the
+#                         tagged commit. This never reuses ci.yml's earlier run or its artifacts —
+#                         the whole point is that the release pipeline trusts nothing it didn't
+#                         just verify itself. (cargo-deny/mpl-headers/gitleaks/coverage/fuzz stay in
+#                         ci.yml; they gate every push and pull request already. What's re-run here
+#                         is the subset a stale-artifact or wrong-commit release would most
+#                         visibly falsify: does it build, does it pass, is it clean, is it pure,
+#                         is it unsafe-free.)
+#   build-artifacts     -> kyzo-bin release binaries (linux x86_64 gnu) + SHA256SUMS.
+#   publish-release     -> drafts and publishes the GitHub Release: changelog since the previous
+#                         tag, the gate summary, FormatVersion, a benchmark-status placeholder for
+#                         a human to fill in (see RELEASING.md), and the attribution note.
+#   publish-crates      -> `cargo publish -p kyzo`, gated on the `crates-io` GitHub Environment
+#                         (manual approval). No-ops loudly if CARGO_REGISTRY_TOKEN isn't configured
+#                         — a missing credential is never a red build.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-provenance:
+    name: Verify tag is ancestor of main + CI green on this exact SHA
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Refuse anything but a green, main-ancestor commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="${{ github.sha }}"
+
+          echo "== Checking $sha is an ancestor of main =="
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::REFUSED — tag commit $sha is not reachable from main. Releases are cut only from commits that are ancestors of main (see VERSIONING.md)."
+            exit 1
+          fi
+          echo "OK: $sha is an ancestor of main."
+
+          echo "== Checking CI reported success on $sha =="
+          runs=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=10" --jq '.workflow_runs')
+          count=$(echo "$runs" | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "::error::REFUSED — no CI workflow run exists for commit $sha. A release requires a recorded green CI run on the exact tagged commit, not an assumption that it would have passed."
+            exit 1
+          fi
+          status=$(echo "$runs" | jq -r '.[0].status')
+          conclusion=$(echo "$runs" | jq -r '.[0].conclusion')
+          echo "Most recent CI run for $sha: status=$status conclusion=$conclusion"
+          if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
+            echo "::error::REFUSED — CI on commit $sha is status=$status conclusion=$conclusion, not a completed success. Releases come only from green main."
+            exit 1
+          fi
+          echo "OK: CI succeeded on $sha. Provenance verified."
+
+  # ---------- Hermetic gate re-run (fresh checkout, mirrors ci.yml's core gates) ----------
+
+  pure-rust-gate:
+    name: Pure-Rust gate (kyzo-core + kyzo-bin)
+    runs-on: ubuntu-latest
+    needs: verify-provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/check-pure-rust.sh
+
+  unsafe-audit:
+    name: Unsafe-code ratchet (engine only)
+    runs-on: ubuntu-latest
+    needs: verify-provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: scripts/check-unsafe.sh
+
+  lint:
+    name: fmt + clippy (whole workspace)
+    runs-on: ubuntu-latest
+    needs: verify-provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  build-test:
+    name: Build + test (whole workspace)
+    runs-on: ubuntu-latest
+    needs: verify-provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --release
+      - run: cargo test --workspace --release
+
+  # ---------- Artifacts ----------
+
+  build-artifacts:
+    name: Build kyzo-bin release artifacts
+    runs-on: ubuntu-latest
+    needs: [pure-rust-gate, unsafe-audit, lint, build-test]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build kyzo-bin (release, x86_64-unknown-linux-gnu)
+        run: cargo build -p kyzo-bin --release --target x86_64-unknown-linux-gnu
+      - name: Package + checksum
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          dir="kyzo-${tag}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/$dir"
+          cp target/x86_64-unknown-linux-gnu/release/kyzo "dist/$dir/"
+          cp README.md LICENSE.txt FORK.md "dist/$dir/"
+          (cd dist && tar czf "$dir.tar.gz" "$dir")
+          (cd dist && sha256sum "$dir.tar.gz" > SHA256SUMS)
+          ls -la dist/
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          retention-days: 90
+
+  # ---------- Release ----------
+
+  publish-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-artifacts
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-artifacts
+          path: dist
+      - name: Draft release notes (RELEASING.md's mandatory sections)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prev_tag=$(git tag --sort=-creatordate --merged "$tag" | grep -v "^${tag}$" | head -1 || true)
+
+          {
+            echo "## Changelog"
+            echo
+            if [ -n "$prev_tag" ]; then
+              echo "Commits since ${prev_tag}:"
+              echo
+              git log "${prev_tag}..${tag}" --pretty=format:'- %s (%h)'
+            else
+              echo "Initial release — no previous tag to diff against. See CHANGELOG.md's [${tag#v}] entry for the full shipped scope."
+            fi
+            echo
+            echo
+            echo "## Gate summary"
+            echo
+            echo "Hermetic re-run on commit \`${{ github.sha }}\`, fresh checkout (not reused from the original CI run):"
+            echo
+            echo "| Gate | Result |"
+            echo "|---|---|"
+            echo "| Pure-Rust gate | success |"
+            echo "| Unsafe-code ratchet | success |"
+            echo "| fmt + clippy -D warnings | success |"
+            echo "| build --workspace --release | success |"
+            echo "| test --workspace --release | success |"
+            echo
+            echo "(This job only runs if every gate above passed — a failing gate blocks \`build-artifacts\` and this job never starts. See ci.yml for the full gate set — cargo-deny, MPL headers, secret scan, supply-chain, coverage, memcmp tripwire, fuzz smoke — enforced on every push and pull request already.)"
+            echo
+            echo "## FormatVersion"
+            echo
+            fv=$(grep -oP 'pub const CURRENT: FormatVersion = FormatVersion\(\K[0-9]+' kyzo-core/src/storage/mod.rs || echo "unknown")
+            echo "FormatVersion: ${fv} — see VERSIONING.md for the migration stance."
+            echo
+            echo "## Benchmark status"
+            echo
+            echo "_Fill in before publishing: criterion numbers for this wave, including any regressions or losing runs against the prior release (CLAUDE.md: benchmarks are instruments, never gates — a known regression still ships, named plainly)._"
+            echo
+            echo "## Attribution"
+            echo
+            echo "KyzoDB is a fork of [CozoDB](https://github.com/cozodb/cozo) (Ziyang Hu and the Cozo Project Authors), MPL-2.0. See [FORK.md](FORK.md) for the full lineage. This release changes nothing about that attribution."
+          } > notes.md
+          cat notes.md
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes-file notes.md \
+            dist/*.tar.gz dist/SHA256SUMS
+
+  # ---------- crates.io ----------
+
+  publish-crates:
+    name: Publish to crates.io (manual approval)
+    runs-on: ubuntu-latest
+    needs: publish-release
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo publish -p kyzo (no-op loudly if no token)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "No CARGO_REGISTRY_TOKEN secret configured in the crates-io environment."
+            echo "Skipping crates.io publication. This is NOT a failure: the GitHub Release above"
+            echo "already exists and is the release of record. Configure the secret and re-run this"
+            echo "job (Actions -> this run -> Re-run jobs) to publish to crates.io."
+            exit 0
+          fi
+          cargo publish -p kyzo --locked
