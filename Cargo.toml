@@ -6,7 +6,12 @@ resolver = "3"
 # kyzo/kyzo-bin dependency trees (`cargo tree -p kyzo|kyzo-bin`), so xtask's
 # syn/quote/proc-macro2 and kyzo-arrow-interop's real `arrow` dependency never
 # reach the purity gate.
-members = ["kyzo-core", "kyzo-bin", "xtask", "kyzo-crashfs", "kyzo-lsp", "kyzo-arrow-interop"]
+# vendor/fjall and vendor/lsm-tree (story #118): the upstream fjall-rs/fjall and
+# fjall-rs/lsm-tree 3.1.5 sources, vendored verbatim (MIT/Apache-2.0 headers
+# preserved) as workspace members. [patch.crates-io] below routes every consumer
+# (kyzo-core's `fjall` dep and fjall's own internal `lsm-tree` edge) onto this
+# tree. This is the fork the story owns; the engine edits land here.
+members = ["kyzo-core", "kyzo-bin", "xtask", "kyzo-crashfs", "kyzo-lsp", "kyzo-arrow-interop", "vendor/fjall", "vendor/lsm-tree"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +20,12 @@ rust-version = "1.93"
 license = "MPL-2.0"
 homepage = "https://github.com/kyzodb/kyzo"
 repository = "https://github.com/kyzodb/kyzo"
+
+# Routes every consumer of these crates.io names onto the vendored fork above,
+# including fjall's own internal `lsm-tree` dependency edge.
+[patch.crates-io]
+fjall = { path = "vendor/fjall" }
+lsm-tree = { path = "vendor/lsm-tree" }
 
 [profile.release]
 lto = "thin"
