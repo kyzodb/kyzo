@@ -48,7 +48,9 @@ use std::ops::Bound;
 use std::path::Path;
 
 use fjall::compaction::Leveled;
-use fjall::config::{BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry, PinningPolicy};
+use fjall::config::{
+    BlockSizePolicy, BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry, PinningPolicy,
+};
 use fjall::{
     Conflict, Guard, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace,
     OptimisticWriteTx, Readable, Slice, Snapshot,
@@ -131,7 +133,7 @@ pub struct StorageStats {
 /// how the single mixed "kyzo" keyspace gets Monkey/Dostoevsky tuning
 /// without a physical split.
 mod tuning {
-    use super::{BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry};
+    use super::{BlockSizePolicy, BloomConstructionPolicy, FilterPolicy, FilterPolicyEntry};
     use super::{KeyspaceCreateOptions, Leveled, PinningPolicy};
 
     /// Every keyspace here is hard-capped at 7 levels (`CreateOptions::level_count`
@@ -195,25 +197,36 @@ mod tuning {
     ///
     ///   The bench (issue #118 task-4 commit's tuning table) tried
     ///   `l0_threshold(8)` (stock's full double) with a growing
-    ///   `level_ratio_policy` and a 4→16 KiB block-size ramp: it cost the
-    ///   as-of-on-dense-chains scan ~10%, for no measurable ingest win —
-    ///   batching more unmerged L0 runs makes every read (including as-of)
-    ///   check more files for whatever fraction of the dense chain hasn't
-    ///   merged down yet, and this instrument's foreground-latency ingest
-    ///   measurement can't see the background write-amplification saving
-    ///   that trade is FOR (no cumulative-bytes-compacted counter exists
-    ///   to observe it — a real gap, not a hidden one). A stock-ratio,
-    ///   stock-block-size isolation run then showed the regression was
-    ///   compaction/block-size, not the filter change: filters-only
-    ///   measured inside the stock run's own noise band. So the ratio
-    ///   growth and the block-size ramp are DROPPED (measured net loss, no
-    ///   measured offset) and only `l0_threshold` moves, by half of the
-    ///   first pass's step (6, not 8) — the smallest lazy-leveling move
-    ///   this primitive can make, landing inside noise on every measured
-    ///   shape while still being a real instantiation of "batch shallow
-    ///   writes before merging" for the append-heavy path.
-    /// - Block size and level ratio stay at fjall's stock, flat values —
-    ///   see above.
+    ///   `level_ratio_policy` and a 4→16 KiB block-size ramp together: it
+    ///   cost the as-of-on-dense-chains scan ~10%, for no measurable
+    ///   ingest win — batching more unmerged L0 runs makes every read
+    ///   (including as-of) check more files for whatever fraction of the
+    ///   dense chain hasn't merged down yet, and this instrument's
+    ///   foreground-latency ingest measurement can't see the background
+    ///   write-amplification saving that trade is FOR (no
+    ///   cumulative-bytes-compacted counter exists to observe it — a real
+    ///   gap, not a hidden one). Isolating each knob then placed the
+    ///   blame precisely: filters-only measured inside the stock run's
+    ///   own noise band (not the cause); block-size-only (this keyspace's
+    ///   4→8 KiB ramp, stock compaction) ALSO measured inside the stock
+    ///   band — the regression was `l0_threshold`/`level_ratio_policy`
+    ///   alone. So `level_ratio_policy` stays stock (the deeper step to
+    ///   12 in the first pass bought nothing measurable) and only
+    ///   `l0_threshold` moves, by half of the first pass's step (6, not
+    ///   8) — the smallest lazy-leveling move this primitive can make,
+    ///   landing at a measured, disclosed -6% on as-of (published as the
+    ///   losing run it is) while still being a real instantiation of
+    ///   "batch shallow writes before merging" for the append-heavy path.
+    /// - Per-level block size steps up modestly with depth (4 KiB shallow
+    ///   → 8 KiB deep, not stock's flat 4 KiB): isolated in the
+    ///   re-measurement above as a genuinely free move at this bench's
+    ///   scale (inside the stock run's noise band on every shape), so it
+    ///   stays — deeper levels are where a fact's superseded versions
+    ///   have sunk (this keyspace's bitemporal suffix keeps one fact's
+    ///   whole history key-adjacent), and a larger block amortizes the
+    ///   seek across whatever as-of/full-history reads do land that deep
+    ///   at production scale, at no measured cost here. `level_ratio_policy`
+    ///   stays stock — see above.
     ///
     /// `opts.max_memtable_size_bytes` / `opts.table_target_size_bytes`
     /// override the flush/compaction unit size (both `None` in
@@ -231,7 +244,16 @@ mod tuning {
                 true, true, true, false, false, false, false,
             ]))
             .expect_point_read_hits(true)
-            .compaction_strategy(std::sync::Arc::new(strategy));
+            .compaction_strategy(std::sync::Arc::new(strategy))
+            .data_block_size_policy(BlockSizePolicy::new(vec![
+                4 * 1_024,
+                4 * 1_024,
+                4 * 1_024,
+                8 * 1_024,
+                8 * 1_024,
+                8 * 1_024,
+                8 * 1_024,
+            ]));
         if let Some(bytes) = opts.max_memtable_size_bytes {
             created = created.max_memtable_size(bytes);
         }
