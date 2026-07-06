@@ -9,7 +9,12 @@ cd "$(dirname "$0")/.."
 
 # -o (untracked included) is deliberate: new files are exactly the ones most
 # likely to be missing headers, and they must fail BEFORE they are committed.
-files=$(git ls-files -co --exclude-standard '*.rs')
+#
+# vendor/ is excluded: the vendored fjall/lsm-tree crates carry their OWN
+# MIT/Apache-2.0 headers, preserved verbatim (story #118). Stamping our MPL
+# header onto upstream code would be relicensing it — exactly what CLAUDE.md
+# forbids ("preserve every original header... never overwrite").
+files=$(git ls-files -co --exclude-standard '*.rs' | grep -v '^vendor/')
 if [ -z "$files" ]; then
   echo "MPL header gate: no .rs files yet — armed but idle"
   exit 0

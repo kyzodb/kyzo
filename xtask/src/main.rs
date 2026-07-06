@@ -1,3 +1,12 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 //! xtask: the resonance gate (story #81). `cargo run -p xtask -- resonance`
 //! runs all five deterministic ontology checks over the workspace rooted at
 //! `RESONANCE_ROOT` (default: the real checkout xtask itself lives in) and

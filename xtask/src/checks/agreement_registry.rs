@@ -1,3 +1,12 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 //! Check 5: the world-model agreement-law registry (`xtask/agreements.toml`)
 //! enumerates every cross-file agreement-law test by name. This check does
 //! not re-derive the taxonomy — it verifies the registry hasn't drifted

@@ -1,3 +1,12 @@
+/*
+ * Copyright 2026, The KyzoDB Authors.
+ * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+ * If a copy of the MPL was not distributed with this file,
+ * You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 //! Story #77's interop cross-check: a REAL Arrow reader (the `arrow` crate,
 //! never a dependency of kyzo-core) decodes what kyzo-core's own
 //! dependency-free `NamedRows::to_arrow_ipc` encoder writes. kyzo-core's
