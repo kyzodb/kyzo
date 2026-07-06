@@ -29,10 +29,15 @@
 //! - **Read-your-own-writes** — the write transaction overlays its write set
 //!   over a consistent snapshot taken at creation.
 //! - **Bitemporal as-of scans** — a seek loop over ONE positioned cursor
-//!   (`fjall::SeekIter`, opened once and re-seeked forward per step,
+//!   (a read tx's `fjall::SeekIter`, or a write tx's SSI-conflict-tracking
+//!   `fjall::TrackedSeekIter`; opened once and re-seeked forward per step,
 //!   never reopened) at the seek key computed by `check_key_for_bitemporal`
 //!   (the row's polarity peeked from its value), touching one stored
-//!   version per distinct fact in the common case.
+//!   version per distinct fact in the common case. On a write tx, each
+//!   step marks the precise sub-range it resolved rather than the whole
+//!   scan up front, promoting to one covering mark past a step-count
+//!   threshold (PostgreSQL SIREAD-lock granularity promotion — see
+//!   `fjall::TrackedSeekIter`'s doc, vendored in `vendor/fjall`).
 //!
 //! The transaction species are distinct types: [`FjallReadTx`] cannot write
 //! by construction, and committing a [`FjallWriteTx`] consumes it — writing
@@ -459,22 +464,49 @@ fn read_total_scan<'a, R: Readable>(
 }
 
 /// The skip walk's cursor over one fjall reader: a single positioned
-/// `fjall::SeekIter`, re-seeked forward once per version step instead of
-/// reopened. `Empty` is the same degenerate-bounds guard `raw_range`
+/// cursor, re-seeked forward once per version step instead of reopened.
+/// Generic over the concrete seek-iterator type because the two readers
+/// hand back different ones: [`FjallReadTx`]'s `Snapshot` returns a bare
+/// `fjall::SeekIter` (a snapshot is read-only and never aborts, so there
+/// is nothing to conflict-track); [`FjallWriteTx`]'s `OptimisticWriteTx`
+/// returns `fjall::TrackedSeekIter`, which additionally records the
+/// walk's SSI read-conflict spans under PostgreSQL-style SIREAD
+/// granularity promotion (precise per-step ranges for a short walk,
+/// collapsed to one covering mark past a step-count threshold — see that
+/// type's doc). `Empty` is the same degenerate-bounds guard `raw_range`
 /// applies to the plain range-scan path — an inverted `[lower, upper)`
 /// must never reach fjall, whose write-transaction conflict manager
 /// replays marked ranges through `BTreeSet::range` at commit time and
 /// panics on one.
-pub(crate) enum FjallSkipCursor {
+pub(crate) enum FjallSkipCursor<S> {
     Empty,
-    Live(fjall::SeekIter),
+    Live(S),
 }
 
-impl SkipCursor for FjallSkipCursor {
+/// The one seek shape both fjall cursor types share (unified here so
+/// [`FjallSkipCursor`] can drive either without knowing which fjall
+/// transaction species produced it).
+trait FjallSeekStep {
+    fn fjall_seek(&mut self, target: &[u8]) -> Option<fjall::Result<(Slice, Slice)>>;
+}
+
+impl FjallSeekStep for fjall::SeekIter {
+    fn fjall_seek(&mut self, target: &[u8]) -> Option<fjall::Result<(Slice, Slice)>> {
+        self.seek(target)
+    }
+}
+
+impl FjallSeekStep for fjall::TrackedSeekIter<'_> {
+    fn fjall_seek(&mut self, target: &[u8]) -> Option<fjall::Result<(Slice, Slice)>> {
+        self.seek(target)
+    }
+}
+
+impl<S: FjallSeekStep> SkipCursor for FjallSkipCursor<S> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
         match self {
             Self::Empty => None,
-            Self::Live(iter) => iter.seek(target).map(|r| {
+            Self::Live(iter) => iter.fjall_seek(target).map(|r| {
                 let (k, v) = r.map_err(|e| miette!("fjall read: {e}"))?;
                 Ok((k.to_vec(), v.to_vec()))
             }),
@@ -483,7 +515,7 @@ impl SkipCursor for FjallSkipCursor {
 }
 
 macro_rules! impl_read_tx {
-    ($ty:ty, $reader:ident) => {
+    ($ty:ty, $reader:ident, $seek_iter:ty) => {
         impl ReadTx for $ty {
             fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
                 read_get(&self.$reader, &self.ks, key)
@@ -529,7 +561,7 @@ macro_rules! impl_read_tx {
         }
 
         impl SkipSeek for $ty {
-            type Cursor<'c> = FjallSkipCursor;
+            type Cursor<'c> = FjallSkipCursor<$seek_iter>;
 
             fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
                 if lower >= upper {
@@ -544,8 +576,8 @@ macro_rules! impl_read_tx {
     };
 }
 
-impl_read_tx!(FjallReadTx, snap);
-impl_read_tx!(FjallWriteTx, tx);
+impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
+impl_read_tx!(FjallWriteTx, tx, fjall::TrackedSeekIter<'c>);
 
 impl WriteTx for FjallWriteTx {
     fn system_stamp(&self) -> ValidityTs {

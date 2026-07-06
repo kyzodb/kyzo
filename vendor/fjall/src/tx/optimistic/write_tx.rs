@@ -3,6 +3,7 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
+    keyspace::InternalKeyspaceId,
     snapshot_nonce::SnapshotNonce,
     tx::{
         optimistic::{
@@ -31,6 +32,122 @@ impl std::error::Error for Conflict {}
 impl fmt::Display for Conflict {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "Transaction conflict".fmt(f)
+    }
+}
+
+/// SSI read-conflict granularity for one [`WriteTransaction::seek_range`]
+/// cursor — PostgreSQL's SIREAD-lock promotion (tuple → page → relation),
+/// specialized to two rungs.
+///
+/// A `seek_range` cursor's window `[lower, upper)` may be walked by many
+/// independent [`TrackedSeekIter::seek`] calls — the bitemporal skip-walk
+/// re-seeks once per resolved fact, reusing the same open cursor across
+/// dozens of facts scattered anywhere in a wide relation. Marking the
+/// WHOLE window read at cursor-open time — correct for a plain `range()`
+/// call, which never revisits the same bound twice — over-aborts a walk
+/// that only ever touches a handful of keys: a write anywhere else in
+/// `[lower, upper)`, however far from every key the walk actually
+/// resolved, would needlessly retry it.
+///
+/// Instead each step marks the PRECISE span it resolved: `[target,
+/// found_key]` if `seek` returned a row, or `[target, upper)` if it found
+/// nothing (nothing lived between `target` and the window's end, which is
+/// exactly what an unbounded scan to the end would have proven). Past
+/// [`Self::PROMOTE_AFTER`] steps, the tracker promotes ONCE to a single
+/// mark covering the cursor's full `[lower, upper)`: every precise span
+/// already recorded is a subset of that mark (redundant, never wrong),
+/// and every later step skips tracking — bounding both the conflict
+/// manager's memory and [`ConflictManager::has_conflict`]'s per-commit
+/// scan cost for a long walk, at the price of the wider abort surface the
+/// old always-eager mark accepted unconditionally. An IO error promotes
+/// immediately regardless of the step count: the span actually touched
+/// before the failure is not knowable, so "assume all of it" is the only
+/// sound answer.
+struct SeekRangeTracker<'a> {
+    cm: &'a ConflictManager,
+    keyspace_id: InternalKeyspaceId,
+    lower: Bound<Slice>,
+    upper: Bound<Slice>,
+    steps: usize,
+    promoted: bool,
+}
+
+impl SeekRangeTracker<'_> {
+    /// However many resolved facts a healthy bitemporal walk touches
+    /// before its window is worth collapsing to one mark. Set well above
+    /// a typical point/small-range query (a handful of facts) so the
+    /// common case stays precise, while still capping a full-relation
+    /// walk's per-step bookkeeping at a small constant multiple of this.
+    const PROMOTE_AFTER: usize = 32;
+
+    /// Collapse every future step (and every already-recorded precise
+    /// span, now redundant) into one mark covering the whole cursor
+    /// window. Idempotent: a later call after promotion is a no-op, so
+    /// callers never need to check `promoted` themselves.
+    fn promote(&mut self) {
+        if !self.promoted {
+            self.cm
+                .mark_range(self.keyspace_id, (self.lower.clone(), self.upper.clone()));
+            self.promoted = true;
+        }
+    }
+
+    /// Record one `seek(target)` step's resolved span: `found` is the key
+    /// the step landed on, or `None` if the seek ran off the end of the
+    /// window without finding one.
+    fn record(&mut self, target: &Slice, found: Option<&Slice>) {
+        if self.promoted {
+            return;
+        }
+        self.steps += 1;
+        if self.steps > Self::PROMOTE_AFTER {
+            self.promote();
+            return;
+        }
+        let start = Bound::Included(target.clone());
+        let end = found.map_or_else(|| self.upper.clone(), |k| Bound::Included(k.clone()));
+        self.cm.mark_range(self.keyspace_id, (start, end));
+    }
+}
+
+/// The seekable, SSI-conflict-tracked cursor [`WriteTransaction::seek_range`]
+/// returns. Wraps the plain [`SeekIter`] the underlying storage drives,
+/// additionally recording each step's read-conflict span through
+/// [`SeekRangeTracker`] — see that type's doc for the precise/promoted
+/// granularity policy.
+pub struct TrackedSeekIter<'a> {
+    inner: SeekIter,
+    tracker: SeekRangeTracker<'a>,
+}
+
+impl TrackedSeekIter<'_> {
+    /// Repositions the cursor forward to the first key at or after
+    /// `target`, within the range it was opened with — exactly
+    /// [`SeekIter::seek`] — additionally marking the SSI read-conflict
+    /// span this step resolves (see [`SeekRangeTracker`]).
+    ///
+    /// `target` must be non-decreasing across calls on the same cursor:
+    /// this is a forward-only seek, not a general reposition.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    pub fn seek(&mut self, target: &[u8]) -> Option<crate::Result<(UserKey, UserValue)>> {
+        let target: Slice = target.into();
+        match self.inner.seek(&target) {
+            None => {
+                self.tracker.record(&target, None);
+                None
+            }
+            Some(Ok((k, v))) => {
+                self.tracker.record(&target, Some(&k));
+                Some(Ok((k, v)))
+            }
+            Some(Err(e)) => {
+                self.tracker.promote();
+                Some(Err(e))
+            }
+        }
     }
 }
 
@@ -141,27 +258,39 @@ impl WriteTransaction {
 
     /// The seekable counterpart to [`Readable::range`]: opens ONE cursor
     /// that a caller re-deriving its own lower bound many times (a skip
-    /// scan) can reposition via [`SeekIter::seek`] instead of reopening a
-    /// fresh range per step.
+    /// scan) can reposition via [`TrackedSeekIter::seek`] instead of
+    /// reopening a fresh range per step.
     ///
-    /// Marks the FULL `range` read for conflict tracking up front, at
-    /// cursor-open time, rather than once per seek step. This is
-    /// equivalent to (a collapse of) what N reopened `range()` calls over
-    /// shrinking sub-bounds of the same `[lower, upper)` would mark: each
-    /// such sub-range is a subset of `range` itself, so its mark is
-    /// already subsumed by this single, widest one — nothing a per-step
-    /// reopen would have caught escapes this.
+    /// SSI granularity promotion (PostgreSQL SIREAD-lock style, see
+    /// [`SeekRangeTracker`]): rather than marking the FULL `range` read up
+    /// front, each `seek` step marks only the precise span it resolved,
+    /// until the walk crosses a step-count threshold and gets promoted to
+    /// one mark covering all of `range` — a short walk (the common
+    /// bitemporal skip-scan shape, one seek per resolved fact) keeps a
+    /// narrow abort surface; a long walk is bounded the same way the old
+    /// always-eager mark was.
     pub fn seek_range<K: AsRef<[u8]>, R: RangeBounds<K>>(
         &self,
         keyspace: impl AsRef<Keyspace>,
         range: R,
-    ) -> SeekIter {
+    ) -> TrackedSeekIter<'_> {
         let start: Bound<Slice> = range.start_bound().map(|k| k.as_ref().into());
         let end: Bound<Slice> = range.end_bound().map(|k| k.as_ref().into());
+        let keyspace_id = keyspace.as_ref().id;
 
-        self.cm.mark_range(keyspace.as_ref().id, (start, end));
+        let inner = self.inner.seek_range(keyspace, range);
 
-        self.inner.seek_range(keyspace, range)
+        TrackedSeekIter {
+            inner,
+            tracker: SeekRangeTracker {
+                cm: &self.cm,
+                keyspace_id,
+                lower: start,
+                upper: end,
+                steps: 0,
+                promoted: false,
+            },
+        }
     }
 
     /// Removes an item and returns its value if it existed.
@@ -910,6 +1039,93 @@ mod tests {
 
         t2.commit()??;
         t1.commit()??;
+
+        Ok(())
+    }
+
+    /// Task 3 (issue #118) — PRECISION half of `seek_range`'s SSI
+    /// granularity promotion: a short walk (well under
+    /// `SeekRangeTracker::PROMOTE_AFTER`) marks only the PRECISE span each
+    /// `seek` step actually resolved, so a concurrent write landing in the
+    /// gap BETWEEN two steps — still well inside the cursor's overall
+    /// `[lower, upper)` window — must not abort it. Byte keys stand in for
+    /// memcmp-encoded tuple keys here: fjall orders raw bytes, and the
+    /// overlap logic under test never looks past that ordering.
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn tx_ssi_seek_range_precision_does_not_over_abort_outside_precise_subranges(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+        env.tree.insert("b", "B")?;
+        env.tree.insert("y", "Y")?;
+
+        let mut t1 = env.db.write_tx()?;
+        let mut t2 = env.db.write_tx()?;
+
+        {
+            let mut cursor = t1.seek_range(&env.tree, "a".."z");
+            // Step 1, near the LOWER end: resolves precise span [a, b].
+            assert_eq!(&*cursor.seek(b"a").unwrap()?.0, b"b");
+            // Step 2, near the UPPER end: resolves precise span [n, y].
+            assert_eq!(&*cursor.seek(b"n").unwrap()?.0, b"y");
+        }
+        t1.insert(env.tree.inner(), "foo", "bar");
+
+        // "g" sits strictly between the two precise spans ([a,b], [n,y]) —
+        // inside the cursor's overall window but never actually resolved
+        // by either seek step.
+        t2.insert(env.tree.inner(), "g", "G");
+
+        t2.commit()??;
+        assert!(
+            t1.commit()?.is_ok(),
+            "a short walk's precise sub-ranges must not cover the gap between them"
+        );
+
+        Ok(())
+    }
+
+    /// Task 3 (issue #118) — SOUNDNESS half: a walk that crosses
+    /// `SeekRangeTracker::PROMOTE_AFTER` steps is promoted to ONE mark
+    /// covering the cursor's full `[lower, upper)`, so a write ANYWHERE in
+    /// that range — including a spot the walk never precisely visited,
+    /// since steps past promotion stop recording precise spans at all —
+    /// must still abort it. Without this, a long walk's tail past the
+    /// threshold would be an unguarded phantom window.
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn tx_ssi_seek_range_promotion_soundness_aborts_write_anywhere_in_covering_range(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let env = setup()?;
+        // 40 keys ("k00".."k39"), lexicographically ordered — enough seek
+        // steps to cross the 32-step promotion threshold.
+        for i in 0..40u32 {
+            env.tree.insert(format!("k{i:02}"), "v")?;
+        }
+
+        let mut t1 = env.db.write_tx()?;
+        let mut t2 = env.db.write_tx()?;
+
+        {
+            let mut cursor = t1.seek_range(&env.tree, "k00".."k99");
+            for i in 0..40u32 {
+                let target = format!("k{i:02}");
+                let (k, _) = cursor.seek(target.as_bytes()).unwrap()?;
+                assert_eq!(&*k, target.as_bytes());
+            }
+        }
+        t1.insert(env.tree.inner(), "foo", "bar");
+
+        // "k50" was never a seek target and sorts past every seeded key —
+        // untouched by any individual step, but inside the promoted
+        // covering range once the walk crossed the threshold.
+        t2.insert(env.tree.inner(), "k50", "V");
+
+        t2.commit()??;
+        assert!(
+            matches!(t1.commit()?, Err(Conflict)),
+            "a promoted covering range must abort a write anywhere inside it"
+        );
 
         Ok(())
     }

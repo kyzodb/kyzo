@@ -102,14 +102,18 @@
 //!
 //! ## Per-backend wiring
 //!
-//! **`storage/fjall.rs`**: `FjallSkipCursor` wraps `fjall::SeekIter`
-//! (itself a thin `SnapshotNonce`-holding wrapper around
-//! `lsm_tree::SeekableRangeIter`, whose `Standard` arm is the real
-//! `TreeIter`). `open_skip_cursor` guards `lower >= upper` itself (never
-//! letting an inverted range reach fjall's conflict manager, which panics
-//! on one at commit — the same guard `raw_range` already applies to the
-//! plain range-scan path) and otherwise calls `self.$reader.seek_range(..)`
-//! once; each `seek` call is `SeekIter::seek`.
+//! **`storage/fjall.rs`**: `FjallSkipCursor<S>` wraps either seek-iterator
+//! fjall hands back — a read tx's `fjall::SeekIter` (itself a thin
+//! `SnapshotNonce`-holding wrapper around `lsm_tree::SeekableRangeIter`,
+//! whose `Standard` arm is the real `TreeIter`), or a write tx's
+//! `fjall::TrackedSeekIter`, which additionally records each `seek` step's
+//! SSI read-conflict span (precise per step, promoted to one covering
+//! mark past a step-count threshold). `open_skip_cursor` guards `lower >=
+//! upper` itself (never letting an inverted range reach fjall's conflict
+//! manager, which panics on one at commit — the same guard `raw_range`
+//! already applies to the plain range-scan path) and otherwise calls
+//! `self.$reader.seek_range(..)` once; each `seek` call goes through
+//! `FjallSeekStep`, unifying both iterators' `seek` methods.
 //!
 //! **`storage/temp.rs`**: `TempSkipCursor` borrows the `BTreeMap` and the
 //! fixed upper bound; `seek` is `self.map.range((Included(target),
