@@ -10,3 +10,6 @@
 //! The value plane: a value is a 16-byte tagged cell, either fully inline
 //! or a dense `Code` into a shared, order-preserving interning arena.
 
+pub mod arena;
+pub mod code;
+pub mod prefix;
