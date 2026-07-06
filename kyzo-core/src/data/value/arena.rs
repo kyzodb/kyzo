@@ -537,6 +537,59 @@ impl Arena {
         if found { Ok(rank) } else { Err(rank) }
     }
 
+    /// Semantic comparison of two live codes: the order authority for
+    /// code-level compares, since `Code` itself deliberately has no `Ord`.
+    /// Both sealed: rank order is byte order, one integer compare. Any
+    /// tail code involved: prefix-first byte comparison (payload deref
+    /// only on tie, counted).
+    ///
+    /// # Panics
+    ///
+    /// Panics if either code is not live in the current epoch.
+    pub fn cmp_codes(&self, a: Code, b: Code) -> Ordering {
+        let (ca, cb) = (a.0 as usize, b.0 as usize);
+        assert!(
+            ca < self.len(),
+            "code {ca} not live: arena holds {}",
+            self.len()
+        );
+        assert!(
+            cb < self.len(),
+            "code {cb} not live: arena holds {}",
+            self.len()
+        );
+        if ca == cb {
+            return Ordering::Equal;
+        }
+        if ca < self.sealed_len && cb < self.sealed_len {
+            return ca.cmp(&cb);
+        }
+        let ea = self.entry_of(ca);
+        let eb = self.entry_of(cb);
+        ea.cmp_entry(&eb, &self.heap)
+    }
+
+    /// The entry behind a live code (sealed: rank-select; tail: arrival).
+    fn entry_of(&self, c: usize) -> Entry {
+        if c < self.sealed_len {
+            // Steady state after cascades collapse: one run, and a sealed
+            // code is a literal index — the O(1) read the sealed scope
+            // promises at rest.
+            if self.runs.len() == 1 {
+                return self.runs[0].entries[c];
+            }
+            self.select_sealed(c)
+        } else {
+            let a = c - self.sealed_len;
+            assert!(
+                a < self.delta.len(),
+                "code {c} not live: arena holds {}",
+                self.len()
+            );
+            self.delta.arrivals[a]
+        }
+    }
+
     /// The `k`-th smallest interned value across sealed and delta together
     /// (the inverse of [`Arena::rank`] over interned values).
     ///
@@ -857,6 +910,18 @@ mod tests {
         for (k, v) in union.iter().enumerate() {
             assert_eq!(arena.select(k), v.as_slice(), "select({k}) wrong");
             assert_eq!(arena.rank(v), Ok(k), "rank of {v:?} wrong");
+        }
+        // cmp_codes is the byte order, over every live pair (sealed x
+        // sealed, sealed x tail, tail x tail).
+        for i in 0..arena.len() {
+            for j in 0..arena.len() {
+                let (a, b) = (Code(i as u32), Code(j as u32));
+                assert_eq!(
+                    arena.cmp_codes(a, b),
+                    naive.resolve(i as u32).cmp(naive.resolve(j as u32)),
+                    "cmp_codes({i},{j}) diverged from byte order"
+                );
+            }
         }
     }
 
@@ -1227,5 +1292,14 @@ mod tests {
     #[should_panic(expected = "out of range")]
     fn select_out_of_range_panics() {
         Arena::new().select(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "not live")]
+    fn cmp_codes_stale_panics_even_when_equal() {
+        let mut arena = Arena::new();
+        arena.intern(b"x");
+        // Equal-but-stale codes must panic, not answer Equal.
+        arena.cmp_codes(Code(7), Code(7));
     }
 }

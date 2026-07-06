@@ -30,8 +30,8 @@ pub const PREFIX_LEN: usize = 4;
 /// prefixes never contradicts bytewise order of payloads (zero-padding is
 /// sound because a shorter string is a strict prefix of any extension).
 #[inline]
-pub fn prefix4(bytes: &[u8]) -> [u8; 4] {
-    let mut p = [0u8; 4];
+pub fn prefix4(bytes: &[u8]) -> [u8; PREFIX_LEN] {
+    let mut p = [0u8; PREFIX_LEN];
     let n = bytes.len().min(PREFIX_LEN);
     p[..n].copy_from_slice(&bytes[..n]);
     p

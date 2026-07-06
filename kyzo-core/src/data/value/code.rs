@@ -15,9 +15,9 @@
 /// [`Arena`](super::arena::Arena)):
 ///
 /// - **Sealed codes** `[0, sealed_len)`: the value's rank in the epoch's
-///   sealed dictionary. Among sealed codes, derived `u32` order *is*
-///   lexicographic byte order — the hot path compares codes and never
-///   touches bytes.
+///   sealed dictionary — among sealed codes of one epoch, rank order *is*
+///   lexicographic byte order, and columnar kernels exploit that under a
+///   container-level epoch stamp.
 /// - **Tail codes** `[sealed_len, sealed_len + delta_len)`: arrival-stable
 ///   handles for values interned since the last seal. Equality (and hash)
 ///   are exact — the currency fixpoints need — but numeric order among
@@ -29,7 +29,14 @@
 /// [`EpochRemap::apply`](super::arena::EpochRemap::apply). Containers that
 /// persist codes across seals own that boundary (they are epoch-stamped and
 /// cross only through the typed gather door).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+///
+/// `Code` deliberately implements no `Ord`: a semantic comparison of two
+/// codes is only sound with the arena (or a container's epoch stamp) in
+/// hand, so it is spelled [`Arena::cmp_codes`](super::arena::Arena::cmp_codes)
+/// — and structural ordering (deterministic iteration, dedup by identity)
+/// is spelled explicitly over [`Code::raw`], which claims identity order,
+/// never value order.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Code(pub(crate) u32);
 
 impl Code {
