@@ -59,7 +59,7 @@ use miette::{Result, bail, miette};
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipCursor, SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
 
 const KEYSPACE_NAME: &str = "kyzo";
@@ -773,7 +773,7 @@ macro_rules! impl_read_tx {
             }
         }
 
-        impl SkipSeek for $ty {
+        impl OpenSkipCursor for $ty {
             type Cursor<'c> = FjallSkipCursor<$seek_iter>;
 
             fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {

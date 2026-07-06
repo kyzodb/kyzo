@@ -95,7 +95,7 @@ use miette::{Result, miette};
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipCursor, SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
@@ -833,7 +833,7 @@ impl SimWriteTx {
     /// write set overlaid, tombstones erased. Eager (used only by
     /// `del_range`, which must collect the doomed keys before mutating
     /// `self.writes` anyway — a single pass over the range, not the
-    /// per-seek-step reopening the skip walk's `SkipSeek` impl does).
+    /// per-seek-step reopening the skip walk's `OpenSkipCursor` impl does).
     fn visible(&self, lower: &[u8], upper: Option<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
         self.visible_lazy(lower, upper).collect()
     }
@@ -980,7 +980,7 @@ impl SkipCursor for SimReadSkipCursor<'_> {
     }
 }
 
-impl SkipSeek for SimReadTx {
+impl OpenSkipCursor for SimReadTx {
     type Cursor<'c> = SimReadSkipCursor<'c>;
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
@@ -1020,7 +1020,7 @@ impl SkipCursor for SimWriteSkipCursor<'_> {
     }
 }
 
-impl SkipSeek for SimWriteTx {
+impl OpenSkipCursor for SimWriteTx {
     type Cursor<'c> = SimWriteSkipCursor<'c>;
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {

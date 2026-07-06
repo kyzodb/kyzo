@@ -83,7 +83,7 @@ use miette::Result;
 
 use crate::data::tuple::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
-use crate::storage::skip_walk::{SkipCursor, SkipSeek, SkipWalk};
+use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ReadTx, WriteTx};
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -148,7 +148,7 @@ impl ReadTx for TempTx {
 
     /// The bitemporal skip-scan walk, inherited whole from
     /// [`crate::storage::skip_walk`]: this backend contributes only the
-    /// [`SkipSeek`] impl below (one cursor over a single `BTreeMap`,
+    /// [`OpenSkipCursor`] impl below (one cursor over a single `BTreeMap`,
     /// re-seeked forward once per version step), never the walk itself.
     fn range_skip_scan_tuple<'a>(
         &'a self,
@@ -195,7 +195,7 @@ impl SkipCursor for TempSkipCursor<'_> {
     }
 }
 
-impl SkipSeek for TempTx {
+impl OpenSkipCursor for TempTx {
     type Cursor<'c> = TempSkipCursor<'c>;
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {

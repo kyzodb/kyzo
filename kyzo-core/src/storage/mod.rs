@@ -109,6 +109,24 @@
 //!   into a fresh store, so both backends REFUSE a non-empty target, and
 //!   restore raises the target's clock floor to the dump's before
 //!   importing (a target can never re-mint an imported instant).
+//! - **v4 — the as-of skip scan seeks one cursor per walk, never reopens
+//!   (story #118 task 1 ruling).** [`ReadTx::range_skip_scan_tuple`]'s
+//!   per-version-step behavior changed, not its resolution semantics: all
+//!   three backends now drive [`skip_walk::SkipWalk`] over one cursor
+//!   opened ONCE per walk (`OpenSkipCursor::open_skip_cursor`) and
+//!   repositioned forward per step (`SkipCursor::seek`), instead of the
+//!   previous shape of reopening a fresh bounded range per version step.
+//!   On `fjall` this is the difference between paying a `SuperVersion`
+//!   lookup and live-run/table/memtable resolution once per WALK versus
+//!   once per STEP; `temp`/`sim` see no efficiency change (a `BTreeMap`
+//!   range call already is the real O(log n) seek) but share the same
+//!   driver so the one theorem
+//!   (`skip_walk_matches_independent_oracle_over_2000_seeded_histories`,
+//!   `skip_walk_opens_exactly_one_cursor_per_walk`) covers every backend.
+//!   No caller-visible semantics moved: the resolved tuples, their order,
+//!   and the bitemporal resolution rule are unchanged; see `skip_walk.rs`'s
+//!   module doc for the full per-backend wiring and the termination
+//!   guarantee.
 
 use std::fmt;
 
@@ -142,11 +160,12 @@ pub(crate) mod fjall;
 #[allow(dead_code)]
 pub(crate) mod merkle;
 pub(crate) mod retry;
-// The generic bitemporal skip-scan driver (story #78 phase 1): a NEW,
-// standalone module the three backends (fjall/temp/sim) will port onto in
-// phase 2. Not yet wired to any backend's `range_skip_scan_tuple` — that
-// swap is phase 2's job once this lands.
-#[allow(dead_code)]
+// The generic bitemporal skip-scan driver (story #78): ONE implementation
+// of the version-skip walk, generic over a backend's `OpenSkipCursor`/
+// `SkipCursor` seam; all three backends (fjall/temp/sim) drive their own
+// `range_skip_scan_tuple` through it (see the module doc for the per-
+// backend wiring and why `OpenSkipCursor::open_skip_cursor` runs once per
+// walk rather than once per version step).
 mod skip_walk;
 // With `bench-internals` on (and test off), sim.rs compiles into the lib so
 // `bench_api` can build mem-backend workloads on `SimStorage`; the module's

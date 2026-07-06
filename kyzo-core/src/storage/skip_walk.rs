@@ -29,7 +29,7 @@
 //! ## The seek seam
 //!
 //! ```text
-//! pub(crate) trait SkipSeek {
+//! pub(crate) trait OpenSkipCursor {
 //!     type Cursor<'c>: SkipCursor where Self: 'c;
 //!     fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c>;
 //! }
@@ -154,7 +154,7 @@ pub(crate) trait SkipCursor {
 /// the module doc for why splitting this from [`SkipCursor::seek`] (which
 /// runs once per version step) is what makes a skip scan seek instead of
 /// reopen.
-pub(crate) trait SkipSeek {
+pub(crate) trait OpenSkipCursor {
     type Cursor<'c>: SkipCursor
     where
         Self: 'c;
@@ -315,7 +315,7 @@ mod tests {
         }
     }
 
-    impl SkipSeek for MapSeek {
+    impl OpenSkipCursor for MapSeek {
         type Cursor<'c> = MapSeekCursor<'c>;
 
         fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
