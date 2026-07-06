@@ -15,6 +15,7 @@
 //! decodes, and keys arrive in strictly ascending order (a store-level
 //! ordering violation means the storage engine itself is unwell).
 
+use fjall::Slice;
 use miette::Result;
 
 use crate::data::tuple::{decode_tuple_from_key, extend_tuple_from_v};
@@ -72,7 +73,7 @@ fn hex_prefix(bytes: &[u8]) -> String {
 pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
     let tx = db.read_tx()?;
     let mut report = VerifyReport::default();
-    let mut prev_key: Option<Vec<u8>> = None;
+    let mut prev_key: Option<Slice> = None;
 
     for pair in tx.total_scan() {
         let (k, v) = pair?;

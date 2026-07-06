@@ -78,6 +78,7 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
+use fjall::Slice;
 use miette::Result;
 
 use crate::data::tuple::Tuple;
@@ -120,8 +121,8 @@ impl TempTx {
 }
 
 impl ReadTx for TempTx {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        Ok(self.map.get(key).cloned())
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
+        Ok(self.map.get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
@@ -132,7 +133,7 @@ impl ReadTx for TempTx {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         if lower >= upper {
             // Degenerate bounds denote the empty interval (the kernel
             // contract; BTreeMap::range would panic on start > end).
@@ -141,7 +142,7 @@ impl ReadTx for TempTx {
         Box::new(
             self.map
                 .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
-                .map(|(k, v)| Ok((k.clone(), v.clone()))),
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
     }
 
@@ -163,8 +164,12 @@ impl ReadTx for TempTx {
         ))
     }
 
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-        Box::new(self.map.iter().map(|(k, v)| Ok((k.clone(), v.clone()))))
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        Box::new(
+            self.map
+                .iter()
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+        )
     }
 }
 
@@ -318,7 +323,7 @@ mod tests {
         t.put(b"a", b"1").unwrap();
         t.put(b"b", b"2").unwrap();
         t.put(b"c", b"3").unwrap();
-        assert_eq!(t.get(b"b").unwrap(), Some(b"2".to_vec()));
+        assert_eq!(t.get(b"b").unwrap(), Some(Slice::from(b"2")));
         assert!(t.exists(b"a").unwrap());
         // Degenerate ranges are empty, never a panic (law 5).
         assert_eq!(t.range_scan(b"z", b"a").count(), 0);
@@ -338,9 +343,9 @@ mod tests {
         let mut t = TempTx::default();
         t.put(b"k", b"first").unwrap();
         t.put(b"k", b"second").unwrap();
-        assert_eq!(t.get(b"k").unwrap(), Some(b"second".to_vec()));
+        assert_eq!(t.get(b"k").unwrap(), Some(Slice::from(b"second")));
         let rows: Vec<_> = t.total_scan().map(|kv| kv.unwrap()).collect();
-        assert_eq!(rows, vec![(b"k".to_vec(), b"second".to_vec())]);
+        assert_eq!(rows, vec![(Slice::from(b"k"), Slice::from(b"second"))]);
     }
 
     /// The skip scan honors validity semantics and its returned VALUES are
@@ -451,17 +456,19 @@ mod tests {
     const CAP: usize = 10_000;
 
     /// One observable answer, normalized. Errors compare by presence only
-    /// (messages differ per backend).
+    /// (messages differ per backend). Rows/values are `Slice` — the
+    /// storage byte currency — which compares by content across backends
+    /// exactly like `Vec<u8>` did (`Slice: PartialEq<T: AsRef<[u8]>>`).
     #[derive(Debug, PartialEq, Eq)]
     enum Obs {
-        Val(Option<Vec<u8>>),
+        Val(Option<Slice>),
         Flag(bool),
-        Rows(Vec<(Vec<u8>, Vec<u8>)>),
+        Rows(Vec<(Slice, Slice)>),
         Count(usize),
         Err,
     }
 
-    fn collect_rows(it: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + '_>) -> Obs {
+    fn collect_rows(it: Box<dyn Iterator<Item = Result<(Slice, Slice)>> + '_>) -> Obs {
         let mut rows = vec![];
         for (i, kv) in it.enumerate() {
             assert!(

@@ -56,6 +56,7 @@
 
 use std::collections::BTreeSet;
 
+use fjall::Slice;
 use kyzo_crashfs::harness::{can_mount, mount, wait_for_mount};
 use kyzo_crashfs::{Fault, FaultPlan, OpKind, PassthroughFs, Trigger};
 
@@ -102,7 +103,7 @@ fn drive_durable_rounds<S: Storage>(storage: &S, rounds: u32, n: u32) {
 /// comparison currency between the real backend and the `SimStorage`
 /// oracle (their `total_scan` byte order need not agree for this
 /// campaign's purposes, only their content).
-fn total_scan_set<S: Storage>(storage: &S) -> BTreeSet<(Vec<u8>, Vec<u8>)> {
+fn total_scan_set<S: Storage>(storage: &S) -> BTreeSet<(Slice, Slice)> {
     let tx = storage.read_tx().unwrap();
     tx.total_scan().map(|r| r.unwrap()).collect()
 }
@@ -112,7 +113,7 @@ fn total_scan_set<S: Storage>(storage: &S) -> BTreeSet<(Vec<u8>, Vec<u8>)> {
 /// fsyncing the remaining rounds first. This is the exact "only the
 /// fsynced prefix survives" contract [`Fault::ClearCache`] on the real
 /// journal implements, so the two must agree.
-fn oracle_after_powercut(surviving_rounds: u32, n: u32) -> BTreeSet<(Vec<u8>, Vec<u8>)> {
+fn oracle_after_powercut(surviving_rounds: u32, n: u32) -> BTreeSet<(Slice, Slice)> {
     let sim = SimStorage::new(0xF00D_F00D_F00D_F00D);
     drive_durable_rounds(&sim, surviving_rounds, n);
     let cut = sim.sim_powercut();

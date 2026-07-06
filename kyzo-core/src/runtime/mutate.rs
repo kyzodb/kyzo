@@ -51,6 +51,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use fjall::Slice;
 use itertools::Itertools;
 use miette::{Diagnostic, Result, WrapErr, bail};
 use smartstring::{LazyCompact, SmartString};
@@ -1573,7 +1574,7 @@ impl<T: WriteTx> SessionTx<T> {
             let upper = (base.id.0 + 1).to_be_bytes();
             let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
             loop {
-                let batch: Vec<(Vec<u8>, Vec<u8>)> = self
+                let batch: Vec<(Slice, Slice)> = self
                     .store
                     .range_scan(&lower, &upper)
                     .take(BACKFILL_BATCH)
@@ -1581,7 +1582,7 @@ impl<T: WriteTx> SessionTx<T> {
                 let Some((last_key, _)) = batch.last() else {
                     break;
                 };
-                let mut succ = last_key.clone();
+                let mut succ = last_key.to_vec();
                 succ.push(0);
                 lower = succ;
                 for (k, v) in &batch {
@@ -1924,6 +1925,8 @@ impl<T: WriteTx> SessionTx<T> {
 mod bulk_write_tests {
     use std::collections::BTreeMap;
 
+    use fjall::Slice;
+
     use crate::data::value::DataValue;
     use crate::runtime::db::Db;
     use crate::storage::sim::SimStorage;
@@ -1984,8 +1987,7 @@ mod bulk_write_tests {
         run_seeded_workload(&db);
 
         let tx = db.storage.read_tx().expect("read tx");
-        let scan: Vec<(Vec<u8>, Vec<u8>)> =
-            tx.total_scan().collect::<Result<_, _>>().expect("scan");
+        let scan: Vec<(Slice, Slice)> = tx.total_scan().collect::<Result<_, _>>().expect("scan");
         assert_eq!(
             scan.len(),
             802,
@@ -2496,11 +2498,11 @@ mod temporal_index_tests {
         let tx_b = db_b.storage.read_tx().unwrap();
         let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
         let upper = (idx_a.id.0 + 1).to_be_bytes().to_vec();
-        let raw_a: Vec<(Vec<u8>, Vec<u8>)> = tx_a
+        let raw_a: Vec<(Slice, Slice)> = tx_a
             .range_scan(&lower, &upper)
             .collect::<Result<_>>()
             .unwrap();
-        let raw_b: Vec<(Vec<u8>, Vec<u8>)> = tx_b
+        let raw_b: Vec<(Slice, Slice)> = tx_b
             .range_scan(&lower, &upper)
             .collect::<Result<_>>()
             .unwrap();

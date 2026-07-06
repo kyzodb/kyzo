@@ -43,8 +43,8 @@ use std::ops::Bound;
 use std::path::Path;
 
 use fjall::{
-    Conflict, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace, OptimisticWriteTx,
-    Readable, Snapshot,
+    Conflict, Guard, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace,
+    OptimisticWriteTx, Readable, Slice, Snapshot,
 };
 use miette::{Result, bail, miette};
 
@@ -287,6 +287,9 @@ impl Storage for FjallStorage {
                     "emptiness probe bound must exceed every relation-id prefix"
                 );
             }
+            // Existence alone: the raw `Guard`s are dropped unmaterialized —
+            // not even `key()` is called — so the probe costs no decode at
+            // all, just "is there a first item."
             let probe = self.db.read_tx();
             if raw_range(&probe, &self.ks, &[], &[0xff; 9])
                 .next()
@@ -381,13 +384,16 @@ impl FjallWriteTx {
 }
 
 /// Both fjall read views (`Snapshot`, `OptimisticWriteTx`) speak `Readable`;
-/// every read-side operation is written once against that.
+/// every read-side operation is written once against that. Yields fjall's
+/// own `Guard` — undecided currency: a caller materializes as much of each
+/// row as it actually needs (see [`materialize_row`], [`materialize_key`])
+/// rather than this choke point deciding for everyone.
 fn raw_range<'a, R: Readable>(
     reader: &'a R,
     ks: &'a OptimisticTxKeyspace,
     lower: &[u8],
     upper: &[u8],
-) -> impl Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a {
+) -> impl Iterator<Item = Guard> + 'a {
     // Degenerate-bounds guard, at the single choke point every range scan,
     // skip scan, and del_range pass through. The contract says `[lower,
     // upper)` with `lower >= upper` is simply EMPTY — but the bounds must
@@ -407,21 +413,36 @@ fn raw_range<'a, R: Readable>(
         .then(|| reader.range::<&[u8], _>(ks, bounds))
         .into_iter()
         .flatten()
-        .map(|guard| {
-            let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-            Ok((k.to_vec(), v.to_vec()))
-        })
+}
+
+/// A full key+value row, materialized via `into_inner_if` with an
+/// unconditionally-true predicate: the one call every row-shaped scan
+/// (`range_scan`, `total_scan`) needs, and the same path a future
+/// key-value-separated keyspace would lazily skip loading blob values
+/// through if a caller ever filtered on the key alone. `Slice` is
+/// Arc-backed, so this is a refcount bump per field, never a heap copy.
+fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
+    let (k, v) = guard
+        .into_inner_if(|_| true)
+        .map_err(|e| miette!("fjall read: {e}"))?;
+    Ok((
+        k,
+        v.expect("predicate is unconditionally true: the value is always loaded"),
+    ))
+}
+
+/// A key alone, filtering the guard on `key()` and never loading the value
+/// — the currency for existence probes and counts, which cost no value I/O.
+fn materialize_key(guard: Guard) -> Result<Slice> {
+    guard.key().map_err(|e| miette!("fjall read: {e}"))
 }
 
 fn read_get<R: Readable>(
     reader: &R,
     ks: &OptimisticTxKeyspace,
     key: &[u8],
-) -> Result<Option<Vec<u8>>> {
-    Ok(reader
-        .get(ks, key)
-        .map_err(|e| miette!("fjall read: {e}"))?
-        .map(|v| v.to_vec()))
+) -> Result<Option<Slice>> {
+    reader.get(ks, key).map_err(|e| miette!("fjall read: {e}"))
 }
 
 fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -> Result<bool> {
@@ -433,11 +454,8 @@ fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -
 fn read_total_scan<'a, R: Readable>(
     reader: &'a R,
     ks: &'a OptimisticTxKeyspace,
-) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-    Box::new(reader.iter(ks).map(|guard| {
-        let (k, v) = guard.into_inner().map_err(|e| miette!("fjall read: {e}"))?;
-        Ok((k.to_vec(), v.to_vec()))
-    }))
+) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+    Box::new(reader.iter(ks).map(materialize_row))
 }
 
 /// The skip walk's cursor over one fjall reader: a single positioned
@@ -467,7 +485,7 @@ impl SkipCursor for FjallSkipCursor {
 macro_rules! impl_read_tx {
     ($ty:ty, $reader:ident) => {
         impl ReadTx for $ty {
-            fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+            fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
                 read_get(&self.$reader, &self.ks, key)
             }
 
@@ -479,8 +497,16 @@ macro_rules! impl_read_tx {
                 &'a self,
                 lower: &[u8],
                 upper: &[u8],
-            ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
-                Box::new(raw_range(&self.$reader, &self.ks, lower, upper))
+            ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+                Box::new(raw_range(&self.$reader, &self.ks, lower, upper).map(materialize_row))
+            }
+
+            fn range_scan_keys<'a>(
+                &'a self,
+                lower: &[u8],
+                upper: &[u8],
+            ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+                Box::new(raw_range(&self.$reader, &self.ks, lower, upper).map(materialize_key))
             }
 
             fn range_skip_scan_tuple<'a>(
@@ -497,9 +523,7 @@ macro_rules! impl_read_tx {
                 ))
             }
 
-            fn total_scan<'a>(
-                &'a self,
-            ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+            fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
                 read_total_scan(&self.$reader, &self.ks)
             }
         }
@@ -548,15 +572,16 @@ impl WriteTx for FjallWriteTx {
         const CHUNK: usize = 1024;
         let mut cursor = lower.to_vec();
         loop {
-            let keys: Vec<Vec<u8>> = raw_range(&self.tx, &self.ks, &cursor, upper)
-                .map(|kv| kv.map(|(k, _)| k))
+            // Keys only: a delete never needs the value bytes.
+            let keys: Vec<Slice> = raw_range(&self.tx, &self.ks, &cursor, upper)
+                .map(materialize_key)
                 .take(CHUNK)
                 .collect::<Result<_>>()?;
             let Some(last) = keys.last() else {
                 return Ok(());
             };
             cursor = {
-                let mut succ = last.clone();
+                let mut succ = last.to_vec();
                 succ.push(0);
                 succ
             };

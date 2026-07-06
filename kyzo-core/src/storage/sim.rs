@@ -90,6 +90,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::sync::{Arc, Condvar, Mutex};
 
+use fjall::Slice;
 use miette::{Result, miette};
 
 use crate::data::tuple::Tuple;
@@ -1031,10 +1032,10 @@ impl SkipSeek for SimWriteTx {
 }
 
 impl ReadTx for SimReadTx {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
         self.ctx.yield_turn();
         self.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
-        Ok(self.snapshot.get(key).cloned())
+        Ok(self.snapshot.get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
@@ -1047,7 +1048,7 @@ impl ReadTx for SimReadTx {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         self.ctx.yield_turn();
         if let Err(e) = self
             .ctx
@@ -1064,7 +1065,8 @@ impl ReadTx for SimReadTx {
         // consumes only the FIRST item: an O(n) skip scan over a range of
         // n keys paid O(n²) total instead of O(n).
         Box::new(
-            map_range(&self.snapshot, lower, Some(upper)).map(|(k, v)| Ok((k.clone(), v.clone()))),
+            map_range(&self.snapshot, lower, Some(upper))
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
     }
 
@@ -1082,7 +1084,7 @@ impl ReadTx for SimReadTx {
         ))
     }
 
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         self.ctx.yield_turn();
         if let Err(e) = self.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
@@ -1090,20 +1092,20 @@ impl ReadTx for SimReadTx {
         let items: Vec<_> = self
             .snapshot
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (Slice::from(k), Slice::from(v)))
             .collect();
         Box::new(items.into_iter().map(Ok))
     }
 }
 
 impl ReadTx for SimWriteTx {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
         self.ctx.yield_turn();
         self.track_key(key);
         self.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
         Ok(match self.writes.get(key) {
-            Some(w) => w.clone(),
-            None => self.snapshot.get(key).cloned(),
+            Some(w) => w.as_deref().map(Slice::from),
+            None => self.snapshot.get(key).map(Slice::from),
         })
     }
 
@@ -1121,7 +1123,7 @@ impl ReadTx for SimWriteTx {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         self.ctx.yield_turn();
         // Track the whole requested range even if iteration stops early:
         // conservative (more false conflicts) and therefore legal under SSI.
@@ -1132,7 +1134,10 @@ impl ReadTx for SimWriteTx {
         {
             return Box::new(std::iter::once(Err(e)));
         }
-        Box::new(self.visible_lazy(lower, Some(upper)).map(Ok))
+        Box::new(
+            self.visible_lazy(lower, Some(upper))
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+        )
     }
 
     fn range_skip_scan_tuple<'a>(
@@ -1149,13 +1154,16 @@ impl ReadTx for SimWriteTx {
         ))
     }
 
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a> {
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         self.ctx.yield_turn();
         self.track_range(&[], None);
         if let Err(e) = self.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
         }
-        Box::new(self.visible_lazy(&[], None).map(Ok))
+        Box::new(
+            self.visible_lazy(&[], None)
+                .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+        )
     }
 }
 

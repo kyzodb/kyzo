@@ -48,6 +48,7 @@
 
 use std::collections::BTreeMap;
 
+use fjall::Slice;
 use miette::Result;
 
 use crate::storage::sim::{FaultConfig, SimRng, SimStorage, for_each_seed};
@@ -102,7 +103,10 @@ pub(crate) fn law_kv_matches_model_oracle<S: Storage>(db: &S) {
 
     let tx = db.read_tx().unwrap();
     let got: Vec<_> = tx.total_scan().map(|r| r.unwrap()).collect();
-    let want: Vec<_> = model.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let want: Vec<_> = model
+        .iter()
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
+        .collect();
     assert_eq!(got, want, "store diverged from the model oracle");
 
     let got: Vec<_> = tx
@@ -111,7 +115,7 @@ pub(crate) fn law_kv_matches_model_oracle<S: Storage>(db: &S) {
         .collect();
     let want: Vec<_> = model
         .range(b"k005".to_vec()..b"k030".to_vec())
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (Slice::from(k), Slice::from(v)))
         .collect();
     assert_eq!(got, want, "bounded scan diverged from the model oracle");
     assert_eq!(tx.range_count(b"k005", b"k030").unwrap(), want.len());
@@ -129,8 +133,8 @@ pub(crate) fn law_mvcc_first_committer_wins<S: Storage>(db: &S) {
     }
     let mut tx1 = db.write_tx().unwrap();
     let mut tx2 = db.write_tx().unwrap();
-    assert_eq!(tx1.get(b"counter").unwrap(), Some(b"0".to_vec()));
-    assert_eq!(tx2.get(b"counter").unwrap(), Some(b"0".to_vec()));
+    assert_eq!(tx1.get(b"counter").unwrap(), Some(Slice::from(b"0")));
+    assert_eq!(tx2.get(b"counter").unwrap(), Some(Slice::from(b"0")));
     tx1.put(b"counter", b"1").unwrap();
     tx2.put(b"counter", b"2").unwrap();
     tx1.commit().unwrap();
@@ -141,7 +145,7 @@ pub(crate) fn law_mvcc_first_committer_wins<S: Storage>(db: &S) {
     let tx = db.read_tx().unwrap();
     assert_eq!(
         tx.get(b"counter").unwrap(),
-        Some(b"1".to_vec()),
+        Some(Slice::from(b"1")),
         "aborted transaction must leave no trace"
     );
 }
@@ -153,13 +157,13 @@ pub(crate) fn law_read_your_own_writes_and_snapshot_isolation<S: Storage>(db: &S
     let reader_before = db.read_tx().unwrap();
     let mut w = db.write_tx().unwrap();
     w.put(b"x", b"1").unwrap();
-    assert_eq!(w.get(b"x").unwrap(), Some(b"1".to_vec()), "RYOW");
+    assert_eq!(w.get(b"x").unwrap(), Some(Slice::from(b"1")), "RYOW");
     assert!(w.exists(b"x").unwrap());
     w.commit().unwrap();
 
     assert_eq!(reader_before.get(b"x").unwrap(), None, "snapshot isolation");
     let reader_after = db.read_tx().unwrap();
-    assert_eq!(reader_after.get(b"x").unwrap(), Some(b"1".to_vec()));
+    assert_eq!(reader_after.get(b"x").unwrap(), Some(Slice::from(b"1")));
 }
 
 /// Law: `del_range` removes every key visible to the transaction in
@@ -182,7 +186,7 @@ pub(crate) fn law_del_range_kills_own_writes<S: Storage>(db: &S) {
     assert_eq!(tx.get(b"k1").unwrap(), None);
     assert_eq!(tx.get(b"k2").unwrap(), None);
     assert_eq!(tx.get(b"k3").unwrap(), None, "own writes in range die too");
-    assert_eq!(tx.get(b"z-outside").unwrap(), Some(b"stays".to_vec()));
+    assert_eq!(tx.get(b"z-outside").unwrap(), Some(Slice::from(b"stays")));
 }
 
 /// Law: a range READ inside a write transaction is conflict-tracked as a
@@ -227,7 +231,7 @@ pub(crate) fn law_concurrent_writers_across_threads<S: Storage>(db: &S) {
                 for _ in 0..OPS {
                     loop {
                         let mut tx = db.write_tx().unwrap();
-                        let cur: u64 = String::from_utf8(tx.get(b"counter").unwrap().unwrap())
+                        let cur: u64 = std::str::from_utf8(&tx.get(b"counter").unwrap().unwrap())
                             .unwrap()
                             .parse()
                             .unwrap();
@@ -243,7 +247,7 @@ pub(crate) fn law_concurrent_writers_across_threads<S: Storage>(db: &S) {
     });
 
     let tx = db.read_tx().unwrap();
-    let total: u64 = String::from_utf8(tx.get(b"counter").unwrap().unwrap())
+    let total: u64 = std::str::from_utf8(&tx.get(b"counter").unwrap().unwrap())
         .unwrap()
         .parse()
         .unwrap();
@@ -312,9 +316,9 @@ pub(crate) fn run_full_battery<S: Storage>(make: impl Fn() -> S) {
 /// differ still compare equal on error PRESENCE.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Obs {
-    Val(Option<Vec<u8>>),
+    Val(Option<Slice>),
     Flag(bool),
-    Rows(Vec<(Vec<u8>, Vec<u8>)>),
+    Rows(Vec<(Slice, Slice)>),
     Count(usize),
     Err,
 }
@@ -336,7 +340,7 @@ pub(crate) enum Op {
 /// iterator terminates rather than merely a slow assertion.
 const SCAN_CAP: usize = 10_000;
 
-fn collect_rows(it: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + '_>) -> Obs {
+fn collect_rows(it: Box<dyn Iterator<Item = Result<(Slice, Slice)>> + '_>) -> Obs {
     let mut rows = vec![];
     for (i, kv) in it.enumerate() {
         assert!(
@@ -450,7 +454,11 @@ fn read_total_scan_retrying(db: &SimStorage) -> BTreeMap<Vec<u8>, Vec<u8>> {
     const ATTEMPTS: usize = 50;
     for _ in 0..ATTEMPTS {
         let tx = db.read_tx().unwrap();
-        if let Ok(m) = tx.total_scan().collect::<Result<BTreeMap<_, _>>>() {
+        if let Ok(m) = tx
+            .total_scan()
+            .map(|kv| kv.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect::<Result<BTreeMap<_, _>>>()
+        {
             return m;
         }
     }

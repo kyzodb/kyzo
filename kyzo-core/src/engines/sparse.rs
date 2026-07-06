@@ -746,7 +746,7 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let f = setup(&db, &[(1, "a", &[(0, 1.0)])]);
 
-        let idx_keys = || -> Vec<(Vec<u8>, Vec<u8>)> {
+        let idx_keys = || -> Vec<(fjall::Slice, fjall::Slice)> {
             let rtx = db.read_tx().unwrap();
             let lower = crate::data::tuple::encode_tuple_key(f.idx.id.0, &[]);
             let upper = (f.idx.id.0 + 1).to_be_bytes();

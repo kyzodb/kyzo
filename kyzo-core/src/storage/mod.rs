@@ -112,6 +112,9 @@
 
 use std::fmt;
 
+// Absolute path: this module also declares `pub(crate) mod fjall;` below,
+// which shadows the extern crate `fjall` for a plain `use fjall::...`.
+use ::fjall::Slice;
 use itertools::Itertools;
 use miette::{Result, bail, miette};
 
@@ -367,8 +370,10 @@ pub trait Storage: Send + Sync + Clone + sealed::Sealed {
 /// write transaction these same operations also see the transaction's own
 /// writes and are conflict-tracked.
 pub trait ReadTx: sealed::Sealed + Sync {
-    /// Get the value of a key.
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    /// Get the value of a key. [`Slice`] is fjall's Arc-backed byte currency
+    /// — a clone is a refcount bump, never a heap copy, so a caller that
+    /// only inspects or re-slices the bytes pays no allocation.
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>>;
 
     /// Check whether a key exists.
     fn exists(&self, key: &[u8]) -> Result<bool>;
@@ -387,9 +392,11 @@ pub trait ReadTx: sealed::Sealed + Sync {
         &'a self,
         lower: &[u8],
         upper: &[u8],
-    ) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>;
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>;
 
-    /// Scan a range, decoding each pair as a [`Tuple`].
+    /// Scan a range, decoding each pair as a [`Tuple`] straight from the
+    /// borrowed [`Slice`]s — no intermediate `Vec` copy of either key or
+    /// value sits between the backend and the decoder.
     fn range_scan_tuple<'a>(
         &'a self,
         lower: &[u8],
@@ -399,6 +406,19 @@ pub trait ReadTx: sealed::Sealed + Sync {
             self.range_scan(lower, upper)
                 .map(|kv| kv.and_then(|(k, v)| decode_tuple_from_kv(&k, &v, None))),
         )
+    }
+
+    /// Scan a range yielding KEYS ONLY — the value is never materialized.
+    /// The default just discards `range_scan`'s value half; the fjall
+    /// backend overrides this to filter its `Guard` currency on `key()`
+    /// alone, so a caller that only needs presence or a count (see
+    /// [`range_count`](Self::range_count)) never pays for value I/O.
+    fn range_scan_keys<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+        Box::new(self.range_scan(lower, upper).map(|kv| kv.map(|(k, _)| k)))
     }
 
     /// Bitemporal as-of scan: among keys differing only in their two
@@ -424,14 +444,16 @@ pub trait ReadTx: sealed::Sealed + Sync {
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
-    /// Count the keys in `[lower, upper)`.
+    /// Count the keys in `[lower, upper)`. Goes through
+    /// [`range_scan_keys`](Self::range_scan_keys): a count never needs a
+    /// single value byte.
     fn range_count(&self, lower: &[u8], upper: &[u8]) -> Result<usize> {
-        self.range_scan(lower, upper)
+        self.range_scan_keys(lower, upper)
             .process_results(|it| it.count())
     }
 
     /// Scan the entire store in ascending order.
-    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>;
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>;
 }
 
 /// The write-transaction species: everything a [`ReadTx`] can do — seeing

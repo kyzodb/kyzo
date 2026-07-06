@@ -59,6 +59,7 @@
 
 use std::num::NonZeroU64;
 
+use fjall::Slice;
 use miette::{Diagnostic, Result};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -193,7 +194,7 @@ impl MerkleAccumulator {
 
 /// Fold an ordered `(k,v)` stream into a root, capped at `budget` entries.
 fn root_over<'a>(
-    entries: Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>)>> + 'a>,
+    entries: Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>,
     budget: NonZeroU64,
 ) -> Result<MerkleHash> {
     let ceiling = budget.get();
@@ -268,6 +269,8 @@ mod tests {
 
     use std::num::NonZeroU64;
 
+    use fjall::Slice;
+
     use super::{
         MerkleHash, RELATION_ID_BOUND, empty_hash, leaf_hash, node_hash, relation_root, root_over,
         state_root,
@@ -304,7 +307,7 @@ mod tests {
         assert_eq!(leaf_hash(k, v).to_hex(), golden);
         // A one-entry root is exactly that leaf (no interior node).
         let root = root_over(
-            Box::new(std::iter::once(Ok((k.to_vec(), v.to_vec())))),
+            Box::new(std::iter::once(Ok((Slice::from(k), Slice::from(v))))),
             big_budget(),
         )
         .unwrap();
@@ -331,9 +334,12 @@ mod tests {
         );
         let root = root_over(
             Box::new(
-                [(k0.to_vec(), v0.to_vec()), (k1.to_vec(), v1.to_vec())]
-                    .into_iter()
-                    .map(Ok),
+                [
+                    (Slice::from(k0), Slice::from(v0)),
+                    (Slice::from(k1), Slice::from(v1)),
+                ]
+                .into_iter()
+                .map(Ok),
             ),
             big_budget(),
         )
@@ -368,7 +374,15 @@ mod tests {
     }
 
     fn root_of_pairs(pairs: &[(Vec<u8>, Vec<u8>)]) -> MerkleHash {
-        root_over(Box::new(pairs.iter().cloned().map(Ok)), big_budget()).unwrap()
+        root_over(
+            Box::new(
+                pairs
+                    .iter()
+                    .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+            ),
+            big_budget(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -548,7 +562,15 @@ mod tests {
         let tx = db.read_tx().unwrap();
 
         let via_relation = relation_root(&tx, rel_a, big_budget()).unwrap();
-        let via_pairs = root_over(Box::new(a_pairs.into_iter().map(Ok)), big_budget()).unwrap();
+        let via_pairs = root_over(
+            Box::new(
+                a_pairs
+                    .into_iter()
+                    .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
+            ),
+            big_budget(),
+        )
+        .unwrap();
         assert_eq!(via_relation, via_pairs);
 
         // Editing relation B leaves relation A's root untouched.
