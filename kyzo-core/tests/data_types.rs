@@ -65,7 +65,7 @@ fn every_data_type_round_trips_through_a_stored_relation() {
     ));
     assert_eq!(row[6], expected_uuid, "Uuid");
 
-    let expected_json = DataValue::Json(JsonData(serde_json::json!({"a": 1})));
+    let expected_json = DataValue::Json(JsonData::new(serde_json::json!({"a": 1})));
     assert_eq!(row[7], expected_json, "Json");
 
     let expected_validity = DataValue::Validity(Validity::from((100, true)));

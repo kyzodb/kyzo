@@ -81,7 +81,7 @@ impl FixedRule for PageRank {
         let ranks = page_rank(&graph, theta, epsilon as f64, iterations, cancel)?;
 
         for (idx, score) in ranks.iter().enumerate() {
-            out.put(vec![indices[idx].clone(), DataValue::from(*score as f64)])?;
+            out.put(vec![indices[idx].clone(), DataValue::from(*score as f64)].into())?;
         }
         Ok(())
     }
@@ -174,6 +174,7 @@ fn page_rank(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
 
     /// The termination metric a Jacobi run stops on. `page_rank` uses
     /// [`Term::Sum`] (`Σ|Δ|`); [`Term::Max`] exists only so a test can pin
@@ -430,12 +431,12 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("a"), s("c")],
-                    vec![s("b"), s("c")],
-                    vec![s("c"), s("a")],
-                    vec![s("d"), s("a")],
-                    vec![s("b"), s("d")],
+                    vec![s("a"), s("b")].into(),
+                    vec![s("a"), s("c")].into(),
+                    vec![s("b"), s("c")].into(),
+                    vec![s("c"), s("a")].into(),
+                    vec![s("d"), s("a")].into(),
+                    vec![s("b"), s("d")].into(),
                 ],
             )],
             BTreeMap::new(),
@@ -446,10 +447,10 @@ mod tests {
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         // Defaults the rule applies: theta 0.85, epsilon 1e-4, iterations 10.
         let want_scores = naive_jacobi(4, &edges, 0.85, 1e-4, 10, Term::Sum);
-        let want: Vec<Vec<DataValue>> = ["a", "b", "c", "d"]
+        let want: Vec<Tuple> = ["a", "b", "c", "d"]
             .iter()
             .zip(want_scores.iter())
-            .map(|(name, score)| vec![s(name), DataValue::from(*score as f64)])
+            .map(|(name, score)| vec![s(name), DataValue::from(*score as f64)].into())
             .collect();
         assert_eq!(got, want);
     }

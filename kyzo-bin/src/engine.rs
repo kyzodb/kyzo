@@ -44,6 +44,10 @@ impl From<StorageArgs> for StorageOptions {
         StorageOptions {
             cache_size_bytes: args.cache_size_bytes,
             worker_threads: args.worker_threads,
+            // Not CLI-exposed (see `StorageArgs`): `None` keeps the tuned
+            // policy's own choice, exactly as before these fields existed.
+            max_memtable_size_bytes: None,
+            table_target_size_bytes: None,
         }
     }
 }

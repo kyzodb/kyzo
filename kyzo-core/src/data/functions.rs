@@ -47,15 +47,14 @@ use jiff::tz::{Offset, TimeZone};
 use miette::{Diagnostic, IntoDiagnostic, Result, bail, ensure, miette};
 use rand::prelude::*;
 use serde_json::{Value, json};
-use smartstring::SmartString;
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 use uuid::v1::Timestamp;
 
 use crate::data::expr::Op;
 use crate::data::value::{
-    DataValue, Interval, JsonData, JsonValue, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
-    VecElementType, Vector,
+    DataValue, GermanStr, Interval, JsonData, JsonValue, Num, RegexWrapper, UuidWrapper, Validity,
+    ValidityTs, VecElementType, Vector,
 };
 
 /// Declares one built-in op: the `Op` const, its name (stringified from the
@@ -122,7 +121,7 @@ pub(crate) fn op_list(args: &[DataValue]) -> Result<DataValue> {
 
 define_op!(OP_JSON, 1, false, true);
 pub(crate) fn op_json(args: &[DataValue]) -> Result<DataValue> {
-    Ok(DataValue::Json(JsonData(to_json(&args[0]))))
+    Ok(DataValue::Json(JsonData::new(to_json(&args[0]))))
 }
 
 define_op!(OP_SET_JSON_PATH, 3, false, true);
@@ -134,7 +133,7 @@ pub(crate) fn op_set_json_path(args: &[DataValue]) -> Result<DataValue> {
     let pointer = get_json_path(&mut result, path)?;
     let new_val = to_json(&args[2]);
     *pointer = new_val;
-    Ok(DataValue::Json(JsonData(result)))
+    Ok(DataValue::Json(JsonData::new(result)))
 }
 
 /// A path step into a JSON array, proven non-negative and machine-sized.
@@ -228,7 +227,7 @@ pub(crate) fn op_remove_json_path(args: &[DataValue]) -> Result<DataValue> {
             bail!("json path does not exist")
         }
     }
-    Ok(DataValue::Json(JsonData(result)))
+    Ok(DataValue::Json(JsonData::new(result)))
 }
 
 define_op!(OP_JSON_OBJECT, 0, true, true);
@@ -243,7 +242,7 @@ pub(crate) fn op_json_object(args: &[DataValue]) -> Result<DataValue> {
         let value = to_json(&pair[1]);
         obj.insert(key.to_string(), value);
     }
-    Ok(DataValue::Json(JsonData(Value::Object(obj))))
+    Ok(DataValue::Json(JsonData::new(Value::Object(obj))))
 }
 
 pub(crate) fn to_json(d: &DataValue) -> JsonValue {
@@ -304,7 +303,7 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
             }
             arr.into()
         }
-        DataValue::Json(j) => j.0.clone(),
+        DataValue::Json(j) => j.value().clone(),
         DataValue::Validity(vld) => {
             json!([vld.timestamp.raw(), vld.is_assert.0])
         }
@@ -322,7 +321,7 @@ pub(crate) fn op_parse_json(args: &[DataValue]) -> Result<DataValue> {
     match args[0].get_str() {
         Some(s) => {
             let value = serde_json::from_str(s).into_diagnostic()?;
-            Ok(DataValue::Json(JsonData(value)))
+            Ok(DataValue::Json(JsonData::new(value)))
         }
         None => bail!("parse_json requires a string argument"),
     }
@@ -331,7 +330,7 @@ pub(crate) fn op_parse_json(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_DUMP_JSON, 1, false, true);
 pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
-        DataValue::Json(j) => Ok(DataValue::Str(j.0.to_string().into())),
+        DataValue::Json(j) => Ok(DataValue::Str(j.value().to_string().into())),
         _ => bail!("dump_json requires a json argument"),
     }
 }
@@ -358,7 +357,7 @@ pub(crate) fn op_is_json(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_JSON_TO_SCALAR, 1, false, true);
 pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Json(JsonData(j)) => json2val(j.clone()),
+        DataValue::Json(j) => json2val(j.value().clone()),
         d => d.clone(),
     })
 }
@@ -1403,11 +1402,11 @@ pub(crate) fn op_bit_and(args: &[DataValue]) -> Result<DataValue> {
                 left.len() == right.len(),
                 "operands of 'bit_and' must have the same lengths"
             );
-            let mut ret = left.clone();
-            for (l, r) in ret.iter_mut().zip(right.iter()) {
+            let mut ret = left.as_bytes().to_vec();
+            for (l, r) in ret.iter_mut().zip(right.as_bytes().iter()) {
                 *l &= *r;
             }
-            Ok(DataValue::Bytes(ret))
+            Ok(DataValue::Bytes(GermanStr::from_bytes(&ret)))
         }
         _ => bail!("'bit_and' requires bytes"),
     }
@@ -1421,11 +1420,11 @@ pub(crate) fn op_bit_or(args: &[DataValue]) -> Result<DataValue> {
                 left.len() == right.len(),
                 "operands of 'bit_or' must have the same lengths",
             );
-            let mut ret = left.clone();
-            for (l, r) in ret.iter_mut().zip(right.iter()) {
+            let mut ret = left.as_bytes().to_vec();
+            for (l, r) in ret.iter_mut().zip(right.as_bytes().iter()) {
                 *l |= *r;
             }
-            Ok(DataValue::Bytes(ret))
+            Ok(DataValue::Bytes(GermanStr::from_bytes(&ret)))
         }
         _ => bail!("'bit_or' requires bytes"),
     }
@@ -1435,11 +1434,11 @@ define_op!(OP_BIT_NOT, 1, false, true);
 pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Bytes(arg) => {
-            let mut ret = arg.clone();
+            let mut ret = arg.as_bytes().to_vec();
             for l in ret.iter_mut() {
                 *l = !*l;
             }
-            Ok(DataValue::Bytes(ret))
+            Ok(DataValue::Bytes(GermanStr::from_bytes(&ret)))
         }
         _ => bail!("'bit_not' requires bytes"),
     }
@@ -1453,11 +1452,11 @@ pub(crate) fn op_bit_xor(args: &[DataValue]) -> Result<DataValue> {
                 left.len() == right.len(),
                 "operands of 'bit_xor' must have the same lengths"
             );
-            let mut ret = left.clone();
-            for (l, r) in ret.iter_mut().zip(right.iter()) {
+            let mut ret = left.as_bytes().to_vec();
+            for (l, r) in ret.iter_mut().zip(right.as_bytes().iter()) {
                 *l ^= *r;
             }
-            Ok(DataValue::Bytes(ret))
+            Ok(DataValue::Bytes(GermanStr::from_bytes(&ret)))
         }
         _ => bail!("'bit_xor' requires bytes"),
     }
@@ -1467,7 +1466,7 @@ define_op!(OP_UNPACK_BITS, 1, false, true);
 pub(crate) fn op_unpack_bits(args: &[DataValue]) -> Result<DataValue> {
     if let DataValue::Bytes(bs) = &args[0] {
         let mut ret = vec![false; bs.len() * 8];
-        for (chunk, byte) in bs.iter().enumerate() {
+        for (chunk, byte) in bs.as_bytes().iter().enumerate() {
             ret[chunk * 8] = (*byte & 0b10000000) != 0;
             ret[chunk * 8 + 1] = (*byte & 0b01000000) != 0;
             ret[chunk * 8 + 2] = (*byte & 0b00100000) != 0;
@@ -1514,7 +1513,7 @@ pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
                 _ => bail!("'pack_bits' requires list of booleans"),
             }
         }
-        Ok(DataValue::Bytes(res))
+        Ok(DataValue::Bytes(GermanStr::from_bytes(&res)))
     } else if let DataValue::Set(v) = &args[0] {
         let l = v.iter().cloned().collect_vec();
         op_pack_bits(&[DataValue::List(l)])
@@ -1554,12 +1553,12 @@ pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
             let mut ret = json!(null);
             for arg in args {
                 if let DataValue::Json(j) = arg {
-                    ret = deep_merge_json(ret, j.0.clone());
+                    ret = deep_merge_json(ret, j.value().clone());
                 } else {
                     bail!("'concat' requires strings, lists, or JSON objects");
                 }
             }
-            Ok(DataValue::Json(JsonData(ret)))
+            Ok(DataValue::Json(JsonData::new(ret)))
         }
         _ => bail!("'concat' requires strings, lists, or JSON objects"),
     }
@@ -1635,7 +1634,7 @@ pub(crate) fn op_starts_with(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.starts_with(r as &str))),
         (DataValue::Bytes(l), DataValue::Bytes(r)) => {
-            Ok(DataValue::from(l.starts_with(r as &[u8])))
+            Ok(DataValue::from(l.as_bytes().starts_with(r.as_bytes())))
         }
         _ => bail!("'starts_with' requires strings or bytes"),
     }
@@ -1645,7 +1644,9 @@ define_op!(OP_ENDS_WITH, 2, false, true);
 pub(crate) fn op_ends_with(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(l), DataValue::Str(r)) => Ok(DataValue::from(l.ends_with(r as &str))),
-        (DataValue::Bytes(l), DataValue::Bytes(r)) => Ok(DataValue::from(l.ends_with(r as &[u8]))),
+        (DataValue::Bytes(l), DataValue::Bytes(r)) => {
+            Ok(DataValue::from(l.as_bytes().ends_with(r.as_bytes())))
+        }
         _ => bail!("'ends_with' requires strings or bytes"),
     }
 }
@@ -2076,9 +2077,9 @@ fn json2val(res: Value) -> DataValue {
                 DataValue::Null
             }
         }
-        Value::String(s) => DataValue::Str(SmartString::from(s)),
-        Value::Array(arr) => DataValue::Json(JsonData(json!(arr))),
-        Value::Object(obj) => DataValue::Json(JsonData(json!(obj))),
+        Value::String(s) => DataValue::Str(GermanStr::from(s)),
+        Value::Array(arr) => DataValue::Json(JsonData::new(json!(arr))),
+        Value::Object(obj) => DataValue::Json(JsonData::new(json!(obj))),
     }
 }
 
@@ -2113,11 +2114,7 @@ pub(crate) fn op_chars(args: &[DataValue]) -> Result<DataValue> {
             .get_str()
             .ok_or_else(|| miette!("'chars' requires strings"))?
             .chars()
-            .map(|c| {
-                let mut s = SmartString::new();
-                s.push(c);
-                DataValue::Str(s)
-            })
+            .map(|c| DataValue::from(c.to_string()))
             .collect_vec(),
     ))
 }
@@ -2189,9 +2186,9 @@ pub(crate) fn op_decode_base64(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => {
             let b = STANDARD
-                .decode(s)
+                .decode(s.as_bytes())
                 .map_err(|_| miette!("Data is not properly encoded"))?;
-            Ok(DataValue::Bytes(b))
+            Ok(DataValue::Bytes(GermanStr::from_bytes(&b)))
         }
         _ => bail!("'decode_base64' requires strings"),
     }
@@ -2213,7 +2210,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Validity(vld) => vld.is_assert.0,
         DataValue::Interval(_) => true,
         DataValue::Bot => false,
-        DataValue::Json(json) => match &json.0 {
+        DataValue::Json(json) => match json.value() {
             Value::Null => false,
             Value::Bool(b) => *b,
             Value::Number(n) => n.as_i64() != Some(0),
@@ -2240,7 +2237,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Validity(vld) => i64::from(vld.is_assert.0),
         DataValue::Interval(_) => 1,
         DataValue::Bot => 0,
-        DataValue::Json(json) => match &json.0 {
+        DataValue::Json(json) => match json.value() {
             Value::Null => 0,
             Value::Bool(b) => *b as i64,
             Value::Number(n) => (n.as_i64() != Some(0)) as i64,
@@ -2302,7 +2299,10 @@ pub(crate) fn op_to_string(args: &[DataValue]) -> Result<DataValue> {
 fn val2str(arg: &DataValue) -> String {
     match arg {
         DataValue::Str(s) => s.to_string(),
-        DataValue::Json(JsonData(JsonValue::String(s))) => s.clone(),
+        DataValue::Json(j) => match j.value() {
+            JsonValue::String(s) => s.clone(),
+            _ => to_json(arg).to_string(),
+        },
         v => {
             let jv = to_json(v);
             jv.to_string()
@@ -2332,9 +2332,10 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Json(j) => {
             // Non-array JSON is a typed error; the CozoDB original unwrapped
             // `as_array()` here and aborted on e.g. `vec(json('{}'))`.
-            let arr =
-                j.0.as_array()
-                    .ok_or_else(|| miette!("'vec' requires a JSON array, got {}", j.0))?;
+            let arr = j
+                .value()
+                .as_array()
+                .ok_or_else(|| miette!("'vec' requires a JSON array, got {}", j.value()))?;
             match t {
                 VecElementType::F32 => {
                     let mut res_arr = ndarray::Array1::zeros(arr.len());
@@ -2770,7 +2771,7 @@ pub(crate) fn op_to_uuid(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         d @ DataValue::Uuid(_u) => Ok(d.clone()),
         DataValue::Str(s) => {
-            let id = uuid::Uuid::try_parse(s).map_err(|_| miette!("invalid UUID"))?;
+            let id = uuid::Uuid::try_parse(s.as_str()).map_err(|_| miette!("invalid UUID"))?;
             Ok(DataValue::uuid(id))
         }
         _ => bail!("'to_uuid' requires a string"),
@@ -2850,7 +2851,7 @@ pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
         }
         None => Offset::UTC,
     };
-    Ok(DataValue::Str(SmartString::from(format_rfc3339(ts, off))))
+    Ok(DataValue::Str(GermanStr::from(format_rfc3339(ts, off))))
 }
 
 // Microseconds since the Unix epoch for a parsed timestamp, FLOORED toward

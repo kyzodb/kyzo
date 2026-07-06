@@ -57,11 +57,14 @@ impl FixedRule for MinimumSpanningForestKruskal {
         }
         let msp = kruskal(&graph, cancel)?;
         for (src, dst, cost) in msp {
-            out.put(vec![
-                indices[src as usize].clone(),
-                indices[dst as usize].clone(),
-                DataValue::from(cost as f64),
-            ])?;
+            out.put(
+                vec![
+                    indices[src as usize].clone(),
+                    indices[dst as usize].clone(),
+                    DataValue::from(cost as f64),
+                ]
+                .into(),
+            )?;
         }
 
         Ok(())
@@ -153,6 +156,7 @@ impl UnionFind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -164,7 +168,7 @@ mod tests {
     /// is a tie among equal priorities — hash-seeded, not pinnable.
     /// Normalize each row to (min endpoint, max endpoint, weight) and
     /// sort; the SET of tree edges and their weights are the semantics.
-    fn normalized(rows: Vec<Vec<DataValue>>) -> Vec<(DataValue, DataValue, DataValue)> {
+    fn normalized(rows: Vec<Tuple>) -> Vec<(DataValue, DataValue, DataValue)> {
         let mut out: Vec<_> = rows
             .into_iter()
             .map(|r| {
@@ -194,10 +198,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(1.0)],
-                    vec![s("b"), s("c"), DataValue::from(2.0)],
-                    vec![s("a"), s("c"), DataValue::from(4.0)],
-                    vec![s("c"), s("d"), DataValue::from(3.0)],
+                    vec![s("a"), s("b"), DataValue::from(1.0)].into(),
+                    vec![s("b"), s("c"), DataValue::from(2.0)].into(),
+                    vec![s("a"), s("c"), DataValue::from(4.0)].into(),
+                    vec![s("c"), s("d"), DataValue::from(3.0)].into(),
                 ],
             )],
             BTreeMap::new(),
@@ -227,9 +231,9 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(2.0)],
-                    vec![s("a"), s("b"), DataValue::from(5.0)],
-                    vec![s("b"), s("c"), DataValue::from(3.0)],
+                    vec![s("a"), s("b"), DataValue::from(2.0)].into(),
+                    vec![s("a"), s("b"), DataValue::from(5.0)].into(),
+                    vec![s("b"), s("c"), DataValue::from(3.0)].into(),
                 ],
             )],
             BTreeMap::new(),
@@ -258,8 +262,8 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(1.0)],
-                    vec![s("b"), s("c"), DataValue::from(1.0)],
+                    vec![s("a"), s("b"), DataValue::from(1.0)].into(),
+                    vec![s("b"), s("c"), DataValue::from(1.0)].into(),
                 ],
             )],
             BTreeMap::new(),

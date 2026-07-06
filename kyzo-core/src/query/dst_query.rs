@@ -67,7 +67,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::tuple::Tuple;
 
-use crate::data::value::{AsOf, DataValue, ValidityTs};
+use crate::data::value::{AsOf, DataValue, GermanStr, ValidityTs};
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
@@ -269,10 +269,10 @@ fn tc_populate(db: &SimStorage) -> Result<()> {
         "edge",
         2,
         &[
-            vec![v(1), v(2)],
-            vec![v(2), v(3)],
-            vec![v(3), v(4)],
-            vec![v(4), v(2)],
+            vec![v(1), v(2)].into(),
+            vec![v(2), v(3)].into(),
+            vec![v(3), v(4)].into(),
+            vec![v(4), v(2)].into(),
         ],
     )
 }
@@ -329,10 +329,10 @@ fn join_populate(db: &SimStorage) -> Result<()> {
         "edge",
         2,
         &[
-            vec![v(1), v(2)],
-            vec![v(2), v(3)],
-            vec![v(3), v(4)],
-            vec![v(2), v(5)],
+            vec![v(1), v(2)].into(),
+            vec![v(2), v(3)].into(),
+            vec![v(3), v(4)].into(),
+            vec![v(2), v(5)].into(),
         ],
     )
 }
@@ -362,11 +362,11 @@ fn aggr_populate(db: &SimStorage) -> Result<()> {
         "cost",
         2,
         &[
-            vec![v(1), v(5)],
-            vec![v(1), v(3)],
-            vec![v(1), v(8)],
-            vec![v(2), v(7)],
-            vec![v(2), v(2)],
+            vec![v(1), v(5)].into(),
+            vec![v(1), v(3)].into(),
+            vec![v(1), v(8)].into(),
+            vec![v(2), v(7)].into(),
+            vec![v(2), v(2)].into(),
         ],
     )
 }
@@ -398,9 +398,14 @@ fn aggr_expected() -> BTreeSet<Tuple> {
 // ── stratified negation: pairs of nodes with no path between them ────────
 
 fn neg_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(db, "node", 1, &[vec![v(1)], vec![v(2)], vec![v(3)]])?;
+    stored_relation(
+        db,
+        "node",
+        1,
+        &[vec![v(1)].into(), vec![v(2)].into(), vec![v(3)].into()],
+    )?;
     // 1->2 only: 3 is isolated, and nothing reaches 1.
-    stored_relation(db, "edge", 2, &[vec![v(1), v(2)]])
+    stored_relation(db, "edge", 2, &[vec![v(1), v(2)].into()])
 }
 fn neg_program() -> StratifiedMagicProgram {
     let (x, y, z) = (sym("x"), sym("y"), sym("z"));
@@ -482,8 +487,18 @@ const SINGLE_HEAD_FIXTURES: &[Fixture] = &[
 // ── a multi-head stratum, for the parallelism / determinism probe ────────
 
 fn multihead_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(db, "ea", 2, &[vec![v(1), v(2)], vec![v(2), v(3)]])?;
-    stored_relation(db, "eb", 2, &[vec![v(10), v(20)], vec![v(20), v(30)]])
+    stored_relation(
+        db,
+        "ea",
+        2,
+        &[vec![v(1), v(2)].into(), vec![v(2), v(3)].into()],
+    )?;
+    stored_relation(
+        db,
+        "eb",
+        2,
+        &[vec![v(10), v(20)].into(), vec![v(20), v(30)].into()],
+    )
 }
 fn multihead_program() -> StratifiedMagicProgram {
     // pa and pb are independent recursive closures in ONE stratum: eval's
@@ -1007,7 +1022,7 @@ fn time_travel_under_faults_answers_or_errors() {
             (1, 30, true, "c"),
         ] {
             if assertive {
-                let row = vec![v(id), DataValue::Str(SmartString::from(state))];
+                let row = vec![v(id), DataValue::Str(GermanStr::from_str(state))];
                 h.put_fact(&mut tx, &row, ValidityTs::from_raw(at), sp())?;
             } else {
                 h.retract_fact(&mut tx, &[v(id)], ValidityTs::from_raw(at), sp())?;
@@ -1093,7 +1108,7 @@ fn time_travel_under_faults_answers_or_errors() {
 
 fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
     data.iter()
-        .map(|(id, s)| vec![v(*id), DataValue::Str(SmartString::from(*s))])
+        .map(|(id, s)| vec![v(*id), DataValue::Str(GermanStr::from_str(s))].into())
         .collect()
 }
 

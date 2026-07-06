@@ -196,6 +196,7 @@ impl FixedRule for Constant {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::run_fixed_rule;
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the
@@ -214,7 +215,8 @@ mod tests {
         )]);
         let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
-        assert_eq!(got[0], vec![DataValue::from(1i64), DataValue::from("x")]);
+        let want: Tuple = vec![DataValue::from(1i64), DataValue::from("x")].into();
+        assert_eq!(got[0], want);
     }
 
     /// Un-normalized (or drifted) options are a typed refusal in `run`,

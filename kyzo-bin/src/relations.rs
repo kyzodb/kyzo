@@ -122,7 +122,12 @@ pub fn import_relations(db: &Db<FjallStorage>, data: BTreeMap<String, NamedRows>
         }
         let cols_str = rows.headers.join(", ");
         let query = format!("?[{cols_str}] <- $data {op} {relation} {{{cols_str}}}");
-        let data_value = DataValue::List(rows.rows.into_iter().map(DataValue::List).collect());
+        let data_value = DataValue::List(
+            rows.rows
+                .into_iter()
+                .map(|t| DataValue::List(t.into_vec()))
+                .collect(),
+        );
         db.run_script(&query, BTreeMap::from([("data".to_string(), data_value)]))
             .map_err(|e| miette!("cannot import data for relation '{relation}': {e}"))?;
     }

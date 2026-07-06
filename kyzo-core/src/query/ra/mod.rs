@@ -1004,7 +1004,7 @@ mod tests {
                 match batches.next()? {
                     Err(e) => return Some(Err(e)),
                     Ok(b) => {
-                        current = (0..b.len()).map(|i| b.row(i).to_vec()).collect();
+                        current = (0..b.len()).map(|i| b.row(i).to_vec().into()).collect();
                         idx = 0;
                     }
                 }
@@ -1070,7 +1070,8 @@ mod tests {
     #[test]
     fn inline_fixed_join_branches() {
         let left_rows = [vec![v(1)], vec![v(2)]];
-        let mk_left = || -> TupleIter<'_> { Box::new(left_rows.iter().map(|t| Ok(t.clone()))) };
+        let mk_left =
+            || -> TupleIter<'_> { Box::new(left_rows.iter().map(|t| Ok(t.clone().into()))) };
 
         let null = InlineFixedRA {
             bindings: vec![sym("y")],
@@ -1098,7 +1099,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![vec![v(2), v(2)]]);
+        assert_eq!(got, vec![Tuple::from(vec![v(2), v(2)])]);
 
         let fixed = InlineFixedRA {
             bindings: vec![sym("y"), sym("z")],
@@ -1112,7 +1113,13 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![vec![v(1), v(1), v(10)], vec![v(1), v(1), v(11)]]);
+        assert_eq!(
+            got,
+            vec![
+                Tuple::from(vec![v(1), v(1), v(10)]),
+                Tuple::from(vec![v(1), v(1), v(11)])
+            ]
+        );
     }
 
     /// `InnerJoin::iter_batched`'s unit-left fast path must NOT fire for a
@@ -1158,7 +1165,7 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         // The independently known answer: y=2 joins x=2 exactly once.
-        assert_eq!(got, vec![vec![v(2), v(2)]]);
+        assert_eq!(got, vec![Tuple::from(vec![v(2), v(2)])]);
     }
 
     /// The general (non-prefix) join's batch executor, judged by an
@@ -1235,8 +1242,8 @@ mod tests {
             .collect();
         got.sort();
         let mut expected: Vec<Tuple> = (0..2000i64)
-            .map(|i| vec![v(7), v(i), v(7)])
-            .chain((5000..5003i64).map(|i| vec![v(8), v(i), v(8)]))
+            .map(|i| vec![v(7), v(i), v(7)].into())
+            .chain((5000..5003i64).map(|i| vec![v(8), v(i), v(8)].into()))
             .collect();
         expected.sort();
         assert_eq!(got, expected, "materialized batch join vs analytic oracle");
@@ -1265,7 +1272,14 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![vec![v(1)], vec![v(2)], vec![v(3)]]);
+        assert_eq!(
+            got,
+            vec![
+                Tuple::from(vec![v(1)]),
+                Tuple::from(vec![v(2)]),
+                Tuple::from(vec![v(3)])
+            ]
+        );
 
         let mut bad = RelAlgebra::unit(sp()).unify(
             sym("x"),
@@ -1577,7 +1591,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        let expected: Vec<Tuple> = (1..=5i64).map(|k| vec![v(k), v(k + 1000)]).collect();
+        let expected: Vec<Tuple> = (1..=5i64).map(|k| vec![v(k), v(k + 1000)].into()).collect();
         assert_eq!(got, expected, "eliminate_indices: wrong surviving columns");
     }
 
@@ -1594,14 +1608,14 @@ mod tests {
 
         let mut store = EpochStore::new_normal(2);
         let mut baseline = RegularTempStore::default();
-        baseline.put(vec![v(0), DataValue::from("a")]);
-        baseline.put(vec![v(1), DataValue::from("b")]);
+        baseline.put(vec![v(0), DataValue::from("a")].into());
+        baseline.put(vec![v(1), DataValue::from("b")].into());
         store.merge_in(baseline.wrap(), &mut ()).unwrap();
         // First merge into an empty total swaps the whole store in (the
         // `use_total_for_delta` fast path) — so this second merge is the
         // one that actually narrows the delta to what's fresh.
         let mut fresh = RegularTempStore::default();
-        fresh.put(vec![v(2), DataValue::from("c")]);
+        fresh.put(vec![v(2), DataValue::from("c")].into());
         store.merge_in(fresh.wrap(), &mut ()).unwrap();
         assert!(store.has_delta(), "the second merge must have a delta");
 
@@ -1653,7 +1667,7 @@ mod tests {
         assert_eq!(it, ba, "delta-threaded batched join diverged from iterator");
         assert_eq!(
             it,
-            vec![vec![v(2), v(2), DataValue::from("c")]],
+            vec![Tuple::from(vec![v(2), v(2), DataValue::from("c")])],
             "delta threading must narrow the join to the fresh row only"
         );
     }
@@ -1707,7 +1721,7 @@ mod tests {
                 right_handle
                     .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::from_raw(0), sp())
                     .unwrap();
-                expected.push(vec![v(k), v(k), v(k * 10)]);
+                expected.push(vec![v(k), v(k), v(k * 10)].into());
             }
         }
         tx.commit().unwrap();
@@ -1788,7 +1802,7 @@ mod tests {
                 right_handle
                     .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())
                     .unwrap();
-                expected.push(vec![v(z), v(z), v(w)]);
+                expected.push(vec![v(z), v(z), v(w)].into());
             }
         }
         tx.commit().unwrap();
@@ -1876,7 +1890,7 @@ mod tests {
 
         const N_PROBES: usize = 200_000;
         let probe_rows: Vec<Tuple> = (0..N_PROBES)
-            .map(|i| vec![v((i as i64) % N_NODES)])
+            .map(|i| vec![v((i as i64) % N_NODES)].into())
             .collect();
         let left_of = |rows: Vec<Tuple>| -> BatchIter<'static> {
             let chunks: Vec<Batch> = rows
@@ -1976,10 +1990,10 @@ mod tests {
             span: Default::default(),
         };
         let stream: Vec<Result<Tuple>> = vec![
-            Ok(vec![DataValue::from(5)]),
-            Ok(vec![DataValue::from("poison")]),
+            Ok(vec![DataValue::from(5)].into()),
+            Ok(vec![DataValue::from("poison")].into()),
             Err(miette::miette!("simulated decode error at row 2")),
-            Ok(vec![DataValue::from(7)]),
+            Ok(vec![DataValue::from(7)].into()),
         ];
         let mut node = BatchTupleFilter {
             inner: stream.into_iter(),

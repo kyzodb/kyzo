@@ -27,14 +27,16 @@ pub(crate) const BATCH_ROWS: usize = 1024;
 ///
 /// **Row-major, flattened.** Every row's values sit end to end in one
 /// `values` buffer, with `offsets` marking row boundaries ([`Batch::row`],
-/// [`Batch::push_with`]) — not whole [`Tuple`]s, and not per-column
-/// `Vec<DataValue>` arrays. Row-major matches the substrate: the engine's
-/// currency is the positional tuple, the predicate/unification VM
+/// [`Batch::push_with`]) — the BATCH itself is never a whole [`Tuple`] nor
+/// a per-column `Vec<DataValue>` array. Row-major matches the substrate: the
+/// engine's currency is the positional tuple, the predicate/unification VM
 /// (`eval_bytecode`) reads one `&[DataValue]` row at a time, and the batched
-/// scan (`BatchScanFilter`) decodes raw key/value bytes straight into the
-/// flattened buffer, so a scanned row never exists as its own `Tuple`. A
-/// columnar layout remains possible if a future profile justifies it; row-
-/// major is what serves the VM and the scan as they exist today.
+/// scan (`BatchScanFilter`) decodes raw key/value bytes through one scratch
+/// `Tuple` (inline, no heap allocation for the common arity-<=3 row) and
+/// copies its values once into the flattened buffer — no per-row `Vec` or
+/// heap-backed row buffer survives past that copy. A columnar layout
+/// remains possible if a future profile justifies it; row-major is what
+/// serves the VM and the scan as they exist today.
 ///
 /// **Order is load-bearing.** A batch is an order-preserving window over the
 /// operator's tuple stream: [`Batch::iter_rows`] yields rows in exactly the
@@ -44,8 +46,8 @@ pub(crate) const BATCH_ROWS: usize = 1024;
 pub(crate) struct Batch {
     /// Every row's values, flattened end to end: two allocations per BATCH
     /// instead of one `Vec` per row. The batched scan decodes raw key/value
-    /// bytes straight into this buffer, so a scanned row never exists as
-    /// its own `Tuple`.
+    /// bytes through one scratch `Tuple` per row (see [`Batch::push_with`]
+    /// callers) and copies the result straight into this buffer.
     values: Vec<DataValue>,
     /// Row end offsets into `values`: row `i` is `offsets[i-1]..offsets[i]`
     /// (row 0 starts at 0).
@@ -84,8 +86,9 @@ impl Batch {
     }
 
     /// Append a row by extending `values` in place through `fill`; the row
-    /// is whatever `fill` pushed. The batched scan decodes key and value
-    /// bytes straight through this — no per-row buffer exists at all.
+    /// is whatever `fill` pushed. `fill` writes directly into the shared
+    /// arena and must not push anything unless it fully succeeds, so a
+    /// failed decode never leaves torn bytes behind for the next row.
     pub(crate) fn push_with(
         &mut self,
         fill: impl FnOnce(&mut Vec<DataValue>) -> Result<()>,
@@ -165,13 +168,14 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
     if batch.is_empty() {
         return Ok(batch);
     }
-    let rows: Vec<&[DataValue]> = batch.iter_rows().collect();
+    let rows: Vec<Tuple> = batch.iter_rows().map(|r| r.to_vec().into()).collect();
     let width = rows[0].len();
-    let columns = crate::data::batch::ColumnBatch::from_rows(&rows, width);
+    let n_rows = rows.len();
+    let columns = crate::data::batch::ColumnBatch::from_rows(rows, width);
     let sel = crate::query::vm::eval_pred_batched(
         pred,
         &columns,
-        &crate::data::batch::Selection::all(rows.len()),
+        &crate::data::batch::Selection::all(n_rows),
     )?;
     let mut out = Batch::new();
     for r in sel.iter() {
@@ -271,8 +275,20 @@ impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I>
                     }
                     Some(Ok((k, v))) => {
                         if let Err(e) = batch.push_with(|buf| {
-                            decode_key_into(&k, buf)?;
-                            extend_tuple_from_v(buf, &v)
+                            // `decode_key_into`/`extend_tuple_from_v` are
+                            // `Tuple`-typed (they `.push` one `DataValue` at
+                            // a time), so the row decodes into a scratch
+                            // `Tuple` first — inline, no heap allocation for
+                            // the common arity-<=3 row — then its values
+                            // are copied once into the batch's shared flat
+                            // arena. Nothing is appended to `buf` unless
+                            // both decode steps succeed, so a torn row
+                            // never lands in the arena at all.
+                            let mut row = Tuple::new();
+                            decode_key_into(&k, &mut row)?;
+                            extend_tuple_from_v(&mut row, &v)?;
+                            buf.extend(row);
+                            Ok(())
                         }) {
                             // The decode failed mid-push: drop the torn row
                             // and hold the error behind the refined prefix.

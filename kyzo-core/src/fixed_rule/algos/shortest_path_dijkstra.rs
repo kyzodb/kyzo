@@ -48,6 +48,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
+use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
@@ -105,7 +106,7 @@ impl FixedRule for ShortestPathDijkstra {
         // the sequential order. `out.put` stays on this thread — the writer
         // is not shared.
         let starts: Vec<u32> = starting_nodes.into_iter().collect();
-        let rows_per_start = par_try_map(starts, |start| -> Result<Vec<Vec<DataValue>>> {
+        let rows_per_start = par_try_map(starts, |start| -> Result<Vec<Tuple>> {
             let res = if let Some(tn) = &termination_nodes {
                 if tn.len() == 1 {
                     // Structural: `tn.len() == 1`.
@@ -136,6 +137,7 @@ impl FixedRule for ShortestPathDijkstra {
                                 .collect_vec(),
                         ),
                     ]
+                    .into()
                 })
                 .collect())
         })?;
@@ -419,8 +421,8 @@ mod tests {
         DataValue::from(v)
     }
 
-    fn e(a: &str, b: &str, w: f64) -> Vec<DataValue> {
-        vec![s(a), s(b), DataValue::from(w)]
+    fn e(a: &str, b: &str, w: f64) -> Tuple {
+        vec![s(a), s(b), DataValue::from(w)].into()
     }
 
     /// A deterministic pseudo-random weighted graph plus a many-node start
@@ -434,7 +436,7 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             state
         };
-        let mut edges = vec![];
+        let mut edges: Vec<Tuple> = vec![];
         for _ in 0..400 {
             let a = (next() >> 33) as u32 % n;
             let b = (next() >> 33) as u32 % n;
@@ -444,10 +446,10 @@ mod tests {
             }
         }
         edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
-        let starts: Vec<_> = (0..n).map(|i| vec![s(&format!("n{i}"))]).collect();
-        let ends: Vec<_> = (0..n)
+        let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("n{i}"))].into()).collect();
+        let ends: Vec<Tuple> = (0..n)
             .step_by(7)
-            .map(|i| vec![s(&format!("n{i}"))])
+            .map(|i| vec![s(&format!("n{i}"))].into())
             .collect();
         vec![
             TestInput::new(vec!["fr", "to", "w"], edges),
@@ -498,8 +500,8 @@ mod tests {
                     vec!["fr", "to", "w"],
                     vec![e("a", "b", 10.0), e("a", "c", 1.0), e("c", "b", 1.0)],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("b")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["end"], vec![vec![s("b")].into()]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -543,8 +545,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -556,23 +558,23 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
+        let want: Vec<Tuple> = vec![
             vec![
-                vec![
-                    s("a"),
-                    s("d"),
-                    DataValue::from(2.0),
-                    DataValue::List(vec![s("a"), s("b"), s("d")]),
-                ],
-                vec![
-                    s("a"),
-                    s("d"),
-                    DataValue::from(2.0),
-                    DataValue::List(vec![s("a"), s("c"), s("d")]),
-                ],
+                s("a"),
+                s("d"),
+                DataValue::from(2.0),
+                DataValue::List(vec![s("a"), s("b"), s("d")]),
             ]
-        );
+            .into(),
+            vec![
+                s("a"),
+                s("d"),
+                DataValue::from(2.0),
+                DataValue::List(vec![s("a"), s("c"), s("d")]),
+            ]
+            .into(),
+        ];
+        assert_eq!(got, want);
     }
 
     /// VALUE ORACLE: `keep_ties` with MULTIPLE termination nodes (the
@@ -588,8 +590,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("b")], vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["end"], vec![vec![s("b")].into(), vec![s("d")].into()]),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -601,29 +603,30 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
+        let want: Vec<Tuple> = vec![
             vec![
-                vec![
-                    s("a"),
-                    s("b"),
-                    DataValue::from(1.0),
-                    DataValue::List(vec![s("a"), s("b")]),
-                ],
-                vec![
-                    s("a"),
-                    s("d"),
-                    DataValue::from(2.0),
-                    DataValue::List(vec![s("a"), s("b"), s("d")]),
-                ],
-                vec![
-                    s("a"),
-                    s("d"),
-                    DataValue::from(2.0),
-                    DataValue::List(vec![s("a"), s("c"), s("d")]),
-                ],
+                s("a"),
+                s("b"),
+                DataValue::from(1.0),
+                DataValue::List(vec![s("a"), s("b")]),
             ]
-        );
+            .into(),
+            vec![
+                s("a"),
+                s("d"),
+                DataValue::from(2.0),
+                DataValue::List(vec![s("a"), s("b"), s("d")]),
+            ]
+            .into(),
+            vec![
+                s("a"),
+                s("d"),
+                DataValue::from(2.0),
+                DataValue::List(vec![s("a"), s("c"), s("d")]),
+            ]
+            .into(),
+        ];
+        assert_eq!(got, want);
     }
 
     /// VALUE ORACLE: without `keep_ties` the same graph yields exactly one
@@ -636,8 +639,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),

@@ -54,7 +54,7 @@ use crate::data::functions::*;
 use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, LARGEST_UTF_CHAR};
+use crate::data::value::{DataValue, GermanStr, LARGEST_UTF_CHAR};
 
 /// One instruction of the compiled expression form: a stack-machine program
 /// produced by `expr2bytecode` from a validated [`Expr`].
@@ -1167,9 +1167,9 @@ impl Expr {
                             StrRangeScanError(val.clone(), symb.span)
                         })?;
                         let lower = DataValue::from(s);
-                        let mut upper = SmartString::from(s);
+                        let mut upper = s.to_string();
                         upper.push(LARGEST_UTF_CHAR);
-                        let upper = DataValue::Str(upper);
+                        let upper = DataValue::Str(GermanStr::from_str(&upper));
                         return Ok(ValueRange::new(lower, upper));
                     }
                     ValueRange::default()

@@ -200,6 +200,7 @@ use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::smallvec;
 use smartstring::SmartString;
 use thiserror::Error;
 
@@ -208,7 +209,7 @@ use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, VecElementType, Vector};
+use crate::data::value::{DataValue, GermanStr, VecElementType, Vector};
 use crate::engines::IndexRowCorrupt;
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
@@ -453,7 +454,7 @@ impl VectorId {
     /// Append this id's three wire slots (key columns, field, sub) to a
     /// key tuple under construction.
     fn push_onto(&self, key: &mut Tuple) {
-        key.extend_from_slice(&self.tuple_key);
+        key.extend(self.tuple_key.iter().cloned());
         key.push(DataValue::from(self.field as i64));
         key.push(DataValue::from(self.sub_wire()));
     }
@@ -511,7 +512,12 @@ pub(crate) enum HnswRow {
     Edge {
         layer: i64,
         fr: VectorId,
-        to: VectorId,
+        // Boxed (unlike `fr`) so `Edge`'s two `VectorId`s don't both count
+        // against the enum's size: `VectorId` carries a `Tuple`, so an
+        // unboxed pair here made `Edge` far larger than `Node`/`Canary`,
+        // bloating every `HnswRow` by the largest variant's size regardless
+        // of which one it holds.
+        to: Box<VectorId>,
         dist: f64,
         ignore_link: bool,
     },
@@ -528,7 +534,7 @@ pub(crate) enum HnswRow {
 
 /// Key tuple of a node row at `layer` (fr == to == `at`).
 fn node_key(layer: i64, at: &VectorId) -> Tuple {
-    let mut k = Vec::with_capacity(2 * at.tuple_key.len() + 5);
+    let mut k = Tuple::with_capacity(2 * at.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
     at.push_onto(&mut k);
     at.push_onto(&mut k);
@@ -537,7 +543,7 @@ fn node_key(layer: i64, at: &VectorId) -> Tuple {
 
 /// Key tuple of an edge row at `layer`.
 fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Tuple {
-    let mut k = Vec::with_capacity(2 * fr.tuple_key.len() + 5);
+    let mut k = Tuple::with_capacity(2 * fr.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
     fr.push_onto(&mut k);
     to.push_onto(&mut k);
@@ -547,7 +553,7 @@ fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Tuple {
 /// Key tuple of the canary row for an index over a base relation with
 /// `base_key_len` key columns.
 fn canary_key(base_key_len: usize) -> Tuple {
-    let mut k = Vec::with_capacity(2 * base_key_len + 5);
+    let mut k = Tuple::with_capacity(2 * base_key_len + 5);
     k.push(DataValue::from(CANARY_LAYER));
     for _ in 0..(2 * base_key_len + 4) {
         k.push(DataValue::Null);
@@ -568,14 +574,14 @@ impl HnswRow {
         match self {
             HnswRow::Node {
                 degree, vec_hash, ..
-            } => vec![
+            } => smallvec![
                 DataValue::from(*degree as i64),
-                DataValue::Bytes(vec_hash.clone()),
+                DataValue::Bytes(GermanStr::from_bytes(vec_hash)),
                 DataValue::from(false),
             ],
             HnswRow::Edge {
                 dist, ignore_link, ..
-            } => vec![
+            } => smallvec![
                 DataValue::from(*dist),
                 DataValue::Null,
                 DataValue::from(*ignore_link),
@@ -583,9 +589,9 @@ impl HnswRow {
             HnswRow::Canary {
                 bottom_layer,
                 entry_key,
-            } => vec![
+            } => smallvec![
                 DataValue::from(*bottom_layer),
-                DataValue::Bytes(entry_key.clone()),
+                DataValue::Bytes(GermanStr::from_bytes(entry_key)),
                 DataValue::from(false),
             ],
         }
@@ -642,7 +648,7 @@ impl HnswRow {
             };
             return Ok(HnswRow::Canary {
                 bottom_layer,
-                entry_key: entry_key.clone(),
+                entry_key: entry_key.as_bytes().to_vec(),
             });
         }
         if layer > 0 {
@@ -672,7 +678,7 @@ impl HnswRow {
                 )),
             };
             Ok(VectorId {
-                tuple_key: tuple[start..start + kl].to_vec(),
+                tuple_key: tuple[start..start + kl].to_vec().into(),
                 field: field as usize,
                 sub,
             })
@@ -708,7 +714,7 @@ impl HnswRow {
                 layer,
                 at: fr,
                 degree: degree as usize,
-                vec_hash: vec_hash.clone(),
+                vec_hash: vec_hash.as_bytes().to_vec(),
             })
         } else {
             let dist = tuple[2 * kl + 5].get_float().ok_or_else(|| {
@@ -728,7 +734,7 @@ impl HnswRow {
             Ok(HnswRow::Edge {
                 layer,
                 fr,
-                to,
+                to: Box::new(to),
                 dist,
                 ignore_link: *flag,
             })
@@ -1022,7 +1028,7 @@ fn neighbours(
     let _t0 = std::time::Instant::now();
     #[cfg(test)]
     probe::NEIGHBOURS_CALLS.with(|c| c.set(c.get() + 1));
-    let mut prefix = Vec::with_capacity(of.tuple_key.len() + 3);
+    let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
@@ -1040,7 +1046,7 @@ fn neighbours(
                 ..
             } => {
                 if include_ignored || !ignore_link {
-                    ret.push((to, dist));
+                    ret.push((*to, dist));
                 }
             }
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
@@ -1265,7 +1271,7 @@ fn neighbours_tagged(
     of: &VectorId,
     layer: i64,
 ) -> Result<Vec<(VectorId, f64, bool)>> {
-    let mut prefix = Vec::with_capacity(of.tuple_key.len() + 3);
+    let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
@@ -1279,7 +1285,7 @@ fn neighbours_tagged(
                 dist,
                 ignore_link,
                 ..
-            } => ret.push((to, dist, ignore_link)),
+            } => ret.push((*to, dist, ignore_link)),
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 &row,
@@ -1399,7 +1405,7 @@ fn shrink_neighbour<T: WriteTx>(
             HnswRow::Edge {
                 layer,
                 fr: target.clone(),
-                to: new,
+                to: Box::new(new),
                 dist: new_dist,
                 ignore_link: false,
             }
@@ -1416,7 +1422,7 @@ fn shrink_neighbour<T: WriteTx>(
                 HnswRow::Edge {
                     layer,
                     fr: target.clone(),
-                    to: old,
+                    to: Box::new(old),
                     dist: old_dist,
                     ignore_link: true,
                 }
@@ -1517,7 +1523,7 @@ fn put_vector<T: WriteTx>(
             HnswRow::Edge {
                 layer,
                 fr: at.clone(),
-                to: neighbour.clone(),
+                to: Box::new(neighbour.clone()),
                 dist: *dist,
                 ignore_link: false,
             }
@@ -1525,7 +1531,7 @@ fn put_vector<T: WriteTx>(
             HnswRow::Edge {
                 layer,
                 fr: neighbour.clone(),
-                to: at.clone(),
+                to: Box::new(at.clone()),
                 dist: *dist,
                 ignore_link: false,
             }
@@ -1703,7 +1709,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             DataValue::Vec(v) => extracted.push((
                 IndexVec::admit(v, manifest)?,
                 VectorId {
-                    tuple_key: tuple[..key_len].to_vec(),
+                    tuple_key: tuple[..key_len].to_vec().into(),
                     field: *field,
                     sub: None,
                 },
@@ -1714,7 +1720,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
                         extracted.push((
                             IndexVec::admit(v, manifest)?,
                             VectorId {
-                                tuple_key: tuple[..key_len].to_vec(),
+                                tuple_key: tuple[..key_len].to_vec().into(),
                                 field: *field,
                                 sub: Some(sub),
                             },
@@ -1756,9 +1762,9 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
             "row shorter than the base relation's key",
         ));
     }
-    let mut prefix = Vec::with_capacity(key_len + 1);
+    let mut prefix = Tuple::with_capacity(key_len + 1);
     prefix.push(DataValue::from(0i64));
-    prefix.extend_from_slice(&tuple[..key_len]);
+    prefix.extend(tuple[..key_len].iter().cloned());
     let mut candidates: FxHashSet<VectorId> = FxHashSet::default();
     // Scan errors and corrupt rows propagate (the original's `filter_map`
     // silently dropped errors here).
@@ -1935,7 +1941,7 @@ pub(crate) fn hnsw_knn(
                     .name
                     .clone()
             };
-            cand_tuple.push(DataValue::Str(name));
+            cand_tuple.push(DataValue::Str(GermanStr::from_str(&name)));
         }
         if params.bind_field_idx {
             cand_tuple.push(match cand.sub {
@@ -2127,7 +2133,7 @@ fn build_cand_tuple(
                 .name
                 .clone()
         };
-        cand_tuple.push(DataValue::Str(name));
+        cand_tuple.push(DataValue::Str(GermanStr::from_str(&name)));
     }
     if params.bind_field_idx {
         cand_tuple.push(match cand.sub {
@@ -2666,7 +2672,7 @@ mod tests {
     }
 
     fn row(k: i64, x: f32, y: f32) -> Tuple {
-        vec![DataValue::from(k), vec2(x, y)]
+        vec![DataValue::from(k), vec2(x, y)].into()
     }
 
     /// A base relation and its HNSW index relation on a real store.
@@ -3647,12 +3653,12 @@ mod tests {
     fn row_kinds_round_trip() {
         let kl = 1usize;
         let at = VectorId {
-            tuple_key: vec![DataValue::from(7)],
+            tuple_key: vec![DataValue::from(7)].into(),
             field: 1,
             sub: None,
         };
         let other = VectorId {
-            tuple_key: vec![DataValue::from(8)],
+            tuple_key: vec![DataValue::from(8)].into(),
             field: 1,
             sub: Some(2),
         };
@@ -3666,7 +3672,7 @@ mod tests {
             HnswRow::Edge {
                 layer: 0,
                 fr: at.clone(),
-                to: other.clone(),
+                to: Box::new(other.clone()),
                 dist: 0.25,
                 ignore_link: true,
             },
@@ -3716,14 +3722,14 @@ mod tests {
     fn corrupt_rows_are_typed_errors() {
         // Well-formed tuple, wrong shape: node degree slot holds a string.
         let at = VectorId {
-            tuple_key: vec![DataValue::from(7)],
+            tuple_key: vec![DataValue::from(7)].into(),
             field: 1,
             sub: None,
         };
         let mut tuple = node_key(0, &at);
         tuple.extend(vec![
             DataValue::from("not a degree"),
-            DataValue::Bytes(vec![]),
+            DataValue::Bytes(GermanStr::from_bytes(&[])),
             DataValue::from(false),
         ]);
         let err = HnswRow::decode(&tuple, 1, "t").unwrap_err();
@@ -3814,7 +3820,7 @@ mod tests {
     fn hnsw_level_is_deterministic_and_geometric() {
         let m = manifest(HnswDistance::L2);
         let id_of = |k: i64| VectorId {
-            tuple_key: vec![DataValue::from(k)],
+            tuple_key: vec![DataValue::from(k)].into(),
             field: 1,
             sub: None,
         };

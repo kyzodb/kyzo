@@ -348,7 +348,9 @@ mod tests {
     /// both, over every (expr, batch) this generator produces.
     fn differential(expr: &Expr, rows: &[Vec<DataValue>]) {
         let width = rows.first().map_or(0, Vec::len);
-        let batch = ColumnBatch::from_rows(rows, width);
+        let owned_rows: Vec<crate::data::tuple::Tuple> =
+            rows.iter().map(|r| r.clone().into()).collect();
+        let batch = ColumnBatch::from_rows(owned_rows, width);
         let sel = Selection::all(rows.len());
         let batched = eval_expr_batched(expr, &batch, &sel);
         // Row oracle: first error in row order wins; otherwise all values.

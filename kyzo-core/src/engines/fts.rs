@@ -94,6 +94,7 @@ use std::cmp::Reverse;
 use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::smallvec;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -101,7 +102,7 @@ use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, LARGEST_UTF_CHAR};
+use crate::data::value::{DataValue, GermanStr, LARGEST_UTF_CHAR};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
@@ -215,7 +216,7 @@ fn extract_text(
     extractor: &[Bytecode],
     tuple: &[DataValue],
     stack: &mut Vec<DataValue>,
-) -> Result<Option<SmartString<LazyCompact>>> {
+) -> Result<Option<GermanStr>> {
     match eval_bytecode(extractor, tuple, stack)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
@@ -228,9 +229,9 @@ fn extract_text(
 /// The FTS posting key under construction: `[word, src_key…]` with the word
 /// slot left as `Bot` for the caller to fill per term.
 fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Vec::with_capacity(1 + base_key_len);
+    let mut key = Tuple::with_capacity(1 + base_key_len);
     key.push(DataValue::Bot);
-    key.extend_from_slice(&tuple[..base_key_len]);
+    key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
 
@@ -284,7 +285,7 @@ pub(crate) fn fts_put<T: WriteTx>(
 
     let mut key = posting_key_scaffold(base_key_len, tuple);
     for (term, (from, to, position)) in collector {
-        key[0] = DataValue::Str(term);
+        key[0] = DataValue::Str(GermanStr::from_str(&term));
         let val = vec![
             DataValue::List(from),
             DataValue::List(to),
@@ -332,7 +333,7 @@ pub(crate) fn fts_del<T: WriteTx>(
     }
     let mut key = posting_key_scaffold(base_key_len, tuple);
     for term in terms {
-        key[0] = DataValue::Str(term);
+        key[0] = DataValue::Str(GermanStr::from_str(&term));
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -376,11 +377,11 @@ fn literal_postings(
         idx.scan_bounded_prefix(
             tx,
             &[],
-            &[DataValue::Str(SmartString::from(value))],
-            &[DataValue::Str(upper)],
+            &[DataValue::Str(GermanStr::from_str(value))],
+            &[DataValue::Str(GermanStr::from_str(&upper))],
         )
     } else {
-        idx.scan_prefix(tx, &vec![DataValue::Str(SmartString::from(value))])
+        idx.scan_prefix(tx, &smallvec![DataValue::Str(GermanStr::from_str(value))])
     };
 
     // Value column indices in the decoded tuple: word(0), src keys
@@ -420,7 +421,7 @@ fn literal_postings(
             })
             .collect::<Result<Vec<u32>>>()?;
         out.push(LiteralPostings {
-            doc_key: row[1..=base_key_len].to_vec(),
+            doc_key: row[1..=base_key_len].to_vec().into(),
             positions,
         });
     }

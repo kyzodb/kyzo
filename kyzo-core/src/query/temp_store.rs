@@ -179,7 +179,10 @@ pub struct RegularTempStore {
 /// meet store's group key): still `DataValue`-shaped, since the meet path
 /// is unconverted this chunk (`MeetAggrStore`/`MeetLevel` stay as-is; see
 /// this module's doc).
-pub(crate) const EMPTY_TUPLE_REF: &Tuple = &Vec::new();
+pub(crate) fn empty_tuple_ref() -> &'static Tuple {
+    static EMPTY: std::sync::OnceLock<Tuple> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(Tuple::new)
+}
 
 impl RegularTempStore {
     pub(crate) fn wrap(self) -> TempStore {
@@ -323,7 +326,7 @@ impl MeetLayout {
     /// placeholder survives.
     pub(crate) fn interleave(&self, key: &[u8], vals: &[DataValue]) -> Tuple {
         let key = decode_tuple_bare(key).expect("this store's own bytes decode");
-        let mut row = vec![DataValue::Null; self.arity];
+        let mut row: Tuple = vec![DataValue::Null; self.arity].into();
         for (slot, i) in self.key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
@@ -676,9 +679,7 @@ impl TupleInIter<'_> {
                 key.extend(val.iter().cloned());
                 key
             }
-            TupleInIter::Values { key, val, .. } => {
-                key.iter().chain(val.iter()).cloned().collect_vec()
-            }
+            TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cloned().collect(),
         }
     }
     /// Total comparison against a plain slice, through `DataValue`'s total
@@ -844,11 +845,11 @@ mod tests {
     use crate::query::levels::{EpochStore, LevelKind};
 
     fn t(vals: &[i64]) -> Tuple {
-        vals.iter().map(|v| DataValue::from(*v)).collect_vec()
+        vals.iter().map(|v| DataValue::from(*v)).collect()
     }
 
     fn gv(group: &str, val: DataValue) -> Tuple {
-        vec![DataValue::from(group), val]
+        vec![DataValue::from(group), val].into()
     }
 
     /// A recording sink: collects every admission, in the order reported.
@@ -1079,7 +1080,7 @@ mod tests {
         assert!(!store.exists(&gv("c", DataValue::from(0i64))));
 
         let got = store
-            .prefix_iter(&vec![DataValue::from("b")])
+            .prefix_iter(&vec![DataValue::from("b")].into())
             .map(TupleInIter::into_tuple)
             .collect_vec();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
@@ -1125,7 +1126,7 @@ mod tests {
 
         // Delta iteration honors the same store (first epoch: via total).
         let d = store
-            .delta_prefix_iter(&vec![DataValue::from(2i64)])
+            .delta_prefix_iter(&vec![DataValue::from(2i64)].into())
             .map(TupleInIter::into_tuple)
             .collect_vec();
         assert_eq!(d, vec![t(&[2])]);
@@ -1145,7 +1146,7 @@ mod tests {
     /// A head tuple with the meet value at position 0 and the grouping key
     /// at position 1 — the layout the suffix-prefix store could not hold.
     fn vg(val: DataValue, group: &str) -> Tuple {
-        vec![val, DataValue::from(group)]
+        vec![val, DataValue::from(group)].into()
     }
 
     /// [`MeetLayout`] projections and their inverse round-trip for an
@@ -1162,15 +1163,19 @@ mod tests {
         assert_eq!(layout.key_positions, vec![1]);
         assert_eq!(layout.val_positions, vec![0, 2]);
 
-        let row = vec![
+        let row: Tuple = vec![
             DataValue::from(2i64),
             DataValue::from("g"),
             DataValue::from(9i64),
-        ];
+        ]
+        .into();
         let key = layout.project_key(&row);
         let vals = layout.project_vals(&row);
-        assert_eq!(key, vec![DataValue::from("g")]);
-        assert_eq!(vals, vec![DataValue::from(2i64), DataValue::from(9i64)]);
+        assert_eq!(key, Tuple::from(vec![DataValue::from("g")]));
+        assert_eq!(
+            vals,
+            Tuple::from(vec![DataValue::from(2i64), DataValue::from(9i64)])
+        );
         assert_eq!(
             layout.interleave(&encode_tuple_bare(&key), &vals),
             row,
@@ -1473,7 +1478,7 @@ mod tests {
         let v1 = t(&[5]);
         let k2 = t(&[1, 5]);
         let joined = TupleInIter::new(&k1, &v1, false);
-        let flat = TupleInIter::new(&k2, EMPTY_TUPLE_REF, false);
+        let flat = TupleInIter::new(&k2, empty_tuple_ref(), false);
         assert_eq!(joined, flat);
         assert_eq!(joined.cmp(&flat), Ordering::Equal);
         assert_eq!(

@@ -518,7 +518,7 @@ mod tests {
             assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
             // A bare retract/erase value carries no payload and extends
             // nothing.
-            let mut tup = vec![DataValue::from(1i64)];
+            let mut tup: Tuple = vec![DataValue::from(1i64)].into();
             extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
             assert_eq!(tup.len(), 1);
         }
@@ -527,26 +527,26 @@ mod tests {
         val.push(ClaimPolarity::Assert.encode());
         let non_keys = vec![DataValue::from(42i64), DataValue::from(7i64)];
         crate::data::fact_payload::encode_fact_payload(&non_keys, &mut val).unwrap();
-        let mut tup = vec![DataValue::from(1i64)];
+        let mut tup: Tuple = vec![DataValue::from(1i64)].into();
         extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
         assert_eq!(
             tup,
-            vec![
+            Tuple::from(vec![
                 DataValue::from(1i64),
                 DataValue::from(42i64),
                 DataValue::from(7i64)
-            ]
+            ])
         );
         // Refusals: short value, unknown polarity byte, garbage payload.
         for len in 0..9usize {
             assert!(claim_polarity_of_value(&vec![0u8; len]).is_err());
-            assert!(extend_tuple_from_bitemporal_v(&mut vec![], &vec![0u8; len]).is_err());
+            assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &vec![0u8; len]).is_err());
         }
         let mut bad = RelationId(7).raw_encode().to_vec();
         bad.push(0xEE);
         assert!(claim_polarity_of_value(&bad).is_err());
         bad.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack bytes
-        assert!(extend_tuple_from_bitemporal_v(&mut vec![], &bad).is_err());
+        assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
     }
 
     /// The judge-of-the-judge: story #62's unified oracle
@@ -598,9 +598,9 @@ mod tests {
             let history: Vec<laws::Event> = rows
                 .iter()
                 .map(|(f, v, s, p)| {
-                    let key = vec![DataValue::from(*f)];
+                    let key: Tuple = vec![DataValue::from(*f)].into();
                     match p {
-                        ClaimPolarity::Assert => laws::Event::assert(key, vec![], *v, *s),
+                        ClaimPolarity::Assert => laws::Event::assert(key, Tuple::new(), *v, *s),
                         ClaimPolarity::Retract => laws::Event::retract(key, *v, *s),
                         ClaimPolarity::Erase => laws::Event::erase(key, *v, *s),
                     }

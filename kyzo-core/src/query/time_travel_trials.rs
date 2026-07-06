@@ -222,7 +222,11 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
         None,
     )
     .expect("evaluates");
-    outcome.store.all_iter().map(|t| t.into_tuple()).collect()
+    outcome
+        .store
+        .all_iter()
+        .map(|t| t.into_tuple().into_vec())
+        .collect()
 }
 
 type Tuple = Vec<DataValue>;
@@ -363,10 +367,10 @@ fn naive_asof_cfg(
             // `ver.ts` is a small, bounded generated/fixture timestamp
             // throughout this file: never the reserved terminal tick.
             if ver.assert {
-                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
+                laws::Event::assert(key.into(), ver.vals.clone().into(), ver.ts, sys)
                     .expect("version timestamps in this file are never the reserved terminal tick")
             } else {
-                laws::Event::retract(key, ver.ts, sys)
+                laws::Event::retract(key.into(), ver.ts, sys)
                     .expect("version timestamps in this file are never the reserved terminal tick")
             }
         })
@@ -379,6 +383,9 @@ fn naive_asof_cfg(
             sys: i64::MAX,
         },
     )
+    .into_iter()
+    .map(|t| t.into_vec())
+    .collect()
 }
 
 /// The correct oracle: inclusive boundary, last-write-wins at an instant.
@@ -1591,9 +1598,9 @@ fn events_of(versions: &[Version], sys_stamps: &[i64]) -> Vec<laws::Event> {
         .map(|(ver, &sys)| {
             let key: Tuple = ver.key.iter().copied().map(v).collect();
             if ver.assert {
-                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
+                laws::Event::assert(key.into(), ver.vals.clone().into(), ver.ts, sys)
             } else {
-                laws::Event::retract(key, ver.ts, sys)
+                laws::Event::retract(key.into(), ver.ts, sys)
             }
             .expect("fixture valid instants are never the reserved terminal tick")
         })
@@ -1652,12 +1659,13 @@ fn delta_atom(
 fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTreeSet<Tuple> {
     let mut want = BTreeSet::new();
     for key in keys {
-        for iv in laws::derive_intervals(events, key, laws::Axis::Valid, fixed_sys) {
+        let real_key = crate::data::tuple::Tuple::from(key.clone());
+        for iv in laws::derive_intervals(events, &real_key, laws::Axis::Valid, fixed_sys) {
             let mut row = iv.tuple.clone();
             row.push(DataValue::Interval(
                 Interval::new(iv.start, iv.end).expect("derive_intervals proves start < end"),
             ));
-            want.insert(row);
+            want.insert(row.to_vec());
         }
     }
     want
@@ -1672,11 +1680,11 @@ fn oracle_delta(events: &[laws::Event], from: laws::AsOf, to: laws::AsOf) -> BTr
         .map(|sf| match sf {
             laws::SignedFact::Plus(mut t) => {
                 t.push(v(1));
-                t
+                t.into_vec()
             }
             laws::SignedFact::Minus(mut t) => {
                 t.push(v(-1));
-                t
+                t.into_vec()
             }
         })
         .collect()
@@ -1917,8 +1925,8 @@ fn delta_composition_law_holds_through_the_real_engine() {
                 .map(|mut row| {
                     let sgn = row.pop().expect("row carries a sign column");
                     match sgn.get_int() {
-                        Some(1) => laws::SignedFact::Plus(row),
-                        Some(-1) => laws::SignedFact::Minus(row),
+                        Some(1) => laws::SignedFact::Plus(row.into()),
+                        Some(-1) => laws::SignedFact::Minus(row.into()),
                         other => panic!("unexpected sign column: {other:?}"),
                     }
                 })
@@ -1980,8 +1988,8 @@ fn production_compose_matches_the_composition_law_on_real_engine_output() {
                 .map(|mut row| {
                     let sgn = row.pop().expect("row carries a sign column");
                     match sgn.get_int() {
-                        Some(1) => temporal::SignedFact::Plus(row),
-                        Some(-1) => temporal::SignedFact::Minus(row),
+                        Some(1) => temporal::SignedFact::Plus(row.into()),
+                        Some(-1) => temporal::SignedFact::Minus(row.into()),
                         other => panic!("unexpected sign column: {other:?}"),
                     }
                 })

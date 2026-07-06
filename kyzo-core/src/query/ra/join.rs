@@ -91,7 +91,7 @@ pub(crate) fn eliminate_from_tuple(mut ret: Tuple, eliminate_indices: &BTreeSet<
                     Some(v)
                 }
             })
-            .collect_vec();
+            .collect();
     }
     ret
 }
@@ -587,7 +587,7 @@ impl InnerJoin {
                         right_store_indices
                             .iter()
                             .map(|i| row[*i].clone())
-                            .collect_vec(),
+                            .collect::<Tuple>(),
                     );
                 }
             }

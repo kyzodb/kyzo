@@ -104,6 +104,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
                 DataValue::from(k),
                 DataValue::Vec(Vector::F32(arr1(&comps))),
             ]
+            .into()
         })
         .collect()
 }
@@ -499,28 +500,33 @@ fn sweep_generator_hits_its_bands() {
 #[test]
 fn oracle_is_exact_and_total_ordered() {
     let m = hmanifest(2, HnswDistance::L2);
-    let rows = vec![
+    let rows: Vec<Tuple> = vec![
         vec![
             DataValue::from(0),
             DataValue::Vec(Vector::F32(arr1(&[3.0, 0.0]))),
-        ],
+        ]
+        .into(),
         vec![
             DataValue::from(1),
             DataValue::Vec(Vector::F32(arr1(&[0.1, 0.0]))),
-        ],
+        ]
+        .into(),
         vec![
             DataValue::from(2),
             DataValue::Vec(Vector::F32(arr1(&[1.0, 0.0]))),
-        ],
+        ]
+        .into(),
         vec![
             DataValue::from(3),
             DataValue::Vec(Vector::F32(arr1(&[0.2, 0.0]))),
-        ],
+        ]
+        .into(),
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         vec![
             DataValue::from(4),
             DataValue::Vec(Vector::F32(arr1(&[-1.0, 0.0]))),
-        ],
+        ]
+        .into(),
     ];
     let q = Vector::F32(arr1(&[0.0, 0.0]));
     let even = FilterSpec::ModLessThan {
@@ -872,6 +878,7 @@ fn engine_ordering_is_total_under_ties() {
                 DataValue::from(i),
                 DataValue::Vec(Vector::F32(arr1(&comps))),
             ]
+            .into()
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
@@ -1050,7 +1057,7 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
             } else {
                 comps.iter().map(|c| c + 40.0).collect()
             };
-            vec![DataValue::from(k), DataValue::Vec(Vector::F32(arr1(&v)))]
+            vec![DataValue::from(k), DataValue::Vec(Vector::F32(arr1(&v)))].into()
         })
         .collect();
     (n, half, rows)
@@ -1402,6 +1409,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
                 DataValue::from(i),
                 DataValue::Vec(Vector::F32(arr1(&comps))),
             ]
+            .into()
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();

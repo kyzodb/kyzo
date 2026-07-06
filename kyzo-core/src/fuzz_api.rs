@@ -56,7 +56,7 @@ pub fn fuzz_parse_script(src: &str) -> Result<()> {
 /// nothing is hidden here — the façade exists only because
 /// `decode_fact_payload` itself is `pub(crate)`.
 pub fn fuzz_decode_fact_payload(data: &[u8]) -> Result<Tuple> {
-    let mut row: Tuple = vec![];
+    let mut row: Tuple = Tuple::new();
     decode_fact_payload(data, &mut row)?;
     Ok(row)
 }

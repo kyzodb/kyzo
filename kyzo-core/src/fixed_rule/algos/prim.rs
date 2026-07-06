@@ -71,11 +71,14 @@ impl FixedRule for MinimumSpanningTreePrim {
         };
         let msp = prim(&graph, starting, cancel)?;
         for (src, dst, cost) in msp {
-            out.put(vec![
-                indices[src as usize].clone(),
-                indices[dst as usize].clone(),
-                DataValue::from(cost as f64),
-            ])?;
+            out.put(
+                vec![
+                    indices[src as usize].clone(),
+                    indices[dst as usize].clone(),
+                    DataValue::from(cost as f64),
+                ]
+                .into(),
+            )?;
         }
         Ok(())
     }
@@ -128,6 +131,7 @@ fn prim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -151,26 +155,24 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to", "w"],
                     vec![
-                        vec![s("a"), s("b"), DataValue::from(1.0)],
-                        vec![s("b"), s("c"), DataValue::from(2.0)],
-                        vec![s("a"), s("c"), DataValue::from(4.0)],
-                        vec![s("c"), s("d"), DataValue::from(3.0)],
+                        vec![s("a"), s("b"), DataValue::from(1.0)].into(),
+                        vec![s("b"), s("c"), DataValue::from(2.0)].into(),
+                        vec![s("a"), s("c"), DataValue::from(4.0)].into(),
+                        vec![s("c"), s("d"), DataValue::from(3.0)].into(),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), s("b"), DataValue::from(1.0)],
-                vec![s("b"), s("c"), DataValue::from(2.0)],
-                vec![s("c"), s("d"), DataValue::from(3.0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), s("b"), DataValue::from(1.0)].into(),
+            vec![s("b"), s("c"), DataValue::from(2.0)].into(),
+            vec![s("c"), s("d"), DataValue::from(3.0)].into(),
+        ];
+        assert_eq!(got, want);
     }
 
     /// TIE BEHAVIOR: equal weights on the chain a-b: 1, b-c: 1 from a.
@@ -188,22 +190,20 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to", "w"],
                     vec![
-                        vec![s("a"), s("b"), DataValue::from(1.0)],
-                        vec![s("b"), s("c"), DataValue::from(1.0)],
+                        vec![s("a"), s("b"), DataValue::from(1.0)].into(),
+                        vec![s("b"), s("c"), DataValue::from(1.0)].into(),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), s("b"), DataValue::from(1.0)],
-                vec![s("b"), s("c"), DataValue::from(1.0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), s("b"), DataValue::from(1.0)].into(),
+            vec![s("b"), s("c"), DataValue::from(1.0)].into(),
+        ];
+        assert_eq!(got, want);
     }
 }

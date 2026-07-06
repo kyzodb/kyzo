@@ -33,7 +33,10 @@ The contract:
   re-minted; the persisted watermark writes under a lock so it never regresses under concurrent
   mints. Bulk import (`batch_put`) is OUTSIDE the stamp/SSI surface and both backends refuse a
   non-empty target.
-- **Pure Rust**: no C or C++ toolchain. Zero `unsafe` (compiler-enforced via `#![forbid]`).
+- **Pure Rust**: no C or C++ toolchain. Zero `unsafe` in `storage/**` itself, compiler-enforced: the
+  crate root is `#![deny(unsafe_code)]` (story #119 downgraded it from `#![forbid]` to admit exactly
+  one reviewed exception, `GermanStr` in `data/germanstr.rs`), and `storage/**` carries no local
+  `#[allow(unsafe_code)]`, so `deny` still makes any unsafe block here a compile error.
 
 Durability is explicit and typed: `commit` survives a process crash, `commit_durable`/`sync` survive a
 power cut. Stores and dumps are stamped with `FormatVersion`; mismatches refuse to open. The

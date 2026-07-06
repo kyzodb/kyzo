@@ -37,7 +37,9 @@ use crate::data::bitemporal::ClaimPolarity;
 use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
-use crate::data::value::{AsOf, DataValue, Interval, JsonData, Num, Validity, ValidityTs, Vector};
+use crate::data::value::{
+    AsOf, DataValue, GermanStr, Interval, JsonData, Num, Validity, ValidityTs, Vector,
+};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -81,10 +83,10 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Str("ab".into()),
         DataValue::Str("b".into()),
         DataValue::Str("Ω unicode ω".into()),
-        DataValue::Bytes(vec![]),
-        DataValue::Bytes(vec![0]),
-        DataValue::Bytes(vec![0, 1]),
-        DataValue::Bytes(vec![255]),
+        DataValue::Bytes(GermanStr::from_bytes(&[])),
+        DataValue::Bytes(GermanStr::from_bytes(&[0])),
+        DataValue::Bytes(GermanStr::from_bytes(&[0, 1])),
+        DataValue::Bytes(GermanStr::from_bytes(&[255])),
         DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(0))),
         DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
@@ -119,8 +121,8 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Vec(Vector::F64(ndarray::arr1(&[0.25f64, -7.5]))),
         DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64]))),
         DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64]))),
-        DataValue::Json(JsonData(serde_json::json!({"a": 1}))),
-        DataValue::Json(JsonData(serde_json::json!([1, 2, 3]))),
+        DataValue::Json(JsonData::new(serde_json::json!({"a": 1}))),
+        DataValue::Json(JsonData::new(serde_json::json!([1, 2, 3]))),
         DataValue::Validity(Validity {
             timestamp: ValidityTs::from_raw(42),
             is_assert: Reverse(true),
@@ -209,10 +211,11 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s.into())),
         // Json's Ord and encoding both reduce to the serialized string, but
         // the reduction is an argument, not a law — fuzz it like the rest.
-        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::value::JsonData(
+        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::value::JsonData::new(
             serde_json::Value::String(s)
         ))),
-        proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
+        proptest::collection::vec(any::<u8>(), 0..24)
+            .prop_map(|v| DataValue::Bytes(GermanStr::from_bytes(&v))),
         any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
         proptest::collection::vec(any::<f32>(), 0..6)
             .prop_map(|v| DataValue::Vec(Vector::F32(ndarray::Array1::from(v)))),
@@ -501,7 +504,7 @@ fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
             is_assert: Reverse(true),
         })
     };
-    let tuple: Tuple = vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)];
+    let tuple: Tuple = vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)].into();
     tuple.encode_as_key(rel)
 }
 
@@ -702,7 +705,8 @@ fn stamped_row(
         DataValue::Str(name.into()),
         slot(ValidityTs::from_raw(valid_ts)),
         slot(sys),
-    ];
+    ]
+    .into();
     (tuple.encode_as_key(rel), pol_val(rel, true))
 }
 
@@ -1228,7 +1232,7 @@ fn law3_value_payloads_error_never_panic() {
     hostile.extend([0x91, 0x81, 0xa5]);
     hostile.extend(b"Regex");
     hostile.push(0xa0);
-    let mut tup: Tuple = vec![];
+    let mut tup: Tuple = Tuple::new();
     assert!(extend_tuple_from_v(&mut tup, &hostile).is_err());
 }
 
@@ -1236,7 +1240,7 @@ proptest! {
     /// Generative value-side Law 3: arbitrary value bytes never panic.
     #[test]
     fn law3_value_generative(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
-        let mut tup: Tuple = vec![];
+        let mut tup: Tuple = Tuple::new();
         let _ = crate::data::tuple::extend_tuple_from_v(&mut tup, &bytes);
     }
 }
@@ -3023,7 +3027,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
             timestamp: stamp,
             is_assert: Reverse(true),
         });
-        let tuple: Tuple = vec![DataValue::from(0), slot.clone(), slot];
+        let tuple: Tuple = vec![DataValue::from(0), slot.clone(), slot].into();
         tuple.encode_as_key(rel)
     };
     let current = |rows: Vec<Tuple>| -> i64 {

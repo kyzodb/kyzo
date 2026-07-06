@@ -41,7 +41,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, GermanStr};
 
 /// The seed for the element hash. Pinned: changing it changes every
 /// sketch's contents (and is a stored-format change if sketches are ever
@@ -202,7 +202,7 @@ impl HyperLogLog {
     /// The sketch as a `DataValue::Bytes`, the form it takes as an
     /// aggregation accumulator that flows through recursion.
     pub(crate) fn to_value(&self) -> DataValue {
-        DataValue::Bytes(self.to_bytes())
+        DataValue::Bytes(GermanStr::from_bytes(&self.to_bytes()))
     }
 }
 

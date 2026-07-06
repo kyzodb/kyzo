@@ -1039,7 +1039,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Json(j) => {
             out.push_str("parse_json(");
-            write_str_literal(&j.0.to_string(), out);
+            write_str_literal(&j.value().to_string(), out);
             out.push(')');
         }
     }

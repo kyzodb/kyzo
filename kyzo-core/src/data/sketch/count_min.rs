@@ -45,7 +45,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, GermanStr};
 
 /// One pinned hash seed per row. The sketch uses the first `depth` of these,
 /// so `depth` is capped at their count. Fixed as part of the sketch format.
@@ -202,7 +202,7 @@ impl CountMinSketch {
 
     /// The sketch as a `DataValue::Bytes`.
     pub(crate) fn to_value(&self) -> DataValue {
-        DataValue::Bytes(self.to_bytes())
+        DataValue::Bytes(GermanStr::from_bytes(&self.to_bytes()))
     }
 }
 

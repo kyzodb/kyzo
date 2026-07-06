@@ -642,7 +642,7 @@ impl<S: Storage> Db<S> {
                 } else {
                     Ok(NamedRows::new(
                         vec!["status".to_string()],
-                        vec![vec![DataValue::from("OK")]],
+                        vec![vec![DataValue::from("OK")].into()],
                     ))
                 }
             }
@@ -696,11 +696,14 @@ impl<S: Storage> Db<S> {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
                 let mut rows = vec![];
                 for handle in list_relations(&tx.store)? {
-                    rows.push(vec![
-                        DataValue::from(handle.name.as_str()),
-                        DataValue::from(handle.arity() as i64),
-                        DataValue::from(format!("{:?}", handle.access_level)),
-                    ]);
+                    rows.push(
+                        vec![
+                            DataValue::from(handle.name.as_str()),
+                            DataValue::from(handle.arity() as i64),
+                            DataValue::from(format!("{:?}", handle.access_level)),
+                        ]
+                        .into(),
+                    );
                 }
                 Ok(NamedRows::new(
                     vec!["name".into(), "arity".into(), "access_level".into()],
@@ -718,10 +721,9 @@ impl<S: Storage> Db<S> {
                     .map(|c| (c, true))
                     .chain(handle.metadata.non_keys.iter().map(|c| (c, false)))
                 {
-                    rows.push(vec![
-                        DataValue::from(col.0.name.as_str()),
-                        DataValue::from(col.1),
-                    ]);
+                    rows.push(
+                        vec![DataValue::from(col.0.name.as_str()), DataValue::from(col.1)].into(),
+                    );
                 }
                 Ok(NamedRows::new(vec!["column".into(), "is_key".into()], rows))
             }
@@ -729,7 +731,7 @@ impl<S: Storage> Db<S> {
                 let rows = self
                     .fixed_rules()
                     .keys()
-                    .map(|k| vec![DataValue::from(k.as_str())])
+                    .map(|k| vec![DataValue::from(k.as_str())].into())
                     .collect();
                 Ok(NamedRows::new(vec!["name".into()], rows))
             }
@@ -744,7 +746,7 @@ impl<S: Storage> Db<S> {
                     .chain(handle.rm_triggers.iter().map(|s| ("on_rm", s)))
                     .chain(handle.replace_triggers.iter().map(|s| ("on_replace", s)))
                 {
-                    rows.push(vec![DataValue::from(kind), DataValue::from(src.as_str())]);
+                    rows.push(vec![DataValue::from(kind), DataValue::from(src.as_str())].into());
                 }
                 Ok(NamedRows::new(vec!["kind".into(), "source".into()], rows))
             }
@@ -808,7 +810,7 @@ impl<S: Storage> Db<S> {
                 };
                 Ok(NamedRows::new(
                     vec!["root".into()],
-                    vec![vec![DataValue::from(root.to_hex())]],
+                    vec![vec![DataValue::from(root.to_hex())].into()],
                 ))
             }
 
@@ -836,7 +838,7 @@ impl<S: Storage> Db<S> {
                             crate::runtime::relation::IndexKind::Fts(..) => "fts",
                             crate::runtime::relation::IndexKind::Lsh { .. } => "lsh",
                         };
-                        vec![DataValue::from(r.name.as_str()), DataValue::from(kind)]
+                        vec![DataValue::from(r.name.as_str()), DataValue::from(kind)].into()
                     })
                     .collect();
                 Ok(NamedRows::new(vec!["name".into(), "kind".into()], rows))
@@ -913,7 +915,7 @@ fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> NamedRows {
 pub(crate) fn status_ok() -> NamedRows {
     NamedRows::new(
         vec!["status".to_string()],
-        vec![vec![DataValue::from("OK")]],
+        vec![vec![DataValue::from("OK")].into()],
     )
 }
 
@@ -1877,9 +1879,9 @@ mod tests {
         let rows = db
             .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
             .expect("two-coordinate read");
+        let want: Vec<Tuple> = vec![vec![DataValue::from("retro")].into()];
         assert_eq!(
-            rows.rows,
-            vec![vec![DataValue::from("retro")]],
+            rows.rows, want,
             "system-now, valid-200 must see the retroactive claim"
         );
         // Swapped (sys=200, valid=now): at system time 200 µs the record
@@ -1928,10 +1930,8 @@ mod tests {
             "index and base must agree on current state"
         );
         assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
-        assert_eq!(
-            via_base.rows[0],
-            vec![DataValue::from(11), DataValue::from(1)]
-        );
+        let want: Tuple = vec![DataValue::from(11), DataValue::from(1)].into();
+        assert_eq!(via_base.rows[0], want);
     }
 
     /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
@@ -2379,7 +2379,9 @@ mod tests {
                 "edge",
                 edges
                     .iter()
-                    .map(|(a, b)| vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
+                    .map(|(a, b)| {
+                        Tuple::from(vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
+                    })
                     .collect(),
             )]
             .into_iter()
@@ -2729,10 +2731,10 @@ mod tests {
                     ),
                 ],
                 facts: [
-                    ("seedp", [vec![v(1), v(2)]].into_iter().collect()),
-                    ("linkp", [vec![v(2), v(3)]].into_iter().collect()),
-                    ("seedr", [vec![v(3), v(4)]].into_iter().collect()),
-                    ("linkr", [vec![v(4), v(1)]].into_iter().collect()),
+                    ("seedp", [vec![v(1), v(2)].into()].into_iter().collect()),
+                    ("linkp", [vec![v(2), v(3)].into()].into_iter().collect()),
+                    ("seedr", [vec![v(3), v(4)].into()].into_iter().collect()),
+                    ("linkr", [vec![v(4), v(1)].into()].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -2824,13 +2826,17 @@ mod tests {
                 facts: [
                     (
                         "addr_of",
-                        [vec![v(1), v(2)], vec![v(2), v(3)]].into_iter().collect(),
+                        [vec![v(1), v(2)].into(), vec![v(2), v(3)].into()]
+                            .into_iter()
+                            .collect(),
                     ),
                     (
                         "assign",
-                        [vec![v(2), v(3)], vec![v(3), v(4)]].into_iter().collect(),
+                        [vec![v(2), v(3)].into(), vec![v(3), v(4)].into()]
+                            .into_iter()
+                            .collect(),
                     ),
-                    ("blocked", [vec![v(1), v(2)]].into_iter().collect()),
+                    ("blocked", [vec![v(1), v(2)].into()].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -2906,11 +2912,11 @@ mod tests {
                 facts: [
                     (
                         "baseq",
-                        [vec![v(1), v(2), v(2)], vec![v(1), v(3), v(4)]]
+                        [vec![v(1), v(2), v(2)].into(), vec![v(1), v(3), v(4)].into()]
                             .into_iter()
                             .collect(),
                     ),
-                    ("seedv", [vec![v(1)]].into_iter().collect()),
+                    ("seedv", [vec![v(1)].into()].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -3013,12 +3019,12 @@ mod tests {
                     ),
                 ],
                 facts: [
-                    ("addr_of", [vec![v(1), v(2)]].into_iter().collect()),
-                    ("assign", [vec![v(2), v(3)]].into_iter().collect()),
-                    ("load", [vec![v(3), v(4)]].into_iter().collect()),
-                    ("store", [vec![v(4), v(1)]].into_iter().collect()),
-                    ("baseh", [vec![v(4), v(5)]].into_iter().collect()),
-                    ("linkh", [vec![v(5), v(6)]].into_iter().collect()),
+                    ("addr_of", [vec![v(1), v(2)].into()].into_iter().collect()),
+                    ("assign", [vec![v(2), v(3)].into()].into_iter().collect()),
+                    ("load", [vec![v(3), v(4)].into()].into_iter().collect()),
+                    ("store", [vec![v(4), v(1)].into()].into_iter().collect()),
+                    ("baseh", [vec![v(4), v(5)].into()].into_iter().collect()),
+                    ("linkh", [vec![v(5), v(6)].into()].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),

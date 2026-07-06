@@ -215,10 +215,15 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
             // throughout this file: never the reserved terminal tick.
             if ev.is_assert {
                 let val = ev.val.clone().expect("assert carries a value");
-                laws::Event::assert(key, vec![DataValue::from(val)], ev.ts, i as i64)
-                    .expect("event timestamps in this file are never the reserved terminal tick")
+                laws::Event::assert(
+                    key.into(),
+                    vec![DataValue::from(val)].into(),
+                    ev.ts,
+                    i as i64,
+                )
+                .expect("event timestamps in this file are never the reserved terminal tick")
             } else {
-                laws::Event::retract(key, ev.ts, i as i64)
+                laws::Event::retract(key.into(), ev.ts, i as i64)
                     .expect("event timestamps in this file are never the reserved terminal tick")
             }
         })
@@ -700,7 +705,10 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         .expect("base as-of read");
     assert_eq!(
         base.rows,
-        vec![vec![DataValue::from(1), DataValue::from("A")]],
+        vec![crate::data::tuple::Tuple::from(vec![
+            DataValue::from(1),
+            DataValue::from("A"),
+        ])],
         "the base must reflect the correction, not the unrelated valid=500 belief"
     );
 
@@ -766,10 +774,10 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
         .rows;
     assert_eq!(
         historical,
-        vec![vec![
+        vec![crate::data::tuple::Tuple::from(vec![
             DataValue::from("X_old_corrected"),
             DataValue::from("Y_old")
-        ]],
+        ])],
         "the carried-forward `y` must be the value that held at the targeted instant"
     );
 
@@ -780,7 +788,10 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
         .rows;
     assert_eq!(
         current,
-        vec![vec![DataValue::from("X_new"), DataValue::from("Y_new")]],
+        vec![crate::data::tuple::Tuple::from(vec![
+            DataValue::from("X_new"),
+            DataValue::from("Y_new")
+        ])],
         "a historical update must not perturb an unrelated later belief"
     );
 }

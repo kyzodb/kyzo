@@ -92,7 +92,7 @@ impl NormalAggrObj for AggrHllSketch {
 /// Decode a `Bytes` value as a HyperLogLog sketch.
 fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
     match v {
-        DataValue::Bytes(b) => HyperLogLog::from_bytes(b),
+        DataValue::Bytes(b) => HyperLogLog::from_bytes(b.as_bytes()),
         other => bail!("hll_union expects sketch bytes, got {other:?}"),
     }
 }
@@ -407,7 +407,7 @@ mod tests {
         let DataValue::Bytes(bytes) = out else {
             panic!("count_min should return bytes")
         };
-        let cms = CountMinSketch::from_bytes(&bytes).unwrap();
+        let cms = CountMinSketch::from_bytes(bytes.as_bytes()).unwrap();
         // Item 6 appeared 6%7+1 = 7 times; estimate never underreports.
         assert!(cms.estimate(&val(6)) >= 7);
     }

@@ -38,6 +38,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
+use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
 use crate::fixed_rule::algos::shortest_path_dijkstra::dijkstra;
 use crate::fixed_rule::graph::DirectedCsrGraph;
@@ -93,7 +94,7 @@ impl FixedRule for KShortestPathYen {
             .iter()
             .flat_map(|start| termination_nodes.iter().map(move |goal| (*start, *goal)))
             .collect();
-        let rows_per_pair = par_try_map(pairs, |(start, goal)| -> Result<Vec<Vec<DataValue>>> {
+        let rows_per_pair = par_try_map(pairs, |(start, goal)| -> Result<Vec<Tuple>> {
             let paths = k_shortest_path_yen(k, &graph, start, goal, cancel.clone())?;
             Ok(paths
                 .into_iter()
@@ -108,6 +109,7 @@ impl FixedRule for KShortestPathYen {
                                 .collect_vec(),
                         ),
                     ]
+                    .into()
                 })
                 .collect())
         })?;
@@ -242,8 +244,8 @@ mod tests {
         DataValue::from(v)
     }
 
-    fn e(a: &str, b: &str, w: f64) -> Vec<DataValue> {
-        vec![s(a), s(b), DataValue::from(w)]
+    fn e(a: &str, b: &str, w: f64) -> Tuple {
+        vec![s(a), s(b), DataValue::from(w)].into()
     }
 
     fn k_opt(k: i64) -> BTreeMap<smartstring::SmartString<smartstring::LazyCompact>, Expr> {
@@ -268,7 +270,7 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             state
         };
-        let mut edges = vec![];
+        let mut edges: Vec<Tuple> = vec![];
         for _ in 0..300 {
             let a = (next() >> 33) as u32 % n;
             let b = (next() >> 33) as u32 % n;
@@ -278,13 +280,13 @@ mod tests {
             }
         }
         edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
-        let starts: Vec<_> = (0..n)
+        let starts: Vec<Tuple> = (0..n)
             .step_by(5)
-            .map(|i| vec![s(&format!("n{i}"))])
+            .map(|i| vec![s(&format!("n{i}"))].into())
             .collect();
-        let ends: Vec<_> = (0..n)
+        let ends: Vec<Tuple> = (0..n)
             .step_by(6)
-            .map(|i| vec![s(&format!("n{i}"))])
+            .map(|i| vec![s(&format!("n{i}"))].into())
             .collect();
         vec![
             TestInput::new(vec!["fr", "to", "w"], edges),
@@ -376,8 +378,8 @@ mod tests {
                         e("c", "d", 2.0),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
             ],
             BTreeMap::from([(
                 smartstring::SmartString::from("k"),
@@ -454,8 +456,8 @@ mod tests {
                         e("c", "d", 2.0),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
             ],
             BTreeMap::from([(
                 smartstring::SmartString::from("k"),

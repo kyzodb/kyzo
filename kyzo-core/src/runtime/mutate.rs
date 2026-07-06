@@ -82,7 +82,7 @@ use crate::storage::{Storage, WriteTx};
 #[diagnostic(code(transact::assertion_failure))]
 pub(crate) struct TransactAssertionFailure {
     relation: String,
-    key: Vec<DataValue>,
+    key: Tuple,
     notice: String,
 }
 
@@ -521,7 +521,7 @@ impl<T: WriteTx> SessionTx<T> {
                     }
                     Some(row) => row,
                 };
-            let original_val: Tuple = old_kv[relation_store.metadata.keys.len()..].to_vec();
+            let original_val: Tuple = old_kv[relation_store.metadata.keys.len()..].to_vec().into();
             new_kv.reserve_exact(relation_store.arity());
             for (i, extractor) in val_extractors.iter().enumerate() {
                 match extractor {
@@ -1148,9 +1148,9 @@ fn temporal_posting_tuple(
     if row.len() < keys_len {
         bail!(ShortTemporalIndexRow(base.name.to_string()));
     }
-    let mut out = Vec::with_capacity(1 + keys_len);
+    let mut out = Tuple::with_capacity(1 + keys_len);
     out.push(crate::data::value::StoredValiditySlot::new(valid).as_datavalue());
-    out.extend_from_slice(&row[..keys_len]);
+    out.extend(row[..keys_len].iter().cloned());
     Ok(out)
 }
 
@@ -1285,7 +1285,7 @@ pub(crate) fn make_const_rule(
     options.insert(
         SmartString::from("data"),
         Expr::Const {
-            val: DataValue::List(data.iter().map(|t| DataValue::List(t.clone())).collect()),
+            val: DataValue::List(data.iter().map(|t| DataValue::List(t.to_vec())).collect()),
             span: SourceSpan::default(),
         },
     );
@@ -1927,6 +1927,7 @@ mod bulk_write_tests {
 
     use fjall::Slice;
 
+    use crate::data::tuple::Tuple;
     use crate::data::value::DataValue;
     use crate::runtime::db::Db;
     use crate::storage::sim::SimStorage;
@@ -2089,9 +2090,9 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, v] := *wi{k, v}", no_params())
             .expect("read back");
+        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(10)].into()];
         assert_eq!(
-            out.rows,
-            vec![vec![DataValue::from(1), DataValue::from(10)]],
+            out.rows, want,
             "the refused insert must not overwrite the existing row"
         );
     }
@@ -2143,13 +2144,10 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, a, b] := *wc{k, a, b}", no_params())
             .expect("read back");
+        let want: Vec<Tuple> =
+            vec![vec![DataValue::from(1), DataValue::from(99), DataValue::from(20)].into()];
         assert_eq!(
-            out.rows,
-            vec![vec![
-                DataValue::from(1),
-                DataValue::from(99),
-                DataValue::from(20)
-            ]],
+            out.rows, want,
             "a is updated to 99; b (omitted from the :update) carries forward as 20"
         );
     }

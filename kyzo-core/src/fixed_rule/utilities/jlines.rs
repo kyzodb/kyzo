@@ -38,6 +38,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
+use crate::data::tuple::Tuple;
 use crate::data::value::{DataValue, JsonData, JsonValue};
 use crate::fixed_rule::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
@@ -76,7 +77,7 @@ pub(crate) fn json_to_datavalue(v: &JsonValue) -> DataValue {
         },
         JsonValue::String(s) => DataValue::Str(s.into()),
         JsonValue::Array(arr) => DataValue::List(arr.iter().map(json_to_datavalue).collect()),
-        JsonValue::Object(d) => DataValue::Json(JsonData(JsonValue::Object(d.clone()))),
+        JsonValue::Object(d) => DataValue::Json(JsonData::new(JsonValue::Object(d.clone()))),
     }
 }
 
@@ -113,11 +114,11 @@ impl FixedRule for JsonReader {
         };
         let mut counter = -1i64;
         let mut process_row = |row: &BTreeMap<String, JsonValue>| -> Result<()> {
-            let mut ret = if prepend_index {
+            let mut ret: Tuple = if prepend_index {
                 counter += 1;
-                vec![DataValue::from(counter)]
+                vec![DataValue::from(counter)].into()
             } else {
-                vec![]
+                Tuple::new()
             };
             for field in &fields {
                 let val = match row.get(field as &str) {
@@ -262,8 +263,10 @@ mod tests {
         let got =
             run_fixed_rule(&JsonReader, vec![], options(&url), CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
-        assert_eq!(got[0], vec![DataValue::from(1i64), DataValue::from("a")]);
-        assert_eq!(got[1], vec![DataValue::from(2i64), DataValue::Null]);
+        let want0: Tuple = vec![DataValue::from(1i64), DataValue::from("a")].into();
+        let want1: Tuple = vec![DataValue::from(2i64), DataValue::Null].into();
+        assert_eq!(got[0], want0);
+        assert_eq!(got[1], want1);
     }
 
     /// CANCELLATION: a raised flag refuses before rows are emitted (the

@@ -91,7 +91,7 @@ impl From<JsonValue> for DataValue {
             JsonValue::Array(arr) => {
                 DataValue::List(arr.into_iter().map(DataValue::from).collect())
             }
-            JsonValue::Object(d) => DataValue::Json(JsonData(JsonValue::Object(d))),
+            JsonValue::Object(d) => DataValue::Json(JsonData::new(JsonValue::Object(d))),
         }
     }
 }
@@ -110,7 +110,7 @@ impl From<&JsonValue> for DataValue {
             },
             JsonValue::String(s) => DataValue::from(s.as_str()),
             JsonValue::Array(arr) => DataValue::List(arr.iter().map(DataValue::from).collect()),
-            JsonValue::Object(d) => DataValue::Json(JsonData(JsonValue::Object(d.clone()))),
+            JsonValue::Object(d) => DataValue::Json(JsonData::new(JsonValue::Object(d.clone()))),
         }
     }
 }
@@ -144,7 +144,7 @@ impl From<&DataValue> for JsonValue {
             },
             DataValue::Validity(v) => json!([v.timestamp.raw(), v.is_assert.0]),
             DataValue::Interval(iv) => json!([iv.start(), iv.end()]),
-            DataValue::Json(j) => j.0.clone(),
+            DataValue::Json(j) => j.value().clone(),
             // Unreachable in a correct query result (see the port note
             // above); `Null` keeps this a total function rather than a
             // panic if it ever is reached.
@@ -254,7 +254,7 @@ static JSON_ERR_HANDLER: LazyLock<JSONReportHandler> = LazyLock::new(JSONReportH
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::{UuidWrapper, Validity, ValidityTs};
+    use crate::data::value::{GermanStr, UuidWrapper, Validity, ValidityTs};
     use std::cmp::Reverse;
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn bytes_render_as_base64_one_way() {
-        let dv = DataValue::Bytes(vec![0, 1, 2, 255]);
+        let dv = DataValue::Bytes(GermanStr::from_bytes(&[0, 1, 2, 255]));
         assert_eq!(JsonValue::from(&dv), json!(STANDARD.encode([0, 1, 2, 255])));
     }
 
@@ -332,8 +332,8 @@ mod tests {
         let nr = NamedRows::new(
             vec!["a".to_string(), "b".to_string()],
             vec![
-                vec![DataValue::from(1_i64), DataValue::from("x")],
-                vec![DataValue::from(2_i64), DataValue::from("y")],
+                vec![DataValue::from(1_i64), DataValue::from("x")].into(),
+                vec![DataValue::from(2_i64), DataValue::from("y")].into(),
             ],
         );
         let j = nr.clone().into_json();

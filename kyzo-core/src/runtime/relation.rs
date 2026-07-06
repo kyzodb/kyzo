@@ -936,7 +936,7 @@ impl RelationHandle {
                     AsOf::current(MAX_VALIDITY_TS),
                     SourceSpan::default(),
                 )?
-                .map(|row| row[self.metadata.keys.len()..].to_vec())),
+                .map(|row| Tuple::from(row[self.metadata.keys.len()..].to_vec()))),
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
                 match tx.get(&key_data)? {
@@ -1152,9 +1152,9 @@ impl RelationHandle {
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let mut lower_t = prefix.clone();
-        lower_t.extend_from_slice(lower);
+        lower_t.extend(lower.iter().cloned());
         let mut upper_t = prefix.clone();
-        upper_t.extend_from_slice(upper);
+        upper_t.extend(upper.iter().cloned());
         upper_t.push(DataValue::Bot);
         let lower_encoded = lower_t.encode_as_key(self.id);
         let upper_encoded = upper_t.encode_as_key(self.id);
@@ -1491,17 +1491,13 @@ mod tests {
     fn system_key_shapes() {
         let counter = SystemKey::IdCounter.encode();
         assert_eq!(&counter[..8], &[0u8; 8], "SYSTEM prefix");
-        assert_eq!(
-            decode_tuple_from_key(&counter, 1).unwrap(),
-            vec![DataValue::Null]
-        );
+        let want_counter: Tuple = vec![DataValue::Null].into();
+        assert_eq!(decode_tuple_from_key(&counter, 1).unwrap(), want_counter);
 
         let rel = SystemKey::Relation("stored").encode();
         assert_eq!(&rel[..8], &[0u8; 8], "SYSTEM prefix");
-        assert_eq!(
-            decode_tuple_from_key(&rel, 1).unwrap(),
-            vec![DataValue::from("stored")]
-        );
+        let want_rel: Tuple = vec![DataValue::from("stored")].into();
+        assert_eq!(decode_tuple_from_key(&rel, 1).unwrap(), want_rel);
 
         assert!(
             counter.as_bytes() < rel.as_bytes(),
@@ -1547,7 +1543,7 @@ mod tests {
 
         // Write and read a row through the handle.
         let span = SourceSpan(0, 0);
-        let row = vec![DataValue::from(1), DataValue::from("one")];
+        let row: Tuple = vec![DataValue::from(1), DataValue::from("one")].into();
         let mut tx = db.write_tx().unwrap();
         a.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
@@ -1558,7 +1554,7 @@ mod tests {
         assert_eq!(a.get(&rtx, &row[..1]).unwrap(), Some(row.clone()));
         assert_eq!(
             a.get_val_only(&rtx, &row[..1]).unwrap(),
-            Some(vec![DataValue::from("one")])
+            Some(vec![DataValue::from("one")].into())
         );
         let scanned: Vec<Tuple> = a.scan_all(&rtx).map(|t| t.unwrap()).collect();
         assert_eq!(scanned, vec![row.clone()]);
@@ -1797,7 +1793,7 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
-        let row = vec![DataValue::from(5), DataValue::from("five")];
+        let row: Tuple = vec![DataValue::from(5), DataValue::from("five")].into();
         rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
         rename_relation(

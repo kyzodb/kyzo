@@ -90,7 +90,7 @@ impl FixedRule for BetweennessCentrality {
 
         for (i, s) in centrality.into_iter().enumerate() {
             let node = indices[i].clone();
-            out.put(vec![node, (s as f64).into()])?;
+            out.put(vec![node, (s as f64).into()].into())?;
         }
 
         Ok(())
@@ -137,10 +137,7 @@ impl FixedRule for ClosenessCentrality {
             Ok(nc * nc / total_dist / (n - 1) as f32)
         })?;
         for (idx, centrality) in res.into_iter().enumerate() {
-            out.put(vec![
-                indices[idx].clone(),
-                DataValue::from(centrality as f64),
-            ])?;
+            out.put(vec![indices[idx].clone(), DataValue::from(centrality as f64)].into())?;
             cancel.check()?;
         }
         Ok(())
@@ -199,6 +196,7 @@ mod tests {
     use super::*;
     use crate::data::expr::Expr;
     use crate::data::span::SourceSpan;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     #[test]
@@ -212,24 +210,30 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             state
         };
-        let mut rows = vec![];
+        let mut rows: Vec<Tuple> = vec![];
         for _ in 0..6000 {
             let a = (next() >> 33) as u32 % n;
             let b = (next() >> 33) as u32 % n;
             let w = 1.0 + ((next() >> 40) as u32 % 97) as f64;
             if a != b {
-                rows.push(vec![
-                    DataValue::from(format!("n{a}").as_str()),
-                    DataValue::from(format!("n{b}").as_str()),
-                    DataValue::from(w),
-                ]);
+                rows.push(
+                    vec![
+                        DataValue::from(format!("n{a}").as_str()),
+                        DataValue::from(format!("n{b}").as_str()),
+                        DataValue::from(w),
+                    ]
+                    .into(),
+                );
             }
         }
-        rows.push(vec![
-            DataValue::from(format!("n{}", n - 1).as_str()),
-            DataValue::from("n0"),
-            DataValue::from(1.0),
-        ]);
+        rows.push(
+            vec![
+                DataValue::from(format!("n{}", n - 1).as_str()),
+                DataValue::from("n0"),
+                DataValue::from(1.0),
+            ]
+            .into(),
+        );
         let opt = || {
             BTreeMap::from([(
                 smartstring::SmartString::from("undirected"),
@@ -274,7 +278,7 @@ mod tests {
         // The undirected path a—b—c, unit weights.
         TestInput::new(
             vec!["fr", "to"],
-            vec![vec![s("a"), s("b")], vec![s("b"), s("c")]],
+            vec![vec![s("a"), s("b")].into(), vec![s("b"), s("c")].into()],
         )
     }
 
@@ -299,24 +303,18 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             state
         };
-        let mut rows = vec![];
+        let mut rows: Vec<Tuple> = vec![];
         for _ in 0..400 {
             let a = (next() >> 33) as u32 % n;
             let b = (next() >> 33) as u32 % n;
             let w = 1.0 + ((next() >> 40) as u32 % 97) as f64;
             if a != b {
-                rows.push(vec![
-                    s(&format!("n{a}")),
-                    s(&format!("n{b}")),
-                    DataValue::from(w),
-                ]);
+                rows.push(
+                    vec![s(&format!("n{a}")), s(&format!("n{b}")), DataValue::from(w)].into(),
+                );
             }
         }
-        rows.push(vec![
-            s(&format!("n{}", n - 1)),
-            s("n0"),
-            DataValue::from(1.0),
-        ]);
+        rows.push(vec![s(&format!("n{}", n - 1)), s("n0"), DataValue::from(1.0)].into());
         TestInput::new(vec!["fr", "to", "w"], rows)
     }
 
@@ -398,14 +396,12 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), DataValue::from(1.5)],
-                vec![s("b"), DataValue::from(2.25)],
-                vec![s("c"), DataValue::from(1.5)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), DataValue::from(1.5)].into(),
+            vec![s("b"), DataValue::from(2.25)].into(),
+            vec![s("c"), DataValue::from(1.5)].into(),
+        ];
+        assert_eq!(got, want);
     }
 
     /// VALUE ORACLE for betweenness as implemented (unnormalized, over
@@ -422,13 +418,11 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), DataValue::from(0.0)],
-                vec![s("b"), DataValue::from(2.0)],
-                vec![s("c"), DataValue::from(0.0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), DataValue::from(0.0)].into(),
+            vec![s("b"), DataValue::from(2.0)].into(),
+            vec![s("c"), DataValue::from(0.0)].into(),
+        ];
+        assert_eq!(got, want);
     }
 }

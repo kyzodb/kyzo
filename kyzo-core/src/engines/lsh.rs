@@ -112,7 +112,7 @@ use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::tuple::Tuple;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, GermanStr};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
@@ -325,7 +325,7 @@ fn element_bytes(v: &DataValue) -> Vec<u8> {
 fn ngram_bytes(tokens: &[SmartString<LazyCompact>]) -> Vec<u8> {
     let mut b = Vec::new();
     for t in tokens {
-        b.encode_datavalue(&DataValue::Str(t.clone()));
+        b.encode_datavalue(&DataValue::Str(GermanStr::from_str(t)));
     }
     b
 }
@@ -491,7 +491,7 @@ fn decode_inv_chunks(
         Some(DataValue::List(l)) => l
             .into_iter()
             .map(|chunk| match chunk {
-                DataValue::Bytes(b) => Ok(b),
+                DataValue::Bytes(b) => Ok(b.as_bytes().to_vec()),
                 other => Err(miette!(IndexRowCorrupt::new(
                     &inv_idx.name,
                     key,
@@ -548,7 +548,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
     key.push(DataValue::Bot);
     key.extend_from_slice(key_part);
     for chunk in chunks {
-        key[0] = DataValue::Bytes(chunk);
+        key[0] = DataValue::Bytes(GermanStr::from_bytes(&chunk));
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -608,7 +608,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
     key.push(DataValue::Bot);
     key.extend_from_slice(inv_key_part);
     for chunk in chunks.iter() {
-        key[0] = DataValue::Bytes(chunk.clone());
+        key[0] = DataValue::Bytes(GermanStr::from_bytes(chunk));
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         // Postings carry no value; an empty value decodes as a key-only
         // tuple (pinned kernel behavior).
@@ -616,7 +616,10 @@ pub(crate) fn lsh_put<T: WriteTx>(
     }
 
     let inv_val_part = vec![DataValue::List(
-        chunks.into_iter().map(DataValue::Bytes).collect(),
+        chunks
+            .into_iter()
+            .map(|c| DataValue::Bytes(GermanStr::from_bytes(&c)))
+            .collect(),
     )];
     let inv_key = inv_idx.encode_key_for_store(inv_key_part, SourceSpan::default())?;
     let inv_val = inv_idx.encode_val_only_for_store(&inv_val_part, SourceSpan::default())?;
@@ -684,17 +687,17 @@ pub(crate) fn lsh_search(
     // smallest-k-by-key cannot early-stop, since a later band may hold a
     // smaller key.)
     let mut found_tuples: BTreeSet<Tuple> = BTreeSet::new();
-    let mut key_prefix = Vec::with_capacity(1);
+    let mut key_prefix = Tuple::with_capacity(1);
     for chunk in chunks {
         key_prefix.clear();
-        key_prefix.push(DataValue::Bytes(chunk));
+        key_prefix.push(DataValue::Bytes(GermanStr::from_bytes(&chunk)));
         for ks in idx.scan_prefix(tx, &key_prefix) {
             cancel.check()?;
             let ks = ks?;
             if ks.is_empty() {
                 bail!(IndexRowCorrupt::new(&idx.name, &ks, "empty LSH posting"));
             }
-            found_tuples.insert(ks[1..].to_vec());
+            found_tuples.insert(ks[1..].to_vec().into());
         }
     }
     let mut ret = vec![];

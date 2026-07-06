@@ -314,8 +314,8 @@ mod tests {
             .collect();
         // mixed-type tail rows: cross-type order is DataValue's declaration
         // order, same as the scan produces.
-        rows.push(vec![DataValue::from(7), DataValue::from("x")]);
-        rows.push(vec![DataValue::from(7), DataValue::from("y")]);
+        rows.push(vec![DataValue::from(7), DataValue::from("x")].into());
+        rows.push(vec![DataValue::from(7), DataValue::from("y")].into());
         let s = Segment::build(rows.clone().into_iter(), Watermark(0)).unwrap();
         for a in -1..9 {
             let probe = [DataValue::from(a)];

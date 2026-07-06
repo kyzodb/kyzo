@@ -78,7 +78,7 @@ impl FixedRule for Dfs {
                 }
 
                 let cand_tuple = if skip_query_nodes {
-                    vec![candidate.clone()]
+                    vec![candidate.clone()].into()
                 } else {
                     nodes
                         .prefix_iter(&candidate)?
@@ -122,7 +122,7 @@ impl FixedRule for Dfs {
             }
             route.push(starting.clone());
             route.reverse();
-            let tuple = vec![starting, ending, DataValue::List(route)];
+            let tuple = vec![starting, ending, DataValue::List(route)].into();
             out.put(tuple)?;
             cancel.check()?;
         }
@@ -142,6 +142,7 @@ impl FixedRule for Dfs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -168,17 +169,22 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")],
-                        vec![s("a"), s("c")],
-                        vec![s("b"), s("d")],
-                        vec![s("c"), s("d")],
+                        vec![s("a"), s("b")].into(),
+                        vec![s("a"), s("c")].into(),
+                        vec![s("b"), s("d")].into(),
+                        vec![s("c"), s("d")].into(),
                     ],
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![vec![s("a")], vec![s("b")], vec![s("c")], vec![s("d")]],
+                    vec![
+                        vec![s("a")].into(),
+                        vec![s("b")].into(),
+                        vec![s("c")].into(),
+                        vec![s("d")].into(),
+                    ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
             ],
             BTreeMap::from([
                 (
@@ -199,18 +205,17 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), s("a"), DataValue::List(vec![s("a")])].into(),
+            vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])].into(),
+            vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])].into(),
             vec![
-                vec![s("a"), s("a"), DataValue::List(vec![s("a")])],
-                vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])],
-                vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])],
-                vec![
-                    s("a"),
-                    s("d"),
-                    DataValue::List(vec![s("a"), s("c"), s("d")]),
-                ],
+                s("a"),
+                s("d"),
+                DataValue::List(vec![s("a"), s("c"), s("d")]),
             ]
-        );
+            .into(),
+        ];
+        assert_eq!(got, want);
     }
 }

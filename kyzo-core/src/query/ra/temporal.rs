@@ -333,7 +333,7 @@ pub(crate) fn decode_raw_version(
     let polarity = claim_polarity_of_value(val)?;
     let mut row = full.clone();
     extend_tuple_from_bitemporal_v(&mut row, val)?;
-    let payload = row.split_off(key_len);
+    let payload: Tuple = row.drain(key_len..).collect();
     Ok((
         key[..prefix_len].to_vec(),
         full,
@@ -375,7 +375,7 @@ fn resolve_at(
         match governing.map(|e| e.polarity) {
             Some(ClaimPolarity::Assert) => {
                 let e = governing.expect("just matched Some");
-                let mut tuple = key.to_vec();
+                let mut tuple: Tuple = key.to_vec().into();
                 tuple.extend(e.payload.iter().cloned());
                 return Some(tuple);
             }
@@ -469,10 +469,7 @@ impl<'a> SpansScanBatches<'a> {
     /// Collect every raw row sharing one fact's key-prefix bytes, starting
     /// from `first` (already pulled from `raw`), leaving the first row of
     /// the NEXT group (if any) in `self.pending_key`.
-    fn collect_group(
-        &mut self,
-        first: (Slice, Slice),
-    ) -> Result<(Vec<DataValue>, Vec<RawVersion>)> {
+    fn collect_group(&mut self, first: (Slice, Slice)) -> Result<(Tuple, Vec<RawVersion>)> {
         let (prefix, key, first_ver) = decode_raw_version(&first.0, &first.1, self.key_len)?;
         let mut group = vec![first_ver];
         loop {
@@ -685,7 +682,7 @@ fn candidate_keys_from_posting(
                 1 + base_key_len + 2
             );
         }
-        keys.insert(full[1..1 + base_key_len].to_vec());
+        keys.insert(full[1..1 + base_key_len].to_vec().into());
     }
     Ok(keys)
 }

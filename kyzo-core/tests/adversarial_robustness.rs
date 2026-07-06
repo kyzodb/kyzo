@@ -20,7 +20,7 @@
 
 mod common;
 use common::*;
-use kyzo::DataValue;
+use kyzo::{DataValue, Tuple};
 
 /// `i64::MAX + 1` computed inside the query: the arithmetic must overflow
 /// into a typed refusal, never wrap, never panic.
@@ -214,7 +214,7 @@ fn math_domain_error_surfaces_through_query() {
     let ok = db
         .run_script("?[x] := x = sqrt(4.0)", no_params())
         .expect("in-domain sqrt must answer");
-    assert_eq!(ok.rows, vec![vec![DataValue::from(2.0)]]);
+    assert_eq!(ok.rows, vec![Tuple::from(vec![DataValue::from(2.0)])]);
 }
 
 /// Story #62's structural checkpoint, not another op-specific guard: an op
@@ -246,7 +246,7 @@ fn to_float_nan_is_now_a_typed_refusal() {
     let ok = db
         .run_script("?[x] := x = to_float('3.5')", no_params())
         .expect("in-domain to_float must still answer");
-    assert_eq!(ok.rows, vec![vec![DataValue::from(3.5)]]);
+    assert_eq!(ok.rows, vec![Tuple::from(vec![DataValue::from(3.5)])]);
 }
 
 /// The row evaluator's checkpoint is proven above through expressions a

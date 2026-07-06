@@ -45,7 +45,7 @@ use crate::data::functions::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, GermanStr};
 use crate::parse::{
     ExtractSpan, IntoChildren, NESTING_CEILING, NestingTooDeep, Pair, Rule, strip_sigil, unexpected,
 };
@@ -320,7 +320,7 @@ fn build_term(
         Rule::quoted_string | Rule::s_quoted_string | Rule::raw_string => {
             let s = parse_string(pair)?;
             Expr::Const {
-                val: DataValue::Str(s),
+                val: DataValue::Str(GermanStr::from_str(&s)),
                 span,
             }
         }

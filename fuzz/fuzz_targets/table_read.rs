@@ -333,13 +333,13 @@ fuzz_target!(|data: &[u8]| {
         let lo_key = &items[lo].key.user_key;
         let lo = items
             .iter()
-            .position(|it| &it.key.user_key == lo_key)
+            .position(|it| it.key.user_key == lo_key)
             .unwrap();
 
         let hi_key = &items[hi].key.user_key;
         let hi = items
             .iter()
-            .rposition(|it| &it.key.user_key == hi_key)
+            .rposition(|it| it.key.user_key == hi_key)
             .unwrap();
 
         let expected_range: Vec<_> = items[lo..=hi].iter().map(ival_tup).collect();

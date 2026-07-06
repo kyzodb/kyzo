@@ -100,6 +100,7 @@ use std::cmp::Reverse;
 use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use rustc_hash::FxHashMap;
+use smallvec::smallvec;
 use smartstring::SmartString;
 use thiserror::Error;
 
@@ -218,9 +219,9 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
 /// The posting key under construction: `[dim, src_key…]` with the dimension
 /// slot left as `Bot` for the caller to fill per posting.
 fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Vec::with_capacity(1 + base_key_len);
+    let mut key = Tuple::with_capacity(1 + base_key_len);
     key.push(DataValue::Bot);
-    key.extend_from_slice(&tuple[..base_key_len]);
+    key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
 
@@ -343,7 +344,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
             "sparse posting weight is not a finite non-negative float",
         ));
     }
-    Ok((row[1..=base_key_len].to_vec(), weight))
+    Ok((row[1..=base_key_len].to_vec().into(), weight))
 }
 
 /// The parameters of one sparse search; the RA operator tier constructs this
@@ -396,7 +397,7 @@ pub(crate) fn sparse_search(
     // term to a given document).
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
-        let prefix = vec![DataValue::from(dim as i64)];
+        let prefix = smallvec![DataValue::from(dim as i64)];
         for row in idx.scan_prefix(tx, &prefix) {
             let row = row?;
             let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, &row)?;

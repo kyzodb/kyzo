@@ -17,7 +17,7 @@ use crate::data::aggr::{Aggregation, MeetAggrObj};
 use crate::data::tuple::{Tuple, bare_prefix_len, encode_tuple_bare};
 use crate::data::value::DataValue;
 use crate::query::temp_store::{
-    AdmissionSink, Admitted, EMPTY_TUPLE_REF, MeetAggrStore, MeetLayout, TempStore, TupleInIter,
+    AdmissionSink, Admitted, MeetAggrStore, MeetLayout, TempStore, TupleInIter, empty_tuple_ref,
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -409,7 +409,7 @@ impl EpochStore {
                     if let Some(vals) = folded {
                         let row = spec.layout.interleave(&group, &vals);
                         if S::RECORDING {
-                            sink.admit(TupleInIter::new(&row, EMPTY_TUPLE_REF, false));
+                            sink.admit(TupleInIter::new(&row, empty_tuple_ref(), false));
                         }
                         if !spec.layout.is_suffix() {
                             level.by_row.push(row);
@@ -467,7 +467,7 @@ impl EpochStore {
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         // `DataValue::Bot` is the maximum variant in the total order, so
         // `prefix ++ [Bot]` (inclusive) bounds every extension of `prefix`.
-        let mut upper = prefix.to_vec();
+        let mut upper = prefix.clone();
         upper.push(DataValue::Bot);
         self.ranged(prefix.clone(), upper, true, false)
     }
@@ -475,7 +475,7 @@ impl EpochStore {
         &'s self,
         prefix: &Tuple,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        let mut upper = prefix.to_vec();
+        let mut upper = prefix.clone();
         upper.push(DataValue::Bot);
         self.ranged(prefix.clone(), upper, true, true)
     }
@@ -525,10 +525,10 @@ impl EpochStore {
     }
 
     pub(crate) fn all_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
-        self.prefix_iter(&vec![])
+        self.prefix_iter(&Tuple::new())
     }
     pub(crate) fn delta_all_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
-        self.delta_prefix_iter(&vec![])
+        self.delta_prefix_iter(&Tuple::new())
     }
     /// The rows an early-returned (`:limit`-satisfied) entry rule actually
     /// returns: everything not flagged limiter-skipped.
@@ -803,7 +803,7 @@ fn meet_ranged<'s>(
                 if owned_by_newer {
                     None
                 } else {
-                    Some(TupleInIter::new(row, EMPTY_TUPLE_REF, false))
+                    Some(TupleInIter::new(row, empty_tuple_ref(), false))
                 }
             })
         });
@@ -830,7 +830,7 @@ mod tests {
         // Ten productive epochs...
         for i in 0..10i64 {
             let mut out = RegularTempStore::default();
-            out.put(vec![DataValue::from(i)]);
+            out.put(vec![DataValue::from(i)].into());
             store.merge_in(out.wrap(), &mut ()).unwrap();
         }
         // ...then fifty empty (converged) epochs.

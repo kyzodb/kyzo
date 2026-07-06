@@ -173,7 +173,11 @@
 //! by a type costs nothing to maintain and cannot be forgotten.
 //!
 //! - **Compiler.** Zero `unsafe` is a build guarantee here, not a convention
-//!   (`#![forbid(unsafe_code)]`, below). A [`ReadTx`] cannot write because the
+//!   (`#![deny(unsafe_code)]`, below) — with exactly one reviewed,
+//!   Miri-audited exception: `GermanStr` (story #119), a hand-built 16-byte
+//!   value replacing `DataValue`'s old `Str`/`Bytes` payloads, confined to
+//!   `data::germanstr` and gated by `scripts/check-unsafe.sh` so the
+//!   exception cannot spread to a second file. A [`ReadTx`] cannot write because the
 //!   mutating methods are not on the trait; [`WriteTx::commit`] takes `self`,
 //!   so commit-twice does not compile; the storage traits are sealed, so no
 //!   foreign backend can weaken the contract.
@@ -227,8 +231,14 @@
 //! exists as named in the tree.
 
 // Zero `unsafe` is a compiler guarantee in this crate, not a convention;
-// CI checks that this attribute stays.
-#![forbid(unsafe_code)]
+// CI checks that this attribute stays. `deny` rather than `forbid`: story
+// #119 introduces exactly one reviewed exception (`data::germanstr`,
+// `GermanStr`'s hand-built 16-byte layout), which opts out locally via its
+// own `#![allow(unsafe_code)]` — `forbid` cannot be locally lifted at all,
+// so it is no longer the right lint once one deliberate exception exists.
+// `scripts/check-unsafe.sh` is the ratchet that keeps the exception from
+// spreading to a second file.
+#![deny(unsafe_code)]
 // The transaction traits return boxed iterator types by design; naming them
 // would not simplify the contract.
 #![allow(clippy::type_complexity)]
@@ -276,7 +286,7 @@ mod jepsen_trials;
 pub use data::json::format_error_as_json;
 pub use data::tuple::{EncodedKey, Tuple, decode_tuple_from_key, encode_tuple_key};
 pub use data::value::{
-    AsOf, DataValue, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
+    AsOf, DataValue, GermanStr, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
     VecElementType, Vector, current_validity,
 };
 pub use storage::backup::{dump_storage, restore_storage};

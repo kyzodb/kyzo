@@ -136,7 +136,7 @@ impl TempStoreRA {
         let bounds = if !l_bound.iter().all(|v| *v == DataValue::Null)
             || !u_bound.iter().all(|v| *v == DataValue::Bot)
         {
-            Some((l_bound, u_bound))
+            Some((l_bound.into(), u_bound.into()))
         } else {
             None
         };

@@ -148,11 +148,14 @@ impl VerifyOutcome {
         };
         crate::fixed_rule::NamedRows::new(
             headers,
-            vec![vec![
-                crate::data::value::DataValue::from(status),
-                crate::data::value::DataValue::from(summary),
-                crate::data::value::DataValue::from(detail),
-            ]],
+            vec![
+                vec![
+                    crate::data::value::DataValue::from(status),
+                    crate::data::value::DataValue::from(summary),
+                    crate::data::value::DataValue::from(detail),
+                ]
+                .into(),
+            ],
         )
     }
 }
@@ -726,7 +729,7 @@ mod tests {
                 facts
                     .get_mut("edge")
                     .expect("edge was scanned")
-                    .remove(&vec![DataValue::from(3), DataValue::from(4)]);
+                    .remove(&Tuple::from(vec![DataValue::from(3), DataValue::from(4)]));
             })
             .expect("verify_program runs");
         match outcome {
@@ -738,7 +741,7 @@ mod tests {
                     oracle.len() < production.len(),
                     "the sabotaged oracle must be missing rows: {oracle:?}"
                 );
-                let dropped = vec![DataValue::from(3), DataValue::from(4)];
+                let dropped: Tuple = vec![DataValue::from(3), DataValue::from(4)].into();
                 assert!(
                     !oracle.contains(&dropped) || oracle.len() != production.len(),
                     "sabotage must be visible in the oracle's answer"

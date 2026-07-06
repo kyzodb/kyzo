@@ -59,7 +59,7 @@ impl FixedRule for LabelPropagation {
         let labels = label_propagation(&graph, max_iter, seed, cancel)?;
         for (idx, label) in labels.into_iter().enumerate() {
             let node = indices[idx].clone();
-            out.put(vec![DataValue::from(label as i64), node])?;
+            out.put(vec![DataValue::from(label as i64), node].into())?;
         }
         Ok(())
     }
@@ -124,6 +124,7 @@ fn label_propagation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -136,8 +137,8 @@ mod tests {
     /// surely) diverge; the fixed seed makes them identical.
     fn ring_inputs() -> Vec<TestInput> {
         let n = 12usize;
-        let edges: Vec<_> = (0..n)
-            .map(|i| vec![s(&format!("a{i}")), s(&format!("a{}", (i + 1) % n))])
+        let edges: Vec<Tuple> = (0..n)
+            .map(|i| vec![s(&format!("a{i}")), s(&format!("a{}", (i + 1) % n))].into())
             .collect();
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
@@ -242,10 +243,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("b"), s("a")],
-                    vec![s("c"), s("a")],
-                    vec![s("y"), s("x")],
-                    vec![s("z"), s("x")],
+                    vec![s("b"), s("a")].into(),
+                    vec![s("c"), s("a")].into(),
+                    vec![s("y"), s("x")].into(),
+                    vec![s("z"), s("x")].into(),
                 ],
             )],
             BTreeMap::new(),
@@ -254,16 +255,14 @@ mod tests {
         .unwrap();
         let one = DataValue::from(1i64);
         let four = DataValue::from(4i64);
-        assert_eq!(
-            got,
-            vec![
-                vec![one.clone(), s("a")],
-                vec![one.clone(), s("b")],
-                vec![one, s("c")],
-                vec![four.clone(), s("x")],
-                vec![four.clone(), s("y")],
-                vec![four, s("z")],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![one.clone(), s("a")].into(),
+            vec![one.clone(), s("b")].into(),
+            vec![one, s("c")].into(),
+            vec![four.clone(), s("x")].into(),
+            vec![four.clone(), s("y")].into(),
+            vec![four, s("z")].into(),
+        ];
+        assert_eq!(got, want);
     }
 }

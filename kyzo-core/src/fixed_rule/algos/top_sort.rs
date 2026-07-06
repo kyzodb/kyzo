@@ -47,7 +47,7 @@ impl FixedRule for TopSort {
             // Structural: `kahn_g` only emits ids of the graph's nodes,
             // and `indices` has an entry per node.
             let val = indices.get(*val_id as usize).unwrap();
-            let tuple = vec![DataValue::from(idx as i64), val.clone()];
+            let tuple = vec![DataValue::from(idx as i64), val.clone()].into();
             out.put(tuple)?;
         }
 
@@ -98,6 +98,7 @@ pub(crate) fn kahn_g(graph: &DirectedCsrGraph, cancel: CancelFlag) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -112,10 +113,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("a"), s("c")],
-                    vec![s("b"), s("d")],
-                    vec![s("c"), s("d")],
+                    vec![s("a"), s("b")].into(),
+                    vec![s("a"), s("c")].into(),
+                    vec![s("b"), s("d")].into(),
+                    vec![s("c"), s("d")].into(),
                 ],
             )],
             BTreeMap::new(),
@@ -153,10 +154,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("a"), s("c")],
-                    vec![s("b"), s("d")],
-                    vec![s("c"), s("d")],
+                    vec![s("a"), s("b")].into(),
+                    vec![s("a"), s("c")].into(),
+                    vec![s("b"), s("d")].into(),
+                    vec![s("c"), s("d")].into(),
                 ],
             )],
             BTreeMap::new(),
@@ -164,14 +165,12 @@ mod tests {
         )
         .unwrap();
         let i = |v: i64| DataValue::from(v);
-        assert_eq!(
-            got,
-            vec![
-                vec![i(0), s("a")],
-                vec![i(1), s("c")],
-                vec![i(2), s("b")],
-                vec![i(3), s("d")],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![i(0), s("a")].into(),
+            vec![i(1), s("c")].into(),
+            vec![i(2), s("b")].into(),
+            vec![i(3), s("d")].into(),
+        ];
+        assert_eq!(got, want);
     }
 }

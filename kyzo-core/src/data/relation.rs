@@ -42,7 +42,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::functions::to_json;
 use crate::data::value::{
-    DataValue, JsonData, Num, UuidWrapper, Validity, ValidityTs, VecElementType, Vector,
+    DataValue, GermanStr, JsonData, Num, UuidWrapper, Validity, ValidityTs, VecElementType, Vector,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
@@ -251,9 +251,9 @@ impl NullableColType {
                     #[diagnostic(code(eval::coercion_bad_base_64))]
                     struct BadBase64EncodedString(String);
                     let b = STANDARD
-                        .decode(s)
+                        .decode(s.as_bytes())
                         .map_err(|e| BadBase64EncodedString(e.to_string()))?;
-                    DataValue::Bytes(b)
+                    DataValue::Bytes(GermanStr::from_bytes(&b))
                 }
                 _ => bail!(make_err()),
             },
@@ -419,7 +419,7 @@ impl NullableColType {
                     v => bail!(InvalidValidity(v)),
                 }
             }
-            ColType::Json => DataValue::Json(JsonData(match data {
+            ColType::Json => DataValue::Json(JsonData::new(match data {
                 DataValue::Null => {
                     json!(null)
                 }
@@ -476,7 +476,7 @@ impl NullableColType {
                     }
                     arr.into()
                 }
-                DataValue::Json(j) => j.0,
+                DataValue::Json(j) => j.into_inner(),
                 DataValue::Validity(vld) => {
                     json!([vld.timestamp.raw(), vld.is_assert.0])
                 }

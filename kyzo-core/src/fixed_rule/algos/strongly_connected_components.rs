@@ -69,7 +69,7 @@ impl FixedRule for StronglyConnectedComponent {
                 // Structural: Tarjan only emits node ids the graph handed
                 // it, and `indices` has an entry per graph node.
                 let val = indices.get(*idx as usize).unwrap();
-                let tuple = vec![val.clone(), DataValue::from(grp_id as i64)];
+                let tuple = vec![val.clone(), DataValue::from(grp_id as i64)].into();
                 out.put(tuple)?;
             }
         }
@@ -89,7 +89,7 @@ impl FixedRule for StronglyConnectedComponent {
                 let node = tuple.into_iter().next().unwrap();
                 if !inv_indices.contains_key(&node) {
                     inv_indices.insert(node.clone(), u32::MAX);
-                    let tuple = vec![node, DataValue::from(counter)];
+                    let tuple = vec![node, DataValue::from(counter)].into();
                     out.put(tuple)?;
                     counter += 1;
                 }
@@ -228,12 +228,12 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")],
-                        vec![s("b"), s("a")],
-                        vec![s("b"), s("c")],
+                        vec![s("a"), s("b")].into(),
+                        vec![s("b"), s("a")].into(),
+                        vec![s("b"), s("c")].into(),
                     ],
                 ),
-                TestInput::new(vec!["id"], vec![vec![s("lonely")]]),
+                TestInput::new(vec!["id"], vec![vec![s("lonely")].into()]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),

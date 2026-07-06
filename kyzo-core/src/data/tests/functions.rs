@@ -1824,12 +1824,12 @@ fn test_vec_rejects_trailing_bytes() {
 // `as_array()` and aborted on e.g. `vec(json('{}'))`.
 #[test]
 fn test_vec_rejects_non_array_json() {
-    assert!(op_vec(&[DataValue::Json(JsonData(json!({"a": 1})))]).is_err());
-    assert!(op_vec(&[DataValue::Json(JsonData(json!(1)))]).is_err());
-    assert!(op_vec(&[DataValue::Json(JsonData(json!("x")))]).is_err());
+    assert!(op_vec(&[DataValue::Json(JsonData::new(json!({"a": 1})))]).is_err());
+    assert!(op_vec(&[DataValue::Json(JsonData::new(json!(1)))]).is_err());
+    assert!(op_vec(&[DataValue::Json(JsonData::new(json!("x")))]).is_err());
     // Positive control: a JSON array of numbers converts.
     assert_eq!(
-        op_vec(&[DataValue::Json(JsonData(json!([1.0, 2.0])))]).unwrap(),
+        op_vec(&[DataValue::Json(JsonData::new(json!([1.0, 2.0])))]).unwrap(),
         DataValue::Vec(Vector::F32(ndarray::Array1::from_vec(vec![1.0f32, 2.0])))
     );
 }
@@ -1839,7 +1839,7 @@ fn test_vec_rejects_non_array_json() {
 // `resize_with` on the write path).
 #[test]
 fn test_json_path_negative_index_errors() {
-    let arr = DataValue::Json(JsonData(json!([1, 2, 3])));
+    let arr = DataValue::Json(JsonData::new(json!([1, 2, 3])));
     let neg_path = DataValue::List(vec![DataValue::from(-1)]);
     assert!(op_set_json_path(&[arr.clone(), neg_path.clone(), DataValue::from(9)]).is_err());
     assert!(op_remove_json_path(&[arr.clone(), neg_path.clone()]).is_err());

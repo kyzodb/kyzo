@@ -106,7 +106,7 @@ use thiserror::Error;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::tuple::Tuple;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, GermanStr};
 use crate::engines::IndexRowCorrupt;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -245,7 +245,7 @@ impl GeoPoint {
 
     /// The curve index as the 8 big-endian bytes stored in the key column.
     fn curve_key(&self) -> DataValue {
-        DataValue::Bytes(self.curve_index().to_be_bytes().to_vec())
+        DataValue::Bytes(GermanStr::from_bytes(&self.curve_index().to_be_bytes()))
     }
 }
 
@@ -390,9 +390,9 @@ fn extract_point(tuple: &[DataValue], manifest: &SpatialIndexManifest) -> Result
 
 /// The spatial posting key `[curve, src_key…]` for one base row.
 fn posting_key(point: &GeoPoint, base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Vec::with_capacity(1 + base_key_len);
+    let mut key = Tuple::with_capacity(1 + base_key_len);
     key.push(point.curve_key());
-    key.extend_from_slice(&tuple[..base_key_len]);
+    key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
 
@@ -637,7 +637,7 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         ))
     })?;
     Ok(Posting {
-        src_key: row[1..=base_key_len].to_vec(),
+        src_key: row[1..=base_key_len].to_vec().into(),
         lat,
         lon,
     })
@@ -676,8 +676,8 @@ fn scan_box(
     let ranges = decompose_box(&bbox.quantized());
     let mut out = Vec::new();
     for (lo, hi) in ranges {
-        let lower = [DataValue::Bytes(lo.to_be_bytes().to_vec())];
-        let upper = [DataValue::Bytes(hi.to_be_bytes().to_vec())];
+        let lower = [DataValue::Bytes(GermanStr::from_bytes(&lo.to_be_bytes()))];
+        let upper = [DataValue::Bytes(GermanStr::from_bytes(&hi.to_be_bytes()))];
         for row in idx.scan_bounded_prefix(tx, &[], &lower, &upper) {
             let row = row?;
             let posting = decode_posting(&row, base_key_len, &idx.name)?;

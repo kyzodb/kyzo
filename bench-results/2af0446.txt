@@ -1,0 +1,10 @@
+# KyzoDB transitive-closure benchmark
+commit:  2af0446  Merge story #118 (Own the LSM): vendored fjall/lsm-tree fork, Sl
+date:    2026-07-05
+machine: Linux 7.0.14-arch1-1 x86_64 | Intel(R) Core(TM) i9-14900K | 32 cores
+workload: transitive closure (canonical 2-rule Datalog) over SNAP graphs, variant=count
+label:    after-118
+
+TC graph=email-Eu-core edges=25571 nodes=1005 variant=count load_ms=106.4 query_ms=4228.8 closure_rows=793283 peak_rss_kb=85596
+TC graph=p2p-Gnutella08 edges=20777 nodes=6301 variant=count load_ms=81.5 query_ms=26603.2 closure_rows=13148244 peak_rss_kb=785436
+TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=406.0 query_ms=69837.7 closure_rows=11947132 peak_rss_kb=870060

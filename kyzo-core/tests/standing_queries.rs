@@ -123,7 +123,7 @@ fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
 
     let query = "?[x, min(y)] := *p[x, y]";
     let mut sq = db.register_standing(query, no_params()).expect("register");
-    let expected_initial: BTreeSet<Tuple> = [vec![DataValue::from(1), DataValue::from(10)]]
+    let expected_initial: BTreeSet<Tuple> = [vec![DataValue::from(1), DataValue::from(10)].into()]
         .into_iter()
         .collect();
     assert_eq!(

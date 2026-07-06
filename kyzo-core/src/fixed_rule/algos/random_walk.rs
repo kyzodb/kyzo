@@ -110,7 +110,7 @@ impl FixedRule for RandomWalk {
                             .iter()
                             .map(|t| -> Result<f64> {
                                 let mut cand = current_tuple.clone();
-                                cand.extend_from_slice(t);
+                                cand.extend(t.iter().cloned());
                                 Ok(match eval_bytecode(weight_expr, &cand, &mut stack)? {
                                     DataValue::Num(n) => {
                                         let f = n.get_float();
@@ -166,11 +166,14 @@ impl FixedRule for RandomWalk {
                     })??;
                     cancel.check()?;
                 }
-                out.put(vec![
-                    DataValue::from(counter),
-                    start_node_key.clone(),
-                    DataValue::List(path),
-                ])?;
+                out.put(
+                    vec![
+                        DataValue::from(counter),
+                        start_node_key.clone(),
+                        DataValue::List(path),
+                    ]
+                    .into(),
+                )?;
             }
         }
         Ok(())
@@ -189,6 +192,7 @@ impl FixedRule for RandomWalk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::tuple::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -221,10 +225,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to"],
-                    vec![vec![s("a"), s("b")], vec![s("b"), s("a")]],
+                    vec![vec![s("a"), s("b")].into(), vec![s("b"), s("a")].into()],
                 ),
-                TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
             ],
             options,
             CancelFlag::default(),
@@ -249,10 +253,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to"],
-                    vec![vec![s("a"), s("b")], vec![s("b"), s("a")]],
+                    vec![vec![s("a"), s("b")].into(), vec![s("b"), s("a")].into()],
                 ),
-                TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
             ],
             options,
             CancelFlag::default(),
@@ -280,16 +284,21 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")],
-                        vec![s("b"), s("c")],
-                        vec![s("c"), s("d")],
+                        vec![s("a"), s("b")].into(),
+                        vec![s("b"), s("c")].into(),
+                        vec![s("c"), s("d")].into(),
                     ],
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![vec![s("a")], vec![s("b")], vec![s("c")], vec![s("d")]],
+                    vec![
+                        vec![s("a")].into(),
+                        vec![s("b")].into(),
+                        vec![s("c")].into(),
+                        vec![s("d")].into(),
+                    ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
             ]
         };
         let steps_opt = |n: i64| {
@@ -313,15 +322,15 @@ mod tests {
                 CancelFlag::default(),
             )
             .unwrap();
-            assert_eq!(
-                got,
-                vec![vec![
+            let want: Vec<Tuple> = vec![
+                vec![
                     DataValue::from(1i64),
                     s("a"),
                     DataValue::List(expected_path),
-                ]],
-                "steps = {steps}"
-            );
+                ]
+                .into(),
+            ];
+            assert_eq!(got, want, "steps = {steps}");
         }
     }
 
@@ -335,13 +344,13 @@ mod tests {
         let inputs = || {
             let n = 8usize;
             // A ring plus a chord from each node, so every node branches.
-            let mut edges = vec![];
+            let mut edges: Vec<Tuple> = vec![];
             for i in 0..n {
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]);
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))]);
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))].into());
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))].into());
             }
-            let nodes: Vec<_> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
-            let starts: Vec<_> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
+            let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
+            let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
             vec![
                 TestInput::new(vec!["fr", "to"], edges),
                 TestInput::new(vec!["id"], nodes),
@@ -384,16 +393,16 @@ mod tests {
     fn explicit_seed_is_reproducible_and_load_bearing() {
         let inputs = || {
             let n = 8usize;
-            let mut edges = vec![];
+            let mut edges: Vec<Tuple> = vec![];
             for i in 0..n {
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]);
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))]);
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))].into());
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))].into());
             }
-            let nodes: Vec<_> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
+            let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
             vec![
                 TestInput::new(vec!["fr", "to"], edges),
                 TestInput::new(vec!["id"], nodes),
-                TestInput::new(vec!["start"], vec![vec![s("v0")]]),
+                TestInput::new(vec!["start"], vec![vec![s("v0")].into()]),
             ]
         };
         let opts = |seed: i64| {
@@ -435,16 +444,16 @@ mod tests {
     #[test]
     fn default_seed_output_is_golden() {
         let n = 6usize;
-        let mut edges = vec![];
+        let mut edges: Vec<Tuple> = vec![];
         for i in 0..n {
-            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]);
-            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 2) % n))]);
+            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))].into());
+            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 2) % n))].into());
         }
-        let nodes: Vec<_> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
+        let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
         let inputs = vec![
             TestInput::new(vec!["fr", "to"], edges),
             TestInput::new(vec!["id"], nodes),
-            TestInput::new(vec!["start"], vec![vec![s("v0")]]),
+            TestInput::new(vec!["start"], vec![vec![s("v0")].into()]),
         ];
         let opts = BTreeMap::from([(
             SmartString::from("steps"),
@@ -454,13 +463,14 @@ mod tests {
             },
         )]);
         let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::default()).unwrap();
-        assert_eq!(
-            got,
-            vec![vec![
+        let want: Vec<Tuple> = vec![
+            vec![
                 DataValue::from(1i64),
                 s("v0"),
                 DataValue::List(vec![s("v0"), s("v1"), s("v3"), s("v4"), s("v0")]),
-            ]]
-        );
+            ]
+            .into(),
+        ];
+        assert_eq!(got, want);
     }
 }

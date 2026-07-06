@@ -48,9 +48,9 @@ means the world model is lost. Appearance is the enemy; reality is the only clie
    shared-dependency files mid-edit — the tree is not quiescent, so the
    result is noise. Hostile review and deeper architecture bug-hunting are a
    SEPARATE PHASE that begins only after ALL of a milestone's build work is
-   committed-green and every build-caught bug is fixed. Nothing is PUSHED
-   without an explicit maintainer go — push stays gated even though commits
-   flow freely.
+   committed-green and every build-caught bug is fixed. Commit and push the
+   working branch as units land; only main-merges, tags/releases, and package
+   publication wait for an explicit go.
 7. **The review phase still refutes.** When the build phase is done and the
    milestone is committed-green, the review/arch-hunt phase attacks it:
    adversarial reviewers briefed to REFUTE, on the committed state (a stable
@@ -66,8 +66,8 @@ means the world model is lost. Appearance is the enemy; reality is the only clie
 9. **Do not narrow scope to look done.** Whole-workspace, or say it is partial. Bindings are committed
    work, not deferrable; name hard work plainly instead of smuggling avoidance into a recommendation.
 10. **Honor the DoD.** A story is done only when its Definition of Done is met and verified.
-11. **Nothing public without a go.** Pushes and published packages wait for an explicit go from the
-   maintainer.
+11. **Public acts wait for a go.** Merging to main, tags/releases, and package publication wait for
+   a go; routine branch pushes do not.
 
 ## Keep the tracker truthful as work lands
 The story's issue checkboxes and the board Status are live state, not a post-hoc summary. An issue
