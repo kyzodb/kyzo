@@ -82,26 +82,9 @@ pub(crate) struct MerkleScanExceeded {
     pub(crate) ceiling: u64,
 }
 
-/// A relation root was asked for an id outside the 48-bit relation-id space
-/// (`data/tuple.rs`: ids stay within 6 bytes). Refused typed rather than
-/// panicking in the id arithmetic — the read path never trusts an
-/// out-of-range id.
-#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
-#[error("relation id {id} is outside the 48-bit relation-id space; cannot root it")]
-#[diagnostic(code(merkle::unscannable))]
-pub(crate) struct MerkleUnscannable {
-    pub(crate) id: u64,
-}
-
 const LEAF_TAG: u8 = 0x00;
 const NODE_TAG: u8 = 0x01;
 const EMPTY_TAG: u8 = 0x02;
-
-/// The upper bound (exclusive) of the relation-id space: ids occupy 48 bits
-/// (`data/tuple.rs::MAX_RELATION_ID` is `1 << 48`). A relation-id root at or
-/// above this is refused, which also keeps the successor arithmetic below
-/// from overflowing the encoded prefix.
-const RELATION_ID_BOUND: u64 = 1 << 48;
 
 /// A 32-byte Merkle hash. Comparison is byte-exact; rendering is lowercase
 /// hex (for golden vectors and the eventual sys-op result column).
@@ -242,11 +225,10 @@ pub(crate) fn relation_root(
     rel: RelationId,
     budget: NonZeroU64,
 ) -> Result<MerkleHash> {
-    if rel.raw() >= RELATION_ID_BOUND {
-        return Err(MerkleUnscannable { id: rel.raw() }.into());
-    }
     let lower = rel.raw().to_be_bytes();
-    // Every constructible id is below `RelationId::CAP` (0xff << 56), so `+ 1` cannot overflow u64.
+    // `RelationId::new`/`raw_decode` refuse any id at or beyond
+    // `RelationId::CAP` (1 << 48), so `raw()` is always below it and the
+    // successor `+ 1` cannot overflow the encoded prefix.
     let upper = (rel.raw() + 1).to_be_bytes();
     range_root(tx, &lower, &upper, budget)
 }
@@ -272,8 +254,7 @@ mod tests {
     use fjall::Slice;
 
     use super::{
-        MerkleHash, RELATION_ID_BOUND, empty_hash, leaf_hash, node_hash, relation_root, root_over,
-        state_root,
+        MerkleHash, empty_hash, leaf_hash, node_hash, relation_root, root_over, state_root,
     };
     use crate::data::value::RelationId;
     use crate::storage::fjall::new_fjall_storage;
@@ -596,20 +577,6 @@ mod tests {
             empty_hash()
         );
         assert_eq!(state_root(&tx, big_budget()).unwrap(), empty_hash());
-    }
-
-    #[test]
-    fn out_of_range_relation_id_is_a_typed_refusal() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let tx = db.read_tx().unwrap();
-        let err = relation_root(
-            &tx,
-            RelationId::new(RELATION_ID_BOUND).unwrap_or(RelationId::SYSTEM),
-            big_budget(),
-        )
-        .expect_err("must refuse an out-of-range id");
-        assert!(err.to_string().contains("48-bit"), "{err}");
     }
 
     #[test]
