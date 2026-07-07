@@ -21,6 +21,20 @@ block() {
   exit 0
 }
 
+# Shadow-story artifact guard (#140). The board is the work authority: a hidden
+# scratchpad/tmp file must NOT stand in for a GitHub issue body. Catch a draft
+# shaped like an issue body (name or a story-contract heading) written into a
+# scratchpad/tmp path, and block it — edit the issue directly instead.
+case "$file" in
+  */scratchpad/*|/tmp/*)
+    base=$(basename "$file")
+    if printf '%s' "$base" | grep -Eiq '^(body|issue|story)[-_.].*\.md$|-(body|issue|story)\.md$' \
+       || grep -Eqi '^##[[:space:]]*(hardest obligation|acceptance criteria|required invariant)|^failure mode:' "$abs" 2>/dev/null; then
+      block "This is a hidden issue-body draft in a scratchpad/tmp path ($file). The board is the work authority (#140): local markdown must not stand in for a GitHub issue. Edit the issue directly (gh issue edit N --body-file - with transient stdin is fine), or post evidence via scripts/board-story-evidence. No shadow story artifacts as working truth."
+    fi
+    ;;
+esac
+
 # Real `unsafe` block / fn / impl (not prose) anywhere the value plane / engine
 # roots forbid it.
 if printf '%s' "$file" | grep -Eq 'kyzo-core/src/'; then

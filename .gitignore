@@ -5,3 +5,7 @@
 
 # REPL history written to cwd when the binary runs interactively
 .kyzo_repl_history
+
+# Board-as-machine local caches (#140) — generated, never truth
+.claude/.project-status.stamp
+.claude/active-story.md
