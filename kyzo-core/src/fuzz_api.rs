@@ -67,7 +67,7 @@ pub fn fuzz_decode_fact_payload(data: &[u8]) -> Result<Tuple> {
 /// escapes the 48-bit bound smart constructor.
 pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
     let handle = RelationHandle::decode(data)?;
-    Ok(handle.id.0)
+    Ok(handle.id.raw())
 }
 
 /// The relation-id space bound (`data/tuple.rs::MAX_RELATION_ID`),

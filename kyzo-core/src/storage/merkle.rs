@@ -242,12 +242,12 @@ pub(crate) fn relation_root(
     rel: RelationId,
     budget: NonZeroU64,
 ) -> Result<MerkleHash> {
-    if rel.0 >= RELATION_ID_BOUND {
-        return Err(MerkleUnscannable { id: rel.0 }.into());
+    if rel.raw() >= RELATION_ID_BOUND {
+        return Err(MerkleUnscannable { id: rel.raw() }.into());
     }
-    let lower = rel.0.to_be_bytes();
-    // `rel.0 < 1 << 48` guarantees `rel.0 + 1 <= 1 << 48`, no u64 overflow.
-    let upper = (rel.0 + 1).to_be_bytes();
+    let lower = rel.raw().to_be_bytes();
+    // Every constructible id is below `RelationId::CAP` (0xff << 56), so `+ 1` cannot overflow u64.
+    let upper = (rel.raw() + 1).to_be_bytes();
     range_root(tx, &lower, &upper, budget)
 }
 

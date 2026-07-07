@@ -361,7 +361,7 @@ mod tests {
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
             Tuple::default().encode_as_key(REL).into_vec(),
-            (REL.0 + 1).to_be_bytes().to_vec(),
+            (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }
 
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn skip_walk_refuses_corrupt_bytes_and_terminates() {
         let (lower, upper) = rel_bounds();
-        let hostile_short: Vec<u8> = [&REL.0.to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
+        let hostile_short: Vec<u8> = [&REL.raw().to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
         let mut hostile_sys_tag = bikey(5, 100, 1);
         let n = hostile_sys_tag.len();
         hostile_sys_tag[n - 10] = 0xFE;

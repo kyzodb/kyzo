@@ -250,11 +250,28 @@ pub struct EncodedKey(Vec<u8>);
 /// A stored relation's identity: the 8-byte big-endian keyspace prefix
 /// every key of the relation opens with (storage key layout v1).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RelationId(pub u64);
+pub struct RelationId(u64);
 
 impl RelationId {
     /// The system catalog keyspace.
     pub const SYSTEM: RelationId = RelationId(0);
+
+    /// The one checked constructor: `None` at or beyond [`RelationId::CAP`].
+    /// Every other mint (decode, allocation) routes through the same
+    /// refusal, so an over-cap id is unrepresentable.
+    pub fn new(raw: u64) -> Option<RelationId> {
+        if raw >= RelationId::CAP {
+            None
+        } else {
+            Some(RelationId(raw))
+        }
+    }
+
+    /// The raw id (read-only; construction goes through [`RelationId::new`]
+    /// or [`RelationId::raw_decode`]).
+    pub fn raw(self) -> u64 {
+        self.0
+    }
 
     /// The exclusive allocation ceiling: every assignable id stays below
     /// `0xff << 56`, so no relation prefix ever BEGINS with `0xFF` — the
@@ -704,7 +721,15 @@ mod tests {
         assert!(RelationId::raw_decode(&u64::MAX.to_be_bytes()).is_err());
         assert!(RelationId::raw_decode(&[0u8; 4]).is_err());
         // Every assignable prefix stays below the 0xFF bound byte.
-        assert!(RelationId(RelationId::CAP - 1).raw_encode()[0] < 0xFF);
+        assert!(
+            RelationId::new(RelationId::CAP - 1)
+                .expect("last assignable")
+                .raw_encode()[0]
+                < 0xFF
+        );
+        // The constructor door itself refuses the cap.
+        assert!(RelationId::new(RelationId::CAP).is_none());
+        assert!(RelationId::new(u64::MAX).is_none());
     }
 
     /// The scan-key sentinel law: lower <= every key of matching rows
@@ -712,7 +737,7 @@ mod tests {
     #[test]
     fn scan_keys_bracket_matching_rows() {
         use super::super::ScanBound;
-        let rel = RelationId(7);
+        let rel = RelationId::new(7).expect("below cap");
         let rows: Vec<Vec<DataValue>> = vec![
             vec![DataValue::from(0i64), DataValue::from("a")],
             vec![DataValue::from(0i64), DataValue::from("zz")],
@@ -734,7 +759,7 @@ mod tests {
             assert!(lo.as_slice() <= k.as_slice() && k.as_slice() <= hi.as_slice());
         }
         // Next relation's keys fall outside.
-        let foreign = rows[0].encode_as_key(RelationId(8));
+        let foreign = rows[0].encode_as_key(RelationId::new(8).expect("below cap"));
         assert!(foreign.as_bytes() > hi.as_slice());
         // Projected == materialized.
         let row = vec![DataValue::from("x"), DataValue::from(0i64)];

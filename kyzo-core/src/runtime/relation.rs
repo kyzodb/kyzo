@@ -185,7 +185,7 @@ pub(crate) struct RelationIdSpaceExhausted;
 /// `data/tuple.rs`; it lives here so this file is the whole draft.)
 fn next_relation_id(cur: RelationId) -> Result<RelationId> {
     // Cannot overflow u64: every minted or decoded id is <= 2^48.
-    let next = cur.0 + 1;
+    let next = cur.raw() + 1;
     RelationId::raw_decode(&next.to_be_bytes()).map_err(|_| RelationIdSpaceExhausted.into())
 }
 
@@ -815,7 +815,7 @@ impl RelationHandle {
     /// original's `id.next()` panicked there).
     fn keyspace_upper(&self) -> [u8; 8] {
         // Cannot overflow u64: ids are <= 2^48, enforced at mint and decode.
-        (self.id.0 + 1).to_be_bytes()
+        (self.id.raw() + 1).to_be_bytes()
     }
 
     /// Scan every fact's CURRENT row (a bitemporal resolution at the
@@ -1335,7 +1335,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
     tx.del(&SystemKey::Relation(name).encode())?;
     let lower = Tuple::default().encode_as_key(store.id);
     // Successor prefix as raw bytes; cannot overflow (ids <= 2^48).
-    let upper = (store.id.0 + 1).to_be_bytes();
+    let upper = (store.id.raw() + 1).to_be_bytes();
     tx.del_range(&lower, &upper)
 }
 
@@ -1664,18 +1664,21 @@ mod tests {
         let first = create_relation(&mut tx, simple_input("one"), KeyspaceKind::Facts).unwrap();
         let second = create_relation(&mut tx, simple_input("two"), KeyspaceKind::Facts).unwrap();
         tx.commit().unwrap();
-        assert_eq!(first.id, RelationId(1));
-        assert_eq!(second.id, RelationId(2));
+        assert_eq!(first.id, RelationId::new(1).expect("below cap"));
+        assert_eq!(second.id, RelationId::new(2).expect("below cap"));
 
         // A later transaction continues where the counter left off.
         let mut tx = db.write_tx().unwrap();
         let third = create_relation(&mut tx, simple_input("three"), KeyspaceKind::Facts).unwrap();
         tx.commit().unwrap();
-        assert_eq!(third.id, RelationId(3));
+        assert_eq!(third.id, RelationId::new(3).expect("below cap"));
 
         let rtx = db.read_tx().unwrap();
         let counter = rtx.get(&SystemKey::IdCounter.encode()).unwrap().unwrap();
-        assert_eq!(RelationId::raw_decode(&counter).unwrap(), RelationId(3));
+        assert_eq!(
+            RelationId::raw_decode(&counter).unwrap(),
+            RelationId::new(3).expect("below cap")
+        );
     }
 
     /// The concurrency story, proven: two transactions racing on the id
@@ -1704,7 +1707,7 @@ mod tests {
         let mut tx3 = db.write_tx().unwrap();
         let right = create_relation(&mut tx3, simple_input("right"), KeyspaceKind::Facts).unwrap();
         tx3.commit().unwrap();
-        assert_eq!(right.id, RelationId(2));
+        assert_eq!(right.id, RelationId::new(2).expect("below cap"));
     }
 
     /// The access ladder gates destructive operations: `Ord` is the
@@ -1858,7 +1861,7 @@ mod tests {
                 vec![col("a", ColType::Int), col("b", ColType::Int)],
                 vec![col("c", ColType::Int)],
             ),
-            RelationId(7),
+            RelationId::new(7).expect("below cap"),
             false,
             KeyspaceKind::Facts,
         );
@@ -1910,7 +1913,7 @@ mod tests {
     fn ensure_compatible_checks_input_dependents() {
         let stored = RelationHandle::new_from_input(
             simple_input("s"),
-            RelationId(1),
+            RelationId::new(1).expect("below cap"),
             false,
             KeyspaceKind::Facts,
         );
@@ -1945,7 +1948,7 @@ mod tests {
                 vec![col("k", ColType::Int)],
                 vec![col("v", ColType::String)],
             ),
-            RelationId(7),
+            RelationId::new(7).expect("below cap"),
             false,
             KeyspaceKind::Facts,
         );

@@ -106,7 +106,7 @@ fn relation_prefix(key: &[u8]) -> Option<RelationId> {
         .get(0..EncodedKey::RELATION_PREFIX_LEN)?
         .try_into()
         .ok()?;
-    Some(RelationId(u64::from_be_bytes(bytes)))
+    RelationId::new(u64::from_be_bytes(bytes))
 }
 
 /// The dump backstop: a `Facts` row's system stamp must be `<=` the floor
@@ -119,7 +119,7 @@ fn verify_stamp_within_floor(id: RelationId, key: &[u8], floor: ValidityTs) -> R
     let stamp = system_stamp_of_key(key)?;
     if stamp.raw() > floor.raw() {
         return Err(DumpClockFloorViolation {
-            relation_id: id.0,
+            relation_id: id.raw(),
             stamp: stamp.raw(),
             floor: floor.raw(),
         }

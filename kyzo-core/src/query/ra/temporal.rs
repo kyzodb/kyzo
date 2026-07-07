@@ -290,7 +290,7 @@ pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Ve
         .encode_as_key(storage.id)
         .as_bytes()
         .to_vec();
-    let upper = (storage.id.0 + 1).to_be_bytes().to_vec();
+    let upper = (storage.id.raw() + 1).to_be_bytes().to_vec();
     (lower, upper)
 }
 

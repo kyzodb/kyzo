@@ -143,13 +143,16 @@ impl miette::Diagnostic for crate::data::value::DecodeError {}
 /// `RelationId`'s wire form: the raw u64 (catalog metadata).
 impl serde::Serialize for crate::data::value::RelationId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u64(self.0)
+        serializer.serialize_u64(self.raw())
     }
 }
 
 impl<'de> serde::Deserialize<'de> for crate::data::value::RelationId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        u64::deserialize(deserializer).map(crate::data::value::RelationId)
+        let raw = u64::deserialize(deserializer)?;
+        crate::data::value::RelationId::new(raw).ok_or_else(|| {
+            serde::de::Error::custom("relation id at or beyond the allocation ceiling")
+        })
     }
 }
 

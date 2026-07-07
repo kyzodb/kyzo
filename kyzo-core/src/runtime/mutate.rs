@@ -1571,7 +1571,7 @@ impl<T: WriteTx> SessionTx<T> {
         if matches!(index_ref.kind, IndexKind::Temporal) {
             let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
             let keys_len = base.metadata.keys.len();
-            let upper = (base.id.0 + 1).to_be_bytes();
+            let upper = (base.id.raw() + 1).to_be_bytes();
             let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
             loop {
                 let batch: Vec<(Slice, Slice)> = self
@@ -1630,7 +1630,7 @@ impl<T: WriteTx> SessionTx<T> {
             Some(self.manifest_index_ctx(&base, &index_ref)?)
         };
         let stamp = self.system_stamp_routed(base.is_temp);
-        let upper = (base.id.0 + 1).to_be_bytes();
+        let upper = (base.id.raw() + 1).to_be_bytes();
         let keys_len = base.metadata.keys.len();
         let as_of = crate::data::value::AsOf::current(crate::data::value::MAX_VALIDITY_TS);
         let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
