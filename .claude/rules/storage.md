@@ -33,10 +33,13 @@ The contract:
   re-minted; the persisted watermark writes under a lock so it never regresses under concurrent
   mints. Bulk import (`batch_put`) is OUTSIDE the stamp/SSI surface and both backends refuse a
   non-empty target.
-- **Pure Rust**: no C or C++ toolchain. Zero `unsafe` in `storage/**` itself, compiler-enforced: the
-  crate root is `#![deny(unsafe_code)]` (story #119 downgraded it from `#![forbid]` to admit exactly
-  one reviewed exception, `GermanStr` in `data/germanstr.rs`), and `storage/**` carries no local
-  `#[allow(unsafe_code)]`, so `deny` still makes any unsafe block here a compile error.
+- **Pure Rust**: no C or C++ toolchain. Zero `unsafe` in `kyzo-core`, compiler-enforced: the crate
+  root is `#![forbid(unsafe_code)]` — the maximum standard, with ZERO exceptions and no
+  locally-liftable `#[allow(unsafe_code)]`. The value plane, including `GermanStr`'s 16-byte layout,
+  is pure safe Rust (`GermanStr` is a safe wrapper over the 16-byte value cell). A future story that
+  genuinely needs unsafe must lower the lint deliberately in that story, at the narrowest scope, with
+  a full safety case; until then, unsafe does not exist in this crate. `scripts/check-unsafe.sh`
+  enforces the lint, the zero-`allow` rule, and that no doc claims an exception that does not exist.
 
 Durability is explicit and typed: `commit` survives a process crash, `commit_durable`/`sync` survive a
 power cut. Stores and dumps are stamped with `FormatVersion`; mismatches refuse to open. The

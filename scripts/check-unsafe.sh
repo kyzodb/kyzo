@@ -3,22 +3,20 @@
 # language bindings are exempt: unsafe FFI is what a binding is (see
 # .claude/rules/ffi-bindings.md).
 #
-# kyzo-bin carries zero exceptions: #![forbid(unsafe_code)] makes any
-# unsafe block there a COMPILE ERROR, full stop.
+# BOTH engine crates carry ZERO exceptions: #![forbid(unsafe_code)] makes any
+# unsafe block a COMPILE ERROR, full stop, and `forbid` (unlike `deny`)
+# cannot be locally lifted by an `#[allow(unsafe_code)]`. The value plane —
+# including GermanStr's 16-byte layout — is pure safe Rust; there is no
+# reviewed exception and no reserved future unsafe zone. A later story that
+# genuinely needs unsafe must lower the lint deliberately in that story, at
+# the narrowest scope, with a full safety case — it does not get a phantom
+# allowance today.
 #
-# kyzo-core carries exactly ONE reviewed exception (story #119's
-# `GermanStr`, a hand-built 16-byte value in `data/germanstr.rs` — the
-# first unsafe zone in the engine, Miri-audited by that module's own
-# tests). Its crate root therefore declares #![deny(unsafe_code)] rather
-# than `forbid`: `deny` still makes an unattributed unsafe block a compile
-# error everywhere in the crate, but (unlike `forbid`) it can be locally
-# lifted by an explicit `#[allow(unsafe_code)]` — which is exactly the
-# opt-in `data/germanstr.rs` uses, and the only one that may exist. This
-# script is the ratchet that keeps that exception from spreading: it greps
-# the whole crate for the `allow(unsafe_code)` attribute and fails unless
-# it finds that attribute in that one file and nowhere else. (It does not
-# grep for the bare word "unsafe" — that also matches ordinary prose
-# comments describing what would be unsafe; the attribute grep does not.)
+# This script enforces three things on the governed first-party surface:
+#   1. each engine crate root declares #![forbid(unsafe_code)];
+#   2. NO `allow(unsafe_code)` attribute appears anywhere in it;
+#   3. the docs do not claim an unsafe exception that does not exist
+#      (a lying guard doc is itself a failure).
 #
 # Runnable locally: scripts/check-unsafe.sh [workspace-dir]
 set -euo pipefail
@@ -30,51 +28,48 @@ if [ ! -f Cargo.toml ]; then
 fi
 
 checked=""
+# Real attribute lines only — not prose comments that mention the attribute.
+allow_pattern='^[[:space:]]*#!?\[allow\(unsafe_code\)\]'
 
-if [ -f kyzo-bin/src/main.rs ]; then
-  if ! grep -q '#!\[forbid(unsafe_code)\]' kyzo-bin/src/main.rs; then
-    echo "FAIL unsafe gate: kyzo-bin/src/main.rs does not declare #![forbid(unsafe_code)]."
-    echo "kyzo-bin carries zero exceptions; removing the forbid is a reviewed decision, not an edit."
+check_crate() {
+  # $1 = crate root file, $2 = crate src dir
+  local root="$1" src="$2"
+  if [ ! -f "$root" ]; then
+    return 0
+  fi
+  if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then
+    echo "FAIL unsafe gate: $root does not declare #![forbid(unsafe_code)]."
+    echo "First-party engine code forbids unsafe with zero exceptions; removing forbid is a reviewed, in-story decision, not an edit."
     exit 1
   fi
-  checked="$checked kyzo-bin/src/main.rs"
-fi
-
-if [ -f kyzo-core/src/lib.rs ]; then
-  if ! grep -q '#!\[deny(unsafe_code)\]' kyzo-core/src/lib.rs; then
-    echo "FAIL unsafe gate: kyzo-core/src/lib.rs does not declare #![deny(unsafe_code)]."
-    echo "kyzo-core's one reviewed exception (data::germanstr) needs a liftable deny, not forbid; changing this is a reviewed decision, not an edit."
-    exit 1
-  fi
-
-  # Anchored to (optional leading whitespace then) the attribute itself, so
-  # this matches only a real `#![allow(unsafe_code)]` / `#[allow(unsafe_code)]`
-  # line — never a comment or doc line that merely mentions the attribute
-  # in prose (this file's own header does, further up).
-  attr_pattern='^[[:space:]]*#!?\[allow\(unsafe_code\)\]'
-  allowed_file="kyzo-core/src/data/germanstr.rs"
-  if [ ! -f "$allowed_file" ] || ! grep -qE "$attr_pattern" "$allowed_file"; then
-    echo "FAIL unsafe gate: $allowed_file does not declare its own #![allow(unsafe_code)]."
-    echo "The one reviewed unsafe zone must opt in explicitly at its own module root."
-    exit 1
-  fi
-
-  # The ratchet: the allow(unsafe_code) attribute must exist ONLY in the
-  # one reviewed file. Widening it to a second file is exactly the "spread"
-  # this gate exists to catch.
-  offenders=$(grep -rlE --include='*.rs' "$attr_pattern" kyzo-core/src | grep -v -F "$allowed_file" || true)
+  # Zero allow(unsafe_code) anywhere in the governed surface.
+  local offenders
+  offenders=$(grep -rlE --include='*.rs' "$allow_pattern" "$src" || true)
   if [ -n "$offenders" ]; then
-    echo "FAIL unsafe gate: allow(unsafe_code) found outside the one reviewed exception ($allowed_file):"
+    echo "FAIL unsafe gate: allow(unsafe_code) found in the forbid-governed surface ($src):"
     echo "$offenders"
+    echo "There is no unsafe exception. A new one must be introduced deliberately in its own story with a full safety case."
     exit 1
   fi
+  # The docs must not claim an exception that does not exist. A guard that
+  # lies is worse than no guard.
+  local liars
+  liars=$(grep -rlniE 'germanstr[^a-z]*unsafe|unsafe[- ]exception|reviewed exception|Miri-audited exception' "$src" || true)
+  if [ -n "$liars" ]; then
+    echo "FAIL unsafe gate: $src claims an unsafe exception that does not exist:"
+    echo "$liars"
+    echo "The value plane is pure safe Rust. Delete the phantom exception language so the docs match the enforced rule."
+    exit 1
+  fi
+  checked="$checked $root"
+}
 
-  checked="$checked kyzo-core/src/lib.rs"
-fi
+check_crate "kyzo-bin/src/main.rs" "kyzo-bin/src"
+check_crate "kyzo-core/src/lib.rs" "kyzo-core/src"
 
 if [ -z "$checked" ]; then
   echo "unsafe gate: workspace exists but no engine crate roots yet — armed but idle"
   exit 0
 fi
 
-echo "unsafe gate: clean (kyzo-bin forbids unsafe entirely; kyzo-core denies it everywhere except the one reviewed exception:$checked)"
+echo "unsafe gate: clean — both engine crates forbid unsafe with zero exceptions:$checked"

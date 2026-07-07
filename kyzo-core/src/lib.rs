@@ -172,12 +172,13 @@
 //! Every law is pushed as far up this ladder as it will go; an invariant held
 //! by a type costs nothing to maintain and cannot be forgotten.
 //!
-//! - **Compiler.** Zero `unsafe` is a build guarantee here, not a convention
-//!   (`#![deny(unsafe_code)]`, below) — with exactly one reviewed,
-//!   Miri-audited exception: `GermanStr` (story #119), a hand-built 16-byte
-//!   value replacing `DataValue`'s old `Str`/`Bytes` payloads, confined to
-//!   `data::germanstr` and gated by `scripts/check-unsafe.sh` so the
-//!   exception cannot spread to a second file. A [`ReadTx`] cannot write because the
+//! - **Compiler.** Zero `unsafe` is a build guarantee here, not a
+//!   convention: the crate root declares `#![forbid(unsafe_code)]` (below),
+//!   the maximum standard — no exception, not even a locally-liftable one.
+//!   `GermanStr` is a SAFE wrapper over the 16-byte value cell; the
+//!   16-byte layout is achieved entirely in safe Rust. `scripts/check-unsafe.sh`
+//!   enforces that this claim and the lint agree — zero `unsafe`, zero
+//!   `allow(unsafe_code)`, anywhere in the crate. A [`ReadTx`] cannot write because the
 //!   mutating methods are not on the trait; [`WriteTx::commit`] takes `self`,
 //!   so commit-twice does not compile; the storage traits are sealed, so no
 //!   foreign backend can weaken the contract.
@@ -231,14 +232,15 @@
 //! exists as named in the tree.
 
 // Zero `unsafe` is a compiler guarantee in this crate, not a convention;
-// CI checks that this attribute stays. `deny` rather than `forbid`: story
-// #119 introduces exactly one reviewed exception (`data::germanstr`,
-// `GermanStr`'s hand-built 16-byte layout), which opts out locally via its
-// own `#![allow(unsafe_code)]` — `forbid` cannot be locally lifted at all,
-// so it is no longer the right lint once one deliberate exception exists.
-// `scripts/check-unsafe.sh` is the ratchet that keeps the exception from
-// spreading to a second file.
-#![deny(unsafe_code)]
+// CI checks that this attribute stays. `forbid`, not `deny`: the strongest
+// standard, which cannot be locally lifted by any `#[allow(unsafe_code)]`.
+// The value plane — including `GermanStr`'s 16-byte layout — is pure safe
+// Rust, so no exception exists. A future story that genuinely needs unsafe
+// must lower this lint deliberately, at the narrowest scope, with a full
+// safety case; until then, unsafe does not exist in this crate.
+// `scripts/check-unsafe.sh` enforces that this lint stays and that no
+// `allow(unsafe_code)` appears anywhere in kyzo-core.
+#![forbid(unsafe_code)]
 // The transaction traits return boxed iterator types by design; naming them
 // would not simplify the contract.
 #![allow(clippy::type_complexity)]
