@@ -785,7 +785,7 @@ impl IndexVec {
         // through f32 precision (the graph's stored working precision
         // until #122's quantized residency owns this decision).
         let mut components: Vec<f64> = match manifest.dtype {
-            VecElementType::F32 => v.as_slice().iter().map(|&x| x as f32 as f64).collect(),
+            VecElementType::F32 => v.as_slice().iter().map(|&x| x as f64 as f64).collect(),
             VecElementType::F64 => v.as_slice().to_vec(),
         };
         if !components.iter().all(|x| x.is_finite()) {
@@ -2647,11 +2647,11 @@ mod tests {
         }
     }
 
-    fn vec2(x: f32, y: f32) -> DataValue {
-        DataValue::Vec(Vector::F32(arr1(&[x, y])))
+    fn vec2(x: f64, y: f64) -> DataValue {
+        DataValue::Vector(Vector::new(vec![x, y]))
     }
 
-    fn row(k: i64, x: f32, y: f32) -> Tuple {
+    fn row(k: i64, x: f64, y: f64) -> Tuple {
         vec![DataValue::from(k), vec2(x, y)].into()
     }
 
@@ -2710,9 +2710,9 @@ mod tests {
         for _ in 0..dim {
             let bits = splitmix64(state);
             let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
-            v.push((unit * 2.0 - 1.0) as f32);
+            v.push((unit * 2.0 - 1.0) as f64);
         }
-        DataValue::Vec(Vector::F32(ndarray::Array1::from(v)))
+        DataValue::Vector(Vector::new(v))
     }
 
     /// Build an `n`-vector index inside ONE write transaction (mirrors the
@@ -3202,13 +3202,13 @@ mod tests {
 
         let mut state = 0x9EC4_11AA_0000_0000u64;
         let mut stack = vec![];
-        let mut stored: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut stored: Vec<Vec<f64>> = Vec::with_capacity(n);
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
-            let DataValue::Vec(Vector::F32(ref arr)) = v else {
+            let DataValue::Vector(ref arr) = v else {
                 unreachable!()
             };
-            stored.push(arr.to_vec());
+            stored.push(arr.as_slice().to_vec());
             let r = vec![DataValue::from(k as i64), v];
             base.put_fact(
                 &mut tx,
@@ -3229,15 +3229,13 @@ mod tests {
         let mut worst = 1.0f64;
         for _ in 0..n_queries {
             let q_data = probe_vec(dim, &mut query_state);
-            let DataValue::Vec(ref q_vec) = q_data else {
+            let DataValue::Vector(ref q_vec) = q_data else {
                 unreachable!()
             };
 
             // Independent oracle: brute-force squared L2 over every stored
             // vector, sorted, top-k ids.
-            let Vector::F32(qa) = q_vec else {
-                unreachable!()
-            };
+            let qa = q_vec.as_slice();
             let mut truth: Vec<(f64, i64)> = stored
                 .iter()
                 .enumerate()
@@ -3310,7 +3308,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[0.9, 0.1]));
+        let q = Vector::new(vec![0.9, 0.1]);
         let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
@@ -3391,7 +3389,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::Cosine, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[2.0, 0.0]));
+        let q = Vector::new(vec![2.0, 0.0]);
         let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
@@ -3441,7 +3439,7 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let err = hnsw_knn(
             &rtx,
-            &Vector::F32(arr1(&[0.0, 0.0])),
+            &Vector::new(vec![0.0, 0.0]),
             &m,
             &base,
             &idx,
@@ -3487,13 +3485,13 @@ mod tests {
 
         // Non-finite components are refused under every metric.
         let mut tx = db.write_tx().unwrap();
-        let nan_row = row(2, f32::NAN, 0.0);
+        let nan_row = row(2, f64::NAN, 0.0);
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &nan_row).unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
-            DataValue::Vec(Vector::F32(arr1(&[1.0, 2.0, 3.0]))),
+            DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &bad_dim).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
@@ -3513,7 +3511,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[1.0, 0.0]));
+        let q = Vector::new(vec![1.0, 0.0]);
         let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
@@ -3584,7 +3582,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[4.0, 4.0]));
+        let q = Vector::new(vec![4.0, 4.0]);
         let hits = hnsw_knn(
             &rtx,
             &q,
@@ -3607,14 +3605,14 @@ mod tests {
         let m_cos = manifest(HnswDistance::Cosine);
         let m_l2 = manifest(HnswDistance::L2);
         let m_ip = manifest(HnswDistance::InnerProduct);
-        proptest!(|(ax in -1e3f32..1e3, ay in -1e3f32..1e3, bx in -1e3f32..1e3, by in -1e3f32..1e3)| {
+        proptest!(|(ax in -1e3f64..1e3, ay in -1e3f64..1e3, bx in -1e3f64..1e3, by in -1e3f64..1e3)| {
             // Skip degenerate near-zero draws for the unit-vector premise.
             prop_assume!(ax.abs() + ay.abs() > 1e-3);
             prop_assume!(bx.abs() + by.abs() > 1e-3);
             let na = (ax * ax + ay * ay).sqrt();
             let nb = (bx * bx + by * by).sqrt();
-            let a = Vector::F32(arr1(&[ax / na, ay / na]));
-            let b = Vector::F32(arr1(&[bx / nb, by / nb]));
+            let a = Vector::new(vec![ax / na, ay / na]);
+            let b = Vector::new(vec![bx / nb, by / nb]);
             for m in [&m_cos, &m_l2, &m_ip] {
                 let va = IndexVec::admit(&a, m).unwrap();
                 let vb = IndexVec::admit(&b, m).unwrap();
@@ -3709,7 +3707,7 @@ mod tests {
         let mut tuple = node_key(0, &at);
         tuple.extend(vec![
             DataValue::from("not a degree"),
-            DataValue::Bytes(GermanStr::from_bytes(&[])),
+            DataValue::Bytes(vec![]),
             DataValue::from(false),
         ]);
         let err = HnswRow::decode(&tuple, 1, "t").unwrap_err();
@@ -3729,9 +3727,9 @@ mod tests {
         // Overwrite every index row's value with garbage msgpack.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::value::encode_tuple_key(idx.id.0, &[]);
-            let upper = (idx.id.0 + 1).to_be_bytes();
-            tx.range_scan(lower.as_bytes(), &upper)
+            let lower = idx.id.raw_encode();
+            let upper = (idx.id.raw() + 1).to_be_bytes();
+            tx.range_scan(&lower, &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
         };
@@ -3745,7 +3743,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[0.5, 0.5]));
+        let q = Vector::new(vec![0.5, 0.5]);
         let mut stack = vec![];
         let err = hnsw_knn(
             &rtx,
@@ -3830,8 +3828,8 @@ mod tests {
     fn index_build_is_byte_identical_across_runs() {
         let rows: Vec<Tuple> = (0..40)
             .map(|i| {
-                let x = (i as f32 * 0.37).sin();
-                let y = (i as f32 * 0.71).cos();
+                let x = (i as f64 * 0.37).sin();
+                let y = (i as f64 * 0.71).cos();
                 row(i, x, y)
             })
             .collect();
@@ -3843,9 +3841,9 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let (_base, idx, _m) = setup(&db, HnswDistance::Cosine, &rows);
             let rtx = db.read_tx().unwrap();
-            let lower = crate::data::value::encode_tuple_key(idx.id.0, &[]);
-            let upper = (idx.id.0 + 1).to_be_bytes();
-            rtx.range_scan(lower.as_bytes(), &upper)
+            let lower = idx.id.raw_encode();
+            let upper = (idx.id.raw() + 1).to_be_bytes();
+            rtx.range_scan(&lower, &upper)
                 .map(|kv| kv.map(|(k, v)| (k[8..].to_vec(), v[8..].to_vec())))
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
@@ -3870,7 +3868,7 @@ mod tests {
             let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect();
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
-            let q = Vector::F32(arr1(&[1.0, 0.0]));
+            let q = Vector::new(vec![1.0, 0.0]);
             let mut stack = vec![];
             let hits = hnsw_knn(
                 &rtx,

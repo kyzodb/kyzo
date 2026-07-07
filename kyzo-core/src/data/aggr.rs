@@ -1665,9 +1665,9 @@ mod tests {
     /// the fold left the accumulator unchanged.
     #[test]
     fn bit_meet_changed_flag_exact() {
-        let zero = DataValue::Bytes(GermanStr::from_bytes(&[0x00]));
-        let ones = DataValue::Bytes(GermanStr::from_bytes(&[0xff]));
-        let some = DataValue::Bytes(GermanStr::from_bytes(&[0x0f]));
+        let zero = DataValue::Bytes(vec![0x00]);
+        let ones = DataValue::Bytes(vec![0xff]);
+        let some = DataValue::Bytes(vec![0x0f]);
 
         // and: 0x00 & 0x0f leaves 0x00 — the flag must say unchanged.
         let mut v = zero.clone();
@@ -1884,7 +1884,7 @@ mod tests {
             acc.set(&DataValue::from(i64::MAX)).unwrap();
         }
         match acc.get().unwrap() {
-            DataValue::Num(crate::data::value::Num::Float(f)) => {
+            DataValue::Num(crate::data::value::Num::float(f)) => {
                 let expected = (i64::MAX as f64).powi(3);
                 assert!(
                     (f - expected).abs() / expected < 1e-9,

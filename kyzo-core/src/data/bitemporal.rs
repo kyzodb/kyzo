@@ -265,8 +265,9 @@ mod tests {
             DataValue::Validity(slot(valid_ts)),
             DataValue::Validity(slot(sys_ts)),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec()
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec()
     }
 
     fn skip_walk(
@@ -356,7 +357,7 @@ mod tests {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(Num::Int(i)) => *i,
+                DataValue::Num(Num::int(i)) => *i,
                 other => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
@@ -480,8 +481,9 @@ mod tests {
             }),
             DataValue::Validity(slot(5)),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec();
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec();
         assert!(
             check_key_for_bitemporal(&flagged, ClaimPolarity::Assert, zero_as_of(), None).is_err(),
             "retract flag in a stored valid slot must refuse"
@@ -491,8 +493,9 @@ mod tests {
             DataValue::Validity(TERMINAL_VALIDITY),
             DataValue::Validity(TERMINAL_VALIDITY),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec();
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec();
         assert!(
             check_key_for_bitemporal(&terminal, ClaimPolarity::Assert, zero_as_of(), None).is_err(),
             "the terminal sentinel is a bound, never a storable slot"
@@ -502,8 +505,9 @@ mod tests {
             DataValue::from(2i64),
             DataValue::from(3i64),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec();
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec();
         assert!(
             check_key_for_bitemporal(&ints, ClaimPolarity::Assert, zero_as_of(), None).is_err()
         );
@@ -520,7 +524,7 @@ mod tests {
             ClaimPolarity::Retract,
             ClaimPolarity::Erase,
         ] {
-            let mut val = RelationId(7).raw_encode().to_vec();
+            let mut val = RelationId::new(7).expect("below cap").raw_encode().to_vec();
             val.push(polarity.encode());
             assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
             // A bare retract/erase value carries no payload and extends
@@ -530,10 +534,12 @@ mod tests {
             assert_eq!(tup.len(), 1);
         }
         // An assert row's non-key columns ride after the polarity byte.
-        let mut val = RelationId(7).raw_encode().to_vec();
+        let mut val = RelationId::new(7).expect("below cap").raw_encode().to_vec();
         val.push(ClaimPolarity::Assert.encode());
         let non_keys = vec![DataValue::from(42i64), DataValue::from(7i64)];
-        crate::data::fact_payload::encode_fact_payload(&non_keys, &mut val).unwrap();
+        for v in &non_keys {
+            crate::data::value::append_canonical(&mut val, v);
+        }
         let mut tup: Tuple = vec![DataValue::from(1i64)].into();
         extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
         assert_eq!(
@@ -549,7 +555,7 @@ mod tests {
             assert!(claim_polarity_of_value(&vec![0u8; len]).is_err());
             assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &vec![0u8; len]).is_err());
         }
-        let mut bad = RelationId(7).raw_encode().to_vec();
+        let mut bad = RelationId::new(7).expect("below cap").raw_encode().to_vec();
         bad.push(0xEE);
         assert!(claim_polarity_of_value(&bad).is_err());
         bad.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack bytes
@@ -624,7 +630,7 @@ mod tests {
                     )
                     .into_iter()
                     .map(|t| match &t[0] {
-                        DataValue::Num(Num::Int(i)) => *i,
+                        DataValue::Num(Num::int(i)) => *i,
                         other => panic!("non-integer fact column: {other:?}"),
                     })
                     .collect();

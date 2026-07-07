@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn bytes_render_as_base64_one_way() {
-        let dv = DataValue::Bytes(GermanStr::from_bytes(&[0, 1, 2, 255]));
+        let dv = DataValue::Bytes(vec![0, 1, 2, 255]);
         assert_eq!(JsonValue::from(&dv), json!(STANDARD.encode([0, 1, 2, 255])));
     }
 

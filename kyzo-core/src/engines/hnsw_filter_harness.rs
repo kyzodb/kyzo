@@ -87,10 +87,11 @@ fn splitmix(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// A reproducible f32 in [-1, 1).
-fn next_f32(state: &mut u64) -> f32 {
+/// A reproducible f64 in [-1, 1) (24 bits of entropy, so every value is
+/// exactly representable at f32 precision too).
+fn next_f32(state: &mut u64) -> f64 {
     let bits = splitmix(state) >> 40; // 24 bits
-    (bits as f32 / (1u32 << 23) as f32) - 1.0
+    (bits as f64 / (1u32 << 23) as f64) - 1.0
 }
 
 /// A seeded corpus: `n` rows, key `k = 0..n`, a `dim`-dimensional F32 vector.
@@ -99,20 +100,16 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
     let mut state = seed ^ 0xA5A5_5A5A_1234_9876;
     (0..n)
         .map(|k| {
-            let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            vec![
-                DataValue::from(k),
-                DataValue::Vec(Vector::F32(arr1(&comps))),
-            ]
-            .into()
+            let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
+            vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))].into()
         })
         .collect()
 }
 
 fn seeded_query(dim: usize, seed: u64) -> Vector {
     let mut state = seed ^ 0x0F0F_F0F0_DEAD_BEEF;
-    let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
-    Vector::F32(arr1(&comps))
+    let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
+    Vector::new(comps)
 }
 
 /// A deterministic (Fisher–Yates, splitmix-seeded) permutation of `rows` — the
@@ -356,7 +353,7 @@ fn brute_force_filtered_knn(
         .map(|r| {
             let key = r[0].get_int().unwrap();
             let v = match &r[1] {
-                DataValue::Vec(v) => v.clone(),
+                DataValue::Vector(v) => v.clone(),
                 _ => panic!("row vector"),
             };
             let vv = IndexVec::admit(&v, manifest).expect("row admits");
@@ -503,32 +500,32 @@ fn oracle_is_exact_and_total_ordered() {
     let rows: Vec<Tuple> = vec![
         vec![
             DataValue::from(0),
-            DataValue::Vec(Vector::F32(arr1(&[3.0, 0.0]))),
+            DataValue::Vector(Vector::new(vec![3.0, 0.0])),
         ]
         .into(),
         vec![
             DataValue::from(1),
-            DataValue::Vec(Vector::F32(arr1(&[0.1, 0.0]))),
+            DataValue::Vector(Vector::new(vec![0.1, 0.0])),
         ]
         .into(),
         vec![
             DataValue::from(2),
-            DataValue::Vec(Vector::F32(arr1(&[1.0, 0.0]))),
+            DataValue::Vector(Vector::new(vec![1.0, 0.0])),
         ]
         .into(),
         vec![
             DataValue::from(3),
-            DataValue::Vec(Vector::F32(arr1(&[0.2, 0.0]))),
+            DataValue::Vector(Vector::new(vec![0.2, 0.0])),
         ]
         .into(),
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         vec![
             DataValue::from(4),
-            DataValue::Vec(Vector::F32(arr1(&[-1.0, 0.0]))),
+            DataValue::Vector(Vector::new(vec![-1.0, 0.0])),
         ]
         .into(),
     ];
-    let q = Vector::F32(arr1(&[0.0, 0.0]));
+    let q = Vector::new(vec![0.0, 0.0]);
     let even = FilterSpec::ModLessThan {
         modulus: 2,
         accept: 1,
@@ -872,20 +869,16 @@ fn engine_ordering_is_total_under_ties() {
     let n = 12i64;
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
-            let mut comps = vec![0.0f32; dim];
+            let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
-            vec![
-                DataValue::from(i),
-                DataValue::Vec(Vector::F32(arr1(&comps))),
-            ]
-            .into()
+            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))].into()
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
     let rtx = db.read_tx().unwrap();
-    let q = Vector::F32(arr1(&vec![0.0f32; dim]));
+    let q = Vector::new((&vec![0.0f64; dim]));
     // A filter that passes every row: (k mod 1) < 1 is always true.
     let f = FilterSpec::ModLessThan {
         modulus: 1,
@@ -1051,13 +1044,13 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
     let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
     let rows: Vec<Tuple> = (0..n)
         .map(|k| {
-            let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
+            let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
             let v = if k < half {
                 comps
             } else {
                 comps.iter().map(|c| c + 40.0).collect()
             };
-            vec![DataValue::from(k), DataValue::Vec(Vector::F32(arr1(&v)))].into()
+            vec![DataValue::from(k), DataValue::Vector(Vector::new((&v)))].into()
         })
         .collect();
     (n, half, rows)
@@ -1403,13 +1396,9 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     let n = P2_N;
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
-            let mut comps = vec![0.0f32; dim];
+            let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
-            vec![
-                DataValue::from(i),
-                DataValue::Vec(Vector::F32(arr1(&comps))),
-            ]
-            .into()
+            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))].into()
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
@@ -1419,7 +1408,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     // Every row is EXACTLY equidistant (squared L2 = 1.0, bit-exact) from the
     // all-zero query, so only the `(distance, encoded-key)` tie-break decides
     // the k survivors.
-    let q = Vector::F32(arr1(&vec![0.0f32; dim]));
+    let q = Vector::new((&vec![0.0f64; dim]));
     // Even keys only (`k mod 2 == 0 < 1`): a genuine filter (not
     // all-matching), ~half the corpus — enough matches (~2000) to force the
     // Graph plan, not Scan.

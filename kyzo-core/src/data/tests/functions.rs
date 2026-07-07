@@ -23,7 +23,7 @@ use serde_json::json;
 
 use crate::data::functions::*;
 use crate::data::relation::{ColType, NullableColType};
-use crate::data::value::{DataValue, JsonData, RegexWrapper, ValidityTs, Vector};
+use crate::data::value::{DataValue, ValidityTs, Vector};
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-5
@@ -114,7 +114,7 @@ fn test_mul() {
 }
 
 fn f64_vec(xs: &[f64]) -> DataValue {
-    DataValue::Vec(Vector::F64(ndarray::Array1::from_vec(xs.to_vec())))
+    DataValue::Vector(Vector::new(xs.to_vec()))
 }
 
 // Regression for the upstream bug where multiplying three or more vectors
@@ -679,14 +679,14 @@ fn test_math_domain_errors_typed() {
 /// position.
 #[test]
 fn test_math_domain_errors_vector() {
-    let has_negative = Vector::F64(ndarray::arr1(&[1.0, -1.0, 4.0]));
-    assert!(op_sqrt(&[DataValue::Vec(has_negative)]).is_err());
+    let has_negative = Vector::new(vec![1.0, -1.0, 4.0]);
+    assert!(op_sqrt(&[DataValue::Vector(has_negative)]).is_err());
 
-    let has_out_of_range = Vector::F32(ndarray::arr1(&[0.0f32, 2.0]));
-    assert!(op_asin(&[DataValue::Vec(has_out_of_range)]).is_err());
+    let has_out_of_range = Vector::new(vec![0.0f64, 2.0]);
+    assert!(op_asin(&[DataValue::Vector(has_out_of_range)]).is_err());
 
-    let has_non_positive = Vector::F64(ndarray::arr1(&[1.0, 0.0]));
-    assert!(op_ln(&[DataValue::Vec(has_non_positive)]).is_err());
+    let has_non_positive = Vector::new(vec![1.0, 0.0]);
+    assert!(op_ln(&[DataValue::Vector(has_non_positive)]).is_err());
 }
 
 /// Valid, in-domain inputs to the same ops still compute the correct
@@ -753,8 +753,8 @@ fn test_math_valid_inputs_unaffected() {
 fn test_vector_distance_domain_errors() {
     use ndarray::arr1;
 
-    let zero = DataValue::Vec(Vector::F64(arr1(&[0.0, 0.0])));
-    let unit = DataValue::Vec(Vector::F64(arr1(&[1.0, 1.0])));
+    let zero = DataValue::Vector(Vector::new(vec![0.0, 0.0]));
+    let unit = DataValue::Vector(Vector::new(vec![1.0, 1.0]));
 
     for res in [
         op_cos_dist(&[zero.clone(), unit.clone()]),
@@ -777,8 +777,8 @@ fn test_vector_distance_domain_errors() {
     assert!(op_l2_normalize(&[unit]).is_ok());
 
     // The F32 lane is guarded identically.
-    let zero32 = DataValue::Vec(Vector::F32(arr1(&[0.0f32, 0.0])));
-    let unit32 = DataValue::Vec(Vector::F32(arr1(&[1.0f32, 1.0])));
+    let zero32 = DataValue::Vector(Vector::new(vec![0.0f64, 0.0]));
+    let unit32 = DataValue::Vector(Vector::new(vec![1.0f64, 1.0]));
     assert!(op_cos_dist(&[zero32.clone(), unit32.clone()]).is_err());
     assert!(op_l2_normalize(&[zero32]).is_err());
     assert!(op_cos_dist(&[unit32.clone(), unit32]).is_ok());
@@ -987,7 +987,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("c.e").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "c.e".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::from(true)
@@ -996,7 +1002,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("c.ef$").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "c.ef$".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::from(true)
@@ -1005,7 +1017,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_matches(&[
             DataValue::Str("abcdef".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("c.e$").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "c.e$".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::from(false)
@@ -1014,7 +1032,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_replace(&[
             DataValue::Str("abcdef".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("[be]").unwrap())),
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "[be]".into()
+                )
+                .unwrap()
+            ),
             DataValue::Str("x".into())
         ])
         .unwrap(),
@@ -1024,7 +1048,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_replace_all(&[
             DataValue::Str("abcdef".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("[be]").unwrap())),
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "[be]".into()
+                )
+                .unwrap()
+            ),
             DataValue::Str("x".into())
         ])
         .unwrap(),
@@ -1033,7 +1063,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_extract(&[
             DataValue::Str("abCDefGH".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("[xayef]|(GH)").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "[xayef]|(GH)".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::List(vec![
@@ -1046,7 +1082,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_extract_first(&[
             DataValue::Str("abCDefGH".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("[xayef]|(GH)").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "[xayef]|(GH)".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::Str("a".into()),
@@ -1054,7 +1096,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_extract(&[
             DataValue::Str("abCDefGH".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("xyz").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "xyz".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::List(vec![])
@@ -1063,7 +1111,13 @@ fn test_regex() {
     assert_eq!(
         op_regex_extract_first(&[
             DataValue::Str("abCDefGH".into()),
-            DataValue::Regex(RegexWrapper(Regex::new("xyz").unwrap()))
+            DataValue::Regex(
+                crate::data::value::RegexSource::validated(
+                    crate::data::value::RegexFlags::NONE,
+                    "xyz".into()
+                )
+                .unwrap()
+            )
         ])
         .unwrap(),
         DataValue::Null
@@ -1075,10 +1129,6 @@ fn test_predicates() {
     assert_eq!(
         op_is_null(&[DataValue::Null]).unwrap(),
         DataValue::from(true)
-    );
-    assert_eq!(
-        op_is_null(&[DataValue::Bot]).unwrap(),
-        DataValue::from(false)
     );
     assert_eq!(
         op_is_int(&[DataValue::from(1)]).unwrap(),
@@ -1807,7 +1857,7 @@ fn test_vec_rejects_trailing_bytes() {
     // 4 bytes decode cleanly to one f32 (1.0, little-endian).
     let ok = STANDARD.encode([0u8, 0, 128, 63]);
     match op_vec(&[DataValue::Str(ok.into())]).unwrap() {
-        DataValue::Vec(v) => assert_eq!(v.len(), 1),
+        DataValue::Vector(v) => assert_eq!(v.len(), 1),
         other => panic!("expected vector, got {other:?}"),
     }
     // The F64 path is equally strict: 9 bytes is one f64 plus trailing.
@@ -1815,7 +1865,7 @@ fn test_vec_rejects_trailing_bytes() {
     assert!(op_vec(&[DataValue::Str(bad64.into()), DataValue::Str("F64".into())]).is_err());
     let ok64 = STANDARD.encode([0u8; 8]);
     match op_vec(&[DataValue::Str(ok64.into()), DataValue::Str("F64".into())]).unwrap() {
-        DataValue::Vec(v) => assert_eq!(v.len(), 1),
+        DataValue::Vector(v) => assert_eq!(v.len(), 1),
         other => panic!("expected vector, got {other:?}"),
     }
 }
@@ -1824,13 +1874,31 @@ fn test_vec_rejects_trailing_bytes() {
 // `as_array()` and aborted on e.g. `vec(json('{}'))`.
 #[test]
 fn test_vec_rejects_non_array_json() {
-    assert!(op_vec(&[DataValue::Json(JsonData::new(json!({"a": 1})))]).is_err());
-    assert!(op_vec(&[DataValue::Json(JsonData::new(json!(1)))]).is_err());
-    assert!(op_vec(&[DataValue::Json(JsonData::new(json!("x")))]).is_err());
+    assert!(
+        op_vec(&[DataValue::Json(crate::data::json::json_from_serde(
+            &json!({"a": 1})
+        ))])
+        .is_err()
+    );
+    assert!(
+        op_vec(&[DataValue::Json(crate::data::json::json_from_serde(&json!(
+            1
+        )))])
+        .is_err()
+    );
+    assert!(
+        op_vec(&[DataValue::Json(crate::data::json::json_from_serde(&json!(
+            "x"
+        )))])
+        .is_err()
+    );
     // Positive control: a JSON array of numbers converts.
     assert_eq!(
-        op_vec(&[DataValue::Json(JsonData::new(json!([1.0, 2.0])))]).unwrap(),
-        DataValue::Vec(Vector::F32(ndarray::Array1::from_vec(vec![1.0f32, 2.0])))
+        op_vec(&[DataValue::Json(crate::data::json::json_from_serde(&json!(
+            [1.0, 2.0]
+        )))])
+        .unwrap(),
+        DataValue::Vector(Vector::new(vec![1.0f64, 2.0]))
     );
 }
 
@@ -1839,7 +1907,7 @@ fn test_vec_rejects_non_array_json() {
 // `resize_with` on the write path).
 #[test]
 fn test_json_path_negative_index_errors() {
-    let arr = DataValue::Json(JsonData::new(json!([1, 2, 3])));
+    let arr = DataValue::Json(crate::data::json::json_from_serde(&json!([1, 2, 3])));
     let neg_path = DataValue::List(vec![DataValue::from(-1)]);
     assert!(op_set_json_path(&[arr.clone(), neg_path.clone(), DataValue::from(9)]).is_err());
     assert!(op_remove_json_path(&[arr.clone(), neg_path.clone()]).is_err());

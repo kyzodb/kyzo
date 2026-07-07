@@ -34,11 +34,8 @@ use proptest::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::value::{
-    AsOf, DataValue, GermanStr, Interval, JsonData, Num, Validity, ValidityTs, Vector,
-};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValidityTs, Vector};
 use crate::data::value::{EncodedKey, RelationId, Tuple, TupleT};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
@@ -57,72 +54,88 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Null,
         DataValue::Bool(false),
         DataValue::Bool(true),
-        DataValue::Num(Num::Float(f64::NEG_INFINITY)),
-        DataValue::Num(Num::Int(i64::MIN)),
-        DataValue::Num(Num::Int(-1_000_000)),
-        DataValue::Num(Num::Float(-1.5)),
-        DataValue::Num(Num::Int(-1)),
-        DataValue::Num(Num::Float(-0.0)),
-        DataValue::Num(Num::Int(0)),
-        DataValue::Num(Num::Float(0.0)),
-        DataValue::Num(Num::Float(0.5)),
-        DataValue::Num(Num::Int(1)),
-        DataValue::Num(Num::Float(1.0)), // int/float tie
-        DataValue::Num(Num::Float(1.5)),
-        DataValue::Num(Num::Int(2)),
+        DataValue::Num(Num::float(f64::NEG_INFINITY)),
+        DataValue::Num(Num::int(i64::MIN)),
+        DataValue::Num(Num::int(-1_000_000)),
+        DataValue::Num(Num::float(-1.5)),
+        DataValue::Num(Num::int(-1)),
+        DataValue::Num(Num::float(-0.0)),
+        DataValue::Num(Num::int(0)),
+        DataValue::Num(Num::float(0.0)),
+        DataValue::Num(Num::float(0.5)),
+        DataValue::Num(Num::int(1)),
+        DataValue::Num(Num::float(1.0)), // int/float tie
+        DataValue::Num(Num::float(1.5)),
+        DataValue::Num(Num::int(2)),
         // The exact-int boundary: 2^53 ± 1 in both representations.
-        DataValue::Num(Num::Int((1 << 53) - 1)),
-        DataValue::Num(Num::Int(1 << 53)),
-        DataValue::Num(Num::Int((1 << 53) + 1)),
-        DataValue::Num(Num::Float((1u64 << 53) as f64)),
-        DataValue::Num(Num::Int(i64::MAX)),
-        DataValue::Num(Num::Float(f64::INFINITY)),
-        DataValue::Num(Num::Float(f64::NAN)),
+        DataValue::Num(Num::int((1 << 53) - 1)),
+        DataValue::Num(Num::int(1 << 53)),
+        DataValue::Num(Num::int((1 << 53) + 1)),
+        DataValue::Num(Num::float((1u64 << 53) as f64)),
+        DataValue::Num(Num::int(i64::MAX)),
+        DataValue::Num(Num::float(f64::INFINITY)),
+        DataValue::Num(Num::float(f64::NAN)),
         DataValue::Str("".into()),
         DataValue::Str("a".into()),
         DataValue::Str("ab".into()),
         DataValue::Str("b".into()),
         DataValue::Str("Ω unicode ω".into()),
-        DataValue::Bytes(GermanStr::from_bytes(&[])),
-        DataValue::Bytes(GermanStr::from_bytes(&[0])),
-        DataValue::Bytes(GermanStr::from_bytes(&[0, 1])),
-        DataValue::Bytes(GermanStr::from_bytes(&[255])),
+        DataValue::Bytes(vec![]),
+        DataValue::Bytes(vec![0]),
+        DataValue::Bytes(vec![0, 1]),
+        DataValue::Bytes(vec![255]),
         DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(0))),
         DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
-        DataValue::Regex(crate::RegexWrapper("^a.*b$".parse().unwrap())),
-        DataValue::Regex(crate::RegexWrapper("^z+$".parse().unwrap())),
+        DataValue::Regex(
+            crate::data::value::RegexSource::validated(
+                crate::data::value::RegexFlags::NONE,
+                "^a.*b$".into(),
+            )
+            .unwrap(),
+        ),
+        DataValue::Regex(
+            crate::data::value::RegexSource::validated(
+                crate::data::value::RegexFlags::NONE,
+                "^z+$".into(),
+            )
+            .unwrap(),
+        ),
         DataValue::List(vec![]),
-        DataValue::List(vec![DataValue::Num(Num::Int(1))]),
+        DataValue::List(vec![DataValue::Num(Num::int(1))]),
         // prefix ordering: [1] < [1, "x"]
         DataValue::List(vec![
-            DataValue::Num(Num::Int(1)),
+            DataValue::Num(Num::int(1)),
             DataValue::Str("x".into()),
         ]),
         DataValue::Set(Default::default()),
         DataValue::Set(
-            [DataValue::Num(Num::Int(1)), DataValue::Num(Num::Int(2))]
+            [DataValue::Num(Num::int(1)), DataValue::Num(Num::int(2))]
                 .into_iter()
                 .collect(),
         ),
         // Vectors: negative values (raw-bit ordering breaks here), length
         // before content, both element widths.
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[-2.5f32, 0.0, 1.0]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[-2.5f32, 0.5, 1.0]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[1.0f32]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[f32::NAN]))),
+        DataValue::Vector(Vector::new(vec![-2.5f64, 0.0, 1.0])),
+        DataValue::Vector(Vector::new(vec![-2.5f64, 0.5, 1.0])),
+        DataValue::Vector(Vector::new(vec![1.0f64])),
+        DataValue::Vector(Vector::new(vec![f64::NAN])),
         // Signed zero: `OrderedFloat` treats -0.0 == 0.0 (unlike scalar
         // `Num`, which distinguishes them below), so these two must encode
         // byte-identically — see `law_vector_signed_zero_canonicalizes`.
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[-0.0f32]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[0.0f32]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[-7.5f64]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[0.25f64, -7.5]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64]))),
-        DataValue::Json(JsonData::new(serde_json::json!({"a": 1}))),
-        DataValue::Json(JsonData::new(serde_json::json!([1, 2, 3]))),
+        DataValue::Vector(Vector::new(vec![-0.0f64])),
+        DataValue::Vector(Vector::new(vec![0.0f64])),
+        DataValue::Vector(Vector::new(vec![-7.5f64])),
+        DataValue::Vector(Vector::new(vec![0.25f64, -7.5])),
+        DataValue::Vector(Vector::new(vec![-0.0f64])),
+        DataValue::Vector(Vector::new(vec![0.0f64])),
+        DataValue::Json(crate::data::json::json_from_serde(
+            &serde_json::json!({"a": 1}),
+        )),
+        DataValue::Json(crate::data::json::json_from_serde(&serde_json::json!([
+            1, 2, 3
+        ]))),
         DataValue::Validity(Validity {
             timestamp: ValidityTs::from_raw(42),
             is_assert: Reverse(true),
@@ -139,33 +152,41 @@ fn corpus() -> Vec<DataValue> {
         // of one equals start of the next), an overlapping pair, and an
         // open-ended interval (end == i64::MAX, the plain-max-tick "END"
         // convention — see `Interval`'s doc comment).
-        DataValue::Interval(Interval::new(i64::MIN, i64::MIN + 1).unwrap()),
-        DataValue::Interval(Interval::new(-100, -1).unwrap()),
-        DataValue::Interval(Interval::new(-1, 0).unwrap()),
-        DataValue::Interval(Interval::new(0, 1).unwrap()),
-        DataValue::Interval(Interval::new(0, 10).unwrap()),
-        DataValue::Interval(Interval::new(5, 15).unwrap()), // overlaps [0,10)
-        DataValue::Interval(Interval::new(10, 20).unwrap()), // meets [0,10)
-        DataValue::Interval(Interval::new(0, 20).unwrap()), // contains [5,15)
-        DataValue::Interval(Interval::new(100, i64::MAX).unwrap()), // open-ended
-        DataValue::Interval(Interval::new(i64::MAX - 1, i64::MAX).unwrap()),
-        DataValue::Bot,
+        DataValue::Interval(Interval::new(
+            Bound::Closed(i64::MIN),
+            Bound::Closed((i64::MIN + 1) - 1),
+        )),
+        DataValue::Interval(Interval::new(Bound::Closed(-100), Bound::Closed((-1) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(-1), Bound::Closed((0) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((1) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((10) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(5), Bound::Closed((15) - 1))), // overlaps [0,10)
+        DataValue::Interval(Interval::new(Bound::Closed(10), Bound::Closed((20) - 1))), // meets [0,10)
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((20) - 1))), // contains [5,15)
+        DataValue::Interval(Interval::new(
+            Bound::Closed(100),
+            Bound::Closed((i64::MAX) - 1),
+        )), // open-ended
+        DataValue::Interval(Interval::new(
+            Bound::Closed(i64::MAX - 1),
+            Bound::Closed((i64::MAX) - 1),
+        )),
     ];
     // Nested collections — bound by name so corpus insertions can't silently
     // change which values get nested.
     let nested_set = DataValue::Set(
-        [DataValue::Num(Num::Int(1)), DataValue::Num(Num::Int(2))]
+        [DataValue::Num(Num::int(1)), DataValue::Num(Num::int(2))]
             .into_iter()
             .collect(),
     );
-    let nested_list = DataValue::List(vec![DataValue::Num(Num::Int(1))]);
+    let nested_list = DataValue::List(vec![DataValue::Num(Num::int(1))]);
     c.push(DataValue::List(vec![nested_set, nested_list]));
     c
 }
 
 fn encode(v: &DataValue) -> Vec<u8> {
     let mut buf = vec![];
-    buf.encode_datavalue(v);
+    crate::data::value::append_canonical(&mut buf, v);
     buf
 }
 
@@ -206,40 +227,28 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
     let leaf = prop_oneof![
         Just(DataValue::Null),
         any::<bool>().prop_map(DataValue::Bool),
-        any::<i64>().prop_map(|i| DataValue::Num(Num::Int(i))),
-        any::<f64>().prop_map(|f| DataValue::Num(Num::Float(f))),
+        any::<i64>().prop_map(|i| DataValue::Num(Num::int(i))),
+        any::<f64>().prop_map(|f| DataValue::Num(Num::float(f))),
         "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s.into())),
         // Json's Ord and encoding both reduce to the serialized string, but
         // the reduction is an argument, not a law — fuzz it like the rest.
-        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::json::JsonData::new(
-            serde_json::Value::String(s)
+        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::json::json_from_serde(
+            &serde_json::Value::String(s)
         ))),
-        proptest::collection::vec(any::<u8>(), 0..24)
-            .prop_map(|v| DataValue::Bytes(GermanStr::from_bytes(&v))),
+        proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
         any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
-        proptest::collection::vec(any::<f32>(), 0..6)
-            .prop_map(|v| DataValue::Vec(Vector::F32(ndarray::Array1::from(v)))),
         proptest::collection::vec(any::<f64>(), 0..6)
-            .prop_map(|v| DataValue::Vec(Vector::F64(ndarray::Array1::from(v)))),
+            .prop_map(|v| DataValue::Vector(Vector::new(v))),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| DataValue::Validity(Validity {
             timestamp: ValidityTs::from_raw(ts),
             is_assert: Reverse(a),
         })),
-        // Two arbitrary i64s, ordered into a valid (non-empty) interval: on
-        // a tie there is no valid interval, so that draw is filtered out
-        // rather than coerced (coercing start==end would hide the very
-        // degenerate case `Interval::new` exists to refuse).
-        (any::<i64>(), any::<i64>()).prop_filter_map("valid interval", |(a, b)| {
-            let (start, end) = match a.cmp(&b) {
-                Ordering::Less => (a, b),
-                Ordering::Greater => (b, a),
-                Ordering::Equal => return None,
-            };
-            Some(DataValue::Interval(
-                Interval::new(start, end).expect("start < end"),
-            ))
+        // Two arbitrary i64s, ordered into a closed interval (a tie is the
+        // single-instant interval, a lawful value of the kind).
+        (any::<i64>(), any::<i64>()).prop_map(|(a, b)| {
+            let (start, end) = if a <= b { (a, b) } else { (b, a) };
+            DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed(end)))
         }),
-        Just(DataValue::Bot),
     ];
     leaf.prop_recursive(3, 24, 4, |inner| {
         prop_oneof![
@@ -297,16 +306,16 @@ proptest! {
         prop_assume!(start.checked_sub(delta).is_some());
         prop_assume!(end > start);
 
-        let same_start_short = DataValue::Interval(Interval::new(start, end).unwrap());
-        let same_start_long = DataValue::Interval(Interval::new(start, end + delta).unwrap());
+        let same_start_short = DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed((end) - 1)));
+        let same_start_long = DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed((end + delta) - 1)));
         prop_assert_eq!(
             same_start_short.cmp(&same_start_long),
             encode(&same_start_short).cmp(&encode(&same_start_long)),
             "same-start pair order disagreement: {:?} vs {:?}", same_start_short, same_start_long
         );
 
-        let same_end_early = DataValue::Interval(Interval::new(start - delta, end).unwrap());
-        let same_end_late = DataValue::Interval(Interval::new(start, end).unwrap());
+        let same_end_early = DataValue::Interval(Interval::new(Bound::Closed(start - delta), Bound::Closed((end) - 1)));
+        let same_end_late = DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed((end) - 1)));
         prop_assert_eq!(
             same_end_early.cmp(&same_end_late),
             encode(&same_end_early).cmp(&encode(&same_end_late)),
@@ -323,8 +332,8 @@ proptest! {
 /// vector, exactly as it already does for the two NaN encodings.
 #[test]
 fn law_vector_signed_zero_canonicalizes() {
-    let neg_f32 = DataValue::Vec(Vector::F32(ndarray::arr1(&[-0.0f32])));
-    let pos_f32 = DataValue::Vec(Vector::F32(ndarray::arr1(&[0.0f32])));
+    let neg_f32 = DataValue::Vector(Vector::new(vec![-0.0f64]));
+    let pos_f32 = DataValue::Vector(Vector::new(vec![0.0f64]));
     assert_eq!(neg_f32.cmp(&pos_f32), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f32),
@@ -332,8 +341,8 @@ fn law_vector_signed_zero_canonicalizes() {
         "-0.0 and +0.0 are semantically Equal in a Vector lane but encoded to different bytes"
     );
 
-    let neg_f64 = DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64])));
-    let pos_f64 = DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64])));
+    let neg_f64 = DataValue::Vector(Vector::new(vec![-0.0f64]));
+    let pos_f64 = DataValue::Vector(Vector::new(vec![0.0f64]));
     assert_eq!(neg_f64.cmp(&pos_f64), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f64),
@@ -342,8 +351,8 @@ fn law_vector_signed_zero_canonicalizes() {
     );
 
     // Mixed sign, multi-element: only the zero lane should collapse.
-    let neg_mixed = DataValue::Vec(Vector::F32(ndarray::arr1(&[-1.5f32, -0.0, 2.5])));
-    let pos_mixed = DataValue::Vec(Vector::F32(ndarray::arr1(&[-1.5f32, 0.0, 2.5])));
+    let neg_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, -0.0, 2.5]));
+    let pos_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, 0.0, 2.5]));
     assert_eq!(neg_mixed.cmp(&pos_mixed), std::cmp::Ordering::Equal);
     assert_eq!(encode(&neg_mixed), encode(&pos_mixed));
 }
@@ -355,8 +364,8 @@ fn law_vector_signed_zero_canonicalizes() {
 /// the scalar path.
 #[test]
 fn law_scalar_num_signed_zero_stays_distinct() {
-    let neg = DataValue::Num(Num::Float(-0.0));
-    let pos = DataValue::Num(Num::Float(0.0));
+    let neg = DataValue::Num(Num::float(-0.0));
+    let pos = DataValue::Num(Num::float(0.0));
     assert_eq!(neg.cmp(&pos), std::cmp::Ordering::Less);
     assert!(encode(&neg) < encode(&pos));
 }
@@ -569,7 +578,7 @@ fn time_travel_matches_naive_oracle() {
         ("e", 3, true),
         ("e", 4, false),
     ];
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
@@ -580,7 +589,7 @@ fn time_travel_matches_naive_oracle() {
     tx.commit().unwrap();
 
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
@@ -608,7 +617,7 @@ fn time_travel_matches_naive_oracle() {
 
 #[test]
 fn time_travel_sees_own_writes() {
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
@@ -621,7 +630,7 @@ fn time_travel_sees_own_writes() {
     let (k, v) = vld_row(rel, "b", 2, true);
     tx.put(&k, &v).unwrap();
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     let got: Vec<String> = tx
         .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(5)))
         .map(|r| match &r.unwrap()[0] {
@@ -720,7 +729,7 @@ fn stamped_row(
 fn dump_refuses_a_row_stamped_above_its_own_floor() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rel = RelationId::new(100);
+    let rel = RelationId::new(100).expect("below cap");
     let handle = facts_handle(rel, "floor_test");
 
     // Far enough in the future that it exceeds any floor a store opened
@@ -782,7 +791,7 @@ fn dump_refuses_a_row_stamped_above_its_own_floor() {
 fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rel = RelationId::new(42);
+    let rel = RelationId::new(42).expect("below cap");
     let handle = facts_handle(rel, "floor_race");
     {
         let mut tx = db.write_tx().unwrap();
@@ -825,7 +834,7 @@ fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers()
     // before any writer has committed a row, which is a scheduling
     // artifact unrelated to the property under test. Rows are never
     // deleted here, so once one appears the store only grows from here.
-    let upper = rel.next().raw_encode();
+    let upper = rel.next().expect("below cap").raw_encode();
     while db
         .read_tx()
         .unwrap()
@@ -882,7 +891,7 @@ fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers()
 /// scan must terminate (and skip it) rather than livelock.
 #[test]
 fn skip_scan_terminates_on_retraction_at_min_ts() {
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
@@ -899,7 +908,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
     let got: Vec<String> = tx
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
-            rel.next().raw_encode().as_ref(),
+            rel.next().expect("below cap").raw_encode().as_ref(),
             AsOf::current(ValidityTs::from_raw(5)),
         )
         .map(|r| match &r.unwrap()[0] {
@@ -913,7 +922,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
 /// An assertion at ts == i64::MIN is a legitimate hit and must also terminate.
 #[test]
 fn skip_scan_hit_at_min_ts_terminates() {
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
@@ -928,7 +937,7 @@ fn skip_scan_hit_at_min_ts_terminates() {
     let got: Vec<Tuple> = tx
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
-            rel.next().raw_encode().as_ref(),
+            rel.next().expect("below cap").raw_encode().as_ref(),
             AsOf::current(ValidityTs::from_raw(0)),
         )
         .map(|r| r.unwrap())
@@ -945,10 +954,13 @@ fn corrupt_inputs_error_never_panic() {
     // bytes, so the requirement is simply no panic, ever.
     let mut k = vec![0xFF; 8];
     let mut enc = vec![];
-    enc.encode_datavalue(&DataValue::Validity(Validity {
-        timestamp: ValidityTs::from_raw(1),
-        is_assert: Reverse(true),
-    }));
+    crate::data::value::append_canonical(
+        &mut enc,
+        &DataValue::Validity(Validity {
+            timestamp: ValidityTs::from_raw(1),
+            is_assert: Reverse(true),
+        }),
+    );
     k.extend(enc);
     let _ = crate::data::bitemporal::check_key_for_bitemporal(
         &k,
@@ -1550,7 +1562,6 @@ fn conflict_is_typed_and_options_and_stats_work() {
 /// keeps walking rather than stopping at the first wound.
 #[test]
 fn verify_storage_reports_injected_corruption() {
-    use crate::data::value::encode_tuple_key;
     use crate::storage::verify::verify_storage;
 
     let dir = tempfile::tempdir().unwrap();
@@ -1559,7 +1570,8 @@ fn verify_storage_reports_injected_corruption() {
         let db = new_fjall_storage(&path).unwrap();
         let mut tx = db.write_tx().unwrap();
         for i in 0..50i64 {
-            let k = encode_tuple_key(7, &[DataValue::Num(Num::Int(i))]);
+            let k =
+                [DataValue::Num(Num::int(i))].encode_as_key(RelationId::new(7).expect("below cap"));
             tx.put(&k, b"").unwrap();
         }
         tx.commit().unwrap();
@@ -1968,7 +1980,7 @@ fn sim_time_travel_matches_naive_oracle() {
         ("e", 3, true),
         ("e", 4, false),
     ];
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let db = SimStorage::new(2);
     let mut tx = db.write_tx().unwrap();
     for (name, ts, assert) in history {
@@ -1977,7 +1989,7 @@ fn sim_time_travel_matches_naive_oracle() {
     }
     // Own writes are visible to the write transaction's as-of scan.
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     assert!(
         tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(1)))
             .next()
@@ -2437,7 +2449,7 @@ fn sim_campaign_durability_tiers_are_distinct() {
 /// oracle at every timestamp.
 #[test]
 fn sim_campaign_time_travel_under_interleaved_history_writes() {
-    let rel = RelationId::new(9);
+    let rel = RelationId::new(9).expect("below cap");
     for_each_seed(0..200, |seed| {
         let db = SimStorage::with_faults(
             seed,
@@ -2486,7 +2498,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
             .map(|(n, t, a)| (n.as_str(), *t, *a))
             .collect();
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().raw_encode().to_vec();
+        let upper = rel.next().expect("below cap").raw_encode().to_vec();
         let tx = db.read_tx().unwrap();
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
@@ -2899,7 +2911,7 @@ fn sim_retry_liveness_escapes_injected_faults() {
 fn bitemporal_fact_race_aborts_second_committer() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     // seed
     let mut tx = db.write_tx().unwrap();
     let (k, v) = vld_row(rel, "ctr", 0, true);
@@ -2907,7 +2919,7 @@ fn bitemporal_fact_race_aborts_second_committer() {
     tx.commit().unwrap();
 
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     let mut a = db.write_tx().unwrap();
     let mut b = db.write_tx().unwrap();
     // both read the fact range (the current-state probe)
@@ -3010,15 +3022,15 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
 
     let dir = tempfile::tempdir().unwrap();
     let db = std::sync::Arc::new(new_fjall_storage(dir.path()).unwrap());
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
 
     // Assert value with a one-column msgpack payload: the counter.
     let val_of = |v: i64| -> Vec<u8> {
         let mut out = rel.raw_encode().to_vec();
         out.push(crate::data::bitemporal::ClaimPolarity::Assert.encode());
-        crate::data::fact_payload::encode_fact_payload(&[DataValue::from(v)], &mut out).unwrap();
+        crate::data::value::append_canonical(&mut out, &DataValue::from(v));
         out
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).
@@ -3115,7 +3127,7 @@ fn restore_raises_clock_floor_past_imported_stamps() {
         let mut tx = src.write_tx().unwrap();
         let stamp = tx.system_stamp();
         assert!(stamp.raw() > far_future, "source mints above its floor");
-        let (k, v) = vld_row(RelationId::new(3), "fact", 1, true);
+        let (k, v) = vld_row(RelationId::new(3).expect("below cap"), "fact", 1, true);
         tx.put(&k, &v).unwrap();
         tx.commit().unwrap();
     }
