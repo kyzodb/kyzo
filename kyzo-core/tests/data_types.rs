@@ -140,3 +140,39 @@ fn vector_round_trips_through_a_stored_relation() {
         "a different vector must not compare equal"
     );
 }
+
+/// Coercion-class regression guard (#119): an INTEGRAL float coerces into an
+/// `Int` column, matching the pre-value-plane behavior. The rewrite had
+/// dropped this (get_int became a pure representation read), silently
+/// breaking `:create ... n: Int` fed a `3.0` literal — invisible to the old
+/// corpus, which only inserted 3.5 into Float and 42 into Int.
+#[test]
+fn integral_float_coerces_into_an_int_column() {
+    let db = fresh_db();
+    db.run_script(
+        "?[id, n] <- [[1, 3.0], [2, -7.0], [3, 42]] :create ic {id => n: Int}",
+        no_params(),
+    )
+    .expect("integral floats coerce into an Int column");
+    let out = db
+        .run_script("?[id, n] := *ic{id, n} :order id", no_params())
+        .expect("scan");
+    let got: Vec<(i64, i64)> = out
+        .rows
+        .iter()
+        .map(|r| (r[0].get_int().unwrap(), r[1].get_int().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![(1, 3), (2, -7), (3, 42)],
+        "integral floats stored as ints"
+    );
+    // A NON-integral float into an Int column is still refused.
+    let err = db
+        .run_script("?[id, n] <- [[9, 3.5]] :put ic {id => n: Int}", no_params())
+        .expect_err("a non-integral float must not silently truncate into an Int column");
+    assert!(
+        format!("{err:?}").contains("coercion"),
+        "non-integral float must be refused"
+    );
+}

@@ -180,7 +180,10 @@ impl DataValue {
     /// The integer, for `Num` values holding the int representation.
     pub fn get_int(&self) -> Option<i64> {
         match self {
-            DataValue::Num(n) => n.as_int(),
+            // Coercing numeric read: an integral in-range float yields its
+            // int value (a `3.0` written into an `Int` column is `3`). Use
+            // `Num::as_int` for the pure "is an Int representation" test.
+            DataValue::Num(n) => n.to_int_coerced(),
             _ => None,
         }
     }

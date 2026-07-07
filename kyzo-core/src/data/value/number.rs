@@ -189,6 +189,30 @@ impl Num {
         }
     }
 
+    /// The integer VALUE via numeric coercion: an int, or an integral float
+    /// inside i64's exact range. This is DISTINCT from [`Num::as_int`],
+    /// which reads only the `Int` representation — coercion (e.g. a `3.0`
+    /// literal written into an `Int` column) goes through here.
+    ///
+    /// The bound is the exact power of two, not `i64::MAX as f64`: the true
+    /// max (2^63 - 1) is not exactly representable in f64, so `i64::MAX as
+    /// f64` rounds UP to 2^63 and would admit 2^63 itself — one past the
+    /// boundary, which then saturates to `i64::MAX` on cast, silently
+    /// fabricating a different index key.
+    pub fn to_int_coerced(self) -> Option<i64> {
+        match self.0 {
+            Repr::Int(v) => Some(v),
+            Repr::Float(f) => {
+                const I64_MAX_BOUND_EXCLUSIVE: f64 = 9223372036854775808.0; // 2^63
+                if f.round() == f && f >= i64::MIN as f64 && f < I64_MAX_BOUND_EXCLUSIVE {
+                    Some(f as i64)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     pub fn as_float(self) -> Option<f64> {
         match self.0 {
             Repr::Float(v) => Some(v),
