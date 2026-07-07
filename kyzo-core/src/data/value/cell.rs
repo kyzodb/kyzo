@@ -204,6 +204,21 @@ impl Value {
         if pa != pb { Some(pa.cmp(&pb)) } else { None }
     }
 
+    /// Plane-internal: the gather door's per-word step — rewrite an
+    /// out-of-line word's code through the epoch remap (the value, its
+    /// tag, and its prefix are unchanged; only the handle moves). Inline
+    /// words pass through untouched.
+    pub(super) fn gathered(self, remap: &super::arena::EpochRemap) -> Value {
+        match self.code() {
+            None => self,
+            Some(code) => {
+                let mut bytes = self.bytes;
+                bytes[6..10].copy_from_slice(&remap.apply_raw(code).raw().to_be_bytes());
+                Value { bytes }
+            }
+        }
+    }
+
     /// Physical 16-byte identity: value identity ONLY within one stamped
     /// context (one arena, one epoch) — the container's law, not the
     /// word's.

@@ -368,6 +368,12 @@ pub fn decode(bytes: &[u8]) -> Result<OwnedDatum, DecodeError> {
     Ok(value)
 }
 
+/// Decode ONE canonical value from the front of `bytes`, returning it
+/// and the bytes consumed (plane-internal: `EncodedKey` splitting).
+pub(super) fn decode_one(bytes: &[u8]) -> Result<(OwnedDatum, usize), DecodeError> {
+    decode_at(bytes, 0)
+}
+
 fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeError> {
     if depth > MAX_DEPTH {
         return Err(DecodeError::TooDeep);

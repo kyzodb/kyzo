@@ -530,6 +530,12 @@ pub struct EpochRemap {
 }
 
 impl EpochRemap {
+    /// The arena this remap belongs to (plane-internal: container gather
+    /// doors verify it).
+    pub(super) fn arena_id(&self) -> ArenaId {
+        self.arena
+    }
+
     /// The epoch this remap reads codes from.
     pub fn from_epoch(&self) -> Epoch {
         self.from
@@ -1057,6 +1063,88 @@ impl Snapshot {
     /// Panics if `k >= len()`.
     pub fn select(&self, k: usize) -> &[u8] {
         self.view().select(k)
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Frame<'_> {}
+    impl Sealed for super::Snapshot {}
+}
+
+/// The bulk-spend observer capability for stamped containers — the facts
+/// a container-domain admission verifies (arena identity, epoch,
+/// visibility extent) and the raw spends that are lawful ONLY under such
+/// an admission. Sealed: exactly [`Frame`] and [`Snapshot`] observe;
+/// nothing else can implement this and forge an observer.
+///
+/// The raw spend methods take bare indices with no stamp: their safety
+/// precondition is precisely a container admission whose domain extent is
+/// within `bulk_len()`. Calling them outside that proof is the smuggle
+/// this plane exists to prevent — every public path to them goes through
+/// an admitted container.
+pub trait BulkObserver: sealed::Sealed {
+    fn bulk_arena(&self) -> ArenaId;
+    fn bulk_epoch(&self) -> Epoch;
+    /// Total visible codes (for a snapshot this includes its cut).
+    fn bulk_len(&self) -> usize;
+    /// Sealed prefix bound (codes below it compare numerically).
+    fn bulk_sealed_len(&self) -> usize;
+    #[doc(hidden)]
+    fn resolve_raw(&self, c: usize) -> &[u8];
+    #[doc(hidden)]
+    fn cmp_raw(&self, a: usize, b: usize) -> Ordering;
+}
+
+impl BulkObserver for Frame<'_> {
+    fn bulk_arena(&self) -> ArenaId {
+        self.arena
+    }
+
+    fn bulk_epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    fn bulk_len(&self) -> usize {
+        self.len()
+    }
+
+    fn bulk_sealed_len(&self) -> usize {
+        self.sealed_len
+    }
+
+    fn resolve_raw(&self, c: usize) -> &[u8] {
+        self.view().resolve(c)
+    }
+
+    fn cmp_raw(&self, a: usize, b: usize) -> Ordering {
+        self.view().cmp(a, b)
+    }
+}
+
+impl BulkObserver for Snapshot {
+    fn bulk_arena(&self) -> ArenaId {
+        self.arena
+    }
+
+    fn bulk_epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    fn bulk_len(&self) -> usize {
+        self.len()
+    }
+
+    fn bulk_sealed_len(&self) -> usize {
+        self.sealed_len
+    }
+
+    fn resolve_raw(&self, c: usize) -> &[u8] {
+        self.view().resolve(c)
+    }
+
+    fn cmp_raw(&self, a: usize, b: usize) -> Ordering {
+        self.view().cmp(a, b)
     }
 }
 
