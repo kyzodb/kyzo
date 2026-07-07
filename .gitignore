@@ -1,1 +1,4 @@
 /target
+
+# ephemeral per-story gate report (produced by the stop-gate workflow, not committed)
+.claude/current-gate-report.md

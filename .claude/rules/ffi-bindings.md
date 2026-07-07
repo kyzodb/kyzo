@@ -7,24 +7,15 @@ paths:
   - "kyzo-lib-swift/**"
   - "kyzo-lib-wasm/**"
 ---
-# Rule: FFI / unsafe boundary (the language bindings)
 
-The FFI and `unsafe` surface is the six language bindings, each with `unsafe` code and a foreign
-toolchain:
+# FFI Boundary (the language bindings)
 
-- `kyzo-lib-c` — C ABI (`extern "C"` + `cbindgen`)
-- `kyzo-lib-python` — `pyo3` (CPython)
-- `kyzo-lib-java` — `jni` (JVM)
-- `kyzo-lib-nodejs` — `neon` / napi (Node)
-- `kyzo-lib-swift` — `swift-bridge`
-- `kyzo-lib-wasm` — `wasm-bindgen`
+The bindings (C ABI, pyo3, jni, neon, swift-bridge, wasm-bindgen) are the ONE `unsafe`/FFI zone —
+separate from `#![forbid(unsafe_code)]` first-party code. A green core build says nothing about them.
 
-- None of these are covered by the core CI. A green core build says nothing about them.
-- The boundary is typed on both sides: kernel/engine errors are typed values (retryable conflict,
-  fatal corruption, resource limits) and each binding maps them to the host language's native error
-  types — never to strings a caller must parse.
-- Unsafe/FFI changes need an explicit invariant review: ownership and lifetimes across the boundary,
-  null / UB, and foreign-error-to-`Result` translation.
-
-**A change here requires:** building the affected binding with its own toolchain, plus an
-unsafe-invariants review (see the unsafe-ffi reviewer agent).
+- The boundary is typed on BOTH sides: engine errors are typed values (retryable conflict, fatal
+  corruption, resource limits), and each binding maps them to the host language's native error types
+  — never to strings a caller must parse.
+- An unsafe/FFI change needs an explicit invariant review: ownership and lifetimes across the
+  boundary, null / UB, foreign-error-to-`Result` translation (the unsafe-ffi reviewer agent).
+- A change here requires building the affected binding with its own toolchain plus that review.

@@ -5,8 +5,7 @@ tools: Read, Grep, Glob, Bash
 model: inherit
 ---
 
-You review KyzoDB storage and key-encoding changes. Read `.claude/rules/storage.md` and
-`.claude/rules/memcmp.md` first. For the given diff, verify:
+You review KyzoDB storage and key-encoding changes. Read `.claude/rules/storage-serialization.md` and `.claude/rules/value-plane.md` first. For the given diff, verify:
 
 - The Storage/ReadTx/WriteTx contract holds: memcmp-ordered range scans, SSI commit failing with the
   typed retryable ConflictError, and validity-in-key as-of (time-travel) reads with guaranteed
