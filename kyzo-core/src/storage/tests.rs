@@ -1654,10 +1654,10 @@ fn retry_on_conflict_reaches_completion_under_contention() {
 #[test]
 fn format_version_rejects_noncanonical_stamps() {
     use crate::storage::FormatVersion;
-    assert_eq!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);
+    assert_eq!(FormatVersion::parse(b"5").unwrap(), FormatVersion::CURRENT);
     // An older stamp still parses (so the mismatch refusal can NAME it) —
     // it is simply not CURRENT.
-    assert_ne!(FormatVersion::parse(b"3").unwrap(), FormatVersion::CURRENT);
+    assert_ne!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);
     for bad in [&b"01"[..], b"+1", b" 1", b"1 ", b""] {
         assert!(
             FormatVersion::parse(bad).is_err(),

@@ -254,7 +254,13 @@ impl FormatVersion {
     /// deployed stores" (there are none yet) makes the bump free, not
     /// optional: the decodable tag space is part of the format's identity
     /// same as the tags already in it.
-    pub const CURRENT: FormatVersion = FormatVersion(4);
+    /// v5: the value plane. Row VALUES are canonical `DataValue`
+    /// encodings with no relation-id header (v4 carried an 8-byte prefix
+    /// and msgpack payloads); catalog metadata is msgpack through the
+    /// sealed catalog door only. A v4 store's values are unreadable under
+    /// v5's decoder, so the stamp turns any pre-existing store into a
+    /// refuse-to-open rather than a silent misread.
+    pub const CURRENT: FormatVersion = FormatVersion(5);
 
     /// The stored representation: ASCII decimal.
     pub fn as_bytes(self) -> Vec<u8> {

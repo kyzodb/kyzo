@@ -459,6 +459,66 @@ struct StoredRelArityMismatch {
     span: SourceSpan,
 }
 
+/// # The catalog serialization boundary (RULED, not incidental)
+///
+/// Row VALUES are the value plane's job: canonical `DataValue` encodings
+/// (`data::value::canonical`), byte-order == value-order, no serde. Catalog
+/// METADATA — a relation's schema, access level, index manifests, triggers
+/// — is structured configuration, NOT a tuple of values: it is nested
+/// enums/options/maps that need self-describing struct serialization and
+/// never a memcmp value order (catalog rows are looked up by name, never
+/// range-scanned by value order). msgpack (serde struct maps) is the right
+/// tool for that, and this module is its ONE door.
+///
+/// The boundary is SEALED so it can never become a second value authority:
+/// [`CatalogRecord`] has a private supertrait, so only types declared in
+/// this module can be serialized through it. `DataValue`, `Tuple`, and any
+/// row value CANNOT implement `CatalogRecord`, so no row value can ever be
+/// routed through msgpack. (A compile-fail proof asserts this.)
+///
+/// Corruption is typed ([`RelationDeserError`]); the whole store is stamped
+/// with [`FormatVersion`](crate::FormatVersion), which a mismatched decoder
+/// refuses at the door.
+mod catalog {
+    use super::{RelationDeserError, RelationHandle};
+    use miette::{Result, miette};
+    use rmp_serde::Serializer;
+    use serde::Serialize;
+
+    mod seal {
+        pub trait Sealed {}
+    }
+
+    /// The CLOSED set of types stored as catalog metadata. Sealed: no type
+    /// outside this module can implement it, so a row value can never be
+    /// serialized through the catalog door.
+    pub(super) trait CatalogRecord:
+        Serialize + serde::de::DeserializeOwned + seal::Sealed
+    {
+    }
+
+    impl seal::Sealed for RelationHandle {}
+    impl CatalogRecord for RelationHandle {}
+
+    /// Serialize a catalog record: msgpack with struct maps. Infallible in
+    /// practice for these field types, but a failure is a typed error, never
+    /// an unwrap.
+    pub(super) fn encode_catalog_record(rec: &impl CatalogRecord) -> Result<Vec<u8>> {
+        let mut ret = vec![];
+        rec.serialize(&mut Serializer::new(&mut ret).with_struct_map())
+            .map_err(|e| miette!("cannot serialize catalog record: {e}"))?;
+        Ok(ret)
+    }
+
+    /// Parse a claimed catalog record; corrupt bytes are the typed
+    /// [`RelationDeserError`].
+    pub(super) fn decode_catalog_record<T: CatalogRecord>(
+        bytes: &[u8],
+    ) -> std::result::Result<T, RelationDeserError> {
+        rmp_serde::from_slice(bytes).map_err(|_| RelationDeserError)
+    }
+}
+
 impl RelationHandle {
     /// The pure half of relation creation: shape a handle from the parsed
     /// input declaration and an allocated id. Storage writes happen in
@@ -526,15 +586,12 @@ impl RelationHandle {
     /// these field types in practice, but per law 5 a failure is an error,
     /// never an unwrap (the original unwrapped at every serialize site).
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut ret = vec![];
-        self.serialize(&mut Serializer::new(&mut ret).with_struct_map())
-            .map_err(|e| miette!("cannot serialize relation handle for {}: {e}", self.name))?;
-        Ok(ret)
+        catalog::encode_catalog_record(self)
     }
 
     /// Parse a claimed catalog row. Fallible: the bytes may be corrupt.
     pub(crate) fn decode(data: &[u8]) -> Result<Self> {
-        Ok(rmp_serde::from_slice(data).map_err(|_| RelationDeserError)?)
+        Ok(catalog::decode_catalog_record(data)?)
     }
 
     // -- key/value encoding for this relation's keyspace ------------------
