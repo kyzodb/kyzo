@@ -334,7 +334,7 @@ fn gen_edges(shape: Graph, n: usize, seed: u64) -> Vec<Tuple> {
     match shape {
         Graph::Chain => {
             for i in 0..n.saturating_sub(1) {
-                edges.push(vec![v(i as i64), v((i + 1) as i64)].into());
+                edges.push(vec![v(i as i64), v((i + 1) as i64)]);
             }
         }
         Graph::Dense => {
@@ -346,7 +346,7 @@ fn gen_edges(shape: Graph, n: usize, seed: u64) -> Vec<Tuple> {
                 for a in base..end {
                     for b in base..end {
                         if a != b {
-                            edges.push(vec![v(a as i64), v(b as i64)].into());
+                            edges.push(vec![v(a as i64), v(b as i64)]);
                         }
                     }
                 }
@@ -360,7 +360,7 @@ fn gen_edges(shape: Graph, n: usize, seed: u64) -> Vec<Tuple> {
                 for _ in 0..out_degree {
                     let b = rng.random_range(0..n);
                     if a != b {
-                        edges.push(vec![v(a as i64), v(b as i64)].into());
+                        edges.push(vec![v(a as i64), v(b as i64)]);
                     }
                 }
             }
@@ -467,9 +467,7 @@ pub fn points_to(
                 rows.insert((y, x));
             }
         }
-        rows.into_iter()
-            .map(|(y, x)| vec![v(y), v(x)].into())
-            .collect()
+        rows.into_iter().map(|(y, x)| vec![v(y), v(x)]).collect()
     };
     let addr_of = gen_rel(1, addrs);
     let assign = gen_rel(2, assigns);
@@ -560,7 +558,6 @@ pub fn three_way_join(backend: Backend, n: usize, fan: usize, seed: u64, tmp: &P
                     v(rng.random_range(0..domain)),
                     v(rng.random_range(0..domain)),
                 ]
-                .into()
             })
             .collect();
         rows.sort();
@@ -627,7 +624,6 @@ pub fn scan_filter(
                 v(rng.random_range(0..1_000)),
                 v(rng.random_range(0..1_000)),
             ]
-            .into()
         })
         .collect();
     // Threshold on c1 (uniform in [0,100)): keep c1 > (100 - select_frac).
@@ -680,7 +676,7 @@ pub fn scan_filter(
 pub fn aggregation(backend: Backend, n: usize, groups: usize, seed: u64, tmp: &Path) -> Workload {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut rows: Vec<Tuple> = (0..n)
-        .map(|i| vec![v(rng.random_range(0..groups as i64)), v(i as i64)].into())
+        .map(|i| vec![v(rng.random_range(0..groups as i64)), v(i as i64)])
         .collect();
     rows.sort();
     rows.dedup();

@@ -2730,10 +2730,10 @@ mod tests {
                     ),
                 ],
                 facts: [
-                    ("seedp", [vec![v(1), v(2)].into()].into_iter().collect()),
-                    ("linkp", [vec![v(2), v(3)].into()].into_iter().collect()),
-                    ("seedr", [vec![v(3), v(4)].into()].into_iter().collect()),
-                    ("linkr", [vec![v(4), v(1)].into()].into_iter().collect()),
+                    ("seedp", [vec![v(1), v(2)]].into_iter().collect()),
+                    ("linkp", [vec![v(2), v(3)]].into_iter().collect()),
+                    ("seedr", [vec![v(3), v(4)]].into_iter().collect()),
+                    ("linkr", [vec![v(4), v(1)]].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -2825,17 +2825,13 @@ mod tests {
                 facts: [
                     (
                         "addr_of",
-                        [vec![v(1), v(2)].into(), vec![v(2), v(3)].into()]
-                            .into_iter()
-                            .collect(),
+                        [vec![v(1), v(2)], vec![v(2), v(3)]].into_iter().collect(),
                     ),
                     (
                         "assign",
-                        [vec![v(2), v(3)].into(), vec![v(3), v(4)].into()]
-                            .into_iter()
-                            .collect(),
+                        [vec![v(2), v(3)], vec![v(3), v(4)]].into_iter().collect(),
                     ),
-                    ("blocked", [vec![v(1), v(2)].into()].into_iter().collect()),
+                    ("blocked", [vec![v(1), v(2)]].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -2911,11 +2907,11 @@ mod tests {
                 facts: [
                     (
                         "baseq",
-                        [vec![v(1), v(2), v(2)].into(), vec![v(1), v(3), v(4)].into()]
+                        [vec![v(1), v(2), v(2)], vec![v(1), v(3), v(4)]]
                             .into_iter()
                             .collect(),
                     ),
-                    ("seedv", [vec![v(1)].into()].into_iter().collect()),
+                    ("seedv", [vec![v(1)]].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -3018,12 +3014,12 @@ mod tests {
                     ),
                 ],
                 facts: [
-                    ("addr_of", [vec![v(1), v(2)].into()].into_iter().collect()),
-                    ("assign", [vec![v(2), v(3)].into()].into_iter().collect()),
-                    ("load", [vec![v(3), v(4)].into()].into_iter().collect()),
-                    ("store", [vec![v(4), v(1)].into()].into_iter().collect()),
-                    ("baseh", [vec![v(4), v(5)].into()].into_iter().collect()),
-                    ("linkh", [vec![v(5), v(6)].into()].into_iter().collect()),
+                    ("addr_of", [vec![v(1), v(2)]].into_iter().collect()),
+                    ("assign", [vec![v(2), v(3)]].into_iter().collect()),
+                    ("load", [vec![v(3), v(4)]].into_iter().collect()),
+                    ("store", [vec![v(4), v(1)]].into_iter().collect()),
+                    ("baseh", [vec![v(4), v(5)]].into_iter().collect()),
+                    ("linkh", [vec![v(5), v(6)]].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
