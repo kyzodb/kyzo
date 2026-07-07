@@ -20,9 +20,15 @@ use std::cmp::Reverse;
 
 use miette::{Result, bail};
 
-use crate::data::memcmp::MemCmpEncoder;
-use crate::data::tuple::{EncodedKey, Tuple, VALUE_HEADER_LEN, decode_tuple_from_key};
-use crate::data::value::{AsOf, DataValue, TERMINAL_VALIDITY, Validity, ValidityTs};
+use crate::data::value::{
+    AsOf, DataValue, EncodedKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
+    decode_tuple_from_key, decode_values_all,
+};
+
+/// Fact-payload format v1: a stored row VALUE opens directly with its
+/// polarity byte (no header precedes it); the non-key columns' canonical
+/// encodings follow.
+const VALUE_HEADER_LEN: usize = 0;
 
 const DEFAULT_SIZE_HINT: usize = 16;
 
@@ -114,14 +120,14 @@ pub fn check_key_for_bitemporal(
     let splice_both = |v: Validity, s: Validity| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..valid_off]);
-        nxt.encode_datavalue(&DataValue::Validity(v));
-        nxt.encode_datavalue(&DataValue::Validity(s));
+        append_canonical(&mut nxt, &DataValue::Validity(v));
+        append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
     let splice_sys = |s: Validity| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..sys_off]);
-        nxt.encode_datavalue(&DataValue::Validity(s));
+        append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
 
@@ -222,7 +228,8 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
     if payload.is_empty() {
         return Ok(());
     }
-    crate::data::fact_payload::decode_fact_payload(payload, key)
+    key.extend(decode_values_all(payload)?);
+    Ok(())
 }
 
 #[cfg(test)]

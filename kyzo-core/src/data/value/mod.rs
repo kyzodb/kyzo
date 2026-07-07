@@ -50,7 +50,9 @@ pub mod tag;
 pub mod wide;
 
 pub use arena::{Arena, BulkObserver, Epoch, EpochRemap, Frame, Snapshot};
-pub use canonical::{CanonicalBytes, Datum, DecodeError, decode, encode, encode_owned};
+pub use canonical::{
+    CanonicalBytes, Datum, DecodeError, append_canonical, decode, encode, encode_owned,
+};
 pub use cell::{Minted, Value};
 pub use code::{Code, StampedCode};
 pub use column::{AdmittedCodes, AdmittedWords, CodeColumn, Column, Domain, WordColumn};
@@ -61,7 +63,9 @@ pub use tag::Tag;
 pub use wide::interval::{Bound, Interval};
 pub use wide::json::{Json, JsonNum, JsonObj};
 pub use wide::regex::{CompiledRegexV1, RegexFlags, RegexSource};
-pub use wide::validity::Validity;
+pub use wide::validity::{
+    AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValidityTs,
+};
 
 /// A vector value: f64 components held in canonical identity form
 /// (constructed through [`Vector::new`], which applies Num's float law to
@@ -314,7 +318,7 @@ impl Ord for DataValue {
                 }
                 a.len().cmp(&b.len())
             }
-            (DataValue::Validity(a), DataValue::Validity(b)) => a.cmp_as_of_order(*b),
+            (DataValue::Validity(a), DataValue::Validity(b)) => a.cmp(b),
             (DataValue::Interval(a), DataValue::Interval(b)) => interval_storage_cmp(a, b),
             _ => unreachable!("tags equal"),
         }
@@ -459,6 +463,50 @@ impl std::fmt::Display for DataValue {
             DataValue::Interval(_) => write!(f, "interval(…)"),
         }
     }
+}
+
+/// The execution tuple in owned form: the engine's row currency at the
+/// logical level (the packed-code form is [`Rows`]; the written form is
+/// [`EncodedKey`]).
+pub type Tuple = Vec<DataValue>;
+
+impl DataValue {
+    /// Decode one canonical value from the front of a stored key,
+    /// returning the remainder. Total: typed refusal, never trust.
+    pub fn decode_from_key(bytes: &[u8]) -> Result<(DataValue, &[u8]), DecodeError> {
+        let (v, used) = canonical::decode_one(bytes)?;
+        Ok((v, &bytes[used..]))
+    }
+}
+
+/// Decode every canonical value in `bytes` until exhaustion (stored keys
+/// whose arity the caller does not know). Total.
+pub fn decode_values_all(bytes: &[u8]) -> Result<Vec<DataValue>, DecodeError> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        let (v, used) = canonical::decode_one(&bytes[at..])?;
+        out.push(v);
+        at += used;
+    }
+    Ok(out)
+}
+
+/// Decode every value of a stored relation key (skipping the relation-id
+/// prefix): key columns plus, for bitemporal keys, the two validity
+/// slots. Total.
+pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, DecodeError> {
+    if key.len() < EncodedKey::RELATION_PREFIX_LEN {
+        return Err(DecodeError::Truncated);
+    }
+    let mut out = Vec::with_capacity(size_hint);
+    let mut at = EncodedKey::RELATION_PREFIX_LEN;
+    while at < key.len() {
+        let (v, used) = canonical::decode_one(&key[at..])?;
+        out.push(v);
+        at += used;
+    }
+    Ok(out)
 }
 
 /// Decode a stored tuple: exactly `arity` canonical encodings, nothing

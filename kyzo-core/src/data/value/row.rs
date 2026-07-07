@@ -247,6 +247,16 @@ fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeEr
 pub struct EncodedKey(Vec<u8>);
 
 impl EncodedKey {
+    /// Storage key layout v1: keys open with the relation id as 8
+    /// big-endian bytes (the keyspace prefix), then the key columns'
+    /// canonical encodings, then — for bitemporal relations — the two
+    /// fixed-width validity slots.
+    pub const RELATION_PREFIX_LEN: usize = 8;
+    /// One canonical validity slot: tag byte + 9-byte payload.
+    pub const VALIDITY_TAIL_LEN: usize = 10;
+    /// Both time slots of a bitemporal key.
+    pub const BITEMPORAL_TAIL_LEN: usize = 2 * Self::VALIDITY_TAIL_LEN;
+
     /// The lawful multi-value mint: encode each value through the codec
     /// authority and concatenate — the execution-free path from logical
     /// values to their written form.
@@ -517,6 +527,21 @@ mod tests {
             Err(PushError::ForeignArena)
         ));
         let _ = other.epoch();
+    }
+
+    /// The fixed slot widths the storage layout constants promise are
+    /// exactly what the codec produces.
+    #[test]
+    fn validity_slot_width_is_pinned() {
+        use super::super::wide::validity::Validity;
+        let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
+            Validity::new(123, true),
+        ));
+        assert_eq!(enc.len(), EncodedKey::VALIDITY_TAIL_LEN);
+        let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
+            Validity::new(i64::MIN, false),
+        ));
+        assert_eq!(enc2.len(), EncodedKey::VALIDITY_TAIL_LEN);
     }
 
     #[test]

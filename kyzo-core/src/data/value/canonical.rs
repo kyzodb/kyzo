@@ -143,6 +143,14 @@ pub fn encode_owned(v: &DataValue) -> CanonicalBytes {
     CanonicalBytes(out)
 }
 
+/// Append a value's canonical encoding to a raw byte buffer: the key
+/// assembler's zero-claim door (the output is deliberately NOT a
+/// `CanonicalBytes` witness — key splicing works in the claimed-bytes
+/// domain of the storage tier).
+pub fn append_canonical(out: &mut Vec<u8>, v: &DataValue) {
+    encode_owned_into(out, v);
+}
+
 fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
     match v {
         DataValue::Null => out.push(Tag::Null.byte()),
@@ -433,6 +441,14 @@ pub enum DecodeError {
     /// An interval form that the closed-normal-form law forbids.
     IntervalNotCanonical,
 }
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "canonical decode refused: {self:?}")
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// Nesting bound: decode of hostile input must refuse, not blow the
 /// stack.
