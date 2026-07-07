@@ -1629,7 +1629,10 @@ fn verify_storage_reports_injected_corruption() {
             report.is_clean(),
             "a real, healthy store must verify clean (catalog + bitemporal rows): {report:?}"
         );
-        assert!(report.checked >= 5, "the five data rows are walked: {report:?}");
+        assert!(
+            report.checked >= 5,
+            "the five data rows are walked: {report:?}"
+        );
         clean_checked = report.checked;
     }
     // Inject garbage below the kernel: a raw fjall write of a key whose column
@@ -1709,7 +1712,11 @@ fn verify_storage_catches_a_corrupt_value() {
         !report.is_clean(),
         "a corrupt VALUE (with a still-decodable key) must be caught: {report:?}"
     );
-    assert_eq!(report.corrupt.len(), 1, "exactly the one wounded row: {report:?}");
+    assert_eq!(
+        report.corrupt.len(),
+        1,
+        "exactly the one wounded row: {report:?}"
+    );
     assert!(
         report.corrupt[0].error.contains("polarity"),
         "the reason names the VALUE failure, not the key: {}",

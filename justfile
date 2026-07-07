@@ -50,14 +50,18 @@ test:
 test-features:
     cargo test -p kyzo --release --features bench-internals,fuzz-internals --lib
 
+# fmt across all first-party kyzo-* crates (a core-only check let a kyzo-bin
+# formatting drift through).
 fmt:
-    cargo fmt --check -p kyzo
+    cargo fmt --check -p kyzo -p kyzo-bin -p kyzo-crashfs -p kyzo-lsp -p kyzo-arrow-interop
 
-# Own-code -D warnings, both feature configs. `--no-deps` excludes the vendored
-# lsm-tree/fjall path deps (their clippy state is #118's, not a story gate).
+# Own-code -D warnings. `--no-deps` excludes the vendored lsm-tree/fjall path
+# deps (their clippy state is #118's, not a story gate). kyzo-core runs both
+# feature configs; the other kyzo-* crates run their default config.
 clippy:
     cargo clippy -p kyzo --release --all-targets --no-deps -- -D warnings
     cargo clippy -p kyzo --release --all-targets --no-deps --features bench-internals,fuzz-internals -- -D warnings
+    cargo clippy -p kyzo-bin -p kyzo-crashfs -p kyzo-lsp -p kyzo-arrow-interop --release --all-targets --no-deps -- -D warnings
 
 unsafe:
     bash scripts/check-unsafe.sh

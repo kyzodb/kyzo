@@ -200,9 +200,9 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
                             .and_then(|_| extend_tuple_from_bitemporal_v(&mut tup, &v))
                             .err()
                             .map(|e| e.to_string()),
-                        Some(RelKind::IndexInternal) => {
-                            extend_tuple_from_v(&mut tup, &v).err().map(|e| e.to_string())
-                        }
+                        Some(RelKind::IndexInternal) => extend_tuple_from_v(&mut tup, &v)
+                            .err()
+                            .map(|e| e.to_string()),
                     }
                 }
             },
