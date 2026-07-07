@@ -52,3 +52,20 @@ TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=434.9 query_ms=
 # correctness-critical, oracle-guarded loop. The regression is a recorded
 # finding whose cause is the wrong FORM in the hot path -- not the value plane's
 # format, which is used correctly at the boundaries.
+
+# MEASURED (arena::tests::bench_code_dedup_vs_byte_dedup, TC recurrence
+# pattern: 8M tuple ops, 7000 distinct ids):
+#     encode + BTreeMap<bytes> dedup (current) : 980 ms
+#     intern-per-op + BTreeMap<(u32,u32)>      : 3352 ms  (3.4x SLOWER)
+# A naive code-backed temp store is CATASTROPHICALLY worse: re-interning
+# each cell on every operation (16M interns) costs far more than
+# encode+btree, because arena intern maintains sorted/delta structure, not a
+# bare hash. So the fix is NOT "key the temp store by codes" -- that
+# backfires. The code identity only pays when a value is interned ONCE (at
+# ingestion) and its code FLOWS through the whole pipeline (join,
+# projection, dedup, iteration) without ever being re-derived from a
+# DataValue. That is the code-based eval pipeline end to end -- #120's core
+# -- and this measurement is the design constraint it must honor:
+# intern-once, never per-operation. Attempting the naive shortcut here
+# (measured) would have regressed the loop 3.4x; the real fix is the whole
+# pipeline, not a temp-store patch.

@@ -1990,6 +1990,56 @@ mod tests {
     /// Distinct prefixes decide with ZERO payload derefs; a shared-prefix
     /// pair derefs to break the tie; nothing derefs speculatively.
     #[test]
+    #[ignore = "micro-benchmark; run explicitly with --ignored --nocapture"]
+    fn bench_code_dedup_vs_byte_dedup() {
+        use super::super::{DataValue, Tuple, append_canonical, encode_tuple_bare};
+        use std::collections::BTreeMap;
+        use std::time::Instant;
+        let distinct = 7000i64;
+        let ops = 8_000_000usize;
+        let pairs: Vec<(i64, i64)> = (0..ops)
+            .map(|i| {
+                let a = ((i as i64).wrapping_mul(2654435761)).rem_euclid(distinct);
+                let b = ((i as i64).wrapping_mul(40503) + 7).rem_euclid(distinct);
+                (a, b)
+            })
+            .collect();
+        // (A) current: encode canonical tuple + BTreeMap<bytes>.
+        let t = Instant::now();
+        let mut m: BTreeMap<Box<[u8]>, bool> = BTreeMap::new();
+        for &(a, b) in &pairs {
+            let tup: Tuple = vec![DataValue::from(a), DataValue::from(b)];
+            let key = encode_tuple_bare(&tup).into_boxed_slice();
+            if !m.contains_key(&key) {
+                m.insert(key, false);
+            }
+        }
+        let bytes_ms = t.elapsed().as_secs_f64() * 1000.0;
+        // (B) code-based: intern each cell once, dedup by u32 pair.
+        let t = Instant::now();
+        let mut arena = Arena::new();
+        let mut codes: BTreeMap<(u32, u32), bool> = BTreeMap::new();
+        let enc = |i: i64| {
+            let mut v = Vec::new();
+            append_canonical(&mut v, &DataValue::from(i));
+            v
+        };
+        for &(a, b) in &pairs {
+            let ca = arena.intern(&enc(a)).code().raw();
+            let cb = arena.intern(&enc(b)).code().raw();
+            if !codes.contains_key(&(ca, cb)) {
+                codes.insert((ca, cb), false);
+            }
+        }
+        let code_ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "TC-pattern dedup {ops} ops, {distinct} distinct: BYTES {bytes_ms:.0}ms ({} keys) | CODE {code_ms:.0}ms ({} keys)",
+            m.len(),
+            codes.len()
+        );
+    }
+
+    #[test]
     fn observer_cmp_derefs_only_on_prefix_tie() {
         let mut arena = Arena::new();
         // Delta (unsealed) codes: comparison must go prefix-first.
