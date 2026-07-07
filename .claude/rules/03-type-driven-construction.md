@@ -34,6 +34,24 @@ would have).
 - "the fixture is unrealistic" as an excuse AFTER a verifier correctly rejects a bypassed store —
   fix the fixture to construct through production, don't blame the verifier.
 
+## Classifying a `Map`/`Set`<`String`>
+
+Not auto-forbidden — but a "genuine string identifier" is not a free pass. A string is allowed only
+at a name/config/parse/HTTP/doc-URI boundary, or as a registry key whose VALUE is already typed and
+whose string is not carrying domain semantics by itself. For every hit, ask one level deeper:
+
+1. Is the string only an external name?
+2. Is it immediately resolved to a typed domain value?
+3. Does membership affect verification, dispatch, storage meaning, relation identity, index
+   identity, or authority?
+4. Could this be a newtype instead?
+
+`BTreeMap<String, DataValue>` param pools, fixed-rule name → `dyn FixedRule`, HTTP headers/doc URIs,
+and `parse/` token → typed enum are boundaries — fine. But if membership CONTROLS verification or
+dispatch (Q3 yes), convert it to a typed key/newtype. A build-time cross-reference of
+catalog-decoded names is acceptable ONLY if it is resolved at the boundary into a typed structure and
+never appears at the dispatch site.
+
 ## Corruption / bypass tests (the only place raw storage writes are allowed)
 
 - must be NAMED as a corruption/bypass test;

@@ -60,12 +60,21 @@ case "$file" in
     ;;
 esac
 
-# Type-driven construction smell (content-based, any first-party source): a
-# String/set standing in for a domain type, especially in proof code. A WARN to
-# classify, not a block — some are genuine boundaries.
+# Type-driven construction smell (content-based; 03-type-driven-construction.md).
+# A WARN to classify, not a block — some are genuine boundaries.
+#
+# (a) A stringly domain KIND / format / string dispatch is forbidden OUTSIDE an
+#     explicit decode/name boundary, anywhere in first-party code.
 if printf '%s' "$file" | grep -Eq 'kyzo-[a-z-]+/src/' \
-   && grep -Eq 'BTreeSet<[[:space:]]*String|HashSet<[[:space:]]*String|(kind|format|ty|typ|index_kind|rel_kind|storage_kind)[[:space:]]*:[[:space:]]*(String|&str)' "$abs"; then
-  warn "This file carries a domain classification as a String/set (03-type-driven-construction.md). If it is a dispatch taxonomy, make it a typed enum/newtype and match on it; if it is a genuine boundary (param pool, parse token, build-time cross-reference), keep it but say so. Run scripts/smell-scan.sh to classify the whole class."
+   && grep -Eq '(kind|format|ty|typ|type_name|index_kind|rel_kind|storage_kind|payload_kind)[[:space:]]*:[[:space:]]*(String|&str|Cow<)' "$abs"; then
+  warn "This carries a domain KIND/format as a String (03-type-driven-construction.md). Forbidden outside an explicit decode/name boundary: make it a typed enum/newtype and dispatch by match. If it is a parse token / external name at the boundary, say so."
+# (b) In the sensitive zones (storage, verifier, catalog, relation, index,
+#     value), ANY Map/Set<String> must be CLASSIFIED — it is not auto-forbidden,
+#     but string membership must not silently control storage meaning, relation/
+#     index identity, verification dispatch, or authority.
+elif printf '%s' "$file" | grep -Eq 'kyzo-core/src/(storage|engines|runtime/relation|data/value|query)' \
+   && grep -Eq '(BTreeSet|HashSet|BTreeMap|HashMap)<[[:space:]]*String' "$abs"; then
+  warn "A Map/Set<String> in storage/verifier/catalog/relation/index/value code MUST be classified (03-type-driven-construction.md): does its membership control verification, dispatch, storage meaning, relation/index identity, or authority? If yes, convert to a typed key/newtype. If it is only an external name / build-time catalog-name cross-reference resolved at a boundary, keep it and say so. Run scripts/smell-scan.sh."
 fi
 
 exit 0

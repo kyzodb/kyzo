@@ -103,19 +103,24 @@ enum RelKind {
     IndexInternal,
 }
 
-/// Verify one catalog (`SYSTEM`) entry and fold it into the typed taxonomy.
-/// A relation-handle value (Str-named key) must decode as a `CatalogRecord`;
-/// doing so classifies its relation (a name appearing as some base's
-/// `{base}:{index}` backing is `IndexInternal`, else `BitemporalData`) and
-/// records its index backings. The id-counter (Null-named key) is an internal
-/// scalar, key-verified only. `index_backings` is a build-time cross-reference
-/// (an index backing has no self-describing field — its kind is derived from
-/// the referencing base handle, which always sorts first), NOT the dispatch
-/// taxonomy, which is the typed `taxonomy` map.
+/// Verify one catalog (`SYSTEM`) entry and fold it into the typed taxonomy
+/// (`RelationId` → `RelKind`), which is the ONLY thing the per-row value
+/// dispatch consults. A relation-handle value (Str-named key) must decode as a
+/// `CatalogRecord`; doing so classifies its relation and records its index
+/// backings. The id-counter (Null-named key) is an internal scalar,
+/// key-verified only.
+///
+/// `index_backings` is a string set ONLY because the catalog links a base to
+/// its index by NAME (`{base}:{index}`) — reading that link is a catalog-name
+/// boundary, resolved here ONCE. It never reaches the dispatch site: a base
+/// always sorts before its backing, so by the time a backing handle is
+/// decoded its name is already present, and the classification result is
+/// immediately a typed `RelKind` in `taxonomy`. Verification behaviour is
+/// controlled by that typed map, not by string membership.
 fn verify_catalog_entry(
     key_cols: &[DataValue],
     val: &[u8],
-    taxonomy: &mut BTreeMap<u64, RelKind>,
+    taxonomy: &mut BTreeMap<RelationId, RelKind>,
     index_backings: &mut BTreeSet<String>,
 ) -> Option<String> {
     match key_cols.first() {
@@ -129,7 +134,7 @@ fn verify_catalog_entry(
                 } else {
                     RelKind::BitemporalData
                 };
-                taxonomy.insert(h.id.raw(), kind);
+                taxonomy.insert(h.id, kind);
                 None
             }
             Err(e) => Some(format!("catalog record: {e}")),
@@ -151,10 +156,11 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
 
     // The typed taxonomy, reconstructed from the catalog as the ordered scan
     // crosses `RelationId::SYSTEM` (id 0, which sorts before every data
-    // relation): relation id → its typed `RelKind`. Complete before the first
-    // non-system entry. `index_backings` is the build-time cross-reference the
-    // catalog needs (see `verify_catalog_entry`), not the dispatch taxonomy.
-    let mut taxonomy: BTreeMap<u64, RelKind> = BTreeMap::new();
+    // relation): `RelationId` → its typed `RelKind`. Complete before the first
+    // non-system entry, and the SOLE input to per-row value dispatch.
+    // `index_backings` is the build-time catalog-name cross-reference (see
+    // `verify_catalog_entry`), never consulted at dispatch.
+    let mut taxonomy: BTreeMap<RelationId, RelKind> = BTreeMap::new();
     let mut index_backings: BTreeSet<String> = BTreeSet::new();
 
     for pair in tx.total_scan() {
@@ -180,7 +186,7 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
                     let kind = if rel == RelationId::SYSTEM {
                         Some(RelKind::Catalog)
                     } else {
-                        taxonomy.get(&rel.raw()).copied()
+                        taxonomy.get(&rel).copied()
                     };
                     match kind {
                         None => Some(format!(
