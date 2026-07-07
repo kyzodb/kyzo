@@ -1607,25 +1607,34 @@ fn conflict_is_typed_and_options_and_stats_work() {
 fn verify_storage_reports_injected_corruption() {
     use crate::storage::verify::verify_storage;
 
+    use crate::runtime::db::Db;
+
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
+    let clean_checked;
     {
-        let db = new_fjall_storage(&path).unwrap();
-        let mut tx = db.write_tx().unwrap();
-        for i in 0..50i64 {
-            let k =
-                [DataValue::Num(Num::int(i))].encode_as_key(RelationId::new(7).expect("below cap"));
-            tx.put(&k, b"").unwrap();
-        }
-        tx.commit().unwrap();
-        let report = verify_storage(&db).unwrap();
+        // A REAL, kernel-written store: the catalog-aware verifier needs the
+        // real entry taxonomy (msgpack catalog + bitemporal data rows), so the
+        // fixture is a genuine relation with genuine rows, not raw puts below
+        // the kernel (which would be dangling, cataloged nowhere).
+        let storage = new_fjall_storage(&path).unwrap();
+        let db = Db::new(storage.clone()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 7], [2, 14], [3, 21], [4, 28], [5, 35]] :create rel {k => v}",
+            std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let report = verify_storage(&storage).unwrap();
         assert!(
             report.is_clean(),
-            "healthy store must verify clean: {report:?}"
+            "a real, healthy store must verify clean (catalog + bitemporal rows): {report:?}"
         );
-        assert_eq!(report.checked, 50);
+        assert!(report.checked >= 5, "the five data rows are walked: {report:?}");
+        clean_checked = report.checked;
     }
-    // Inject garbage below the kernel: raw fjall write of an undecodable key.
+    // Inject garbage below the kernel: a raw fjall write of a key whose column
+    // bytes do not decode (0xEE is no valid tag). Verification must surface it
+    // and keep walking, not stop at the first wound.
     {
         let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
         let ks = raw
@@ -1635,17 +1644,75 @@ fn verify_storage_reports_injected_corruption() {
             .unwrap();
         raw.persist(fjall::PersistMode::SyncAll).unwrap();
     }
-    let db = new_fjall_storage(&path).unwrap();
-    let report = verify_storage(&db).unwrap();
+    let storage = new_fjall_storage(&path).unwrap();
+    let report = verify_storage(&storage).unwrap();
     assert!(!report.is_clean());
-    assert_eq!(report.checked, 51, "the walk must continue past corruption");
+    assert_eq!(
+        report.checked,
+        clean_checked + 1,
+        "the walk continues past the wound: {report:?}"
+    );
     assert_eq!(report.corrupt.len(), 1);
-    // The injected garbage is a leading 0x00 byte where a value tag is
-    // expected: the codec names the exact refusal (BadTag), and the
+    // 0xEE is no valid tag: the codec names the exact refusal (BadTag) and the
     // verifier surfaces it as the corruption reason.
     assert!(
         report.corrupt[0].error.contains("BadTag"),
         "names the decode failure: {}",
+        report.corrupt[0].error
+    );
+}
+
+/// The verifier checks VALUES, not just keys: a base-relation row whose KEY
+/// still decodes but whose VALUE is corrupt (an invalid polarity byte) is
+/// caught, and the reason names the value failure — proof that catalog-aware
+/// per-format value verification is real, not decorative.
+#[test]
+fn verify_storage_catches_a_corrupt_value() {
+    use crate::runtime::db::Db;
+    use crate::storage::verify::verify_storage;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    // Build a real store, capture a base-relation data-row key, then DROP the
+    // store so the raw fjall handle below can take the file lock.
+    let data_key: Vec<u8> = {
+        let storage = new_fjall_storage(&path).unwrap();
+        let db = Db::new(storage.clone()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 7]] :create rel {k => v}",
+            std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let tx = storage.read_tx().unwrap();
+        tx.total_scan()
+            .filter_map(Result::ok)
+            .map(|(k, _)| k.to_vec())
+            // Any non-SYSTEM entry (relation prefix not all-zero): `rel` has no
+            // index, so its base rows are the only non-catalog entries.
+            .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0))
+            .expect("a rel base-relation data row")
+    };
+    // Overwrite that row's VALUE — not its key — with a single 0xFF byte, which
+    // is no valid `ClaimPolarity`, below the kernel. The key still decodes; only
+    // the value is corrupt, proving verify checks values, not just keys.
+    {
+        let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+        let ks = raw
+            .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
+            .unwrap();
+        ks.insert(&data_key, [0xFFu8]).unwrap();
+        raw.persist(fjall::PersistMode::SyncAll).unwrap();
+    }
+    let storage = new_fjall_storage(&path).unwrap();
+    let report = verify_storage(&storage).unwrap();
+    assert!(
+        !report.is_clean(),
+        "a corrupt VALUE (with a still-decodable key) must be caught: {report:?}"
+    );
+    assert_eq!(report.corrupt.len(), 1, "exactly the one wounded row: {report:?}");
+    assert!(
+        report.corrupt[0].error.contains("polarity"),
+        "the reason names the VALUE failure, not the key: {}",
         report.corrupt[0].error
     );
 }

@@ -7,18 +7,40 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Integrity verification: walk the whole store and check every invariant
+//! Integrity verification: walk the whole store and verify every invariant
 //! that can be checked offline. A suspect store gets a *report*, not a chain
 //! of mystery query failures — corruption is diagnosed, never discovered.
 //!
-//! Checked per pair: the key decodes as a memcmp tuple key, the value payload
-//! decodes, and keys arrive in strictly ascending order (a store-level
-//! ordering violation means the storage engine itself is unwell).
+//! This is CATALOG-AWARE. The store holds three distinct value formats, and a
+//! verifier that decoded them all one way would either false-flag a healthy
+//! store or, worse, silently pass corruption — a partial verifier reported as
+//! "storage verification" is worse than none. So it reconstructs the relation
+//! taxonomy from the catalog (which sorts first, under `RelationId::SYSTEM`)
+//! and decodes each stored VALUE in its true codec:
+//!
+//! - **Catalog** (`RelationId::SYSTEM`, id 0): each relation handle's value is
+//!   a msgpack `CatalogRecord`, verified by decoding it — that decode also
+//!   builds the taxonomy (every relation's id + name, and which relations are
+//!   index backings via the `{base}:{index}` naming convention).
+//! - **Base-relation rows**: value is `[polarity byte][canonical non-key
+//!   columns]` (bitemporal), verified through the polarity-aware decoder.
+//! - **Index-backing rows** (HNSW/FTS/LSH/spatial/sparse/temporal): value is a
+//!   plain canonical tuple (rebuildable current state, no bitemporal polarity),
+//!   verified through the canonical decoder.
+//!
+//! Per pair: key decodes, VALUE decodes in its format, and keys arrive in
+//! strictly ascending order (a store-level ordering violation means the KV
+//! engine itself is unwell). A data entry for a relation absent from the
+//! catalog is a dangling-data corruption, reported too.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::value::decode_tuple_from_key;
+use crate::data::bitemporal::{claim_polarity_of_value, extend_tuple_from_bitemporal_v};
+use crate::data::value::{DataValue, RelationId, decode_tuple_from_key, extend_tuple_from_v};
+use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, Storage};
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption
@@ -66,7 +88,59 @@ fn hex_prefix(bytes: &[u8]) -> String {
     s
 }
 
-/// Walk every pair in the store and verify decodability and ordering.
+/// The storage kind of an entry, resolved from the catalog: the TYPE that
+/// decides which value codec verifies a row. Every stored value is one of
+/// these three formats; the verifier dispatches by `match` on this kind, never
+/// by a string test or set membership at the decode site.
+#[derive(Clone, Copy)]
+enum RelKind {
+    /// `RelationId::SYSTEM`: a msgpack `CatalogRecord` (or the id-counter).
+    Catalog,
+    /// A base relation's rows: `[polarity byte][canonical non-key columns]`.
+    BitemporalData,
+    /// An index backing's rows: a plain canonical tuple (rebuildable current
+    /// state, no bitemporal polarity).
+    IndexInternal,
+}
+
+/// Verify one catalog (`SYSTEM`) entry and fold it into the typed taxonomy.
+/// A relation-handle value (Str-named key) must decode as a `CatalogRecord`;
+/// doing so classifies its relation (a name appearing as some base's
+/// `{base}:{index}` backing is `IndexInternal`, else `BitemporalData`) and
+/// records its index backings. The id-counter (Null-named key) is an internal
+/// scalar, key-verified only. `index_backings` is a build-time cross-reference
+/// (an index backing has no self-describing field — its kind is derived from
+/// the referencing base handle, which always sorts first), NOT the dispatch
+/// taxonomy, which is the typed `taxonomy` map.
+fn verify_catalog_entry(
+    key_cols: &[DataValue],
+    val: &[u8],
+    taxonomy: &mut BTreeMap<u64, RelKind>,
+    index_backings: &mut BTreeSet<String>,
+) -> Option<String> {
+    match key_cols.first() {
+        Some(DataValue::Str(_)) => match RelationHandle::decode(val) {
+            Ok(h) => {
+                for ix in &h.indices {
+                    index_backings.insert(ix.relation_name(&h.name));
+                }
+                let kind = if index_backings.contains(h.name.as_str()) {
+                    RelKind::IndexInternal
+                } else {
+                    RelKind::BitemporalData
+                };
+                taxonomy.insert(h.id.raw(), kind);
+                None
+            }
+            Err(e) => Some(format!("catalog record: {e}")),
+        },
+        Some(DataValue::Null) => None,
+        other => Some(format!("unrecognized system key column: {other:?}")),
+    }
+}
+
+/// Walk every pair in the store and verify key decodability, VALUE
+/// decodability in each entry's true codec (catalog-aware), and ordering.
 ///
 /// Read-only, snapshot-consistent, and total: corrupt pairs are recorded and
 /// the walk continues — one bad page must not hide the rest of the damage.
@@ -74,6 +148,14 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
     let tx = db.read_tx()?;
     let mut report = VerifyReport::default();
     let mut prev_key: Option<Slice> = None;
+
+    // The typed taxonomy, reconstructed from the catalog as the ordered scan
+    // crosses `RelationId::SYSTEM` (id 0, which sorts before every data
+    // relation): relation id → its typed `RelKind`. Complete before the first
+    // non-system entry. `index_backings` is the build-time cross-reference the
+    // catalog needs (see `verify_catalog_entry`), not the dispatch taxonomy.
+    let mut taxonomy: BTreeMap<u64, RelKind> = BTreeMap::new();
+    let mut index_backings: BTreeSet<String> = BTreeSet::new();
 
     for pair in tx.total_scan() {
         let (k, v) = pair?;
@@ -85,27 +167,46 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
             report.ordering_violations += 1;
         }
 
-        // Verify the KEY decodes: every entry — catalog (system), data row,
-        // AND derived-index internal storage — shares one uniform key shape
-        // (relation prefix + canonical column bytes + fixed-width bitemporal
-        // tail), so a key that fails to decode is unambiguous structural
-        // corruption, whatever the entry's kind.
-        //
-        // The VALUE is deliberately NOT decoded here: the store holds four
-        // distinct value formats (msgpack `CatalogRecord` for the catalog,
-        // `[polarity byte][canonical columns]` for data rows, engine-specific
-        // layouts for HNSW/FTS/... index internals, and empty/1-byte key-only
-        // values), and decoding them all as canonical data rows was a real
-        // bug that reported a HEALTHY store as fully corrupt. Verifying a
-        // value in the right codec needs the catalog to resolve each
-        // relation's kind — a catalog-aware pass tracked as future work; this
-        // pass guarantees key-and-ordering integrity uniformly.
-        let _ = &v; // value intentionally unread; see above
-        if let Err(e) = decode_tuple_from_key(&k, 16) {
+        // The KEY is uniform across every entry kind (relation prefix +
+        // canonical column bytes + fixed-width bitemporal tail), so a
+        // non-decoding key is unambiguous structural corruption. Resolve the
+        // entry to a typed `RelKind`, then verify its value in that kind's
+        // codec — the dispatch is a `match` on the type, never a string test.
+        let error: Option<String> = match decode_tuple_from_key(&k, 16) {
+            Err(e) => Some(e.to_string()),
+            Ok(mut tup) => match RelationId::raw_decode(&k) {
+                Err(e) => Some(e.to_string()),
+                Ok(rel) => {
+                    let kind = if rel == RelationId::SYSTEM {
+                        Some(RelKind::Catalog)
+                    } else {
+                        taxonomy.get(&rel.raw()).copied()
+                    };
+                    match kind {
+                        None => Some(format!(
+                            "dangling data: no catalog entry for relation id {}",
+                            rel.raw()
+                        )),
+                        Some(RelKind::Catalog) => {
+                            verify_catalog_entry(&tup, &v, &mut taxonomy, &mut index_backings)
+                        }
+                        Some(RelKind::BitemporalData) => claim_polarity_of_value(&v)
+                            .and_then(|_| extend_tuple_from_bitemporal_v(&mut tup, &v))
+                            .err()
+                            .map(|e| e.to_string()),
+                        Some(RelKind::IndexInternal) => {
+                            extend_tuple_from_v(&mut tup, &v).err().map(|e| e.to_string())
+                        }
+                    }
+                }
+            },
+        };
+
+        if let Some(error) = error {
             if report.corrupt.len() < MAX_RECORDED {
                 report.corrupt.push(CorruptEntry {
                     key_hex: hex_prefix(&k),
-                    error: e.to_string(),
+                    error,
                 });
             } else {
                 report.truncated = true;
