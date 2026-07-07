@@ -500,6 +500,23 @@ mod catalog {
     impl seal::Sealed for RelationHandle {}
     impl CatalogRecord for RelationHandle {}
 
+    /// ABSENCE PROOF: a row VALUE cannot be a catalog record, so nothing
+    /// can route `DataValue` (or any value) through the msgpack door. The
+    /// seal (private supertrait) already forbids it structurally; this
+    /// locks it at compile time -- if `DataValue` ever implemented
+    /// `CatalogRecord`, the associated-item lookup below would become
+    /// ambiguous and fail to build.
+    const _: fn() = || {
+        trait AmbiguousIfImpl<A> {
+            fn __proof() {}
+        }
+        impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+        #[allow(dead_code)]
+        struct Marker;
+        impl<T: ?Sized + CatalogRecord> AmbiguousIfImpl<Marker> for T {}
+        let _ = <crate::data::value::DataValue as AmbiguousIfImpl<_>>::__proof;
+    };
+
     /// Serialize a catalog record: msgpack with struct maps. Infallible in
     /// practice for these field types, but a failure is a typed error, never
     /// an unwrap.

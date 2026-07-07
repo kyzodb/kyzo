@@ -44,6 +44,7 @@ pub mod code;
 pub mod column;
 pub mod number;
 pub mod prefix;
+mod proofs;
 pub mod row;
 pub mod string;
 pub mod tag;
