@@ -7,21 +7,18 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Story #77's Arrow boundary: a dependency-free encoder for the Arrow IPC
-//! STREAMING format (one Schema message, then any number of RecordBatch
-//! messages, then an end-of-stream marker), built directly against
-//! [`ColumnBatch`] — never against the
-//! `arrow` crate, which is not (and, per the pure-Rust invariant, cannot
-//! be) a dependency of this crate: `arrow-array` unconditionally requires
-//! `chrono`'s `clock` feature, which pulls `iana-time-zone`, which needs
-//! `core-foundation-sys` on macOS and `windows-core` on Windows — the exact
-//! platform-native-binding class this codebase already migrated away from
-//! once (see the time-library history in `Cargo.toml`'s own comments).
-//! Verified, not assumed: `cargo tree -e normal,build --target=all -i
-//! core-foundation-sys` shows arrow's own chrono dependency as the path in;
-//! a Linux-only `cargo tree` (no `--target=all`) hides this, which is why
-//! that check must always use `--target=all` for any dependency question
-//! going forward.
+//! A dependency-free encoder for the Arrow IPC STREAMING format (one Schema
+//! message, then any number of RecordBatch messages, then an end-of-stream
+//! marker), built directly against [`ColumnBatch`] — never against the
+//! `arrow` crate. The `arrow` crate is not (and, per the pure-Rust
+//! invariant, cannot be) a dependency of this crate: `arrow-array`
+//! unconditionally requires `chrono`'s `clock` feature, which pulls
+//! `iana-time-zone`, which needs `core-foundation-sys` on macOS and
+//! `windows-core` on Windows — the exact platform-native-binding class
+//! this codebase migrated away from. Verified through `cargo tree -e
+//! normal,build --target=all -i core-foundation-sys`: arrow's chrono
+//! dependency is the pull-in path; note that Linux-only `cargo tree`
+//! (without `--target=all`) hides this platform-specific path.
 //!
 //! The only new dependency is `flatbuffers`, the pure-Rust metadata-object
 //! runtime library (used here as a plain buffer builder, no code

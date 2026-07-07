@@ -44,7 +44,7 @@
 //! terminator (`0x01`) sorts below any continuation — a prefix list sorts
 //! before its extensions, exactly as the semantic law requires.
 //!
-//! **Map ruling (v1)**: there is no first-class Map kind. Keyed documents
+//! **Map (v1)**: there is no first-class Map kind. Keyed documents
 //! are `Json` values (whose identity law canonicalizes key order); a
 //! relation is the engine's native keyed structure. If a first-class Map
 //! ever earns existence, it takes a reserved tag; nothing moves.
@@ -55,7 +55,7 @@
 //! whose plane version exceeds what it knows — an old reader rejects the
 //! store at open, never mid-keyspace on an unknown tag.
 //!
-//! **The cross-type order ruling (v1, permanent)**: `Null < Bool < Num <
+//! **The cross-type order (v1, permanent)**: `Null < Bool < Num <
 //! Str < Bytes < Uuid < Regex < Json < Vector < List < Set < Validity <
 //! Interval` — scalars, then identifiers, then documents, then sequences,
 //! then the temporal kinds. This is the *storage* total order over kinds;

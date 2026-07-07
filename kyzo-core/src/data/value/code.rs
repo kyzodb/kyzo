@@ -10,13 +10,12 @@
 //! `Code(u32)`: the dense interned value handle — the hot-path identity the recursive relations and residency layers consume.
 
 /// The raw dense handle for an interned value: **identity only, no read
-/// authority**.
-///
-/// Type-C's law is that a code means something only inside a scoped
-/// observer frame, so no read API anywhere accepts a bare `Code`. What a
-/// `Code` *can* do is be identity: equality, hashing, and packed storage
-/// (`raw()` for #120's u32 runs, bitmaps, quantization) — always under a
-/// container-level epoch stamp. To spend one you need its epoch:
+/// authority**. By design, no read API anywhere accepts a bare `Code` —
+/// codes are only valid as observed through an arena [`Frame`](super::arena::Frame)
+/// or [`Snapshot`](super::arena::Snapshot). What a `Code` *can* do is be
+/// identity: equality, hashing, and packed storage (via `raw()` for u32
+/// runs, bitmaps, quantization) — always stamped with the [`StampedCode`]
+/// that carries its epoch. To spend one you need its epoch and arena:
 ///
 /// - [`StampedCode`] — code + epoch, minted by `Arena::intern` and by
 ///   [`EpochRemap::apply`](super::arena::EpochRemap::apply) (the morphism

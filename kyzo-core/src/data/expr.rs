@@ -1364,7 +1364,6 @@ pub(crate) fn op_display_name(name: &'static str) -> String {
 /// belt-and-suspenders first line (they carry a more specific domain
 /// diagnosis before the result even exists), but no op — present or
 /// future — can bypass this backstop and hand a poison value to a caller.
-/// Structural absorption for story #62's silent-NaN class.
 pub(crate) fn apply_op(op: &Op, args: &[DataValue]) -> Result<DataValue> {
     let result = (op.inner)(args)?;
     if crate::data::functions::result_has_nan(&result) {

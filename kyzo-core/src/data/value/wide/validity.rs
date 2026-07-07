@@ -50,11 +50,10 @@ impl ValidityTs {
 }
 
 impl ValidityTs {
-    /// The user-assertion door (issue #62's ruling): a USER-ASSERTED
-    /// write validity can never be the reserved terminal tick
-    /// (`i64::MAX` / `'END'`), the instant every open-end sentinel and
-    /// derived interval reads as "still open". `None` refuses it;
-    /// diagnostics (spans) are the caller's business.
+    /// The user-assertion door: a user-asserted write validity can never
+    /// be the reserved terminal tick (`i64::MAX` / `'END'`), the instant
+    /// every open-end sentinel and derived interval reads as "still open".
+    /// `None` refuses it; diagnostics (spans) are the caller's business.
     pub fn for_assertion(ts_micros: i64) -> Option<ValidityTs> {
         if ts_micros == i64::MAX {
             None

@@ -30,10 +30,10 @@
 //! Consequence: equivalence = dedup identity = code identity, and numeric
 //! *order* crosses representations while numeric *identity* does not.
 //!
-//! Two durable rulings riding on this law:
+//! Two durable laws riding on this identity:
 //! - `Int(1) != Float(1.0)` is **query-layer semantics forever**, not an
-//!   encoding detail — the seam's oracle differentials gate that the
-//!   expression layer agrees.
+//!   encoding detail — the expression layer's oracle differentials verify
+//!   that the semantics agree across all consumers.
 //! - The v1 numeric domain is closed: exactly `i64 ∪ f64`. Decimal or
 //!   bigint, if they ever earn existence, are *new kinds* in reserved tag
 //!   space with their own identity laws — never extensions of this key,

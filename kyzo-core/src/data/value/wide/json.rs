@@ -31,9 +31,9 @@
 //!   is order-preserving over raw bytes, so the escaped payload order and
 //!   the raw key order are one order (law-tested with NUL-bearing keys).
 //! - The canonical payload carries a trailing FNV-1a 64 hash of the
-//!   canonical value bytes (the story's "canonical bytes + hash"). The
-//!   algorithm is pinned as format v1; the hash rides AFTER the
-//!   self-terminating value bytes, so it can never influence order.
+//!   canonical value bytes. The algorithm is pinned as format v1; the hash
+//!   rides AFTER the self-terminating value bytes, so it can never
+//!   influence order.
 //!   **The hash is an accelerator and a filter, never equality
 //!   authority**: FNV collides, so equality and join correctness always
 //!   confirm the canonical value bytes; decode verifies the hash and

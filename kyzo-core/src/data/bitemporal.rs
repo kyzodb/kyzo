@@ -556,16 +556,14 @@ mod tests {
         assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
     }
 
-    /// The judge-of-the-judge: story #62's unified oracle
-    /// (`query::laws::resolve_relation`) mirrors THIS kernel across the
-    /// sign boundary on both axes — 2000 generated histories, valid and
-    /// system coordinates each spanning negative and positive, probed at
-    /// coordinates on both sides of every stored one (this module's own
-    /// `bikey`/`skip_walk` reused directly, which is exactly why this
-    /// cross-check lives here rather than as a second, hand-built copy
-    /// in `query/laws.rs` — that file keeps a small fixed fixture as a
-    /// fast sanity check; this is the exhaustive one). Hostile-review
-    /// pin, issue #62 comment 4882951801.
+    /// Cross-check against the reference oracle: `query::laws::resolve_relation`
+    /// implements the same resolution kernel, mirrored across the sign
+    /// boundary on both axes (valid and system coordinates spanning
+    /// negative and positive). This test probes coordinates on both sides
+    /// of every stored one, using `bikey` and `skip_walk` directly from
+    /// this module (the exhaustive case with 2000 generated histories,
+    /// vs. the small fixed fixture in `query/laws.rs` used as a fast
+    /// sanity check).
     #[test]
     fn reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps() {
         use crate::query::laws;

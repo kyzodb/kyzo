@@ -1525,8 +1525,8 @@ pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
 /// identity only (`RegexSource` — deliberately no compiled state inside
 /// the value plane); the parser's constant-folding hoists `op_regex` so
 /// patterns validate once at compile time, but row-wise execution
-/// recompiles here. Hoisting COMPILATION (not just validation) into the
-/// operator layer is #120-adjacent evaluator work, measured by the bench
+/// recompiles here. A future optimization would hoist COMPILATION (not
+/// just validation) into the operator layer instead, measured by the bench
 /// lane.
 fn compile_regex_value(r: &RegexSource) -> Result<crate::data::value::CompiledRegexV1> {
     r.compile()

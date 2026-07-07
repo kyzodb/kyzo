@@ -79,8 +79,8 @@ fn conditional_without_catch_all() {
     assert!(eval_bytecode(&compiled, vec![], &mut stack).is_err());
 }
 
-// ─── The op-application NaN checkpoint (story #62's structural absorption
-// of the silent-NaN class) ───────────────────────────────────────────────
+// ─── The op-application NaN checkpoint: structural absorption of any NaN
+// result the domain layer missed ─────────────────────────────────────────
 //
 // A synthetic op stands in for ANY op — present or future — whose own
 // `no_nan`/`no_nan_vec_f32`/`no_nan_vec_f64` guard is missing or has a gap:
@@ -357,7 +357,7 @@ fn lazy_refusal_spans_agree_between_machines() {
     use crate::data::expr::LazyOp;
     use crate::data::span::SourceSpan;
     // Distinct spans everywhere: a span-blind fixture cannot see a
-    // divergence (the reviewers' refutation of the earlier pins).
+    // divergence.
     let bad_arg = Expr::Const {
         val: DataValue::from(1),
         span: SourceSpan(30, 4),

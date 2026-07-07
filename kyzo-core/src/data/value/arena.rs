@@ -9,13 +9,17 @@
 
 //! The order-preserving interning dictionary: dedups values, assigns dense `Code`; observers resolve admitted stamps to canonical bytes. The out-of-line home.
 //!
-//! ## The type-C contract (ratified on #119)
+//! ## The epoch-scoped interning architecture
 //!
 //! Dense codes, code-order-equals-byte-order, and validity under growth
 //! cannot all hold at every *absolute* instant (pigeonhole). This arena
-//! keeps all three for every observer that exists by making the observer
-//! the unit of meaning: **a code is only valid inside a scoped observer
-//! frame.**
+//! keeps all three for every observer by making the observer the unit of
+//! meaning: **a code is only valid as observed through a scoped [`Frame`]
+//! (live) or [`Snapshot`] (pinned), never as a bare handle.** Sealed codes
+//! are global ranks over the union of immutable sorted runs (merges of runs
+//! preserve the union, so sealed codes never change); tail codes are
+//! arrival-ordered (identity only). A seal mints an [`EpochRemap`] —
+//! the compact morphism carrying codes from one epoch to the next.
 //!
 //! - [`Arena`] is minting and transition only: `intern`, `seal`, and the
 //!   two ways to open an observer. It has no read methods — there is no
@@ -27,9 +31,9 @@
 //!   `intern` and `seal` take `&mut Arena`, so the borrow checker retires
 //!   every frame at the next mutation.
 //! - [`Snapshot`] is the pinned observer: run references + a delta cut +
-//!   frozen heap chunks + the epoch — exactly the ruling's "snapshot's
-//!   dictionary", owned and `Send + Sync`. It answers identically forever
-//!   while the writer interns and seals past it.
+//!   frozen heap chunks + the epoch — the dictionary as one moment saw
+//!   it, owned and `Send + Sync`. It answers identically forever while
+//!   the writer interns and seals past it.
 //! - [`EpochRemap`] is the morphism between frames: minted only by
 //!   [`Arena::seal`], it restamps a [`StampedCode`] from its epoch into
 //!   the next — strictly monotone over sealed codes, a permutation over
@@ -73,8 +77,8 @@
 //!    `Snapshot`s hold only immutable structure — frozen chunks and runs
 //!    the transition never mutates. Runs are shared (`Arc`), not
 //!    consumed: old shapes legitimately outlive the transition *in old
-//!    frames* — that is type-C itself — and their immutability is what
-//!    makes it sound.
+//!    frames* — this is the epoch-scoped architecture in action — and
+//!    their immutability is what makes it sound.
 //!
 //! Cascading run merges inside a seal never change codes: a sealed code is
 //! a rank over the *union* of runs, and reorganizing which run holds a
@@ -915,9 +919,9 @@ impl<'a> Frame<'a> {
 }
 
 /// The pinned observer frame: run references + a delta cut + frozen heap
-/// chunks + the epoch — the ruling's "snapshot's dictionary", owned. It
-/// answers identically forever while the writer interns and seals past
-/// it, and it is `Send + Sync` (everything it holds is immutable).
+/// chunks + the epoch — a snapshot of the arena's state at one moment,
+/// owned and `Send + Sync` (everything it holds is immutable). It answers
+/// identically forever while the writer interns and seals past it.
 ///
 /// Visibility is **not** implied by the epoch here: the delta cut is part
 /// of the observer, so every spend verifies both the stamp and the cut,
@@ -1130,7 +1134,7 @@ impl BulkObserver for Snapshot {
 /// The shared, order-preserving interning arena: minting and transition
 /// only. Reads happen through the observer frames — [`Arena::frame`] for
 /// the live borrow, [`Arena::snapshot`] for the pinned owner. See the
-/// module docs for the full type-C contract.
+/// module docs for the full epoch-scoped interning architecture.
 pub struct Arena {
     id: ArenaId,
     heap: Heap,
@@ -1398,9 +1402,9 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Naive oracle: the type-C contract stated so simply it is obviously
-    // correct. The arena must agree with it on every operation, every
-    // epoch, and so must every snapshot, forever.
+    // Naive oracle: the epoch-scoped interning architecture stated so
+    // simply it is obviously correct. The arena must agree with it on
+    // every operation, every epoch, and so must every snapshot, forever.
     // ------------------------------------------------------------------
 
     #[derive(Clone)]
