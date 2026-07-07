@@ -52,10 +52,13 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::v1::Timestamp;
 
 use crate::data::expr::Op;
+use crate::data::json::{json_from_serde, serde_from_json};
+use crate::data::relation::VecElementType;
 use crate::data::value::{
-    DataValue, GermanStr, Interval, JsonData, JsonValue, Num, RegexWrapper, UuidWrapper, Validity,
-    ValidityTs, VecElementType, Vector,
+    DataValue, Interval, Num, NumRepr, RegexFlags, RegexSource, UuidWrapper, Validity, ValidityTs,
+    Vector,
 };
+use serde_json::Value as JsonValue;
 
 /// Declares one built-in op: the `Op` const, its name (stringified from the
 /// const's own identifier), its arity contract, its determinism claim, and
@@ -103,7 +106,6 @@ fn ensure_same_value_type(a: &DataValue, b: &DataValue) -> Result<()> {
             | (Regex(_), Regex(_))
             | (List(_), List(_))
             | (Set(_), Set(_))
-            | (Bot, Bot)
     ) {
         bail!(
             "comparison can only be done between the same datatypes, got {:?} and {:?}",
@@ -121,7 +123,7 @@ pub(crate) fn op_list(args: &[DataValue]) -> Result<DataValue> {
 
 define_op!(OP_JSON, 1, false, true);
 pub(crate) fn op_json(args: &[DataValue]) -> Result<DataValue> {
-    Ok(DataValue::Json(JsonData::new(to_json(&args[0]))))
+    Ok(DataValue::Json(json_from_serde(&to_json(&args[0]))))
 }
 
 define_op!(OP_SET_JSON_PATH, 3, false, true);
@@ -133,7 +135,7 @@ pub(crate) fn op_set_json_path(args: &[DataValue]) -> Result<DataValue> {
     let pointer = get_json_path(&mut result, path)?;
     let new_val = to_json(&args[2]);
     *pointer = new_val;
-    Ok(DataValue::Json(JsonData::new(result)))
+    Ok(DataValue::Json(json_from_serde(&result)))
 }
 
 /// A path step into a JSON array, proven non-negative and machine-sized.
@@ -227,7 +229,7 @@ pub(crate) fn op_remove_json_path(args: &[DataValue]) -> Result<DataValue> {
             bail!("json path does not exist")
         }
     }
-    Ok(DataValue::Json(JsonData::new(result)))
+    Ok(DataValue::Json(json_from_serde(&result)))
 }
 
 define_op!(OP_JSON_OBJECT, 0, true, true);
@@ -242,7 +244,7 @@ pub(crate) fn op_json_object(args: &[DataValue]) -> Result<DataValue> {
         let value = to_json(&pair[1]);
         obj.insert(key.to_string(), value);
     }
-    Ok(DataValue::Json(JsonData::new(Value::Object(obj))))
+    Ok(DataValue::Json(json_from_serde(&Value::Object(obj))))
 }
 
 pub(crate) fn to_json(d: &DataValue) -> JsonValue {
@@ -253,11 +255,11 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
         DataValue::Bool(b) => {
             json!(b)
         }
-        DataValue::Num(n) => match n {
-            Num::Int(i) => {
+        DataValue::Num(n) => match n.repr() {
+            NumRepr::Int(i) => {
                 json!(i)
             }
-            Num::Float(f) => {
+            NumRepr::Float(f) => {
                 json!(f)
             }
         },
@@ -271,7 +273,7 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
             json!(u.0.as_bytes())
         }
         DataValue::Regex(r) => {
-            json!(r.0.as_str())
+            json!(r.pattern())
         }
         DataValue::List(l) => {
             let mut arr = Vec::with_capacity(l.len());
@@ -287,31 +289,37 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
             }
             arr.into()
         }
-        DataValue::Vec(v) => {
+        DataValue::Vector(v) => {
             let mut arr = Vec::with_capacity(v.len());
-            match v {
-                Vector::F32(a) => {
-                    for el in a {
-                        arr.push(json!(el));
-                    }
-                }
-                Vector::F64(a) => {
-                    for el in a {
-                        arr.push(json!(el));
-                    }
-                }
+            for el in v.as_slice() {
+                arr.push(json!(el));
             }
             arr.into()
         }
-        DataValue::Json(j) => j.value().clone(),
+        DataValue::Json(j) => serde_from_json(j),
         DataValue::Validity(vld) => {
-            json!([vld.timestamp.raw(), vld.is_assert.0])
+            json!([vld.ts_micros(), vld.is_assert()])
         }
-        DataValue::Interval(iv) => {
-            json!([iv.start(), iv.end()])
-        }
-        DataValue::Bot => {
-            json!(null)
+        DataValue::Interval(iv) => interval_to_json(iv),
+    }
+}
+
+/// The interval render shared with the bridge: `null` for empty,
+/// `[lo|null, hi|null]` otherwise.
+fn interval_to_json(iv: &Interval) -> JsonValue {
+    use crate::data::value::wide::interval::{Hi, Lo};
+    match iv.ends() {
+        None => JsonValue::Null,
+        Some((lo, hi)) => {
+            let l = match lo {
+                Lo::NegUnbounded => JsonValue::Null,
+                Lo::At(t) => JsonValue::Number(t.into()),
+            };
+            let h = match hi {
+                Hi::PosUnbounded => JsonValue::Null,
+                Hi::At(t) => JsonValue::Number(t.into()),
+            };
+            JsonValue::Array(vec![l, h])
         }
     }
 }
@@ -321,7 +329,7 @@ pub(crate) fn op_parse_json(args: &[DataValue]) -> Result<DataValue> {
     match args[0].get_str() {
         Some(s) => {
             let value = serde_json::from_str(s).into_diagnostic()?;
-            Ok(DataValue::Json(JsonData::new(value)))
+            Ok(DataValue::Json(json_from_serde(&value)))
         }
         None => bail!("parse_json requires a string argument"),
     }
@@ -330,16 +338,18 @@ pub(crate) fn op_parse_json(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_DUMP_JSON, 1, false, true);
 pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
-        DataValue::Json(j) => Ok(DataValue::Str(j.value().to_string().into())),
+        DataValue::Json(j) => Ok(DataValue::Str(serde_from_json(j).to_string())),
         _ => bail!("dump_json requires a json argument"),
     }
 }
 
 define_op!(OP_EQ, 2, false, true);
 pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
+    // Expression equality: NUMERIC for numbers (1 == 1.0, and — unlike
+    // the inherited lossy `i as f64` — EXACT beyond 2^53), identity for
+    // every other kind.
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Float(f)), DataValue::Num(Num::Int(i)))
-        | (DataValue::Num(Num::Int(i)), DataValue::Num(Num::Float(f))) => *i as f64 == *f,
+        (DataValue::Num(a), DataValue::Num(b)) => a.eq_numeric(*b),
         (a, b) => a == b,
     }))
 }
@@ -357,7 +367,7 @@ pub(crate) fn op_is_json(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_JSON_TO_SCALAR, 1, false, true);
 pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Json(j) => json2val(j.value().clone()),
+        DataValue::Json(j) => json2val(serde_from_json(j)),
         d => d.clone(),
     })
 }
@@ -374,8 +384,7 @@ pub(crate) fn op_is_in(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_NEQ, 2, false, true);
 pub(crate) fn op_neq(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Float(f)), DataValue::Num(Num::Int(i)))
-        | (DataValue::Num(Num::Int(i)), DataValue::Num(Num::Float(f))) => *i as f64 != *f,
+        (DataValue::Num(a), DataValue::Num(b)) => !a.eq_numeric(*b),
         (a, b) => a != b,
     }))
 }
@@ -384,9 +393,8 @@ define_op!(OP_GT, 2, false, true);
 pub(crate) fn op_gt(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Float(l)), DataValue::Num(Num::Int(r))) => *l > *r as f64,
-        (DataValue::Num(Num::Int(l)), DataValue::Num(Num::Float(r))) => *l as f64 > *r,
-        (a, b) => a > b,
+        (DataValue::Num(a), DataValue::Num(b)) => a.cmp_numeric(*b) == std::cmp::Ordering::Greater,
+        (a, b) => a.cmp(b) == std::cmp::Ordering::Greater,
     }))
 }
 
@@ -394,9 +402,8 @@ define_op!(OP_GE, 2, false, true);
 pub(crate) fn op_ge(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Float(l)), DataValue::Num(Num::Int(r))) => *l >= *r as f64,
-        (DataValue::Num(Num::Int(l)), DataValue::Num(Num::Float(r))) => *l as f64 >= *r,
-        (a, b) => a >= b,
+        (DataValue::Num(a), DataValue::Num(b)) => a.cmp_numeric(*b) != std::cmp::Ordering::Less,
+        (a, b) => a.cmp(b) != std::cmp::Ordering::Less,
     }))
 }
 
@@ -404,9 +411,8 @@ define_op!(OP_LT, 2, false, true);
 pub(crate) fn op_lt(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Float(l)), DataValue::Num(Num::Int(r))) => *l < (*r as f64),
-        (DataValue::Num(Num::Int(l)), DataValue::Num(Num::Float(r))) => (*l as f64) < *r,
-        (a, b) => a < b,
+        (DataValue::Num(a), DataValue::Num(b)) => a.cmp_numeric(*b) == std::cmp::Ordering::Less,
+        (a, b) => a.cmp(b) == std::cmp::Ordering::Less,
     }))
 }
 
@@ -414,9 +420,8 @@ define_op!(OP_LE, 2, false, true);
 pub(crate) fn op_le(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(Num::Float(l)), DataValue::Num(Num::Int(r))) => *l <= (*r as f64),
-        (DataValue::Num(Num::Int(l)), DataValue::Num(Num::Float(r))) => (*l as f64) <= *r,
-        (a, b) => a <= b,
+        (DataValue::Num(a), DataValue::Num(b)) => a.cmp_numeric(*b) != std::cmp::Ordering::Greater,
+        (a, b) => a.cmp(b) != std::cmp::Ordering::Greater,
     }))
 }
 
@@ -481,24 +486,18 @@ fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
     if x.is_nan() {
         bail!(DomainError { op: op.into() });
     }
-    Ok(DataValue::Num(Num::Float(x)))
+    Ok(DataValue::Num(Num::float(x)))
 }
 
 /// The vector-lane counterpart of [`no_nan`]: an element-wise result with
-/// any `NaN` left in it is refused rather than returned poisoned.
-fn no_nan_vec_f32(op: &'static str, v: ndarray::Array1<f32>) -> Result<DataValue> {
+/// any `NaN` left in it is refused rather than returned poisoned (the
+/// refusal runs BEFORE `Vector::new`, whose canonicalization would
+/// otherwise normalize the poison into a legal value).
+fn no_nan_vec(op: &'static str, v: Vec<f64>) -> Result<DataValue> {
     if v.iter().any(|x| x.is_nan()) {
         bail!(DomainError { op: op.into() });
     }
-    Ok(DataValue::Vec(Vector::F32(v)))
-}
-
-/// See [`no_nan_vec_f32`].
-fn no_nan_vec_f64(op: &'static str, v: ndarray::Array1<f64>) -> Result<DataValue> {
-    if v.iter().any(|x| x.is_nan()) {
-        bail!(DomainError { op: op.into() });
-    }
-    Ok(DataValue::Vec(Vector::F64(v)))
+    Ok(DataValue::Vector(Vector::new(v)))
 }
 
 /// Whether a function-op's result is carrying a poison `NaN` — as the
@@ -515,8 +514,8 @@ fn no_nan_vec_f64(op: &'static str, v: ndarray::Array1<f64>) -> Result<DataValue
 pub(crate) fn result_has_nan(v: &DataValue) -> bool {
     match v {
         DataValue::Num(Num::Float(x)) => x.is_nan(),
-        DataValue::Vec(Vector::F32(arr)) => arr.iter().any(|x| x.is_nan()),
-        DataValue::Vec(Vector::F64(arr)) => arr.iter().any(|x| x.is_nan()),
+        DataValue::Vector(Vector::F32(arr)) => arr.iter().any(|x| x.is_nan()),
+        DataValue::Vector(Vector::F64(arr)) => arr.iter().any(|x| x.is_nan()),
         _ => false,
     }
 }
@@ -526,20 +525,22 @@ pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
     let mut f_accum = 0.0f64;
     for arg in args {
         match arg {
-            DataValue::Num(Num::Int(i)) => {
-                i_accum = i_accum
-                    .checked_add(*i)
-                    .ok_or(IntegerOverflow { op: "add" })?;
-            }
-            DataValue::Num(Num::Float(f)) => f_accum += f,
-            DataValue::Vec(_) => return add_vecs(args),
+            DataValue::Num(n) => match n.repr() {
+                NumRepr::Int(i) => {
+                    i_accum = i_accum
+                        .checked_add(i)
+                        .ok_or(IntegerOverflow { op: "add" })?;
+                }
+                NumRepr::Float(f) => f_accum += f,
+            },
+            DataValue::Vector(_) => return add_vecs(args),
             _ => bail!("addition requires numbers"),
         }
     }
     if f_accum == 0.0f64 {
-        Ok(DataValue::Num(Num::Int(i_accum)))
+        Ok(DataValue::Num(Num::int(i_accum)))
     } else {
-        Ok(DataValue::Num(Num::Float(i_accum as f64 + f_accum)))
+        Ok(DataValue::Num(Num::float(i_accum as f64 + f_accum)))
     }
 }
 
@@ -552,46 +553,29 @@ fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
     let (last, first) = args.split_last().expect("args non-empty");
     let first = add_vecs(first)?;
     match (first, last) {
-        (DataValue::Vec(a), DataValue::Vec(b)) => {
+        (DataValue::Vector(a), DataValue::Vector(b)) => {
             if a.len() != b.len() {
                 bail!("can only add vectors of the same length");
             }
-            match (a, b) {
-                (Vector::F32(a), Vector::F32(b)) => Ok(DataValue::Vec(Vector::F32(a + b))),
-                (Vector::F64(a), Vector::F64(b)) => Ok(DataValue::Vec(Vector::F64(a + b))),
-                (Vector::F32(a), Vector::F64(b)) => {
-                    let a = a.mapv(|x| x as f64);
-                    Ok(DataValue::Vec(Vector::F64(a + b)))
-                }
-                (Vector::F64(a), Vector::F32(b)) => {
-                    let b = b.mapv(|x| x as f64);
-                    Ok(DataValue::Vec(Vector::F64(a + b)))
-                }
-            }
+            Ok(DataValue::Vector(Vector::new(
+                a.as_slice().iter().zip(b.as_slice().iter()).map(|(x, y)| x + y).collect(),
+            )))
         }
-        (DataValue::Vec(a), b) => {
+        (DataValue::Vector(a), b) => {
             let f = b
                 .get_float()
                 .ok_or_else(|| miette!("can only add numbers to vectors"))?;
-            match a {
-                Vector::F32(mut v) => {
-                    v += f as f32;
-                    Ok(DataValue::Vec(Vector::F32(v)))
-                }
-                Vector::F64(mut v) => {
-                    v += f;
-                    Ok(DataValue::Vec(Vector::F64(v)))
-                }
-            }
+            Ok(DataValue::Vector(Vector::new(
+                a.as_slice().iter().map(|x| x + f).collect(),
+            )))
         }
-        (a, DataValue::Vec(b)) => {
+        (a, DataValue::Vector(b)) => {
             let f = a
                 .get_float()
                 .ok_or_else(|| miette!("can only add numbers to vectors"))?;
-            match b {
-                Vector::F32(v) => Ok(DataValue::Vec(Vector::F32(v + f as f32))),
-                Vector::F64(v) => Ok(DataValue::Vec(Vector::F64(v + f))),
-            }
+            Ok(DataValue::Vector(Vector::new(
+                b.as_slice().iter().map(|x| x + f).collect(),
+            )))
         }
         _ => bail!("addition requires numbers"),
     }
@@ -603,11 +587,11 @@ pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
         .iter()
         .try_fold(None, |accum, nxt| match (accum, nxt) {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
-            (Some(DataValue::Num(a)), DataValue::Num(b)) => Ok(Some(DataValue::Num(a.max(*b)))),
+            (Some(DataValue::Num(a)), DataValue::Num(b)) => Ok(Some(DataValue::Num(a.max_numeric(*b)))),
             _ => bail!("'max can only be applied to numbers'"),
         })?;
     match res {
-        None => Ok(DataValue::Num(Num::Float(f64::NEG_INFINITY))),
+        None => Ok(DataValue::Num(Num::float(f64::NEG_INFINITY))),
         Some(v) => Ok(v),
     }
 }
@@ -618,11 +602,11 @@ pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
         .iter()
         .try_fold(None, |accum, nxt| match (accum, nxt) {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
-            (Some(DataValue::Num(a)), DataValue::Num(b)) => Ok(Some(DataValue::Num(a.min(*b)))),
+            (Some(DataValue::Num(a)), DataValue::Num(b)) => Ok(Some(DataValue::Num(a.min_numeric(*b)))),
             _ => bail!("'min' can only be applied to numbers"),
         })?;
     match res {
-        None => Ok(DataValue::Num(Num::Float(f64::INFINITY))),
+        None => Ok(DataValue::Num(Num::float(f64::INFINITY))),
         Some(v) => Ok(v),
     }
 }
@@ -631,7 +615,7 @@ define_op!(OP_SUB, 2, false, true);
 pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
     Ok(match (&args[0], &args[1]) {
         (DataValue::Num(Num::Int(a)), DataValue::Num(Num::Int(b))) => match a.checked_sub(*b) {
-            Some(v) => DataValue::Num(Num::Int(v)),
+            Some(v) => DataValue::Num(Num::int(v)),
             None => bail!(IntegerOverflow { op: "sub" }),
         },
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Float(b))) => {
@@ -643,45 +627,45 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
         (DataValue::Num(Num::Float(a)), DataValue::Num(Num::Int(b))) => {
             DataValue::Num(Num::Float(a - (*b as f64)))
         }
-        (DataValue::Vec(a), DataValue::Vec(b)) => match (a, b) {
-            (Vector::F32(a), Vector::F32(b)) => DataValue::Vec(Vector::F32(a - b)),
-            (Vector::F64(a), Vector::F64(b)) => DataValue::Vec(Vector::F64(a - b)),
+        (DataValue::Vector(a), DataValue::Vector(b)) => match (a, b) {
+            (Vector::F32(a), Vector::F32(b)) => DataValue::Vector(Vector::F32(a - b)),
+            (Vector::F64(a), Vector::F64(b)) => DataValue::Vector(Vector::F64(a - b)),
             (Vector::F32(a), Vector::F64(b)) => {
                 let a = a.mapv(|x| x as f64);
-                DataValue::Vec(Vector::F64(a - b))
+                DataValue::Vector(Vector::F64(a - b))
             }
             (Vector::F64(a), Vector::F32(b)) => {
                 let b = b.mapv(|x| x as f64);
-                DataValue::Vec(Vector::F64(a - b))
+                DataValue::Vector(Vector::F64(a - b))
             }
         },
-        (DataValue::Vec(a), b) => {
+        (DataValue::Vector(a), b) => {
             let b = b
                 .get_float()
                 .ok_or_else(|| miette!("can only subtract numbers from vectors"))?;
             match a.clone() {
                 Vector::F32(mut v) => {
                     v -= b as f32;
-                    DataValue::Vec(Vector::F32(v))
+                    DataValue::Vector(Vector::F32(v))
                 }
                 Vector::F64(mut v) => {
                     v -= b;
-                    DataValue::Vec(Vector::F64(v))
+                    DataValue::Vector(Vector::F64(v))
                 }
             }
         }
-        (a, DataValue::Vec(b)) => {
+        (a, DataValue::Vector(b)) => {
             let a = a
                 .get_float()
                 .ok_or_else(|| miette!("can only subtract vectors from numbers"))?;
             match b.clone() {
                 Vector::F32(mut v) => {
                     v -= a as f32;
-                    DataValue::Vec(Vector::F32(-v))
+                    DataValue::Vector(Vector::F32(-v))
                 }
                 Vector::F64(mut v) => {
                     v -= a;
-                    DataValue::Vec(Vector::F64(-v))
+                    DataValue::Vector(Vector::F64(-v))
                 }
             }
         }
@@ -701,14 +685,14 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
                     .ok_or(IntegerOverflow { op: "mul" })?;
             }
             DataValue::Num(Num::Float(f)) => f_accum *= f,
-            DataValue::Vec(_) => return mul_vecs(args),
+            DataValue::Vector(_) => return mul_vecs(args),
             _ => bail!("multiplication requires numbers"),
         }
     }
     if f_accum == 1.0f64 {
-        Ok(DataValue::Num(Num::Int(i_accum)))
+        Ok(DataValue::Num(Num::int(i_accum)))
     } else {
-        Ok(DataValue::Num(Num::Float(i_accum as f64 * f_accum)))
+        Ok(DataValue::Num(Num::float(i_accum as f64 * f_accum)))
     }
 }
 
@@ -724,45 +708,45 @@ fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
     // recurse into multiplication; flagged as a deliberate deviation.
     let first = mul_vecs(first)?;
     match (first, last) {
-        (DataValue::Vec(a), DataValue::Vec(b)) => {
+        (DataValue::Vector(a), DataValue::Vector(b)) => {
             if a.len() != b.len() {
                 bail!("can only multiply vectors of the same length");
             }
             match (a, b) {
-                (Vector::F32(a), Vector::F32(b)) => Ok(DataValue::Vec(Vector::F32(a * b))),
-                (Vector::F64(a), Vector::F64(b)) => Ok(DataValue::Vec(Vector::F64(a * b))),
+                (Vector::F32(a), Vector::F32(b)) => Ok(DataValue::Vector(Vector::F32(a * b))),
+                (Vector::F64(a), Vector::F64(b)) => Ok(DataValue::Vector(Vector::F64(a * b))),
                 (Vector::F32(a), Vector::F64(b)) => {
                     let a = a.mapv(|x| x as f64);
-                    Ok(DataValue::Vec(Vector::F64(a * b)))
+                    Ok(DataValue::Vector(Vector::F64(a * b)))
                 }
                 (Vector::F64(a), Vector::F32(b)) => {
                     let b = b.mapv(|x| x as f64);
-                    Ok(DataValue::Vec(Vector::F64(a * b)))
+                    Ok(DataValue::Vector(Vector::F64(a * b)))
                 }
             }
         }
-        (DataValue::Vec(a), b) => {
+        (DataValue::Vector(a), b) => {
             let f = b
                 .get_float()
                 .ok_or_else(|| miette!("can only multiply vectors by numbers"))?;
             match a {
                 Vector::F32(mut v) => {
                     v *= f as f32;
-                    Ok(DataValue::Vec(Vector::F32(v)))
+                    Ok(DataValue::Vector(Vector::F32(v)))
                 }
                 Vector::F64(mut v) => {
                     v *= f;
-                    Ok(DataValue::Vec(Vector::F64(v)))
+                    Ok(DataValue::Vector(Vector::F64(v)))
                 }
             }
         }
-        (a, DataValue::Vec(b)) => {
+        (a, DataValue::Vector(b)) => {
             let f = a
                 .get_float()
                 .ok_or_else(|| miette!("can only multiply vectors by numbers"))?;
             match b {
-                Vector::F32(v) => Ok(DataValue::Vec(Vector::F32(v * f as f32))),
-                Vector::F64(v) => Ok(DataValue::Vec(Vector::F64(v * f))),
+                Vector::F32(v) => Ok(DataValue::Vector(Vector::F32(v * f as f32))),
+                Vector::F64(v) => Ok(DataValue::Vector(Vector::F64(v * f))),
             }
         }
         _ => bail!("multiplication requires numbers"),
@@ -796,40 +780,40 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
             }
             DataValue::Num(Num::Float(a / (*b as f64)))
         }
-        (DataValue::Vec(a), DataValue::Vec(b)) => match (a, b) {
-            (Vector::F32(a), Vector::F32(b)) => DataValue::Vec(Vector::F32(a / b)),
-            (Vector::F64(a), Vector::F64(b)) => DataValue::Vec(Vector::F64(a / b)),
+        (DataValue::Vector(a), DataValue::Vector(b)) => match (a, b) {
+            (Vector::F32(a), Vector::F32(b)) => DataValue::Vector(Vector::F32(a / b)),
+            (Vector::F64(a), Vector::F64(b)) => DataValue::Vector(Vector::F64(a / b)),
             (Vector::F32(a), Vector::F64(b)) => {
                 let a = a.mapv(|x| x as f64);
-                DataValue::Vec(Vector::F64(a / b))
+                DataValue::Vector(Vector::F64(a / b))
             }
             (Vector::F64(a), Vector::F32(b)) => {
                 let b = b.mapv(|x| x as f64);
-                DataValue::Vec(Vector::F64(a / b))
+                DataValue::Vector(Vector::F64(a / b))
             }
         },
-        (DataValue::Vec(a), b) => {
+        (DataValue::Vector(a), b) => {
             let b = b
                 .get_float()
                 .ok_or_else(|| miette!("can only divide vectors by numbers"))?;
             match a.clone() {
                 Vector::F32(mut v) => {
                     v /= b as f32;
-                    DataValue::Vec(Vector::F32(v))
+                    DataValue::Vector(Vector::F32(v))
                 }
                 Vector::F64(mut v) => {
                     v /= b;
-                    DataValue::Vec(Vector::F64(v))
+                    DataValue::Vector(Vector::F64(v))
                 }
             }
         }
-        (a, DataValue::Vec(b)) => {
+        (a, DataValue::Vector(b)) => {
             let a = a
                 .get_float()
                 .ok_or_else(|| miette!("can only divide numbers by vectors"))?;
             match b {
-                Vector::F32(v) => DataValue::Vec(Vector::F32(a as f32 / v)),
-                Vector::F64(v) => DataValue::Vec(Vector::F64(a / v)),
+                Vector::F32(v) => DataValue::Vector(Vector::F32(a as f32 / v)),
+                Vector::F64(v) => DataValue::Vector(Vector::F64(a / v)),
             }
         }
         _ => bail!("division requires numbers"),
@@ -840,12 +824,12 @@ define_op!(OP_MINUS, 1, false, true);
 pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(Num::Int(i)) => match i.checked_neg() {
-            Some(v) => DataValue::Num(Num::Int(v)),
+            Some(v) => DataValue::Num(Num::int(v)),
             None => bail!(IntegerOverflow { op: "minus" }),
         },
-        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(-(*f))),
-        DataValue::Vec(Vector::F64(v)) => DataValue::Vec(Vector::F64(0. - v)),
-        DataValue::Vec(Vector::F32(v)) => DataValue::Vec(Vector::F32(0. - v)),
+        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::float(-(*f))),
+        DataValue::Vector(Vector::F64(v)) => DataValue::Vector(Vector::F64(0. - v)),
+        DataValue::Vector(Vector::F32(v)) => DataValue::Vector(Vector::F32(0. - v)),
         _ => bail!("minus can only be applied to numbers"),
     })
 }
@@ -854,12 +838,12 @@ define_op!(OP_ABS, 1, false, true);
 pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Num(Num::Int(i)) => match i.checked_abs() {
-            Some(v) => DataValue::Num(Num::Int(v)),
+            Some(v) => DataValue::Num(Num::int(v)),
             None => bail!(IntegerOverflow { op: "abs" }),
         },
-        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(f.abs())),
-        DataValue::Vec(Vector::F64(v)) => DataValue::Vec(Vector::F64(v.mapv(|x| x.abs()))),
-        DataValue::Vec(Vector::F32(v)) => DataValue::Vec(Vector::F32(v.mapv(|x| x.abs()))),
+        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::float(f.abs())),
+        DataValue::Vector(Vector::F64(v)) => DataValue::Vector(Vector::F64(v.mapv(|x| x.abs()))),
+        DataValue::Vector(Vector::F32(v)) => DataValue::Vector(Vector::F32(v.mapv(|x| x.abs()))),
         _ => bail!("'abs' requires numbers"),
     })
 }
@@ -867,7 +851,7 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_SIGNUM, 1, false, true);
 pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::Int(i.signum())),
+        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::int(i.signum())),
         DataValue::Num(Num::Float(f)) => {
             if f.signum() < 0. {
                 DataValue::from(-1)
@@ -886,8 +870,8 @@ pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_FLOOR, 1, false, true);
 pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::Int(*i)),
-        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(f.floor())),
+        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::int(*i)),
+        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::float(f.floor())),
         _ => bail!("'floor' requires numbers"),
     })
 }
@@ -895,8 +879,8 @@ pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_CEIL, 1, false, true);
 pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::Int(*i)),
-        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(f.ceil())),
+        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::int(*i)),
+        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::float(f.ceil())),
         _ => bail!("'ceil' requires numbers"),
     })
 }
@@ -904,8 +888,8 @@ pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_ROUND, 1, false, true);
 pub(crate) fn op_round(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::Int(*i)),
-        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::Float(f.round())),
+        DataValue::Num(Num::Int(i)) => DataValue::Num(Num::int(*i)),
+        DataValue::Num(Num::Float(f)) => DataValue::Num(Num::float(f.round())),
         _ => bail!("'round' requires numbers"),
     })
 }
@@ -915,15 +899,15 @@ pub(crate) fn op_exp(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.exp()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.exp()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.exp()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.exp()))));
         }
         _ => bail!("'exp' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.exp())))
+    Ok(DataValue::Num(Num::float(a.exp())))
 }
 
 define_op!(OP_EXP2, 1, false, true);
@@ -931,15 +915,15 @@ pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.exp2()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.exp2()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.exp2()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.exp2()))));
         }
         _ => bail!("'exp2' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.exp2())))
+    Ok(DataValue::Num(Num::float(a.exp2())))
 }
 
 define_op!(OP_LN, 1, false, true);
@@ -947,13 +931,13 @@ pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
                 bail!(DomainError { op: "ln".into() });
             }
             return no_nan_vec_f32("ln", v.mapv(|x| x.ln()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
                 bail!(DomainError { op: "ln".into() });
             }
@@ -975,13 +959,13 @@ pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
                 bail!(DomainError { op: "log2".into() });
             }
             return no_nan_vec_f32("log2", v.mapv(|x| x.log2()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
                 bail!(DomainError { op: "log2".into() });
             }
@@ -1001,13 +985,13 @@ pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
                 bail!(DomainError { op: "log10".into() });
             }
             return no_nan_vec_f32("log10", v.mapv(|x| x.log10()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| *x <= 0.0) {
                 bail!(DomainError { op: "log10".into() });
             }
@@ -1027,15 +1011,15 @@ pub(crate) fn op_sin(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.sin()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.sin()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.sin()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.sin()))));
         }
         _ => bail!("'sin' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.sin())))
+    Ok(DataValue::Num(Num::float(a.sin())))
 }
 
 define_op!(OP_COS, 1, false, true);
@@ -1043,15 +1027,15 @@ pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.cos()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.cos()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.cos()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.cos()))));
         }
         _ => bail!("'cos' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.cos())))
+    Ok(DataValue::Num(Num::float(a.cos())))
 }
 
 define_op!(OP_TAN, 1, false, true);
@@ -1059,15 +1043,15 @@ pub(crate) fn op_tan(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.tan()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.tan()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.tan()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.tan()))));
         }
         _ => bail!("'tan' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.tan())))
+    Ok(DataValue::Num(Num::float(a.tan())))
 }
 
 define_op!(OP_ASIN, 1, false, true);
@@ -1075,13 +1059,13 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(&(*x as f64))) {
                 bail!(DomainError { op: "asin".into() });
             }
             return no_nan_vec_f32("asin", v.mapv(|x| x.asin()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(x)) {
                 bail!(DomainError { op: "asin".into() });
             }
@@ -1102,13 +1086,13 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(&(*x as f64))) {
                 bail!(DomainError { op: "acos".into() });
             }
             return no_nan_vec_f32("acos", v.mapv(|x| x.acos()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| !(-1.0..=1.0).contains(x)) {
                 bail!(DomainError { op: "acos".into() });
             }
@@ -1129,15 +1113,15 @@ pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.atan()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.atan()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.atan()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.atan()))));
         }
         _ => bail!("'atan' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.atan())))
+    Ok(DataValue::Num(Num::float(a.atan())))
 }
 
 define_op!(OP_ATAN2, 2, false, true);
@@ -1153,7 +1137,7 @@ pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
         _ => bail!("'atan2' requires numbers"),
     };
 
-    Ok(DataValue::Num(Num::Float(a.atan2(b))))
+    Ok(DataValue::Num(Num::float(a.atan2(b))))
 }
 
 define_op!(OP_SINH, 1, false, true);
@@ -1161,15 +1145,15 @@ pub(crate) fn op_sinh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.sinh()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.sinh()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.sinh()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.sinh()))));
         }
         _ => bail!("'sinh' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.sinh())))
+    Ok(DataValue::Num(Num::float(a.sinh())))
 }
 
 define_op!(OP_COSH, 1, false, true);
@@ -1177,15 +1161,15 @@ pub(crate) fn op_cosh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.cosh()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.cosh()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.cosh()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.cosh()))));
         }
         _ => bail!("'cosh' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.cosh())))
+    Ok(DataValue::Num(Num::float(a.cosh())))
 }
 
 define_op!(OP_TANH, 1, false, true);
@@ -1193,15 +1177,15 @@ pub(crate) fn op_tanh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.tanh()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.tanh()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.tanh()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.tanh()))));
         }
         _ => bail!("'tanh' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.tanh())))
+    Ok(DataValue::Num(Num::float(a.tanh())))
 }
 
 define_op!(OP_ASINH, 1, false, true);
@@ -1209,15 +1193,15 @@ pub(crate) fn op_asinh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
-            return Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x.asinh()))));
+        DataValue::Vector(Vector::F32(v)) => {
+            return Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x.asinh()))));
         }
-        DataValue::Vec(Vector::F64(v)) => {
-            return Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x.asinh()))));
+        DataValue::Vector(Vector::F64(v)) => {
+            return Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x.asinh()))));
         }
         _ => bail!("'asinh' requires numbers"),
     };
-    Ok(DataValue::Num(Num::Float(a.asinh())))
+    Ok(DataValue::Num(Num::float(a.asinh())))
 }
 
 define_op!(OP_ACOSH, 1, false, true);
@@ -1225,13 +1209,13 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| (*x as f64) < 1.0) {
                 bail!(DomainError { op: "acosh".into() });
             }
             return no_nan_vec_f32("acosh", v.mapv(|x| x.acosh()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| *x < 1.0) {
                 bail!(DomainError { op: "acosh".into() });
             }
@@ -1252,13 +1236,13 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| (*x as f64).abs() >= 1.0) {
                 bail!(DomainError { op: "atanh".into() });
             }
             return no_nan_vec_f32("atanh", v.mapv(|x| x.atanh()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| x.abs() >= 1.0) {
                 bail!(DomainError { op: "atanh".into() });
             }
@@ -1280,13 +1264,13 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             if v.iter().any(|x| *x < 0.0) {
                 bail!(DomainError { op: "sqrt".into() });
             }
             return no_nan_vec_f32("sqrt", v.mapv(|x| x.sqrt()));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             if v.iter().any(|x| *x < 0.0) {
                 bail!(DomainError { op: "sqrt".into() });
             }
@@ -1315,7 +1299,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(Num::Int(i)) => *i as f64,
         DataValue::Num(Num::Float(f)) => *f,
-        DataValue::Vec(Vector::F32(v)) => {
+        DataValue::Vector(Vector::F32(v)) => {
             let b = args[1]
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
@@ -1324,7 +1308,7 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec_f32("pow", v.mapv(|x| x.powf(b as f32)));
         }
-        DataValue::Vec(Vector::F64(v)) => {
+        DataValue::Vector(Vector::F64(v)) => {
             let b = args[1]
                 .get_float()
                 .ok_or_else(|| miette!("'pow' requires numbers"))?;
@@ -1359,7 +1343,7 @@ pub(crate) fn op_mod(args: &[DataValue]) -> Result<DataValue> {
             // performs internally overflows too, distinct from the
             // zero-divisor case just above.
             match a.checked_rem(*b) {
-                Some(v) => DataValue::Num(Num::Int(v)),
+                Some(v) => DataValue::Num(Num::int(v)),
                 None => bail!(IntegerOverflow { op: "mod" }),
             }
         }
@@ -1558,7 +1542,7 @@ pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
                     bail!("'concat' requires strings, lists, or JSON objects");
                 }
             }
-            Ok(DataValue::Json(JsonData::new(ret)))
+            Ok(DataValue::Json(json_from_serde(&ret)))
         }
         _ => bail!("'concat' requires strings, lists, or JSON objects"),
     }
@@ -1799,7 +1783,7 @@ pub(crate) fn op_is_list(args: &[DataValue]) -> Result<DataValue> {
 
 define_op!(OP_IS_VEC, 1, false, true);
 pub(crate) fn op_is_vec(args: &[DataValue]) -> Result<DataValue> {
-    Ok(DataValue::from(matches!(args[0], DataValue::Vec(_))))
+    Ok(DataValue::from(matches!(args[0], DataValue::Vector(_))))
 }
 
 define_op!(OP_APPEND, 2, false, true);
@@ -1848,7 +1832,7 @@ pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
         DataValue::List(l) => l.len() as i64,
         DataValue::Str(s) => s.chars().count() as i64,
         DataValue::Bytes(b) => b.len() as i64,
-        DataValue::Vec(v) => v.len() as i64,
+        DataValue::Vector(v) => v.len() as i64,
         _ => bail!("'length' requires lists"),
     }))
 }
@@ -2078,8 +2062,8 @@ fn json2val(res: Value) -> DataValue {
             }
         }
         Value::String(s) => DataValue::Str(GermanStr::from(s)),
-        Value::Array(arr) => DataValue::Json(JsonData::new(json!(arr))),
-        Value::Object(obj) => DataValue::Json(JsonData::new(json!(obj))),
+        Value::Array(arr) => DataValue::Json(json_from_serde(&json!(arr))),
+        Value::Object(obj) => DataValue::Json(json_from_serde(&json!(obj))),
     }
 }
 
@@ -2206,7 +2190,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Regex(r) => !r.0.as_str().is_empty(),
         DataValue::List(l) => !l.is_empty(),
         DataValue::Set(s) => !s.is_empty(),
-        DataValue::Vec(_) => true,
+        DataValue::Vector(_) => true,
         DataValue::Validity(vld) => vld.is_assert.0,
         DataValue::Interval(_) => true,
         DataValue::Bot => false,
@@ -2233,7 +2217,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Regex(r) => i64::from(!r.0.as_str().is_empty()),
         DataValue::List(l) => i64::from(!l.is_empty()),
         DataValue::Set(s) => i64::from(!s.is_empty()),
-        DataValue::Vec(_) => 1,
+        DataValue::Vector(_) => 1,
         DataValue::Validity(vld) => i64::from(vld.is_assert.0),
         DataValue::Interval(_) => 1,
         DataValue::Bot => 0,
@@ -2256,7 +2240,7 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
                 let f = n.get_float();
                 DataValue::Num(Num::Int(f as i64))
             }
-            Some(i) => DataValue::Num(Num::Int(i)),
+            Some(i) => DataValue::Num(Num::int(i)),
         },
         DataValue::Null => DataValue::from(0),
         DataValue::Bool(b) => DataValue::from(if *b { 1 } else { 0 }),
@@ -2266,7 +2250,7 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("The string cannot be interpreted as int"))?
                 .into()
         }
-        DataValue::Validity(vld) => DataValue::Num(Num::Int(vld.timestamp.raw())),
+        DataValue::Validity(vld) => DataValue::Num(Num::int(vld.timestamp.raw())),
         v => bail!("'to_int' does not recognize {:?}", v),
     })
 }
@@ -2345,7 +2329,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                             .ok_or_else(|| miette!("'vec' requires a list of numbers"))?;
                         row.fill(f as f32);
                     }
-                    Ok(DataValue::Vec(Vector::F32(res_arr)))
+                    Ok(DataValue::Vector(Vector::F32(res_arr)))
                 }
                 VecElementType::F64 => {
                     let mut res_arr = ndarray::Array1::zeros(arr.len());
@@ -2355,7 +2339,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                             .ok_or_else(|| miette!("'vec' requires a list of numbers"))?;
                         row.fill(f);
                     }
-                    Ok(DataValue::Vec(Vector::F64(res_arr)))
+                    Ok(DataValue::Vector(Vector::F64(res_arr)))
                 }
             }
         }
@@ -2368,7 +2352,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                         .ok_or_else(|| miette!("'vec' requires a list of numbers"))?;
                     row.fill(f as f32);
                 }
-                Ok(DataValue::Vec(Vector::F32(res_arr)))
+                Ok(DataValue::Vector(Vector::F32(res_arr)))
             }
             VecElementType::F64 => {
                 let mut res_arr = ndarray::Array1::zeros(l.len());
@@ -2378,17 +2362,17 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                         .ok_or_else(|| miette!("'vec' requires a list of numbers"))?;
                     row.fill(f);
                 }
-                Ok(DataValue::Vec(Vector::F64(res_arr)))
+                Ok(DataValue::Vector(Vector::F64(res_arr)))
             }
         },
-        DataValue::Vec(v) => match (t, v) {
-            (VecElementType::F32, Vector::F32(v)) => Ok(DataValue::Vec(Vector::F32(v.clone()))),
-            (VecElementType::F64, Vector::F64(v)) => Ok(DataValue::Vec(Vector::F64(v.clone()))),
+        DataValue::Vector(v) => match (t, v) {
+            (VecElementType::F32, Vector::F32(v)) => Ok(DataValue::Vector(Vector::F32(v.clone()))),
+            (VecElementType::F64, Vector::F64(v)) => Ok(DataValue::Vector(Vector::F64(v.clone()))),
             (VecElementType::F32, Vector::F64(v)) => {
-                Ok(DataValue::Vec(Vector::F32(v.mapv(|x| x as f32))))
+                Ok(DataValue::Vector(Vector::F32(v.mapv(|x| x as f32))))
             }
             (VecElementType::F64, Vector::F32(v)) => {
-                Ok(DataValue::Vec(Vector::F64(v.mapv(|x| x as f64))))
+                Ok(DataValue::Vector(Vector::F64(v.mapv(|x| x as f64))))
             }
         },
         DataValue::Str(s) => {
@@ -2422,7 +2406,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                         // In bounds: `chunks_exact(4)` yields 4-byte chunks.
                         .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
                         .collect();
-                    Ok(DataValue::Vec(Vector::F32(ndarray::Array1::from(v))))
+                    Ok(DataValue::Vector(Vector::F32(ndarray::Array1::from(v))))
                 }
                 VecElementType::F64 => {
                     let v: Vec<f64> = bytes
@@ -2430,7 +2414,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                         // In bounds: `chunks_exact(8)` yields 8-byte chunks.
                         .map(|c| f64::from_le_bytes(c.try_into().expect("chunk of 8")))
                         .collect();
-                    Ok(DataValue::Vec(Vector::F64(ndarray::Array1::from(v))))
+                    Ok(DataValue::Vector(Vector::F64(ndarray::Array1::from(v))))
                 }
             }
         }
@@ -2453,14 +2437,14 @@ pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
             for mut row in res_arr.axis_iter_mut(ndarray::Axis(0)) {
                 row.fill(rng.random::<f64>() as f32);
             }
-            Ok(DataValue::Vec(Vector::F32(res_arr)))
+            Ok(DataValue::Vector(Vector::F32(res_arr)))
         }
         VecElementType::F64 => {
             let mut res_arr = ndarray::Array1::zeros(len);
             for mut row in res_arr.axis_iter_mut(ndarray::Axis(0)) {
                 row.fill(rng.random::<f64>());
             }
-            Ok(DataValue::Vec(Vector::F64(res_arr)))
+            Ok(DataValue::Vector(Vector::F64(res_arr)))
         }
     }
 }
@@ -2469,7 +2453,7 @@ define_op!(OP_L2_NORMALIZE, 1, false, true);
 pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
     match a {
-        DataValue::Vec(Vector::F32(a)) => {
+        DataValue::Vector(Vector::F32(a)) => {
             let norm = a.dot(a).sqrt();
             if norm == 0.0 {
                 bail!(DomainError {
@@ -2478,7 +2462,7 @@ pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
             }
             no_nan_vec_f32("l2_normalize", a / norm)
         }
-        DataValue::Vec(Vector::F64(a)) => {
+        DataValue::Vector(Vector::F64(a)) => {
             let norm = a.dot(a).sqrt();
             if norm == 0.0 {
                 bail!(DomainError {
@@ -2496,14 +2480,14 @@ pub(crate) fn op_l2_dist(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
     let b = &args[1];
     match (a, b) {
-        (DataValue::Vec(Vector::F32(a)), DataValue::Vec(Vector::F32(b))) => {
+        (DataValue::Vector(Vector::F32(a)), DataValue::Vector(Vector::F32(b))) => {
             if a.len() != b.len() {
                 bail!("'l2_dist' requires two vectors of the same length");
             }
             let diff = a - b;
             Ok(DataValue::from(diff.dot(&diff) as f64))
         }
-        (DataValue::Vec(Vector::F64(a)), DataValue::Vec(Vector::F64(b))) => {
+        (DataValue::Vector(Vector::F64(a)), DataValue::Vector(Vector::F64(b))) => {
             if a.len() != b.len() {
                 bail!("'l2_dist' requires two vectors of the same length");
             }
@@ -2519,14 +2503,14 @@ pub(crate) fn op_ip_dist(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
     let b = &args[1];
     match (a, b) {
-        (DataValue::Vec(Vector::F32(a)), DataValue::Vec(Vector::F32(b))) => {
+        (DataValue::Vector(Vector::F32(a)), DataValue::Vector(Vector::F32(b))) => {
             if a.len() != b.len() {
                 bail!("'ip_dist' requires two vectors of the same length");
             }
             let dot = a.dot(b);
             Ok(DataValue::from(1. - dot as f64))
         }
-        (DataValue::Vec(Vector::F64(a)), DataValue::Vec(Vector::F64(b))) => {
+        (DataValue::Vector(Vector::F64(a)), DataValue::Vector(Vector::F64(b))) => {
             if a.len() != b.len() {
                 bail!("'ip_dist' requires two vectors of the same length");
             }
@@ -2542,7 +2526,7 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
     let a = &args[0];
     let b = &args[1];
     match (a, b) {
-        (DataValue::Vec(Vector::F32(a)), DataValue::Vec(Vector::F32(b))) => {
+        (DataValue::Vector(Vector::F32(a)), DataValue::Vector(Vector::F32(b))) => {
             if a.len() != b.len() {
                 bail!("'cos_dist' requires two vectors of the same length");
             }
@@ -2556,7 +2540,7 @@ pub(crate) fn op_cos_dist(args: &[DataValue]) -> Result<DataValue> {
             let dot = a.dot(b) as f64;
             no_nan("cos_dist", 1. - dot / (a_norm * b_norm).sqrt())
         }
-        (DataValue::Vec(Vector::F64(a)), DataValue::Vec(Vector::F64(b))) => {
+        (DataValue::Vector(Vector::F64(a)), DataValue::Vector(Vector::F64(b))) => {
             if a.len() != b.len() {
                 bail!("'cos_dist' requires two vectors of the same length");
             }

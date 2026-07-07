@@ -106,6 +106,60 @@ impl Num {
         Num(Repr::Float(v))
     }
 
+    /// NUMERIC comparison: exact real-value order with ties EQUAL —
+    /// `1 == 1.0` here, unlike the identity/storage order where they are
+    /// adjacent distinct values. This is the expression layer's
+    /// comparison authority for numbers; `Ord` remains the storage
+    /// mirror. Two authorities, both named, never confused.
+    pub fn cmp_numeric(self, other: Num) -> Ordering {
+        // The total order is (real value, repr tie-break); stripping the
+        // tie-break yields the numeric order exactly.
+        match self.cmp(&other) {
+            Ordering::Equal => Ordering::Equal,
+            o => {
+                if self.repr_byte() != other.repr_byte() {
+                    // Could be a pure tie-break difference: re-check by
+                    // comparing with reprs swapped-normalized.
+                    let same = matches!(
+                        (self.as_int(), other.as_float()),
+                        (Some(i), Some(f)) if int_float_eq(i, f)
+                    ) || matches!(
+                        (self.as_float(), other.as_int()),
+                        (Some(f), Some(i)) if int_float_eq(i, f)
+                    );
+                    if same { Ordering::Equal } else { o }
+                } else {
+                    o
+                }
+            }
+        }
+    }
+
+    /// Numeric equality (see [`Num::cmp_numeric`]).
+    pub fn eq_numeric(self, other: Num) -> bool {
+        self.cmp_numeric(other) == Ordering::Equal
+    }
+
+    /// Numeric maximum (ties keep `self` — deterministic and
+    /// accumulation-friendly). Expression authority, like
+    /// [`Num::cmp_numeric`].
+    pub fn max_numeric(self, other: Num) -> Num {
+        if self.cmp_numeric(other) == Ordering::Less {
+            other
+        } else {
+            self
+        }
+    }
+
+    /// Numeric minimum (ties keep `self`).
+    pub fn min_numeric(self, other: Num) -> Num {
+        if self.cmp_numeric(other) == Ordering::Greater {
+            other
+        } else {
+            self
+        }
+    }
+
     /// The read-only representation view: pattern-matching ergonomics
     /// WITHOUT construction authority — `NumRepr` cannot be turned back
     /// into a `Num` except through the normalizing constructors, so the
@@ -417,6 +471,18 @@ impl std::hash::Hash for Num {
     }
 }
 
+/// Exact int/float real-value equality (no lossy casts): true iff the
+/// float is integral, in range, and equal.
+fn int_float_eq(i: i64, f: f64) -> bool {
+    if !f.is_finite() || f.fract() != 0.0 {
+        return false;
+    }
+    if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
+        return false;
+    }
+    f as i64 == i
+}
+
 /// The read-only view of a `Num`'s representation (see [`Num::repr`]):
 /// match on it freely; mint through the normalizing constructors only.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -633,6 +699,38 @@ mod tests {
             assert_eq!(used, k.len());
             assert_eq!(back, n, "round-trip changed identity for {n:?}");
             assert_eq!(back.repr_byte(), n.repr_byte(), "repr changed for {n:?}");
+        }
+    }
+
+    /// The numeric authority: ties equal, exactness beyond 2^53, named
+    /// apart from the storage order.
+    #[test]
+    fn numeric_comparison_is_value_order_with_ties_equal() {
+        assert_eq!(Num::int(1).cmp_numeric(Num::float(1.0)), Ordering::Equal);
+        assert_eq!(Num::float(1.0).cmp_numeric(Num::int(1)), Ordering::Equal);
+        assert!(Num::int(1).eq_numeric(Num::float(1.0)));
+        assert_eq!(Num::int(1).cmp_numeric(Num::float(1.5)), Ordering::Less);
+        assert_eq!(Num::float(2.5).cmp_numeric(Num::int(2)), Ordering::Greater);
+        // Beyond 2^53: floats cannot represent the int; NOT equal.
+        assert_ne!(
+            Num::int((1 << 53) + 1).cmp_numeric(Num::float(9_007_199_254_740_992.0)),
+            Ordering::Equal
+        );
+        // The storage order keeps its tie-break; numeric drops it. Both
+        // named, both true.
+        assert_eq!(Num::int(1).cmp(&Num::float(1.0)), Ordering::Less);
+        // Differential vs the oracle over the corpus: equal reals are the
+        // ONLY places the two authorities differ.
+        let mut c = corpus();
+        extend_random(&mut c, 300, 0xACE);
+        for &a in &c {
+            for &b in &c {
+                let num = a.cmp_numeric(b);
+                let sto = a.cmp(&b);
+                if num != sto {
+                    assert_eq!(num, Ordering::Equal, "authorities may differ only on ties");
+                }
+            }
         }
     }
 
