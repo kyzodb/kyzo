@@ -76,3 +76,9 @@ futures = "0.3"
 # `cargo tree` sweep as the TLS stack: no `cc`/`*-sys` crate present.
 tower-http = { version = "0.6", features = ["cors", "auth", "compression-gzip", "compression-br"] }
 rayon = "1"
+
+# A binary crate's integration tests (tests/) are a separate crate that sees
+# only dev-dependencies, not the bin's regular deps — so tempfile is declared
+# again here for repl_smoke.rs (Cargo dedups the one version).
+[dev-dependencies]
+tempfile = "3"

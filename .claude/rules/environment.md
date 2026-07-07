@@ -20,6 +20,15 @@ it, and say you did.
   C-source dependency fails to build here, one rung above `scripts/check-pure-rust.sh`).
 - Named commands: `justfile`. Two services in `docker-compose.yml`: `kyzo-dev` (32 GiB RSS,
   parallel) and `kyzo-bench` (96 GiB, single-threaded).
+- **Target-dir isolation:** the container builds to the `target-cache` named volume at `/target`
+  (`CARGO_TARGET_DIR`), and an anonymous volume shadows `/workspace/target` so the host's `./target`
+  (possibly a different glibc) is invisible in-container. The only binary the container can run is
+  one it built itself — run it with `just run <args>`, never a hand-typed `./target/...` path (that
+  was a real footgun: a stale host binary linked against a newer glibc, un-runnable in-container).
+- **The gate tests all first-party `kyzo-*` crates**, not just `kyzo-core`: `just test` is
+  `--workspace --exclude fjall --exclude lsm-tree --exclude xtask`, so a break OUTSIDE the core (a
+  `kyzo-bin` CLI regression, an interop drift) fails the gate. `cargo check --workspace` compiles
+  everything; running only `-p kyzo` tests would miss runtime breakage in the other members.
 
 ## The rule
 

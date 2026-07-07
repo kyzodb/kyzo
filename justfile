@@ -1,7 +1,8 @@
-# KyzoDB gates, made boring. Run natively for speed, or in the pinned
-# container for an official gate:
+# KyzoDB gates, made boring. EVERY recipe runs in the pinned container — there
+# is no native path (pre-bash-guard.sh blocks native cargo/just):
 #
 #     docker compose run --rm kyzo-dev  just gate      # the seal
+#     docker compose run --rm kyzo-dev  just run repl --engine mem   # run the binary
 #     docker compose run --rm kyzo-bench just bench     # measurements
 #
 # No `ulimit -v` here: the container's cgroup RSS limit (compose mem_limit) is
@@ -31,9 +32,19 @@ env-report:
 check:
     cargo check --workspace --all-targets
 
-# Default config, lib + integration.
+# Run the freshly-built binary IN the container (never hand-invoke ./target/…,
+# which is the host build — possibly a different glibc). E.g.:
+#     just run repl --engine mem
+run *ARGS:
+    cargo run -p kyzo-bin --release -- {{ARGS}}
+
+# Default config, lib + integration, across ALL first-party kyzo-* crates
+# (core, bin, crashfs, lsp, arrow-interop) — NOT the vendored KV (fjall/lsm-tree,
+# whose tests are #118's) or xtask (dev tooling). This is what catches a break
+# OUTSIDE kyzo-core — a kyzo-bin CLI regression, an interop drift — that a
+# core-only `-p kyzo` run sails past.
 test:
-    cargo test -p kyzo --release
+    cargo test --workspace --exclude fjall --exclude lsm-tree --exclude xtask --release
 
 # Features config (bench/fuzz internals).
 test-features:
