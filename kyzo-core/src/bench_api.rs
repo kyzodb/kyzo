@@ -853,7 +853,11 @@ pub fn bare_fjall_put_batches(
         let mut tx = storage.write_tx()?;
         for i in 0..batch_rows {
             let k = (b * batch_rows + i) as i64;
-            let key = crate::data::value::encode_tuple_key(42, &[DataValue::from(k)]);
+            let key = {
+                use crate::data::value::TupleT;
+                [DataValue::from(k)]
+                    .encode_as_key(crate::data::value::RelationId::new(42).expect("below cap"))
+            };
             tx.put(key.as_bytes(), &k.to_be_bytes())?;
         }
         tx.commit()?;

@@ -33,12 +33,12 @@ use std::collections::BTreeMap;
 
 use miette::Result;
 
-use crate::current_validity;
-use crate::data::fact_payload::decode_fact_payload;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
+use crate::data::value::decode_values_all;
 use crate::fixed_rule::DEFAULT_FIXED_RULES;
 use crate::parse::parse_script;
+use crate::runtime::current_validity;
 use crate::runtime::relation::RelationHandle;
 
 /// Parse a KyzoScript source string with empty params and the real default
@@ -57,7 +57,7 @@ pub fn fuzz_parse_script(src: &str) -> Result<()> {
 /// `decode_fact_payload` itself is `pub(crate)`.
 pub fn fuzz_decode_fact_payload(data: &[u8]) -> Result<Tuple> {
     let mut row: Tuple = Tuple::new();
-    decode_fact_payload(data, &mut row)?;
+    row.extend(decode_values_all(data)?);
     Ok(row)
 }
 
@@ -74,7 +74,7 @@ pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
 /// re-exported so the fuzz target can check
 /// [`fuzz_decode_relation_handle_id`]'s result without duplicating the
 /// constant.
-pub const MAX_RELATION_ID: u64 = crate::data::value::MAX_RELATION_ID;
+pub const MAX_RELATION_ID: u64 = crate::data::value::RelationId::CAP;
 
 /// Extract an `Interval`'s bounds as raw `i64`s. `Interval` (`data/
 /// value.rs`) is public, but its `start()`/`end()` accessors are
@@ -83,7 +83,10 @@ pub const MAX_RELATION_ID: u64 = crate::data::value::MAX_RELATION_ID;
 /// `DataValue::Interval`, without widening the accessors themselves.
 pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
     match v {
-        DataValue::Interval(iv) => Some((iv.start(), iv.end())),
+        DataValue::Interval(iv) => match (iv.start(), iv.end()) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        },
         _ => None,
     }
 }
