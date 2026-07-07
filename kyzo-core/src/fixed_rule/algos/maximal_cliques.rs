@@ -460,7 +460,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::data::tuple::Tuple;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {

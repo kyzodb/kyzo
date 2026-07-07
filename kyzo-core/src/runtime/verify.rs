@@ -79,13 +79,14 @@ use crate::data::program::{
     InputProgram, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed,
 };
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
-use crate::data::value::{AsOf, ValidityTs, current_validity};
+use crate::data::value::Tuple;
+use crate::data::value::{AsOf, ValidityTs};
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
 use crate::query::laws;
 use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::stored::StoredWithValidityRA;
+use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::{ReadTx, Storage};

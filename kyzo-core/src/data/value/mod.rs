@@ -51,7 +51,7 @@ pub mod wide;
 
 pub use arena::{Arena, BulkObserver, Epoch, EpochRemap, Frame, Snapshot};
 pub use canonical::{
-    CanonicalBytes, Datum, DecodeError, append_canonical, decode, encode, encode_owned,
+    CanonicalBytes, Datum, DecodeError, append_canonical, decode, encode, encode_owned, skip_one,
 };
 pub use cell::{Minted, Value};
 pub use code::{Code, StampedCode};
@@ -546,10 +546,77 @@ pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, Deco
     Ok(out)
 }
 
+/// A tuple's BARE encoding: canonical concatenation with no relation
+/// prefix — the in-memory fixpoint stores' row form (byte order there IS
+/// value order, by the Ord mirror law).
+pub fn encode_tuple_bare(vals: &[DataValue]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for v in vals {
+        canonical::append_canonical(&mut out, v);
+    }
+    out
+}
+
+/// Decode a bare row back to values. Total.
+pub fn decode_tuple_bare(bytes: &[u8]) -> Result<Tuple, DecodeError> {
+    decode_values_all(bytes)
+}
+
+/// The byte length of the first `n_cols` encodings of a bare row (no
+/// materialization — the binary-search comparator's walk). `None` if the
+/// row has fewer columns.
+pub fn bare_prefix_len(bytes: &[u8], n_cols: usize) -> Option<usize> {
+    let mut at = 0usize;
+    for _ in 0..n_cols {
+        if at >= bytes.len() {
+            return None;
+        }
+        at += canonical::skip_one(&bytes[at..]).ok()?;
+    }
+    Some(at)
+}
+
+/// A bare LOWER scan bound from column-wise [`ScanBound`]s.
+pub fn bare_bounds_lower(bounds: &[ScanBound]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for b in bounds {
+        match b {
+            ScanBound::Value(v) => canonical::append_canonical(&mut out, v),
+            ScanBound::Least => break,
+            ScanBound::Greatest => {
+                out.push(0xFF);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// A bare UPPER scan bound: like [`bare_bounds_lower`] (a `Greatest`
+/// closes with the 0xFF byte); pair with an inclusive byte compare.
+pub fn bare_bounds_upper(bounds: &[ScanBound]) -> Vec<u8> {
+    bare_bounds_lower(bounds)
+}
+
 /// Append a stored VALUE payload's rows onto `tuple` (plain canonical
 /// concatenation — the non-temporal keyspaces' value form).
 pub fn extend_tuple_from_v(tuple: &mut Tuple, val: &[u8]) -> Result<(), DecodeError> {
     tuple.extend(decode_values_all(val)?);
+    Ok(())
+}
+
+/// Decode a stored relation key's columns into a scratch tuple (the
+/// batch reader's zero-fresh-allocation path).
+pub fn decode_key_into(key: &[u8], out: &mut Tuple) -> Result<(), DecodeError> {
+    if key.len() < EncodedKey::RELATION_PREFIX_LEN {
+        return Err(DecodeError::Truncated);
+    }
+    let mut at = EncodedKey::RELATION_PREFIX_LEN;
+    while at < key.len() {
+        let (v, used) = canonical::decode_one(&key[at..])?;
+        out.push(v);
+        at += used;
+    }
     Ok(())
 }
 

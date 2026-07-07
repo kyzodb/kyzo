@@ -20,7 +20,7 @@ use super::{StoredRowTooShortError, TupleIter};
 use crate::data::expr::{Bytecode, Expr, compute_bounds};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, DataValue};
+use crate::data::value::{AsOf, DataValue, ScanBound};
 use crate::engines::segments::{Segment, SegmentEngine, Segments};
 use crate::query::batch_ops::refine_batch;
 use crate::query::batch_ops::{
@@ -271,8 +271,8 @@ impl StoredRA {
                 } else {
                     let (l_bound, u_bound) =
                         compute_bounds(&self.filters, other_bindings).unwrap_or_default();
-                    if !l_bound.iter().all(|v| *v == DataValue::Null)
-                        || !u_bound.iter().all(|v| *v == DataValue::Bot)
+                    if l_bound.iter().any(|b| *b != ScanBound::Least)
+                        || u_bound.iter().any(|b| *b != ScanBound::Greatest)
                     {
                         Some((l_bound, u_bound))
                     } else {
@@ -392,8 +392,8 @@ impl StoredWithValidityRA {
         } else {
             let (l_bound, u_bound) =
                 compute_bounds(&self.filters, other_bindings).unwrap_or_default();
-            if !l_bound.iter().all(|v| *v == DataValue::Null)
-                || !u_bound.iter().all(|v| *v == DataValue::Bot)
+            if l_bound.iter().any(|b| *b != ScanBound::Least)
+                || u_bound.iter().any(|b| *b != ScanBound::Greatest)
             {
                 Some((l_bound, u_bound))
             } else {

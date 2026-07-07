@@ -148,8 +148,8 @@ use crate::data::bitemporal::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
-use crate::data::value::{AsOf, DataValue, Interval, StoredValiditySlot, ValidityTs};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
+use crate::data::value::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -286,7 +286,10 @@ pub(crate) struct RawVersion {
 /// of the same public encoding API every caller of this module already
 /// uses.
 pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
-    let lower = Tuple::default().encode_as_key(storage.id).into_vec();
+    let lower = Tuple::default()
+        .encode_as_key(storage.id)
+        .as_bytes()
+        .to_vec();
     let upper = (storage.id.0 + 1).to_be_bytes().to_vec();
     (lower, upper)
 }
@@ -423,9 +426,11 @@ fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Resu
         // `start < end` always; a corrupt stored row that defeated the
         // write-side reservation would surface here as a typed error,
         // never a panic (law 5).
-        let iv = Interval::new(start, end).map_err(|e| {
-            miette!("temporal derivation produced an invalid interval [{start}, {end}): {e}")
-        })?;
+        // Closed normal form on the discrete grid: the stored half-open
+        // [start, end) becomes [start, end - 1]; `end` is strictly later
+        // than `start` by the write-side reservation, so the subtraction
+        // cannot underflow past the grid.
+        let iv = Interval::new(Bound::Closed(start), Bound::Closed(end - 1));
         let mut row = tuple;
         row.push(DataValue::Interval(iv));
         out.push(row);
@@ -646,8 +651,8 @@ impl DeltaRA {
 /// which is exactly why this is factored out and named rather than inlined.
 fn posting_window_bounds(posting: &RelationHandle, lo: i64, hi: i64) -> (Vec<u8>, Vec<u8>) {
     let col_at = |ts: i64| vec![StoredValiditySlot::new(ValidityTs::from_raw(ts)).as_datavalue()];
-    let lower = col_at(hi).encode_as_key(posting.id).into_vec();
-    let upper = col_at(lo).encode_as_key(posting.id).into_vec();
+    let lower = col_at(hi).encode_as_key(posting.id).as_bytes().to_vec();
+    let upper = col_at(lo).encode_as_key(posting.id).as_bytes().to_vec();
     (lower, upper)
 }
 

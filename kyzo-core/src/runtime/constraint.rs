@@ -75,7 +75,7 @@ use crate::data::program::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ValidityTs};
 use crate::fixed_rule::NamedRows;
 use crate::parse::parse_script;

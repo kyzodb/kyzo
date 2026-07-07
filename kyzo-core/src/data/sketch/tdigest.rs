@@ -97,7 +97,7 @@ impl TDigest {
         let mut nums: Vec<f64> = Vec::with_capacity(values.len());
         for v in values {
             match v {
-                DataValue::Num(n) => nums.push(n.get_float()),
+                DataValue::Num(n) => nums.push(n.to_f64()),
                 other => bail!("t-digest requires numeric values, got {other:?}"),
             }
         }
@@ -293,7 +293,7 @@ impl TDigest {
 
     /// The digest as a `DataValue::Bytes`.
     pub(crate) fn to_value(&self) -> DataValue {
-        DataValue::Bytes(GermanStr::from_bytes(&self.to_bytes()))
+        DataValue::Bytes(self.to_bytes())
     }
 }
 
@@ -306,11 +306,11 @@ fn interpolate(target: f64, r0: f64, v0: f64, r1: f64, v1: f64) -> f64 {
 }
 
 /// Sort raw `f64`s into ascending order via the exact [`Num`] total order
-/// (the memcmp order), returning weight-1 points. Using `Num`'s `Ord` rather
+/// (the canonical order), returning weight-1 points. Using `Num`'s `Ord` rather
 /// than `f64::partial_cmp` keeps NaN handling and the int/float boundary
 /// consistent with the rest of the engine and total (no `unwrap` on `None`).
 fn sort_floats(mut xs: Vec<f64>) -> Vec<(f64, f64)> {
-    xs.sort_by_key(|x| Num::Float(*x));
+    xs.sort_by_key(|x| Num::float(*x));
     xs.into_iter().map(|x| (x, 1.0)).collect()
 }
 

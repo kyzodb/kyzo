@@ -283,11 +283,11 @@ pub(crate) mod storage;
 #[cfg(test)]
 mod jepsen_trials;
 
+pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
-pub use data::tuple::{EncodedKey, Tuple, decode_tuple_from_key, encode_tuple_key};
 pub use data::value::{
-    AsOf, DataValue, GermanStr, JsonData, Num, RegexWrapper, UuidWrapper, Validity, ValidityTs,
-    VecElementType, Vector, current_validity,
+    AsOf, DataValue, EncodedKey, Num, RegexSource, Tuple, UuidWrapper, Validity, ValidityTs,
+    Vector, decode_tuple_from_key,
 };
 pub use storage::backup::{dump_storage, restore_storage};
 pub use storage::fjall::{

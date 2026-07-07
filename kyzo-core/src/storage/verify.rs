@@ -18,7 +18,7 @@
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::tuple::{decode_tuple_from_key, extend_tuple_from_v};
+use crate::data::value::{decode_tuple_from_key, extend_tuple_from_v};
 use crate::storage::{ReadTx, Storage};
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption

@@ -143,6 +143,163 @@ pub fn encode_owned(v: &DataValue) -> CanonicalBytes {
     CanonicalBytes(out)
 }
 
+/// The length of the FIRST canonical encoding in `bytes`, without
+/// materializing the value: a no-allocation grammar walk (the hot-path
+/// arm of the one decoder — binary searches over encoded rows skip, not
+/// decode). Differentially locked to [`decode_one`]'s consumed length.
+pub fn skip_one(bytes: &[u8]) -> Result<usize, DecodeError> {
+    skip_at(bytes, 0)
+}
+
+fn skip_at(bytes: &[u8], depth: usize) -> Result<usize, DecodeError> {
+    if depth > MAX_DEPTH {
+        return Err(DecodeError::TooDeep);
+    }
+    let Some(&tag_byte) = bytes.first() else {
+        return Err(DecodeError::Truncated);
+    };
+    let Some(tag) = Tag::from_byte(tag_byte) else {
+        return Err(DecodeError::BadTag(tag_byte));
+    };
+    let body = &bytes[1..];
+    let need = |n: usize| -> Result<usize, DecodeError> {
+        if body.len() < n {
+            Err(DecodeError::Truncated)
+        } else {
+            Ok(1 + n)
+        }
+    };
+    match tag {
+        Tag::Null => Ok(1),
+        Tag::Bool => need(1),
+        Tag::Num => {
+            let (_, used) = Num::decode_key(body).map_err(DecodeError::Num)?;
+            Ok(1 + used)
+        }
+        Tag::Str | Tag::Bytes => Ok(1 + skip_terminated(body)?),
+        Tag::Uuid => need(16),
+        Tag::Regex => {
+            let Some(&flag_byte) = body.first() else {
+                return Err(DecodeError::Truncated);
+            };
+            if RegexFlags::from_bits(flag_byte).is_none() {
+                return Err(DecodeError::BadRegexFlags);
+            }
+            Ok(2 + skip_terminated(&body[1..])?)
+        }
+        Tag::Json => {
+            let jused = skip_json(body, 0)?;
+            if body.len() < jused + 8 {
+                return Err(DecodeError::Truncated);
+            }
+            Ok(1 + jused + 8)
+        }
+        Tag::Vector => {
+            let Some(dim_bytes) = body.get(..4) else {
+                return Err(DecodeError::Truncated);
+            };
+            let dim = u32::from_be_bytes(dim_bytes.try_into().expect("4 bytes")) as usize;
+            let mut at = 4;
+            for _ in 0..dim {
+                let (_, used) = Num::decode_key(&body[at..]).map_err(DecodeError::Num)?;
+                at += used;
+            }
+            Ok(1 + at)
+        }
+        Tag::List | Tag::Set => {
+            let mut at = 0;
+            loop {
+                match body.get(at) {
+                    None => return Err(DecodeError::Truncated),
+                    Some(&STRUCT_SEQ_END) => return Ok(1 + at + 1),
+                    Some(_) => at += skip_at(&body[at..], depth + 1)?,
+                }
+            }
+        }
+        Tag::Validity => need(9),
+        Tag::Interval => match body.first() {
+            None => Err(DecodeError::Truncated),
+            Some(0x01) => Ok(2),
+            Some(0x02) => {
+                let mut at = 1;
+                for _ in 0..2 {
+                    match body.get(at) {
+                        Some(0x01) => at += 1,
+                        Some(0x02) => {
+                            if body.len() < at + 9 {
+                                return Err(DecodeError::Truncated);
+                            }
+                            at += 9;
+                        }
+                        _ => return Err(DecodeError::IntervalNotCanonical),
+                    }
+                }
+                Ok(1 + at)
+            }
+            Some(_) => Err(DecodeError::IntervalNotCanonical),
+        },
+    }
+}
+
+/// Skip a 0x00-escaped, terminator-closed byte string; returns the bytes
+/// consumed including the terminator.
+fn skip_terminated(body: &[u8]) -> Result<usize, DecodeError> {
+    let mut at = 0;
+    loop {
+        match body.get(at) {
+            None => return Err(DecodeError::Truncated),
+            Some(0x00) => match body.get(at + 1) {
+                // Terminator [0x00, 0x00]; escaped zero [0x00, 0xFF].
+                Some(0x00) => return Ok(at + 2),
+                Some(0xFF) => at += 2,
+                _ => return Err(DecodeError::BadEscape),
+            },
+            Some(_) => at += 1,
+        }
+    }
+}
+
+/// Skip one JSON payload value (grammar walk; the trailing hash is the
+/// enclosing skip's business, verification is decode's).
+fn skip_json(body: &[u8], depth: usize) -> Result<usize, DecodeError> {
+    if depth > MAX_DEPTH {
+        return Err(DecodeError::TooDeep);
+    }
+    match body.first() {
+        None => Err(DecodeError::Truncated),
+        Some(&JNULL) | Some(&JFALSE) | Some(&JTRUE) => Ok(1),
+        Some(&JNUM) => {
+            let (_, used) = Num::decode_key(&body[1..]).map_err(DecodeError::Num)?;
+            Ok(1 + used)
+        }
+        Some(&JSTR) => Ok(1 + skip_terminated(&body[1..])?),
+        Some(&JARR) => {
+            let mut at = 1;
+            loop {
+                match body.get(at) {
+                    None => return Err(DecodeError::Truncated),
+                    Some(&STRUCT_SEQ_END) => return Ok(at + 1),
+                    Some(_) => at += skip_json(&body[at..], depth + 1)?,
+                }
+            }
+        }
+        Some(&JOBJ) => {
+            let mut at = 1;
+            loop {
+                match body.get(at) {
+                    None => return Err(DecodeError::Truncated),
+                    Some(&STRUCT_SEQ_END) => return Ok(at + 1),
+                    Some(_) => {
+                        at += skip_terminated(&body[at..])?;
+                        at += skip_json(&body[at..], depth + 1)?;
+                    }
+                }
+            }
+        }
+        Some(&b) => Err(DecodeError::BadJsonMarker(b)),
+    }
+}
+
 /// Append a value's canonical encoding to a raw byte buffer: the key
 /// assembler's zero-claim door (the output is deliberately NOT a
 /// `CanonicalBytes` witness — key splicing works in the claimed-bytes
@@ -438,6 +595,10 @@ pub enum DecodeError {
     JsonHashMismatch,
     /// JSON has no NaN or infinity.
     JsonNumberNotFinite,
+    /// A relation id at or beyond the allocation ceiling
+    /// (`RelationId::CAP`): not a lawful id, refused at decode so the
+    /// allocator's exhaustion door cannot be bypassed by stored bytes.
+    RelationIdOverCap,
     /// An interval form that the closed-normal-form law forbids.
     IntervalNotCanonical,
 }
@@ -1032,6 +1193,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// skip_one is decode_one's length, everywhere (including nested
+    /// containers), and refuses garbage decode refuses.
+    #[test]
+    fn law_skip_matches_decode_consumed_length() {
+        let mut rng = Rng(0x5C1B);
+        for _ in 0..400 {
+            let d = random_datum(&mut rng, 0);
+            let enc = encode_owned(&d);
+            let (_, used) = decode_one(enc.as_bytes()).expect("lawful");
+            match skip_one(enc.as_bytes()) {
+                Ok(s) => assert_eq!(s, used, "skip diverged: {d:?}"),
+                Err(e) => panic!(
+                    "skip refused lawful {d:?}: {e:?} bytes={:02x?}",
+                    enc.as_bytes()
+                ),
+            }
+        }
+        for d in edge_datums() {
+            let enc = encode_owned(&d);
+            let (_, used) = decode_one(enc.as_bytes()).expect("lawful");
+            assert_eq!(
+                skip_one(enc.as_bytes()).expect("lawful"),
+                used,
+                "skip diverged: {d:?}"
+            );
+        }
+        assert!(skip_one(&[]).is_err());
+        assert!(skip_one(&[0xEE]).is_err());
+        assert!(skip_one(&[Tag::Str.byte(), 0x61]).is_err());
     }
 
     /// Round-trip totality over the edge corpus.

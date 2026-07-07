@@ -136,8 +136,8 @@ use ::fjall::Slice;
 use itertools::Itertools;
 use miette::{Result, bail, miette};
 
-use crate::data::tuple::{Tuple, decode_tuple_from_kv};
 use crate::data::value::{AsOf, ValidityTs};
+use crate::data::value::{Tuple, decode_tuple_from_kv};
 
 pub(crate) mod backup;
 // The backend-agnostic conformance kit (story #79): a reusable law/DST/
@@ -421,10 +421,9 @@ pub trait ReadTx: sealed::Sealed + Sync {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        Box::new(
-            self.range_scan(lower, upper)
-                .map(|kv| kv.and_then(|(k, v)| decode_tuple_from_kv(&k, &v, None))),
-        )
+        Box::new(self.range_scan(lower, upper).map(|kv| {
+            kv.and_then(|(k, v)| decode_tuple_from_kv(&k, &v, None).map_err(miette::Report::from))
+        }))
     }
 
     /// Scan a range yielding KEYS ONLY — the value is never materialized.
@@ -442,7 +441,7 @@ pub trait ReadTx: sealed::Sealed + Sync {
 
     /// Bitemporal as-of scan: among keys differing only in their two
     /// trailing time slots (valid instant outer, system version inner —
-    /// [`EncodedKey::BITEMPORAL_TAIL_LEN`](crate::data::tuple::EncodedKey)),
+    /// [`EncodedKey::BITEMPORAL_TAIL_LEN`](crate::data::value::EncodedKey)),
     /// resolve each fact to what the record said at the [`AsOf`]
     /// coordinate, and yield only facts whose governing
     /// row asserts them. A row's polarity (assert / retract / erase) is

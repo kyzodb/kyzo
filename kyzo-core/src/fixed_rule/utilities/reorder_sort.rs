@@ -28,8 +28,8 @@ use crate::data::functions::OP_LIST;
 use crate::data::program::WrongFixedRuleOptionError;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
@@ -108,19 +108,19 @@ impl FixedRule for ReorderSort {
 
         let mut count = 0usize;
         let mut rank = 0usize;
-        let mut last = &DataValue::Bot;
+        let mut last: Option<&DataValue> = None;
         let take_plus_skip = take.saturating_add(skip);
         for val in &buffer {
             // Structural: every buffered tuple ends with the sort key
             // pushed above, so it is non-empty.
             let sorter = val.last().unwrap();
 
-            if sorter == last {
+            if last == Some(sorter) {
                 count += 1;
             } else {
                 count += 1;
                 rank = count;
-                last = sorter;
+                last = Some(sorter);
             }
 
             if take != 0 && count > take_plus_skip {

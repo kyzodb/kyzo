@@ -202,7 +202,7 @@ impl CountMinSketch {
 
     /// The sketch as a `DataValue::Bytes`.
     pub(crate) fn to_value(&self) -> DataValue {
-        DataValue::Bytes(GermanStr::from_bytes(&self.to_bytes()))
+        DataValue::Bytes(self.to_bytes())
     }
 }
 

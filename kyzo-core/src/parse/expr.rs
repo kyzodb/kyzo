@@ -320,7 +320,7 @@ fn build_term(
         Rule::quoted_string | Rule::s_quoted_string | Rule::raw_string => {
             let s = parse_string(pair)?;
             Expr::Const {
-                val: DataValue::Str(GermanStr::from_str(&s)),
+                val: DataValue::Str(s.to_string()),
                 span,
             }
         }

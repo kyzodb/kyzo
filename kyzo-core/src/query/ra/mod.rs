@@ -150,7 +150,7 @@ use crate::data::expr::{Bytecode, Expr, eval_bytecode_pred};
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
@@ -488,8 +488,14 @@ impl RelAlgebra {
                 let (from, to) = match axis {
                     DeltaAxis::Valid => (AsOf::current(from), AsOf::current(to)),
                     DeltaAxis::Sys => (
-                        AsOf::at(from, MAX_VALIDITY_TS),
-                        AsOf::at(to, MAX_VALIDITY_TS),
+                        AsOf {
+                            valid: from,
+                            sys: MAX_VALIDITY_TS,
+                        },
+                        AsOf {
+                            valid: to,
+                            sys: MAX_VALIDITY_TS,
+                        },
                     ),
                 };
                 Ok(Self::Delta(DeltaRA {

@@ -81,7 +81,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::data::program::MagicSymbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{DataValue, current_validity};
 use crate::fixed_rule::{CancelFlag, NamedRows};
 use crate::parse::{Script, parse_script};

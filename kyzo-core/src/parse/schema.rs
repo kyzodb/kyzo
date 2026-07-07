@@ -8,7 +8,7 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): grammar-shape `unwrap`s and `unreachable!` dispatch arms go
- * through the typed-accessor layer; `VecElementType` is imported from the
+ * through the typed-accessor layer; `VecElementType` comes from the
  * value model (`data/value.rs`), where it lives in KyzoDB.
  */
 
@@ -29,10 +29,11 @@ use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::SmartString;
 use thiserror::Error;
 
+use crate::data::relation::VecElementType;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, VecElementType};
+use crate::data::value::DataValue;
 use crate::parse::expr::build_expr;
 use crate::parse::{ExtractSpan, IntoChildren, Pair, Rule, unexpected};
 

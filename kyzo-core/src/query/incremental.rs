@@ -74,8 +74,8 @@ use miette::{Error, Result};
 
 use crate::data::aggr::{Aggregation, NormalAggrObj};
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::ra::temporal::SignedFact;
 
 /// One rule-body argument: a bound value, or a variable to unify.

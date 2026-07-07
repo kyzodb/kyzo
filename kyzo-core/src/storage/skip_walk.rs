@@ -138,8 +138,8 @@ use miette::Result;
 use crate::data::bitemporal::{
     check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
-use crate::data::tuple::Tuple;
 use crate::data::value::AsOf;
+use crate::data::value::Tuple;
 
 /// A single positioned cursor, repositioned forward by [`Self::seek`]
 /// rather than rebuilt. `target` is always non-decreasing across calls on
@@ -255,8 +255,8 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::tuple::{RelationId, TupleT};
     use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId(9);
 

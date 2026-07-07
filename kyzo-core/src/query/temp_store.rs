@@ -104,8 +104,8 @@ use itertools::Itertools;
 use miette::{Result, miette};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj};
-use crate::data::tuple::{Tuple, decode_tuple_bare, encode_tuple_bare};
 use crate::data::value::DataValue;
+use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
 
 // ─────────────────────────────────────────────────────────────────────────
 // The admission seam
@@ -689,6 +689,29 @@ impl TupleInIter<'_> {
     /// without decoding the stored side at all where the whole row is
     /// bytes; a mixed key still decodes its own (small) key half since the
     /// value half is not comparably encoded.
+    /// Compare this row's BARE byte form to a bare bound (byte order is
+    /// value order by the mirror law; 0xFF-closed bounds sort past every
+    /// row extension).
+    pub(crate) fn cmp_bare(&self, probe: &[u8]) -> Ordering {
+        match self {
+            TupleInIter::Bytes { key, .. } => (*key).cmp(probe),
+            TupleInIter::MeetSuffix { key, val, .. } => {
+                let mut full = key.to_vec();
+                for v in val.iter() {
+                    crate::data::value::append_canonical(&mut full, v);
+                }
+                full.as_slice().cmp(probe)
+            }
+            TupleInIter::Values { key, val, .. } => {
+                let mut full = Vec::new();
+                for v in key.iter().chain(val.iter()) {
+                    crate::data::value::append_canonical(&mut full, v);
+                }
+                full.as_slice().cmp(probe)
+            }
+        }
+    }
+
     pub(crate) fn cmp_slice(&self, other: &[DataValue]) -> Ordering {
         match self {
             TupleInIter::Bytes { key, .. } => {
@@ -705,10 +728,9 @@ impl TupleInIter<'_> {
 }
 
 /// The `idx`-th self-delimiting value in `bytes`, walking from the start
-/// (bare-encoded rows carry no per-column offset table — see
-/// `data/tuple.rs`'s module doc for why one contiguous, self-delimiting
-/// region is the whole point). `None` if fewer than `idx + 1` values are
-/// present.
+/// (bare-encoded rows carry no per-column offset table: one contiguous,
+/// self-delimiting region is the whole point). `None` if fewer than
+/// `idx + 1` values are present.
 fn bare_nth(bytes: &[u8], idx: usize) -> Option<DataValue> {
     let mut remaining = bytes;
     for _ in 0..idx {

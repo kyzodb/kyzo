@@ -256,17 +256,27 @@ impl RelationId {
     /// The system catalog keyspace.
     pub const SYSTEM: RelationId = RelationId(0);
 
+    /// The exclusive allocation ceiling: every assignable id stays below
+    /// `0xff << 56`, so no relation prefix ever BEGINS with `0xFF` — the
+    /// byte the scan-bound vocabulary reserves as its `Greatest` tail.
+    pub const CAP: u64 = 0xff_u64 << 56;
+
     pub fn raw_encode(self) -> [u8; 8] {
         self.0.to_be_bytes()
     }
 
+    /// Decode 8 big-endian bytes as a relation id, REFUSING anything at
+    /// or beyond [`RelationId::CAP`] — the exhaustion door: stored bytes
+    /// cannot smuggle an unassignable id back into the allocator.
     pub fn raw_decode(bytes: &[u8]) -> Result<RelationId, DecodeError> {
         let Some(head) = bytes.get(..8) else {
             return Err(DecodeError::Truncated);
         };
-        Ok(RelationId(u64::from_be_bytes(
-            head.try_into().expect("8 bytes"),
-        )))
+        let id = u64::from_be_bytes(head.try_into().expect("8 bytes"));
+        if id >= RelationId::CAP {
+            return Err(DecodeError::RelationIdOverCap);
+        }
+        Ok(RelationId(id))
     }
 
     /// The next id, `None` on exhaustion (the caller owns the typed
@@ -680,6 +690,21 @@ mod tests {
             Err(PushError::ForeignArena)
         ));
         let _ = other.epoch();
+    }
+
+    /// The exhaustion door: ids at/beyond the cap refuse at decode, so
+    /// the allocator's ceiling cannot be bypassed by stored counter bytes.
+    #[test]
+    fn relation_id_cap_is_enforced_at_decode() {
+        assert_eq!(
+            RelationId::raw_decode(&7u64.to_be_bytes()),
+            Ok(RelationId(7))
+        );
+        assert!(RelationId::raw_decode(&RelationId::CAP.to_be_bytes()).is_err());
+        assert!(RelationId::raw_decode(&u64::MAX.to_be_bytes()).is_err());
+        assert!(RelationId::raw_decode(&[0u8; 4]).is_err());
+        // Every assignable prefix stays below the 0xFF bound byte.
+        assert!(RelationId(RelationId::CAP - 1).raw_encode()[0] < 0xFF);
     }
 
     /// The scan-key sentinel law: lower <= every key of matching rows

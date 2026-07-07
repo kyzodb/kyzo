@@ -22,8 +22,8 @@ use crate::data::expr::{Bytecode, Expr, compute_bounds, eval_bytecode_pred};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::{ScanBound, Tuple};
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
@@ -133,10 +133,10 @@ impl TempStoreRA {
         } else {
             compute_bounds(&self.filters, other_bindings).unwrap_or_default()
         };
-        let bounds = if !l_bound.iter().all(|v| *v == DataValue::Null)
-            || !u_bound.iter().all(|v| *v == DataValue::Bot)
-        {
-            Some((l_bound.into(), u_bound.into()))
+        let informative = l_bound.iter().any(|b| *b != ScanBound::Least)
+            || u_bound.iter().any(|b| *b != ScanBound::Greatest);
+        let bounds = if informative {
+            Some((l_bound, u_bound))
         } else {
             None
         };
@@ -167,7 +167,7 @@ struct TempStorePrefixBatchJoin<'a> {
     storage: &'a EpochStore,
     scan_epoch: bool,
     left_to_prefix_indices: Vec<usize>,
-    bounds: Option<(Tuple, Tuple)>,
+    bounds: Option<(Vec<ScanBound>, Vec<ScanBound>)>,
     eliminate_indices: BTreeSet<usize>,
     /// The left batch currently being probed, and the cursor into it.
     cur: Option<(Batch, usize)>,
@@ -201,15 +201,15 @@ impl<'a> TempStorePrefixBatchJoin<'a> {
                 // Range-bounded probes carry residual filter bounds beyond
                 // the prefix: the merged bound tuples must own (the level
                 // merge filters per row against them).
-                let prefix: Tuple = self
-                    .left_to_prefix_indices
-                    .iter()
-                    .map(|i| left_row[*i].clone())
-                    .collect();
-                let mut lower = prefix.clone();
-                lower.extend(l_bound.iter().cloned());
-                let mut upper = prefix;
-                upper.extend(u_bound.iter().cloned());
+                let prefix_bounds = || {
+                    self.left_to_prefix_indices
+                        .iter()
+                        .map(|i| ScanBound::Value(left_row[*i].clone()))
+                };
+                let lower: Vec<ScanBound> =
+                    prefix_bounds().chain(l_bound.iter().cloned()).collect();
+                let upper: Vec<ScanBound> =
+                    prefix_bounds().chain(u_bound.iter().cloned()).collect();
                 if self.scan_epoch {
                     Box::new(self.storage.delta_range_iter(&lower, &upper, true))
                 } else {

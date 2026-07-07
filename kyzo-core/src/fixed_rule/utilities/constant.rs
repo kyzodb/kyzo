@@ -196,7 +196,7 @@ impl FixedRule for Constant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::tuple::Tuple;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::run_fixed_rule;
 
     /// `init_options` normalizes, `arity` reads the proof, `run` emits the

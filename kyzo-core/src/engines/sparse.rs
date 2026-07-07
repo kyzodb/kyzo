@@ -748,7 +748,7 @@ mod tests {
 
         let idx_keys = || -> Vec<(fjall::Slice, fjall::Slice)> {
             let rtx = db.read_tx().unwrap();
-            let lower = crate::data::tuple::encode_tuple_key(f.idx.id.0, &[]);
+            let lower = crate::data::value::encode_tuple_key(f.idx.id.0, &[]);
             let upper = (f.idx.id.0 + 1).to_be_bytes();
             rtx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()

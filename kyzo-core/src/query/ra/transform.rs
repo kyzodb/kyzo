@@ -22,8 +22,8 @@ use crate::data::expr::{Bytecode, Expr};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -222,11 +222,11 @@ impl UnificationRA {
                 let rows: Vec<&[DataValue]> = batch.iter_rows().collect();
                 let width = rows.first().map_or(0, |r| r.len());
                 let owned_rows: Vec<Tuple> = rows.iter().map(|r| r.to_vec().into()).collect();
-                let columns = crate::data::batch::ColumnBatch::from_rows(owned_rows, width);
+                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width);
                 let values = crate::query::vm::eval_expr_batched(
                     &ra.expr,
                     &columns,
-                    &crate::data::batch::Selection::all(rows.len()),
+                    &crate::query::batch::Selection::all(rows.len()),
                 )?;
                 let mut out = Batch::new();
                 let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {

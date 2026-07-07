@@ -69,7 +69,8 @@ use miette::{
     GraphicalReportHandler, GraphicalTheme, JSONReportHandler, Report, Result, ThemeCharacters,
     ThemeStyles,
 };
-use serde_json::{Value as JsonValue, json};
+pub use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::sync::LazyLock;
 
 use crate::data::value::{DataValue, Json, JsonNum, JsonObj, Num};

@@ -25,8 +25,8 @@ use miette::{Diagnostic, IntoDiagnostic, Result, bail, miette};
 use thiserror::Error;
 
 use crate::data::bitemporal::system_stamp_of_key;
-use crate::data::tuple::{EncodedKey, RelationId};
 use crate::data::value::ValidityTs;
+use crate::data::value::{EncodedKey, RelationId};
 use crate::runtime::relation::{KeyspaceKind, list_relations};
 use crate::storage::{FormatVersion, ReadTx, Storage};
 

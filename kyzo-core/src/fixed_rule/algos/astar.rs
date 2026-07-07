@@ -28,8 +28,8 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::{Expr, eval_bytecode};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
     FixedRulePayload, NodeNotFoundError,

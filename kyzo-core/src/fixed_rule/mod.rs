@@ -96,7 +96,7 @@ use crate::data::program::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue, GermanStr};
 use crate::fixed_rule::algos::*;
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
@@ -481,7 +481,7 @@ impl<'a> FixedRulePayload<'a> {
     }
 
     /// Extract a string option
-    pub fn string_option(&self, name: &str, default: Option<&str>) -> Result<GermanStr> {
+    pub fn string_option(&self, name: &str, default: Option<&str>) -> Result<String> {
         match self.manifest.options.get(name) {
             Some(ex) => match ex.clone().eval_to_const()? {
                 DataValue::Str(s) => Ok(s),
@@ -500,7 +500,7 @@ impl<'a> FixedRulePayload<'a> {
                     rule_name: self.manifest.fixed_handle.name.to_string(),
                 }
                 .into()),
-                Some(s) => Ok(GermanStr::from_str(s)),
+                Some(s) => Ok(s.to_string()),
             },
         }
     }
@@ -521,7 +521,7 @@ impl<'a> FixedRulePayload<'a> {
     pub fn integer_option(&self, name: &str, default: Option<i64>) -> Result<i64> {
         match self.manifest.options.get(name) {
             Some(v) => match v.clone().eval_to_const() {
-                Ok(DataValue::Num(n)) => match n.get_int() {
+                Ok(DataValue::Num(n)) => match n.as_int() {
                     Some(i) => Ok(i),
                     None => Err(FixedRuleOptionNotFoundError {
                         name: name.to_string(),
@@ -582,7 +582,7 @@ impl<'a> FixedRulePayload<'a> {
         match self.manifest.options.get(name) {
             Some(v) => match v.clone().eval_to_const() {
                 Ok(DataValue::Num(n)) => {
-                    let f = n.get_float();
+                    let f = n.to_f64();
                     Ok(f)
                 }
                 _ => Err(WrongFixedRuleOptionError {

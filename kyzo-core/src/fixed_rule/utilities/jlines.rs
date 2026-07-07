@@ -36,10 +36,11 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
+use crate::data::json::{JsonData, JsonValue};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, JsonData, JsonValue};
+use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
@@ -77,7 +78,9 @@ pub(crate) fn json_to_datavalue(v: &JsonValue) -> DataValue {
         },
         JsonValue::String(s) => DataValue::Str(s.into()),
         JsonValue::Array(arr) => DataValue::List(arr.iter().map(json_to_datavalue).collect()),
-        JsonValue::Object(d) => DataValue::Json(JsonData::new(JsonValue::Object(d.clone()))),
+        JsonValue::Object(d) => DataValue::Json(crate::data::json::json_from_serde(
+            &JsonValue::Object(d.clone()),
+        )),
     }
 }
 

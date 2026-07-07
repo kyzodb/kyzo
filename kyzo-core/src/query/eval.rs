@@ -189,8 +189,8 @@ use thiserror::Error;
 use crate::data::aggr::{Aggregation, NormalAggrObj};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
 use crate::query::temp_store::{

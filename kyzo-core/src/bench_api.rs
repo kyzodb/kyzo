@@ -45,7 +45,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
@@ -853,7 +853,7 @@ pub fn bare_fjall_put_batches(
         let mut tx = storage.write_tx()?;
         for i in 0..batch_rows {
             let k = (b * batch_rows + i) as i64;
-            let key = crate::data::tuple::encode_tuple_key(42, &[DataValue::from(k)]);
+            let key = crate::data::value::encode_tuple_key(42, &[DataValue::from(k)]);
             tx.put(key.as_bytes(), &k.to_be_bytes())?;
         }
         tx.commit()?;

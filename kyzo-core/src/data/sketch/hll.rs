@@ -202,7 +202,7 @@ impl HyperLogLog {
     /// The sketch as a `DataValue::Bytes`, the form it takes as an
     /// aggregation accumulator that flows through recursion.
     pub(crate) fn to_value(&self) -> DataValue {
-        DataValue::Bytes(GermanStr::from_bytes(&self.to_bytes()))
+        DataValue::Bytes(self.to_bytes())
     }
 }
 

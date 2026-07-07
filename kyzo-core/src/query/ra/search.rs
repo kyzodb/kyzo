@@ -21,8 +21,8 @@ use super::RelAlgebra;
 use crate::data::expr::{Bytecode, eval_bytecode};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -117,7 +117,7 @@ impl SearchRA {
             Ok(match cfg {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {
-                        DataValue::Vec(v) => v,
+                        DataValue::Vector(v) => v,
                         other => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
                     };
                     crate::engines::hnsw::hnsw_knn(

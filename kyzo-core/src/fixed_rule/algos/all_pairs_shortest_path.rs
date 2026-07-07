@@ -196,7 +196,7 @@ mod tests {
     use super::*;
     use crate::data::expr::Expr;
     use crate::data::span::SourceSpan;
-    use crate::data::tuple::Tuple;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     #[test]

@@ -70,14 +70,15 @@ use miette::{Result, miette};
 
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, current_validity};
+use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
 use crate::query::incremental::{self, IncrementalProgram, MaintainedState};
 use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::temporal::SignedFact;
 use crate::runtime::callback::{CallbackEvent, CallbackOp};
+use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::Storage;

@@ -49,7 +49,9 @@ use crate::data::json::{json_from_serde, serde_from_json};
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
 /// constrain declared width and let engines pack narrower internally —
 /// every f32 is exactly representable as f64, so identity round-trips.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum VecElementType {
     F32,
     F64,

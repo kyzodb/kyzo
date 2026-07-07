@@ -167,7 +167,6 @@ impl ColumnBatch {
         &self.columns[i]
     }
 }
-use crate::data::value::DataValue;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Arrow's flatbuffer IDL constants (org.apache.arrow.flatbuf.*), hand-kept
@@ -459,7 +458,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
         Some(Kind::Binary) => {
             let empty: Vec<u8> = Vec::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
-                DataValue::Bytes(b) => b.as_bytes(),
+                DataValue::Bytes(b) => b.as_slice(),
                 _ => empty.as_slice(),
             }));
             Ok(PlannedColumn {

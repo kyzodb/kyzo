@@ -36,10 +36,10 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
 use crate::data::value::{
     AsOf, DataValue, GermanStr, Interval, JsonData, Num, Validity, ValidityTs, Vector,
 };
+use crate::data::value::{EncodedKey, RelationId, Tuple, TupleT};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -211,7 +211,7 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s.into())),
         // Json's Ord and encoding both reduce to the serialized string, but
         // the reduction is an argument, not a law — fuzz it like the rest.
-        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::value::JsonData::new(
+        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::json::JsonData::new(
             serde_json::Value::String(s)
         ))),
         proptest::collection::vec(any::<u8>(), 0..24)
@@ -727,7 +727,7 @@ fn dump_refuses_a_row_stamped_above_its_own_floor() {
     // "now" could possibly report (mirrors the existing
     // `restore_raises_clock_floor_past_imported_stamps` convention).
     let bad_sys =
-        ValidityTs::from_raw(crate::data::value::current_validity().unwrap().raw() + 1_000_000_000);
+        ValidityTs::from_raw(crate::runtime::current_validity().unwrap().raw() + 1_000_000_000);
     let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
 
     let mut tx = db.write_tx().unwrap();
@@ -1226,7 +1226,7 @@ fn concurrency_bounds_are_compiler_checked() {
 /// payload reaches the RegexWrapper deserializer in 14 bytes.
 #[test]
 fn law3_value_payloads_error_never_panic() {
-    use crate::data::tuple::extend_tuple_from_v;
+    use crate::data::value::extend_tuple_from_v;
     // rmp payload: array[1] { map{ "Regex": "" } } behind the 8-byte header.
     let mut hostile = vec![0u8; 8];
     hostile.extend([0x91, 0x81, 0xa5]);
@@ -1241,7 +1241,7 @@ proptest! {
     #[test]
     fn law3_value_generative(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
         let mut tup: Tuple = Tuple::new();
-        let _ = crate::data::tuple::extend_tuple_from_v(&mut tup, &bytes);
+        let _ = crate::data::value::extend_tuple_from_v(&mut tup, &bytes);
     }
 }
 
@@ -1550,7 +1550,7 @@ fn conflict_is_typed_and_options_and_stats_work() {
 /// keeps walking rather than stopping at the first wound.
 #[test]
 fn verify_storage_reports_injected_corruption() {
-    use crate::data::tuple::encode_tuple_key;
+    use crate::data::value::encode_tuple_key;
     use crate::storage::verify::verify_storage;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3108,7 +3108,7 @@ fn restore_raises_clock_floor_past_imported_stamps() {
     let src = new_fjall_storage(src_dir.path()).unwrap();
     // Push the source clock far into the future, then write one row so
     // the dump carries both data and the inflated floor.
-    let far_future = crate::data::value::current_validity().unwrap().raw() + 1_000_000_000;
+    let far_future = crate::runtime::current_validity().unwrap().raw() + 1_000_000_000;
     src.raise_clock_floor(ValidityTs::from_raw(far_future))
         .unwrap();
     {

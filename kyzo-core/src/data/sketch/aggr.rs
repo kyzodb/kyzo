@@ -92,7 +92,7 @@ impl NormalAggrObj for AggrHllSketch {
 /// Decode a `Bytes` value as a HyperLogLog sketch.
 fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
     match v {
-        DataValue::Bytes(b) => HyperLogLog::from_bytes(b.as_bytes()),
+        DataValue::Bytes(b) => HyperLogLog::from_bytes(b),
         other => bail!("hll_union expects sketch bytes, got {other:?}"),
     }
 }

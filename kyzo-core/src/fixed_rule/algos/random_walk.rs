@@ -113,7 +113,7 @@ impl FixedRule for RandomWalk {
                                 cand.extend(t.iter().cloned());
                                 Ok(match eval_bytecode(weight_expr, &cand, &mut stack)? {
                                     DataValue::Num(n) => {
-                                        let f = n.get_float();
+                                        let f = n.to_f64();
                                         ensure!(
                                             f >= 0.,
                                             BadExprValueError(
@@ -192,7 +192,7 @@ impl FixedRule for RandomWalk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::tuple::Tuple;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {

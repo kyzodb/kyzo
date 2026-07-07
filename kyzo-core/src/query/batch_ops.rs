@@ -18,8 +18,8 @@ use fjall::Slice;
 use miette::Result;
 
 use crate::data::expr::Expr;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 
 pub(crate) const BATCH_ROWS: usize = 1024;
 
@@ -171,11 +171,11 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
     let rows: Vec<Tuple> = batch.iter_rows().map(|r| r.to_vec().into()).collect();
     let width = rows[0].len();
     let n_rows = rows.len();
-    let columns = crate::data::batch::ColumnBatch::from_rows(rows, width);
+    let columns = crate::query::batch::ColumnBatch::from_rows(rows, width);
     let sel = crate::query::vm::eval_pred_batched(
         pred,
         &columns,
-        &crate::data::batch::Selection::all(n_rows),
+        &crate::query::batch::Selection::all(n_rows),
     )?;
     let mut out = Batch::new();
     for r in sel.iter() {
@@ -260,7 +260,7 @@ pub(crate) struct BatchScanFilter<I> {
 impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I> {
     type Item = Result<Batch>;
     fn next(&mut self) -> Option<Self::Item> {
-        use crate::data::tuple::{decode_key_into, extend_tuple_from_v};
+        use crate::data::value::{decode_key_into, extend_tuple_from_v};
         loop {
             if let Some(e) = self.pending_err.take() {
                 return Some(Err(e));

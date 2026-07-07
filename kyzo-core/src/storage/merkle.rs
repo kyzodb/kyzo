@@ -64,7 +64,7 @@ use miette::{Diagnostic, Result};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::data::tuple::RelationId;
+use crate::data::value::RelationId;
 use crate::storage::ReadTx;
 
 /// The number of `(k,v)` pairs a root scan may touch before it refuses. The
@@ -275,7 +275,7 @@ mod tests {
         MerkleHash, RELATION_ID_BOUND, empty_hash, leaf_hash, node_hash, relation_root, root_over,
         state_root,
     };
-    use crate::data::tuple::RelationId;
+    use crate::data::value::RelationId;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
 

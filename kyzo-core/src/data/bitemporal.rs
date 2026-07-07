@@ -235,9 +235,9 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::tuple::{RelationId, TupleT};
     use crate::data::value::Num;
     use crate::data::value::ValidityTs;
+    use crate::data::value::{RelationId, TupleT};
     use std::collections::BTreeMap;
 
     fn vts(t: i64) -> ValidityTs {

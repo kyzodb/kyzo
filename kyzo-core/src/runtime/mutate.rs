@@ -66,8 +66,8 @@ use crate::data::program::{
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::{Tuple, TupleT};
 use crate::data::value::{DataValue, ValidityTs};
+use crate::data::value::{Tuple, TupleT};
 use crate::fixed_rule::utilities::Constant;
 use crate::fixed_rule::{FixedRule, FixedRuleHandle, NamedRows};
 use crate::runtime::callback::{CallbackCollector, CallbackOp};
@@ -1591,7 +1591,7 @@ impl<T: WriteTx> SessionTx<T> {
                     // as-of resolution — resolution is exactly what would
                     // collapse the history this backfill must reproduce
                     // whole), and its polarity from the value.
-                    let tuple = crate::data::tuple::decode_tuple_from_key(k, keys_len + 2)?;
+                    let tuple = crate::data::value::decode_tuple_from_key(k, keys_len + 2)?;
                     let polarity = crate::data::bitemporal::claim_polarity_of_value(v)?;
                     let key_cols = &tuple[..keys_len];
                     let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
@@ -1651,11 +1651,15 @@ impl<T: WriteTx> SessionTx<T> {
                 })
                 .try_collect()?;
             let Some(last) = batch.last() else { break };
-            // Resume past ALL versions of the last fact: `Bot` encodes
-            // above every slot byte, so this bound clears its group.
-            let mut succ = last[0..keys_len].to_vec();
-            succ.push(DataValue::Bot);
-            lower = base.encode_partial_key_for_store(&succ).as_ref().to_vec();
+            // Resume past ALL versions of the last fact: the 0xFF tail
+            // encodes above every slot byte, so this bound clears its
+            // group.
+            let mut succ = base
+                .encode_partial_key_for_store(&last[0..keys_len])
+                .as_bytes()
+                .to_vec();
+            succ.push(0xFF);
+            lower = succ;
             for row in &batch {
                 match &ctx {
                     Some(ctx) => self.apply_manifest_index(&base, ctx, Some(row), None)?,
@@ -1927,8 +1931,8 @@ mod bulk_write_tests {
 
     use fjall::Slice;
 
-    use crate::data::tuple::Tuple;
     use crate::data::value::DataValue;
+    use crate::data::value::Tuple;
     use crate::runtime::db::Db;
     use crate::storage::sim::SimStorage;
     use crate::storage::{ReadTx, Storage};
@@ -2285,7 +2289,7 @@ mod temporal_index_tests {
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("posting row decodes cleanly");
-                let tup = crate::data::tuple::decode_tuple_from_key(&k, 4)
+                let tup = crate::data::value::decode_tuple_from_key(&k, 4)
                     .expect("posting key decodes cleanly");
                 let leading = match &tup[0] {
                     DataValue::Validity(vv) => vv.timestamp.raw(),
@@ -2318,7 +2322,7 @@ mod temporal_index_tests {
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("base row decodes cleanly");
-                let tup = crate::data::tuple::decode_tuple_from_key(&k, 3)
+                let tup = crate::data::value::decode_tuple_from_key(&k, 3)
                     .expect("base key decodes cleanly");
                 let key_col = tup[0].get_int().expect("int base key column");
                 let valid = match &tup[1] {

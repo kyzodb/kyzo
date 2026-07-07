@@ -146,8 +146,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj, NormalAggrObj};
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::eval::Budget;
 
 pub(crate) type Rel = &'static str;
@@ -3749,7 +3749,7 @@ mod tests {
     #[test]
     fn asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture() {
         use crate::data::bitemporal::check_key_for_bitemporal;
-        use crate::data::tuple::{RelationId, TupleT};
+        use crate::data::value::{RelationId, TupleT};
         use crate::data::value::{Validity, ValidityTs};
         use std::cmp::Reverse;
 

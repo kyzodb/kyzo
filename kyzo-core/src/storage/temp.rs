@@ -81,7 +81,7 @@ use std::ops::Bound;
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ReadTx, WriteTx};
@@ -255,8 +255,8 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::tuple::{RelationId, TupleT};
     use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId(7);
 

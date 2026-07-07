@@ -35,8 +35,8 @@ use miette::Result;
 
 use crate::current_validity;
 use crate::data::fact_payload::decode_fact_payload;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::DEFAULT_FIXED_RULES;
 use crate::parse::parse_script;
 use crate::runtime::relation::RelationHandle;
@@ -74,7 +74,7 @@ pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
 /// re-exported so the fuzz target can check
 /// [`fuzz_decode_relation_handle_id`]'s result without duplicating the
 /// constant.
-pub const MAX_RELATION_ID: u64 = crate::data::tuple::MAX_RELATION_ID;
+pub const MAX_RELATION_ID: u64 = crate::data::value::MAX_RELATION_ID;
 
 /// Extract an `Interval`'s bounds as raw `i64`s. `Interval` (`data/
 /// value.rs`) is public, but its `start()`/`end()` accessors are

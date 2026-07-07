@@ -3729,7 +3729,7 @@ mod tests {
         // Overwrite every index row's value with garbage msgpack.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::tuple::encode_tuple_key(idx.id.0, &[]);
+            let lower = crate::data::value::encode_tuple_key(idx.id.0, &[]);
             let upper = (idx.id.0 + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
@@ -3843,7 +3843,7 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let (_base, idx, _m) = setup(&db, HnswDistance::Cosine, &rows);
             let rtx = db.read_tx().unwrap();
-            let lower = crate::data::tuple::encode_tuple_key(idx.id.0, &[]);
+            let lower = crate::data::value::encode_tuple_key(idx.id.0, &[]);
             let upper = (idx.id.0 + 1).to_be_bytes();
             rtx.range_scan(lower.as_bytes(), &upper)
                 .map(|kv| kv.map(|(k, v)| (k[8..].to_vec(), v[8..].to_vec())))

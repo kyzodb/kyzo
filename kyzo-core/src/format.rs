@@ -73,7 +73,7 @@ use crate::data::program::{
 };
 use crate::data::relation::ColumnDef;
 use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, Num, ValidityTs, Vector};
+use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, NumRepr, ValidityTs};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -963,10 +963,12 @@ fn write_object(args: &[Expr], out: &mut String) {
 /// round-trip it — there is no source text that would.
 fn write_const(val: &DataValue, out: &mut String) {
     match val {
-        DataValue::Null | DataValue::Bot => out.push_str("null"),
+        DataValue::Null => out.push_str("null"),
         DataValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        DataValue::Num(Num::Int(i)) => out.push_str(&i.to_string()),
-        DataValue::Num(Num::Float(f)) => write_float(*f, out),
+        DataValue::Num(n) => match n.repr() {
+            NumRepr::Int(i) => out.push_str(&i.to_string()),
+            NumRepr::Float(f) => write_float(f, out),
+        },
         DataValue::Str(s) => write_str_literal(s, out),
         DataValue::Bytes(b) => {
             out.push_str("decode_base64(");
@@ -980,7 +982,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Regex(rx) => {
             out.push_str("regex(");
-            write_str_literal(rx.0.as_str(), out);
+            write_str_literal(rx.pattern(), out);
             out.push(')');
         }
         DataValue::List(items) => {
@@ -1011,25 +1013,24 @@ fn write_const(val: &DataValue, out: &mut String) {
             out.push(')');
         }
         DataValue::Interval(iv) => {
-            out.push_str("make_interval(");
-            out.push_str(&iv.start().to_string());
-            out.push_str(", ");
-            out.push_str(&iv.end().to_string());
-            out.push(')');
-        }
-        DataValue::Vec(Vector::F32(a)) => {
-            out.push_str("vec([");
-            for (i, x) in a.iter().enumerate() {
-                if i > 0 {
+            // Bounded intervals round-trip through make_interval; the
+            // empty/unbounded forms have no literal (see the fn doc's
+            // honesty note) and render as their constructor-less debug
+            // shape.
+            match (iv.start(), iv.end()) {
+                (Some(s), Some(e)) => {
+                    out.push_str("make_interval(");
+                    out.push_str(&s.to_string());
                     out.push_str(", ");
+                    out.push_str(&e.to_string());
+                    out.push(')');
                 }
-                write_float(*x as f64, out);
+                _ => out.push_str(&format!("{iv:?}")),
             }
-            out.push_str("])");
         }
-        DataValue::Vec(Vector::F64(a)) => {
+        DataValue::Vector(a) => {
             out.push_str("vec([");
-            for (i, x) in a.iter().enumerate() {
+            for (i, x) in a.as_slice().iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
                 }
@@ -1039,7 +1040,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Json(j) => {
             out.push_str("parse_json(");
-            write_str_literal(&j.value().to_string(), out);
+            write_str_literal(&crate::data::json::serde_from_json(j).to_string(), out);
             out.push(')');
         }
     }

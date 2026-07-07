@@ -174,7 +174,7 @@ fn page_rank(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::tuple::Tuple;
+    use crate::data::value::Tuple;
 
     /// The termination metric a Jacobi run stops on. `page_rank` uses
     /// [`Term::Sum`] (`Σ|Δ|`); [`Term::Max`] exists only so a test can pin

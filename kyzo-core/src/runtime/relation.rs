@@ -1436,8 +1436,8 @@ mod tests {
 
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::tuple::decode_tuple_from_key;
     use crate::data::value::ValidityTs;
+    use crate::data::value::decode_tuple_from_key;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{ConflictError, Storage};
 
@@ -1610,7 +1610,7 @@ mod tests {
 
         let shadow = ShadowHandle {
             name: handle.name.clone(),
-            id: crate::data::tuple::MAX_RELATION_ID + 1, // out of the 48-bit bound
+            id: crate::data::value::MAX_RELATION_ID + 1, // out of the 48-bit bound
             metadata: handle.metadata.clone(),
             put_triggers: handle.put_triggers.clone(),
             rm_triggers: handle.rm_triggers.clone(),

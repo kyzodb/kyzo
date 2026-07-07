@@ -72,6 +72,7 @@
 // yet by `::verify`) is dead in a plain release build — same posture as
 // `parse`/`fixed_rule` in `lib.rs`.
 #[allow(dead_code)]
+pub(crate) mod batch;
 pub(crate) mod laws;
 
 // Trial (issue #29): the SQLancer-class metamorphic logic-bug gauntlet —

@@ -1659,7 +1659,7 @@ fn delta_atom(
 fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTreeSet<Tuple> {
     let mut want = BTreeSet::new();
     for key in keys {
-        let real_key = crate::data::tuple::Tuple::from(key.clone());
+        let real_key = crate::data::value::Tuple::from(key.clone());
         for iv in laws::derive_intervals(events, &real_key, laws::Axis::Valid, fixed_sys) {
             let mut row = iv.tuple.clone();
             row.push(DataValue::Interval(

@@ -36,9 +36,10 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::program::{FixedRule, InputProgram};
+use crate::data::relation::VecElementType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, ValidityTs, VecElementType};
+use crate::data::value::{DataValue, ValidityTs};
 use crate::engines::text::TokenizerConfig;
 use crate::parse::expr::{build_expr, parse_string};
 use crate::parse::query::parse_query;

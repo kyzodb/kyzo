@@ -65,7 +65,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 
 use crate::data::value::{AsOf, DataValue, GermanStr, ValidityTs};
 use crate::query::compile::{

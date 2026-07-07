@@ -947,7 +947,7 @@ mod tests {
             let rtx = db.read_tx().unwrap();
             let mut out = vec![];
             for rel in [&idx, &inv] {
-                let lower = crate::data::tuple::encode_tuple_key(rel.id.0, &[]);
+                let lower = crate::data::value::encode_tuple_key(rel.id.0, &[]);
                 let upper = (rel.id.0 + 1).to_be_bytes();
                 for kv in rtx.range_scan(lower.as_bytes(), &upper) {
                     let (k, v) = kv.unwrap();
