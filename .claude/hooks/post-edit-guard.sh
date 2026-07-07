@@ -56,8 +56,16 @@ case "$file" in
     fi
     ;;
   *tests/*|*tests.rs|*golden*|*fixture*)
-    warn "You changed a test/golden/fixture. Never weaken to pass (tests-goldens.md): no 'any refusal' broadening, no deleted corruption-type, no golden copied from output. Classify any failure (old-false-behavior / impl-violation / deleted-vocabulary) and, for a golden, keep an independent-derivation note."
+    warn "You changed a test/golden/fixture. Never weaken to pass (tests-goldens.md): no 'any refusal' broadening, no deleted corruption-type, no golden copied from output. Classify any failure (old-false-behavior / impl-violation / deleted-vocabulary) and, for a golden, keep an independent-derivation note. If a healthy-path fixture uses raw storage writes that bypass the catalog/kernel, that is a construction violation (03-type-driven-construction.md), not a corruption test."
     ;;
 esac
+
+# Type-driven construction smell (content-based, any first-party source): a
+# String/set standing in for a domain type, especially in proof code. A WARN to
+# classify, not a block — some are genuine boundaries.
+if printf '%s' "$file" | grep -Eq 'kyzo-[a-z-]+/src/' \
+   && grep -Eq 'BTreeSet<[[:space:]]*String|HashSet<[[:space:]]*String|(kind|format|ty|typ|index_kind|rel_kind|storage_kind)[[:space:]]*:[[:space:]]*(String|&str)' "$abs"; then
+  warn "This file carries a domain classification as a String/set (03-type-driven-construction.md). If it is a dispatch taxonomy, make it a typed enum/newtype and match on it; if it is a genuine boundary (param pool, parse token, build-time cross-reference), keep it but say so. Run scripts/smell-scan.sh to classify the whole class."
+fi
 
 exit 0
