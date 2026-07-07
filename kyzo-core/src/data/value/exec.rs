@@ -390,6 +390,98 @@ mod tests {
         assert_eq!(e.arity(), 2);
     }
 
+    /// DIFFERENTIAL: `join_project` on codes equals a naive nested-loop
+    /// join on the underlying values, for arbitrary edge sets. The code
+    /// path and the value oracle must agree on the exact multiset of output
+    /// pairs (order aside).
+    #[test]
+    fn join_project_equals_naive_value_join() {
+        // A handful of adversarial edge sets: self-loops, duplicate edges,
+        // fan-in/fan-out, disconnected, and a value range wider than a byte.
+        let cases: &[&[(i64, i64)]] = &[
+            &[(1, 2), (2, 3), (3, 4), (1, 5)],
+            &[(1, 1), (1, 2), (2, 1)],             // self-loop + back-edge
+            &[(5, 5), (5, 5)],                     // duplicate edge
+            &[(1, 9), (2, 9), (9, 3), (9, 4)],     // fan-in then fan-out
+            &[(1, 2), (3, 4)],                     // disconnected: empty join
+            &[(300, 400), (400, 500), (500, 600)], // multi-byte values
+            &[(-3, 0), (0, 7), (7, -3)],           // negatives, a cycle
+        ];
+        for pairs in cases {
+            let mut arena = Arena::new();
+            let edges = rows_of(&mut arena, pairs);
+            let f = arena.frame();
+            let e = ExecRows::admit(&edges, &f);
+            // Code path: edge(x,y) ⋈_y edge(y,z) → (x, z).
+            let step = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+            let mut got: Vec<(i64, i64)> = (0..step.len())
+                .map(|r| {
+                    (
+                        decode_int(step.resolve_cell(&f, r, 0)),
+                        decode_int(step.resolve_cell(&f, r, 1)),
+                    )
+                })
+                .collect();
+            got.sort();
+            // Naive oracle on the raw values.
+            let mut want: Vec<(i64, i64)> = Vec::new();
+            for &(x, y1) in *pairs {
+                for &(y2, z) in *pairs {
+                    if y1 == y2 {
+                        want.push((x, z));
+                    }
+                }
+            }
+            want.sort();
+            assert_eq!(
+                got, want,
+                "code join disagreed with the value oracle on {pairs:?}"
+            );
+        }
+    }
+
+    /// DETERMINISM: `join_project` is a pure function of its inputs — the
+    /// output row order is identical across repeated runs (the probe is a
+    /// lookup, never an iteration over hash order), so the engine's
+    /// schedule-independence law is preserved when this becomes the
+    /// fixpoint currency.
+    #[test]
+    fn join_project_output_is_deterministic() {
+        let pairs = &[(1, 9), (2, 9), (3, 9), (9, 10), (9, 11), (9, 12)];
+        let mut arena = Arena::new();
+        let edges = rows_of(&mut arena, pairs);
+        let f = arena.frame();
+        let e = ExecRows::admit(&edges, &f);
+        let a = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        let b = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        assert_eq!(
+            a.raw(),
+            b.raw(),
+            "join_project output order is not deterministic"
+        );
+        // And it is the left-row-major order the fixpoint relies on.
+        assert_eq!(a.len(), 9, "3 left rows × 3 right matches on code 9");
+    }
+
+    /// The domain guard: joining rows from two DIFFERENT arenas is refused
+    /// — u32 code identity is only value identity within one arena+epoch.
+    #[test]
+    #[should_panic(expected = "different arenas")]
+    fn join_project_across_arenas_panics() {
+        let mut a1 = Arena::new();
+        let r1 = rows_of(&mut a1, &[(1, 2)]);
+        let f1 = a1.frame();
+        let e1 = ExecRows::admit(&r1, &f1);
+
+        let mut a2 = Arena::new();
+        let r2 = rows_of(&mut a2, &[(2, 3)]);
+        let f2 = a2.frame();
+        let e2 = ExecRows::admit(&r2, &f2);
+
+        // Same shape, foreign arena: the codes are incomparable.
+        let _ = e1.join_project(&e2, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+    }
+
     fn decode_int(bytes: &[u8]) -> i64 {
         match super::super::canonical::decode(bytes).expect("lawful") {
             DataValue::Num(n) => n.as_int().expect("int"),
