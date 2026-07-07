@@ -4,15 +4,15 @@
 # emits additionalContext warning the agent. Silent (exit 0, no output) otherwise.
 #
 # Test locally:
-#   echo '{"tool_input":{"file_path":"kyzo-core/src/data/memcmp.rs"}}' | .claude/hooks/blast-radius-guard.sh
+#   echo '{"tool_input":{"file_path":"kyzo-core/src/data/value/canonical.rs"}}' | .claude/hooks/blast-radius-guard.sh
 set -euo pipefail
 
 file=$(jq -r '.tool_input.file_path // ""')
 
 msg=""
 case "$file" in
-  *kyzo-core/src/data/memcmp.rs | *kyzo-core/src/data/tuple.rs | *kyzo-core/src/data/bitemporal.rs | *kyzo-core/src/data/fact_payload.rs)
-    msg="memcmp.rs/tuple.rs/bitemporal.rs/fact_payload.rs are the ON-DISK key+value format (FormatVersion 3: bitemporal two-slot key tail, value claim polarity, self-describing tagged fields): byte order MUST equal semantic value order, and any change is a DB migration (see .claude/rules/memcmp.md and storage.md) needing round-trip+ordering tests and a FormatVersion decision."
+  *kyzo-core/src/data/value/canonical.rs | *kyzo-core/src/data/value/tag.rs | *kyzo-core/src/data/value/number.rs | *kyzo-core/src/data/value/row.rs | *kyzo-core/src/data/bitemporal.rs)
+    msg="canonical.rs/tag.rs/number.rs/row.rs/bitemporal.rs are the ON-DISK key+value format (value plane, FormatVersion 5: canonical byte format v1, tag-byte-first cross-type order, bitemporal two-slot key tail, value claim polarity): byte order MUST equal semantic value order (and DataValue::Ord must match the bytes), and any change to a RELEASED format is a DB migration (see .claude/rules/memcmp.md and storage.md) needing round-trip+ordering tests and a FormatVersion decision."
     ;;
   *kyzo-core/src/storage/*)
     msg="storage/** implements the Storage/ReadTx/WriteTx contract for the single pure-Rust fjall backend: ordered scans, SSI commit with typed conflicts, validity-in-key time travel, no C/C++, and species invariants held by TYPES (reader cannot write; commit consumes). Never move an invariant down the enforcement ladder (see .claude/rules/storage.md)."

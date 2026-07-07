@@ -1,6 +1,6 @@
 ---
 name: storage-semantics-reviewer
-description: Read-only reviewer for diffs touching kyzo-core/src/storage/** or the on-disk key-and-value encoding (data/memcmp.rs, data/tuple.rs, data/bitemporal.rs, data/fact_payload.rs). Checks the single pure-Rust KV backend against the Storage/ReadTx/WriteTx contract (ordered scans, SSI with typed conflicts, consuming commits, validity-in-key time travel), flags on-disk-format/ordering risks and enforcement-ladder regressions, and catches any C/C++ reintroduction. Use before finalizing a storage or key-encoding change.
+description: Read-only reviewer for diffs touching kyzo-core/src/storage/** or the on-disk key-and-value encoding (data/value/canonical.rs, data/value/tag.rs, data/value/number.rs, data/value/row.rs, data/bitemporal.rs). Checks the single pure-Rust KV backend against the Storage/ReadTx/WriteTx contract (ordered scans, SSI with typed conflicts, consuming commits, validity-in-key time travel), flags on-disk-format/ordering risks and enforcement-ladder regressions, and catches any C/C++ reintroduction. Use before finalizing a storage or key-encoding change.
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---

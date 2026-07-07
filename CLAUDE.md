@@ -115,9 +115,10 @@ here. A bench-exposed engine defect becomes an issue in this repo and gets fixed
 
 ## Guardrails (high blast radius, verify around every change)
 
-- **memcmp key encoding** (`data/memcmp.rs`): bytewise key order equals semantic value order. It
-  is the on-disk format; any change is a format migration with round-trip + ordering tests before
-  and after, and a FormatVersion decision.
+- **Canonical encoding** (`data/value/canonical.rs`, with `tag.rs`/`number.rs`/`row.rs`): bytewise
+  order equals semantic value order, and the owned `DataValue::Ord` mirror must match those bytes.
+  It is the on-disk format (value plane, FormatVersion 5); any change to a released format is a
+  migration with round-trip + ordering tests before and after, and a FormatVersion decision.
 - **Storage contract:** ordered range scans, SSI over reads and writes, consuming commits,
   validity-in-key time travel. Sealed; changes get a contract-history entry.
 - **Query semantics:** the naive oracle (`query/laws.rs`) is judge. Any eval change runs the

@@ -6,9 +6,16 @@ paths:
 
 `kyzo-core` (package name `kyzo`) is the database engine. Map:
 
-- `data/` — value model; the three wire formats each in their own file: **memcmp.rs** (key
-  encoding), **bitemporal.rs** (two-axis resolution kernel + claim polarity), **fact_payload.rs**
-  (self-describing value layout); tuple layout; **batch.rs** (the columnar execution currency)
+- `data/` — the value model, now the **value plane** under `data/value/` (story #119). The 16-byte
+  tagged cell (`cell.rs`) with its wide faces; **`canonical.rs`** — the ONE order-preserving byte
+  format (v1; `FormatVersion` 5), replacing the old memcmp/fact_payload split; **`tag.rs`** — the
+  cross-type kind order (tag byte first: `Null=0x05`, `Bool=0x08`, `Num=0x10`, `Str=0x18`, …);
+  **`number.rs`** (`Num`, exact int/float order); **`row.rs`** (`EncodedKey`/`RelationId`, the
+  written key form); **`column.rs`**/**`exec.rs`** (the arena-backed execution currency: `CodeColumn`,
+  `Domain`, `ExecRows`); **`arena.rs`** (the epoch-scoped interning arena). `data/bitemporal.rs`
+  (two-axis resolution kernel + claim polarity) is the one surviving top-level format file.
+  (`data/memcmp.rs`, `data/fact_payload.rs`, `data/tuple.rs`, `data/batch.rs` were unified into
+  `data/value/` and no longer exist.)
 - `parse/` — pest grammar → `InputProgram` (the language is KyzoScript)
 - `query/` — the Datalog compiler and evaluator, including the fixpoint state (`temp_store.rs`)
   and the columnar expression evaluator (`vm.rs`) (see the query rule)

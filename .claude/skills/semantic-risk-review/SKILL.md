@@ -10,7 +10,7 @@ Gate high-blast-radius changes on the right reviewer before finalizing.
 ## Trigger -> reviewer
 | Diff touches | Dispatch agent |
 |---|---|
-| `data/{memcmp,tuple,bitemporal,fact_payload}.rs` (on-disk formats) | `storage-semantics-reviewer` |
+| `data/value/{canonical,tag,number,row}.rs`, `data/bitemporal.rs` (on-disk formats) | `storage-semantics-reviewer` |
 | `storage/**` (the KV backend + time travel) | `storage-semantics-reviewer` |
 | `query/**` (Datalog engine) or `engines/**` (index-search operators) | `query-semantics-reviewer` |
 | any `kyzo-lib-*` binding or `unsafe` | `unsafe-ffi-reviewer` |
