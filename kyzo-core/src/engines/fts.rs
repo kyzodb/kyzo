@@ -1060,8 +1060,8 @@ mod tests {
         // Byte-flip every index row's value to reserved-msgpack garbage.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::value::encode_tuple_key(f.idx.id.0, &[]);
-            let upper = (f.idx.id.0 + 1).to_be_bytes();
+            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()

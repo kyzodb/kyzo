@@ -3768,8 +3768,9 @@ mod tests {
                 DataValue::Validity(slot(valid_ts)),
                 DataValue::Validity(slot(sys_ts)),
             ]
-            .encode_as_key(RelationId(7))
-            .into_vec()
+            .encode_as_key(RelationId::new(7).expect("below cap"))
+            .as_bytes()
+            .to_vec()
         }
         /// A from-scratch skip-walk over the real kernel — the same shape
         /// as `data/bitemporal.rs`'s private `skip_walk` test helper.

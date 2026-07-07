@@ -51,7 +51,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, DataValue, Interval, MAX_VALIDITY_TS, ValidityTs};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, MAX_VALIDITY_TS, ValidityTs};
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
@@ -222,11 +222,7 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
         None,
     )
     .expect("evaluates");
-    outcome
-        .store
-        .all_iter()
-        .map(|t| t.into_tuple().into_vec())
-        .collect()
+    outcome.store.all_iter().map(|t| t.into_tuple()).collect()
 }
 
 type Tuple = Vec<DataValue>;
@@ -384,7 +380,6 @@ fn naive_asof_cfg(
         },
     )
     .into_iter()
-    .map(|t| t.into_vec())
     .collect()
 }
 
@@ -1662,9 +1657,10 @@ fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTree
         let real_key = crate::data::value::Tuple::from(key.clone());
         for iv in laws::derive_intervals(events, &real_key, laws::Axis::Valid, fixed_sys) {
             let mut row = iv.tuple.clone();
-            row.push(DataValue::Interval(
-                Interval::new(iv.start, iv.end).expect("derive_intervals proves start < end"),
-            ));
+            row.push(DataValue::Interval(Interval::new(
+                Bound::Closed(iv.start),
+                Bound::Closed(iv.end),
+            )));
             want.insert(row.to_vec());
         }
     }
@@ -1680,11 +1676,11 @@ fn oracle_delta(events: &[laws::Event], from: laws::AsOf, to: laws::AsOf) -> BTr
         .map(|sf| match sf {
             laws::SignedFact::Plus(mut t) => {
                 t.push(v(1));
-                t.into_vec()
+                t
             }
             laws::SignedFact::Minus(mut t) => {
                 t.push(v(-1));
-                t.into_vec()
+                t
             }
         })
         .collect()
@@ -2035,7 +2031,7 @@ fn one_interval(k: i64, val: i64, start: i64, end: i64) -> Tuple {
     vec![
         v(k),
         v(val),
-        DataValue::Interval(Interval::new(start, end).unwrap()),
+        DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed(end))),
     ]
 }
 

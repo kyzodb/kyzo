@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn witness_equality_governs_service() {
         let engine = SegmentEngine::default();
-        let rel = RelationId(7);
+        let rel = RelationId::new(7).expect("below cap");
         let snapshot = (); // any open snapshot stands in
 
         let w0 = engine.witness_after_snapshot(&snapshot, rel);
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn rebuild_gated_by_stable_miss_streak() {
         let engine = SegmentEngine::default();
-        let rel = RelationId(3);
+        let rel = RelationId::new(3).expect("below cap");
         let snapshot = ();
 
         let w = engine.witness_after_snapshot(&snapshot, rel);
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn alternating_writes_never_cross_the_rebuild_gate() {
         let engine = SegmentEngine::default();
-        let rel = RelationId(5);
+        let rel = RelationId::new(5).expect("below cap");
         let snapshot = ();
         for _ in 0..50 {
             engine.bump_before_commit(rel);
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn miss_map_loss_only_delays_rebuild_never_corrupts_serving() {
         let engine = SegmentEngine::default();
-        let rel = RelationId(11);
+        let rel = RelationId::new(11).expect("below cap");
         let snapshot = ();
 
         let w = engine.witness_after_snapshot(&snapshot, rel);

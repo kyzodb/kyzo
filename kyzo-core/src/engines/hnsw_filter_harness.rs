@@ -878,7 +878,7 @@ fn engine_ordering_is_total_under_ties() {
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
     let rtx = db.read_tx().unwrap();
-    let q = Vector::new((&vec![0.0f64; dim]));
+    let q = Vector::new(vec![0.0f64; dim]);
     // A filter that passes every row: (k mod 1) < 1 is always true.
     let f = FilterSpec::ModLessThan {
         modulus: 1,
@@ -1050,7 +1050,11 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
             } else {
                 comps.iter().map(|c| c + 40.0).collect()
             };
-            vec![DataValue::from(k), DataValue::Vector(Vector::new((&v)))].into()
+            vec![
+                DataValue::from(k),
+                DataValue::Vector(Vector::new(v.clone())),
+            ]
+            .into()
         })
         .collect();
     (n, half, rows)
@@ -1408,7 +1412,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     // Every row is EXACTLY equidistant (squared L2 = 1.0, bit-exact) from the
     // all-zero query, so only the `(distance, encoded-key)` tie-break decides
     // the k survivors.
-    let q = Vector::new((&vec![0.0f64; dim]));
+    let q = Vector::new(vec![0.0f64; dim]);
     // Even keys only (`k mod 2 == 0 < 1`): a genuine filter (not
     // all-matching), ~half the corpus — enough matches (~2000) to force the
     // Graph plan, not Scan.

@@ -2285,7 +2285,7 @@ mod temporal_index_tests {
             .encode_as_key(idx_handle.id)
             .as_ref()
             .to_vec();
-        let upper = (idx_handle.id.0 + 1).to_be_bytes().to_vec();
+        let upper = (idx_handle.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("posting row decodes cleanly");
@@ -2318,7 +2318,7 @@ mod temporal_index_tests {
     /// this module has exactly one Int key column.
     fn scan_base_rows(tx: &impl ReadTx, base: &RelationHandle) -> Vec<DecodedPosting> {
         let lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
-        let upper = (base.id.0 + 1).to_be_bytes().to_vec();
+        let upper = (base.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("base row decodes cleanly");
@@ -2401,7 +2401,10 @@ mod temporal_index_tests {
         ];
         let expected_key = expected_first_tuple.encode_as_key(idx_handle.id);
         let (got_key, _) = tx
-            .range_scan(expected_key.as_ref(), &(idx_handle.id.0 + 1).to_be_bytes())
+            .range_scan(
+                expected_key.as_ref(),
+                &(idx_handle.id.raw() + 1).to_be_bytes(),
+            )
             .next()
             .expect("at least one posting at or after the hand-encoded key")
             .unwrap();
@@ -2499,7 +2502,7 @@ mod temporal_index_tests {
         let tx_a = db_a.storage.read_tx().unwrap();
         let tx_b = db_b.storage.read_tx().unwrap();
         let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
-        let upper = (idx_a.id.0 + 1).to_be_bytes().to_vec();
+        let upper = (idx_a.id.raw() + 1).to_be_bytes().to_vec();
         let raw_a: Vec<(Slice, Slice)> = tx_a
             .range_scan(&lower, &upper)
             .collect::<Result<_>>()

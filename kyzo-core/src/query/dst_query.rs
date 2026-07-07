@@ -1022,7 +1022,7 @@ fn time_travel_under_faults_answers_or_errors() {
             (1, 30, true, "c"),
         ] {
             if assertive {
-                let row = vec![v(id), DataValue::Str(GermanStr::from_str(state))];
+                let row = vec![v(id), DataValue::Str((*state).to_string())];
                 h.put_fact(&mut tx, &row, ValidityTs::from_raw(at), sp())?;
             } else {
                 h.retract_fact(&mut tx, &[v(id)], ValidityTs::from_raw(at), sp())?;
@@ -1108,7 +1108,7 @@ fn time_travel_under_faults_answers_or_errors() {
 
 fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
     data.iter()
-        .map(|(id, s)| vec![v(*id), DataValue::Str(GermanStr::from_str(s))].into())
+        .map(|(id, s)| vec![v(*id), DataValue::Str((*s).to_string())].into())
         .collect()
 }
 

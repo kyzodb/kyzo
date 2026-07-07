@@ -407,7 +407,7 @@ mod tests {
         let DataValue::Bytes(bytes) = out else {
             panic!("count_min should return bytes")
         };
-        let cms = CountMinSketch::from_bytes(bytes.as_bytes()).unwrap();
+        let cms = CountMinSketch::from_bytes(&bytes).unwrap();
         // Item 6 appeared 6%7+1 = 7 times; estimate never underreports.
         assert!(cms.estimate(&val(6)) >= 7);
     }

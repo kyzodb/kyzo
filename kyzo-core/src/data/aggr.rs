@@ -1568,9 +1568,9 @@ mod tests {
             let bytes = move || prop::collection::vec(any::<u8>(), len);
             (bytes(), bytes(), bytes()).prop_map(|(x, y, z)| {
                 (
-                    DataValue::Bytes(GermanStr::from_bytes(&x)),
-                    DataValue::Bytes(GermanStr::from_bytes(&y)),
-                    DataValue::Bytes(GermanStr::from_bytes(&z)),
+                    DataValue::Bytes(x.clone()),
+                    DataValue::Bytes(y.clone()),
+                    DataValue::Bytes(z.clone()),
                 )
             })
         })
@@ -1884,7 +1884,8 @@ mod tests {
             acc.set(&DataValue::from(i64::MAX)).unwrap();
         }
         match acc.get().unwrap() {
-            DataValue::Num(crate::data::value::Num::float(f)) => {
+            DataValue::Num(n) if n.as_float().is_some() => {
+                let f = n.as_float().expect("guarded float");
                 let expected = (i64::MAX as f64).powi(3);
                 assert!(
                     (f - expected).abs() / expected < 1e-9,

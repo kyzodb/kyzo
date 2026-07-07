@@ -258,7 +258,7 @@ mod tests {
     use crate::data::value::{DataValue, Validity, ValidityTs};
     use crate::data::value::{RelationId, TupleT};
 
-    const REL: RelationId = RelationId(7);
+    const REL: RelationId = RelationId::new(7).expect("below cap");
 
     /// A bitemporal key: `[int x, valid(ts), sys(ts)]` under `REL`, slot
     /// flags pinned to assert (the row's polarity lives in the value).
@@ -286,7 +286,7 @@ mod tests {
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
             Tuple::default().encode_as_key(REL).to_vec(),
-            (REL.0 + 1).to_be_bytes().to_vec(),
+            (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }
 
@@ -296,7 +296,10 @@ mod tests {
     /// fails fast rather than merely hanging.
     fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Vec<(i64, i64)> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf::at(ValidityTs::from_raw(sys), ValidityTs::from_raw(valid));
+        let as_of = AsOf {
+            valid: ValidityTs::from_raw(sys),
+            sys: ValidityTs::from_raw(valid),
+        };
         t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
@@ -672,7 +675,7 @@ mod tests {
         // unknown polarity byte, and a garbage rmp payload (hits only on
         // emit).
         let (lower, upper) = rel_bounds();
-        let hostile_short: Vec<u8> = [&REL.0.to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
+        let hostile_short: Vec<u8> = [&REL.raw().to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
         let mut hostile_sys_tag = bk(5, 100, 1);
         let n = hostile_sys_tag.len();
         hostile_sys_tag[n - 10] = 0xFE; // clobber the system slot's tag
@@ -757,7 +760,10 @@ mod tests {
             }
             for sys in &sys_queries {
                 for ts in &queries {
-                    let at = AsOf::at(ValidityTs::from_raw(*sys), ValidityTs::from_raw(*ts));
+                    let at = AsOf {
+                        valid: ValidityTs::from_raw(*sys),
+                        sys: ValidityTs::from_raw(*ts),
+                    };
                     let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));

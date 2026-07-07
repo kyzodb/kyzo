@@ -104,12 +104,7 @@ const POISONED_VECTOR: Op = Op {
     min_arity: 0,
     vararg: true,
     deterministic: true,
-    inner: |_| {
-        Ok(DataValue::Vec(Vector::F32(ndarray::arr1(&[
-            1.0f32,
-            f32::NAN,
-        ]))))
-    },
+    inner: |_| Ok(DataValue::Vector(Vector::new(vec![1.0f64, f64::NAN]))),
 };
 
 fn assert_domain_refusal(res: miette::Result<DataValue>) {

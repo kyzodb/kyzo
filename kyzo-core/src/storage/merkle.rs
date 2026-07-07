@@ -540,21 +540,21 @@ mod tests {
         // Two relations sharing the keyspace, separated by the 8-byte id
         // prefix. The per-relation root must equal a root over just that
         // relation's rows, and must be blind to the other relation.
-        let rel_a = RelationId(7);
-        let rel_b = RelationId(9);
+        let rel_a = RelationId::new(7).expect("below cap");
+        let rel_b = RelationId::new(9).expect("below cap");
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let mut tx = db.write_tx().unwrap();
         let mut a_pairs = Vec::new();
         for i in 0..10u32 {
-            let mut k = rel_a.0.to_be_bytes().to_vec();
+            let mut k = rel_a.raw().to_be_bytes().to_vec();
             k.extend_from_slice(format!("row{i:02}").as_bytes());
             let v = format!("a{i}").into_bytes();
             tx.put(&k, &v).unwrap();
             a_pairs.push((k, v));
         }
         for i in 0..5u32 {
-            let mut k = rel_b.0.to_be_bytes().to_vec();
+            let mut k = rel_b.raw().to_be_bytes().to_vec();
             k.extend_from_slice(format!("row{i:02}").as_bytes());
             tx.put(&k, format!("b{i}").as_bytes()).unwrap();
         }
@@ -575,7 +575,7 @@ mod tests {
 
         // Editing relation B leaves relation A's root untouched.
         let mut tx = db.write_tx().unwrap();
-        let mut k = rel_b.0.to_be_bytes().to_vec();
+        let mut k = rel_b.raw().to_be_bytes().to_vec();
         k.extend_from_slice(b"row00");
         tx.put(&k, b"changed").unwrap();
         tx.commit().unwrap();
@@ -592,7 +592,7 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let tx = db.read_tx().unwrap();
         assert_eq!(
-            relation_root(&tx, RelationId(3), big_budget()).unwrap(),
+            relation_root(&tx, RelationId::new(3).expect("below cap"), big_budget()).unwrap(),
             empty_hash()
         );
         assert_eq!(state_root(&tx, big_budget()).unwrap(), empty_hash());
@@ -603,8 +603,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let tx = db.read_tx().unwrap();
-        let err = relation_root(&tx, RelationId(RELATION_ID_BOUND), big_budget())
-            .expect_err("must refuse an out-of-range id");
+        let err = relation_root(
+            &tx,
+            RelationId::new(RELATION_ID_BOUND).unwrap_or(RelationId::SYSTEM),
+            big_budget(),
+        )
+        .expect_err("must refuse an out-of-range id");
         assert!(err.to_string().contains("48-bit"), "{err}");
     }
 

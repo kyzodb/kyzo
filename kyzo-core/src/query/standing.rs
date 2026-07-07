@@ -442,7 +442,7 @@ mod tests {
         Symbol::new(name, SourceSpan::default())
     }
     fn v(i: i64) -> DataValue {
-        DataValue::Num(Num::Int(i))
+        DataValue::Num(Num::int(i))
     }
     fn no_params() -> BTreeMap<String, DataValue> {
         BTreeMap::new()

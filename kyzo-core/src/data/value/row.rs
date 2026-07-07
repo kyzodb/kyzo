@@ -259,7 +259,7 @@ impl RelationId {
     /// The one checked constructor: `None` at or beyond [`RelationId::CAP`].
     /// Every other mint (decode, allocation) routes through the same
     /// refusal, so an over-cap id is unrepresentable.
-    pub fn new(raw: u64) -> Option<RelationId> {
+    pub const fn new(raw: u64) -> Option<RelationId> {
         if raw >= RelationId::CAP {
             None
         } else {
@@ -269,7 +269,7 @@ impl RelationId {
 
     /// The raw id (read-only; construction goes through [`RelationId::new`]
     /// or [`RelationId::raw_decode`]).
-    pub fn raw(self) -> u64 {
+    pub const fn raw(self) -> u64 {
         self.0
     }
 

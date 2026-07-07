@@ -357,7 +357,7 @@ mod tests {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(Num::int(i)) => *i,
+                DataValue::Num(n) => n.as_int().expect("int-domain column"),
                 other => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
@@ -630,7 +630,7 @@ mod tests {
                     )
                     .into_iter()
                     .map(|t| match &t[0] {
-                        DataValue::Num(Num::int(i)) => *i,
+                        DataValue::Num(n) => n.as_int().expect("int-domain column"),
                         other => panic!("non-integer fact column: {other:?}"),
                     })
                     .collect();

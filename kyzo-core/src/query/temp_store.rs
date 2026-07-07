@@ -105,7 +105,7 @@ use miette::{Result, miette};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj};
 use crate::data::value::DataValue;
-use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
+use crate::data::value::{ScanBound, Tuple, decode_tuple_bare, encode_tuple_bare};
 
 // ─────────────────────────────────────────────────────────────────────────
 // The admission seam
@@ -1113,8 +1113,14 @@ mod tests {
         assert_eq!(row.get(1), DataValue::from(4i64));
 
         // Bounded range scans over the whole head tuple in `by_row`.
-        let lower = gv("a", DataValue::from(5i64)); // above (a, 4)
-        let upper = gv("b", DataValue::from(2i64)); // exactly (b, 2)
+        let bounds = |group: &str, v: i64| {
+            vec![
+                ScanBound::Value(DataValue::from(group)),
+                ScanBound::Value(DataValue::from(v)),
+            ]
+        };
+        let lower = bounds("a", 5); // above (a, 4)
+        let upper = bounds("b", 2); // exactly (b, 2)
         let got = store
             .range_iter(&lower, &upper, true)
             .map(TupleInIter::into_tuple)

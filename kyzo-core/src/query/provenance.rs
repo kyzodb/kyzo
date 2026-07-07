@@ -254,7 +254,7 @@ impl RuleBody for ModelBody {
             } else {
                 Premises::NotRequested
             };
-            if f(Cow::Owned(head.into_vec()), arg)?.is_break() {
+            if f(Cow::Owned(head), arg)?.is_break() {
                 return Ok(());
             }
         }

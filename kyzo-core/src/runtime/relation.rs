@@ -1610,7 +1610,7 @@ mod tests {
 
         let shadow = ShadowHandle {
             name: handle.name.clone(),
-            id: crate::data::value::MAX_RELATION_ID + 1, // out of the 48-bit bound
+            id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
             put_triggers: handle.put_triggers.clone(),
             rm_triggers: handle.rm_triggers.clone(),

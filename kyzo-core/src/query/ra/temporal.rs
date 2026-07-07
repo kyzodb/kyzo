@@ -426,11 +426,19 @@ fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Resu
         // `start < end` always; a corrupt stored row that defeated the
         // write-side reservation would surface here as a typed error,
         // never a panic (law 5).
-        // Closed normal form on the discrete grid: the stored half-open
-        // [start, end) becomes [start, end - 1]; `end` is strictly later
-        // than `start` by the write-side reservation, so the subtraction
-        // cannot underflow past the grid.
-        let iv = Interval::new(Bound::Closed(start), Bound::Closed(end - 1));
+        // Closed normal form on the discrete grid. A fact still in force
+        // (no later break) is valid on `[start, +∞)` — an upper-unbounded
+        // interval, NOT a finite one ending at the sentinel, which would
+        // falsely claim the fact stops being valid. A clipped fact's
+        // stored half-open `[start, end)` becomes the closed `[start,
+        // end - 1]`; `end` is strictly later than `start` by the
+        // write-side reservation, so the subtraction cannot underflow.
+        let hi = if end == i64::MAX {
+            Bound::Unbounded
+        } else {
+            Bound::Closed(end - 1)
+        };
+        let iv = Interval::new(Bound::Closed(start), hi);
         let mut row = tuple;
         row.push(DataValue::Interval(iv));
         out.push(row);
@@ -841,16 +849,23 @@ mod tests {
         let mut out = vec![];
         for batch in ra.iter_batched(&rtx).expect("iter") {
             for row in batch.expect("batch").into_rows() {
-                let DataValue::Num(crate::data::value::Num::Int(k)) = row[0] else {
+                let DataValue::Num(ref n_k) = row[0] else {
                     panic!("key not an int")
                 };
-                let DataValue::Num(crate::data::value::Num::Int(val)) = row[1] else {
+                let k = n_k.as_int().unwrap_or_else(|| panic!("key not an int"));
+                let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
+                let val = n_val.as_int().unwrap_or_else(|| panic!("val not an int"));
                 let DataValue::Interval(iv) = &row[2] else {
                     panic!("third column not an interval: {row:?}")
                 };
-                out.push((k, val, iv.start(), iv.end()));
+                out.push((
+                    k,
+                    val,
+                    iv.start().unwrap_or(i64::MIN),
+                    iv.end().unwrap_or(i64::MAX),
+                ));
             }
         }
         out.sort();
@@ -995,15 +1010,18 @@ mod tests {
         let mut out = vec![];
         for batch in ra.iter_batched(&rtx).expect("iter") {
             for row in batch.expect("batch").into_rows() {
-                let DataValue::Num(crate::data::value::Num::Int(k)) = row[0] else {
+                let DataValue::Num(ref n_k) = row[0] else {
                     panic!("key not an int")
                 };
-                let DataValue::Num(crate::data::value::Num::Int(val)) = row[1] else {
+                let k = n_k.as_int().unwrap_or_else(|| panic!("key not an int"));
+                let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
-                let DataValue::Num(crate::data::value::Num::Int(sgn)) = row[2] else {
+                let val = n_val.as_int().unwrap_or_else(|| panic!("val not an int"));
+                let DataValue::Num(ref n_sgn) = row[2] else {
                     panic!("sign not an int")
                 };
+                let sgn = n_sgn.as_int().unwrap_or_else(|| panic!("sign not an int"));
                 out.push((k, val, sgn));
             }
         }
@@ -1047,7 +1065,10 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100); // sys stamp 1 (first commit)
         assert_at(&db, &h, 1, 10, 200); // sys stamp 2 (correction, same instant)
         // Fixed valid = MAX (current belief about "now"); sys axis varies.
-        let before = AsOf::at(vts(0), MAX_VALIDITY_TS);
+        let before = AsOf {
+            valid: vts(0),
+            sys: MAX_VALIDITY_TS,
+        };
         let after = AsOf::current(MAX_VALIDITY_TS);
         let rows = delta_rows(&db, &h, before, after);
         assert_eq!(rows, vec![(1, 200, SIGN_PLUS)]);

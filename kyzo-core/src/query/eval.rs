@@ -2043,7 +2043,7 @@ mod tests {
                 } else {
                     Premises::NotRequested
                 };
-                return f(Cow::Owned(head.into_vec()), arg);
+                return f(Cow::Owned(head), arg);
             }
             let (body_pos, l) = ordered[idx];
             if l.negated {

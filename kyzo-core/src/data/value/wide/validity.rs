@@ -106,6 +106,12 @@ impl Validity {
     }
 }
 
+impl From<(i64, bool)> for Validity {
+    fn from((ts_micros, is_assert): (i64, bool)) -> Validity {
+        Validity::new(ts_micros, is_assert)
+    }
+}
+
 /// A stored key-slot builder: slot flags are PINNED to assert (polarity
 /// lives in row values, per the guardrail), so a slot is fully
 /// determined by its coordinate.

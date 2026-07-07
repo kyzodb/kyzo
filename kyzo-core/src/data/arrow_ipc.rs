@@ -643,7 +643,7 @@ mod tests {
     use crate::data::value::Num;
 
     fn v_int(i: i64) -> DataValue {
-        DataValue::Num(Num::Int(i))
+        DataValue::Num(Num::int(i))
     }
 
     #[test]

@@ -1102,7 +1102,7 @@ mod tests {
             .iter()
             .map(|(code, key)| {
                 let mut buf = Vec::new();
-                buf.encode_datavalue(key);
+                crate::data::value::append_canonical(&mut buf, key);
                 (buf, *code)
             })
             .collect();
@@ -1468,8 +1468,8 @@ mod tests {
         // Overwrite the index row's value with garbage msgpack.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::value::encode_tuple_key(f.idx.id.0, &[]);
-            let upper = (f.idx.id.0 + 1).to_be_bytes();
+            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()

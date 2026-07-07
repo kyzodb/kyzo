@@ -34,9 +34,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::data::program::Comment;
-use crate::data::value::{DataValue, current_validity};
+use crate::data::value::DataValue;
 use crate::fixed_rule::{FixedRule, SimpleFixedRule};
 use crate::parse::{Script, parse_expressions, parse_script};
+use crate::runtime::current_validity;
 
 use super::{format_expr, format_program, format_program_with_comments};
 

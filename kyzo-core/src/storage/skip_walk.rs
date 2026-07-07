@@ -258,7 +258,7 @@ mod tests {
     use crate::data::value::{DataValue, Validity, ValidityTs};
     use crate::data::value::{RelationId, TupleT};
 
-    const REL: RelationId = RelationId(9);
+    const REL: RelationId = RelationId::new(9).expect("below cap");
 
     /// `advance_past` as its own pinned law: a tie, a regression, and a
     /// genuine advance, plus the empty-key edge — independent of whether
@@ -349,7 +349,8 @@ mod tests {
             DataValue::Validity(slot(sys_ts)),
         ]
         .encode_as_key(REL)
-        .into_vec()
+        .as_bytes()
+        .to_vec()
     }
 
     fn bval(polarity: ClaimPolarity) -> Vec<u8> {
@@ -360,7 +361,7 @@ mod tests {
 
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
-            Tuple::default().encode_as_key(REL).into_vec(),
+            Tuple::default().encode_as_key(REL).as_bytes().to_vec(),
             (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }
@@ -369,7 +370,7 @@ mod tests {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(crate::data::value::Num::Int(i)) => *i,
+                DataValue::Num(n) => n.as_int().expect("int-domain column"),
                 other => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
@@ -377,7 +378,10 @@ mod tests {
 
     fn walk(store: &MapSeek, sys_at: i64, valid_at: i64) -> Result<Vec<Tuple>> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf::at(vts(sys_at), vts(valid_at));
+        let as_of = AsOf {
+            valid: vts(sys_at),
+            sys: vts(valid_at),
+        };
         let cursor = store.open_skip_cursor(&lo, &hi);
         SkipWalk::new(cursor, &lo, &hi, as_of).take(1000).collect()
     }
