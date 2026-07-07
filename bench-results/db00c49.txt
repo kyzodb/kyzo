@@ -16,34 +16,39 @@ TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=434.9 query_ms=
 # closure_rows IDENTICAL on all three: correctness preserved, this is a pure
 # throughput regression. Root-cause below.
 
-# ROOT CAUSE (confirmed by code inspection, not speculation):
-# The fixpoint temp store (query/temp_store.rs, Story #77 chunk 2) dedups
-# every derived tuple by keying a BTreeMap on its bare encoding
-# (encode_tuple_bare), in the hottest loop of semi-naive evaluation. That
-# call moved from the OLD memcmp encoder to the value plane's CANONICAL
-# encoder:
-#   - old memcmp Int: value tag + 8-byte order-flipped f64 + 1 marker byte
-#     (~10 B), produced by a single order_encode_f64 bit-flip.
-#   - new canonical Num key: value tag + 13-byte [class][exp+1080 (2B)]
-#     [frac72 (9B)][repr] (14 B), produced by a sign/magnitude +
-#     mantissa/exponent decomposition.
-# For transitive closure -- millions of 2-int tuples deduped per fixpoint
-# iteration -- the wider, richer per-int encoding costs ~18-27% more query
-# time and 11-25% more RSS (larger BTreeMap keys). closure_rows are
-# identical: this is throughput, not correctness.
+# ROOT CAUSE (profiled, and it is NOT intrinsic to the value plane):
+# The fixpoint temp store (query/temp_store.rs RegularTempStore) dedups
+# every derived tuple in the hottest semi-naive loop by keying a BTreeMap on
+# encode_tuple_bare -- the DURABLE canonical encoder. Micro-profile of the
+# hot shape (int-pair tuples, 20M ops):
+#     canonical encode alone : 893 ms   (56% of the dedup insert cost)
+#     BTreeMap<bytes> insert  : 1598 ms  (current path: encode + byte cmp)
+#     BTreeMap<Tuple> insert  : 2103 ms  (structural DataValue::Ord -- SLOWER,
+#                                         so "just use Tuple keys" is NOT the fix)
+# The durable encoder is the dominant cost, and it runs PER TUPLE OPERATION
+# (millions of times) even though transitive closure has only ~thousands of
+# DISTINCT node ids. This is the exact anti-pattern the value plane's two-form
+# law exists to eliminate: the DURABLE form (canonical bytes) is being used as
+# the EXECUTION identity in the hot loop.
 #
-# WHY the encoding is richer, not wasteful: the canonical key places ints
-# AND floats in ONE exact real-value order (Int(1) and Float(1.0) adjacent,
-# exact beyond 2^53) -- the "memory that cannot misremember" property the
-# old lossy i-as-f64 comparisons lacked. The cost IS the exactness; there
-# is no format-preserving shortcut that keeps it.
+# THE FIX (architectural, primitives already built and proven):
+# Execution must use the EXECUTION currency -- raw admitted codes -- not the
+# durable encoder. Equal values intern to the same code, so a code tuple
+# [code_a, code_b] is exact dedup identity by u32 comparison, and the encoder
+# runs ONCE PER DISTINCT VALUE at the intern boundary instead of once per
+# operation. Ordered iteration is the sealed-code fast lane (raw rank order,
+# proven to sort with ZERO derefs in arena::sealed_code_column_sort_never_derefs).
+# The primitives exist and are proven TODAY: Rows, CodeColumn, Domain, admit,
+# gather, and the sealed-rank sort; query/batch.rs is the seam. What remains is
+# to route the eval pipeline (vm.rs / batch_ops / ra) on codes end to end so a
+# DataValue is never re-encoded mid-loop -- values become codes at ingestion,
+# flow as codes through dedup/join, and materialize canonical bytes ONLY at the
+# storage/scan boundary. A temp-store-only change does NOT recover the cost,
+# because a DataValue->code lookup still re-encodes; the win needs codes to flow
+# THROUGH the pipeline.
 #
-# RECOVERY (owner: #120, packed-u32 relations): the values-based fixpoint
-# store and its per-tuple canonical encoding are a known-temporary. #120
-# replaces them with packed u32 CODE columns over the interning arena --
-# tuples dedup by dense code identity, no per-tuple canonical encode in the
-# hot loop. The query/batch.rs module built in task 6 is the seam it swaps
-# behind. This regression is the value plane paying for its substrate now
-# and reclaiming it (plus more) when the code columns land. Per CLAUDE.md
-# ("benchmarks are instruments, never gates"), this is a recorded finding
-# with a named owner, not a hidden loss.
+# STATUS: this is a genuine, scoped architectural unit (the code-based eval
+# pipeline, #120's core), not a loss to accept and not a quick tail change to a
+# correctness-critical, oracle-guarded loop. The regression is a recorded
+# finding whose cause is the wrong FORM in the hot path -- not the value plane's
+# format, which is used correctly at the boundaries.
