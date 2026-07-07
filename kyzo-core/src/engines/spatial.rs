@@ -681,7 +681,9 @@ fn scan_box(
         let upper = [ScanBound::Value(DataValue::Bytes(
             hi.to_be_bytes().to_vec(),
         ))];
-        for row in idx.scan_bounded_prefix(tx, &[], &lower, &upper) {
+        for row in
+            crate::engines::index_rows(&idx.name, idx.scan_bounded_prefix(tx, &[], &lower, &upper))
+        {
             let row = row?;
             let posting = decode_posting(&row, base_key_len, &idx.name)?;
             // The curve over-approximates; the exact predicate filters.
@@ -1487,8 +1489,9 @@ mod tests {
         let err = spatial_range_query(&rtx, &f.base, &f.idx, &bbox)
             .expect_err("corrupt posting must error, not panic");
         assert!(
-            format!("{err:?}").contains("corrupt") || format!("{err:?}").contains("refused"),
-            "names corruption: {err:?}"
+            err.downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
     }
 

@@ -397,7 +397,7 @@ pub(crate) fn sparse_search(
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
         let prefix = vec![DataValue::from(dim as i64)];
-        for row in idx.scan_prefix(tx, &prefix) {
+        for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
             let row = row?;
             let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, &row)?;
             *scores.entry(doc_key).or_insert(0.0f32) += q_weight * d_weight;
@@ -754,10 +754,10 @@ mod tests {
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
         };
-        let search_err = || -> String {
+        let search_err = || -> miette::Report {
             let rtx = db.read_tx().unwrap();
             let mut stack = vec![];
-            let err = sparse_search(
+            sparse_search(
                 &rtx,
                 &[(0, 1.0)],
                 &f.base,
@@ -766,8 +766,7 @@ mod tests {
                 &None,
                 &mut stack,
             )
-            .expect_err("corrupt posting must error, not panic");
-            format!("{err:?}")
+            .expect_err("corrupt posting must error, not panic")
         };
 
         // (a) Garbage msgpack value: the scan's decode fails, still not a panic.
@@ -783,8 +782,10 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt") || search_err().contains("refused"),
-            "garbage value names corruption"
+            search_err()
+                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "garbage value must surface as the typed IndexRowCorrupt"
         );
 
         // (b) A VALID tuple whose weight column is the wrong type: our own
@@ -804,8 +805,10 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt") || search_err().contains("refused"),
-            "wrong-typed weight names corruption"
+            search_err()
+                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "wrong-typed weight must surface as the typed IndexRowCorrupt"
         );
 
         // (c) A finite-but-negative stored weight violates the admission
@@ -822,8 +825,10 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt") || search_err().contains("refused"),
-            "negative stored weight names corruption"
+            search_err()
+                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "negative stored weight must surface as the typed IndexRowCorrupt"
         );
     }
 

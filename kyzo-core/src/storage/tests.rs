@@ -1597,9 +1597,11 @@ fn verify_storage_reports_injected_corruption() {
     assert!(!report.is_clean());
     assert_eq!(report.checked, 51, "the walk must continue past corruption");
     assert_eq!(report.corrupt.len(), 1);
+    // The injected garbage is a leading 0x00 byte where a value tag is
+    // expected: the codec names the exact refusal (BadTag), and the
+    // verifier surfaces it as the corruption reason.
     assert!(
-        report.corrupt[0].error.contains("decode refused")
-            || report.corrupt[0].error.contains("BadTag"),
+        report.corrupt[0].error.contains("BadTag"),
         "names the decode failure: {}",
         report.corrupt[0].error
     );

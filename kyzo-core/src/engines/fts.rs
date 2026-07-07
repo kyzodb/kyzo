@@ -382,6 +382,7 @@ fn literal_postings(
     } else {
         idx.scan_prefix(tx, &vec![DataValue::Str(value.to_string())])
     };
+    let scan = crate::engines::index_rows(&idx.name, scan);
 
     // Value column indices in the decoded tuple: word(0), src keys
     // (1..=base_key_len), then offset_from, offset_to, position, total_length.
@@ -1090,8 +1091,9 @@ mod tests {
         )
         .expect_err("corrupt postings must error, not panic");
         assert!(
-            format!("{err:?}").contains("corrupt") || format!("{err:?}").contains("refused"),
-            "names corruption: {err:?}"
+            err.downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
     }
 

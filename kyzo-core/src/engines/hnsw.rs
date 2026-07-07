@@ -956,14 +956,16 @@ fn entry_point(
     let _t0 = std::time::Instant::now();
     #[cfg(test)]
     probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
-    let first = idx
-        .scan_bounded_prefix(
+    let first = crate::engines::index_rows(
+        &idx.name,
+        idx.scan_bounded_prefix(
             tx,
             &[],
             &[ScanBound::Value(DataValue::from(i64::MIN))],
             &[ScanBound::Value(DataValue::from(0i64))],
-        )
-        .next();
+        ),
+    )
+    .next();
     #[cfg(test)]
     probe::ENTRY_POINT_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
     match first {
@@ -1004,7 +1006,7 @@ fn neighbours(
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
-    for row in idx.scan_prefix(tx, &prefix) {
+    for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         #[cfg(test)]
         probe::NEIGHBOURS_ROWS_SCANNED.with(|c| c.set(c.get() + 1));
         let row = row?;
@@ -1248,7 +1250,7 @@ fn neighbours_tagged(
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
-    for row in idx.scan_prefix(tx, &prefix) {
+    for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
         match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name)? {
             // The vector's own presence row under the same prefix.
@@ -1742,7 +1744,8 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     let mut candidates: FxHashSet<VectorId> = FxHashSet::default();
     // Scan errors and corrupt rows propagate (the original's `filter_map`
     // silently dropped errors here).
-    let rows: Vec<Tuple> = idx.scan_prefix(tx, &prefix).collect::<Result<Vec<_>>>()?;
+    let rows: Vec<Tuple> = crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
+        .collect::<Result<Vec<_>>>()?;
     for row in rows {
         match HnswRow::decode(&row, key_len, &idx.name)? {
             HnswRow::Node { at, .. } => {
@@ -2187,11 +2190,14 @@ fn layer0_nodes<'a>(
     base: &'a RelationHandle,
     idx: &'a RelationHandle,
 ) -> impl Iterator<Item = Result<VectorId>> + 'a {
-    idx.scan_bounded_prefix(
-        tx,
-        &[],
-        &[ScanBound::Value(DataValue::from(0i64))],
-        &[ScanBound::Value(DataValue::from(0i64))],
+    crate::engines::index_rows(
+        &idx.name,
+        idx.scan_bounded_prefix(
+            tx,
+            &[],
+            &[ScanBound::Value(DataValue::from(0i64))],
+            &[ScanBound::Value(DataValue::from(0i64))],
+        ),
     )
     .filter_map(move |row| match row {
         Err(e) => Some(Err(e)),
@@ -3757,10 +3763,9 @@ mod tests {
             &CancelFlag::default(),
         )
         .expect_err("corrupt rows must be errors, not panics");
-        let msg = format!("{err:?}");
         assert!(
-            msg.contains("corrupt") || msg.contains("refused"),
-            "the error names the corruption: {msg}"
+            err.downcast_ref::<IndexRowCorrupt>().is_some(),
+            "corrupt index bytes must surface as the typed IndexRowCorrupt, got: {err:?}"
         );
     }
 
