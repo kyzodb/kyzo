@@ -1037,7 +1037,12 @@ mod sealed {
 /// raw spend methods below are UNCALLABLE outside the plane: holding a
 /// `Frame` is not enough — sealing the trait guards who observes, this
 /// token guards who spends.
-#[derive(Clone, Copy)]
+///
+/// NOT a skeleton key, by shape: no `Clone`/`Copy`, no accessor ever
+/// returns one, and the admitted container that minted it is its only
+/// home — the token is stored beside the observer it was verified
+/// against and passed by reference to that observer's spends. One
+/// admission, one token, one observer.
 pub struct BulkSpendAuthority(());
 
 impl BulkSpendAuthority {
@@ -1066,8 +1071,8 @@ pub trait BulkObserver: sealed::Sealed {
     fn bulk_len(&self) -> usize;
     /// Sealed prefix bound (codes below it compare numerically).
     fn bulk_sealed_len(&self) -> usize;
-    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> &[u8];
-    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Ordering;
+    fn resolve_raw(&self, c: usize, proof: &BulkSpendAuthority) -> &[u8];
+    fn cmp_raw(&self, a: usize, b: usize, proof: &BulkSpendAuthority) -> Ordering;
 }
 
 impl BulkObserver for Frame<'_> {
@@ -1087,11 +1092,11 @@ impl BulkObserver for Frame<'_> {
         self.sealed_len
     }
 
-    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
+    fn resolve_raw(&self, c: usize, _proof: &BulkSpendAuthority) -> &[u8] {
         self.view().resolve(c)
     }
 
-    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, _proof: &BulkSpendAuthority) -> Ordering {
         self.view().cmp(a, b)
     }
 }
@@ -1113,11 +1118,11 @@ impl BulkObserver for Snapshot {
         self.sealed_len
     }
 
-    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
+    fn resolve_raw(&self, c: usize, _proof: &BulkSpendAuthority) -> &[u8] {
         self.view().resolve(c)
     }
 
-    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, _proof: &BulkSpendAuthority) -> Ordering {
         self.view().cmp(a, b)
     }
 }

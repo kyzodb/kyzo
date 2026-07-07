@@ -249,7 +249,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// The canonical bytes of the value at `i`.
     pub fn resolve(&self, i: usize) -> &'a [u8] {
-        self.obs.resolve_raw(self.codes[i] as usize, self.proof)
+        self.obs.resolve_raw(self.codes[i] as usize, &self.proof)
     }
 
     /// Semantic (byte-order) comparison of two positions: numeric when
@@ -262,7 +262,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         if self.all_sealed {
             return a.cmp(&b);
         }
-        self.obs.cmp_raw(a as usize, b as usize, self.proof)
+        self.obs.cmp_raw(a as usize, b as usize, &self.proof)
     }
 
     /// A deterministic sort permutation by value order (the kernel the
@@ -412,7 +412,7 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
                 .obs
                 .resolve_raw(
                     w.code().expect("non-inline word carries a code").raw() as usize,
-                    self.proof,
+                    &self.proof,
                 )
                 .to_vec(),
         }
