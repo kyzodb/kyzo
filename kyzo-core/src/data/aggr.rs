@@ -1728,21 +1728,21 @@ mod tests {
             }
         }
 
-        // Across the Int/Float boundary the exact `Num` order is the
-        // canonical one the memcmp key encoding preserves: an Int sorts
-        // before the Float it collides with as f64, so `2^53 + 1` (Int) is
-        // *less than* `2^53.0` (Float) by that tie-break.
+        // The `Num` order compares EXACT real values, not f64-rounded
+        // ones: `2^53 + 1` (Int, exact) is genuinely GREATER than
+        // `2^53.0` (Float), where the old lossy `i as f64` comparison
+        // would have collided them. So min picks the float, max the int.
         let int_val = DataValue::from((1i64 << 53) + 1);
         let float_val = DataValue::from((1i64 << 53) as f64);
-        let mut acc = float_val.clone();
-        assert!(MeetAggrMin.update(&mut acc, &int_val).unwrap());
-        assert_eq!(acc, int_val);
         let mut acc = int_val.clone();
-        assert!(!MeetAggrMin.update(&mut acc, &float_val).unwrap());
-        assert_eq!(acc, int_val);
-        let mut acc = int_val.clone();
-        assert!(MeetAggrMax.update(&mut acc, &float_val).unwrap());
+        assert!(MeetAggrMin.update(&mut acc, &float_val).unwrap());
         assert_eq!(acc, float_val);
+        let mut acc = float_val.clone();
+        assert!(!MeetAggrMin.update(&mut acc, &int_val).unwrap());
+        assert_eq!(acc, float_val);
+        let mut acc = float_val.clone();
+        assert!(MeetAggrMax.update(&mut acc, &int_val).unwrap());
+        assert_eq!(acc, int_val);
     }
 
     /// Ratifies the deviation from upstream: sum/product over all-integer

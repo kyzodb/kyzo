@@ -1657,10 +1657,7 @@ fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTree
         let real_key = crate::data::value::Tuple::from(key.clone());
         for iv in laws::derive_intervals(events, &real_key, laws::Axis::Valid, fixed_sys) {
             let mut row = iv.tuple.clone();
-            row.push(DataValue::Interval(Interval::new(
-                Bound::Closed(iv.start),
-                Bound::Closed(iv.end),
-            )));
+            row.push(DataValue::Interval(plane_interval(iv.start, iv.end)));
             want.insert(row.to_vec());
         }
     }
@@ -2027,11 +2024,24 @@ fn spans_of(db: &FjallStorage, name: &str, sys: Option<i64>) -> BTreeSet<Tuple> 
     compile_and_run(db, prog)
 }
 
+/// Convert an oracle half-open `[start, end)` derived interval to the
+/// plane's closed-normal-form value: an open run (`end == OPEN_END`)
+/// becomes upper-unbounded; a clipped run's exclusive `end` becomes the
+/// closed instant `end - 1`.
+fn plane_interval(start: i64, end: i64) -> Interval {
+    let hi = if end == laws::OPEN_END {
+        Bound::Unbounded
+    } else {
+        Bound::Closed(end - 1)
+    };
+    Interval::new(Bound::Closed(start), hi)
+}
+
 fn one_interval(k: i64, val: i64, start: i64, end: i64) -> Tuple {
     vec![
         v(k),
         v(val),
-        DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed(end))),
+        DataValue::Interval(plane_interval(start, end)),
     ]
 }
 
@@ -2134,7 +2144,7 @@ fn spans_no_zero_width_intervals_ever() {
         let DataValue::Interval(iv) = row.last().unwrap() else {
             panic!("expected an interval column: {row:?}")
         };
-        assert!(iv.start() < iv.end(), "zero-width interval: {iv:?}");
+        assert!(!iv.is_empty(), "empty interval: {iv:?}");
     }
 }
 

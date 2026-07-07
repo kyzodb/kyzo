@@ -1762,9 +1762,13 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
 
         let mut tx = db.write_tx().unwrap();
-        // Force the counter to the last allocatable id.
-        tx.put(&SystemKey::IdCounter.encode(), &(1u64 << 48).to_be_bytes())
-            .unwrap();
+        // Force the counter to the last allocatable id, so the next
+        // allocation crosses the ceiling.
+        tx.put(
+            &SystemKey::IdCounter.encode(),
+            &(crate::data::value::RelationId::CAP - 1).to_be_bytes(),
+        )
+        .unwrap();
         let err =
             create_relation(&mut tx, simple_input("too_many"), KeyspaceKind::Facts).unwrap_err();
         assert!(

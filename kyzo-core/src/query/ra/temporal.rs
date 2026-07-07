@@ -888,7 +888,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 20)]);
+        assert_eq!(rows, vec![(1, 100, 10, 19)]);
     }
 
     #[test]
@@ -898,7 +898,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 20), (1, 200, 20, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, 19), (1, 200, 20, i64::MAX)]);
     }
 
     #[test]
@@ -919,7 +919,7 @@ mod tests {
         retract_at(&db, &h, 1, 20);
         assert_at(&db, &h, 1, 30, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 20), (1, 100, 30, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, 19), (1, 100, 30, i64::MAX)]);
     }
 
     #[test]
@@ -978,7 +978,7 @@ mod tests {
         let rows = spans_rows(&db, &h, i64::MAX);
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
-            vec![(1, 100, 10, i64::MAX), (2, 900, 5, 15)]
+            vec![(1, 100, 10, i64::MAX), (2, 900, 5, 14)]
         );
     }
 

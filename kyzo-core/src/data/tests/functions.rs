@@ -468,9 +468,11 @@ fn test_signum() {
         op_signum(&[DataValue::from(0.0)]).unwrap(),
         DataValue::from(0)
     );
+    // `-0.0` collapses to `+0.0` in the value plane (one canonical zero),
+    // so its signum is `0`, not `-1`.
     assert_eq!(
         op_signum(&[DataValue::from(-0.0)]).unwrap(),
-        DataValue::from(-1)
+        DataValue::from(0)
     );
     assert_eq!(
         op_signum(&[DataValue::from(-3)]).unwrap(),

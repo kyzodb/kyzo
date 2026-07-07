@@ -274,9 +274,11 @@ impl RelationId {
     }
 
     /// The exclusive allocation ceiling: every assignable id stays below
-    /// `0xff << 56`, so no relation prefix ever BEGINS with `0xFF` — the
-    /// byte the scan-bound vocabulary reserves as its `Greatest` tail.
-    pub const CAP: u64 = 0xff_u64 << 56;
+    /// `1 << 48`, so a key's 8-byte relation prefix always begins with two
+    /// `0x00` bytes — far below the `0xFF` the scan-bound vocabulary
+    /// reserves as its `Greatest` tail, and the bound every storage
+    /// consumer (merkle roots, keyspace probes) already assumes.
+    pub const CAP: u64 = 1_u64 << 48;
 
     pub fn raw_encode(self) -> [u8; 8] {
         self.0.to_be_bytes()

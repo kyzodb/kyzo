@@ -357,17 +357,17 @@ fn law_vector_signed_zero_canonicalizes() {
     assert_eq!(encode(&neg_mixed), encode(&pos_mixed));
 }
 
-/// Scalar `Num::Float` deliberately does NOT canonicalize signed zero:
-/// `Num::cmp` uses `total_cmp`, which orders `-0.0` strictly below `+0.0`,
-/// so the two must stay distinguishable — this pins that design decision so
-/// a future change to `Vector` canonicalization can't accidentally leak into
-/// the scalar path.
+/// The value plane has ONE canonical zero: `Num::float(-0.0)` collapses to
+/// `+0.0` at construction, so the two are the same value — equal, and
+/// byte-identical under the canonical encoding. This pins that law so a
+/// future change cannot re-introduce a distinct negative zero.
 #[test]
-fn law_scalar_num_signed_zero_stays_distinct() {
+fn law_scalar_num_negative_zero_collapses_to_positive() {
     let neg = DataValue::Num(Num::float(-0.0));
     let pos = DataValue::Num(Num::float(0.0));
-    assert_eq!(neg.cmp(&pos), std::cmp::Ordering::Less);
-    assert!(encode(&neg) < encode(&pos));
+    assert_eq!(neg.cmp(&pos), std::cmp::Ordering::Equal);
+    assert_eq!(neg, pos);
+    assert_eq!(encode(&neg), encode(&pos));
 }
 
 // ---------- KV contract vs a model oracle ----------

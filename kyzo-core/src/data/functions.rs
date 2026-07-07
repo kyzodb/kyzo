@@ -2062,7 +2062,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
         DataValue::Null => false,
         DataValue::Bool(b) => *b,
-        DataValue::Num(n) => n.as_int() != Some(0),
+        DataValue::Num(n) => !n.eq_numeric(Num::int(0)),
         DataValue::Str(s) => !s.is_empty(),
         DataValue::Bytes(b) => !b.is_empty(),
         DataValue::Uuid(u) => !u.0.is_nil(),
@@ -2075,7 +2075,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Json(json) => match json {
             Json::Null => false,
             Json::Bool(b) => *b,
-            Json::Num(n) => n.num().as_int() != Some(0),
+            Json::Num(n) => !n.num().eq_numeric(Num::int(0)),
             Json::Str(s) => !s.is_empty(),
             Json::Arr(a) => !a.is_empty(),
             Json::Obj(o) => !o.entries().is_empty(),
@@ -2088,7 +2088,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
         DataValue::Null => 0,
         DataValue::Bool(b) => *b as i64,
-        DataValue::Num(n) => (n.to_f64() != 0.) as i64,
+        DataValue::Num(n) => !n.eq_numeric(Num::int(0)) as i64,
         DataValue::Str(s) => i64::from(!s.is_empty()),
         DataValue::Bytes(b) => i64::from(!b.is_empty()),
         DataValue::Uuid(u) => i64::from(!u.0.is_nil()),
@@ -2101,7 +2101,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Json(json) => match json {
             Json::Null => 0,
             Json::Bool(b) => *b as i64,
-            Json::Num(n) => (n.num().as_int() != Some(0)) as i64,
+            Json::Num(n) => !n.num().eq_numeric(Num::int(0)) as i64,
             Json::Str(s) => !s.is_empty() as i64,
             Json::Arr(a) => !a.is_empty() as i64,
             Json::Obj(o) => !o.entries().is_empty() as i64,
