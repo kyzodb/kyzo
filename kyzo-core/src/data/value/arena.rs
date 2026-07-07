@@ -1982,6 +1982,83 @@ mod tests {
     // never touch payloads; ties (including equality) do.
     // ------------------------------------------------------------------
 
+    /// The deref counter at the OBSERVER comparison seam
+    /// (`Frame::cmp_codes` over DELTA/tail codes -- what an ordered
+    /// comparison of not-yet-sealed values calls). Two sealed codes
+    /// compare by rank alone (the fast lane, proven separately); the
+    /// prefix-first-then-deref-on-tie discipline governs delta comparison.
+    /// Distinct prefixes decide with ZERO payload derefs; a shared-prefix
+    /// pair derefs to break the tie; nothing derefs speculatively.
+    #[test]
+    fn observer_cmp_derefs_only_on_prefix_tie() {
+        let mut arena = Arena::new();
+        // Delta (unsealed) codes: comparison must go prefix-first.
+        let a = arena.intern(b"AAAA-tail-1"); // distinct prefix
+        let b = arena.intern(b"BBBB-tail-2"); // distinct prefix
+        let c = arena.intern(b"SAME-tail-x"); // shared prefix with d
+        let d = arena.intern(b"SAME-tail-y");
+        let f = arena.frame();
+
+        let base = arena.compare_derefs();
+        assert_eq!(f.cmp_codes(a, b), std::cmp::Ordering::Less);
+        assert_eq!(
+            arena.compare_derefs() - base,
+            0,
+            "distinct-prefix compare dereferenced payload"
+        );
+
+        let base = arena.compare_derefs();
+        assert_eq!(f.cmp_codes(c, d), std::cmp::Ordering::Less);
+        assert!(
+            arena.compare_derefs() > base,
+            "shared-prefix tie must deref to break the tie"
+        );
+    }
+
+    /// The sealed fast lane: sorting an all-sealed CodeColumn is RAW
+    /// NUMERIC order over codes -- sealed codes ARE global ranks == byte
+    /// order -- so it compares u32s and dereferences the arena ZERO times,
+    /// no matter how many prefixes tie. This is the execution currency: no
+    /// durable-encoding work in the ordered-iteration hot path.
+    #[test]
+    fn sealed_code_column_sort_never_derefs() {
+        use super::super::column::CodeColumn;
+        let mut arena = Arena::new();
+        // Many shared-prefix values (would all be prefix-ties under a
+        // byte compare) plus distinct ones.
+        let mut interned = Vec::new();
+        for i in 0..500u32 {
+            interned.push(arena.intern(format!("SAME-{i:08}").as_bytes()));
+        }
+        for i in 0..500u32 {
+            interned.push(arena.intern(&i.to_be_bytes()));
+        }
+        let remap = arena.seal();
+        let codes: Vec<_> = interned.into_iter().map(|c| remap.apply(c)).collect();
+        let f = arena.frame();
+        let mut col = CodeColumn::new_in(&f);
+        for c in &codes {
+            col.push(*c);
+        }
+        let base = arena.compare_derefs();
+        let perm = col.admit(&f).sort_permutation();
+        assert_eq!(perm.len(), 1000);
+        assert_eq!(
+            arena.compare_derefs() - base,
+            0,
+            "the sealed fast lane must sort by raw code order with zero derefs"
+        );
+        // And the order it produced is the true value (byte) order.
+        let ranks: Vec<usize> = perm
+            .iter()
+            .map(|&i| f.rank(f.resolve(codes[i as usize])).expect("interned"))
+            .collect();
+        assert!(
+            ranks.windows(2).all(|w| w[0] <= w[1]),
+            "sealed sort not value-ordered"
+        );
+    }
+
     #[test]
     fn distinct_prefix_compares_never_deref() {
         let mut arena = Arena::new();
