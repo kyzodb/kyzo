@@ -1858,7 +1858,7 @@ mod tests {
     /// search over more than one emitted row per probe. Run explicitly:
     /// `cargo test -p kyzo --release query::ra::tests::stored_prefix_join_segment_probe_cost_vs_storage -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "cost probe; run explicitly to compare segment vs storage prefix-join cost"]
     fn stored_prefix_join_segment_probe_cost_vs_storage() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();

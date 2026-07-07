@@ -200,7 +200,7 @@ mod tests {
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     #[test]
-    #[ignore]
+    #[ignore = "timing-evidence rig; run explicitly with --ignored --nocapture to print APSP timings"]
     fn zz_timing_evidence() {
         let n = 400u32;
         let mut state = 0x0bad_c0de_dead_beefu64;

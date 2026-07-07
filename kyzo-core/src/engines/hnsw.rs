@@ -2959,7 +2959,7 @@ mod tests {
     /// respected, or is some hub node's degree escaping its cap?).
     /// `cargo test -p kyzo --release engines::hnsw::tests::build_graph_shape_probe -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "HNSW graph-shape measurement rig; run explicitly with --ignored"]
     fn build_graph_shape_probe() {
         for &n in &[1000usize, 8000] {
             let dim = 16;
@@ -3070,7 +3070,7 @@ mod tests {
     /// explicitly and read the exponents:
     /// `cargo test -p kyzo --release engines::hnsw::tests::build_time_complexity_probe -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "HNSW build-time complexity probe; run explicitly with --ignored"]
     fn build_time_complexity_probe() {
         // n=64000 is omitted: it exceeds this suite's `ulimit -v 12582912`
         // memory cap (observed: a 16 GiB single allocation aborts the
@@ -3177,7 +3177,7 @@ mod tests {
     /// single-transaction number instead.
     /// `cargo test -p kyzo --release engines::hnsw::tests::build_time_transaction_lifetime_probe -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "HNSW build-time transaction-lifetime probe; run explicitly with --ignored"]
     fn build_time_transaction_lifetime_probe() {
         for &n in &[1000usize, 4000] {
             let (t_one, snap_one) = probe_build_dim(n, 0x5EED_1234_ABCD_0000, 16);
