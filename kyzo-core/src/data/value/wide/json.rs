@@ -42,8 +42,9 @@
 
 use super::super::number::Num;
 
-/// A JSON value tree in canonical identity form.
-#[derive(Clone, PartialEq, Eq, Debug)]
+/// A JSON value tree in canonical identity form. `Hash` is lawful:
+/// every constituent hashes by its identity law (JsonNum through Num).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Json {
     Null,
     Bool(bool),
@@ -78,7 +79,7 @@ impl JsonNum {
 /// A canonical JSON object: entries sorted by key, keys unique.
 /// Constructible only through [`JsonObj::new`], which sorts and refuses
 /// duplicates — an unlawful object cannot be written down.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct JsonObj(Vec<(String, Json)>);
 
 /// The typed refusal for ambiguous documents.

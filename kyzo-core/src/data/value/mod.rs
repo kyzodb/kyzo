@@ -8,7 +8,34 @@
  */
 
 //! The value plane: a value is a 16-byte tagged cell, either fully inline
-//! or a dense `Code` into a shared, order-preserving interning arena.
+//! or a dense `Code` into a shared, order-preserving interning arena —
+//! and [`DataValue`] is its logical owned face, the engine's value
+//! currency.
+//!
+//! ## `DataValue`: one owned logical value
+//!
+//! The 13 canonical kinds as an owned tree. Its trait surfaces are the
+//! identity laws made ergonomic, each with a single authority:
+//!
+//! - `Eq`/`Hash` ARE the identity laws (Num's representation-faithful
+//!   identity with one NaN and no `-0.0`; canonicalized sets; sorted
+//!   unique JSON objects; normalized vector components).
+//! - `Ord` is the STORAGE total order — the same order the canonical
+//!   bytes embed — implemented as a fast structural mirror and
+//!   **law-locked** to the codec by differential property tests (byte
+//!   order of `encode_owned(v)` must equal `v.cmp(w)` on generated
+//!   corpora, both directions, mutation-gated). One order, two proven
+//!   implementations, machine-checked equal — never two truths.
+//! - Expression-level comparability remains a separate, refusable
+//!   authority in the query layer; `Ord` here is deterministic storage
+//!   order, exactly what sorted containers and canonical output need.
+//!
+//! There is deliberately no bottom/sentinel variant: scan bounds are the
+//! codec's bound vocabulary (the empty byte string sorts below every
+//! encoding), never members of the value domain.
+
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 pub mod arena;
 pub mod canonical;
@@ -21,3 +48,584 @@ pub mod row;
 pub mod string;
 pub mod tag;
 pub mod wide;
+
+pub use arena::{Arena, BulkObserver, Epoch, EpochRemap, Frame, Snapshot};
+pub use canonical::{CanonicalBytes, Datum, DecodeError, decode, encode, encode_owned};
+pub use cell::{Minted, Value};
+pub use code::{Code, StampedCode};
+pub use column::{AdmittedCodes, AdmittedWords, CodeColumn, Column, Domain, WordColumn};
+pub use number::Num;
+pub use row::{AdmittedRows, EncodedKey, PushError, Rows};
+pub use string::GermanStr;
+pub use tag::Tag;
+pub use wide::interval::{Bound, Interval};
+pub use wide::json::{Json, JsonNum, JsonObj};
+pub use wide::regex::{CompiledRegexV1, RegexFlags, RegexSource};
+pub use wide::validity::Validity;
+
+/// A vector value: f64 components held in canonical identity form
+/// (constructed through [`Vector::new`], which applies Num's float law to
+/// every component: `-0.0 → +0.0`, one canonical NaN). Identity is
+/// dimensionality + exact component bits — lawful because the bits are
+/// normalized at the door.
+#[derive(Clone, Debug)]
+pub struct Vector(Vec<f64>);
+
+impl Vector {
+    pub fn new(components: Vec<f64>) -> Vector {
+        Vector(
+            components
+                .into_iter()
+                .map(|c| Num::float(c).as_float().expect("float stays float"))
+                .collect(),
+        )
+    }
+
+    pub fn as_slice(&self) -> &[f64] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl PartialEq for Vector {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self
+                .0
+                .iter()
+                .zip(other.0.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+    }
+}
+
+impl Eq for Vector {}
+
+impl std::hash::Hash for Vector {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(self.0.len());
+        for c in &self.0 {
+            state.write_u64(c.to_bits());
+        }
+    }
+}
+
+/// The engine-facing UUID value (16 bytes; identity and order are the
+/// bytes, per the uuid face's law).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct UuidWrapper(pub uuid::Uuid);
+
+/// The logical owned value: the engine's currency across parsing,
+/// expression evaluation, and materialization. See the module docs for
+/// its trait-law contract.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum DataValue {
+    Null,
+    Bool(bool),
+    Num(Num),
+    Str(String),
+    Bytes(Vec<u8>),
+    Uuid(UuidWrapper),
+    Regex(RegexSource),
+    Json(Json),
+    Vector(Vector),
+    List(Vec<DataValue>),
+    /// Canonical set form by construction: `BTreeSet` under the storage
+    /// order.
+    Set(BTreeSet<DataValue>),
+    Validity(Validity),
+    Interval(Interval),
+}
+
+impl DataValue {
+    /// The value's kind: the cross-type order authority.
+    pub fn tag(&self) -> Tag {
+        match self {
+            DataValue::Null => Tag::Null,
+            DataValue::Bool(_) => Tag::Bool,
+            DataValue::Num(_) => Tag::Num,
+            DataValue::Str(_) => Tag::Str,
+            DataValue::Bytes(_) => Tag::Bytes,
+            DataValue::Uuid(_) => Tag::Uuid,
+            DataValue::Regex(_) => Tag::Regex,
+            DataValue::Json(_) => Tag::Json,
+            DataValue::Vector(_) => Tag::Vector,
+            DataValue::List(_) => Tag::List,
+            DataValue::Set(_) => Tag::Set,
+            DataValue::Validity(_) => Tag::Validity,
+            DataValue::Interval(_) => Tag::Interval,
+        }
+    }
+
+    pub fn uuid(u: uuid::Uuid) -> DataValue {
+        DataValue::Uuid(UuidWrapper(u))
+    }
+
+    /// The integer, for `Num` values holding the int representation.
+    pub fn get_int(&self) -> Option<i64> {
+        match self {
+            DataValue::Num(n) => n.as_int(),
+            _ => None,
+        }
+    }
+
+    /// The numeric value as f64 (ints promote losslessly where they can;
+    /// this is a NUMERIC read, not an identity claim).
+    pub fn get_float(&self) -> Option<f64> {
+        match self {
+            DataValue::Num(n) => Some(match n.as_float() {
+                Some(f) => f,
+                None => n.as_int().expect("Num is int or float") as f64,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn get_str(&self) -> Option<&str> {
+        match self {
+            DataValue::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn get_bytes(&self) -> Option<&[u8]> {
+        match self {
+            DataValue::Bytes(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn get_bool(&self) -> Option<bool> {
+        match self {
+            DataValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn get_slice(&self) -> Option<&[DataValue]> {
+        match self {
+            DataValue::List(l) => Some(l),
+            _ => None,
+        }
+    }
+}
+
+impl From<i64> for DataValue {
+    fn from(v: i64) -> DataValue {
+        DataValue::Num(Num::int(v))
+    }
+}
+
+impl From<f64> for DataValue {
+    fn from(v: f64) -> DataValue {
+        DataValue::Num(Num::float(v))
+    }
+}
+
+impl From<bool> for DataValue {
+    fn from(v: bool) -> DataValue {
+        DataValue::Bool(v)
+    }
+}
+
+impl From<&str> for DataValue {
+    fn from(v: &str) -> DataValue {
+        DataValue::Str(v.to_string())
+    }
+}
+
+impl From<String> for DataValue {
+    fn from(v: String) -> DataValue {
+        DataValue::Str(v)
+    }
+}
+
+impl From<Num> for DataValue {
+    fn from(v: Num) -> DataValue {
+        DataValue::Num(v)
+    }
+}
+
+impl From<Vec<DataValue>> for DataValue {
+    fn from(v: Vec<DataValue>) -> DataValue {
+        DataValue::List(v)
+    }
+}
+
+impl PartialOrd for DataValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DataValue {
+    /// The storage total order: a structural mirror of canonical byte
+    /// order, law-locked to the codec by differential tests.
+    fn cmp(&self, other: &Self) -> Ordering {
+        let t = self.tag().cmp(&other.tag());
+        if t != Ordering::Equal {
+            return t;
+        }
+        match (self, other) {
+            (DataValue::Null, DataValue::Null) => Ordering::Equal,
+            (DataValue::Bool(a), DataValue::Bool(b)) => a.cmp(b),
+            (DataValue::Num(a), DataValue::Num(b)) => a.cmp(b),
+            (DataValue::Str(a), DataValue::Str(b)) => a.as_bytes().cmp(b.as_bytes()),
+            (DataValue::Bytes(a), DataValue::Bytes(b)) => a.cmp(b),
+            (DataValue::Uuid(a), DataValue::Uuid(b)) => a.cmp(b),
+            (DataValue::Regex(a), DataValue::Regex(b)) => a
+                .flags()
+                .bits()
+                .cmp(&b.flags().bits())
+                .then_with(|| a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
+            (DataValue::Json(a), DataValue::Json(b)) => json_storage_cmp(a, b),
+            (DataValue::Vector(a), DataValue::Vector(b)) => {
+                a.0.len().cmp(&b.0.len()).then_with(|| {
+                    for (x, y) in a.0.iter().zip(b.0.iter()) {
+                        let c = Num::float(*x).cmp(&Num::float(*y));
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                    }
+                    Ordering::Equal
+                })
+            }
+            (DataValue::List(a), DataValue::List(b)) => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    let c = x.cmp(y);
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                a.len().cmp(&b.len())
+            }
+            (DataValue::Set(a), DataValue::Set(b)) => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    let c = x.cmp(y);
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                a.len().cmp(&b.len())
+            }
+            (DataValue::Validity(a), DataValue::Validity(b)) => a.cmp_as_of_order(*b),
+            (DataValue::Interval(a), DataValue::Interval(b)) => interval_storage_cmp(a, b),
+            _ => unreachable!("tags equal"),
+        }
+    }
+}
+
+/// The JSON storage order: the mirror of the JSON payload grammar.
+fn json_storage_cmp(a: &Json, b: &Json) -> Ordering {
+    fn rank(j: &Json) -> u8 {
+        match j {
+            Json::Null => 0x05,
+            Json::Bool(false) => 0x06,
+            Json::Bool(true) => 0x07,
+            Json::Num(_) => 0x10,
+            Json::Str(_) => 0x18,
+            Json::Arr(_) => 0x48,
+            Json::Obj(_) => 0x4C,
+        }
+    }
+    let r = rank(a).cmp(&rank(b));
+    if r != Ordering::Equal {
+        return r;
+    }
+    match (a, b) {
+        (Json::Num(x), Json::Num(y)) => x.num().cmp(&y.num()),
+        (Json::Str(x), Json::Str(y)) => x.as_bytes().cmp(y.as_bytes()),
+        (Json::Arr(x), Json::Arr(y)) => {
+            for (i, j) in x.iter().zip(y.iter()) {
+                let c = json_storage_cmp(i, j);
+                if c != Ordering::Equal {
+                    return c;
+                }
+            }
+            x.len().cmp(&y.len())
+        }
+        (Json::Obj(x), Json::Obj(y)) => {
+            for ((ka, va), (kb, vb)) in x.entries().iter().zip(y.entries().iter()) {
+                let c = ka
+                    .as_bytes()
+                    .cmp(kb.as_bytes())
+                    .then_with(|| json_storage_cmp(va, vb));
+                if c != Ordering::Equal {
+                    return c;
+                }
+            }
+            x.entries().len().cmp(&y.entries().len())
+        }
+        _ => Ordering::Equal,
+    }
+}
+
+/// The interval storage order: the mirror of the interval grammar.
+fn interval_storage_cmp(a: &Interval, b: &Interval) -> Ordering {
+    use wide::interval::{Hi, Lo};
+    fn key(iv: &Interval) -> (u8, u8, i64, u8, i64) {
+        match iv.ends() {
+            None => (0x01, 0, 0, 0, 0),
+            Some((lo, hi)) => {
+                let (lm, lt) = match lo {
+                    Lo::NegUnbounded => (0x01, 0),
+                    Lo::At(t) => (0x02, t),
+                };
+                let (hm, ht) = match hi {
+                    Hi::PosUnbounded => (0x01, 0),
+                    Hi::At(t) => (0x02, t),
+                };
+                (0x02, lm, lt, hm, ht)
+            }
+        }
+    }
+    let (af, alm, alt, ahm, aht) = key(a);
+    let (bf, blm, blt, bhm, bht) = key(b);
+    af.cmp(&bf)
+        .then(alm.cmp(&blm))
+        .then(alt.cmp(&blt))
+        .then(ahm.cmp(&bhm))
+        .then(aht.cmp(&bht))
+}
+
+impl std::fmt::Display for DataValue {
+    /// Deterministic display: the stable textual face (KyzoScript-ish
+    /// literals). Part of query semantics; the oracle differentials at
+    /// the gates judge any change.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataValue::Null => write!(f, "null"),
+            DataValue::Bool(b) => write!(f, "{b}"),
+            DataValue::Num(n) => match (n.as_int(), n.as_float()) {
+                (Some(i), _) => write!(f, "{i}"),
+                (_, Some(x)) => write!(f, "{x:?}"),
+                _ => unreachable!("Num is int or float"),
+            },
+            DataValue::Str(s) => write!(f, "{s:?}"),
+            DataValue::Bytes(b) => {
+                write!(f, "x'")?;
+                for byte in b {
+                    write!(f, "{byte:02x}")?;
+                }
+                write!(f, "'")
+            }
+            DataValue::Uuid(u) => write!(f, "uuid(\"{}\")", u.0),
+            DataValue::Regex(r) => write!(
+                f,
+                "regex({:?}, flags={:#04x})",
+                r.pattern(),
+                r.flags().bits()
+            ),
+            DataValue::Json(_) => write!(f, "json(…)"),
+            DataValue::Vector(v) => {
+                write!(f, "vec[")?;
+                for (i, c) in v.as_slice().iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{c:?}")?;
+                }
+                write!(f, "]")
+            }
+            DataValue::List(l) => {
+                write!(f, "[")?;
+                for (i, v) in l.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                write!(f, "]")
+            }
+            DataValue::Set(s) => {
+                write!(f, "{{")?;
+                for (i, v) in s.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                write!(f, "}}")
+            }
+            DataValue::Validity(v) => {
+                write!(f, "validity({}, {})", v.ts_micros(), v.is_assert())
+            }
+            DataValue::Interval(_) => write!(f, "interval(…)"),
+        }
+    }
+}
+
+/// Decode a stored tuple: exactly `arity` canonical encodings, nothing
+/// trailing. Total — the storage tier's typed read door.
+pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, DecodeError> {
+    let mut out = Vec::with_capacity(arity);
+    let mut at = 0usize;
+    for _ in 0..arity {
+        let (v, used) = canonical::decode_one(&bytes[at..])?;
+        out.push(v);
+        at += used;
+    }
+    if at != bytes.len() {
+        return Err(DecodeError::TrailingBytes);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod facade_tests {
+    use super::*;
+
+    /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    fn random_value(rng: &mut Rng, depth: usize) -> DataValue {
+        let roll = rng.below(if depth == 0 { 13 } else { 7 });
+        match roll {
+            0 => DataValue::Null,
+            1 => DataValue::Bool(rng.next().is_multiple_of(2)),
+            2 => DataValue::Num(if rng.next().is_multiple_of(2) {
+                Num::int(rng.next() as i64)
+            } else {
+                Num::float(f64::from_bits(rng.next()))
+            }),
+            3 => DataValue::Str(["", "a", "ab", "a\u{0}b"][rng.below(4)].to_string()),
+            4 => DataValue::Bytes(vec![0x00, 0xFF][..rng.below(3).min(2)].to_vec()),
+            5 => DataValue::List(
+                (0..rng.below(3))
+                    .map(|_| random_value(rng, depth + 1))
+                    .collect(),
+            ),
+            6 => DataValue::Set(
+                (0..rng.below(3))
+                    .map(|_| random_value(rng, depth + 1))
+                    .collect(),
+            ),
+            7 => DataValue::uuid(uuid::Uuid::from_bytes({
+                let mut b = [0u8; 16];
+                b[0] = rng.next() as u8;
+                b
+            })),
+            8 => DataValue::Regex(
+                RegexSource::validated(RegexFlags::NONE, ["a", "b+", ""][rng.below(3)].into())
+                    .expect("valid"),
+            ),
+            9 => DataValue::Vector(Vector::new(
+                (0..rng.below(3))
+                    .map(|_| f64::from_bits(rng.next()))
+                    .collect(),
+            )),
+            10 => DataValue::Validity(Validity::new(
+                rng.next() as i64,
+                rng.next().is_multiple_of(2),
+            )),
+            11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
+                Interval::EMPTY
+            } else {
+                Interval::new(Bound::Closed(rng.next() as i64 % 1000), Bound::Unbounded)
+            }),
+            _ => DataValue::Json(if rng.next().is_multiple_of(2) {
+                Json::Null
+            } else {
+                Json::Str("k".into())
+            }),
+        }
+    }
+
+    /// THE Ord law: the structural mirror equals canonical byte order,
+    /// every generated pair, both directions.
+    #[test]
+    fn law_storage_ord_equals_canonical_byte_order() {
+        let mut rng = Rng(0xFACADE);
+        let corpus: Vec<DataValue> = (0..250).map(|_| random_value(&mut rng, 0)).collect();
+        let encoded: Vec<CanonicalBytes> = corpus.iter().map(encode_owned).collect();
+        for i in 0..corpus.len() {
+            for j in 0..corpus.len() {
+                assert_eq!(
+                    corpus[i].cmp(&corpus[j]),
+                    encoded[i].as_bytes().cmp(encoded[j].as_bytes()),
+                    "Ord mirror diverged from canonical order: {:?} vs {:?}",
+                    corpus[i],
+                    corpus[j]
+                );
+            }
+        }
+    }
+
+    /// Identity laws surface through Eq: -0.0 vectors, NaN components,
+    /// set writing order.
+    #[test]
+    fn identity_laws_flow_through_the_facade() {
+        assert_eq!(
+            DataValue::Vector(Vector::new(vec![0.0])),
+            DataValue::Vector(Vector::new(vec![-0.0]))
+        );
+        assert_eq!(
+            DataValue::Vector(Vector::new(vec![f64::NAN])),
+            DataValue::Vector(Vector::new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]))
+        );
+        let a: DataValue = DataValue::Set(
+            [DataValue::from(2i64), DataValue::from(1i64)]
+                .into_iter()
+                .collect(),
+        );
+        let b: DataValue = DataValue::Set(
+            [
+                DataValue::from(1i64),
+                DataValue::from(2i64),
+                DataValue::from(1i64),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(a, b);
+        assert_eq!(encode_owned(&a), encode_owned(&b));
+        // Num identity is representation-faithful through From.
+        assert_ne!(DataValue::from(1i64), DataValue::from(1.0f64));
+        assert!(DataValue::from(1i64) < DataValue::from(1.0f64));
+    }
+
+    /// Round-trip through the codec: DataValue is the decode result.
+    #[test]
+    fn facade_round_trips_through_the_codec() {
+        let mut rng = Rng(0x5EED);
+        for _ in 0..300 {
+            let v = random_value(&mut rng, 0);
+            let enc = encode_owned(&v);
+            let back = decode(enc.as_bytes()).expect("lawful");
+            assert_eq!(back, v, "round-trip changed {v:?}");
+        }
+    }
+
+    /// decode_tuple: exact arity, nothing trailing, total.
+    #[test]
+    fn decode_tuple_is_exact_and_total() {
+        let vals = [DataValue::from(7i64), DataValue::from("x"), DataValue::Null];
+        let key = EncodedKey::from_values(&vals);
+        let back = decode_tuple(key.as_bytes(), 3).expect("lawful");
+        assert_eq!(back.as_slice(), &vals);
+        assert!(decode_tuple(key.as_bytes(), 2).is_err());
+        assert!(decode_tuple(key.as_bytes(), 4).is_err());
+        assert!(decode_tuple(&[0xEE], 1).is_err());
+    }
+}

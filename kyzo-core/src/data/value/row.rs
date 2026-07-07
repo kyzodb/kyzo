@@ -247,6 +247,17 @@ fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeEr
 pub struct EncodedKey(Vec<u8>);
 
 impl EncodedKey {
+    /// The lawful multi-value mint: encode each value through the codec
+    /// authority and concatenate — the execution-free path from logical
+    /// values to their written form.
+    pub fn from_values<'v>(values: impl IntoIterator<Item = &'v super::DataValue>) -> EncodedKey {
+        let mut out = Vec::new();
+        for v in values {
+            out.extend_from_slice(super::canonical::encode_owned(v).as_bytes());
+        }
+        EncodedKey(out)
+    }
+
     /// The storage-facing door: claim stored bytes as a written tuple by
     /// proving they split into exactly `arity` lawful canonical
     /// encodings with nothing trailing. The ONLY public byte constructor
@@ -413,7 +424,7 @@ mod tests {
             for bytes in frontier.drain(..) {
                 let (datum, _) = decode_one(&bytes).expect("lawful");
                 let n = match datum {
-                    super::super::canonical::OwnedDatum::Num(n) => n.as_int().expect("int domain"),
+                    super::super::DataValue::Num(n) => n.as_int().expect("int domain"),
                     other => panic!("wrong kind: {other:?}"),
                 };
                 if n + 3 <= 12 {

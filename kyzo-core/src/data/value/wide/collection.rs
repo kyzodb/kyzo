@@ -18,7 +18,8 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::canonical::{Datum, OwnedDatum, decode, encode};
+    use super::super::super::DataValue;
+    use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
 
     #[test]
@@ -28,13 +29,13 @@ mod tests {
         let enc = encode(Datum::List(&outer));
         let back = decode(enc.as_bytes()).expect("round-trip");
         match &back {
-            OwnedDatum::List(items) => {
+            DataValue::List(items) => {
                 // The set canonicalized to sorted order; the list kept
                 // writing order.
-                assert!(matches!(&items[0], OwnedDatum::Set(s)
-                    if matches!(s[0], OwnedDatum::Num(n) if n == Num::int(1))));
-                assert!(matches!(&items[1], OwnedDatum::List(l)
-                    if matches!(l[0], OwnedDatum::Num(n) if n == Num::int(2))));
+                assert!(matches!(&items[0], DataValue::Set(s)
+                    if matches!(s.iter().next(), Some(DataValue::Num(n)) if *n == Num::int(1))));
+                assert!(matches!(&items[1], DataValue::List(l)
+                    if matches!(&l[0], DataValue::Num(n) if *n == Num::int(2))));
             }
             other => panic!("wrong shape: {other:?}"),
         }

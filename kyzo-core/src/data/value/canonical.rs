@@ -70,6 +70,7 @@ use super::wide::interval::{Hi, Interval, Lo};
 use super::wide::json::{Json, JsonNum, JsonObj, fnv1a64};
 use super::wide::regex::{RegexFlags, RegexSource};
 use super::wide::validity::Validity;
+use super::{DataValue, UuidWrapper, Vector};
 
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
 /// `Ord`/`Eq` are the storage total order over values, byte for byte.
@@ -123,38 +124,130 @@ pub enum Datum<'a> {
     Interval(Interval),
 }
 
-/// Owned mirror of [`Datum`], what [`decode`] returns.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum OwnedDatum {
-    Null,
-    Bool(bool),
-    Num(Num),
-    Str(String),
-    Bytes(Vec<u8>),
-    Uuid([u8; 16]),
-    List(Vec<OwnedDatum>),
-    /// Always sorted and deduplicated (the canonical set form).
-    Set(Vec<OwnedDatum>),
-    Regex(RegexSource),
-    Json(Json),
-    /// Components held as [`Num`] (always the float representation),
-    /// so identity is exact under Num's law (`Eq` incl. canonical NaN).
-    /// `OwnedDatum` is a DECODE RESULT surface, not a construction
-    /// surface: decode enforces the float-only invariant; building one
-    /// by hand with an Int component is out of contract (a vector
-    /// witness newtype becomes mandatory the day this is constructed
-    /// outside the plane).
-    Vector(Vec<Num>),
-    Validity(Validity),
-    Interval(Interval),
-}
-
 /// Encode a value into its canonical form: the one mint of
 /// [`CanonicalBytes`].
 pub fn encode(d: Datum<'_>) -> CanonicalBytes {
     let mut out = Vec::new();
     encode_into(&mut out, d);
     CanonicalBytes(out)
+}
+
+/// Encode an owned logical value: the production second arm of the one
+/// codec authority (same grammar, same mints). Deliberately does NOT
+/// trust `DataValue`'s `Ord` for set ordering — sets are sorted by their
+/// ENCODED bytes here, so the codec stays the independent authority the
+/// `Ord` mirror is law-locked against (no circularity).
+pub fn encode_owned(v: &DataValue) -> CanonicalBytes {
+    let mut out = Vec::new();
+    encode_owned_into(&mut out, v);
+    CanonicalBytes(out)
+}
+
+fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
+    match v {
+        DataValue::Null => out.push(Tag::Null.byte()),
+        DataValue::Bool(b) => {
+            out.push(Tag::Bool.byte());
+            out.push(*b as u8);
+        }
+        DataValue::Num(n) => {
+            out.push(Tag::Num.byte());
+            n.encode_key(out);
+        }
+        DataValue::Str(s) => {
+            out.push(Tag::Str.byte());
+            encode_terminated(out, s.as_bytes());
+        }
+        DataValue::Bytes(b) => {
+            out.push(Tag::Bytes.byte());
+            encode_terminated(out, b);
+        }
+        DataValue::Uuid(u) => {
+            out.push(Tag::Uuid.byte());
+            out.extend_from_slice(u.0.as_bytes());
+        }
+        DataValue::Regex(r) => {
+            out.push(Tag::Regex.byte());
+            out.push(r.flags().bits());
+            encode_terminated(out, r.pattern().as_bytes());
+        }
+        DataValue::Json(j) => {
+            out.push(Tag::Json.byte());
+            let start = out.len();
+            encode_json(out, j);
+            let h = fnv1a64(&out[start..]);
+            out.extend_from_slice(&h.to_be_bytes());
+        }
+        DataValue::Vector(vec) => {
+            out.push(Tag::Vector.byte());
+            let components = vec.as_slice();
+            assert!(
+                components.len() <= u32::MAX as usize,
+                "vector dimension exceeds u32"
+            );
+            out.extend_from_slice(&(components.len() as u32).to_be_bytes());
+            for &c in components {
+                Num::float(c).encode_key(out);
+            }
+        }
+        DataValue::List(items) => {
+            out.push(Tag::List.byte());
+            for item in items {
+                encode_owned_into(out, item);
+            }
+            out.push(STRUCT_SEQ_END);
+        }
+        DataValue::Set(items) => {
+            out.push(Tag::Set.byte());
+            let mut encoded: Vec<Vec<u8>> = items
+                .iter()
+                .map(|item| {
+                    let mut e = Vec::new();
+                    encode_owned_into(&mut e, item);
+                    e
+                })
+                .collect();
+            encoded.sort();
+            encoded.dedup();
+            for e in encoded {
+                out.extend_from_slice(&e);
+            }
+            out.push(STRUCT_SEQ_END);
+        }
+        DataValue::Validity(v) => {
+            out.push(Tag::Validity.byte());
+            out.extend_from_slice(&desc_ts_key(v.ts_micros()));
+            out.push(if v.is_assert() { 0x00 } else { 0x01 });
+        }
+        DataValue::Interval(iv) => {
+            out.push(Tag::Interval.byte());
+            encode_interval_body(out, iv);
+        }
+    }
+}
+
+/// The interval body grammar, shared by both encoder arms.
+fn encode_interval_body(out: &mut Vec<u8>, iv: &Interval) {
+    match iv.ends() {
+        None => out.push(0x01),
+        Some((lo, hi)) => {
+            out.push(0x02);
+            match lo {
+                Lo::NegUnbounded => out.push(0x01),
+                Lo::At(t) => {
+                    out.push(0x02);
+                    out.extend_from_slice(&asc_ts_key(t));
+                }
+            }
+            match hi {
+                Hi::PosUnbounded => out.push(0x01),
+                Hi::At(t) => {
+                    out.push(0x02);
+                    out.extend_from_slice(&asc_ts_key(t));
+                }
+            }
+        }
+    }
 }
 
 fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
@@ -234,26 +327,7 @@ fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
         }
         Datum::Interval(iv) => {
             out.push(Tag::Interval.byte());
-            match iv.ends() {
-                None => out.push(0x01),
-                Some((lo, hi)) => {
-                    out.push(0x02);
-                    match lo {
-                        Lo::NegUnbounded => out.push(0x01),
-                        Lo::At(t) => {
-                            out.push(0x02);
-                            out.extend_from_slice(&asc_ts_key(t));
-                        }
-                    }
-                    match hi {
-                        Hi::PosUnbounded => out.push(0x01),
-                        Hi::At(t) => {
-                            out.push(0x02);
-                            out.extend_from_slice(&asc_ts_key(t));
-                        }
-                    }
-                }
-            }
+            encode_interval_body(out, &iv);
         }
     }
 }
@@ -366,7 +440,7 @@ const MAX_DEPTH: usize = 128;
 
 /// Decode a full canonical encoding. Total: arbitrary bytes yield a value
 /// or a typed error; trailing bytes are an error; nesting is bounded.
-pub fn decode(bytes: &[u8]) -> Result<OwnedDatum, DecodeError> {
+pub fn decode(bytes: &[u8]) -> Result<DataValue, DecodeError> {
     let (value, used) = decode_at(bytes, 0)?;
     if used != bytes.len() {
         return Err(DecodeError::TrailingBytes);
@@ -376,11 +450,11 @@ pub fn decode(bytes: &[u8]) -> Result<OwnedDatum, DecodeError> {
 
 /// Decode ONE canonical value from the front of `bytes`, returning it
 /// and the bytes consumed (plane-internal: `EncodedKey` splitting).
-pub(super) fn decode_one(bytes: &[u8]) -> Result<(OwnedDatum, usize), DecodeError> {
+pub(super) fn decode_one(bytes: &[u8]) -> Result<(DataValue, usize), DecodeError> {
     decode_at(bytes, 0)
 }
 
-fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeError> {
+fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeError> {
     if depth > MAX_DEPTH {
         return Err(DecodeError::TooDeep);
     }
@@ -388,25 +462,25 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
     let tag = Tag::from_byte(tag_byte).ok_or(DecodeError::BadTag(tag_byte))?;
     let body = &bytes[1..];
     match tag {
-        Tag::Null => Ok((OwnedDatum::Null, 1)),
+        Tag::Null => Ok((DataValue::Null, 1)),
         Tag::Bool => match body.first() {
-            Some(0) => Ok((OwnedDatum::Bool(false), 2)),
-            Some(1) => Ok((OwnedDatum::Bool(true), 2)),
+            Some(0) => Ok((DataValue::Bool(false), 2)),
+            Some(1) => Ok((DataValue::Bool(true), 2)),
             Some(_) => Err(DecodeError::BadBool),
             None => Err(DecodeError::Truncated),
         },
         Tag::Num => {
             let (n, used) = Num::decode_key(body).map_err(DecodeError::Num)?;
-            Ok((OwnedDatum::Num(n), 1 + used))
+            Ok((DataValue::Num(n), 1 + used))
         }
         Tag::Str => {
             let (content, used) = decode_terminated(body)?;
             let s = String::from_utf8(content).map_err(|_| DecodeError::BadUtf8)?;
-            Ok((OwnedDatum::Str(s), 1 + used))
+            Ok((DataValue::Str(s), 1 + used))
         }
         Tag::Bytes => {
             let (content, used) = decode_terminated(body)?;
-            Ok((OwnedDatum::Bytes(content), 1 + used))
+            Ok((DataValue::Bytes(content), 1 + used))
         }
         Tag::Uuid => {
             if body.len() < 16 {
@@ -414,11 +488,11 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
             }
             let mut u = [0u8; 16];
             u.copy_from_slice(&body[..16]);
-            Ok((OwnedDatum::Uuid(u), 17))
+            Ok((DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(u))), 17))
         }
         Tag::List => {
             let (items, used) = decode_sequence(body, depth)?;
-            Ok((OwnedDatum::List(items), 1 + used))
+            Ok((DataValue::List(items), 1 + used))
         }
         Tag::Set => {
             let (items, used) = decode_sequence(body, depth)?;
@@ -437,7 +511,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
                 prev = Some(this);
                 cursor = &cursor[elen..];
             }
-            Ok((OwnedDatum::Set(items), 1 + used))
+            Ok((DataValue::Set(items.into_iter().collect()), 1 + used))
         }
         Tag::Regex => {
             let &flag_byte = body.first().ok_or(DecodeError::Truncated)?;
@@ -447,7 +521,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
             // Stored patterns were validated at write; decode stays total
             // over stored history (see wide::regex validity law).
             Ok((
-                OwnedDatum::Regex(RegexSource::from_stored(flags, pattern)),
+                DataValue::Regex(RegexSource::from_stored(flags, pattern)),
                 2 + used,
             ))
         }
@@ -458,7 +532,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
             if hash_bytes != expect.to_be_bytes() {
                 return Err(DecodeError::JsonHashMismatch);
             }
-            Ok((OwnedDatum::Json(j), 1 + jused + 8))
+            Ok((DataValue::Json(j), 1 + jused + 8))
         }
         Tag::Vector => {
             let count_bytes = body.get(..4).ok_or(DecodeError::Truncated)?;
@@ -473,7 +547,11 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
                 components.push(n);
                 used += nused;
             }
-            Ok((OwnedDatum::Vector(components), 1 + used))
+            let floats: Vec<f64> = components
+                .into_iter()
+                .map(|n| n.as_float().expect("validated float component"))
+                .collect();
+            Ok((DataValue::Vector(Vector::new(floats)), 1 + used))
         }
         Tag::Validity => {
             let ts_bytes = body.get(..8).ok_or(DecodeError::Truncated)?;
@@ -488,10 +566,10 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
                 Some(_) => return Err(DecodeError::BadPolarity),
                 None => return Err(DecodeError::Truncated),
             };
-            Ok((OwnedDatum::Validity(Validity::new(ts, is_assert)), 10))
+            Ok((DataValue::Validity(Validity::new(ts, is_assert)), 10))
         }
         Tag::Interval => match body.first() {
-            Some(0x01) => Ok((OwnedDatum::Interval(Interval::EMPTY), 2)),
+            Some(0x01) => Ok((DataValue::Interval(Interval::EMPTY), 2)),
             Some(0x02) => {
                 let mut used = 1usize;
                 let (lo, lo_used) = decode_interval_end(&body[used..], true)?;
@@ -510,7 +588,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(OwnedDatum, usize), DecodeEr
                 if iv.is_empty() {
                     return Err(DecodeError::IntervalNotCanonical);
                 }
-                Ok((OwnedDatum::Interval(iv), 1 + used))
+                Ok((DataValue::Interval(iv), 1 + used))
             }
             Some(_) => Err(DecodeError::IntervalNotCanonical),
             None => Err(DecodeError::Truncated),
@@ -607,7 +685,7 @@ fn decode_json(body: &[u8], depth: usize) -> Result<(Json, usize), DecodeError> 
     }
 }
 
-fn decode_sequence(body: &[u8], depth: usize) -> Result<(Vec<OwnedDatum>, usize), DecodeError> {
+fn decode_sequence(body: &[u8], depth: usize) -> Result<(Vec<DataValue>, usize), DecodeError> {
     let mut items = Vec::new();
     let mut used = 0usize;
     loop {
@@ -648,6 +726,8 @@ pub(super) fn decode_terminated(body: &[u8]) -> Result<(Vec<u8>, usize), DecodeE
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::super::wide::interval::Bound;
     use super::*;
     use std::cmp::Ordering;
@@ -675,38 +755,37 @@ mod tests {
     // per-kind law. Shares nothing with the encoder.
     // ------------------------------------------------------------------
 
-    fn tag_of(d: &OwnedDatum) -> Tag {
+    fn tag_of(d: &DataValue) -> Tag {
         match d {
-            OwnedDatum::Null => Tag::Null,
-            OwnedDatum::Bool(_) => Tag::Bool,
-            OwnedDatum::Num(_) => Tag::Num,
-            OwnedDatum::Str(_) => Tag::Str,
-            OwnedDatum::Bytes(_) => Tag::Bytes,
-            OwnedDatum::Uuid(_) => Tag::Uuid,
-            OwnedDatum::List(_) => Tag::List,
-            OwnedDatum::Set(_) => Tag::Set,
-            OwnedDatum::Regex(_) => Tag::Regex,
-            OwnedDatum::Json(_) => Tag::Json,
-            OwnedDatum::Vector(_) => Tag::Vector,
-            OwnedDatum::Validity(_) => Tag::Validity,
-            OwnedDatum::Interval(_) => Tag::Interval,
+            DataValue::Null => Tag::Null,
+            DataValue::Bool(_) => Tag::Bool,
+            DataValue::Num(_) => Tag::Num,
+            DataValue::Str(_) => Tag::Str,
+            DataValue::Bytes(_) => Tag::Bytes,
+            DataValue::Uuid(_) => Tag::Uuid,
+            DataValue::List(_) => Tag::List,
+            DataValue::Set(_) => Tag::Set,
+            DataValue::Regex(_) => Tag::Regex,
+            DataValue::Json(_) => Tag::Json,
+            DataValue::Vector(_) => Tag::Vector,
+            DataValue::Validity(_) => Tag::Validity,
+            DataValue::Interval(_) => Tag::Interval,
         }
     }
 
-    fn semantic_cmp(a: &OwnedDatum, b: &OwnedDatum) -> Ordering {
+    fn semantic_cmp(a: &DataValue, b: &DataValue) -> Ordering {
         let t = tag_of(a).cmp(&tag_of(b));
         if t != Ordering::Equal {
             return t;
         }
         match (a, b) {
-            (OwnedDatum::Null, OwnedDatum::Null) => Ordering::Equal,
-            (OwnedDatum::Bool(x), OwnedDatum::Bool(y)) => x.cmp(y),
-            (OwnedDatum::Num(x), OwnedDatum::Num(y)) => x.cmp(y),
-            (OwnedDatum::Str(x), OwnedDatum::Str(y)) => cmp_terminated(x.as_bytes(), y.as_bytes()),
-            (OwnedDatum::Bytes(x), OwnedDatum::Bytes(y)) => cmp_terminated(x, y),
-            (OwnedDatum::Uuid(x), OwnedDatum::Uuid(y)) => x.cmp(y),
-            (OwnedDatum::List(x), OwnedDatum::List(y))
-            | (OwnedDatum::Set(x), OwnedDatum::Set(y)) => {
+            (DataValue::Null, DataValue::Null) => Ordering::Equal,
+            (DataValue::Bool(x), DataValue::Bool(y)) => x.cmp(y),
+            (DataValue::Num(x), DataValue::Num(y)) => x.cmp(y),
+            (DataValue::Str(x), DataValue::Str(y)) => cmp_terminated(x.as_bytes(), y.as_bytes()),
+            (DataValue::Bytes(x), DataValue::Bytes(y)) => cmp_terminated(x, y),
+            (DataValue::Uuid(x), DataValue::Uuid(y)) => x.cmp(y),
+            (DataValue::List(x), DataValue::List(y)) => {
                 for (i, j) in x.iter().zip(y.iter()) {
                     let c = semantic_cmp(i, j);
                     if c != Ordering::Equal {
@@ -715,25 +794,32 @@ mod tests {
                 }
                 x.len().cmp(&y.len())
             }
-            (OwnedDatum::Regex(a), OwnedDatum::Regex(b)) => a
+            (DataValue::Set(x), DataValue::Set(y)) => {
+                for (i, j) in x.iter().zip(y.iter()) {
+                    let c = semantic_cmp(i, j);
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                x.len().cmp(&y.len())
+            }
+            (DataValue::Regex(a), DataValue::Regex(b)) => a
                 .flags()
                 .bits()
                 .cmp(&b.flags().bits())
                 .then(a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
-            (OwnedDatum::Json(x), OwnedDatum::Json(y)) => semantic_json_cmp(x, y),
-            (OwnedDatum::Vector(x), OwnedDatum::Vector(y)) => {
-                x.len().cmp(&y.len()).then_with(|| {
-                    for (i, j) in x.iter().zip(y.iter()) {
-                        let c = i.cmp(j);
-                        if c != Ordering::Equal {
-                            return c;
-                        }
+            (DataValue::Json(x), DataValue::Json(y)) => semantic_json_cmp(x, y),
+            (DataValue::Vector(x), DataValue::Vector(y)) => x.len().cmp(&y.len()).then_with(|| {
+                for (i, j) in x.as_slice().iter().zip(y.as_slice().iter()) {
+                    let c = Num::float(*i).cmp(&Num::float(*j));
+                    if c != Ordering::Equal {
+                        return c;
                     }
-                    Ordering::Equal
-                })
-            }
-            (OwnedDatum::Validity(x), OwnedDatum::Validity(y)) => x.cmp_as_of_order(*y),
-            (OwnedDatum::Interval(x), OwnedDatum::Interval(y)) => semantic_interval_cmp(x, y),
+                }
+                Ordering::Equal
+            }),
+            (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
+            (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
             _ => unreachable!("tags equal"),
         }
     }
@@ -825,7 +911,7 @@ mod tests {
 
     const U1: [u8; 16] = [0x11; 16];
 
-    fn edge_datums() -> Vec<OwnedDatum> {
+    fn edge_datums() -> Vec<DataValue> {
         let nums = [
             Num::int(0),
             Num::float(0.0),
@@ -838,39 +924,39 @@ mod tests {
             Num::float(f64::NAN),
         ];
         let mut out = vec![
-            OwnedDatum::Null,
-            OwnedDatum::Bool(false),
-            OwnedDatum::Bool(true),
-            OwnedDatum::Str(String::new()),
-            OwnedDatum::Str("a".into()),
-            OwnedDatum::Str("ab".into()),
-            OwnedDatum::Str("a\u{0}b".into()),
-            OwnedDatum::Str("a\u{0}".into()),
-            OwnedDatum::Bytes(vec![]),
-            OwnedDatum::Bytes(vec![0x00]),
-            OwnedDatum::Bytes(vec![0x00, 0x00]),
-            OwnedDatum::Bytes(vec![0x00, 0xFF]),
-            OwnedDatum::Bytes(vec![0xFF]),
-            OwnedDatum::Uuid(U1),
-            OwnedDatum::List(vec![]),
+            DataValue::Null,
+            DataValue::Bool(false),
+            DataValue::Bool(true),
+            DataValue::Str(String::new()),
+            DataValue::Str("a".into()),
+            DataValue::Str("ab".into()),
+            DataValue::Str("a\u{0}b".into()),
+            DataValue::Str("a\u{0}".into()),
+            DataValue::Bytes(vec![]),
+            DataValue::Bytes(vec![0x00]),
+            DataValue::Bytes(vec![0x00, 0x00]),
+            DataValue::Bytes(vec![0x00, 0xFF]),
+            DataValue::Bytes(vec![0xFF]),
+            DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(U1))),
+            DataValue::List(vec![]),
         ];
-        out.extend(nums.iter().map(|&n| OwnedDatum::Num(n)));
-        let a = OwnedDatum::Str("a".into());
-        let b = OwnedDatum::Str("b".into());
-        out.push(OwnedDatum::List(vec![a.clone()]));
-        out.push(OwnedDatum::List(vec![a.clone(), b.clone()]));
-        out.push(OwnedDatum::List(vec![a.clone(), OwnedDatum::List(vec![])]));
-        out.push(OwnedDatum::List(vec![OwnedDatum::List(vec![a.clone()])]));
-        out.push(OwnedDatum::Set(vec![]));
-        out.push(OwnedDatum::Set(vec![a.clone(), b.clone()]));
-        out.push(OwnedDatum::Regex(
+        out.extend(nums.iter().map(|&n| DataValue::Num(n)));
+        let a = DataValue::Str("a".into());
+        let b = DataValue::Str("b".into());
+        out.push(DataValue::List(vec![a.clone()]));
+        out.push(DataValue::List(vec![a.clone(), b.clone()]));
+        out.push(DataValue::List(vec![a.clone(), DataValue::List(vec![])]));
+        out.push(DataValue::List(vec![DataValue::List(vec![a.clone()])]));
+        out.push(DataValue::Set(BTreeSet::new()));
+        out.push(DataValue::Set([a.clone(), b.clone()].into_iter().collect()));
+        out.push(DataValue::Regex(
             RegexSource::validated(RegexFlags::NONE, "a+".into()).expect("valid"),
         ));
-        out.push(OwnedDatum::Regex(
+        out.push(DataValue::Regex(
             RegexSource::validated(RegexFlags::CASE_INSENSITIVE, "a+".into()).expect("valid"),
         ));
-        out.push(OwnedDatum::Json(Json::Null));
-        out.push(OwnedDatum::Json(Json::Obj(
+        out.push(DataValue::Json(Json::Null));
+        out.push(DataValue::Json(Json::Obj(
             JsonObj::new(vec![
                 (
                     "b".into(),
@@ -880,113 +966,37 @@ mod tests {
             ])
             .expect("lawful"),
         )));
-        out.push(OwnedDatum::Json(Json::Arr(vec![
+        out.push(DataValue::Json(Json::Arr(vec![
             Json::Bool(true),
             Json::Null,
         ])));
-        out.push(OwnedDatum::Json(Json::Obj(
+        out.push(DataValue::Json(Json::Obj(
             JsonObj::new(vec![
                 ("\u{0}k".into(), Json::Null),
                 ("k".into(), Json::Bool(false)),
             ])
             .expect("lawful"),
         )));
-        out.push(OwnedDatum::Vector(vec![]));
-        out.push(OwnedDatum::Vector(vec![Num::float(0.0)]));
-        out.push(OwnedDatum::Vector(vec![
-            Num::float(-1.5),
-            Num::float(f64::NAN),
-        ]));
-        out.push(OwnedDatum::Validity(Validity::new(0, true)));
-        out.push(OwnedDatum::Validity(Validity::new(0, false)));
-        out.push(OwnedDatum::Validity(Validity::new(i64::MAX, true)));
-        out.push(OwnedDatum::Interval(Interval::EMPTY));
-        out.push(OwnedDatum::Interval(Interval::new(
+        out.push(DataValue::Vector(Vector::new(vec![])));
+        out.push(DataValue::Vector(Vector::new(vec![0.0])));
+        out.push(DataValue::Vector(Vector::new(vec![-1.5, f64::NAN])));
+        out.push(DataValue::Validity(Validity::new(0, true)));
+        out.push(DataValue::Validity(Validity::new(0, false)));
+        out.push(DataValue::Validity(Validity::new(i64::MAX, true)));
+        out.push(DataValue::Interval(Interval::EMPTY));
+        out.push(DataValue::Interval(Interval::new(
             Bound::Closed(0),
             Bound::Unbounded,
         )));
-        out.push(OwnedDatum::Interval(Interval::new(
+        out.push(DataValue::Interval(Interval::new(
             Bound::Closed(-5),
             Bound::Open(9),
         )));
-        out.push(OwnedDatum::Interval(Interval::new(
+        out.push(DataValue::Interval(Interval::new(
             Bound::Unbounded,
             Bound::Unbounded,
         )));
         out
-    }
-
-    /// Owned-datum encoder mirroring the production one exactly, so the
-    /// arbitrarily nested test corpus re-encodes without borrow gymnastics.
-    fn encode_owned(d: &OwnedDatum) -> CanonicalBytes {
-        let mut out = Vec::new();
-        enc_owned_into(&mut out, d);
-        CanonicalBytes(out)
-    }
-
-    fn enc_owned_into(out: &mut Vec<u8>, d: &OwnedDatum) {
-        match d {
-            OwnedDatum::Null => out.push(Tag::Null.byte()),
-            OwnedDatum::Bool(b) => {
-                out.push(Tag::Bool.byte());
-                out.push(*b as u8);
-            }
-            OwnedDatum::Num(n) => {
-                out.push(Tag::Num.byte());
-                n.encode_key(out);
-            }
-            OwnedDatum::Str(s) => {
-                out.push(Tag::Str.byte());
-                encode_terminated(out, s.as_bytes());
-            }
-            OwnedDatum::Bytes(b) => {
-                out.push(Tag::Bytes.byte());
-                encode_terminated(out, b);
-            }
-            OwnedDatum::Uuid(u) => {
-                out.push(Tag::Uuid.byte());
-                out.extend_from_slice(u);
-            }
-            OwnedDatum::List(items) => {
-                out.push(Tag::List.byte());
-                for item in items {
-                    enc_owned_into(out, item);
-                }
-                out.push(STRUCT_SEQ_END);
-            }
-            OwnedDatum::Set(items) => {
-                out.push(Tag::Set.byte());
-                let mut encoded: Vec<Vec<u8>> = items
-                    .iter()
-                    .map(|item| {
-                        let mut e = Vec::new();
-                        enc_owned_into(&mut e, item);
-                        e
-                    })
-                    .collect();
-                encoded.sort();
-                encoded.dedup();
-                for e in encoded {
-                    out.extend_from_slice(&e);
-                }
-                out.push(STRUCT_SEQ_END);
-            }
-            OwnedDatum::Regex(lit) => encode_into(out, Datum::Regex(lit)),
-            OwnedDatum::Json(j) => encode_into(out, Datum::Json(j)),
-            OwnedDatum::Vector(components) => {
-                out.push(Tag::Vector.byte());
-                assert!(
-                    components.len() <= u32::MAX as usize,
-                    "vector dimension exceeds u32"
-                );
-                out.extend_from_slice(&(components.len() as u32).to_be_bytes());
-                for n in components {
-                    n.encode_key(out);
-                }
-            }
-            OwnedDatum::Validity(v) => encode_into(out, Datum::Validity(*v)),
-            OwnedDatum::Interval(iv) => encode_into(out, Datum::Interval(*iv)),
-        }
     }
 
     /// Order embedding: canonical byte order == semantic order, every
@@ -1088,7 +1098,7 @@ mod tests {
     #[test]
     fn law_order_embedding_randomized() {
         let mut rng = Rng(0xC0FFEE);
-        let mut corpus: Vec<OwnedDatum> = Vec::new();
+        let mut corpus: Vec<DataValue> = Vec::new();
         for _ in 0..300 {
             corpus.push(random_datum(&mut rng, 0));
         }
@@ -1109,12 +1119,12 @@ mod tests {
         }
     }
 
-    fn random_datum(rng: &mut Rng, depth: usize) -> OwnedDatum {
+    fn random_datum(rng: &mut Rng, depth: usize) -> DataValue {
         let roll = rng.below(if depth == 0 { 12 } else { 6 });
         match roll {
-            0 => OwnedDatum::Null,
-            1 => OwnedDatum::Bool(rng.next().is_multiple_of(2)),
-            2 => OwnedDatum::Num(if rng.next().is_multiple_of(2) {
+            0 => DataValue::Null,
+            1 => DataValue::Bool(rng.next().is_multiple_of(2)),
+            2 => DataValue::Num(if rng.next().is_multiple_of(2) {
                 Num::int(rng.next() as i64)
             } else {
                 Num::float(f64::from_bits(rng.next()))
@@ -1125,49 +1135,43 @@ mod tests {
                 let s: String = (0..len)
                     .map(|_| ['\u{0}', 'a', 'b', '\u{1}'][rng.below(4)])
                     .collect();
-                OwnedDatum::Str(s)
+                DataValue::Str(s)
             }
             4 => {
                 let len = rng.below(6);
-                OwnedDatum::Bytes((0..len).map(|_| [0x00, 0x61, 0xFF][rng.below(3)]).collect())
+                DataValue::Bytes((0..len).map(|_| [0x00, 0x61, 0xFF][rng.below(3)]).collect())
             }
             5 => {
                 let mut u = [0u8; 16];
                 u[0] = rng.next() as u8;
-                OwnedDatum::Uuid(u)
+                DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(u)))
             }
             6 => {
                 let len = rng.below(4);
-                OwnedDatum::List((0..len).map(|_| random_datum(rng, depth + 1)).collect())
+                DataValue::List((0..len).map(|_| random_datum(rng, depth + 1)).collect())
             }
             7 => {
                 let len = rng.below(4);
-                let mut v: Vec<OwnedDatum> =
-                    (0..len).map(|_| random_datum(rng, depth + 1)).collect();
-                v.sort_by(semantic_cmp);
-                v.dedup_by(|a, b| semantic_cmp(a, b) == Ordering::Equal);
-                OwnedDatum::Set(v)
+                DataValue::Set((0..len).map(|_| random_datum(rng, depth + 1)).collect())
             }
             8 => {
                 let flags = RegexFlags::from_bits((rng.next() % 0x40) as u8).expect("masked");
                 let pattern = ["", "a", "a\\+", "^x$"][rng.below(4)].to_string();
-                OwnedDatum::Regex(
+                DataValue::Regex(
                     RegexSource::validated(flags, pattern).expect("corpus patterns are valid"),
                 )
             }
             9 => {
                 let len = rng.below(3);
-                OwnedDatum::Vector(
-                    (0..len)
-                        .map(|_| Num::float(f64::from_bits(rng.next())))
-                        .collect(),
-                )
+                DataValue::Vector(Vector::new(
+                    (0..len).map(|_| f64::from_bits(rng.next())).collect(),
+                ))
             }
-            10 => OwnedDatum::Validity(Validity::new(
+            10 => DataValue::Validity(Validity::new(
                 rng.next() as i64,
                 rng.next().is_multiple_of(2),
             )),
-            _ => OwnedDatum::Json(random_json(rng, 0)),
+            _ => DataValue::Json(random_json(rng, 0)),
         }
     }
 
