@@ -123,7 +123,11 @@ fn public_api_full_surface_smoke() {
         )
         .expect("k-NN search");
     assert!(!knn.rows.is_empty(), "k-NN returns neighbours");
-    assert_eq!(knn.rows[0][0].get_int(), Some(1), "nearest to [1,0] is id 1");
+    assert_eq!(
+        knn.rows[0][0].get_int(),
+        Some(1),
+        "nearest to [1,0] is id 1"
+    );
 
     // ---- bitemporal time travel ----
     db.run_script("?[k, v] <- [[1, 100]] :create hist {k => v} @ 100", np())
@@ -144,7 +148,10 @@ fn public_api_full_surface_smoke() {
         "?[k, n] <- [[9, 'not-an-int']] :put ints {k => n: Int}",
         np(),
     );
-    assert!(refused.is_err(), "a String into an Int column must be refused");
+    assert!(
+        refused.is_err(),
+        "a String into an Int column must be refused"
+    );
 
     // ---- dump -> restore backup round-trip (public backup API) ----
     let dump_dir = tempfile::tempdir().expect("dump dir");
@@ -157,14 +164,15 @@ fn public_api_full_surface_smoke() {
     let restored = db2
         .run_script("?[id, name] := *item{id, name} :order id", np())
         .expect("scan restored item");
-    assert_eq!(restored.rows.len(), 2, "every relation survives dump/restore");
+    assert_eq!(
+        restored.rows.len(),
+        2,
+        "every relation survives dump/restore"
+    );
     assert_eq!(restored.rows[1][1].get_str(), Some("beta"));
     // the vector index rebuilds and still searches after restore
     let restored_knn = db2
-        .run_script(
-            "?[id] := ~emb:idx{id | query: vec([1.0, 0.0]), k: 1}",
-            np(),
-        )
+        .run_script("?[id] := ~emb:idx{id | query: vec([1.0, 0.0]), k: 1}", np())
         .expect("k-NN on restored index");
     assert_eq!(restored_knn.rows.len(), 1);
 
