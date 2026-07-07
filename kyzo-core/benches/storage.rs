@@ -184,7 +184,7 @@ fn asof(c: &mut Criterion) {
         g.bench_function("seek_skip_scan", |b| {
             let tx = db.read_tx().unwrap();
             b.iter(|| {
-                black_box(tx.range_skip_scan_tuple(&lo, &hi, at).fold(0usize, |n, r| {
+                black_box(tx.range_skip_scan_tuple(lo, hi, at).fold(0usize, |n, r| {
                     r.unwrap();
                     n + 1
                 }))
@@ -196,7 +196,7 @@ fn asof(c: &mut Criterion) {
             let cutoff = versions / 2;
             b.iter(|| {
                 let mut newest: std::collections::BTreeMap<i64, (i64, bool)> = Default::default();
-                for r in tx.range_scan(&lo, &hi) {
+                for r in tx.range_scan(lo, hi) {
                     let (k, v) = r.unwrap();
                     let t = kyzo::decode_tuple_from_key(&k, 4).unwrap();
                     let (DataValue::Num(name_n), DataValue::Validity(vld)) = (&t[0], &t[1]) else {

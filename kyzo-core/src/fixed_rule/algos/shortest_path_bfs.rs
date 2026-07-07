@@ -148,13 +148,14 @@ impl FixedRule for ShortestPathBFS {
                         starting_node.clone(),
                         ending_node.clone(),
                         DataValue::List(route),
-                    ]
-                    .into();
+                    ];
                     out.put(tuple)?;
                 } else {
-                    out.put(
-                        vec![starting_node.clone(), ending_node.clone(), DataValue::Null].into(),
-                    )?
+                    out.put(vec![
+                        starting_node.clone(),
+                        ending_node.clone(),
+                        DataValue::Null,
+                    ])?
                 }
             }
             cancel.check()?;
@@ -194,7 +195,7 @@ mod tests {
             ("george", "george"),
         ]
         .into_iter()
-        .map(|(a, b)| vec![s(a), s(b)].into())
+        .map(|(a, b)| vec![s(a), s(b)])
         .collect()
     }
 
@@ -207,8 +208,8 @@ mod tests {
             &ShortestPathBFS,
             vec![
                 TestInput::new(vec!["loving", "loved"], love_edges()),
-                TestInput::new(vec!["start"], vec![vec![s("alice")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("bob")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("alice")]]),
+                TestInput::new(vec!["end"], vec![vec![s("bob")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -220,8 +221,8 @@ mod tests {
             &ShortestPathBFS,
             vec![
                 TestInput::new(vec!["loving", "loved"], love_edges()),
-                TestInput::new(vec!["start"], vec![vec![s("alice")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("george")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("alice")]]),
+                TestInput::new(vec!["end"], vec![vec![s("george")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -254,14 +255,14 @@ mod tests {
 
         let n: u32 = 250_000;
         let edges: Vec<Tuple> = (0..n - 1)
-            .map(|i| vec![s(&format!("n{i}")), s(&format!("n{}", i + 1))].into())
+            .map(|i| vec![s(&format!("n{i}")), s(&format!("n{}", i + 1))])
             .collect();
         // An end node absent from the graph: the frontier never empties, so
         // without the inner poll the whole chain is walked.
         let inputs = vec![
             TestInput::new(vec!["fr", "to"], edges),
-            TestInput::new(vec!["start"], vec![vec![s("n0")].into()]),
-            TestInput::new(vec!["end"], vec![vec![s("absent")].into()]),
+            TestInput::new(vec!["start"], vec![vec![s("n0")]]),
+            TestInput::new(vec!["end"], vec![vec![s("absent")]]),
         ];
         let prepared = prepare_fixed_rule(&ShortestPathBFS, inputs, BTreeMap::new()).unwrap();
 
@@ -300,20 +301,19 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")].into(),
-                        vec![s("b"), s("c")].into(),
-                        vec![s("a"), s("c")].into(),
+                        vec![s("a"), s("b")],
+                        vec![s("b"), s("c")],
+                        vec![s("a"), s("c")],
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("c")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("c")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> =
-            vec![vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])].into()];
+        let want: Vec<Tuple> = vec![vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])]];
         assert_eq!(got, want);
     }
 }

@@ -326,7 +326,7 @@ impl MeetLayout {
     /// placeholder survives.
     pub(crate) fn interleave(&self, key: &[u8], vals: &[DataValue]) -> Tuple {
         let key = decode_tuple_bare(key).expect("this store's own bytes decode");
-        let mut row: Tuple = vec![DataValue::Null; self.arity].into();
+        let mut row: Tuple = vec![DataValue::Null; self.arity];
         for (slot, i) in self.key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
@@ -871,7 +871,7 @@ mod tests {
     }
 
     fn gv(group: &str, val: DataValue) -> Tuple {
-        vec![DataValue::from(group), val].into()
+        vec![DataValue::from(group), val]
     }
 
     /// A recording sink: collects every admission, in the order reported.
@@ -1102,7 +1102,7 @@ mod tests {
         assert!(!store.exists(&gv("c", DataValue::from(0i64))));
 
         let got = store
-            .prefix_iter(&vec![DataValue::from("b")].into())
+            .prefix_iter(&vec![DataValue::from("b")])
             .map(TupleInIter::into_tuple)
             .collect_vec();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
@@ -1154,7 +1154,7 @@ mod tests {
 
         // Delta iteration honors the same store (first epoch: via total).
         let d = store
-            .delta_prefix_iter(&vec![DataValue::from(2i64)].into())
+            .delta_prefix_iter(&vec![DataValue::from(2i64)])
             .map(TupleInIter::into_tuple)
             .collect_vec();
         assert_eq!(d, vec![t(&[2])]);
@@ -1174,7 +1174,7 @@ mod tests {
     /// A head tuple with the meet value at position 0 and the grouping key
     /// at position 1 — the layout the suffix-prefix store could not hold.
     fn vg(val: DataValue, group: &str) -> Tuple {
-        vec![val, DataValue::from(group)].into()
+        vec![val, DataValue::from(group)]
     }
 
     /// [`MeetLayout`] projections and their inverse round-trip for an
@@ -1195,8 +1195,7 @@ mod tests {
             DataValue::from(2i64),
             DataValue::from("g"),
             DataValue::from(9i64),
-        ]
-        .into();
+        ];
         let key = layout.project_key(&row);
         let vals = layout.project_vals(&row);
         assert_eq!(key, Tuple::from(vec![DataValue::from("g")]));

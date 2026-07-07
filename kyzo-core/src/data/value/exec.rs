@@ -367,7 +367,7 @@ mod tests {
             derefs_after_load,
             "recombine/dedup dereferenced a payload -- the hot loop must not encode/deref"
         );
-        assert!(dedup.len() >= 1);
+        assert!(!dedup.is_empty());
     }
 
     /// The narrow door has no back door: `ExecRows` cannot be built from

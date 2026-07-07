@@ -839,7 +839,7 @@ mod tests {
         // Ten productive epochs...
         for i in 0..10i64 {
             let mut out = RegularTempStore::default();
-            out.put(vec![DataValue::from(i)].into());
+            out.put(vec![DataValue::from(i)]);
             store.merge_in(out.wrap(), &mut ()).unwrap();
         }
         // ...then fifty empty (converged) epochs.

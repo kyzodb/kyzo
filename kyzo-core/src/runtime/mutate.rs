@@ -521,7 +521,7 @@ impl<T: WriteTx> SessionTx<T> {
                     }
                     Some(row) => row,
                 };
-            let original_val: Tuple = old_kv[relation_store.metadata.keys.len()..].to_vec().into();
+            let original_val: Tuple = old_kv[relation_store.metadata.keys.len()..].to_vec();
             new_kv.reserve_exact(relation_store.arity());
             for (i, extractor) in val_extractors.iter().enumerate() {
                 match extractor {
@@ -2117,7 +2117,7 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, v] := *wi{k, v}", no_params())
             .expect("read back");
-        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(10)].into()];
+        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(10)]];
         assert_eq!(
             out.rows, want,
             "the refused insert must not overwrite the existing row"
@@ -2171,8 +2171,11 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, a, b] := *wc{k, a, b}", no_params())
             .expect("read back");
-        let want: Vec<Tuple> =
-            vec![vec![DataValue::from(1), DataValue::from(99), DataValue::from(20)].into()];
+        let want: Vec<Tuple> = vec![vec![
+            DataValue::from(1),
+            DataValue::from(99),
+            DataValue::from(20),
+        ]];
         assert_eq!(
             out.rows, want,
             "a is updated to 99; b (omitted from the :update) carries forward as 20"

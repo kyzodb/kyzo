@@ -529,7 +529,7 @@ mod tests {
             assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
             // A bare retract/erase value carries no payload and extends
             // nothing.
-            let mut tup: Tuple = vec![DataValue::from(1i64)].into();
+            let mut tup: Tuple = vec![DataValue::from(1i64)];
             extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
             assert_eq!(tup.len(), 1);
         }
@@ -540,7 +540,7 @@ mod tests {
         for v in &non_keys {
             crate::data::value::append_canonical(&mut val, v);
         }
-        let mut tup: Tuple = vec![DataValue::from(1i64)].into();
+        let mut tup: Tuple = vec![DataValue::from(1i64)];
         extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
         assert_eq!(
             tup,
@@ -613,7 +613,7 @@ mod tests {
             let history: Vec<laws::Event> = rows
                 .iter()
                 .map(|(f, v, s, p)| {
-                    let key: Tuple = vec![DataValue::from(*f)].into();
+                    let key: Tuple = vec![DataValue::from(*f)];
                     match p {
                         ClaimPolarity::Assert => laws::Event::assert(key, Tuple::new(), *v, *s),
                         ClaimPolarity::Retract => laws::Event::retract(key, *v, *s),

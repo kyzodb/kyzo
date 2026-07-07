@@ -81,7 +81,7 @@ impl FixedRule for PageRank {
         let ranks = page_rank(&graph, theta, epsilon as f64, iterations, cancel)?;
 
         for (idx, score) in ranks.iter().enumerate() {
-            out.put(vec![indices[idx].clone(), DataValue::from(*score as f64)].into())?;
+            out.put(vec![indices[idx].clone(), DataValue::from(*score as f64)])?;
         }
         Ok(())
     }
@@ -431,12 +431,12 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")].into(),
-                    vec![s("a"), s("c")].into(),
-                    vec![s("b"), s("c")].into(),
-                    vec![s("c"), s("a")].into(),
-                    vec![s("d"), s("a")].into(),
-                    vec![s("b"), s("d")].into(),
+                    vec![s("a"), s("b")],
+                    vec![s("a"), s("c")],
+                    vec![s("b"), s("c")],
+                    vec![s("c"), s("a")],
+                    vec![s("d"), s("a")],
+                    vec![s("b"), s("d")],
                 ],
             )],
             BTreeMap::new(),
@@ -450,7 +450,7 @@ mod tests {
         let want: Vec<Tuple> = ["a", "b", "c", "d"]
             .iter()
             .zip(want_scores.iter())
-            .map(|(name, score)| vec![s(name), DataValue::from(*score as f64)].into())
+            .map(|(name, score)| vec![s(name), DataValue::from(*score as f64)])
             .collect();
         assert_eq!(got, want);
     }

@@ -128,14 +128,11 @@ impl FixedRule for MaxFlow {
         net.max_flow(source, sink, &cancel)?;
 
         for (from, to, flow) in net.min_cut_edges(source) {
-            out.put(
-                vec![
-                    indices[from as usize].clone(),
-                    indices[to as usize].clone(),
-                    DataValue::from(flow),
-                ]
-                .into(),
-            )?;
+            out.put(vec![
+                indices[from as usize].clone(),
+                indices[to as usize].clone(),
+                DataValue::from(flow),
+            ])?;
         }
         Ok(())
     }
@@ -366,14 +363,14 @@ mod tests {
     ) -> Vec<(String, String, f64)> {
         let erows = edges
             .iter()
-            .map(|&(a, b, c)| vec![s(a), s(b), DataValue::from(c)].into())
+            .map(|&(a, b, c)| vec![s(a), s(b), DataValue::from(c)])
             .collect::<Vec<Tuple>>();
         let got = run_fixed_rule(
             &MaxFlow,
             vec![
                 TestInput::new(vec!["fr", "to", "cap"], erows),
-                TestInput::new(vec!["src"], vec![vec![s(source)].into()]),
-                TestInput::new(vec!["snk"], vec![vec![s(sink)].into()]),
+                TestInput::new(vec!["src"], vec![vec![s(source)]]),
+                TestInput::new(vec!["snk"], vec![vec![s(sink)]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -556,10 +553,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![vec![s("a"), s("b"), DataValue::from(1.0)].into()],
+                    vec![vec![s("a"), s("b"), DataValue::from(1.0)]],
                 ),
-                TestInput::new(vec!["src"], vec![vec![s("nope")].into()]),
-                TestInput::new(vec!["snk"], vec![vec![s("b")].into()]),
+                TestInput::new(vec!["src"], vec![vec![s("nope")]]),
+                TestInput::new(vec!["snk"], vec![vec![s("b")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -576,10 +573,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![vec![s("a"), s("b"), DataValue::from(1.0)].into()],
+                    vec![vec![s("a"), s("b"), DataValue::from(1.0)]],
                 ),
-                TestInput::new(vec!["src"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["snk"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["src"], vec![vec![s("a")]]),
+                TestInput::new(vec!["snk"], vec![vec![s("a")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -597,10 +594,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![vec![s("a"), s("b"), DataValue::from(-1.0)].into()],
+                    vec![vec![s("a"), s("b"), DataValue::from(-1.0)]],
                 ),
-                TestInput::new(vec!["src"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["snk"], vec![vec![s("b")].into()]),
+                TestInput::new(vec!["src"], vec![vec![s("a")]]),
+                TestInput::new(vec!["snk"], vec![vec![s("b")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -628,13 +625,12 @@ mod tests {
                     s(&format!("v{}", i + 1)),
                     DataValue::from(1.0),
                 ]
-                .into()
             })
             .collect();
         let inputs = vec![
             TestInput::new(vec!["fr", "to", "cap"], edges),
-            TestInput::new(vec!["src"], vec![vec![s("v0")].into()]),
-            TestInput::new(vec!["snk"], vec![vec![s(&format!("v{}", n - 1))].into()]),
+            TestInput::new(vec!["src"], vec![vec![s("v0")]]),
+            TestInput::new(vec!["snk"], vec![vec![s(&format!("v{}", n - 1))]]),
         ];
         let prepared = prepare_fixed_rule(&MaxFlow, inputs, BTreeMap::new()).unwrap();
 
@@ -674,10 +670,10 @@ mod tests {
                 vec![
                     TestInput::new(
                         vec!["fr", "to", "cap"],
-                        vec![vec![s("s"), s("t"), DataValue::from(tiny)].into()],
+                        vec![vec![s("s"), s("t"), DataValue::from(tiny)]],
                     ),
-                    TestInput::new(vec!["src"], vec![vec![s("s")].into()]),
-                    TestInput::new(vec!["snk"], vec![vec![s("t")].into()]),
+                    TestInput::new(vec!["src"], vec![vec![s("s")]]),
+                    TestInput::new(vec!["snk"], vec![vec![s("t")]]),
                 ],
                 BTreeMap::new(),
                 CancelFlag::default(),

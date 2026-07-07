@@ -57,14 +57,11 @@ impl FixedRule for MinimumSpanningForestKruskal {
         }
         let msp = kruskal(&graph, cancel)?;
         for (src, dst, cost) in msp {
-            out.put(
-                vec![
-                    indices[src as usize].clone(),
-                    indices[dst as usize].clone(),
-                    DataValue::from(cost as f64),
-                ]
-                .into(),
-            )?;
+            out.put(vec![
+                indices[src as usize].clone(),
+                indices[dst as usize].clone(),
+                DataValue::from(cost as f64),
+            ])?;
         }
 
         Ok(())
@@ -198,10 +195,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(1.0)].into(),
-                    vec![s("b"), s("c"), DataValue::from(2.0)].into(),
-                    vec![s("a"), s("c"), DataValue::from(4.0)].into(),
-                    vec![s("c"), s("d"), DataValue::from(3.0)].into(),
+                    vec![s("a"), s("b"), DataValue::from(1.0)],
+                    vec![s("b"), s("c"), DataValue::from(2.0)],
+                    vec![s("a"), s("c"), DataValue::from(4.0)],
+                    vec![s("c"), s("d"), DataValue::from(3.0)],
                 ],
             )],
             BTreeMap::new(),
@@ -231,9 +228,9 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(2.0)].into(),
-                    vec![s("a"), s("b"), DataValue::from(5.0)].into(),
-                    vec![s("b"), s("c"), DataValue::from(3.0)].into(),
+                    vec![s("a"), s("b"), DataValue::from(2.0)],
+                    vec![s("a"), s("b"), DataValue::from(5.0)],
+                    vec![s("b"), s("c"), DataValue::from(3.0)],
                 ],
             )],
             BTreeMap::new(),
@@ -262,8 +259,8 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(1.0)].into(),
-                    vec![s("b"), s("c"), DataValue::from(1.0)].into(),
+                    vec![s("a"), s("b"), DataValue::from(1.0)],
+                    vec![s("b"), s("c"), DataValue::from(1.0)],
                 ],
             )],
             BTreeMap::new(),

@@ -47,15 +47,12 @@ impl FixedRule for ClusteringCoefficients {
         let (graph, indices, _) = edges.as_directed_graph(true)?;
         let coefficients = clustering_coefficients(&graph, cancel)?;
         for (idx, (cc, n_triangles, degree)) in coefficients.into_iter().enumerate() {
-            out.put(
-                vec![
-                    indices[idx].clone(),
-                    DataValue::from(cc),
-                    DataValue::from(n_triangles as i64),
-                    DataValue::from(degree as i64),
-                ]
-                .into(),
-            )?;
+            out.put(vec![
+                indices[idx].clone(),
+                DataValue::from(cc),
+                DataValue::from(n_triangles as i64),
+                DataValue::from(degree as i64),
+            ])?;
         }
 
         Ok(())
@@ -185,11 +182,11 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")].into(),
-                    vec![s("a"), s("c")].into(),
-                    vec![s("b"), s("c")].into(),
-                    vec![s("a"), s("d")].into(),
-                    vec![s("b"), s("d")].into(),
+                    vec![s("a"), s("b")],
+                    vec![s("a"), s("c")],
+                    vec![s("b"), s("c")],
+                    vec![s("a"), s("d")],
+                    vec![s("b"), s("d")],
                 ],
             )],
             BTreeMap::new(),
@@ -198,10 +195,10 @@ mod tests {
         .unwrap();
         let two_thirds = DataValue::from(2.0 * 2.0 / (3.0 * 2.0));
         let want: Vec<Tuple> = vec![
-            vec![s("a"), two_thirds.clone(), i(2), i(3)].into(),
-            vec![s("b"), two_thirds, i(2), i(3)].into(),
-            vec![s("c"), DataValue::from(1.0), i(1), i(2)].into(),
-            vec![s("d"), DataValue::from(1.0), i(1), i(2)].into(),
+            vec![s("a"), two_thirds.clone(), i(2), i(3)],
+            vec![s("b"), two_thirds, i(2), i(3)],
+            vec![s("c"), DataValue::from(1.0), i(1), i(2)],
+            vec![s("d"), DataValue::from(1.0), i(1), i(2)],
         ];
         assert_eq!(got, want);
     }

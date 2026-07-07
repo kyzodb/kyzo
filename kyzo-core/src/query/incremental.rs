@@ -689,7 +689,7 @@ fn eval_one_group(
     }
     match ops {
         None if key_positions.is_empty() => {
-            let mut row: Tuple = vec![DataValue::Null; signature_len].into();
+            let mut row: Tuple = vec![DataValue::Null; signature_len];
             for (op, (i, _, _)) in fresh_ops()?.iter().zip(val_positions) {
                 row[*i] = op.get()?;
             }
@@ -697,7 +697,7 @@ fn eval_one_group(
         }
         None => Ok(None),
         Some(ops) => {
-            let mut row: Tuple = vec![DataValue::Null; signature_len].into();
+            let mut row: Tuple = vec![DataValue::Null; signature_len];
             for (slot, &i) in key_positions.iter().enumerate() {
                 row[i] = group_key[slot].clone();
             }
@@ -978,20 +978,14 @@ mod tests {
                 vec![lit("p", vec![x()], false), lit("r", vec![x()], true)],
             )],
         };
-        let state = state_of(vec![
-            ("p", vec![vec![v(1)].into()]),
-            ("r", vec![vec![v(1)].into()]),
-        ]);
-        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)].into()))]);
+        let state = state_of(vec![("p", vec![vec![v(1)]]), ("r", vec![vec![v(1)]])]);
+        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
         let (deltas, new_state) = incremental_eval(&program, &state, &patch).unwrap();
         assert_eq!(
             deltas[&sym("q")],
-            [SignedFact::Plus(vec![v(1)].into())].into_iter().collect()
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
         );
-        assert_eq!(
-            new_state[&sym("q")],
-            [vec![v(1)].into()].into_iter().collect()
-        );
+        assert_eq!(new_state[&sym("q")], [vec![v(1)]].into_iter().collect());
     }
 
     /// The mirror: asserting into the negated relation retracts the
@@ -1010,15 +1004,15 @@ mod tests {
         // the base relations, since this module never re-derives from
         // scratch to find out.
         let state = state_of(vec![
-            ("p", vec![vec![v(1)].into()]),
+            ("p", vec![vec![v(1)]]),
             ("r", vec![]),
-            ("q", vec![vec![v(1)].into()]),
+            ("q", vec![vec![v(1)]]),
         ]);
-        let patch = patch_of(vec![("r", SignedFact::Plus(vec![v(1)].into()))]);
+        let patch = patch_of(vec![("r", SignedFact::Plus(vec![v(1)]))]);
         let (deltas, new_state) = incremental_eval(&program, &state, &patch).unwrap();
         assert_eq!(
             deltas[&sym("q")],
-            [SignedFact::Minus(vec![v(1)].into())].into_iter().collect()
+            [SignedFact::Minus(vec![v(1)])].into_iter().collect()
         );
         assert!(new_state[&sym("q")].is_empty());
     }
@@ -1041,21 +1035,18 @@ mod tests {
         // reflected in q's own prior MaintainedState. Only p(2,1) is
         // retracted; p(2,3) still supports q(2) unchanged.
         let state = state_of(vec![
-            ("p", vec![vec![v(2), v(1)].into(), vec![v(2), v(3)].into()]),
+            ("p", vec![vec![v(2), v(1)], vec![v(2), v(3)]]),
             ("r", vec![]),
-            ("q", vec![vec![v(2)].into()]),
+            ("q", vec![vec![v(2)]]),
         ]);
-        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(2), v(1)].into()))]);
+        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(2), v(1)]))]);
         let (deltas, new_state) = incremental_eval(&program, &state, &patch).unwrap();
         assert!(
             deltas.get(&sym("q")).is_none_or(BTreeSet::is_empty),
             "q(2) has a second, untouched derivation — must not change: {:?}",
             deltas.get(&sym("q"))
         );
-        assert_eq!(
-            new_state[&sym("q")],
-            [vec![v(2)].into()].into_iter().collect()
-        );
+        assert_eq!(new_state[&sym("q")], [vec![v(2)]].into_iter().collect());
     }
 
     #[test]
@@ -1077,8 +1068,8 @@ mod tests {
                 ),
             ],
         };
-        let state = state_of(vec![("edge", vec![vec![v(1), v(2)].into()])]);
-        let patch = patch_of(vec![("edge", SignedFact::Plus(vec![v(2), v(3)].into()))]);
+        let state = state_of(vec![("edge", vec![vec![v(1), v(2)]])]);
+        let patch = patch_of(vec![("edge", SignedFact::Plus(vec![v(2), v(3)]))]);
         let err = incremental_eval(&program, &state, &patch).unwrap_err();
         assert!(err.to_string().contains("recursive"));
     }
@@ -1267,9 +1258,9 @@ mod tests {
                     for _ in 0..n {
                         let a = v(next_range(4) as i64);
                         if rel == "p" || rel == "r2" {
-                            set.insert(vec![a, v(next_range(4) as i64)].into());
+                            set.insert(vec![a, v(next_range(4) as i64)]);
                         } else {
-                            set.insert(vec![a].into());
+                            set.insert(vec![a]);
                         }
                     }
                     facts.insert(rel, set);
@@ -1296,9 +1287,9 @@ mod tests {
                     } else {
                         let a = v(next_range(4) as i64);
                         let t: Tuple = if rel == "p" || rel == "r2" {
-                            vec![a, v(next_range(4) as i64)].into()
+                            vec![a, v(next_range(4) as i64)]
                         } else {
-                            vec![a].into()
+                            vec![a]
                         };
                         patch
                             .entry(rel)
@@ -1560,15 +1551,12 @@ mod tests {
             )],
         )]);
         let program = translate(magic).expect("translation succeeds");
-        let state = state_of(vec![
-            ("p", vec![vec![v(1)].into()]),
-            ("r", vec![vec![v(1)].into()]),
-        ]);
-        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)].into()))]);
+        let state = state_of(vec![("p", vec![vec![v(1)]]), ("r", vec![vec![v(1)]])]);
+        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
         let (deltas, _new_state) = incremental_eval(&program, &state, &patch).unwrap();
         assert_eq!(
             deltas[&sym("?")],
-            [SignedFact::Plus(vec![v(1)].into())].into_iter().collect()
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
         );
     }
 }

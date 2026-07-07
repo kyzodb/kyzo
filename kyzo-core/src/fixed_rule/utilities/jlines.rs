@@ -119,7 +119,7 @@ impl FixedRule for JsonReader {
         let mut process_row = |row: &BTreeMap<String, JsonValue>| -> Result<()> {
             let mut ret: Tuple = if prepend_index {
                 counter += 1;
-                vec![DataValue::from(counter)].into()
+                vec![DataValue::from(counter)]
             } else {
                 Tuple::new()
             };
@@ -266,8 +266,8 @@ mod tests {
         let got =
             run_fixed_rule(&JsonReader, vec![], options(&url), CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
-        let want0: Tuple = vec![DataValue::from(1i64), DataValue::from("a")].into();
-        let want1: Tuple = vec![DataValue::from(2i64), DataValue::Null].into();
+        let want0: Tuple = vec![DataValue::from(1i64), DataValue::from("a")];
+        let want1: Tuple = vec![DataValue::from(2i64), DataValue::Null];
         assert_eq!(got[0], want0);
         assert_eq!(got[1], want1);
     }

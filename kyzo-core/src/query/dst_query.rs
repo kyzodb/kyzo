@@ -269,10 +269,10 @@ fn tc_populate(db: &SimStorage) -> Result<()> {
         "edge",
         2,
         &[
-            vec![v(1), v(2)].into(),
-            vec![v(2), v(3)].into(),
-            vec![v(3), v(4)].into(),
-            vec![v(4), v(2)].into(),
+            vec![v(1), v(2)],
+            vec![v(2), v(3)],
+            vec![v(3), v(4)],
+            vec![v(4), v(2)],
         ],
     )
 }
@@ -329,10 +329,10 @@ fn join_populate(db: &SimStorage) -> Result<()> {
         "edge",
         2,
         &[
-            vec![v(1), v(2)].into(),
-            vec![v(2), v(3)].into(),
-            vec![v(3), v(4)].into(),
-            vec![v(2), v(5)].into(),
+            vec![v(1), v(2)],
+            vec![v(2), v(3)],
+            vec![v(3), v(4)],
+            vec![v(2), v(5)],
         ],
     )
 }
@@ -362,11 +362,11 @@ fn aggr_populate(db: &SimStorage) -> Result<()> {
         "cost",
         2,
         &[
-            vec![v(1), v(5)].into(),
-            vec![v(1), v(3)].into(),
-            vec![v(1), v(8)].into(),
-            vec![v(2), v(7)].into(),
-            vec![v(2), v(2)].into(),
+            vec![v(1), v(5)],
+            vec![v(1), v(3)],
+            vec![v(1), v(8)],
+            vec![v(2), v(7)],
+            vec![v(2), v(2)],
         ],
     )
 }
@@ -398,14 +398,9 @@ fn aggr_expected() -> BTreeSet<Tuple> {
 // ── stratified negation: pairs of nodes with no path between them ────────
 
 fn neg_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(
-        db,
-        "node",
-        1,
-        &[vec![v(1)].into(), vec![v(2)].into(), vec![v(3)].into()],
-    )?;
+    stored_relation(db, "node", 1, &[vec![v(1)], vec![v(2)], vec![v(3)]])?;
     // 1->2 only: 3 is isolated, and nothing reaches 1.
-    stored_relation(db, "edge", 2, &[vec![v(1), v(2)].into()])
+    stored_relation(db, "edge", 2, &[vec![v(1), v(2)]])
 }
 fn neg_program() -> StratifiedMagicProgram {
     let (x, y, z) = (sym("x"), sym("y"), sym("z"));
@@ -487,18 +482,8 @@ const SINGLE_HEAD_FIXTURES: &[Fixture] = &[
 // ── a multi-head stratum, for the parallelism / determinism probe ────────
 
 fn multihead_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(
-        db,
-        "ea",
-        2,
-        &[vec![v(1), v(2)].into(), vec![v(2), v(3)].into()],
-    )?;
-    stored_relation(
-        db,
-        "eb",
-        2,
-        &[vec![v(10), v(20)].into(), vec![v(20), v(30)].into()],
-    )
+    stored_relation(db, "ea", 2, &[vec![v(1), v(2)], vec![v(2), v(3)]])?;
+    stored_relation(db, "eb", 2, &[vec![v(10), v(20)], vec![v(20), v(30)]])
 }
 fn multihead_program() -> StratifiedMagicProgram {
     // pa and pb are independent recursive closures in ONE stratum: eval's
@@ -1108,7 +1093,7 @@ fn time_travel_under_faults_answers_or_errors() {
 
 fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
     data.iter()
-        .map(|(id, s)| vec![v(*id), DataValue::Str((*s).to_string())].into())
+        .map(|(id, s)| vec![v(*id), DataValue::Str((*s).to_string())])
         .collect()
 }
 

@@ -378,7 +378,7 @@ fn resolve_at(
         match governing.map(|e| e.polarity) {
             Some(ClaimPolarity::Assert) => {
                 let e = governing.expect("just matched Some");
-                let mut tuple: Tuple = key.to_vec().into();
+                let mut tuple: Tuple = key.to_vec();
                 tuple.extend(e.payload.iter().cloned());
                 return Some(tuple);
             }
@@ -695,7 +695,7 @@ fn candidate_keys_from_posting(
                 1 + base_key_len + 2
             );
         }
-        keys.insert(full[1..1 + base_key_len].to_vec().into());
+        keys.insert(full[1..1 + base_key_len].to_vec());
     }
     Ok(keys)
 }

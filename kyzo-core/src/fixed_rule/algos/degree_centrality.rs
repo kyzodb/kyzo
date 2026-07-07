@@ -72,8 +72,7 @@ impl FixedRule for DegreeCentrality {
                 DataValue::from(total_d as i64),
                 DataValue::from(out_d as i64),
                 DataValue::from(in_d as i64),
-            ]
-            .into();
+            ];
             out.put(tuple)?;
         }
         Ok(())
@@ -115,19 +114,14 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")].into(),
-                        vec![s("a"), s("c")].into(),
-                        vec![s("b"), s("c")].into(),
+                        vec![s("a"), s("b")],
+                        vec![s("a"), s("c")],
+                        vec![s("b"), s("c")],
                     ],
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![
-                        vec![s("a")].into(),
-                        vec![s("b")].into(),
-                        vec![s("c")].into(),
-                        vec![s("d")].into(),
-                    ],
+                    vec![vec![s("a")], vec![s("b")], vec![s("c")], vec![s("d")]],
                 ),
             ],
             BTreeMap::new(),
@@ -135,10 +129,10 @@ mod tests {
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![s("a"), i(2), i(2), i(0)].into(),
-            vec![s("b"), i(2), i(1), i(1)].into(),
-            vec![s("c"), i(2), i(0), i(2)].into(),
-            vec![s("d"), i(0), i(0), i(0)].into(),
+            vec![s("a"), i(2), i(2), i(0)],
+            vec![s("b"), i(2), i(1), i(1)],
+            vec![s("c"), i(2), i(0), i(2)],
+            vec![s("d"), i(0), i(0), i(0)],
         ];
         assert_eq!(got, want);
     }

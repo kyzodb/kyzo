@@ -293,8 +293,7 @@ mod tests {
             DataValue::from("a"),
             DataValue::from(1i64),
             DataValue::from(1.5f64),
-        ]
-        .into();
+        ];
         assert_eq!(got[0], want);
         assert_eq!(got[1][2], DataValue::Null); // nullable Float? absorbed "oops"
     }

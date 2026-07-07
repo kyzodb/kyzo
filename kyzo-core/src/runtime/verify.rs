@@ -149,14 +149,11 @@ impl VerifyOutcome {
         };
         crate::fixed_rule::NamedRows::new(
             headers,
-            vec![
-                vec![
-                    crate::data::value::DataValue::from(status),
-                    crate::data::value::DataValue::from(summary),
-                    crate::data::value::DataValue::from(detail),
-                ]
-                .into(),
-            ],
+            vec![vec![
+                crate::data::value::DataValue::from(status),
+                crate::data::value::DataValue::from(summary),
+                crate::data::value::DataValue::from(detail),
+            ]],
         )
     }
 }
@@ -742,7 +739,7 @@ mod tests {
                     oracle.len() < production.len(),
                     "the sabotaged oracle must be missing rows: {oracle:?}"
                 );
-                let dropped: Tuple = vec![DataValue::from(3), DataValue::from(4)].into();
+                let dropped: Tuple = vec![DataValue::from(3), DataValue::from(4)];
                 assert!(
                     !oracle.contains(&dropped) || oracle.len() != production.len(),
                     "sabotage must be visible in the oracle's answer"

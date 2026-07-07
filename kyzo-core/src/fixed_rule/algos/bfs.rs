@@ -84,7 +84,7 @@ impl FixedRule for Bfs {
                     backtrace.insert(to_node.clone(), candidate.clone());
 
                     let cand_tuple = if skip_query_nodes {
-                        vec![to_node.clone()].into()
+                        vec![to_node.clone()]
                     } else {
                         nodes
                             .prefix_iter(to_node)?
@@ -124,7 +124,7 @@ impl FixedRule for Bfs {
             }
             route.push(starting.clone());
             route.reverse();
-            let tuple = vec![starting, ending, DataValue::List(route)].into();
+            let tuple = vec![starting, ending, DataValue::List(route)];
             out.put(tuple)?;
         }
         Ok(())
@@ -169,22 +169,17 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")].into(),
-                        vec![s("a"), s("c")].into(),
-                        vec![s("b"), s("d")].into(),
-                        vec![s("c"), s("d")].into(),
+                        vec![s("a"), s("b")],
+                        vec![s("a"), s("c")],
+                        vec![s("b"), s("d")],
+                        vec![s("c"), s("d")],
                     ],
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![
-                        vec![s("a")].into(),
-                        vec![s("b")].into(),
-                        vec![s("c")].into(),
-                        vec![s("d")].into(),
-                    ],
+                    vec![vec![s("a")], vec![s("b")], vec![s("c")], vec![s("d")]],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
             ],
             BTreeMap::from([
                 (
@@ -206,14 +201,13 @@ mod tests {
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])].into(),
-            vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])].into(),
+            vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])],
+            vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])],
             vec![
                 s("a"),
                 s("d"),
                 DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ]
-            .into(),
+            ],
         ];
         assert_eq!(got, want);
     }

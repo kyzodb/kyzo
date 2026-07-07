@@ -584,7 +584,7 @@ fn gen_positive(seed: u64, small: bool) -> Program {
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     let n_edges = rng.below((n * 2) as u64) as i64 + 1;
     let edges: BTreeSet<Tuple> = (0..n_edges)
-        .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))].into())
+        .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))])
         .collect();
     facts.insert("edge", edges);
 
@@ -1141,7 +1141,7 @@ fn tropical_min_cost_matches_independent_reference_random_weights() {
 fn certificate_model() -> Program {
     let edges: BTreeSet<Tuple> = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]
         .iter()
-        .map(|(a, b)| vec![v(*a), v(*b)].into())
+        .map(|(a, b)| vec![v(*a), v(*b)])
         .collect();
     Program::untimed(
         vec![
@@ -1261,7 +1261,7 @@ fn corrupted_certificates_are_rejected() {
         }
     }
     if let ProofNode::Fact { node } = first_leaf(&mut corrupt) {
-        node.1 = vec![v(96), v(97)].into();
+        node.1 = vec![v(96), v(97)];
     }
     assert_eq!(check_both(&corrupt), (false, false), "forged leaf");
 
@@ -1288,7 +1288,7 @@ fn corrupted_certificates_are_rejected() {
 #[test]
 fn underivable_targets_refuse_certificate_extraction() {
     let fx = certificate_fixture();
-    let ghost = rule_node("path", &vec![v(40), v(41)].into());
+    let ghost = rule_node("path", &vec![v(40), v(41)]);
     let err = extract_min_cost_proof(&fx.graph, &fx.costs, &ghost).expect_err("must refuse");
     assert!(
         err.downcast_ref::<crate::query::semiring::NoDerivation>()
@@ -1371,14 +1371,14 @@ fn aggregation_boundary_collapses_to_ground_facts() {
                 "edge",
                 [(0, 1), (1, 2), (2, 0)]
                     .iter()
-                    .map(|(a, b)| vec![v(*a), v(*b)].into())
+                    .map(|(a, b)| vec![v(*a), v(*b)])
                     .collect(),
             ),
             (
                 "seed",
                 [(0, 5), (1, 9), (2, 3)]
                     .iter()
-                    .map(|(a, b)| vec![v(*a), v(*b)].into())
+                    .map(|(a, b)| vec![v(*a), v(*b)])
                     .collect(),
             ),
         ]),
@@ -1420,7 +1420,7 @@ fn unattributed_body_is_refused_typed() {
     // A one-rule program whose body declines to attribute its premises.
     let facts: Arc<BTreeMap<Rel, BTreeSet<Tuple>>> = Arc::new(BTreeMap::from([(
         "edge",
-        BTreeSet::from([vec![v(1), v(2)].into()]),
+        BTreeSet::from([vec![v(1), v(2)]]),
     )]));
     let idb: Arc<BTreeSet<Rel>> = Arc::new(BTreeSet::new());
     let body = UnattributedBody(ModelBody::new(

@@ -421,7 +421,7 @@ fn literal_postings(
             })
             .collect::<Result<Vec<u32>>>()?;
         out.push(LiteralPostings {
-            doc_key: row[1..=base_key_len].to_vec().into(),
+            doc_key: row[1..=base_key_len].to_vec(),
             positions,
         });
     }

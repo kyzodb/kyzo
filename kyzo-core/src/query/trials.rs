@@ -712,15 +712,15 @@ fn generate(seed: u64) -> Generated {
     // A moderate graph: closure stays oracle-tractable (≤ n²).
     let n_edges = rng.below((n * 3) as u64) as i64 + 1;
     let edges: BTreeSet<Tuple> = (0..n_edges)
-        .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))].into())
+        .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))])
         .collect();
     facts.insert("edge", edges);
-    facts.insert("node", (0..n).map(|i| vec![v(i)].into()).collect());
+    facts.insert("node", (0..n).map(|i| vec![v(i)]).collect());
 
     // Meet seeds, typed to the chosen lattice.
     let n_seeds = rng.below(n as u64) as i64 + 1;
     let seeds: BTreeSet<Tuple> = (0..n_seeds)
-        .map(|_| vec![v(rng.range(0, n)), meet_value(&mut rng, p.meet_op)].into())
+        .map(|_| vec![v(rng.range(0, n)), meet_value(&mut rng, p.meet_op)])
         .collect();
     facts.insert("seed", seeds);
 
@@ -728,7 +728,7 @@ fn generate(seed: u64) -> Generated {
     let n_items = rng.range(800, 3000);
     let n_keys = rng.range(20, 100);
     let items: BTreeSet<Tuple> = (0..n_items)
-        .map(|_| vec![v(rng.range(0, n_keys)), v(rng.range(0, 50))].into())
+        .map(|_| vec![v(rng.range(0, n_keys)), v(rng.range(0, 50))])
         .collect();
     facts.insert("item", items);
 
@@ -812,7 +812,6 @@ fn generate(seed: u64) -> Generated {
                     v(rng.range(-10, 10)),
                     v(rng.range(-10, 10)),
                 ]
-                .into()
             })
             .collect();
         facts.insert("seed3", seed3);
@@ -963,8 +962,8 @@ fn fixed_endpoints(inputs: &[BTreeSet<Tuple>]) -> BTreeSet<Tuple> {
     let mut out = BTreeSet::new();
     for t in &inputs[0] {
         if t.len() == 2 {
-            out.insert(vec![t[0].clone()].into());
-            out.insert(vec![t[1].clone()].into());
+            out.insert(vec![t[0].clone()]);
+            out.insert(vec![t[1].clone()]);
         }
     }
     out
@@ -1393,14 +1392,14 @@ fn provenance_fixture() -> (Program, Rel) {
         "edge",
         [(1, 2), (2, 3), (3, 4), (2, 5)]
             .iter()
-            .map(|(a, b)| vec![v(*a), v(*b)].into())
+            .map(|(a, b)| vec![v(*a), v(*b)])
             .collect(),
     );
     facts.insert(
         "tag",
         [(4, 100), (5, 200)]
             .iter()
-            .map(|(a, b)| vec![v(*a), v(*b)].into())
+            .map(|(a, b)| vec![v(*a), v(*b)])
             .collect(),
     );
     let rules = vec![
@@ -1785,9 +1784,7 @@ fn gen_temporal_history(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Ve
 
 fn push_temporal_event(history: &mut Vec<Event>, rng: &mut Rng, key: &Tuple, valid: i64, sys: i64) {
     let event = match rng.one_of(&TEMPORAL_POLARITIES) {
-        ClaimPolarity::Assert => {
-            Event::assert(key.clone(), vec![v(rng.range(0, 5))].into(), valid, sys)
-        }
+        ClaimPolarity::Assert => Event::assert(key.clone(), vec![v(rng.range(0, 5))], valid, sys),
         ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
         ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
     };
@@ -1811,7 +1808,7 @@ fn gen_temporal_histories(rng: &mut Rng, p: &TemporalGenParams) -> TemporalHisto
     for &rel in HIST_RELS.iter().take(p.n_relations) {
         let mut per_key = BTreeMap::new();
         for i in 0..p.keys_per_relation {
-            let key: Tuple = vec![v(i)].into();
+            let key: Tuple = vec![v(i)];
             per_key.insert(key.clone(), gen_temporal_history(rng, &key, p));
         }
         per_relation.insert(rel, per_key);
@@ -2007,9 +2004,11 @@ fn grid_differential_over_generated_temporal_programs() {
             for row_a in &snap_a {
                 for row_b in &snap_b {
                     if row_a[0] == row_b[0] {
-                        expected_joined.insert(
-                            vec![row_a[0].clone(), row_a[1].clone(), row_b[1].clone()].into(),
-                        );
+                        expected_joined.insert(vec![
+                            row_a[0].clone(),
+                            row_a[1].clone(),
+                            row_b[1].clone(),
+                        ]);
                     }
                 }
             }
@@ -2055,7 +2054,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
     for seed in 0..seeds {
         let mut rng = Rng::new(0xD1FF_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
-        let key: Tuple = vec![v(0)].into();
+        let key: Tuple = vec![v(0)];
         let history = gen_temporal_history(&mut rng, &key, &params);
 
         let sys_now = AsOf::current().sys;
@@ -2158,7 +2157,7 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
         let params = gen_temporal_params(&mut rng);
         let mut history = Vec::new();
         for i in 0..params.keys_per_relation {
-            history.extend(gen_temporal_history(&mut rng, &vec![v(i)].into(), &params));
+            history.extend(gen_temporal_history(&mut rng, &vec![v(i)], &params));
         }
 
         // Two distinct query coordinates near real generated events — the
@@ -2202,7 +2201,7 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
         for row1 in &snap1 {
             for row2 in &snap2 {
                 if row1[0] == row2[0] {
-                    expected.insert(vec![row1[0].clone(), row1[1].clone(), row2[1].clone()].into());
+                    expected.insert(vec![row1[0].clone(), row1[1].clone(), row2[1].clone()]);
                 }
             }
         }
@@ -2263,7 +2262,7 @@ fn gen_temporal_history_no_erase(rng: &mut Rng, key: &Tuple, p: &TemporalGenPara
         let valid = rng.range(-p.coord_span, p.coord_span);
         let sys = rng.range(-p.coord_span, p.coord_span);
         let event = if rng.chance(1, 2) {
-            Event::assert(key.clone(), vec![v(rng.range(0, 5))].into(), valid, sys)
+            Event::assert(key.clone(), vec![v(rng.range(0, 5))], valid, sys)
         } else {
             Event::retract(key.clone(), valid, sys)
         };
@@ -2272,13 +2271,8 @@ fn gen_temporal_history_no_erase(rng: &mut Rng, key: &Tuple, p: &TemporalGenPara
         if rng.chance(2, 5) {
             let correction_sys = sys + rng.range(1, 5);
             history.push(
-                Event::assert(
-                    key.clone(),
-                    vec![v(rng.range(0, 5))].into(),
-                    valid,
-                    correction_sys,
-                )
-                .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                Event::assert(key.clone(), vec![v(rng.range(0, 5))], valid, correction_sys)
+                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
             );
         }
     }
@@ -2302,7 +2296,7 @@ fn erase_bug_manifests(history: &[Event], key: &Tuple) -> bool {
 #[test]
 fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
     let seeds = 300u64;
-    let key: Tuple = vec![v(0)].into();
+    let key: Tuple = vec![v(0)];
 
     let mut caught_without_erase = false;
     for seed in 0..seeds {
@@ -2429,7 +2423,7 @@ fn abs_sort_bug_manifests(history: &[Event], key: &Tuple) -> bool {
 #[test]
 fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
     let seeds = 300u64;
-    let key: Tuple = vec![v(0)].into();
+    let key: Tuple = vec![v(0)];
 
     let mut caught_nonneg_only = false;
     for seed in 0..seeds {
@@ -2543,7 +2537,7 @@ fn short_end_bug_manifests(history: &[Event], key: &Tuple, grid: &[i64]) -> bool
 #[test]
 fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end_boundary_bug() {
     let seeds = 300u64;
-    let key: Tuple = vec![v(0)].into();
+    let key: Tuple = vec![v(0)];
 
     // Counted, not merely booleaned: a coordinates-only grid CAN still
     // catch this bug when two stored breakpoints happen to be exactly one
@@ -2643,7 +2637,7 @@ fn gen_temporal_existential_history(
         let valid = rng.range(-p.coord_span, p.coord_span);
         let sys = rng.range(-p.coord_span, p.coord_span);
         let event = match rng.one_of(&TEMPORAL_POLARITIES) {
-            ClaimPolarity::Assert => Event::assert(key.clone(), vec![].into(), valid, sys),
+            ClaimPolarity::Assert => Event::assert(key.clone(), vec![], valid, sys),
             ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
             ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
         };
@@ -2652,7 +2646,7 @@ fn gen_temporal_existential_history(
         if rng.chance(2, 5) {
             let correction_sys = sys + rng.range(1, 5);
             history.push(
-                Event::assert(key.clone(), vec![].into(), valid, correction_sys)
+                Event::assert(key.clone(), vec![], valid, correction_sys)
                     .expect("coord_span keeps every draw far below the reserved terminal tick"),
             );
         }
@@ -2695,7 +2689,7 @@ fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
         let b = rng.range(0, n);
         edge_history.extend(gen_temporal_existential_history(
             rng,
-            &vec![v(a), v(b)].into(),
+            &vec![v(a), v(b)],
             &params,
         ));
     }
@@ -2707,18 +2701,13 @@ fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
     let mut seed_history = Vec::new();
     for &node in &nodes {
         if rng.chance(2, 3) {
-            let key: Tuple = vec![v(node)].into();
+            let key: Tuple = vec![v(node)];
             for _ in 0..rng.range(1, 4) {
                 let valid = rng.range(-params.coord_span, params.coord_span);
                 let sys = rng.range(-params.coord_span, params.coord_span);
                 seed_history.push(
-                    Event::assert(
-                        key.clone(),
-                        vec![meet_value(rng, meet_op)].into(),
-                        valid,
-                        sys,
-                    )
-                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                    Event::assert(key.clone(), vec![meet_value(rng, meet_op)], valid, sys)
+                        .expect("coord_span keeps every draw far below the reserved terminal tick"),
                 );
             }
         }
@@ -2753,10 +2742,7 @@ fn reachability_program(rng: &mut Rng, fx: &ReachabilityFixture) -> Program {
     histories.insert("hedge", fx.edge_history.clone());
     histories.insert("hseed", fx.seed_history.clone());
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert(
-        "node",
-        fx.nodes.iter().map(|&n| vec![v(n)].into()).collect(),
-    );
+    facts.insert("node", fx.nodes.iter().map(|&n| vec![v(n)]).collect());
 
     let mut rules = vec![
         // path(X,Y) :- hedge(X,Y) @c_edge.
@@ -2831,7 +2817,7 @@ fn brute_force_closure(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
         for e1 in &closure {
             for e2 in &closure {
                 if e1[1] == e2[0] {
-                    let candidate: Tuple = vec![e1[0].clone(), e2[1].clone()].into();
+                    let candidate: Tuple = vec![e1[0].clone(), e2[1].clone()];
                     if !closure.contains(&candidate) {
                         additions.push(candidate);
                     }
@@ -2852,7 +2838,7 @@ fn expected_unreachable(nodes: &[i64], edges: &BTreeSet<Tuple>) -> BTreeSet<Tupl
     let mut out = BTreeSet::new();
     for &a in nodes {
         for &b in nodes {
-            let t: Tuple = vec![v(a), v(b)].into();
+            let t: Tuple = vec![v(a), v(b)];
             if !edges.contains(&t) {
                 out.insert(t);
             }
@@ -2868,10 +2854,7 @@ fn expected_degree(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
     for e in edges {
         *counts.entry(e[0].clone()).or_insert(0) += 1;
     }
-    counts
-        .into_iter()
-        .map(|(k, c)| vec![k, v(c)].into())
-        .collect()
+    counts.into_iter().map(|(k, c)| vec![k, v(c)]).collect()
 }
 
 /// The reference for `m`: seed values propagated along `edges` to a
@@ -2922,9 +2905,7 @@ fn expected_meet(
             break;
         }
     }
-    acc.into_iter()
-        .map(|(k, val)| vec![k, val].into())
-        .collect()
+    acc.into_iter().map(|(k, val)| vec![k, val]).collect()
 }
 
 #[test]

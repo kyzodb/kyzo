@@ -137,7 +137,6 @@ impl FixedRule for ShortestPathDijkstra {
                                 .collect_vec(),
                         ),
                     ]
-                    .into()
                 })
                 .collect())
         })?;
@@ -422,7 +421,7 @@ mod tests {
     }
 
     fn e(a: &str, b: &str, w: f64) -> Tuple {
-        vec![s(a), s(b), DataValue::from(w)].into()
+        vec![s(a), s(b), DataValue::from(w)]
     }
 
     /// A deterministic pseudo-random weighted graph plus a many-node start
@@ -446,10 +445,10 @@ mod tests {
             }
         }
         edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
-        let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("n{i}"))].into()).collect();
+        let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("n{i}"))]).collect();
         let ends: Vec<Tuple> = (0..n)
             .step_by(7)
-            .map(|i| vec![s(&format!("n{i}"))].into())
+            .map(|i| vec![s(&format!("n{i}"))])
             .collect();
         vec![
             TestInput::new(vec!["fr", "to", "w"], edges),
@@ -500,8 +499,8 @@ mod tests {
                     vec!["fr", "to", "w"],
                     vec![e("a", "b", 10.0), e("a", "c", 1.0), e("c", "b", 1.0)],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("b")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("b")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -545,8 +544,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("d")]]),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -564,15 +563,13 @@ mod tests {
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ]
-            .into(),
+            ],
             vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("c"), s("d")]),
-            ]
-            .into(),
+            ],
         ];
         assert_eq!(got, want);
     }
@@ -590,8 +587,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("b")].into(), vec![s("d")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("b")], vec![s("d")]]),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -609,22 +606,19 @@ mod tests {
                 s("b"),
                 DataValue::from(1.0),
                 DataValue::List(vec![s("a"), s("b")]),
-            ]
-            .into(),
+            ],
             vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ]
-            .into(),
+            ],
             vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("c"), s("d")]),
-            ]
-            .into(),
+            ],
         ];
         assert_eq!(got, want);
     }
@@ -639,8 +633,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("d")]]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),

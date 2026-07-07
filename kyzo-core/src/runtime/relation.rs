@@ -629,7 +629,7 @@ impl RelationHandle {
                 span
             }
         );
-        Ok((&tuple[0..len]).encode_as_key(self.id))
+        Ok(tuple[0..len].encode_as_key(self.id))
     }
 
     /// Encode a key prefix (fewer columns than the full key) for prefix
@@ -1567,12 +1567,12 @@ mod tests {
     fn system_key_shapes() {
         let counter = SystemKey::IdCounter.encode();
         assert_eq!(&counter[..8], &[0u8; 8], "SYSTEM prefix");
-        let want_counter: Tuple = vec![DataValue::Null].into();
+        let want_counter: Tuple = vec![DataValue::Null];
         assert_eq!(decode_tuple_from_key(&counter, 1).unwrap(), want_counter);
 
         let rel = SystemKey::Relation("stored").encode();
         assert_eq!(&rel[..8], &[0u8; 8], "SYSTEM prefix");
-        let want_rel: Tuple = vec![DataValue::from("stored")].into();
+        let want_rel: Tuple = vec![DataValue::from("stored")];
         assert_eq!(decode_tuple_from_key(&rel, 1).unwrap(), want_rel);
 
         assert!(
@@ -1619,7 +1619,7 @@ mod tests {
 
         // Write and read a row through the handle.
         let span = SourceSpan(0, 0);
-        let row: Tuple = vec![DataValue::from(1), DataValue::from("one")].into();
+        let row: Tuple = vec![DataValue::from(1), DataValue::from("one")];
         let mut tx = db.write_tx().unwrap();
         a.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
@@ -1630,7 +1630,7 @@ mod tests {
         assert_eq!(a.get(&rtx, &row[..1]).unwrap(), Some(row.clone()));
         assert_eq!(
             a.get_val_only(&rtx, &row[..1]).unwrap(),
-            Some(vec![DataValue::from("one")].into())
+            Some(vec![DataValue::from("one")])
         );
         let scanned: Vec<Tuple> = a.scan_all(&rtx).map(|t| t.unwrap()).collect();
         assert_eq!(scanned, vec![row.clone()]);
@@ -1876,7 +1876,7 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
-        let row: Tuple = vec![DataValue::from(5), DataValue::from("five")].into();
+        let row: Tuple = vec![DataValue::from(5), DataValue::from("five")];
         rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
         rename_relation(

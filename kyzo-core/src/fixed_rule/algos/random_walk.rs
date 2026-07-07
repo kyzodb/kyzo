@@ -166,14 +166,11 @@ impl FixedRule for RandomWalk {
                     })??;
                     cancel.check()?;
                 }
-                out.put(
-                    vec![
-                        DataValue::from(counter),
-                        start_node_key.clone(),
-                        DataValue::List(path),
-                    ]
-                    .into(),
-                )?;
+                out.put(vec![
+                    DataValue::from(counter),
+                    start_node_key.clone(),
+                    DataValue::List(path),
+                ])?;
             }
         }
         Ok(())
@@ -225,10 +222,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to"],
-                    vec![vec![s("a"), s("b")].into(), vec![s("b"), s("a")].into()],
+                    vec![vec![s("a"), s("b")], vec![s("b"), s("a")]],
                 ),
-                TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
             ],
             options,
             CancelFlag::default(),
@@ -253,10 +250,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to"],
-                    vec![vec![s("a"), s("b")].into(), vec![s("b"), s("a")].into()],
+                    vec![vec![s("a"), s("b")], vec![s("b"), s("a")]],
                 ),
-                TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
             ],
             options,
             CancelFlag::default(),
@@ -284,21 +281,16 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")].into(),
-                        vec![s("b"), s("c")].into(),
-                        vec![s("c"), s("d")].into(),
+                        vec![s("a"), s("b")],
+                        vec![s("b"), s("c")],
+                        vec![s("c"), s("d")],
                     ],
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![
-                        vec![s("a")].into(),
-                        vec![s("b")].into(),
-                        vec![s("c")].into(),
-                        vec![s("d")].into(),
-                    ],
+                    vec![vec![s("a")], vec![s("b")], vec![s("c")], vec![s("d")]],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
             ]
         };
         let steps_opt = |n: i64| {
@@ -322,14 +314,11 @@ mod tests {
                 CancelFlag::default(),
             )
             .unwrap();
-            let want: Vec<Tuple> = vec![
-                vec![
-                    DataValue::from(1i64),
-                    s("a"),
-                    DataValue::List(expected_path),
-                ]
-                .into(),
-            ];
+            let want: Vec<Tuple> = vec![vec![
+                DataValue::from(1i64),
+                s("a"),
+                DataValue::List(expected_path),
+            ]];
             assert_eq!(got, want, "steps = {steps}");
         }
     }
@@ -346,11 +335,11 @@ mod tests {
             // A ring plus a chord from each node, so every node branches.
             let mut edges: Vec<Tuple> = vec![];
             for i in 0..n {
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))].into());
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))].into());
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]);
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))]);
             }
-            let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
-            let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
+            let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
+            let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
             vec![
                 TestInput::new(vec!["fr", "to"], edges),
                 TestInput::new(vec!["id"], nodes),
@@ -395,14 +384,14 @@ mod tests {
             let n = 8usize;
             let mut edges: Vec<Tuple> = vec![];
             for i in 0..n {
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))].into());
-                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))].into());
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]);
+                edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))]);
             }
-            let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
+            let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
             vec![
                 TestInput::new(vec!["fr", "to"], edges),
                 TestInput::new(vec!["id"], nodes),
-                TestInput::new(vec!["start"], vec![vec![s("v0")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("v0")]]),
             ]
         };
         let opts = |seed: i64| {
@@ -446,14 +435,14 @@ mod tests {
         let n = 6usize;
         let mut edges: Vec<Tuple> = vec![];
         for i in 0..n {
-            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))].into());
-            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 2) % n))].into());
+            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]);
+            edges.push(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 2) % n))]);
         }
-        let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))].into()).collect();
+        let nodes: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("v{i}"))]).collect();
         let inputs = vec![
             TestInput::new(vec!["fr", "to"], edges),
             TestInput::new(vec!["id"], nodes),
-            TestInput::new(vec!["start"], vec![vec![s("v0")].into()]),
+            TestInput::new(vec!["start"], vec![vec![s("v0")]]),
         ];
         let opts = BTreeMap::from([(
             SmartString::from("steps"),
@@ -463,14 +452,11 @@ mod tests {
             },
         )]);
         let got = run_fixed_rule(&RandomWalk, inputs, opts, CancelFlag::default()).unwrap();
-        let want: Vec<Tuple> = vec![
-            vec![
-                DataValue::from(1i64),
-                s("v0"),
-                DataValue::List(vec![s("v0"), s("v1"), s("v3"), s("v4"), s("v0")]),
-            ]
-            .into(),
-        ];
+        let want: Vec<Tuple> = vec![vec![
+            DataValue::from(1i64),
+            s("v0"),
+            DataValue::List(vec![s("v0"), s("v1"), s("v3"), s("v4"), s("v0")]),
+        ]];
         assert_eq!(got, want);
     }
 }

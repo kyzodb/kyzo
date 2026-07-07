@@ -131,7 +131,7 @@ fn no_params() -> BTreeMap<String, DataValue> {
 // ── germanstr_eq: the primitive, in memory, no engine ───────────────────
 
 fn make_keys(n: u64, make: fn(u64) -> String) -> Vec<DataValue> {
-    (0..n).map(|i| DataValue::Str(make(i).into())).collect()
+    (0..n).map(|i| DataValue::Str(make(i))).collect()
 }
 
 fn bench_germanstr_eq(c: &mut Criterion) {

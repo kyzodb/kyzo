@@ -1855,18 +1855,18 @@ fn test_vec_rejects_trailing_bytes() {
     use base64::engine::general_purpose::STANDARD;
     // 5 bytes: one whole f32 plus one trailing byte.
     let b64 = STANDARD.encode([0u8, 0, 128, 63, 7]);
-    assert!(op_vec(&[DataValue::Str(b64.into())]).is_err());
+    assert!(op_vec(&[DataValue::Str(b64)]).is_err());
     // 4 bytes decode cleanly to one f32 (1.0, little-endian).
     let ok = STANDARD.encode([0u8, 0, 128, 63]);
-    match op_vec(&[DataValue::Str(ok.into())]).unwrap() {
+    match op_vec(&[DataValue::Str(ok)]).unwrap() {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
         other => panic!("expected vector, got {other:?}"),
     }
     // The F64 path is equally strict: 9 bytes is one f64 plus trailing.
     let bad64 = STANDARD.encode([0u8; 9]);
-    assert!(op_vec(&[DataValue::Str(bad64.into()), DataValue::Str("F64".into())]).is_err());
+    assert!(op_vec(&[DataValue::Str(bad64), DataValue::Str("F64".into())]).is_err());
     let ok64 = STANDARD.encode([0u8; 8]);
-    match op_vec(&[DataValue::Str(ok64.into()), DataValue::Str("F64".into())]).unwrap() {
+    match op_vec(&[DataValue::Str(ok64), DataValue::Str("F64".into())]).unwrap() {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
         other => panic!("expected vector, got {other:?}"),
     }

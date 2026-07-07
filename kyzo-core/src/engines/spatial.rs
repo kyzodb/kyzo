@@ -636,7 +636,7 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         ))
     })?;
     Ok(Posting {
-        src_key: row[1..=base_key_len].to_vec().into(),
+        src_key: row[1..=base_key_len].to_vec(),
         lat,
         lon,
     })

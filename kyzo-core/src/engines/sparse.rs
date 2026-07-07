@@ -343,7 +343,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
             "sparse posting weight is not a finite non-negative float",
         ));
     }
-    Ok((row[1..=base_key_len].to_vec().into(), weight))
+    Ok((row[1..=base_key_len].to_vec(), weight))
 }
 
 /// The parameters of one sparse search; the RA operator tier constructs this

@@ -101,7 +101,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
     (0..n)
         .map(|k| {
             let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))].into()
+            vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))]
         })
         .collect()
 }
@@ -501,29 +501,24 @@ fn oracle_is_exact_and_total_ordered() {
         vec![
             DataValue::from(0),
             DataValue::Vector(Vector::new(vec![3.0, 0.0])),
-        ]
-        .into(),
+        ],
         vec![
             DataValue::from(1),
             DataValue::Vector(Vector::new(vec![0.1, 0.0])),
-        ]
-        .into(),
+        ],
         vec![
             DataValue::from(2),
             DataValue::Vector(Vector::new(vec![1.0, 0.0])),
-        ]
-        .into(),
+        ],
         vec![
             DataValue::from(3),
             DataValue::Vector(Vector::new(vec![0.2, 0.0])),
-        ]
-        .into(),
+        ],
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         vec![
             DataValue::from(4),
             DataValue::Vector(Vector::new(vec![-1.0, 0.0])),
-        ]
-        .into(),
+        ],
     ];
     let q = Vector::new(vec![0.0, 0.0]);
     let even = FilterSpec::ModLessThan {
@@ -871,7 +866,7 @@ fn engine_ordering_is_total_under_ties() {
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
-            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))].into()
+            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))]
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
@@ -1054,7 +1049,6 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
                 DataValue::from(k),
                 DataValue::Vector(Vector::new(v.clone())),
             ]
-            .into()
         })
         .collect();
     (n, half, rows)
@@ -1405,7 +1399,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
-            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))].into()
+            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))]
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();

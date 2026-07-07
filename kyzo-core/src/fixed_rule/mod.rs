@@ -313,7 +313,7 @@ impl<'a> FixedRuleInputRelation<'a> {
                         name.as_plain_symbol().span,
                     )
                 })?;
-                let t: Tuple = vec![prefix.clone()].into();
+                let t: Tuple = vec![prefix.clone()];
                 Box::new(store.prefix_iter(&t).map(|t| Ok(t.into_tuple())))
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
@@ -794,7 +794,7 @@ mod fixed_rule_output_budget_tests {
     use crate::data::value::DataValue;
 
     fn row(i: i64) -> Tuple {
-        vec![DataValue::from(i), DataValue::from(i)].into()
+        vec![DataValue::from(i), DataValue::from(i)]
     }
 
     /// A fixed rule that floods its output refuses mid-run, typed, once its
@@ -1428,10 +1428,10 @@ mod tests {
     #[test]
     fn output_writer_rejects_wrong_arity() {
         let mut out = FixedRuleOutput::new(2, SourceSpan::default());
-        out.put(vec![s("a"), s("b")].into()).unwrap();
-        let err = out.put(vec![s("a")].into()).unwrap_err();
+        out.put(vec![s("a"), s("b")]).unwrap();
+        let err = out.put(vec![s("a")]).unwrap_err();
         assert!(err.to_string().contains("arity 2"), "{err}");
-        let err = out.put(vec![s("a"), s("b"), s("c")].into()).unwrap_err();
+        let err = out.put(vec![s("a"), s("b"), s("c")]).unwrap_err();
         assert!(err.to_string().contains("width 3"), "{err}");
     }
 
@@ -1455,7 +1455,7 @@ mod tests {
                 out: &mut FixedRuleOutput,
                 _cancel: CancelFlag,
             ) -> Result<()> {
-                out.put(vec![DataValue::from(1i64)].into())?; // declared 3, wrote 1
+                out.put(vec![DataValue::from(1i64)])?; // declared 3, wrote 1
                 Ok(())
             }
         }
@@ -1470,7 +1470,7 @@ mod tests {
         let rule = SimpleFixedRule::new(2, |_inputs, _opts| {
             Ok(NamedRows::new(
                 vec!["a".to_string()],
-                vec![vec![DataValue::from(1i64)].into()], // width 1, declared 2
+                vec![vec![DataValue::from(1i64)]], // width 1, declared 2
             ))
         });
         let res = run_fixed_rule(&rule, vec![], BTreeMap::new(), CancelFlag::default());
@@ -1485,15 +1485,12 @@ mod tests {
         });
         let got = run_fixed_rule(
             &rule,
-            vec![TestInput::new(
-                vec!["x"],
-                vec![vec![s("p")].into(), vec![s("q")].into()],
-            )],
+            vec![TestInput::new(vec!["x"], vec![vec![s("p")], vec![s("q")]])],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![vec![s("p")].into(), vec![s("q")].into()];
+        let want: Vec<Tuple> = vec![vec![s("p")], vec![s("q")]];
         assert_eq!(got, want);
     }
 
@@ -1523,9 +1520,9 @@ mod tests {
         let res = run_fixed_rule(
             &Bfs,
             vec![
-                TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
-                TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
+                TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
             ],
             BTreeMap::from([(
                 SmartString::from("condition"),
@@ -1577,12 +1574,12 @@ mod tests {
         });
         let got = run_fixed_rule(
             &rule,
-            vec![TestInput::new(vec!["x"], vec![vec![s("z")].into()])],
+            vec![TestInput::new(vec!["x"], vec![vec![s("z")]])],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![vec![s("z")].into()];
+        let want: Vec<Tuple> = vec![vec![s("z")]];
         assert_eq!(got, want);
         handle.join().unwrap();
     }
@@ -1647,7 +1644,7 @@ mod tests {
                 let (gw, _, _) = rel.as_directed_weighted_graph(false, false)?;
                 let w: Vec<_> = gw.out_neighbors_with_values(0).map(|t| t.value).collect();
                 assert_eq!(w, vec![1.0]); // absent third column defaults to 1.0
-                out.put(vec![DataValue::from(true)].into())?;
+                out.put(vec![DataValue::from(true)])?;
                 Ok(())
             }
         }
@@ -1656,8 +1653,8 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![DataValue::from("a"), DataValue::from("b")].into(),
-                    vec![DataValue::from("b"), DataValue::from("c")].into(),
+                    vec![DataValue::from("a"), DataValue::from("b")],
+                    vec![DataValue::from("b"), DataValue::from("c")],
                 ],
             )],
             BTreeMap::new(),
@@ -1688,10 +1685,7 @@ mod tests {
         }
         let err = run_fixed_rule(
             &BadEdge,
-            vec![TestInput::new(
-                vec!["x"],
-                vec![vec![DataValue::from("a")].into()],
-            )],
+            vec![TestInput::new(vec!["x"], vec![vec![DataValue::from("a")]])],
             BTreeMap::new(),
             CancelFlag::default(),
         )
@@ -1703,7 +1697,7 @@ mod tests {
             &BadWeight,
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
-                vec![vec![s("a"), s("b"), DataValue::from(f64::NAN)].into()],
+                vec![vec![s("a"), s("b"), DataValue::from(f64::NAN)]],
             )],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -1758,7 +1752,7 @@ mod tests {
         };
 
         fn e(a: &str, b: &str, w: f64) -> Tuple {
-            vec![s(a), s(b), DataValue::from(w)].into()
+            vec![s(a), s(b), DataValue::from(w)]
         }
         fn const_expr(v: DataValue) -> Expr {
             Expr::Const {
@@ -1772,7 +1766,7 @@ mod tests {
         // included — so removing just the one guard under test lets
         // execution reach the real indexing site instead of stopping on
         // some unrelated missing-input/-option error.
-        let nullary = || TestInput::new(vec![], vec![vec![].into()]);
+        let nullary = || TestInput::new(vec![], vec![vec![]]);
 
         let cases: Vec<(&str, Result<Vec<Tuple>>)> = vec![
             (
@@ -1782,7 +1776,7 @@ mod tests {
                     vec![
                         TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
                         nullary(),
-                        TestInput::new(vec!["end"], vec![vec![s("b")].into()]),
+                        TestInput::new(vec!["end"], vec![vec![s("b")]]),
                     ],
                     BTreeMap::new(),
                     CancelFlag::default(),
@@ -1795,7 +1789,7 @@ mod tests {
                     vec![
                         TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
                         nullary(),
-                        TestInput::new(vec!["end"], vec![vec![s("b")].into()]),
+                        TestInput::new(vec!["end"], vec![vec![s("b")]]),
                     ],
                     BTreeMap::from([(SmartString::from("k"), const_expr(DataValue::from(1i64)))]),
                     CancelFlag::default(),
@@ -1806,10 +1800,10 @@ mod tests {
                 run_fixed_rule(
                     &ShortestPathAStar,
                     vec![
-                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
-                        TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
                         nullary(),
-                        TestInput::new(vec!["goal"], vec![vec![s("b")].into()]),
+                        TestInput::new(vec!["goal"], vec![vec![s("b")]]),
                     ],
                     BTreeMap::from([(
                         SmartString::from("heuristic"),
@@ -1823,8 +1817,8 @@ mod tests {
                 run_fixed_rule(
                     &Bfs,
                     vec![
-                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
-                        TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
                         nullary(),
                     ],
                     BTreeMap::from([(
@@ -1839,8 +1833,8 @@ mod tests {
                 run_fixed_rule(
                     &Dfs,
                     vec![
-                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
-                        TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
                         nullary(),
                     ],
                     BTreeMap::from([(
@@ -1857,7 +1851,7 @@ mod tests {
                     vec![
                         TestInput::new(vec!["fr", "to", "w"], vec![e("a", "b", 1.0)]),
                         nullary(),
-                        TestInput::new(vec!["sink"], vec![vec![s("b")].into()]),
+                        TestInput::new(vec!["sink"], vec![vec![s("b")]]),
                     ],
                     BTreeMap::new(),
                     CancelFlag::default(),
@@ -1883,7 +1877,7 @@ mod tests {
                 run_fixed_rule(
                     &DegreeCentrality,
                     vec![
-                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
                         nullary(),
                     ],
                     BTreeMap::new(),
@@ -1895,8 +1889,8 @@ mod tests {
                 run_fixed_rule(
                     &RandomWalk,
                     vec![
-                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
-                        TestInput::new(vec!["id"], vec![vec![s("a")].into(), vec![s("b")].into()]),
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
+                        TestInput::new(vec!["id"], vec![vec![s("a")], vec![s("b")]]),
                         nullary(),
                     ],
                     BTreeMap::from([(
@@ -1911,7 +1905,7 @@ mod tests {
                 run_fixed_rule(
                     &StronglyConnectedComponent::new(true),
                     vec![
-                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")].into()]),
+                        TestInput::new(vec!["fr", "to"], vec![vec![s("a"), s("b")]]),
                         nullary(),
                     ],
                     BTreeMap::new(),
@@ -1946,8 +1940,8 @@ mod tests {
         let named = NamedRows::new(
             vec!["n".into(), "name".into()],
             vec![
-                vec![DataValue::from(1), s("a")].into(),
-                vec![DataValue::from(2), s("b")].into(),
+                vec![DataValue::from(1), s("a")],
+                vec![DataValue::from(2), s("b")],
             ],
         );
         let bytes = named
@@ -1960,7 +1954,7 @@ mod tests {
     fn to_arrow_ipc_refuses_a_heterogeneous_column() {
         let named = NamedRows::new(
             vec!["mixed".into()],
-            vec![vec![DataValue::from(1)].into(), vec![s("x")].into()],
+            vec![vec![DataValue::from(1)], vec![s("x")]],
         );
         let err = named.to_arrow_ipc().unwrap_err();
         assert!(

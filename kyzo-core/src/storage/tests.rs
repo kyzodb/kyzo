@@ -229,7 +229,7 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         any::<bool>().prop_map(DataValue::Bool),
         any::<i64>().prop_map(|i| DataValue::Num(Num::int(i))),
         any::<f64>().prop_map(|f| DataValue::Num(Num::float(f))),
-        "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s.into())),
+        "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s)),
         // Json's Ord and encoding both reduce to the serialized string, but
         // the reduction is an argument, not a law — fuzz it like the rest.
         "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::json::json_from_serde(
@@ -513,7 +513,7 @@ fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
             is_assert: Reverse(true),
         })
     };
-    let tuple: Tuple = vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)].into();
+    let tuple: Tuple = vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)];
     tuple.encode_as_key(rel)
 }
 
@@ -714,8 +714,7 @@ fn stamped_row(
         DataValue::Str(name.into()),
         slot(ValidityTs::from_raw(valid_ts)),
         slot(sys),
-    ]
-    .into();
+    ];
     (tuple.encode_as_key(rel), pol_val(rel, true))
 }
 
@@ -3090,7 +3089,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
             timestamp: stamp,
             is_assert: Reverse(true),
         });
-        let tuple: Tuple = vec![DataValue::from(0), slot.clone(), slot].into();
+        let tuple: Tuple = vec![DataValue::from(0), slot.clone(), slot];
         tuple.encode_as_key(rel)
     };
     let current = |rows: Vec<Tuple>| -> i64 {

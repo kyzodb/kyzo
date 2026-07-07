@@ -991,10 +991,7 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            if v.as_slice()
-                .iter()
-                .any(|x| !(-1.0..=1.0).contains(&(*x as f64)))
-            {
+            if v.as_slice().iter().any(|x| !(-1.0..=1.0).contains(&{ *x })) {
                 bail!(DomainError { op: "asin".into() });
             }
             return no_nan_vec("asin", v.as_slice().iter().map(|x| x.asin()).collect());
@@ -1014,10 +1011,7 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            if v.as_slice()
-                .iter()
-                .any(|x| !(-1.0..=1.0).contains(&(*x as f64)))
-            {
+            if v.as_slice().iter().any(|x| !(-1.0..=1.0).contains(&{ *x })) {
                 bail!(DomainError { op: "acos".into() });
             }
             return no_nan_vec("acos", v.as_slice().iter().map(|x| x.acos()).collect());
@@ -1121,7 +1115,7 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            if v.as_slice().iter().any(|x| (*x as f64) < 1.0) {
+            if v.as_slice().iter().any(|x| *x < 1.0) {
                 bail!(DomainError { op: "acosh".into() });
             }
             return no_nan_vec("acosh", v.as_slice().iter().map(|x| x.acosh()).collect());
@@ -1141,7 +1135,7 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            if v.as_slice().iter().any(|x| (*x as f64).abs() >= 1.0) {
+            if v.as_slice().iter().any(|x| (*x).abs() >= 1.0) {
                 bail!(DomainError { op: "atanh".into() });
             }
             return no_nan_vec("atanh", v.as_slice().iter().map(|x| x.atanh()).collect());
@@ -1592,7 +1586,7 @@ pub(crate) fn op_regex_extract_first(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_T2S, 1, false, true);
 fn op_t2s(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Str(s) => DataValue::Str(fast2s::convert(s).into()),
+        DataValue::Str(s) => DataValue::Str(fast2s::convert(s)),
         d => d.clone(),
     })
 }
@@ -2154,7 +2148,7 @@ pub(crate) fn op_to_float(args: &[DataValue]) -> Result<DataValue> {
 
 define_op!(OP_TO_STRING, 1, false, true);
 pub(crate) fn op_to_string(args: &[DataValue]) -> Result<DataValue> {
-    Ok(DataValue::Str(val2str(&args[0]).into()))
+    Ok(DataValue::Str(val2str(&args[0])))
 }
 
 fn val2str(arg: &DataValue) -> String {

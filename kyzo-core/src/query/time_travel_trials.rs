@@ -363,10 +363,10 @@ fn naive_asof_cfg(
             // `ver.ts` is a small, bounded generated/fixture timestamp
             // throughout this file: never the reserved terminal tick.
             if ver.assert {
-                laws::Event::assert(key.into(), ver.vals.clone().into(), ver.ts, sys)
+                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
                     .expect("version timestamps in this file are never the reserved terminal tick")
             } else {
-                laws::Event::retract(key.into(), ver.ts, sys)
+                laws::Event::retract(key, ver.ts, sys)
                     .expect("version timestamps in this file are never the reserved terminal tick")
             }
         })
@@ -1593,9 +1593,9 @@ fn events_of(versions: &[Version], sys_stamps: &[i64]) -> Vec<laws::Event> {
         .map(|(ver, &sys)| {
             let key: Tuple = ver.key.iter().copied().map(v).collect();
             if ver.assert {
-                laws::Event::assert(key.into(), ver.vals.clone().into(), ver.ts, sys)
+                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
             } else {
-                laws::Event::retract(key.into(), ver.ts, sys)
+                laws::Event::retract(key, ver.ts, sys)
             }
             .expect("fixture valid instants are never the reserved terminal tick")
         })
@@ -1918,8 +1918,8 @@ fn delta_composition_law_holds_through_the_real_engine() {
                 .map(|mut row| {
                     let sgn = row.pop().expect("row carries a sign column");
                     match sgn.get_int() {
-                        Some(1) => laws::SignedFact::Plus(row.into()),
-                        Some(-1) => laws::SignedFact::Minus(row.into()),
+                        Some(1) => laws::SignedFact::Plus(row),
+                        Some(-1) => laws::SignedFact::Minus(row),
                         other => panic!("unexpected sign column: {other:?}"),
                     }
                 })
@@ -1981,8 +1981,8 @@ fn production_compose_matches_the_composition_law_on_real_engine_output() {
                 .map(|mut row| {
                     let sgn = row.pop().expect("row carries a sign column");
                     match sgn.get_int() {
-                        Some(1) => temporal::SignedFact::Plus(row.into()),
-                        Some(-1) => temporal::SignedFact::Minus(row.into()),
+                        Some(1) => temporal::SignedFact::Plus(row),
+                        Some(-1) => temporal::SignedFact::Minus(row),
                         other => panic!("unexpected sign column: {other:?}"),
                     }
                 })

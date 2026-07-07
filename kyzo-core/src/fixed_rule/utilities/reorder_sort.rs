@@ -131,7 +131,7 @@ impl FixedRule for ReorderSort {
                 continue;
             }
             let mut out_t: Tuple =
-                vec![DataValue::from(if break_ties { count } else { rank } as i64)].into();
+                vec![DataValue::from(if break_ties { count } else { rank } as i64)];
             out_t.extend(val[0..val.len() - 1].iter().cloned());
             out.put(out_t)?;
             cancel.check()?;
@@ -217,11 +217,11 @@ mod tests {
     #[test]
     fn sorts_mixed_types_per_datavalue_order() {
         let rows: Vec<Tuple> = vec![
-            vec![s("n"), DataValue::Null].into(),
-            vec![s("b"), DataValue::from(false)].into(),
-            vec![s("h"), DataValue::from(0.5)].into(),
-            vec![s("i"), DataValue::from(1i64)].into(),
-            vec![s("s"), DataValue::from("str")].into(),
+            vec![s("n"), DataValue::Null],
+            vec![s("b"), DataValue::from(false)],
+            vec![s("h"), DataValue::from(0.5)],
+            vec![s("i"), DataValue::from(1i64)],
+            vec![s("s"), DataValue::from("str")],
         ];
         let got = run_fixed_rule(
             &ReorderSort,
@@ -232,11 +232,11 @@ mod tests {
         .unwrap();
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
-            vec![i(1), s("n")].into(), // Null
-            vec![i(2), s("b")].into(), // Bool(false)
-            vec![i(3), s("h")].into(), // Num(0.5)
-            vec![i(4), s("i")].into(), // Num(1)
-            vec![i(5), s("s")].into(), // Str
+            vec![i(1), s("n")], // Null
+            vec![i(2), s("b")], // Bool(false)
+            vec![i(3), s("h")], // Num(0.5)
+            vec![i(4), s("i")], // Num(1)
+            vec![i(5), s("s")], // Str
         ];
         assert_eq!(got, want);
     }
@@ -255,9 +255,9 @@ mod tests {
     fn rank_ties_and_descending() {
         let rows = || -> Vec<Tuple> {
             vec![
-                vec![s("a"), DataValue::from(1i64)].into(),
-                vec![s("b"), DataValue::from(1i64)].into(),
-                vec![s("c"), DataValue::from(2i64)].into(),
+                vec![s("a"), DataValue::from(1i64)],
+                vec![s("b"), DataValue::from(1i64)],
+                vec![s("c"), DataValue::from(2i64)],
             ]
         };
         let i = |v: i64| DataValue::from(v);
@@ -269,11 +269,7 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![
-            vec![i(1), s("a")].into(),
-            vec![i(1), s("b")].into(),
-            vec![i(3), s("c")].into(),
-        ];
+        let want: Vec<Tuple> = vec![vec![i(1), s("a")], vec![i(1), s("b")], vec![i(3), s("c")]];
         assert_eq!(got, want);
 
         let got = run_fixed_rule(
@@ -283,11 +279,7 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![
-            vec![i(1), s("a")].into(),
-            vec![i(2), s("b")].into(),
-            vec![i(3), s("c")].into(),
-        ];
+        let want: Vec<Tuple> = vec![vec![i(1), s("a")], vec![i(2), s("b")], vec![i(3), s("c")]];
         assert_eq!(got, want);
 
         let got = run_fixed_rule(
@@ -297,11 +289,7 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![
-            vec![i(1), s("c")].into(),
-            vec![i(2), s("a")].into(),
-            vec![i(2), s("b")].into(),
-        ];
+        let want: Vec<Tuple> = vec![vec![i(1), s("c")], vec![i(2), s("a")], vec![i(2), s("b")]];
         assert_eq!(got, want);
     }
 
@@ -315,9 +303,9 @@ mod tests {
             vec![TestInput::new(
                 vec!["id", "k"],
                 vec![
-                    vec![s("a"), DataValue::from(1i64)].into(),
-                    vec![s("b"), DataValue::from(2i64)].into(),
-                    vec![s("c"), DataValue::from(3i64)].into(),
+                    vec![s("a"), DataValue::from(1i64)],
+                    vec![s("b"), DataValue::from(2i64)],
+                    vec![s("c"), DataValue::from(3i64)],
                 ],
             )],
             opts(&[
@@ -327,7 +315,7 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![vec![DataValue::from(2i64), s("b")].into()];
+        let want: Vec<Tuple> = vec![vec![DataValue::from(2i64), s("b")]];
         assert_eq!(got, want);
     }
 }

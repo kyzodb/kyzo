@@ -223,7 +223,7 @@ impl StoredRA {
                                 }
                             }
                             if matches {
-                                return Ok(Box::new(iter::once(Ok(found.to_vec().into()))));
+                                return Ok(Box::new(iter::once(Ok(found.to_vec()))));
                             }
                         }
                         Ok(Box::new(iter::empty()))
@@ -297,7 +297,7 @@ impl StoredRA {
                                     .collect();
                                 let s = s.clone();
                                 let range = s.prefix_range(&prefix);
-                                Box::new(range.map(move |i| Ok(s.row(i).to_vec().into())))
+                                Box::new(range.map(move |i| Ok(s.row(i).to_vec())))
                             }
                             None => self.storage.scan_prefix_projected(
                                 tx,

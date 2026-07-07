@@ -678,7 +678,7 @@ impl HnswRow {
                 )),
             };
             Ok(VectorId {
-                tuple_key: tuple[start..start + kl].to_vec().into(),
+                tuple_key: tuple[start..start + kl].to_vec(),
                 field: field as usize,
                 sub,
             })
@@ -785,7 +785,7 @@ impl IndexVec {
         // through f32 precision (the graph's stored working precision
         // until #122's quantized residency owns this decision).
         let mut components: Vec<f64> = match manifest.dtype {
-            VecElementType::F32 => v.as_slice().iter().map(|&x| x as f64 as f64).collect(),
+            VecElementType::F32 => v.as_slice().iter().map(|&x| x as f64).collect(),
             VecElementType::F64 => v.as_slice().to_vec(),
         };
         if !components.iter().all(|x| x.is_finite()) {
@@ -903,7 +903,7 @@ impl<'m> VectorCache<'m> {
         }
         match field {
             DataValue::Vector(v) => {
-                let admitted = IndexVec::admit(&v, self.manifest)?;
+                let admitted = IndexVec::admit(v, self.manifest)?;
                 self.cache.insert(id.clone(), admitted);
                 Ok(())
             }
@@ -1721,7 +1721,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             DataValue::Vector(v) => extracted.push((
                 IndexVec::admit(v, manifest)?,
                 VectorId {
-                    tuple_key: tuple[..key_len].to_vec().into(),
+                    tuple_key: tuple[..key_len].to_vec(),
                     field: *field,
                     sub: None,
                 },
@@ -1732,7 +1732,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
                         extracted.push((
                             IndexVec::admit(v, manifest)?,
                             VectorId {
-                                tuple_key: tuple[..key_len].to_vec().into(),
+                                tuple_key: tuple[..key_len].to_vec(),
                                 field: *field,
                                 sub: Some(sub),
                             },
@@ -2697,7 +2697,7 @@ mod tests {
     }
 
     fn row(k: i64, x: f64, y: f64) -> Tuple {
-        vec![DataValue::from(k), vec2(x, y)].into()
+        vec![DataValue::from(k), vec2(x, y)]
     }
 
     /// A base relation and its HNSW index relation on a real store.
@@ -2755,7 +2755,7 @@ mod tests {
         for _ in 0..dim {
             let bits = splitmix64(state);
             let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
-            v.push((unit * 2.0 - 1.0) as f64);
+            v.push((unit * 2.0 - 1.0));
         }
         DataValue::Vector(Vector::new(v))
     }
@@ -3289,7 +3289,7 @@ mod tests {
                         .iter()
                         .zip(v.iter())
                         .map(|(a, b)| {
-                            let diff = (*a - *b) as f64;
+                            let diff = (*a - *b);
                             diff * diff
                         })
                         .sum();
@@ -3676,12 +3676,12 @@ mod tests {
     fn row_kinds_round_trip() {
         let kl = 1usize;
         let at = VectorId {
-            tuple_key: vec![DataValue::from(7)].into(),
+            tuple_key: vec![DataValue::from(7)],
             field: 1,
             sub: None,
         };
         let other = VectorId {
-            tuple_key: vec![DataValue::from(8)].into(),
+            tuple_key: vec![DataValue::from(8)],
             field: 1,
             sub: Some(2),
         };
@@ -3745,7 +3745,7 @@ mod tests {
     fn corrupt_rows_are_typed_errors() {
         // Well-formed tuple, wrong shape: node degree slot holds a string.
         let at = VectorId {
-            tuple_key: vec![DataValue::from(7)].into(),
+            tuple_key: vec![DataValue::from(7)],
             field: 1,
             sub: None,
         };
@@ -3842,7 +3842,7 @@ mod tests {
     fn hnsw_level_is_deterministic_and_geometric() {
         let m = manifest(HnswDistance::L2);
         let id_of = |k: i64| VectorId {
-            tuple_key: vec![DataValue::from(k)].into(),
+            tuple_key: vec![DataValue::from(k)],
             field: 1,
             sub: None,
         };

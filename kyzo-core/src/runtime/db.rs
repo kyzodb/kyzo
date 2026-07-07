@@ -643,7 +643,7 @@ impl<S: Storage> Db<S> {
                 } else {
                     Ok(NamedRows::new(
                         vec!["status".to_string()],
-                        vec![vec![DataValue::from("OK")].into()],
+                        vec![vec![DataValue::from("OK")]],
                     ))
                 }
             }
@@ -697,14 +697,11 @@ impl<S: Storage> Db<S> {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
                 let mut rows = vec![];
                 for handle in list_relations(&tx.store)? {
-                    rows.push(
-                        vec![
-                            DataValue::from(handle.name.as_str()),
-                            DataValue::from(handle.arity() as i64),
-                            DataValue::from(format!("{:?}", handle.access_level)),
-                        ]
-                        .into(),
-                    );
+                    rows.push(vec![
+                        DataValue::from(handle.name.as_str()),
+                        DataValue::from(handle.arity() as i64),
+                        DataValue::from(format!("{:?}", handle.access_level)),
+                    ]);
                 }
                 Ok(NamedRows::new(
                     vec!["name".into(), "arity".into(), "access_level".into()],
@@ -722,9 +719,10 @@ impl<S: Storage> Db<S> {
                     .map(|c| (c, true))
                     .chain(handle.metadata.non_keys.iter().map(|c| (c, false)))
                 {
-                    rows.push(
-                        vec![DataValue::from(col.0.name.as_str()), DataValue::from(col.1)].into(),
-                    );
+                    rows.push(vec![
+                        DataValue::from(col.0.name.as_str()),
+                        DataValue::from(col.1),
+                    ]);
                 }
                 Ok(NamedRows::new(vec!["column".into(), "is_key".into()], rows))
             }
@@ -732,7 +730,7 @@ impl<S: Storage> Db<S> {
                 let rows = self
                     .fixed_rules()
                     .keys()
-                    .map(|k| vec![DataValue::from(k.as_str())].into())
+                    .map(|k| vec![DataValue::from(k.as_str())])
                     .collect();
                 Ok(NamedRows::new(vec!["name".into()], rows))
             }
@@ -747,7 +745,7 @@ impl<S: Storage> Db<S> {
                     .chain(handle.rm_triggers.iter().map(|s| ("on_rm", s)))
                     .chain(handle.replace_triggers.iter().map(|s| ("on_replace", s)))
                 {
-                    rows.push(vec![DataValue::from(kind), DataValue::from(src.as_str())].into());
+                    rows.push(vec![DataValue::from(kind), DataValue::from(src.as_str())]);
                 }
                 Ok(NamedRows::new(vec!["kind".into(), "source".into()], rows))
             }
@@ -811,7 +809,7 @@ impl<S: Storage> Db<S> {
                 };
                 Ok(NamedRows::new(
                     vec!["root".into()],
-                    vec![vec![DataValue::from(root.to_hex())].into()],
+                    vec![vec![DataValue::from(root.to_hex())]],
                 ))
             }
 
@@ -839,7 +837,7 @@ impl<S: Storage> Db<S> {
                             crate::runtime::relation::IndexKind::Fts(..) => "fts",
                             crate::runtime::relation::IndexKind::Lsh { .. } => "lsh",
                         };
-                        vec![DataValue::from(r.name.as_str()), DataValue::from(kind)].into()
+                        vec![DataValue::from(r.name.as_str()), DataValue::from(kind)]
                     })
                     .collect();
                 Ok(NamedRows::new(vec!["name".into(), "kind".into()], rows))
@@ -916,7 +914,7 @@ fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> NamedRows {
 pub(crate) fn status_ok() -> NamedRows {
     NamedRows::new(
         vec!["status".to_string()],
-        vec![vec![DataValue::from("OK")].into()],
+        vec![vec![DataValue::from("OK")]],
     )
 }
 
@@ -1880,7 +1878,7 @@ mod tests {
         let rows = db
             .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
             .expect("two-coordinate read");
-        let want: Vec<Tuple> = vec![vec![DataValue::from("retro")].into()];
+        let want: Vec<Tuple> = vec![vec![DataValue::from("retro")]];
         assert_eq!(
             rows.rows, want,
             "system-now, valid-200 must see the retroactive claim"
@@ -1931,7 +1929,7 @@ mod tests {
             "index and base must agree on current state"
         );
         assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
-        let want: Tuple = vec![DataValue::from(11), DataValue::from(1)].into();
+        let want: Tuple = vec![DataValue::from(11), DataValue::from(1)];
         assert_eq!(via_base.rows[0], want);
     }
 

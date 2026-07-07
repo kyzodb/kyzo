@@ -511,7 +511,7 @@ mod tests {
         let mut sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1)].into()].into_iter().collect(),
+            [vec![v(1)]].into_iter().collect(),
             "q(1) must already hold from the pre-registration snapshot"
         );
 
@@ -525,7 +525,7 @@ mod tests {
         let deltas = sq.apply_pending().unwrap();
         assert_eq!(
             deltas.get(&sym("?")).cloned().unwrap_or_default(),
-            [SignedFact::Minus(vec![v(1)].into())].into_iter().collect()
+            [SignedFact::Minus(vec![v(1)])].into_iter().collect()
         );
         assert!(sq.current(&sym("?")).unwrap().is_empty());
 
@@ -535,11 +535,11 @@ mod tests {
         let deltas = sq.apply_pending().unwrap();
         assert_eq!(
             deltas.get(&sym("?")).cloned().unwrap_or_default(),
-            [SignedFact::Plus(vec![v(1)].into())].into_iter().collect()
+            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
         );
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1)].into()].into_iter().collect()
+            [vec![v(1)]].into_iter().collect()
         );
 
         sq.teardown();
@@ -569,7 +569,7 @@ mod tests {
         let answer_delta = sq.apply_pending_answer().unwrap();
         assert_eq!(
             answer_delta,
-            [SignedFact::Minus(vec![v(1)].into())].into_iter().collect()
+            [SignedFact::Minus(vec![v(1)])].into_iter().collect()
         );
         assert!(sq.current_answer().is_empty());
 
@@ -635,7 +635,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             sq2.current_answer().clone(),
-            [vec![v(1)].into()].into_iter().collect()
+            [vec![v(1)]].into_iter().collect()
         );
         db2.run_script("?[x] <- [[1]] :rm p {x}", no_params())
             .unwrap();
@@ -648,7 +648,7 @@ mod tests {
         );
         assert_eq!(
             sq2.current_answer().clone(),
-            [vec![v(1)].into()].into_iter().collect()
+            [vec![v(1)]].into_iter().collect()
         );
         sq2.teardown();
 
@@ -682,7 +682,7 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(maintained, real3);
-        assert_eq!(maintained, [vec![v(1), v(30)].into()].into_iter().collect());
+        assert_eq!(maintained, [vec![v(1), v(30)]].into_iter().collect());
         sq3.teardown();
     }
 
@@ -760,7 +760,7 @@ mod tests {
 
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1), v(10)].into()].into_iter().collect(),
+            [vec![v(1), v(10)]].into_iter().collect(),
             "initial snapshot: min(y) for x=1 is 10"
         );
         assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
@@ -772,7 +772,7 @@ mod tests {
         sq.apply_pending().unwrap();
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1), v(10)].into()].into_iter().collect(),
+            [vec![v(1), v(10)]].into_iter().collect(),
             "min(y) unchanged by a larger sibling"
         );
         assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
@@ -784,7 +784,7 @@ mod tests {
         sq.apply_pending().unwrap();
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1), v(20)].into()].into_iter().collect(),
+            [vec![v(1), v(20)]].into_iter().collect(),
             "min(y) rescans to the new minimum, 20"
         );
         assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
@@ -795,9 +795,7 @@ mod tests {
         sq.apply_pending().unwrap();
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1), v(20)].into(), vec![v(2), v(5)].into()]
-                .into_iter()
-                .collect(),
+            [vec![v(1), v(20)], vec![v(2), v(5)]].into_iter().collect(),
             "a new group appears with its own min"
         );
         assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());
@@ -808,7 +806,7 @@ mod tests {
         sq.apply_pending().unwrap();
         assert_eq!(
             sq.current(&sym("?")).cloned().unwrap_or_default(),
-            [vec![v(1), v(20)].into()].into_iter().collect(),
+            [vec![v(1), v(20)]].into_iter().collect(),
             "the emptied group's row vanishes, not just its value"
         );
         assert_eq!(sq.current(&sym("?")).cloned().unwrap_or_default(), real());

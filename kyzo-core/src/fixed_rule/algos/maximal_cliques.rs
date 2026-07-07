@@ -155,7 +155,7 @@ impl FixedRule for MaximalCliques {
 
         for (clique_id, members) in keyed.into_iter().enumerate() {
             for member in members {
-                out.put(vec![DataValue::from(clique_id as i64), member].into())?;
+                out.put(vec![DataValue::from(clique_id as i64), member])?;
             }
         }
         Ok(())
@@ -473,7 +473,7 @@ mod tests {
     fn run_cliques(edges: &[(&str, &str)], max_cliques: Option<i64>) -> Vec<Vec<String>> {
         let rows = edges
             .iter()
-            .map(|&(a, b)| vec![s(a), s(b)].into())
+            .map(|&(a, b)| vec![s(a), s(b)])
             .collect::<Vec<Tuple>>();
         let mut opts = BTreeMap::new();
         if let Some(mc) = max_cliques {
@@ -713,7 +713,7 @@ mod tests {
         // Cap of 3 < 5 ⇒ refusal.
         let rows = eref
             .iter()
-            .map(|&(a, b)| vec![s(a), s(b)].into())
+            .map(|&(a, b)| vec![s(a), s(b)])
             .collect::<Vec<Tuple>>();
         let err = run_fixed_rule(
             &MaximalCliques,
@@ -756,7 +756,7 @@ mod tests {
             .collect();
         let rows = owned
             .iter()
-            .map(|(a, b)| vec![s(a), s(b)].into())
+            .map(|(a, b)| vec![s(a), s(b)])
             .collect::<Vec<Tuple>>();
         let got = run_fixed_rule(
             &MaximalCliques,
@@ -782,7 +782,7 @@ mod tests {
 
         let n: u32 = 60_000;
         let edges: Vec<Tuple> = (0..n - 1)
-            .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))].into())
+            .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))])
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
         let prepared = prepare_fixed_rule(&MaximalCliques, inputs, BTreeMap::new()).unwrap();
@@ -825,7 +825,7 @@ mod tests {
         // A 2k-node path: ~2k expansion steps, far above the trip point.
         let n: u32 = 2_000;
         let edges: Vec<Tuple> = (0..n - 1)
-            .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))].into())
+            .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))])
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
         let prepared = prepare_fixed_rule(&MaximalCliques, inputs, BTreeMap::new()).unwrap();

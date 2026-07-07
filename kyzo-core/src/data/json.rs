@@ -469,8 +469,8 @@ mod tests {
         let nr = NamedRows::new(
             vec!["a".to_string(), "b".to_string()],
             vec![
-                vec![DataValue::from(1_i64), DataValue::from("x")].into(),
-                vec![DataValue::from(2_i64), DataValue::from("y")].into(),
+                vec![DataValue::from(1_i64), DataValue::from("x")],
+                vec![DataValue::from(2_i64), DataValue::from("y")],
             ],
         );
         let j = nr.clone().into_json();

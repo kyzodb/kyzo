@@ -694,7 +694,7 @@ pub(crate) fn lsh_search(
             if ks.is_empty() {
                 bail!(IndexRowCorrupt::new(&idx.name, &ks, "empty LSH posting"));
             }
-            found_tuples.insert(ks[1..].to_vec().into());
+            found_tuples.insert(ks[1..].to_vec());
         }
     }
     let mut ret = vec![];

@@ -62,7 +62,7 @@ impl FixedRule for CommunityDetectionLouvain {
             if let Some(l) = keep_depth {
                 labels.truncate(l);
             }
-            out.put(vec![DataValue::List(labels), node].into())?;
+            out.put(vec![DataValue::List(labels), node])?;
         }
 
         Ok(())
@@ -374,10 +374,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")].into(),
-                    vec![s("b"), s("a")].into(),
-                    vec![s("b"), s("c")].into(),
-                    vec![s("c"), s("b")].into(),
+                    vec![s("a"), s("b")],
+                    vec![s("b"), s("a")],
+                    vec![s("b"), s("c")],
+                    vec![s("c"), s("b")],
                 ],
             )],
             BTreeMap::new(),

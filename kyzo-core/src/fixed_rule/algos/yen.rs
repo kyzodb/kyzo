@@ -109,7 +109,6 @@ impl FixedRule for KShortestPathYen {
                                 .collect_vec(),
                         ),
                     ]
-                    .into()
                 })
                 .collect())
         })?;
@@ -245,7 +244,7 @@ mod tests {
     }
 
     fn e(a: &str, b: &str, w: f64) -> Tuple {
-        vec![s(a), s(b), DataValue::from(w)].into()
+        vec![s(a), s(b), DataValue::from(w)]
     }
 
     fn k_opt(k: i64) -> BTreeMap<smartstring::SmartString<smartstring::LazyCompact>, Expr> {
@@ -282,11 +281,11 @@ mod tests {
         edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
         let starts: Vec<Tuple> = (0..n)
             .step_by(5)
-            .map(|i| vec![s(&format!("n{i}"))].into())
+            .map(|i| vec![s(&format!("n{i}"))])
             .collect();
         let ends: Vec<Tuple> = (0..n)
             .step_by(6)
-            .map(|i| vec![s(&format!("n{i}"))].into())
+            .map(|i| vec![s(&format!("n{i}"))])
             .collect();
         vec![
             TestInput::new(vec!["fr", "to", "w"], edges),
@@ -378,8 +377,8 @@ mod tests {
                         e("c", "d", 2.0),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("d")]]),
             ],
             BTreeMap::from([(
                 smartstring::SmartString::from("k"),
@@ -456,8 +455,8 @@ mod tests {
                         e("c", "d", 2.0),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")].into()]),
-                TestInput::new(vec!["end"], vec![vec![s("d")].into()]),
+                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["end"], vec![vec![s("d")]]),
             ],
             BTreeMap::from([(
                 smartstring::SmartString::from("k"),
