@@ -17,13 +17,13 @@ use std::io::Cursor;
 
 use arrow::array::{Array, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::ipc::reader::StreamReader;
-use kyzo::{DataValue, GermanStr, NamedRows, Num};
+use kyzo::{DataValue, NamedRows, Num};
 
 fn v_int(i: i64) -> DataValue {
-    DataValue::Num(Num::Int(i))
+    DataValue::Num(Num::int(i))
 }
 fn v_float(f: f64) -> DataValue {
-    DataValue::Num(Num::Float(f))
+    DataValue::Num(Num::float(f))
 }
 
 /// Every uniformly-typed `ColumnVec` kind this encoder maps: Int64,
@@ -154,9 +154,9 @@ fn real_arrow_reader_decodes_a_binary_column() {
     let named = NamedRows::new(
         vec!["blob".into()],
         vec![
-            vec![DataValue::Bytes(GermanStr::from_bytes(&[0, 1, 2]))].into(),
-            vec![DataValue::Bytes(GermanStr::from_bytes(&[]))].into(),
-            vec![DataValue::Bytes(GermanStr::from_bytes(&[255, 254]))].into(),
+            vec![DataValue::Bytes(vec![0, 1, 2])].into(),
+            vec![DataValue::Bytes(vec![])].into(),
+            vec![DataValue::Bytes(vec![255, 254])].into(),
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");
