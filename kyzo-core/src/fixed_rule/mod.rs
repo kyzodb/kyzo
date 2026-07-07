@@ -909,7 +909,7 @@ impl NamedRows {
     /// one non-null kind, or a kind this encoder has no Arrow mapping for.
     pub fn to_arrow_ipc(&self) -> Result<Vec<u8>> {
         let batch =
-            crate::data::batch::ColumnBatch::from_rows(self.rows.clone(), self.headers.len());
+            crate::data::arrow_ipc::ColumnBatch::from_rows(self.rows.clone(), self.headers.len());
         let names: Vec<&str> = self.headers.iter().map(String::as_str).collect();
         crate::data::arrow_ipc::encode_stream(&batch, &names)
     }

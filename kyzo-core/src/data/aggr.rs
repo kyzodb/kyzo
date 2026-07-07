@@ -51,7 +51,7 @@ use std::fmt::{Debug, Formatter};
 use miette::{Result, bail, ensure, miette};
 use rand::prelude::*;
 
-use crate::data::value::{DataValue, GermanStr, Num};
+use crate::data::value::{DataValue, Num, NumRepr};
 
 /// An ordinary fold over rows: `set` feeds one row's value, `get` produces
 /// the final answer. Runs only after the fixpoint, seeing each row once.
@@ -605,7 +605,7 @@ impl NormalAggrObj for AggrVariance {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => {
-                let f = n.get_float();
+                let f = n.to_f64();
                 self.sum += f;
                 self.sum_sq += f * f;
                 self.count += 1;
@@ -637,7 +637,7 @@ impl NormalAggrObj for AggrStdDev {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => {
-                let f = n.get_float();
+                let f = n.to_f64();
                 self.sum += f;
                 self.sum_sq += f * f;
                 self.count += 1;
@@ -667,7 +667,7 @@ impl NormalAggrObj for AggrMean {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => {
-                self.sum += n.get_float();
+                self.sum += n.to_f64();
                 self.count += 1;
             }
             v => bail!("cannot compute 'mean': encountered value {:?}", v),
@@ -704,13 +704,13 @@ impl NumAccum {
         int_op: fn(i128, i128) -> Option<i128>,
         float_op: fn(f64, f64) -> f64,
     ) -> Self {
-        match (self, n) {
-            (NumAccum::Int(acc), Num::Int(i)) => match int_op(acc, *i as i128) {
+        match (self, n.repr()) {
+            (NumAccum::Int(acc), NumRepr::Int(i)) => match int_op(acc, i as i128) {
                 Some(acc) => NumAccum::Int(acc),
-                None => NumAccum::Float(float_op(acc as f64, *i as f64)),
+                None => NumAccum::Float(float_op(acc as f64, i as f64)),
             },
-            (NumAccum::Int(acc), Num::Float(f)) => NumAccum::Float(float_op(acc as f64, *f)),
-            (NumAccum::Float(acc), n) => NumAccum::Float(float_op(acc, n.get_float())),
+            (NumAccum::Int(acc), NumRepr::Float(f)) => NumAccum::Float(float_op(acc as f64, f)),
+            (NumAccum::Float(acc), _) => NumAccum::Float(float_op(acc, n.to_f64())),
         }
     }
 
@@ -1223,7 +1223,7 @@ impl NormalAggrObj for AggrBitAnd {
         match value {
             DataValue::Bytes(bs) => {
                 if self.res.is_empty() {
-                    self.res = bs.as_bytes().to_vec();
+                    self.res = bs.clone();
                 } else {
                     ensure!(
                         self.res.len() == bs.len(),
@@ -1231,7 +1231,7 @@ impl NormalAggrObj for AggrBitAnd {
                         self.res,
                         bs
                     );
-                    for (l, r) in self.res.iter_mut().zip(bs.as_bytes().iter()) {
+                    for (l, r) in self.res.iter_mut().zip(bs.iter()) {
                         *l &= *r;
                     }
                 }
@@ -1242,7 +1242,7 @@ impl NormalAggrObj for AggrBitAnd {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(DataValue::Bytes(GermanStr::from_bytes(&self.res)))
+        Ok(DataValue::Bytes(self.res.clone()))
     }
 }
 
@@ -1254,7 +1254,7 @@ pub(crate) struct MeetAggrBitAnd;
 
 impl MeetAggrObj for MeetAggrBitAnd {
     fn init_val(&self) -> DataValue {
-        DataValue::Bytes(GermanStr::from_bytes(&[]))
+        DataValue::Bytes(Vec::new())
     }
 
     fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
@@ -1270,17 +1270,12 @@ impl MeetAggrObj for MeetAggrBitAnd {
                     left,
                     right
                 );
-                // `GermanStr` has no in-place mutation API (it's an
-                // immutable value type, see `data/germanstr.rs`): fold into
-                // a scratch `Vec<u8>` and rebuild.
-                let mut folded_bytes = left.as_bytes().to_vec();
                 let mut changed = false;
-                for (l, r) in folded_bytes.iter_mut().zip(right.as_bytes().iter()) {
+                for (l, r) in left.iter_mut().zip(right.iter()) {
                     let folded = *l & *r;
                     changed |= folded != *l;
                     *l = folded;
                 }
-                *left = GermanStr::from_bytes(&folded_bytes);
                 Ok(changed)
             }
             v => bail!("cannot apply 'bit_and' to {:?}", v),
@@ -1301,7 +1296,7 @@ impl NormalAggrObj for AggrBitOr {
         match value {
             DataValue::Bytes(bs) => {
                 if self.res.is_empty() {
-                    self.res = bs.as_bytes().to_vec();
+                    self.res = bs.clone();
                 } else {
                     ensure!(
                         self.res.len() == bs.len(),
@@ -1309,7 +1304,7 @@ impl NormalAggrObj for AggrBitOr {
                         self.res,
                         bs
                     );
-                    for (l, r) in self.res.iter_mut().zip(bs.as_bytes().iter()) {
+                    for (l, r) in self.res.iter_mut().zip(bs.iter()) {
                         *l |= *r;
                     }
                 }
@@ -1320,7 +1315,7 @@ impl NormalAggrObj for AggrBitOr {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(DataValue::Bytes(GermanStr::from_bytes(&self.res)))
+        Ok(DataValue::Bytes(self.res.clone()))
     }
 }
 
@@ -1330,7 +1325,7 @@ pub(crate) struct MeetAggrBitOr;
 
 impl MeetAggrObj for MeetAggrBitOr {
     fn init_val(&self) -> DataValue {
-        DataValue::Bytes(GermanStr::from_bytes(&[]))
+        DataValue::Bytes(Vec::new())
     }
 
     fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
@@ -1346,14 +1341,12 @@ impl MeetAggrObj for MeetAggrBitOr {
                     left,
                     right
                 );
-                let mut folded_bytes = left.as_bytes().to_vec();
                 let mut changed = false;
-                for (l, r) in folded_bytes.iter_mut().zip(right.as_bytes().iter()) {
+                for (l, r) in left.iter_mut().zip(right.iter()) {
                     let folded = *l | *r;
                     changed |= folded != *l;
                     *l = folded;
                 }
-                *left = GermanStr::from_bytes(&folded_bytes);
                 Ok(changed)
             }
             v => bail!("cannot apply 'bit_or' to {:?}", v),
@@ -1376,7 +1369,7 @@ impl NormalAggrObj for AggrBitXor {
         match value {
             DataValue::Bytes(bs) => {
                 if self.res.is_empty() {
-                    self.res = bs.as_bytes().to_vec();
+                    self.res = bs.clone();
                 } else {
                     ensure!(
                         self.res.len() == bs.len(),
@@ -1384,7 +1377,7 @@ impl NormalAggrObj for AggrBitXor {
                         self.res,
                         bs
                     );
-                    for (l, r) in self.res.iter_mut().zip(bs.as_bytes().iter()) {
+                    for (l, r) in self.res.iter_mut().zip(bs.iter()) {
                         *l ^= *r;
                     }
                 }
@@ -1395,7 +1388,7 @@ impl NormalAggrObj for AggrBitXor {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(DataValue::Bytes(GermanStr::from_bytes(&self.res)))
+        Ok(DataValue::Bytes(self.res.clone()))
     }
 }
 

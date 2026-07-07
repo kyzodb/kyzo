@@ -54,7 +54,7 @@ use crate::data::functions::*;
 use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, GermanStr, LARGEST_UTF_CHAR};
+use crate::data::value::{DataValue, GermanStr, LARGEST_UTF_CHAR, ScanBound};
 
 /// One instruction of the compiled expression form: a stack-machine program
 /// produced by `expr2bytecode` from a validated [`Expr`].
@@ -1166,10 +1166,10 @@ impl Expr {
 
                             StrRangeScanError(val.clone(), symb.span)
                         })?;
-                        let lower = DataValue::from(s);
+                        let lower = ScanBound::Value(DataValue::from(s));
                         let mut upper = s.to_string();
                         upper.push(LARGEST_UTF_CHAR);
-                        let upper = DataValue::Str(GermanStr::from_str(&upper));
+                        let upper = ScanBound::Value(DataValue::Str(upper));
                         return Ok(ValueRange::new(lower, upper));
                     }
                     ValueRange::default()
@@ -1256,7 +1256,7 @@ impl Expr {
 pub(crate) fn compute_bounds(
     filters: &[Expr],
     symbols: &[Symbol],
-) -> Result<(Vec<DataValue>, Vec<DataValue>)> {
+) -> Result<(Vec<ScanBound>, Vec<ScanBound>)> {
     let mut lowers = vec![];
     let mut uppers = vec![];
     for current in symbols {
@@ -1274,8 +1274,8 @@ pub(crate) fn compute_bounds(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValueRange {
-    pub(crate) lower: DataValue,
-    pub(crate) upper: DataValue,
+    pub(crate) lower: ScanBound,
+    pub(crate) upper: ScanBound,
 }
 
 impl ValueRange {
@@ -1288,25 +1288,27 @@ impl ValueRange {
             Self { lower, upper }
         }
     }
+    /// The provably-empty range: lower past upper, so the scan visits
+    /// nothing (`Greatest > Least` at the key level too).
     fn null() -> Self {
         Self {
-            lower: DataValue::Bot,
-            upper: DataValue::Bot,
+            lower: ScanBound::Greatest,
+            upper: ScanBound::Least,
         }
     }
-    fn new(lower: DataValue, upper: DataValue) -> Self {
+    fn new(lower: ScanBound, upper: ScanBound) -> Self {
         Self { lower, upper }
     }
     fn lower_bound(val: DataValue) -> Self {
         Self {
-            lower: val,
-            upper: DataValue::Bot,
+            lower: ScanBound::Value(val),
+            upper: ScanBound::Greatest,
         }
     }
     fn upper_bound(val: DataValue) -> Self {
         Self {
-            lower: DataValue::Null,
-            upper: val,
+            lower: ScanBound::Least,
+            upper: ScanBound::Value(val),
         }
     }
 }
@@ -1314,8 +1316,8 @@ impl ValueRange {
 impl Default for ValueRange {
     fn default() -> Self {
         Self {
-            lower: DataValue::Null,
-            upper: DataValue::Bot,
+            lower: ScanBound::Least,
+            upper: ScanBound::Greatest,
         }
     }
 }

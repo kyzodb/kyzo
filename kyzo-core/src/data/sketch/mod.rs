@@ -20,7 +20,7 @@
 //! ## What determinism costs, and how each sketch pays it
 //!
 //! - **Hashing is pinned and portable.** Every sketch that hashes a value
-//!   hashes the value's *memcomparable encoding* (`data/memcmp.rs`) with a
+//!   hashes the value's *canonical encoding* (`data/value/canonical.rs`) with a
 //!   seeded [`xxh64`] — never `std::hash::Hash`, whose output is neither
 //!   stable across releases nor defined to be portable. `xxh64` is
 //!   hand-rolled from the published xxHash64 specification (all arithmetic
@@ -38,7 +38,7 @@
 //!   centroid clustering depends on the order points arrive — so
 //!   [`tdigest::TDigest`] does not fold incrementally; it buffers and builds
 //!   from the values **sorted into the exact `Num` order** (the same total
-//!   order the memcmp encoding preserves), which makes its output a pure
+//!   order the canonical encoding preserves), which makes its output a pure
 //!   function of the input multiset. None of the three ever draws
 //!   randomness.
 //!
@@ -65,7 +65,6 @@ pub(crate) mod count_min;
 pub(crate) mod hll;
 pub(crate) mod tdigest;
 
-use crate::data::memcmp::MemCmpEncoder;
 use crate::data::value::DataValue;
 
 // xxHash64 primes, from the published specification.
@@ -174,7 +173,7 @@ pub(crate) fn xxh64(data: &[u8], seed: u64) -> u64 {
 /// because this is the same encoding that backs the on-disk keys.
 pub(crate) fn encode_value(v: &DataValue) -> Vec<u8> {
     let mut buf = Vec::new();
-    buf.encode_datavalue(v);
+    crate::data::value::append_canonical(&mut buf, v);
     buf
 }
 

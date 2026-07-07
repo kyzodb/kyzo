@@ -543,6 +543,52 @@ pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, Deco
     Ok(out)
 }
 
+/// A per-column scan bound: below every value, a value, or past every
+/// value of every kind. THE bound vocabulary — bounds are the codec's
+/// domain, never members of the value domain (there is no bottom/top
+/// value). Its `Ord` extends the storage order by the two sentinels,
+/// and its written form extends the canonical encoding the same way:
+/// `Least` writes nothing (the empty prefix sorts below every encoding)
+/// and `Greatest` writes the single byte `0xFF`, which no canonical
+/// encoding begins.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ScanBound {
+    Least,
+    Value(DataValue),
+    Greatest,
+}
+
+impl ScanBound {
+    /// Append the bound's written form to a key buffer.
+    pub fn append_to_key(&self, out: &mut Vec<u8>) {
+        match self {
+            ScanBound::Least => {}
+            ScanBound::Value(v) => canonical::append_canonical(out, v),
+            ScanBound::Greatest => out.push(0xFF),
+        }
+    }
+}
+
+impl PartialOrd for ScanBound {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScanBound {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (ScanBound::Least, ScanBound::Least) => Ordering::Equal,
+            (ScanBound::Least, _) => Ordering::Less,
+            (_, ScanBound::Least) => Ordering::Greater,
+            (ScanBound::Greatest, ScanBound::Greatest) => Ordering::Equal,
+            (ScanBound::Greatest, _) => Ordering::Greater,
+            (_, ScanBound::Greatest) => Ordering::Less,
+            (ScanBound::Value(a), ScanBound::Value(b)) => a.cmp(b),
+        }
+    }
+}
+
 /// Decode a stored tuple: exactly `arity` canonical encodings, nothing
 /// trailing. Total — the storage tier's typed read door.
 pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, DecodeError> {
@@ -696,6 +742,37 @@ mod facade_tests {
             let enc = encode_owned(&v);
             let back = decode(enc.as_bytes()).expect("lawful");
             assert_eq!(back, v, "round-trip changed {v:?}");
+        }
+    }
+
+    /// ScanBound's Ord mirrors its written form's byte order — the two
+    /// sentinels really do bracket every canonical encoding.
+    #[test]
+    fn law_scan_bound_order_equals_written_byte_order() {
+        let mut rng = Rng(0xB0BB1E5);
+        let mut bounds: Vec<ScanBound> = (0..80)
+            .map(|_| ScanBound::Value(random_value(&mut rng, 0)))
+            .collect();
+        bounds.push(ScanBound::Least);
+        bounds.push(ScanBound::Greatest);
+        let keys: Vec<Vec<u8>> = bounds
+            .iter()
+            .map(|b| {
+                let mut k = Vec::new();
+                b.append_to_key(&mut k);
+                k
+            })
+            .collect();
+        for i in 0..bounds.len() {
+            for j in 0..bounds.len() {
+                assert_eq!(
+                    bounds[i].cmp(&bounds[j]),
+                    keys[i].cmp(&keys[j]),
+                    "bound order diverged from key order: {:?} vs {:?}",
+                    bounds[i],
+                    bounds[j]
+                );
+            }
         }
     }
 

@@ -183,7 +183,12 @@ impl WriteValidity {
                 // terminal tick (`i64::MAX` / `'END'`, issue #62's ruling),
                 // the instant every open-end sentinel and derived interval
                 // reads as "still open."
-                crate::data::value::ValidityTs::for_assertion(vld.raw(), span)
+                crate::data::value::ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
+                    miette::miette!(
+                        labels = vec![miette::LabeledSpan::underline(span)],
+                        "a write validity cannot be the reserved terminal tick (i64::MAX / 'END')"
+                    )
+                })
             }
         }
     }

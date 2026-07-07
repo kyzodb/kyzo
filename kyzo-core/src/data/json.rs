@@ -91,6 +91,50 @@ impl JsonData {
     }
 }
 
+/// `DataValue`'s wire form for engine metadata (stored programs,
+/// catalogs): the CANONICAL BYTES, nothing else — serde here is a thin
+/// skin over the one codec authority, so there is no second
+/// serialization truth to drift. Deserialize runs the full validating
+/// decode: corrupted metadata refuses, never half-loads.
+impl serde::Serialize for DataValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(crate::data::value::encode_owned(self).as_bytes())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DataValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<DataValue, D::Error> {
+        struct CanonicalVisitor;
+        impl<'de> serde::de::Visitor<'de> for CanonicalVisitor {
+            type Value = DataValue;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("canonical value bytes")
+            }
+
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<DataValue, E> {
+                crate::data::value::decode(v).map_err(E::custom)
+            }
+
+            fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<DataValue, E> {
+                self.visit_bytes(&v)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<DataValue, A::Error> {
+                let mut buf = Vec::new();
+                while let Some(b) = seq.next_element::<u8>()? {
+                    buf.push(b);
+                }
+                self.visit_bytes(&buf)
+            }
+        }
+        deserializer.deserialize_bytes(CanonicalVisitor)
+    }
+}
+
 /// serde → plane: total. serde_json numbers are finite by construction
 /// (standard parsing admits no NaN/inf), and serde maps carry unique
 /// keys, so the plane's refusals cannot fire on this path.
@@ -108,8 +152,12 @@ pub fn json_from_serde(v: &JsonValue) -> Json {
         JsonValue::String(s) => Json::Str(s.clone()),
         JsonValue::Array(a) => Json::Arr(a.iter().map(json_from_serde).collect()),
         JsonValue::Object(o) => Json::Obj(
-            JsonObj::new(o.iter().map(|(k, x)| (k.clone(), json_from_serde(x))).collect())
-                .expect("serde maps have unique keys"),
+            JsonObj::new(
+                o.iter()
+                    .map(|(k, x)| (k.clone(), json_from_serde(x)))
+                    .collect(),
+            )
+            .expect("serde maps have unique keys"),
         ),
     }
 }
