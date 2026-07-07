@@ -36,7 +36,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
-use crate::data::json::{JsonData, JsonValue};
+use crate::data::json::JsonValue;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;

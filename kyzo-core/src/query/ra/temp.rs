@@ -23,7 +23,7 @@ use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
-use crate::data::value::{ScanBound, Tuple};
+use crate::data::value::ScanBound;
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter, BatchTupleFilter, conjunction_pred};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;

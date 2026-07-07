@@ -235,7 +235,7 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::Num;
+
     use crate::data::value::ValidityTs;
     use crate::data::value::{RelationId, TupleT};
     use std::collections::BTreeMap;
@@ -524,8 +524,7 @@ mod tests {
             ClaimPolarity::Retract,
             ClaimPolarity::Erase,
         ] {
-            let mut val = Vec::new();
-            val.push(polarity.encode());
+            let val = vec![polarity.encode()];
             assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
             // A bare retract/erase value carries no payload and extends
             // nothing.

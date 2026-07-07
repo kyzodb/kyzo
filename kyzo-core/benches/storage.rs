@@ -26,7 +26,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kyzo::{
-    DataValue, EncodedKey, Num, ReadTx, RelationId, Storage, TupleT, Validity, ValidityTs, WriteTx,
+    DataValue, EncodedKey, ReadTx, RelationId, Storage, TupleT, Validity, ValidityTs, WriteTx,
     new_fjall_storage,
 };
 use std::cmp::Reverse;

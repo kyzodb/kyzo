@@ -354,9 +354,7 @@ mod tests {
     }
 
     fn bval(polarity: ClaimPolarity) -> Vec<u8> {
-        let mut v = Vec::new();
-        v.push(polarity.encode());
-        v
+        vec![polarity.encode()]
     }
 
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
@@ -498,8 +496,7 @@ mod tests {
         let mut hostile_sys_tag = bikey(5, 100, 1);
         let n = hostile_sys_tag.len();
         hostile_sys_tag[n - 10] = 0xFE;
-        let mut unknown_polarity = Vec::new();
-        unknown_polarity.push(0xEE);
+        let unknown_polarity = vec![0xEE];
 
         let scenarios: Vec<Vec<(Vec<u8>, Vec<u8>)>> = vec![
             vec![

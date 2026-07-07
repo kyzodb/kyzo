@@ -73,7 +73,7 @@ pub use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::sync::LazyLock;
 
-use crate::data::value::{Bound, DataValue, Json, JsonNum, JsonObj, Num};
+use crate::data::value::{DataValue, Json, JsonNum, JsonObj, Num};
 use crate::fixed_rule::NamedRows;
 
 /// The serde bridge value: engine-side JSON carried as `serde_json`
@@ -393,7 +393,8 @@ static JSON_ERR_HANDLER: LazyLock<JSONReportHandler> = LazyLock::new(JSONReportH
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::value::{GermanStr, UuidWrapper, Validity, ValidityTs};
+    use crate::data::value::Bound;
+    use crate::data::value::{UuidWrapper, Validity, ValidityTs};
     use std::cmp::Reverse;
 
     #[test]

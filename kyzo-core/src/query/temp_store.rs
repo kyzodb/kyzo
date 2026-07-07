@@ -105,7 +105,7 @@ use miette::{Result, miette};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj};
 use crate::data::value::DataValue;
-use crate::data::value::{ScanBound, Tuple, decode_tuple_bare, encode_tuple_bare};
+use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
 
 // ─────────────────────────────────────────────────────────────────────────
 // The admission seam
@@ -864,6 +864,7 @@ impl Iterator for TupleInIterIterator<'_> {
 mod tests {
     use super::*;
     use crate::data::aggr::parse_aggr;
+    use crate::data::value::ScanBound;
     use crate::query::levels::{EpochStore, LevelKind};
 
     fn t(vals: &[i64]) -> Tuple {

@@ -43,6 +43,11 @@
 //!   [`Value::same_word`] (physical 16-byte identity, which is value
 //!   identity only within one stamped context).
 
+// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
+// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
+// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
+#![allow(dead_code)]
+
 use std::cmp::Ordering;
 
 use super::arena::Arena;

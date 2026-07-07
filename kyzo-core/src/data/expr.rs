@@ -54,7 +54,7 @@ use crate::data::functions::*;
 use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, GermanStr, LARGEST_UTF_CHAR, ScanBound};
+use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
 
 /// One instruction of the compiled expression form: a stack-machine program
 /// produced by `expr2bytecode` from a validated [`Expr`].
@@ -422,9 +422,7 @@ pub fn eval_bytecode(
                 let val = stack
                     .pop()
                     .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
-                let cond = val
-                    .get_bool()
-                    .ok_or_else(|| PredicateTypeError(*span, val))?;
+                let cond = val.get_bool().ok_or(PredicateTypeError(*span, val))?;
                 if cond {
                     pointer += 1;
                 } else {
@@ -435,9 +433,7 @@ pub fn eval_bytecode(
                 let val = stack
                     .pop()
                     .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
-                let cond = val
-                    .get_bool()
-                    .ok_or_else(|| PredicateTypeError(*span, val))?;
+                let cond = val.get_bool().ok_or(PredicateTypeError(*span, val))?;
                 if cond {
                     pointer = *jump_to;
                 } else {

@@ -200,7 +200,6 @@ use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::smallvec;
 use smartstring::SmartString;
 use thiserror::Error;
 
@@ -785,7 +784,7 @@ impl IndexVec {
         // through f32 precision (the graph's stored working precision
         // until #122's quantized residency owns this decision).
         let mut components: Vec<f64> = match manifest.dtype {
-            VecElementType::F32 => v.as_slice().iter().map(|&x| x as f64).collect(),
+            VecElementType::F32 => v.as_slice().to_vec(),
             VecElementType::F64 => v.as_slice().to_vec(),
         };
         if !components.iter().all(|x| x.is_finite()) {
@@ -2618,7 +2617,7 @@ fn hnsw_knn_forced(
 
 #[cfg(test)]
 mod tests {
-    use ndarray::arr1;
+
     use proptest::prelude::*;
 
     use super::*;
@@ -2755,7 +2754,7 @@ mod tests {
         for _ in 0..dim {
             let bits = splitmix64(state);
             let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
-            v.push((unit * 2.0 - 1.0));
+            v.push(unit * 2.0 - 1.0);
         }
         DataValue::Vector(Vector::new(v))
     }
@@ -3289,7 +3288,7 @@ mod tests {
                         .iter()
                         .zip(v.iter())
                         .map(|(a, b)| {
-                            let diff = (*a - *b);
+                            let diff = *a - *b;
                             diff * diff
                         })
                         .sum();

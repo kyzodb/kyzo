@@ -41,7 +41,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::{DataValue, GermanStr};
+use crate::data::value::DataValue;
 
 /// The seed for the element hash. Pinned: changing it changes every
 /// sketch's contents (and is a stored-format change if sketches are ever

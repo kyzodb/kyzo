@@ -97,7 +97,7 @@ use crate::data::program::{
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
-use crate::data::value::{AsOf, DataValue, GermanStr};
+use crate::data::value::{AsOf, DataValue};
 use crate::fixed_rule::algos::*;
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;

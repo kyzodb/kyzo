@@ -1562,10 +1562,7 @@ pub(crate) fn op_regex_extract(args: &[DataValue]) -> Result<DataValue> {
     match (&args[0], &args[1]) {
         (DataValue::Str(s), DataValue::Regex(r)) => {
             let compiled = compile_regex_value(r)?;
-            let found = compiled
-                .find_iter(s)
-                .map(|v| DataValue::from(v))
-                .collect_vec();
+            let found = compiled.find_iter(s).map(DataValue::from).collect_vec();
             Ok(DataValue::List(found))
         }
         _ => bail!("'regex_extract' requires strings"),

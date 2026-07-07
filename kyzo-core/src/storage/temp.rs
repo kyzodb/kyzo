@@ -277,9 +277,7 @@ mod tests {
     /// A bitemporal value: relation-id header, polarity byte, no payload —
     /// the shape the engine writes for a key-only relation.
     fn bv(polarity: ClaimPolarity) -> Vec<u8> {
-        let mut v = Vec::new();
-        v.push(polarity.encode());
-        v
+        vec![polarity.encode()]
     }
 
     /// The half-open byte range covering the whole of `REL`'s keyspace.
@@ -684,8 +682,7 @@ mod tests {
         let e = || bv(ClaimPolarity::Erase);
         let mut garbage_payload = bv(ClaimPolarity::Assert);
         garbage_payload.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack
-        let mut unknown_polarity = Vec::new();
-        unknown_polarity.push(0xEE);
+        let unknown_polarity = vec![0xEE];
         let scenarios: Vec<(Vec<(Vec<u8>, Vec<u8>)>, &str)> = vec![
             (
                 vec![

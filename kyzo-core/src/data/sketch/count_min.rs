@@ -45,7 +45,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::{DataValue, GermanStr};
+use crate::data::value::DataValue;
 
 /// One pinned hash seed per row. The sketch uses the first `depth` of these,
 /// so `depth` is capped at their count. Fixed as part of the sketch format.

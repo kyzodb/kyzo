@@ -28,7 +28,6 @@
 
 use super::*;
 
-use ndarray::arr1;
 use proptest::prelude::*;
 
 use crate::data::functions::{OP_GE, OP_LT, OP_MOD};

@@ -94,7 +94,6 @@ use std::cmp::Reverse;
 use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::smallvec;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 

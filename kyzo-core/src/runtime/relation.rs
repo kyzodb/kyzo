@@ -105,9 +105,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 
-use miette::{Diagnostic, Result, bail, ensure, miette};
-use rmp_serde::Serializer;
-use serde::Serialize;
+use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -513,7 +511,7 @@ mod catalog {
         impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
         #[allow(dead_code)]
         struct Marker;
-        impl<T: ?Sized + CatalogRecord> AmbiguousIfImpl<Marker> for T {}
+        impl<T: CatalogRecord> AmbiguousIfImpl<Marker> for T {}
         let _ = <crate::data::value::DataValue as AmbiguousIfImpl<_>>::__proof;
     };
 
@@ -1509,6 +1507,8 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
 
 #[cfg(test)]
 mod tests {
+    use rmp_serde::Serializer;
+    use serde::Serialize;
 
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};

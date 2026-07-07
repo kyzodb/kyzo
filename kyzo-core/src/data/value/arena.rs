@@ -97,6 +97,11 @@
 //! it. Two arenas at the same epoch reject each other's stamps instead of
 //! silently resolving wrong values.
 
+// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
+// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
+// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
+#![allow(dead_code)]
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
@@ -500,12 +505,12 @@ impl EpochRemap {
     }
 
     /// The epoch this remap reads codes from.
-    pub fn from_epoch(&self) -> Epoch {
+    pub fn source_epoch(&self) -> Epoch {
         self.from
     }
 
     /// The epoch this remap restamps codes into.
-    pub fn to_epoch(&self) -> Epoch {
+    pub fn target_epoch(&self) -> Epoch {
         self.to
     }
 
@@ -1600,24 +1605,24 @@ mod tests {
                 Op::Seal => {
                     // Capture every live code's bytes before the
                     // transition.
-                    let from_epoch = arena.epoch();
+                    let source_epoch = arena.epoch();
                     let live: Vec<Vec<u8>> = {
                         let f = arena.frame();
                         (0..f.len())
-                            .map(|c| f.resolve(stamp(c, from_epoch, f.arena)).to_vec())
+                            .map(|c| f.resolve(stamp(c, source_epoch, f.arena)).to_vec())
                             .collect()
                     };
                     let from_sealed = arena.sealed_len();
                     let remap = arena.seal();
                     let expect = naive.seal();
-                    assert_eq!(remap.from_epoch(), from_epoch);
-                    assert_eq!(remap.to_epoch(), arena.epoch());
+                    assert_eq!(remap.source_epoch(), source_epoch);
+                    assert_eq!(remap.target_epoch(), arena.epoch());
                     // The remap law: every old code, sealed or tail,
                     // reads the same bytes through the door — and the
                     // door restamps it into the new epoch.
                     let f = arena.frame();
                     for (old, bytes) in live.iter().enumerate() {
-                        let new = remap.apply(stamp(old, from_epoch, arena.id));
+                        let new = remap.apply(stamp(old, source_epoch, arena.id));
                         assert_eq!(
                             new.code().raw(),
                             expect[old],
@@ -1633,7 +1638,7 @@ mod tests {
                     // Strictly monotone over the old sealed range.
                     let mut prev = None;
                     for old in 0..from_sealed {
-                        let new = remap.apply(stamp(old, from_epoch, arena.id)).code().raw();
+                        let new = remap.apply(stamp(old, source_epoch, arena.id)).code().raw();
                         if let Some(p) = prev {
                             assert!(p < new, "op {i}: sealed remap not strictly monotone");
                         }
@@ -2010,9 +2015,7 @@ mod tests {
         for &(a, b) in &pairs {
             let tup: Tuple = vec![DataValue::from(a), DataValue::from(b)];
             let key = encode_tuple_bare(&tup).into_boxed_slice();
-            if !m.contains_key(&key) {
-                m.insert(key, false);
-            }
+            m.entry(key).or_insert(false);
         }
         let bytes_ms = t.elapsed().as_secs_f64() * 1000.0;
         // (B) code-based: intern each cell once, dedup by u32 pair.
@@ -2027,9 +2030,7 @@ mod tests {
         for &(a, b) in &pairs {
             let ca = arena.intern(&enc(a)).code().raw();
             let cb = arena.intern(&enc(b)).code().raw();
-            if !codes.contains_key(&(ca, cb)) {
-                codes.insert((ca, cb), false);
-            }
+            codes.entry((ca, cb)).or_insert(false);
         }
         let code_ms = t.elapsed().as_secs_f64() * 1000.0;
         eprintln!(

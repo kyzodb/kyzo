@@ -62,6 +62,7 @@
 //! (`as_bytes`), and its derived `Ord` is exactly the storage total
 //! order. [`decode`] is total over arbitrary bytes: a typed error, never
 //! a panic, never trust.
+#![allow(dead_code)] // #119 codec test-helpers (Datum/encode variants) are target-split; #120-era cleanup
 
 use super::number::{Num, NumDecodeError};
 use super::prefix::prefix4;

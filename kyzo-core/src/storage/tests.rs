@@ -26,7 +26,7 @@
 //! time-travel scan is checked against a naive full-scan reference
 //! implementation of the as-of semantics.
 
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use fjall::Slice;
@@ -158,7 +158,7 @@ fn corpus() -> Vec<DataValue> {
         )),
         DataValue::Interval(Interval::new(Bound::Closed(-100), Bound::Closed((-1) - 1))),
         DataValue::Interval(Interval::new(Bound::Closed(-1), Bound::Closed((0) - 1))),
-        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((1) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed(0))),
         DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((10) - 1))),
         DataValue::Interval(Interval::new(Bound::Closed(5), Bound::Closed((15) - 1))), // overlaps [0,10)
         DataValue::Interval(Interval::new(Bound::Closed(10), Bound::Closed((20) - 1))), // meets [0,10)
@@ -229,7 +229,7 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         any::<bool>().prop_map(DataValue::Bool),
         any::<i64>().prop_map(|i| DataValue::Num(Num::int(i))),
         any::<f64>().prop_map(|f| DataValue::Num(Num::float(f))),
-        "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s)),
+        "[\\PC]{0,12}".prop_map(DataValue::Str),
         // Json's Ord and encoding both reduce to the serialized string, but
         // the reduction is an argument, not a law — fuzz it like the rest.
         "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::json::json_from_serde(

@@ -51,20 +51,12 @@ pub mod string;
 pub mod tag;
 pub mod wide;
 
-pub use arena::{Arena, BulkObserver, Epoch, EpochRemap, Frame, Snapshot};
-pub use canonical::{
-    CanonicalBytes, Datum, DecodeError, append_canonical, decode, encode, encode_owned, skip_one,
-};
-pub use cell::{Minted, Value};
-pub use code::{Code, StampedCode};
-pub use column::{AdmittedCodes, AdmittedWords, CodeColumn, Column, Domain, WordColumn};
-pub use exec::{ExecDedup, ExecRows, Side};
+pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
 pub use number::{Num, NumRepr};
 pub use row::{
-    AdmittedRows, EncodedKey, PushError, RelationId, Rows, TupleT, encode_key_with_suffix,
-    scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
+    EncodedKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
+    scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
-pub use string::GermanStr;
 pub use tag::Tag;
 pub use wide::interval::{Bound, Interval};
 pub use wide::json::{Json, JsonNum, JsonObj};
@@ -655,6 +647,7 @@ pub enum ScanBound {
 
 impl ScanBound {
     /// Append the bound's written form to a key buffer.
+    #[cfg(test)]
     pub fn append_to_key(&self, out: &mut Vec<u8>) {
         match self {
             ScanBound::Least => {}
@@ -686,6 +679,7 @@ impl Ord for ScanBound {
 
 /// Decode a stored tuple: exactly `arity` canonical encodings, nothing
 /// trailing. Total — the storage tier's typed read door.
+#[cfg(test)]
 pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, DecodeError> {
     let mut out = Vec::with_capacity(arity);
     let mut at = 0usize;
@@ -702,6 +696,7 @@ pub fn decode_tuple(bytes: &[u8], arity: usize) -> Result<Vec<DataValue>, Decode
 
 #[cfg(test)]
 mod facade_tests {
+    use super::canonical::CanonicalBytes;
     use super::*;
 
     /// Deterministic PRNG (xorshift64*): seeded, reproducible, no clock.

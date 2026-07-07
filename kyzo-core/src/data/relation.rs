@@ -41,7 +41,7 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::functions::to_json;
-use crate::data::value::{DataValue, Num, NumRepr, RegexSource, Validity, ValidityTs, Vector};
+use crate::data::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
 
 use crate::data::json::{json_from_serde, serde_from_json};
 

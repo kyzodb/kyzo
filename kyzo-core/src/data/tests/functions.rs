@@ -18,7 +18,6 @@
 
 use std::f64::consts::{E, PI};
 
-use regex::Regex;
 use serde_json::json;
 
 use crate::data::functions::*;
@@ -753,8 +752,6 @@ fn test_math_valid_inputs_unaffected() {
 /// vectors still compute.
 #[test]
 fn test_vector_distance_domain_errors() {
-    use ndarray::arr1;
-
     let zero = DataValue::Vector(Vector::new(vec![0.0, 0.0]));
     let unit = DataValue::Vector(Vector::new(vec![1.0, 1.0]));
 

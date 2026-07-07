@@ -37,12 +37,6 @@
 //!   values, that is a new kind or format version, not a field slipped
 //!   into today's payload.
 
-/// The match-determinism contract: accepted syntax, flag semantics,
-/// Unicode behavior, and match semantics for every `Regex` value. There
-/// is exactly one dialect in format v1; every value is KyzoRegexV1 by
-/// definition.
-pub const KYZO_REGEX_DIALECT: &str = "KyzoRegexV1";
-
 /// The v1 flag bitset (closed; reserved bits refuse at decode). The
 /// constants are typed `RegexFlags`, composed with [`RegexFlags::union`]
 /// and probed with [`RegexFlags::contains`] — no loose `u8` bit passing.

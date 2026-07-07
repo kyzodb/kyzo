@@ -67,7 +67,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 
-use crate::data::value::{AsOf, DataValue, GermanStr, ValidityTs};
+use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };

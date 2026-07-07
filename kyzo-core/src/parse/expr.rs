@@ -45,7 +45,7 @@ use crate::data::functions::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, GermanStr};
+use crate::data::value::DataValue;
 use crate::parse::{
     ExtractSpan, IntoChildren, NESTING_CEILING, NestingTooDeep, Pair, Rule, strip_sigil, unexpected,
 };

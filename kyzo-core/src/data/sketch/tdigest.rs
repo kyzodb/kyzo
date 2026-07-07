@@ -46,7 +46,7 @@ use std::io::Write;
 
 use miette::{Result, bail, ensure};
 
-use crate::data::value::{DataValue, GermanStr, Num};
+use crate::data::value::{DataValue, Num};
 
 /// The compression parameter δ. Larger is more accurate and larger; 100 is
 /// the common default (≈ 1% rank error mid-distribution, better at tails).

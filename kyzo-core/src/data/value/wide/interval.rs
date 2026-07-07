@@ -219,8 +219,7 @@ impl Interval {
     /// Boundary topology, exposed so callers read interval SHAPE directly
     /// instead of reverse-engineering it from endpoint nullability. The
     /// empty interval has no boundary of any kind: every predicate below is
-    /// `false` for it (it is neither finitely bounded nor unbounded).
-
+    /// `false` for it (it is neither finitely bounded nor unbounded).    ///
     /// `true` iff there is a finite lower endpoint (`interval_start` is
     /// non-null).
     pub fn has_start(self) -> bool {

@@ -8,6 +8,7 @@
  */
 
 //! `Code(u32)`: the dense interned value handle — the hot-path identity the recursive relations and residency layers consume.
+#![allow(dead_code)] // #119 foundation: dead_code is target-split, #120 wires it
 
 /// The raw dense handle for an interned value: **identity only, no read
 /// authority**. By design, no read API anywhere accepts a bare `Code` —
@@ -30,6 +31,7 @@
 /// a frame. Structural ordering (deterministic iteration, dedup by
 /// identity) is spelled over [`Code::raw`], which claims identity order,
 /// never value order.
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Code(pub(super) u32);
 

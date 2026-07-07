@@ -36,6 +36,11 @@
 //! admission machinery — exactly why they exist as the vectorizable fast
 //! lane.
 
+// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
+// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
+// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
+#![allow(dead_code)]
+
 use std::cmp::Ordering;
 
 use super::arena::{ArenaId, BulkObserver, BulkSpendAuthority, Epoch, EpochRemap};
@@ -187,9 +192,9 @@ impl CodeColumn {
         );
         assert_eq!(
             self.domain.epoch,
-            remap.from_epoch(),
+            remap.source_epoch(),
             "gather fed a remap reading epoch {:?}, container is epoch {:?}",
-            remap.from_epoch(),
+            remap.source_epoch(),
             self.domain.epoch
         );
         let mut extent = 0u32;
@@ -205,7 +210,7 @@ impl CodeColumn {
         CodeColumn {
             domain: Domain {
                 arena: self.domain.arena,
-                epoch: remap.to_epoch(),
+                epoch: remap.target_epoch(),
                 extent,
             },
             codes,
@@ -360,9 +365,9 @@ impl WordColumn {
         );
         assert_eq!(
             self.domain.epoch,
-            remap.from_epoch(),
+            remap.source_epoch(),
             "gather fed a remap reading epoch {:?}, container is epoch {:?}",
-            remap.from_epoch(),
+            remap.source_epoch(),
             self.domain.epoch
         );
         let mut extent = 0u32;
@@ -380,7 +385,7 @@ impl WordColumn {
         WordColumn {
             domain: Domain {
                 arena: self.domain.arena,
-                epoch: remap.to_epoch(),
+                epoch: remap.target_epoch(),
                 extent,
             },
             words,

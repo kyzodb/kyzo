@@ -12,6 +12,3 @@
 //! variant/version interpretation (a v4 and a v7 UUID with equal bytes
 //! would be the same value, and unequal bytes are different values,
 //! full stop).
-
-/// Width of the canonical UUID payload.
-pub const UUID_LEN: usize = 16;

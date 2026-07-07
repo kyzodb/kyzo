@@ -100,7 +100,6 @@ use std::cmp::Reverse;
 use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use rustc_hash::FxHashMap;
-use smallvec::smallvec;
 use smartstring::SmartString;
 use thiserror::Error;
 
