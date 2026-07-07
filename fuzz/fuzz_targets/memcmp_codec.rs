@@ -8,6 +8,13 @@
  */
 
 #![no_main]
+// `DataValue` is used as a `BTreeSet` element in `gen_value`'s `Set` arm,
+// exactly as `kyzo-core/src/lib.rs` notes for its own crate-wide allow:
+// clippy's interior-mutability check is a false positive here (the
+// `Regex`/cache internals it flags are never mutated through a shared
+// reference), and that crate-level allow does not reach across the crate
+// boundary into this separate fuzz-target binary, so it is repeated here.
+#![allow(clippy::mutable_key_type)]
 
 //! Fuzzes the memcomparable key codec (`kyzo-core/src/data/memcmp.rs`)
 //! through its public façade — `encode_tuple_key` / `decode_tuple_from_key`
@@ -131,7 +138,7 @@ fn gen_value(u: &mut Unstructured, depth: usize) -> arbitrary::Result<DataValue>
             let j = gen_json(u, 0)?;
             let normalized: serde_json::Value =
                 serde_json::from_str(&j.to_string()).unwrap_or(serde_json::Value::Null);
-            DataValue::Json(JsonData(normalized))
+            DataValue::Json(JsonData::new(normalized))
         }
         10 => DataValue::Validity(Validity {
             timestamp: ValidityTs::from_raw(i64::arbitrary(u)?),
@@ -159,7 +166,7 @@ fn gen_value(u: &mut Unstructured, depth: usize) -> arbitrary::Result<DataValue>
 
 fn gen_tuple(u: &mut Unstructured) -> arbitrary::Result<Tuple> {
     let n = u.int_in_range(0..=4u32)?;
-    let mut t = Vec::with_capacity(n as usize);
+    let mut t = Tuple::with_capacity(n as usize);
     for _ in 0..n {
         t.push(gen_value(u, 0)?);
     }

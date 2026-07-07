@@ -39,7 +39,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use itertools::Itertools;
-use miette::{Diagnostic, LabeledSpan, Report, Result, bail, ensure};
+use miette::{Diagnostic, LabeledSpan, Report, Result, bail, ensure, miette};
 use pest::Parser;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
@@ -366,7 +366,8 @@ pub(crate) fn parse_query(
                 let limit = build_expr(pair, param_pool)?
                     .eval_to_const()
                     .map_err(|err| OptionNotConstantError("limit", span, [err]))?
-                    .get_non_neg_int()
+                    .get_int()
+                    .filter(|i| *i >= 0)
                     .ok_or(OptionNotNonNegIntError("limit", span))?;
                 out_opts.limit = Some(limit as usize);
             }
@@ -376,7 +377,8 @@ pub(crate) fn parse_query(
                 let offset = build_expr(pair, param_pool)?
                     .eval_to_const()
                     .map_err(|err| OptionNotConstantError("offset", span, [err]))?
-                    .get_non_neg_int()
+                    .get_int()
+                    .filter(|i| *i >= 0)
                     .ok_or(OptionNotNonNegIntError("offset", span))?;
                 out_opts.offset = Some(offset as usize);
             }
@@ -750,7 +752,14 @@ fn resolve_write_validity(
                 // reserved terminal tick (`i64::MAX` / `'END'`, issue #62's
                 // ruling) is refused at the one place a `ValidityTs`
                 // becomes a write coordinate, not re-derived here.
-                let vld = crate::data::value::ValidityTs::for_assertion(vld.raw(), span)?;
+                let vld =
+                    crate::data::value::ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
+                        miette!(
+                            labels = vec![miette::LabeledSpan::underline(span)],
+                            "a write validity cannot be the reserved terminal tick \
+                             (i64::MAX / 'END')"
+                        )
+                    })?;
                 Ok(WriteValidity::Fixed(vld))
             } else {
                 let head = prog.get_entry_out_head()?;

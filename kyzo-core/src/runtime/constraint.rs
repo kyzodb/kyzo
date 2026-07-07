@@ -75,7 +75,7 @@ use crate::data::program::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ValidityTs};
 use crate::fixed_rule::NamedRows;
 use crate::parse::parse_script;
@@ -540,9 +540,9 @@ mod tests {
             .expect("typed ConstraintViolation");
         assert_eq!(viol.name, "nonneg");
         assert_eq!(viol.total, 1);
+        let want: Vec<Tuple> = vec![vec![DataValue::from(3), DataValue::from(-4)]];
         assert_eq!(
-            viol.witnesses,
-            vec![vec![DataValue::from(3), DataValue::from(-4)]],
+            viol.witnesses, want,
             "the witness is exactly the violating row, post-write"
         );
 
@@ -587,7 +587,8 @@ mod tests {
             .run_script("?[id, fk] <- [[11, 2]] :put child {id, fk}", no_params())
             .expect_err("orphan child denied");
         let viol = err.downcast_ref::<ConstraintViolation>().expect("typed");
-        assert_eq!(viol.witnesses, vec![vec![DataValue::from(2)]]);
+        let want: Vec<Tuple> = vec![vec![DataValue::from(2)]];
+        assert_eq!(viol.witnesses, want);
 
         // Deleting the parent while a child references it: denied through
         // the parent-side attachment.
@@ -625,10 +626,8 @@ mod tests {
             .downcast_ref::<ConstraintRejectedOnCreation>()
             .expect("typed creation rejection");
         assert_eq!(rej.total, 1);
-        assert_eq!(
-            rej.witnesses,
-            vec![vec![DataValue::from(1), DataValue::from(-9)]]
-        );
+        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(-9)]];
+        assert_eq!(rej.witnesses, want);
 
         // Nothing was attached by the refused creation.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
@@ -692,7 +691,8 @@ mod tests {
             .expect_err("trigger write violates b's constraint");
         let viol = err.downcast_ref::<ConstraintViolation>().expect("typed");
         assert_eq!(viol.name, "small_b");
-        assert_eq!(viol.witnesses, vec![vec![DataValue::from(50)]]);
+        let want: Vec<Tuple> = vec![vec![DataValue::from(50)]];
+        assert_eq!(viol.witnesses, want);
         assert_eq!(
             ints(&db.run_script("?[x] := *a[x]", no_params()).unwrap()),
             vec![vec![5]],
@@ -796,7 +796,7 @@ mod tests {
         // Sorted ⇒ the cap keeps the smallest keys 1..=8.
         assert_eq!(
             baseline.2.first().unwrap(),
-            &vec![DataValue::from(1), DataValue::from(-1)]
+            &Tuple::from(vec![DataValue::from(1), DataValue::from(-1)])
         );
 
         for threads in [2, 4] {
@@ -1097,6 +1097,7 @@ mod tests {
             )
             .expect_err("duplicate email denied");
         let viol = err.downcast_ref::<ConstraintViolation>().expect("typed");
-        assert_eq!(viol.witnesses, vec![vec![DataValue::from("a@x.com")]]);
+        let want: Vec<Tuple> = vec![vec![DataValue::from("a@x.com")]];
+        assert_eq!(viol.witnesses, want);
     }
 }

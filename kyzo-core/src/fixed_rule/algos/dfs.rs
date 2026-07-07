@@ -142,6 +142,7 @@ impl FixedRule for Dfs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -199,18 +200,16 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), s("a"), DataValue::List(vec![s("a")])],
+            vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])],
+            vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])],
             vec![
-                vec![s("a"), s("a"), DataValue::List(vec![s("a")])],
-                vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])],
-                vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])],
-                vec![
-                    s("a"),
-                    s("d"),
-                    DataValue::List(vec![s("a"), s("c"), s("d")]),
-                ],
-            ]
-        );
+                s("a"),
+                s("d"),
+                DataValue::List(vec![s("a"), s("c"), s("d")]),
+            ],
+        ];
+        assert_eq!(got, want);
     }
 }

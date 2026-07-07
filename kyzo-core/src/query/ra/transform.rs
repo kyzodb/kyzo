@@ -22,15 +22,14 @@ use crate::data::expr::{Bytecode, Expr};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::query::ra::join::{eliminate_from_tuple, get_eliminate_indices};
 use crate::storage::ReadTx;
-use itertools::Itertools;
 use miette::{Diagnostic, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -85,7 +84,7 @@ impl ReorderRA {
                             reorder_indices
                                 .iter()
                                 .map(|i| tuple[*i].clone())
-                                .collect_vec()
+                                .collect::<Tuple>()
                         })
                         .collect();
                     Ok(Batch::with_rows(rows))
@@ -222,11 +221,12 @@ impl UnificationRA {
                 let batch = batch?;
                 let rows: Vec<&[DataValue]> = batch.iter_rows().collect();
                 let width = rows.first().map_or(0, |r| r.len());
-                let columns = crate::data::batch::ColumnBatch::from_rows(&rows, width);
+                let owned_rows: Vec<Tuple> = rows.iter().map(|r| r.to_vec()).collect();
+                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width);
                 let values = crate::query::vm::eval_expr_batched(
                     &ra.expr,
                     &columns,
-                    &crate::data::batch::Selection::all(rows.len()),
+                    &crate::query::batch::Selection::all(rows.len()),
                 )?;
                 let mut out = Batch::new();
                 let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {

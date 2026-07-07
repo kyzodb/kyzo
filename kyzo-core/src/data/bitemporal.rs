@@ -20,9 +20,15 @@ use std::cmp::Reverse;
 
 use miette::{Result, bail};
 
-use crate::data::memcmp::MemCmpEncoder;
-use crate::data::tuple::{EncodedKey, Tuple, VALUE_HEADER_LEN, decode_tuple_from_key};
-use crate::data::value::{AsOf, DataValue, TERMINAL_VALIDITY, Validity, ValidityTs};
+use crate::data::value::{
+    AsOf, DataValue, EncodedKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
+    decode_tuple_from_key, decode_values_all,
+};
+
+/// Fact-payload format v1: a stored row VALUE opens directly with its
+/// polarity byte (no header precedes it); the non-key columns' canonical
+/// encodings follow.
+const VALUE_HEADER_LEN: usize = 0;
 
 const DEFAULT_SIZE_HINT: usize = 16;
 
@@ -114,14 +120,14 @@ pub fn check_key_for_bitemporal(
     let splice_both = |v: Validity, s: Validity| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..valid_off]);
-        nxt.encode_datavalue(&DataValue::Validity(v));
-        nxt.encode_datavalue(&DataValue::Validity(s));
+        append_canonical(&mut nxt, &DataValue::Validity(v));
+        append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
     let splice_sys = |s: Validity| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..sys_off]);
-        nxt.encode_datavalue(&DataValue::Validity(s));
+        append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
 
@@ -222,15 +228,16 @@ pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()>
     if payload.is_empty() {
         return Ok(());
     }
-    crate::data::fact_payload::decode_fact_payload(payload, key)
+    key.extend(decode_values_all(payload)?);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::tuple::{RelationId, TupleT};
-    use crate::data::value::Num;
+
     use crate::data::value::ValidityTs;
+    use crate::data::value::{RelationId, TupleT};
     use std::collections::BTreeMap;
 
     fn vts(t: i64) -> ValidityTs {
@@ -258,8 +265,9 @@ mod tests {
             DataValue::Validity(slot(valid_ts)),
             DataValue::Validity(slot(sys_ts)),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec()
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec()
     }
 
     fn skip_walk(
@@ -349,7 +357,7 @@ mod tests {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(Num::Int(i)) => *i,
+                DataValue::Num(n) => n.as_int().expect("int-domain column"),
                 other => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
@@ -473,8 +481,9 @@ mod tests {
             }),
             DataValue::Validity(slot(5)),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec();
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec();
         assert!(
             check_key_for_bitemporal(&flagged, ClaimPolarity::Assert, zero_as_of(), None).is_err(),
             "retract flag in a stored valid slot must refuse"
@@ -484,8 +493,9 @@ mod tests {
             DataValue::Validity(TERMINAL_VALIDITY),
             DataValue::Validity(TERMINAL_VALIDITY),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec();
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec();
         assert!(
             check_key_for_bitemporal(&terminal, ClaimPolarity::Assert, zero_as_of(), None).is_err(),
             "the terminal sentinel is a bound, never a storable slot"
@@ -495,8 +505,9 @@ mod tests {
             DataValue::from(2i64),
             DataValue::from(3i64),
         ]
-        .encode_as_key(RelationId(7))
-        .into_vec();
+        .encode_as_key(RelationId::new(7).expect("below cap"))
+        .as_bytes()
+        .to_vec();
         assert!(
             check_key_for_bitemporal(&ints, ClaimPolarity::Assert, zero_as_of(), None).is_err()
         );
@@ -513,52 +524,55 @@ mod tests {
             ClaimPolarity::Retract,
             ClaimPolarity::Erase,
         ] {
-            let mut val = RelationId(7).raw_encode().to_vec();
-            val.push(polarity.encode());
+            let val = vec![polarity.encode()];
             assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
             // A bare retract/erase value carries no payload and extends
             // nothing.
-            let mut tup = vec![DataValue::from(1i64)];
+            let mut tup: Tuple = vec![DataValue::from(1i64)];
             extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
             assert_eq!(tup.len(), 1);
         }
         // An assert row's non-key columns ride after the polarity byte.
-        let mut val = RelationId(7).raw_encode().to_vec();
+        let mut val = Vec::new();
         val.push(ClaimPolarity::Assert.encode());
         let non_keys = vec![DataValue::from(42i64), DataValue::from(7i64)];
-        crate::data::fact_payload::encode_fact_payload(&non_keys, &mut val).unwrap();
-        let mut tup = vec![DataValue::from(1i64)];
+        for v in &non_keys {
+            crate::data::value::append_canonical(&mut val, v);
+        }
+        let mut tup: Tuple = vec![DataValue::from(1i64)];
         extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
         assert_eq!(
             tup,
-            vec![
+            Tuple::from(vec![
                 DataValue::from(1i64),
                 DataValue::from(42i64),
                 DataValue::from(7i64)
-            ]
+            ])
         );
-        // Refusals: short value, unknown polarity byte, garbage payload.
-        for len in 0..9usize {
-            assert!(claim_polarity_of_value(&vec![0u8; len]).is_err());
-            assert!(extend_tuple_from_bitemporal_v(&mut vec![], &vec![0u8; len]).is_err());
-        }
-        let mut bad = RelationId(7).raw_encode().to_vec();
-        bad.push(0xEE);
-        assert!(claim_polarity_of_value(&bad).is_err());
-        bad.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack bytes
-        assert!(extend_tuple_from_bitemporal_v(&mut vec![], &bad).is_err());
+        // Refusals. An EMPTY value has no polarity byte at all.
+        assert!(claim_polarity_of_value(&[]).is_err());
+        assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &[]).is_err());
+        // A leading byte that is not a known polarity is refused.
+        assert!(claim_polarity_of_value(&[0xEE]).is_err());
+        // A valid Assert polarity followed by a garbage payload: the
+        // polarity reads fine, but decoding the non-key columns refuses.
+        let mut bad = vec![ClaimPolarity::Assert.encode()];
+        bad.push(0xEE); // 0xEE is not a canonical value tag
+        assert_eq!(
+            claim_polarity_of_value(&bad).unwrap(),
+            ClaimPolarity::Assert
+        );
+        assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
     }
 
-    /// The judge-of-the-judge: story #62's unified oracle
-    /// (`query::laws::resolve_relation`) mirrors THIS kernel across the
-    /// sign boundary on both axes — 2000 generated histories, valid and
-    /// system coordinates each spanning negative and positive, probed at
-    /// coordinates on both sides of every stored one (this module's own
-    /// `bikey`/`skip_walk` reused directly, which is exactly why this
-    /// cross-check lives here rather than as a second, hand-built copy
-    /// in `query/laws.rs` — that file keeps a small fixed fixture as a
-    /// fast sanity check; this is the exhaustive one). Hostile-review
-    /// pin, issue #62 comment 4882951801.
+    /// Cross-check against the reference oracle: `query::laws::resolve_relation`
+    /// implements the same resolution kernel, mirrored across the sign
+    /// boundary on both axes (valid and system coordinates spanning
+    /// negative and positive). This test probes coordinates on both sides
+    /// of every stored one, using `bikey` and `skip_walk` directly from
+    /// this module (the exhaustive case with 2000 generated histories,
+    /// vs. the small fixed fixture in `query/laws.rs` used as a fast
+    /// sanity check).
     #[test]
     fn reverify_laws_resolve_mirrors_the_real_kernel_with_negative_timestamps() {
         use crate::query::laws;
@@ -598,9 +612,9 @@ mod tests {
             let history: Vec<laws::Event> = rows
                 .iter()
                 .map(|(f, v, s, p)| {
-                    let key = vec![DataValue::from(*f)];
+                    let key: Tuple = vec![DataValue::from(*f)];
                     match p {
-                        ClaimPolarity::Assert => laws::Event::assert(key, vec![], *v, *s),
+                        ClaimPolarity::Assert => laws::Event::assert(key, Tuple::new(), *v, *s),
                         ClaimPolarity::Retract => laws::Event::retract(key, *v, *s),
                         ClaimPolarity::Erase => laws::Event::erase(key, *v, *s),
                     }
@@ -619,7 +633,7 @@ mod tests {
                     )
                     .into_iter()
                     .map(|t| match &t[0] {
-                        DataValue::Num(Num::Int(i)) => *i,
+                        DataValue::Num(n) => n.as_int().expect("int-domain column"),
                         other => panic!("non-integer fact column: {other:?}"),
                     })
                     .collect();

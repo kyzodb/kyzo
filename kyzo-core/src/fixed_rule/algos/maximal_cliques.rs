@@ -460,6 +460,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -473,7 +474,7 @@ mod tests {
         let rows = edges
             .iter()
             .map(|&(a, b)| vec![s(a), s(b)])
-            .collect::<Vec<_>>();
+            .collect::<Vec<Tuple>>();
         let mut opts = BTreeMap::new();
         if let Some(mc) = max_cliques {
             opts.insert(
@@ -713,7 +714,7 @@ mod tests {
         let rows = eref
             .iter()
             .map(|&(a, b)| vec![s(a), s(b)])
-            .collect::<Vec<_>>();
+            .collect::<Vec<Tuple>>();
         let err = run_fixed_rule(
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
@@ -756,7 +757,7 @@ mod tests {
         let rows = owned
             .iter()
             .map(|(a, b)| vec![s(a), s(b)])
-            .collect::<Vec<_>>();
+            .collect::<Vec<Tuple>>();
         let got = run_fixed_rule(
             &MaximalCliques,
             vec![TestInput::new(vec!["fr", "to"], rows)],
@@ -780,7 +781,7 @@ mod tests {
         use crate::fixed_rule::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
-        let edges: Vec<_> = (0..n - 1)
+        let edges: Vec<Tuple> = (0..n - 1)
             .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))])
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
@@ -823,7 +824,7 @@ mod tests {
 
         // A 2k-node path: ~2k expansion steps, far above the trip point.
         let n: u32 = 2_000;
-        let edges: Vec<_> = (0..n - 1)
+        let edges: Vec<Tuple> = (0..n - 1)
             .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))])
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];

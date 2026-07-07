@@ -128,6 +128,7 @@ fn prim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -163,14 +164,12 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), s("b"), DataValue::from(1.0)],
-                vec![s("b"), s("c"), DataValue::from(2.0)],
-                vec![s("c"), s("d"), DataValue::from(3.0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), s("b"), DataValue::from(1.0)],
+            vec![s("b"), s("c"), DataValue::from(2.0)],
+            vec![s("c"), s("d"), DataValue::from(3.0)],
+        ];
+        assert_eq!(got, want);
     }
 
     /// TIE BEHAVIOR: equal weights on the chain a-b: 1, b-c: 1 from a.
@@ -198,12 +197,10 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), s("b"), DataValue::from(1.0)],
-                vec![s("b"), s("c"), DataValue::from(1.0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), s("b"), DataValue::from(1.0)],
+            vec![s("b"), s("c"), DataValue::from(1.0)],
+        ];
+        assert_eq!(got, want);
     }
 }

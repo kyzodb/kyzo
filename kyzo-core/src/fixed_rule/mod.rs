@@ -96,7 +96,7 @@ use crate::data::program::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue};
 use crate::fixed_rule::algos::*;
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
@@ -313,7 +313,7 @@ impl<'a> FixedRuleInputRelation<'a> {
                         name.as_plain_symbol().span,
                     )
                 })?;
-                let t = vec![prefix.clone()];
+                let t: Tuple = vec![prefix.clone()];
                 Box::new(store.prefix_iter(&t).map(|t| Ok(t.into_tuple())))
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
@@ -481,11 +481,7 @@ impl<'a> FixedRulePayload<'a> {
     }
 
     /// Extract a string option
-    pub fn string_option(
-        &self,
-        name: &str,
-        default: Option<&str>,
-    ) -> Result<SmartString<LazyCompact>> {
+    pub fn string_option(&self, name: &str, default: Option<&str>) -> Result<String> {
         match self.manifest.options.get(name) {
             Some(ex) => match ex.clone().eval_to_const()? {
                 DataValue::Str(s) => Ok(s),
@@ -504,7 +500,7 @@ impl<'a> FixedRulePayload<'a> {
                     rule_name: self.manifest.fixed_handle.name.to_string(),
                 }
                 .into()),
-                Some(s) => Ok(SmartString::from(s)),
+                Some(s) => Ok(s.to_string()),
             },
         }
     }
@@ -525,7 +521,7 @@ impl<'a> FixedRulePayload<'a> {
     pub fn integer_option(&self, name: &str, default: Option<i64>) -> Result<i64> {
         match self.manifest.options.get(name) {
             Some(v) => match v.clone().eval_to_const() {
-                Ok(DataValue::Num(n)) => match n.get_int() {
+                Ok(DataValue::Num(n)) => match n.as_int() {
                     Some(i) => Ok(i),
                     None => Err(FixedRuleOptionNotFoundError {
                         name: name.to_string(),
@@ -586,7 +582,7 @@ impl<'a> FixedRulePayload<'a> {
         match self.manifest.options.get(name) {
             Some(v) => match v.clone().eval_to_const() {
                 Ok(DataValue::Num(n)) => {
-                    let f = n.get_float();
+                    let f = n.to_f64();
                     Ok(f)
                 }
                 _ => Err(WrongFixedRuleOptionError {
@@ -797,7 +793,7 @@ mod fixed_rule_output_budget_tests {
     use super::*;
     use crate::data::value::DataValue;
 
-    fn row(i: i64) -> Vec<DataValue> {
+    fn row(i: i64) -> Tuple {
         vec![DataValue::from(i), DataValue::from(i)]
     }
 
@@ -912,7 +908,8 @@ impl NamedRows {
     /// Refuses (never silently drops data) when a column mixes more than
     /// one non-null kind, or a kind this encoder has no Arrow mapping for.
     pub fn to_arrow_ipc(&self) -> Result<Vec<u8>> {
-        let batch = crate::data::batch::ColumnBatch::from_rows(&self.rows, self.headers.len());
+        let batch =
+            crate::data::arrow_ipc::ColumnBatch::from_rows(self.rows.clone(), self.headers.len());
         let names: Vec<&str> = self.headers.iter().map(String::as_str).collect();
         crate::data::arrow_ipc::encode_stream(&batch, &names)
     }
@@ -1493,7 +1490,8 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(got, vec![vec![s("p")], vec![s("q")]]);
+        let want: Vec<Tuple> = vec![vec![s("p")], vec![s("q")]];
+        assert_eq!(got, want);
     }
 
     /// The stored-input seam refuses, typed, until the runtime lands.
@@ -1581,7 +1579,8 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(got, vec![vec![s("z")]]);
+        let want: Vec<Tuple> = vec![vec![s("z")]];
+        assert_eq!(got, want);
         handle.join().unwrap();
     }
 
@@ -1752,7 +1751,7 @@ mod tests {
             RandomWalk, ShortestPathAStar, ShortestPathDijkstra, StronglyConnectedComponent,
         };
 
-        fn e(a: &str, b: &str, w: f64) -> Vec<DataValue> {
+        fn e(a: &str, b: &str, w: f64) -> Tuple {
             vec![s(a), s(b), DataValue::from(w)]
         }
         fn const_expr(v: DataValue) -> Expr {

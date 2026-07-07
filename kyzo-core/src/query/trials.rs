@@ -73,8 +73,8 @@ use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::eval::{
     AtomOccurrence, Budget, BudgetDimension, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum,
     FixedRuleEval, LimitExceeded, Premises, RowLimit, RuleBody, Witness, WitnessTable,
@@ -1808,7 +1808,7 @@ fn gen_temporal_histories(rng: &mut Rng, p: &TemporalGenParams) -> TemporalHisto
     for &rel in HIST_RELS.iter().take(p.n_relations) {
         let mut per_key = BTreeMap::new();
         for i in 0..p.keys_per_relation {
-            let key = vec![v(i)];
+            let key: Tuple = vec![v(i)];
             per_key.insert(key.clone(), gen_temporal_history(rng, &key, p));
         }
         per_relation.insert(rel, per_key);
@@ -2054,7 +2054,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
     for seed in 0..seeds {
         let mut rng = Rng::new(0xD1FF_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
-        let key = vec![v(0)];
+        let key: Tuple = vec![v(0)];
         let history = gen_temporal_history(&mut rng, &key, &params);
 
         let sys_now = AsOf::current().sys;
@@ -2296,7 +2296,7 @@ fn erase_bug_manifests(history: &[Event], key: &Tuple) -> bool {
 #[test]
 fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
     let seeds = 300u64;
-    let key = vec![v(0)];
+    let key: Tuple = vec![v(0)];
 
     let mut caught_without_erase = false;
     for seed in 0..seeds {
@@ -2423,7 +2423,7 @@ fn abs_sort_bug_manifests(history: &[Event], key: &Tuple) -> bool {
 #[test]
 fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
     let seeds = 300u64;
-    let key = vec![v(0)];
+    let key: Tuple = vec![v(0)];
 
     let mut caught_nonneg_only = false;
     for seed in 0..seeds {
@@ -2537,7 +2537,7 @@ fn short_end_bug_manifests(history: &[Event], key: &Tuple, grid: &[i64]) -> bool
 #[test]
 fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end_boundary_bug() {
     let seeds = 300u64;
-    let key = vec![v(0)];
+    let key: Tuple = vec![v(0)];
 
     // Counted, not merely booleaned: a coordinates-only grid CAN still
     // catch this bug when two stored breakpoints happen to be exactly one
@@ -2701,7 +2701,7 @@ fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
     let mut seed_history = Vec::new();
     for &node in &nodes {
         if rng.chance(2, 3) {
-            let key = vec![v(node)];
+            let key: Tuple = vec![v(node)];
             for _ in 0..rng.range(1, 4) {
                 let valid = rng.range(-params.coord_span, params.coord_span);
                 let sys = rng.range(-params.coord_span, params.coord_span);
@@ -2817,7 +2817,7 @@ fn brute_force_closure(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
         for e1 in &closure {
             for e2 in &closure {
                 if e1[1] == e2[0] {
-                    let candidate = vec![e1[0].clone(), e2[1].clone()];
+                    let candidate: Tuple = vec![e1[0].clone(), e2[1].clone()];
                     if !closure.contains(&candidate) {
                         additions.push(candidate);
                     }
@@ -2838,7 +2838,7 @@ fn expected_unreachable(nodes: &[i64], edges: &BTreeSet<Tuple>) -> BTreeSet<Tupl
     let mut out = BTreeSet::new();
     for &a in nodes {
         for &b in nodes {
-            let t = vec![v(a), v(b)];
+            let t: Tuple = vec![v(a), v(b)];
             if !edges.contains(&t) {
                 out.insert(t);
             }

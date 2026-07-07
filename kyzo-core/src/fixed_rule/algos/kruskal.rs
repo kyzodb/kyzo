@@ -153,6 +153,7 @@ impl UnionFind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -164,7 +165,7 @@ mod tests {
     /// is a tie among equal priorities — hash-seeded, not pinnable.
     /// Normalize each row to (min endpoint, max endpoint, weight) and
     /// sort; the SET of tree edges and their weights are the semantics.
-    fn normalized(rows: Vec<Vec<DataValue>>) -> Vec<(DataValue, DataValue, DataValue)> {
+    fn normalized(rows: Vec<Tuple>) -> Vec<(DataValue, DataValue, DataValue)> {
         let mut out: Vec<_> = rows
             .into_iter()
             .map(|r| {

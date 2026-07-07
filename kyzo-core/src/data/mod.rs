@@ -7,27 +7,23 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-// Port in flight (#3): modules land bottom-up in dependency order; the
-// dead-code expectations fire — forcing their removal — as consumers land.
-// aggr's expectation fired when query/eval.rs landed as its first engine
-// consumer.
+// Modules are landed in dependency order, sorted bottom-up: the dead-code
+// expectations fire (forcing their removal) as consumers land. Once a
+// module's first engine consumer is in place, its dead-code expectation
+// becomes triggered and the expectation must be removed or changed to allow.
 pub(crate) mod aggr;
 pub(crate) mod arrow_ipc;
-pub(crate) mod batch;
 pub(crate) mod bitemporal;
 #[expect(dead_code)]
 pub(crate) mod expr;
-pub(crate) mod fact_payload;
 pub(crate) mod functions;
 pub(crate) mod json;
-pub(crate) mod memcmp;
 #[allow(dead_code)]
 pub(crate) mod program;
 pub(crate) mod relation;
 pub(crate) mod sketch;
 pub(crate) mod span;
 pub(crate) mod symb;
-pub(crate) mod tuple;
 pub(crate) mod value;
 
 #[cfg(test)]

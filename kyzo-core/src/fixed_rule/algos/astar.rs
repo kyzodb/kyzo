@@ -28,8 +28,8 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::{Expr, eval_bytecode};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
     FixedRulePayload, NodeNotFoundError,
@@ -99,7 +99,7 @@ fn astar(
     let mut stack = vec![];
     let mut eval_heuristic = |node: &Tuple| -> Result<f64> {
         let mut v = node.clone();
-        v.extend_from_slice(goal);
+        v.extend(goal.iter().cloned());
         let t = v;
         let cost_val = eval_bytecode(&heuristic_bytecode, &t, &mut stack)?;
         let cost = cost_val.get_float().ok_or_else(|| {
@@ -248,14 +248,12 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![vec![
-                s("a"),
-                s("c"),
-                DataValue::from(2.0),
-                DataValue::List(vec![s("a"), s("b"), s("c")]),
-            ]]
-        );
+        let want: Vec<Tuple> = vec![vec![
+            s("a"),
+            s("c"),
+            DataValue::from(2.0),
+            DataValue::List(vec![s("a"), s("b"), s("c")]),
+        ]];
+        assert_eq!(got, want);
     }
 }

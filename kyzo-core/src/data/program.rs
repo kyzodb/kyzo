@@ -32,10 +32,10 @@
  * deliberately not serialized (spans are never persisted in KyzoDB);
  * `MagicInlineRule::contained_rules` lands with the compile tier, which
  * owns the occurrence-keyed delta-selection map (`AtomOccurrence`, in
- * `query/eval.rs`) it returns — issue #68's fix replaced the original's
- * name-keyed `ContainedRuleMultiplicity` (a store mentioned twice in one
- * body collapsed to one `Many` entry and lost all delta narrowing) with
- * one entry per body position, so repeated occurrences of the same store
+ * `query/eval.rs`) it returns. The original's name-keyed
+ * `ContainedRuleMultiplicity` would collapse a store mentioned twice in one
+ * body to one `Many` entry and lose all delta narrowing. This implementation
+ * uses one entry per body position, so repeated occurrences of the same store
  * are each independently delta-selectable.
  */
 
@@ -179,11 +179,15 @@ impl WriteValidity {
                 // of the mutation's output columns, never what value that
                 // column will hold for any given row. Re-prove it here,
                 // per row, through the same smart constructor: a
-                // USER-ASSERTED write validity can never be the reserved
-                // terminal tick (`i64::MAX` / `'END'`, issue #62's ruling),
-                // the instant every open-end sentinel and derived interval
-                // reads as "still open."
-                crate::data::value::ValidityTs::for_assertion(vld.raw(), span)
+                // user-asserted write validity can never be the reserved
+                // terminal tick (`i64::MAX` / `'END'`), the instant every
+                // open-end sentinel and derived interval reads as "still open."
+                crate::data::value::ValidityTs::for_assertion(vld.raw()).ok_or_else(|| {
+                    miette::miette!(
+                        labels = vec![miette::LabeledSpan::underline(span)],
+                        "a write validity cannot be the reserved terminal tick (i64::MAX / 'END')"
+                    )
+                })
             }
         }
     }
@@ -769,14 +773,14 @@ pub(crate) enum DeltaAxis {
     Sys,
 }
 
-/// A stored-relation atom's trailing `@` clause, in the ONE grammar seat
-/// (issue #62's ratified surface decision: derivation and diff change row
-/// multiplicity, so they ride the atom-level clause that already changes
-/// what a stored atom yields, never a new top-level construct or an
-/// expression function).
+/// A stored-relation atom's trailing `@` clause, in the ONE grammar seat.
+/// Derivation and diff change row multiplicity: they ride the atom-level
+/// clause that already changes what a stored atom yields, never a new
+/// top-level construct or an expression function.
 ///
-/// `At` is the pre-existing point-in-time read, byte-identical to before
-/// this story. `Spans` and `Delta` each bind one EXTRA trailing column
+/// `At` is the pre-existing point-in-time read (unchanged, as it was
+/// before time-travel semantics expanded). `Spans` and `Delta` each bind
+/// one EXTRA trailing column
 /// beyond the atom's own `args` — the interval or the signed-fact marker
 /// — the same shape [`crate::query::search::SearchAtom::own_bindings`]
 /// already uses for a search's engine-appended columns; the resolver
@@ -1290,9 +1294,9 @@ pub(crate) trait BodyNormalizer {
     fn well_order(&mut self, rule: NormalFormInlineRule) -> Result<NormalFormInlineRule>;
 }
 
-/// Normalize one definition: total desugar here, DNF and well-ordering via
-/// the seam. Free function so `into_normalized_program` can consume `self`
-/// field by field.
+/// Normalize one definition: total desugar here, with disjunctive normal
+/// form and well-ordering checks. Implemented as a free function so
+/// `into_normalized_program` can consume its input field by field.
 fn normalize_ruleset(
     ruleset: InputInlineRulesOrFixed,
     normalizer: &mut impl BodyNormalizer,

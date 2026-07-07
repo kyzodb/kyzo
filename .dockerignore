@@ -1,0 +1,9 @@
+# The repo is bind-mounted at run time; the build context only needs the
+# toolchain pin. Keep host build artifacts and VCS out of the context.
+target
+target-container
+/target
+.git
+bench-data
+**/*.rlib
+**/*.rmeta

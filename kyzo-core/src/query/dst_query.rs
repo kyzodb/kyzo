@@ -65,7 +65,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 
 use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::query::compile::{
@@ -1007,7 +1007,7 @@ fn time_travel_under_faults_answers_or_errors() {
             (1, 30, true, "c"),
         ] {
             if assertive {
-                let row = vec![v(id), DataValue::Str(SmartString::from(state))];
+                let row = vec![v(id), DataValue::Str((*state).to_string())];
                 h.put_fact(&mut tx, &row, ValidityTs::from_raw(at), sp())?;
             } else {
                 h.retract_fact(&mut tx, &[v(id)], ValidityTs::from_raw(at), sp())?;
@@ -1093,7 +1093,7 @@ fn time_travel_under_faults_answers_or_errors() {
 
 fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
     data.iter()
-        .map(|(id, s)| vec![v(*id), DataValue::Str(SmartString::from(*s))])
+        .map(|(id, s)| vec![v(*id), DataValue::Str((*s).to_string())])
         .collect()
 }
 

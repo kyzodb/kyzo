@@ -81,14 +81,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::data::program::MagicSymbol;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, current_validity};
+use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::{CancelFlag, NamedRows};
 use crate::parse::{Script, parse_script};
 use crate::query::laws::{
     Literal, Program, Rel, Rule, Term, check_stratifiable, check_wellformed, naive_eval,
 };
 use crate::query::normalize::{SessionNormalizer, SessionView};
+use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::storage::Storage;
 use crate::storage::sim::SimStorage;

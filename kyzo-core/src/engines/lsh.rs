@@ -108,11 +108,9 @@ use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
 use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
-use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple, append_canonical};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
@@ -311,10 +309,10 @@ pub(crate) struct HashValues(pub(crate) Vec<u32>);
 /// integer or a collection writes native-endian words and word-sized length
 /// prefixes (`write_usize`), so the same value produced a different MinHash
 /// signature on a different platform or Rust version — the same index, a
-/// different near-duplicate answer. memcmp is version- and platform-pinned.
+/// different near-duplicate answer. The canonical encoding is version- and platform-pinned.
 fn element_bytes(v: &DataValue) -> Vec<u8> {
     let mut b = Vec::new();
-    b.encode_datavalue(v);
+    append_canonical(&mut b, v);
     b
 }
 
@@ -325,7 +323,7 @@ fn element_bytes(v: &DataValue) -> Vec<u8> {
 fn ngram_bytes(tokens: &[SmartString<LazyCompact>]) -> Vec<u8> {
     let mut b = Vec::new();
     for t in tokens {
-        b.encode_datavalue(&DataValue::Str(t.clone()));
+        append_canonical(&mut b, &DataValue::Str(t.to_string()));
     }
     b
 }
@@ -544,11 +542,12 @@ pub(crate) fn lsh_del<T: WriteTx>(
             decoded
         }
     };
+    // Placeholder slot: every loop below overwrites key[0] before use.
     let mut key = Vec::with_capacity(key_len + 1);
-    key.push(DataValue::Bot);
+    key.push(DataValue::Null);
     key.extend_from_slice(key_part);
     for chunk in chunks {
-        key[0] = DataValue::Bytes(chunk);
+        key[0] = DataValue::Bytes(chunk.clone());
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -604,8 +603,9 @@ pub(crate) fn lsh_put<T: WriteTx>(
     };
     let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
 
+    // Placeholder slot: every loop below overwrites key[0] before use.
     let mut key = Vec::with_capacity(key_len + 1);
-    key.push(DataValue::Bot);
+    key.push(DataValue::Null);
     key.extend_from_slice(inv_key_part);
     for chunk in chunks.iter() {
         key[0] = DataValue::Bytes(chunk.clone());
@@ -684,10 +684,10 @@ pub(crate) fn lsh_search(
     // smallest-k-by-key cannot early-stop, since a later band may hold a
     // smaller key.)
     let mut found_tuples: BTreeSet<Tuple> = BTreeSet::new();
-    let mut key_prefix = Vec::with_capacity(1);
+    let mut key_prefix = Tuple::with_capacity(1);
     for chunk in chunks {
         key_prefix.clear();
-        key_prefix.push(DataValue::Bytes(chunk));
+        key_prefix.push(DataValue::Bytes(chunk.clone()));
         for ks in idx.scan_prefix(tx, &key_prefix) {
             cancel.check()?;
             let ks = ks?;
@@ -861,19 +861,41 @@ mod tests {
     /// the memcmp encoder and xxHash32 under seeds 10/20/30, take the min.
     #[test]
     fn signature_bytes_are_pinned_and_portable() {
+        // INDEPENDENT ANCHOR. The element bytes are the canonical encoding
+        // of `Int(1..3)`, derived from the format law by hand (the value
+        // tag `0x10` = `Tag::Num`, then the 13-byte Num key pinned
+        // byte-for-byte by `data::value::number::format_v1_golden_vectors`
+        // -- `int(1) = 03 04 39 80 00..`, `int(2) = 03 04 3a 80 00..`,
+        // `int(3) = 03 04 3a c0 00..`). If the production encoder drifts
+        // from the format, THIS equality fails first, independent of the
+        // signature below.
+        let hand_derived: Vec<Vec<u8>> = vec![
+            vec![0x10, 0x03, 0x04, 0x39, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0x10, 0x03, 0x04, 0x3a, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0x10, 0x03, 0x04, 0x3a, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ];
+        assert_eq!(
+            int_bytes(&[1, 2, 3]),
+            hand_derived,
+            "element encoding drifted from the hand-derived canonical format"
+        );
+
         let perms = HashPermutations(vec![10, 20, 30]);
-        let sig = HashValues::new(int_bytes(&[1, 2, 3]).into_iter(), &perms);
+        // The signature is the seeded-xxHash32 MinHash of the FORMAT-VERIFIED
+        // element bytes above -- so this pin catches drift in the MinHash
+        // algorithm, the encoding drift having already been caught.
+        let sig = HashValues::new(hand_derived.into_iter(), &perms);
         assert_eq!(
             sig.0, PINNED_SIGNATURE,
             "the MinHash signature wire value drifted; this is an on-disk \
-             format event (element encoding or hash changed), not a test to bump"
+             format event (the hash algorithm changed), not a test to bump"
         );
     }
 
     /// Pinned signature of `{Int(1), Int(2), Int(3)}` under seeds `[10, 20, 30]`
     /// (memcmp element bytes → seeded xxHash32 → per-seed minimum). Regenerate
     /// ONLY as a deliberate format migration.
-    const PINNED_SIGNATURE: [u32; 3] = [35817863, 664601928, 1320854893];
+    const PINNED_SIGNATURE: [u32; 3] = [741026819, 588752230, 918467525];
 
     /// The determinism law at the whole-index level: two databases building the
     /// SAME index from the SAME facts — with the SEEDED permutation draw, not a
@@ -947,8 +969,8 @@ mod tests {
             let rtx = db.read_tx().unwrap();
             let mut out = vec![];
             for rel in [&idx, &inv] {
-                let lower = crate::data::tuple::encode_tuple_key(rel.id.0, &[]);
-                let upper = (rel.id.0 + 1).to_be_bytes();
+                let lower = crate::data::value::encode_key_with_suffix(rel.id, &[], &[]);
+                let upper = (rel.id.raw() + 1).to_be_bytes();
                 for kv in rtx.range_scan(lower.as_bytes(), &upper) {
                     let (k, v) = kv.unwrap();
                     out.push((k[8..].to_vec(), v.get(8..).unwrap_or(&[]).to_vec()));

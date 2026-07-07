@@ -100,8 +100,7 @@ use thiserror::Error;
 use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, LARGEST_UTF_CHAR};
+use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
@@ -215,7 +214,7 @@ fn extract_text(
     extractor: &[Bytecode],
     tuple: &[DataValue],
     stack: &mut Vec<DataValue>,
-) -> Result<Option<SmartString<LazyCompact>>> {
+) -> Result<Option<String>> {
     match eval_bytecode(extractor, tuple, stack)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
@@ -226,11 +225,12 @@ fn extract_text(
 }
 
 /// The FTS posting key under construction: `[word, src_key…]` with the word
-/// slot left as `Bot` for the caller to fill per term.
+/// slot seeded `Null` for the caller to overwrite per term (every caller
+/// fills it before the key is used).
 fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Vec::with_capacity(1 + base_key_len);
-    key.push(DataValue::Bot);
-    key.extend_from_slice(&tuple[..base_key_len]);
+    let mut key = Tuple::with_capacity(1 + base_key_len);
+    key.push(DataValue::Null);
+    key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
 
@@ -284,7 +284,7 @@ pub(crate) fn fts_put<T: WriteTx>(
 
     let mut key = posting_key_scaffold(base_key_len, tuple);
     for (term, (from, to, position)) in collector {
-        key[0] = DataValue::Str(term);
+        key[0] = DataValue::Str(term.to_string());
         let val = vec![
             DataValue::List(from),
             DataValue::List(to),
@@ -332,7 +332,7 @@ pub(crate) fn fts_del<T: WriteTx>(
     }
     let mut key = posting_key_scaffold(base_key_len, tuple);
     for term in terms {
-        key[0] = DataValue::Str(term);
+        key[0] = DataValue::Str(term.to_string());
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -347,9 +347,8 @@ pub(crate) fn fts_del<T: WriteTx>(
 /// Hoisted so a multi-tuple search counts once; pass `0` when the score kind
 /// is `Tf` (the count is unused there).
 pub(crate) fn fts_total_docs(tx: &impl ReadTx, base: &RelationHandle) -> Result<usize> {
-    let start = base.encode_partial_key_for_store(&[]);
-    let end = base.encode_partial_key_for_store(&[DataValue::Bot]);
-    tx.range_count(start.as_bytes(), end.as_bytes())
+    let (start, end) = base.whole_relation_bounds();
+    tx.range_count(&start, &end)
 }
 
 /// One document's positions for one matched literal.
@@ -376,12 +375,13 @@ fn literal_postings(
         idx.scan_bounded_prefix(
             tx,
             &[],
-            &[DataValue::Str(SmartString::from(value))],
-            &[DataValue::Str(upper)],
+            &[ScanBound::Value(DataValue::Str(value.to_string()))],
+            &[ScanBound::Value(DataValue::Str(upper.to_string()))],
         )
     } else {
-        idx.scan_prefix(tx, &vec![DataValue::Str(SmartString::from(value))])
+        idx.scan_prefix(tx, &vec![DataValue::Str(value.to_string())])
     };
+    let scan = crate::engines::index_rows(&idx.name, scan);
 
     // Value column indices in the decoded tuple: word(0), src keys
     // (1..=base_key_len), then offset_from, offset_to, position, total_length.
@@ -1060,8 +1060,8 @@ mod tests {
         // Byte-flip every index row's value to reserved-msgpack garbage.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::tuple::encode_tuple_key(f.idx.id.0, &[]);
-            let upper = (f.idx.id.0 + 1).to_be_bytes();
+            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
@@ -1090,8 +1090,9 @@ mod tests {
         )
         .expect_err("corrupt postings must error, not panic");
         assert!(
-            format!("{err:?}").contains("corrupt"),
-            "names corruption: {err:?}"
+            err.downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
     }
 

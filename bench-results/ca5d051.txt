@@ -1,0 +1,9 @@
+# KyzoDB transitive-closure benchmark
+commit:  ca5d051  bench: purge bespoke synthetic benches; standard TC-over-SNAP be
+date:    2026-07-06
+machine: Linux 7.0.14-arch1-1 x86_64 | Intel(R) Core(TM) i9-14900K | 32 cores
+workload: transitive closure (canonical 2-rule Datalog) over SNAP graphs, variant=count
+
+TC graph=email-Eu-core edges=25571 nodes=1005 variant=count load_ms=112.8 query_ms=4537.3 closure_rows=793283 peak_rss_kb=88468
+TC graph=p2p-Gnutella08 edges=20777 nodes=6301 variant=count load_ms=87.6 query_ms=28054.0 closure_rows=13148244 peak_rss_kb=807156
+TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=419.5 query_ms=74383.2 closure_rows=11947132 peak_rss_kb=794236

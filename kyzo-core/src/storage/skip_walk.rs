@@ -138,8 +138,8 @@ use miette::Result;
 use crate::data::bitemporal::{
     check_key_for_bitemporal, claim_polarity_of_value, extend_tuple_from_bitemporal_v,
 };
-use crate::data::tuple::Tuple;
 use crate::data::value::AsOf;
+use crate::data::value::Tuple;
 
 /// A single positioned cursor, repositioned forward by [`Self::seek`]
 /// rather than rebuilt. `target` is always non-decreasing across calls on
@@ -255,10 +255,10 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::tuple::{RelationId, TupleT};
     use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{RelationId, TupleT};
 
-    const REL: RelationId = RelationId(9);
+    const REL: RelationId = RelationId::new(9).expect("below cap");
 
     /// `advance_past` as its own pinned law: a tie, a regression, and a
     /// genuine advance, plus the empty-key edge — independent of whether
@@ -349,19 +349,18 @@ mod tests {
             DataValue::Validity(slot(sys_ts)),
         ]
         .encode_as_key(REL)
-        .into_vec()
+        .as_bytes()
+        .to_vec()
     }
 
     fn bval(polarity: ClaimPolarity) -> Vec<u8> {
-        let mut v = REL.raw_encode().to_vec();
-        v.push(polarity.encode());
-        v
+        vec![polarity.encode()]
     }
 
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
-            Tuple::default().encode_as_key(REL).into_vec(),
-            (REL.0 + 1).to_be_bytes().to_vec(),
+            Tuple::default().encode_as_key(REL).as_bytes().to_vec(),
+            (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }
 
@@ -369,7 +368,7 @@ mod tests {
         tuples
             .iter()
             .map(|t| match &t[0] {
-                DataValue::Num(crate::data::value::Num::Int(i)) => *i,
+                DataValue::Num(n) => n.as_int().expect("int-domain column"),
                 other => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
@@ -493,12 +492,11 @@ mod tests {
     #[test]
     fn skip_walk_refuses_corrupt_bytes_and_terminates() {
         let (lower, upper) = rel_bounds();
-        let hostile_short: Vec<u8> = [&REL.0.to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
+        let hostile_short: Vec<u8> = [&REL.raw().to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
         let mut hostile_sys_tag = bikey(5, 100, 1);
         let n = hostile_sys_tag.len();
         hostile_sys_tag[n - 10] = 0xFE;
-        let mut unknown_polarity = REL.raw_encode().to_vec();
-        unknown_polarity.push(0xEE);
+        let unknown_polarity = vec![0xEE];
 
         let scenarios: Vec<Vec<(Vec<u8>, Vec<u8>)>> = vec![
             vec![

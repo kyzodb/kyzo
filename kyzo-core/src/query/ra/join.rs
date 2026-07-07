@@ -22,8 +22,8 @@ use crate::data::expr::{Bytecode, eval_bytecode_pred};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{BATCH_ROWS, Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -91,7 +91,7 @@ pub(crate) fn eliminate_from_tuple(mut ret: Tuple, eliminate_indices: &BTreeSet<
                     Some(v)
                 }
             })
-            .collect_vec();
+            .collect();
     }
     ret
 }
@@ -587,7 +587,7 @@ impl InnerJoin {
                         right_store_indices
                             .iter()
                             .map(|i| row[*i].clone())
-                            .collect_vec(),
+                            .collect::<Tuple>(),
                     );
                 }
             }

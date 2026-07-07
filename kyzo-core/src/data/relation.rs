@@ -41,9 +41,21 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::functions::to_json;
-use crate::data::value::{
-    DataValue, JsonData, Num, UuidWrapper, Validity, ValidityTs, VecElementType, Vector,
-};
+use crate::data::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
+
+use crate::data::json::{json_from_serde, serde_from_json};
+
+/// Schema vocabulary: a vector column's declared element width. Stored
+/// vector VALUES are always f64 canonical (format v1); `F32` columns
+/// constrain declared width and let engines pack narrower internally —
+/// every f32 is exactly representable as f64, so identity round-trips.
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
+)]
+pub(crate) enum VecElementType {
+    F32,
+    F64,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct NullableColType {
@@ -223,14 +235,6 @@ impl NullableColType {
         Ok(match &self.coltype {
             ColType::Any => match data {
                 DataValue::Set(s) => DataValue::List(s.into_iter().collect_vec()),
-                DataValue::Bot => {
-                    #[derive(Debug, Error, Diagnostic)]
-                    #[error("data coercion failed: internal type Bot not allowed")]
-                    #[diagnostic(code(eval::coercion_from_bot))]
-                    struct DataCoercionFromBot;
-
-                    bail!(DataCoercionFromBot)
-                }
                 d => d,
             },
             ColType::Bool => DataValue::from(data.get_bool().ok_or_else(make_err)?),
@@ -251,13 +255,21 @@ impl NullableColType {
                     #[diagnostic(code(eval::coercion_bad_base_64))]
                     struct BadBase64EncodedString(String);
                     let b = STANDARD
-                        .decode(s)
+                        .decode(s.as_bytes())
                         .map_err(|e| BadBase64EncodedString(e.to_string()))?;
                     DataValue::Bytes(b)
                 }
                 _ => bail!(make_err()),
             },
-            ColType::Uuid => DataValue::Uuid(UuidWrapper(data.get_uuid().ok_or_else(make_err)?)),
+            ColType::Uuid => match data {
+                u @ DataValue::Uuid(_) => u,
+                // A UUID string literal coerces by parsing — the embedder
+                // boundary (and KyzoScript) hand UUIDs as strings.
+                DataValue::Str(ref s) => {
+                    DataValue::uuid(uuid::Uuid::try_parse(s).map_err(|_| make_err())?)
+                }
+                _ => bail!(make_err()),
+            },
             ColType::List { eltype, len } => {
                 if let DataValue::List(l) = data {
                     if let Some(expected) = len {
@@ -277,29 +289,34 @@ impl NullableColType {
                     if l.len() != *len {
                         bail!(BadListLength(self.clone(), l.len()))
                     }
-                    match eltype {
-                        VecElementType::F32 => {
-                            let collected: Vec<f32> = l
-                                .iter()
-                                .map(|el| el.get_float().map(|f| f as f32).ok_or_else(make_err))
-                                .try_collect()?;
-                            DataValue::Vec(Vector::F32(ndarray::Array1::from_vec(collected)))
-                        }
-                        VecElementType::F64 => {
-                            let collected: Vec<f64> = l
-                                .iter()
-                                .map(|el| el.get_float().ok_or_else(make_err))
-                                .try_collect()?;
-                            DataValue::Vec(Vector::F64(ndarray::Array1::from_vec(collected)))
-                        }
-                    }
+                    let collected: Vec<f64> = l
+                        .iter()
+                        .map(|el| {
+                            el.get_float()
+                                .map(|f| match eltype {
+                                    VecElementType::F32 => f as f32 as f64,
+                                    VecElementType::F64 => f,
+                                })
+                                .ok_or_else(make_err)
+                        })
+                        .try_collect()?;
+                    DataValue::Vector(Vector::new(collected))
                 }
-                DataValue::Vec(arr) => {
-                    if *eltype != arr.el_type() || *len != arr.len() {
+                DataValue::Vector(arr) => {
+                    if *len != arr.len() {
                         bail!(make_err())
-                    } else {
-                        data
                     }
+                    // The declared element type is a precision constraint on
+                    // the f64-canonical components, not a storage variant.
+                    if matches!(eltype, VecElementType::F32)
+                        && arr
+                            .as_slice()
+                            .iter()
+                            .any(|&f| (f as f32 as f64) != f && !f.is_nan())
+                    {
+                        bail!(make_err())
+                    }
+                    data
                 }
                 DataValue::Str(s) => {
                     // Base64-encoded raw floats. Little-endian is the
@@ -310,36 +327,37 @@ impl NullableColType {
                     // mismatch — including trailing bytes short of a full
                     // element — is an error, never a silent truncation.
                     let bytes = STANDARD.decode(s).map_err(|_| make_err())?;
-                    match eltype {
+                    let collected: Vec<f64> = match eltype {
                         VecElementType::F32 => {
                             // Division form: the multiplication form wraps in
                             // release on a pathological declared length.
                             if bytes.len() / size_of::<f32>() != *len
-                                || bytes.len() % size_of::<f32>() != 0
+                                || !bytes.len().is_multiple_of(size_of::<f32>())
                             {
                                 bail!(make_err())
                             }
-                            let collected: Vec<f32> = bytes
+                            bytes
                                 .chunks_exact(4)
                                 // In bounds: `chunks_exact(4)` yields 4-byte chunks.
-                                .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")))
-                                .collect();
-                            DataValue::Vec(Vector::F32(ndarray::Array1::from_vec(collected)))
+                                .map(|c| {
+                                    f32::from_le_bytes(c.try_into().expect("chunk of 4")) as f64
+                                })
+                                .collect()
                         }
                         VecElementType::F64 => {
                             if bytes.len() / size_of::<f64>() != *len
-                                || bytes.len() % size_of::<f64>() != 0
+                                || !bytes.len().is_multiple_of(size_of::<f64>())
                             {
                                 bail!(make_err())
                             }
-                            let collected: Vec<f64> = bytes
+                            bytes
                                 .chunks_exact(8)
                                 // In bounds: `chunks_exact(8)` yields 8-byte chunks.
                                 .map(|c| f64::from_le_bytes(c.try_into().expect("chunk of 8")))
-                                .collect();
-                            DataValue::Vec(Vector::F64(ndarray::Array1::from_vec(collected)))
+                                .collect()
                         }
-                    }
+                    };
+                    DataValue::Vector(Vector::new(collected))
                 }
                 _ => bail!(make_err()),
             },
@@ -419,74 +437,65 @@ impl NullableColType {
                     v => bail!(InvalidValidity(v)),
                 }
             }
-            ColType::Json => DataValue::Json(JsonData(match data {
-                DataValue::Null => {
-                    json!(null)
-                }
-                DataValue::Bool(b) => {
-                    json!(b)
-                }
-                DataValue::Num(n) => match n {
-                    Num::Int(i) => {
-                        json!(i)
+            ColType::Json => {
+                let serde_val = match data {
+                    DataValue::Null => {
+                        json!(null)
                     }
-                    Num::Float(f) => {
-                        json!(f)
+                    DataValue::Bool(b) => {
+                        json!(b)
                     }
-                },
-                DataValue::Str(s) => {
-                    json!(s)
-                }
-                DataValue::Bytes(b) => {
-                    json!(b)
-                }
-                DataValue::Uuid(u) => {
-                    json!(u.0.as_bytes())
-                }
-                DataValue::Regex(r) => {
-                    json!(r.0.as_str())
-                }
-                DataValue::List(l) => {
-                    let mut arr = Vec::with_capacity(l.len());
-                    for el in l {
-                        arr.push(to_json(&self.coerce(el, cur_vld)?));
-                    }
-                    arr.into()
-                }
-                DataValue::Set(l) => {
-                    let mut arr = Vec::with_capacity(l.len());
-                    for el in l {
-                        arr.push(to_json(&self.coerce(el, cur_vld)?));
-                    }
-                    arr.into()
-                }
-                DataValue::Vec(v) => {
-                    let mut arr = Vec::with_capacity(v.len());
-                    match v {
-                        Vector::F32(a) => {
-                            for el in a {
-                                arr.push(json!(el));
-                            }
+                    DataValue::Num(n) => match n.repr() {
+                        NumRepr::Int(i) => {
+                            json!(i)
                         }
-                        Vector::F64(a) => {
-                            for el in a {
-                                arr.push(json!(el));
-                            }
+                        NumRepr::Float(f) => {
+                            json!(f)
                         }
+                    },
+                    DataValue::Str(s) => {
+                        json!(s)
                     }
-                    arr.into()
-                }
-                DataValue::Json(j) => j.0,
-                DataValue::Validity(vld) => {
-                    json!([vld.timestamp.raw(), vld.is_assert.0])
-                }
-                DataValue::Interval(iv) => {
-                    json!([iv.start(), iv.end()])
-                }
-                DataValue::Bot => {
-                    json!(null)
-                }
-            })),
+                    DataValue::Bytes(b) => {
+                        json!(b)
+                    }
+                    DataValue::Uuid(u) => {
+                        json!(u.0.as_bytes())
+                    }
+                    DataValue::Regex(r) => {
+                        json!(r.pattern())
+                    }
+                    DataValue::List(l) => {
+                        let mut arr = Vec::with_capacity(l.len());
+                        for el in l {
+                            arr.push(to_json(&self.coerce(el, cur_vld)?));
+                        }
+                        arr.into()
+                    }
+                    DataValue::Set(l) => {
+                        let mut arr = Vec::with_capacity(l.len());
+                        for el in l {
+                            arr.push(to_json(&self.coerce(el, cur_vld)?));
+                        }
+                        arr.into()
+                    }
+                    DataValue::Vector(v) => {
+                        let mut arr = Vec::with_capacity(v.len());
+                        for el in v.as_slice() {
+                            arr.push(json!(el));
+                        }
+                        arr.into()
+                    }
+                    DataValue::Json(j) => serde_from_json(&j),
+                    DataValue::Validity(vld) => {
+                        json!([vld.timestamp.raw(), vld.is_assert.0])
+                    }
+                    DataValue::Interval(iv) => {
+                        json!([iv.start(), iv.end()])
+                    }
+                };
+                DataValue::Json(json_from_serde(&serde_val))
+            }
         })
     }
 }

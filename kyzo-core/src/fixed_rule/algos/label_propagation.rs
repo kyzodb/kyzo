@@ -124,6 +124,7 @@ fn label_propagation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -136,7 +137,7 @@ mod tests {
     /// surely) diverge; the fixed seed makes them identical.
     fn ring_inputs() -> Vec<TestInput> {
         let n = 12usize;
-        let edges: Vec<_> = (0..n)
+        let edges: Vec<Tuple> = (0..n)
             .map(|i| vec![s(&format!("a{i}")), s(&format!("a{}", (i + 1) % n))])
             .collect();
         vec![TestInput::new(vec!["fr", "to"], edges)]
@@ -254,16 +255,14 @@ mod tests {
         .unwrap();
         let one = DataValue::from(1i64);
         let four = DataValue::from(4i64);
-        assert_eq!(
-            got,
-            vec![
-                vec![one.clone(), s("a")],
-                vec![one.clone(), s("b")],
-                vec![one, s("c")],
-                vec![four.clone(), s("x")],
-                vec![four.clone(), s("y")],
-                vec![four, s("z")],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![one.clone(), s("a")],
+            vec![one.clone(), s("b")],
+            vec![one, s("c")],
+            vec![four.clone(), s("x")],
+            vec![four.clone(), s("y")],
+            vec![four, s("z")],
+        ];
+        assert_eq!(got, want);
     }
 }

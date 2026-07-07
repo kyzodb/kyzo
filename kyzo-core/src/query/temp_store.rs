@@ -104,8 +104,8 @@ use itertools::Itertools;
 use miette::{Result, miette};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj};
-use crate::data::tuple::{Tuple, decode_tuple_bare, encode_tuple_bare};
 use crate::data::value::DataValue;
+use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
 
 // ─────────────────────────────────────────────────────────────────────────
 // The admission seam
@@ -179,7 +179,10 @@ pub struct RegularTempStore {
 /// meet store's group key): still `DataValue`-shaped, since the meet path
 /// is unconverted this chunk (`MeetAggrStore`/`MeetLevel` stay as-is; see
 /// this module's doc).
-pub(crate) const EMPTY_TUPLE_REF: &Tuple = &Vec::new();
+pub(crate) fn empty_tuple_ref() -> &'static Tuple {
+    static EMPTY: std::sync::OnceLock<Tuple> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(Tuple::new)
+}
 
 impl RegularTempStore {
     pub(crate) fn wrap(self) -> TempStore {
@@ -323,7 +326,7 @@ impl MeetLayout {
     /// placeholder survives.
     pub(crate) fn interleave(&self, key: &[u8], vals: &[DataValue]) -> Tuple {
         let key = decode_tuple_bare(key).expect("this store's own bytes decode");
-        let mut row = vec![DataValue::Null; self.arity];
+        let mut row: Tuple = vec![DataValue::Null; self.arity];
         for (slot, i) in self.key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
@@ -676,9 +679,7 @@ impl TupleInIter<'_> {
                 key.extend(val.iter().cloned());
                 key
             }
-            TupleInIter::Values { key, val, .. } => {
-                key.iter().chain(val.iter()).cloned().collect_vec()
-            }
+            TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cloned().collect(),
         }
     }
     /// Total comparison against a plain slice, through `DataValue`'s total
@@ -688,6 +689,29 @@ impl TupleInIter<'_> {
     /// without decoding the stored side at all where the whole row is
     /// bytes; a mixed key still decodes its own (small) key half since the
     /// value half is not comparably encoded.
+    /// Compare this row's BARE byte form to a bare bound (byte order is
+    /// value order by the mirror law; 0xFF-closed bounds sort past every
+    /// row extension).
+    pub(crate) fn cmp_bare(&self, probe: &[u8]) -> Ordering {
+        match self {
+            TupleInIter::Bytes { key, .. } => (*key).cmp(probe),
+            TupleInIter::MeetSuffix { key, val, .. } => {
+                let mut full = key.to_vec();
+                for v in val.iter() {
+                    crate::data::value::append_canonical(&mut full, v);
+                }
+                full.as_slice().cmp(probe)
+            }
+            TupleInIter::Values { key, val, .. } => {
+                let mut full = Vec::new();
+                for v in key.iter().chain(val.iter()) {
+                    crate::data::value::append_canonical(&mut full, v);
+                }
+                full.as_slice().cmp(probe)
+            }
+        }
+    }
+
     pub(crate) fn cmp_slice(&self, other: &[DataValue]) -> Ordering {
         match self {
             TupleInIter::Bytes { key, .. } => {
@@ -704,10 +728,9 @@ impl TupleInIter<'_> {
 }
 
 /// The `idx`-th self-delimiting value in `bytes`, walking from the start
-/// (bare-encoded rows carry no per-column offset table — see
-/// `data/tuple.rs`'s module doc for why one contiguous, self-delimiting
-/// region is the whole point). `None` if fewer than `idx + 1` values are
-/// present.
+/// (bare-encoded rows carry no per-column offset table: one contiguous,
+/// self-delimiting region is the whole point). `None` if fewer than
+/// `idx + 1` values are present.
 fn bare_nth(bytes: &[u8], idx: usize) -> Option<DataValue> {
     let mut remaining = bytes;
     for _ in 0..idx {
@@ -841,10 +864,11 @@ impl Iterator for TupleInIterIterator<'_> {
 mod tests {
     use super::*;
     use crate::data::aggr::parse_aggr;
+    use crate::data::value::ScanBound;
     use crate::query::levels::{EpochStore, LevelKind};
 
     fn t(vals: &[i64]) -> Tuple {
-        vals.iter().map(|v| DataValue::from(*v)).collect_vec()
+        vals.iter().map(|v| DataValue::from(*v)).collect()
     }
 
     fn gv(group: &str, val: DataValue) -> Tuple {
@@ -1090,8 +1114,14 @@ mod tests {
         assert_eq!(row.get(1), DataValue::from(4i64));
 
         // Bounded range scans over the whole head tuple in `by_row`.
-        let lower = gv("a", DataValue::from(5i64)); // above (a, 4)
-        let upper = gv("b", DataValue::from(2i64)); // exactly (b, 2)
+        let bounds = |group: &str, v: i64| {
+            vec![
+                ScanBound::Value(DataValue::from(group)),
+                ScanBound::Value(DataValue::from(v)),
+            ]
+        };
+        let lower = bounds("a", 5); // above (a, 4)
+        let upper = bounds("b", 2); // exactly (b, 2)
         let got = store
             .range_iter(&lower, &upper, true)
             .map(TupleInIter::into_tuple)
@@ -1162,15 +1192,18 @@ mod tests {
         assert_eq!(layout.key_positions, vec![1]);
         assert_eq!(layout.val_positions, vec![0, 2]);
 
-        let row = vec![
+        let row: Tuple = vec![
             DataValue::from(2i64),
             DataValue::from("g"),
             DataValue::from(9i64),
         ];
         let key = layout.project_key(&row);
         let vals = layout.project_vals(&row);
-        assert_eq!(key, vec![DataValue::from("g")]);
-        assert_eq!(vals, vec![DataValue::from(2i64), DataValue::from(9i64)]);
+        assert_eq!(key, Tuple::from(vec![DataValue::from("g")]));
+        assert_eq!(
+            vals,
+            Tuple::from(vec![DataValue::from(2i64), DataValue::from(9i64)])
+        );
         assert_eq!(
             layout.interleave(&encode_tuple_bare(&key), &vals),
             row,
@@ -1473,7 +1506,7 @@ mod tests {
         let v1 = t(&[5]);
         let k2 = t(&[1, 5]);
         let joined = TupleInIter::new(&k1, &v1, false);
-        let flat = TupleInIter::new(&k2, EMPTY_TUPLE_REF, false);
+        let flat = TupleInIter::new(&k2, empty_tuple_ref(), false);
         assert_eq!(joined, flat);
         assert_eq!(joined.cmp(&flat), Ordering::Equal);
         assert_eq!(

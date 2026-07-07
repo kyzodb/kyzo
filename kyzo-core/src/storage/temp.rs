@@ -81,7 +81,7 @@ use std::ops::Bound;
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ReadTx, WriteTx};
@@ -255,10 +255,10 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::tuple::{RelationId, TupleT};
     use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{RelationId, TupleT};
 
-    const REL: RelationId = RelationId(7);
+    const REL: RelationId = RelationId::new(7).expect("below cap");
 
     /// A bitemporal key: `[int x, valid(ts), sys(ts)]` under `REL`, slot
     /// flags pinned to assert (the row's polarity lives in the value).
@@ -277,16 +277,14 @@ mod tests {
     /// A bitemporal value: relation-id header, polarity byte, no payload —
     /// the shape the engine writes for a key-only relation.
     fn bv(polarity: ClaimPolarity) -> Vec<u8> {
-        let mut v = REL.raw_encode().to_vec();
-        v.push(polarity.encode());
-        v
+        vec![polarity.encode()]
     }
 
     /// The half-open byte range covering the whole of `REL`'s keyspace.
     fn rel_bounds() -> (Vec<u8>, Vec<u8>) {
         (
             Tuple::default().encode_as_key(REL).to_vec(),
-            (REL.0 + 1).to_be_bytes().to_vec(),
+            (REL.raw() + 1).to_be_bytes().to_vec(),
         )
     }
 
@@ -672,7 +670,7 @@ mod tests {
         // unknown polarity byte, and a garbage rmp payload (hits only on
         // emit).
         let (lower, upper) = rel_bounds();
-        let hostile_short: Vec<u8> = [&REL.0.to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
+        let hostile_short: Vec<u8> = [&REL.raw().to_be_bytes()[..], &[0x41, 0x42, 0x43]].concat();
         let mut hostile_sys_tag = bk(5, 100, 1);
         let n = hostile_sys_tag.len();
         hostile_sys_tag[n - 10] = 0xFE; // clobber the system slot's tag
@@ -684,8 +682,7 @@ mod tests {
         let e = || bv(ClaimPolarity::Erase);
         let mut garbage_payload = bv(ClaimPolarity::Assert);
         garbage_payload.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack
-        let mut unknown_polarity = REL.raw_encode().to_vec();
-        unknown_polarity.push(0xEE);
+        let unknown_polarity = vec![0xEE];
         let scenarios: Vec<(Vec<(Vec<u8>, Vec<u8>)>, &str)> = vec![
             (
                 vec![

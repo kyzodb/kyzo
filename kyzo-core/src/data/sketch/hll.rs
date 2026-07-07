@@ -456,6 +456,21 @@ mod tests {
     /// of the pinned `HASH_SEED` and the encoding.
     #[test]
     fn pinned_sketch_fingerprint() {
+        // INPUT ANCHOR (see count_min::pinned_sketch_fingerprint): the
+        // registers are set by hashing each value's CANONICAL encoding,
+        // pinned to the format law by hand so the fingerprint is a function
+        // of format-correct input, not an implementation snapshot.
+        let enc = |v: &DataValue| {
+            let mut b = Vec::new();
+            crate::data::value::append_canonical(&mut b, v);
+            b
+        };
+        assert_eq!(enc(&val(0)), vec![0x10, 0x02, 0x00]);
+        assert_eq!(
+            enc(&val(1)),
+            vec![0x10, 0x03, 0x04, 0x39, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+
         let mut hll = HyperLogLog::new(14).unwrap();
         for i in 0..1000i64 {
             hll.add(&val(i));
@@ -467,6 +482,6 @@ mod tests {
         // the bytes with the same pinned hash; any drift of HASH_SEED, the
         // xxh64 constants, the encoding, or the register layout changes it.
         let fingerprint = super::super::xxh64(&bytes, 0);
-        assert_eq!(fingerprint, 0x0E63_EA11_522D_0E26);
+        assert_eq!(fingerprint, 0x4133_90D9_1C93_796C);
     }
 }

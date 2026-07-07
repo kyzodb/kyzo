@@ -45,8 +45,8 @@ use crate::data::aggr::parse_aggr;
 use crate::data::program::{MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::eval::{
     AtomOccurrence, Budget, EvalDefinition, EvalProgram, EvalRuleSet, EvalStratum, FixedRuleEval,
     PremiseSource, Premises, ProvNode, ProvenanceUnsupported, RowLimit, RuleBody, provenance_graph,

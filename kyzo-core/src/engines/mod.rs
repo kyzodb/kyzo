@@ -69,12 +69,47 @@ pub(crate) struct IndexRowCorrupt {
     pub(crate) reason: String,
 }
 
+/// Wrap a scanned index-row stream so a codec refusal surfaces as this
+/// index's OWN typed [`IndexRowCorrupt`], never a bare
+/// [`DecodeError`](crate::data::value::DecodeError). Storage/IO errors are
+/// NOT corruption and pass through unchanged (distinguished by downcast).
+/// Every engine consumes an index scan through this boundary, so a raw
+/// codec error cannot leak out of an engine as its contract.
+pub(crate) fn index_rows<'a>(
+    index_name: &'a str,
+    scan: impl Iterator<Item = miette::Result<crate::data::value::Tuple>> + 'a,
+) -> impl Iterator<Item = miette::Result<crate::data::value::Tuple>> + 'a {
+    scan.map(move |r| {
+        r.map_err(|e| {
+            if e.downcast_ref::<crate::data::value::DecodeError>()
+                .is_some()
+            {
+                IndexRowCorrupt::from_decode(index_name, e).into()
+            } else {
+                e
+            }
+        })
+    })
+}
+
 impl IndexRowCorrupt {
     pub(crate) fn new(index: &str, row: &[DataValue], reason: impl Into<String>) -> Self {
         IndexRowCorrupt {
             index: index.to_string(),
             row: format!("{row:?}"),
             reason: reason.into(),
+        }
+    }
+
+    /// The codec refused a scanned index row's stored bytes before they
+    /// could become a tuple: wrap that raw decode failure as this index's
+    /// own typed corruption error, so a `DecodeError` never leaks out of
+    /// an engine as the engine's contract.
+    pub(crate) fn from_decode(index: &str, err: impl std::fmt::Display) -> Self {
+        IndexRowCorrupt {
+            index: index.to_string(),
+            row: "<undecodable bytes>".to_string(),
+            reason: format!("stored row bytes did not decode: {err}"),
         }
     }
 }

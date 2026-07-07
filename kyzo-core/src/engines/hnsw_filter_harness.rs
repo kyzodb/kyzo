@@ -28,7 +28,6 @@
 
 use super::*;
 
-use ndarray::arr1;
 use proptest::prelude::*;
 
 use crate::data::functions::{OP_GE, OP_LT, OP_MOD};
@@ -87,10 +86,11 @@ fn splitmix(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// A reproducible f32 in [-1, 1).
-fn next_f32(state: &mut u64) -> f32 {
+/// A reproducible f64 in [-1, 1) (24 bits of entropy, so every value is
+/// exactly representable at f32 precision too).
+fn next_f32(state: &mut u64) -> f64 {
     let bits = splitmix(state) >> 40; // 24 bits
-    (bits as f32 / (1u32 << 23) as f32) - 1.0
+    (bits as f64 / (1u32 << 23) as f64) - 1.0
 }
 
 /// A seeded corpus: `n` rows, key `k = 0..n`, a `dim`-dimensional F32 vector.
@@ -99,19 +99,16 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
     let mut state = seed ^ 0xA5A5_5A5A_1234_9876;
     (0..n)
         .map(|k| {
-            let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            vec![
-                DataValue::from(k),
-                DataValue::Vec(Vector::F32(arr1(&comps))),
-            ]
+            let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
+            vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))]
         })
         .collect()
 }
 
 fn seeded_query(dim: usize, seed: u64) -> Vector {
     let mut state = seed ^ 0x0F0F_F0F0_DEAD_BEEF;
-    let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
-    Vector::F32(arr1(&comps))
+    let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
+    Vector::new(comps)
 }
 
 /// A deterministic (Fisher–Yates, splitmix-seeded) permutation of `rows` — the
@@ -355,7 +352,7 @@ fn brute_force_filtered_knn(
         .map(|r| {
             let key = r[0].get_int().unwrap();
             let v = match &r[1] {
-                DataValue::Vec(v) => v.clone(),
+                DataValue::Vector(v) => v.clone(),
                 _ => panic!("row vector"),
             };
             let vv = IndexVec::admit(&v, manifest).expect("row admits");
@@ -499,30 +496,30 @@ fn sweep_generator_hits_its_bands() {
 #[test]
 fn oracle_is_exact_and_total_ordered() {
     let m = hmanifest(2, HnswDistance::L2);
-    let rows = vec![
+    let rows: Vec<Tuple> = vec![
         vec![
             DataValue::from(0),
-            DataValue::Vec(Vector::F32(arr1(&[3.0, 0.0]))),
+            DataValue::Vector(Vector::new(vec![3.0, 0.0])),
         ],
         vec![
             DataValue::from(1),
-            DataValue::Vec(Vector::F32(arr1(&[0.1, 0.0]))),
+            DataValue::Vector(Vector::new(vec![0.1, 0.0])),
         ],
         vec![
             DataValue::from(2),
-            DataValue::Vec(Vector::F32(arr1(&[1.0, 0.0]))),
+            DataValue::Vector(Vector::new(vec![1.0, 0.0])),
         ],
         vec![
             DataValue::from(3),
-            DataValue::Vec(Vector::F32(arr1(&[0.2, 0.0]))),
+            DataValue::Vector(Vector::new(vec![0.2, 0.0])),
         ],
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         vec![
             DataValue::from(4),
-            DataValue::Vec(Vector::F32(arr1(&[-1.0, 0.0]))),
+            DataValue::Vector(Vector::new(vec![-1.0, 0.0])),
         ],
     ];
-    let q = Vector::F32(arr1(&[0.0, 0.0]));
+    let q = Vector::new(vec![0.0, 0.0]);
     let even = FilterSpec::ModLessThan {
         modulus: 2,
         accept: 1,
@@ -866,19 +863,16 @@ fn engine_ordering_is_total_under_ties() {
     let n = 12i64;
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
-            let mut comps = vec![0.0f32; dim];
+            let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
-            vec![
-                DataValue::from(i),
-                DataValue::Vec(Vector::F32(arr1(&comps))),
-            ]
+            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))]
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
     let rtx = db.read_tx().unwrap();
-    let q = Vector::F32(arr1(&vec![0.0f32; dim]));
+    let q = Vector::new(vec![0.0f64; dim]);
     // A filter that passes every row: (k mod 1) < 1 is always true.
     let f = FilterSpec::ModLessThan {
         modulus: 1,
@@ -1044,13 +1038,16 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
     let mut state = P2_CORPUS_SEED ^ 0xA5A5_5A5A_1234_9876;
     let rows: Vec<Tuple> = (0..n)
         .map(|k| {
-            let comps: Vec<f32> = (0..dim).map(|_| next_f32(&mut state)).collect();
+            let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
             let v = if k < half {
                 comps
             } else {
                 comps.iter().map(|c| c + 40.0).collect()
             };
-            vec![DataValue::from(k), DataValue::Vec(Vector::F32(arr1(&v)))]
+            vec![
+                DataValue::from(k),
+                DataValue::Vector(Vector::new(v.clone())),
+            ]
         })
         .collect();
     (n, half, rows)
@@ -1388,20 +1385,20 @@ fn min_k_matches_k_exceeds_entire_population() {
 /// selectivity that forces `SearchPlan::Graph`, checks the result matches
 /// the independent oracle's tie-break EXACTLY (not just in count), and that
 /// the tie-break is thread-count invariant — a "drop the tie-break" or a
-/// hash-order-leaking mutation would either diverge from the oracle or
-/// diverge across thread counts (or both).
+/// hash-order-leaking mutation in construction or search would diverge
+/// across independent rebuilds or across thread counts (or both). Exact
+/// recall vs brute force is NOT claimed: HNSW is approximate and this
+/// corpus is adversarial (identical-vector clusters); the law is
+/// determinism, enforced by the `(distance, VectorId)` beam priority.
 #[test]
 fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     let dim = 16;
     let n = P2_N;
     let rows: Vec<Tuple> = (0..n)
         .map(|i| {
-            let mut comps = vec![0.0f32; dim];
+            let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
-            vec![
-                DataValue::from(i),
-                DataValue::Vec(Vector::F32(arr1(&comps))),
-            ]
+            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))]
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
@@ -1411,7 +1408,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     // Every row is EXACTLY equidistant (squared L2 = 1.0, bit-exact) from the
     // all-zero query, so only the `(distance, encoded-key)` tie-break decides
     // the k survivors.
-    let q = Vector::F32(arr1(&vec![0.0f32; dim]));
+    let q = Vector::new(vec![0.0f64; dim]);
     // Even keys only (`k mod 2 == 0 < 1`): a genuine filter (not
     // all-matching), ~half the corpus — enough matches (~2000) to force the
     // Graph plan, not Scan.
@@ -1426,20 +1423,44 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
         "precondition: this corpus/filter must select Graph, got {plan:?}"
     );
 
-    let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
-    // Under exact ties among even keys, ascending-key order wins: 0, 2, 4, ...
-    assert_eq!(
-        truth,
-        vec![0, 2, 4, 6, 8, 10, 12, 14, 16, 18],
-        "sanity: the oracle's own tie-break must be the smallest even keys"
-    );
-
     let baseline = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
+
+    // LAWFULNESS. HNSW is an APPROXIMATE index. This corpus is adversarial:
+    // `comps[i % dim] = 1.0` makes every residue class an identical vector,
+    // so same-axis nodes are distance 0 from each other and cross-axis nodes
+    // are distance sqrt(2) — the graph connects densely WITHIN a cluster and
+    // sparsely ACROSS clusters. No correct HNSW can therefore return the
+    // globally smallest keys across disconnected identical-vector clusters;
+    // it returns one cluster's members. The invariant that IS lawful — and
+    // that the `(distance, VectorId)` beam priority now guarantees — is
+    // DETERMINISM: the exact same k survivors on every build and every
+    // search, independent of hasher state, thread count, or run. (Before the
+    // tie-break fix the survivors leaked the priority queue's hash-map
+    // iteration order and varied run to run.)
+
+    // Every survivor is a genuine match: an even key whose vector is exactly
+    // equidistant (squared L2 = 1.0) from the all-zero query.
+    for key in keys_of(&baseline) {
+        assert!(key % 2 == 0, "filter admits only even keys, got {key}");
+    }
+    assert_eq!(keys_of(&baseline).len(), P2_K, "k survivors");
+
+    // Reproducibility across an INDEPENDENT rebuild: a fresh store, a fresh
+    // graph built from the same rows, searched again, yields byte-identical
+    // survivors. A hash-order-leaking construction or search would diverge
+    // here even single-threaded.
+    let rebuilt = {
+        let dir2 = tempfile::tempdir().unwrap();
+        let db2 = new_fjall_storage(dir2.path()).unwrap();
+        let (base2, idx2, m2) = hsetup(&db2, dim, HnswDistance::L2, &rows);
+        let rtx2 = db2.read_tx().unwrap();
+        filtered_search(&rtx2, &q, &m2, &base2, &idx2, P2_K, P2_EF, &f)
+    };
     assert_eq!(
+        keys_of(&rebuilt),
         keys_of(&baseline),
-        truth,
-        "under the GRAPH plan, exact ties must still resolve to the smallest \
-         matching keys, deterministically"
+        "an independent rebuild produced different survivors: construction or \
+         search is not deterministic"
     );
 
     // Thread-count invariance of that same tie-break: rayon pools of

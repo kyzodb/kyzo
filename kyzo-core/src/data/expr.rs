@@ -54,7 +54,7 @@ use crate::data::functions::*;
 use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, LARGEST_UTF_CHAR};
+use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
 
 /// One instruction of the compiled expression form: a stack-machine program
 /// produced by `expr2bytecode` from a validated [`Expr`].
@@ -422,9 +422,7 @@ pub fn eval_bytecode(
                 let val = stack
                     .pop()
                     .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
-                let cond = val
-                    .get_bool()
-                    .ok_or_else(|| PredicateTypeError(*span, val))?;
+                let cond = val.get_bool().ok_or(PredicateTypeError(*span, val))?;
                 if cond {
                     pointer += 1;
                 } else {
@@ -435,9 +433,7 @@ pub fn eval_bytecode(
                 let val = stack
                     .pop()
                     .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
-                let cond = val
-                    .get_bool()
-                    .ok_or_else(|| PredicateTypeError(*span, val))?;
+                let cond = val.get_bool().ok_or(PredicateTypeError(*span, val))?;
                 if cond {
                     pointer = *jump_to;
                 } else {
@@ -1166,10 +1162,10 @@ impl Expr {
 
                             StrRangeScanError(val.clone(), symb.span)
                         })?;
-                        let lower = DataValue::from(s);
-                        let mut upper = SmartString::from(s);
+                        let lower = ScanBound::Value(DataValue::from(s));
+                        let mut upper = s.to_string();
                         upper.push(LARGEST_UTF_CHAR);
-                        let upper = DataValue::Str(upper);
+                        let upper = ScanBound::Value(DataValue::Str(upper));
                         return Ok(ValueRange::new(lower, upper));
                     }
                     ValueRange::default()
@@ -1256,7 +1252,7 @@ impl Expr {
 pub(crate) fn compute_bounds(
     filters: &[Expr],
     symbols: &[Symbol],
-) -> Result<(Vec<DataValue>, Vec<DataValue>)> {
+) -> Result<(Vec<ScanBound>, Vec<ScanBound>)> {
     let mut lowers = vec![];
     let mut uppers = vec![];
     for current in symbols {
@@ -1274,8 +1270,8 @@ pub(crate) fn compute_bounds(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValueRange {
-    pub(crate) lower: DataValue,
-    pub(crate) upper: DataValue,
+    pub(crate) lower: ScanBound,
+    pub(crate) upper: ScanBound,
 }
 
 impl ValueRange {
@@ -1288,25 +1284,27 @@ impl ValueRange {
             Self { lower, upper }
         }
     }
+    /// The provably-empty range: lower past upper, so the scan visits
+    /// nothing (`Greatest > Least` at the key level too).
     fn null() -> Self {
         Self {
-            lower: DataValue::Bot,
-            upper: DataValue::Bot,
+            lower: ScanBound::Greatest,
+            upper: ScanBound::Least,
         }
     }
-    fn new(lower: DataValue, upper: DataValue) -> Self {
+    fn new(lower: ScanBound, upper: ScanBound) -> Self {
         Self { lower, upper }
     }
     fn lower_bound(val: DataValue) -> Self {
         Self {
-            lower: val,
-            upper: DataValue::Bot,
+            lower: ScanBound::Value(val),
+            upper: ScanBound::Greatest,
         }
     }
     fn upper_bound(val: DataValue) -> Self {
         Self {
-            lower: DataValue::Null,
-            upper: val,
+            lower: ScanBound::Least,
+            upper: ScanBound::Value(val),
         }
     }
 }
@@ -1314,8 +1312,8 @@ impl ValueRange {
 impl Default for ValueRange {
     fn default() -> Self {
         Self {
-            lower: DataValue::Null,
-            upper: DataValue::Bot,
+            lower: ScanBound::Least,
+            upper: ScanBound::Greatest,
         }
     }
 }
@@ -1362,7 +1360,6 @@ pub(crate) fn op_display_name(name: &'static str) -> String {
 /// belt-and-suspenders first line (they carry a more specific domain
 /// diagnosis before the result even exists), but no op — present or
 /// future — can bypass this backstop and hand a poison value to a caller.
-/// Structural absorption for story #62's silent-NaN class.
 pub(crate) fn apply_op(op: &Op, args: &[DataValue]) -> Result<DataValue> {
     let result = (op.inner)(args)?;
     if crate::data::functions::result_has_nan(&result) {
@@ -1577,6 +1574,10 @@ pub(crate) fn get_op(name: &str) -> Option<&'static Op> {
         "make_interval" => &OP_MAKE_INTERVAL,
         "interval_start" => &OP_INTERVAL_START,
         "interval_end" => &OP_INTERVAL_END,
+        "interval_has_start" => &OP_INTERVAL_HAS_START,
+        "interval_has_end" => &OP_INTERVAL_HAS_END,
+        "interval_is_start_unbounded" => &OP_INTERVAL_IS_START_UNBOUNDED,
+        "interval_is_end_unbounded" => &OP_INTERVAL_IS_END_UNBOUNDED,
         "interval_before" => &OP_INTERVAL_BEFORE,
         "interval_meets" => &OP_INTERVAL_MEETS,
         "interval_overlaps" => &OP_INTERVAL_OVERLAPS,

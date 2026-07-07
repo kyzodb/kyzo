@@ -37,9 +37,9 @@
 
 use miette::Result;
 
-use crate::data::batch::{ColumnBatch, ErrorMin, Selection};
 use crate::data::expr::{Decision, Expr};
 use crate::data::value::DataValue;
+use crate::query::batch::{ColumnBatch, ErrorMin, Selection};
 
 /// A column of values ALIGNED TO A SELECTION: `values[i]` is the result
 /// for the `i`-th live row of the selection it was computed under. The
@@ -348,7 +348,8 @@ mod tests {
     /// both, over every (expr, batch) this generator produces.
     fn differential(expr: &Expr, rows: &[Vec<DataValue>]) {
         let width = rows.first().map_or(0, Vec::len);
-        let batch = ColumnBatch::from_rows(rows, width);
+        let owned_rows: Vec<crate::data::value::Tuple> = rows.to_vec();
+        let batch = ColumnBatch::from_rows(owned_rows, width);
         let sel = Selection::all(rows.len());
         let batched = eval_expr_batched(expr, &batch, &sel);
         // Row oracle: first error in row order wins; otherwise all values.

@@ -105,8 +105,7 @@ use thiserror::Error;
 
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, ScanBound, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -390,9 +389,9 @@ fn extract_point(tuple: &[DataValue], manifest: &SpatialIndexManifest) -> Result
 
 /// The spatial posting key `[curve, src_key…]` for one base row.
 fn posting_key(point: &GeoPoint, base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Vec::with_capacity(1 + base_key_len);
+    let mut key = Tuple::with_capacity(1 + base_key_len);
     key.push(point.curve_key());
-    key.extend_from_slice(&tuple[..base_key_len]);
+    key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
 
@@ -676,9 +675,15 @@ fn scan_box(
     let ranges = decompose_box(&bbox.quantized());
     let mut out = Vec::new();
     for (lo, hi) in ranges {
-        let lower = [DataValue::Bytes(lo.to_be_bytes().to_vec())];
-        let upper = [DataValue::Bytes(hi.to_be_bytes().to_vec())];
-        for row in idx.scan_bounded_prefix(tx, &[], &lower, &upper) {
+        let lower = [ScanBound::Value(DataValue::Bytes(
+            lo.to_be_bytes().to_vec(),
+        ))];
+        let upper = [ScanBound::Value(DataValue::Bytes(
+            hi.to_be_bytes().to_vec(),
+        ))];
+        for row in
+            crate::engines::index_rows(&idx.name, idx.scan_bounded_prefix(tx, &[], &lower, &upper))
+        {
             let row = row?;
             let posting = decode_posting(&row, base_key_len, &idx.name)?;
             // The curve over-approximates; the exact predicate filters.
@@ -1095,12 +1100,11 @@ mod tests {
         }
         // Ordering property: memcmp order of the Bytes key == u64 curve order.
         // This is THE law — byte order equals curve order.
-        use crate::data::memcmp::MemCmpEncoder;
         let mut encoded: Vec<(Vec<u8>, u64)> = pairs
             .iter()
             .map(|(code, key)| {
                 let mut buf = Vec::new();
-                buf.encode_datavalue(key);
+                crate::data::value::append_canonical(&mut buf, key);
                 (buf, *code)
             })
             .collect();
@@ -1466,8 +1470,8 @@ mod tests {
         // Overwrite the index row's value with garbage msgpack.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::tuple::encode_tuple_key(f.idx.id.0, &[]);
-            let upper = (f.idx.id.0 + 1).to_be_bytes();
+            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let upper = (f.idx.id.raw() + 1).to_be_bytes();
             tx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
@@ -1485,8 +1489,9 @@ mod tests {
         let err = spatial_range_query(&rtx, &f.base, &f.idx, &bbox)
             .expect_err("corrupt posting must error, not panic");
         assert!(
-            format!("{err:?}").contains("corrupt"),
-            "names corruption: {err:?}"
+            err.downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "corrupt index bytes must surface as the typed IndexRowCorrupt: {err:?}"
         );
     }
 

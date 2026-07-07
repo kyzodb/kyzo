@@ -199,10 +199,11 @@ mod tests {
     use super::*;
     use crate::data::expr::Expr;
     use crate::data::span::SourceSpan;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     #[test]
-    #[ignore]
+    #[ignore = "timing-evidence rig; run explicitly with --ignored --nocapture to print APSP timings"]
     fn zz_timing_evidence() {
         let n = 400u32;
         let mut state = 0x0bad_c0de_dead_beefu64;
@@ -212,7 +213,7 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             state
         };
-        let mut rows = vec![];
+        let mut rows: Vec<Tuple> = vec![];
         for _ in 0..6000 {
             let a = (next() >> 33) as u32 % n;
             let b = (next() >> 33) as u32 % n;
@@ -299,7 +300,7 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             state
         };
-        let mut rows = vec![];
+        let mut rows: Vec<Tuple> = vec![];
         for _ in 0..400 {
             let a = (next() >> 33) as u32 % n;
             let b = (next() >> 33) as u32 % n;
@@ -398,14 +399,12 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), DataValue::from(1.5)],
-                vec![s("b"), DataValue::from(2.25)],
-                vec![s("c"), DataValue::from(1.5)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), DataValue::from(1.5)],
+            vec![s("b"), DataValue::from(2.25)],
+            vec![s("c"), DataValue::from(1.5)],
+        ];
+        assert_eq!(got, want);
     }
 
     /// VALUE ORACLE for betweenness as implemented (unnormalized, over
@@ -422,13 +421,11 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), DataValue::from(0.0)],
-                vec![s("b"), DataValue::from(2.0)],
-                vec![s("c"), DataValue::from(0.0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), DataValue::from(0.0)],
+            vec![s("b"), DataValue::from(2.0)],
+            vec![s("c"), DataValue::from(0.0)],
+        ];
+        assert_eq!(got, want);
     }
 }

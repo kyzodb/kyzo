@@ -51,7 +51,7 @@ use std::fmt::{Debug, Formatter};
 use miette::{Result, bail, ensure, miette};
 use rand::prelude::*;
 
-use crate::data::value::{DataValue, Num};
+use crate::data::value::{DataValue, Num, NumRepr};
 
 /// An ordinary fold over rows: `set` feeds one row's value, `get` produces
 /// the final answer. Runs only after the fixpoint, seeing each row once.
@@ -605,7 +605,7 @@ impl NormalAggrObj for AggrVariance {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => {
-                let f = n.get_float();
+                let f = n.to_f64();
                 self.sum += f;
                 self.sum_sq += f * f;
                 self.count += 1;
@@ -637,7 +637,7 @@ impl NormalAggrObj for AggrStdDev {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => {
-                let f = n.get_float();
+                let f = n.to_f64();
                 self.sum += f;
                 self.sum_sq += f * f;
                 self.count += 1;
@@ -667,7 +667,7 @@ impl NormalAggrObj for AggrMean {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => {
-                self.sum += n.get_float();
+                self.sum += n.to_f64();
                 self.count += 1;
             }
             v => bail!("cannot compute 'mean': encountered value {:?}", v),
@@ -704,13 +704,13 @@ impl NumAccum {
         int_op: fn(i128, i128) -> Option<i128>,
         float_op: fn(f64, f64) -> f64,
     ) -> Self {
-        match (self, n) {
-            (NumAccum::Int(acc), Num::Int(i)) => match int_op(acc, *i as i128) {
+        match (self, n.repr()) {
+            (NumAccum::Int(acc), NumRepr::Int(i)) => match int_op(acc, i as i128) {
                 Some(acc) => NumAccum::Int(acc),
-                None => NumAccum::Float(float_op(acc as f64, *i as f64)),
+                None => NumAccum::Float(float_op(acc as f64, i as f64)),
             },
-            (NumAccum::Int(acc), Num::Float(f)) => NumAccum::Float(float_op(acc as f64, *f)),
-            (NumAccum::Float(acc), n) => NumAccum::Float(float_op(acc, n.get_float())),
+            (NumAccum::Int(acc), NumRepr::Float(f)) => NumAccum::Float(float_op(acc as f64, f)),
+            (NumAccum::Float(acc), _) => NumAccum::Float(float_op(acc, n.to_f64())),
         }
     }
 
@@ -1223,7 +1223,7 @@ impl NormalAggrObj for AggrBitAnd {
         match value {
             DataValue::Bytes(bs) => {
                 if self.res.is_empty() {
-                    self.res = bs.to_vec();
+                    self.res = bs.clone();
                 } else {
                     ensure!(
                         self.res.len() == bs.len(),
@@ -1254,7 +1254,7 @@ pub(crate) struct MeetAggrBitAnd;
 
 impl MeetAggrObj for MeetAggrBitAnd {
     fn init_val(&self) -> DataValue {
-        DataValue::Bytes(vec![])
+        DataValue::Bytes(Vec::new())
     }
 
     fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
@@ -1296,7 +1296,7 @@ impl NormalAggrObj for AggrBitOr {
         match value {
             DataValue::Bytes(bs) => {
                 if self.res.is_empty() {
-                    self.res = bs.to_vec();
+                    self.res = bs.clone();
                 } else {
                     ensure!(
                         self.res.len() == bs.len(),
@@ -1325,7 +1325,7 @@ pub(crate) struct MeetAggrBitOr;
 
 impl MeetAggrObj for MeetAggrBitOr {
     fn init_val(&self) -> DataValue {
-        DataValue::Bytes(vec![])
+        DataValue::Bytes(Vec::new())
     }
 
     fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
@@ -1369,7 +1369,7 @@ impl NormalAggrObj for AggrBitXor {
         match value {
             DataValue::Bytes(bs) => {
                 if self.res.is_empty() {
-                    self.res = bs.to_vec();
+                    self.res = bs.clone();
                 } else {
                     ensure!(
                         self.res.len() == bs.len(),
@@ -1568,9 +1568,9 @@ mod tests {
             let bytes = move || prop::collection::vec(any::<u8>(), len);
             (bytes(), bytes(), bytes()).prop_map(|(x, y, z)| {
                 (
-                    DataValue::Bytes(x),
-                    DataValue::Bytes(y),
-                    DataValue::Bytes(z),
+                    DataValue::Bytes(x.clone()),
+                    DataValue::Bytes(y.clone()),
+                    DataValue::Bytes(z.clone()),
                 )
             })
         })
@@ -1728,21 +1728,21 @@ mod tests {
             }
         }
 
-        // Across the Int/Float boundary the exact `Num` order is the
-        // canonical one the memcmp key encoding preserves: an Int sorts
-        // before the Float it collides with as f64, so `2^53 + 1` (Int) is
-        // *less than* `2^53.0` (Float) by that tie-break.
+        // The `Num` order compares EXACT real values, not f64-rounded
+        // ones: `2^53 + 1` (Int, exact) is genuinely GREATER than
+        // `2^53.0` (Float), where the old lossy `i as f64` comparison
+        // would have collided them. So min picks the float, max the int.
         let int_val = DataValue::from((1i64 << 53) + 1);
         let float_val = DataValue::from((1i64 << 53) as f64);
-        let mut acc = float_val.clone();
-        assert!(MeetAggrMin.update(&mut acc, &int_val).unwrap());
-        assert_eq!(acc, int_val);
         let mut acc = int_val.clone();
-        assert!(!MeetAggrMin.update(&mut acc, &float_val).unwrap());
-        assert_eq!(acc, int_val);
-        let mut acc = int_val.clone();
-        assert!(MeetAggrMax.update(&mut acc, &float_val).unwrap());
+        assert!(MeetAggrMin.update(&mut acc, &float_val).unwrap());
         assert_eq!(acc, float_val);
+        let mut acc = float_val.clone();
+        assert!(!MeetAggrMin.update(&mut acc, &int_val).unwrap());
+        assert_eq!(acc, float_val);
+        let mut acc = float_val.clone();
+        assert!(MeetAggrMax.update(&mut acc, &int_val).unwrap());
+        assert_eq!(acc, int_val);
     }
 
     /// Ratifies the deviation from upstream: sum/product over all-integer
@@ -1884,7 +1884,8 @@ mod tests {
             acc.set(&DataValue::from(i64::MAX)).unwrap();
         }
         match acc.get().unwrap() {
-            DataValue::Num(crate::data::value::Num::Float(f)) => {
+            DataValue::Num(n) if n.as_float().is_some() => {
+                let f = n.as_float().expect("guarded float");
                 let expected = (i64::MAX as f64).powi(3);
                 assert!(
                     (f - expected).abs() / expected < 1e-9,

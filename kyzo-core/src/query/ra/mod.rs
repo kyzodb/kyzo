@@ -150,7 +150,7 @@ use crate::data::expr::{Bytecode, Expr, eval_bytecode_pred};
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
@@ -1098,7 +1098,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![vec![v(2), v(2)]]);
+        assert_eq!(got, vec![Tuple::from(vec![v(2), v(2)])]);
 
         let fixed = InlineFixedRA {
             bindings: vec![sym("y"), sym("z")],
@@ -1112,7 +1112,13 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![vec![v(1), v(1), v(10)], vec![v(1), v(1), v(11)]]);
+        assert_eq!(
+            got,
+            vec![
+                Tuple::from(vec![v(1), v(1), v(10)]),
+                Tuple::from(vec![v(1), v(1), v(11)])
+            ]
+        );
     }
 
     /// `InnerJoin::iter_batched`'s unit-left fast path must NOT fire for a
@@ -1158,7 +1164,7 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         // The independently known answer: y=2 joins x=2 exactly once.
-        assert_eq!(got, vec![vec![v(2), v(2)]]);
+        assert_eq!(got, vec![Tuple::from(vec![v(2), v(2)])]);
     }
 
     /// The general (non-prefix) join's batch executor, judged by an
@@ -1265,7 +1271,14 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![vec![v(1)], vec![v(2)], vec![v(3)]]);
+        assert_eq!(
+            got,
+            vec![
+                Tuple::from(vec![v(1)]),
+                Tuple::from(vec![v(2)]),
+                Tuple::from(vec![v(3)])
+            ]
+        );
 
         let mut bad = RelAlgebra::unit(sp()).unify(
             sym("x"),
@@ -1653,7 +1666,7 @@ mod tests {
         assert_eq!(it, ba, "delta-threaded batched join diverged from iterator");
         assert_eq!(
             it,
-            vec![vec![v(2), v(2), DataValue::from("c")]],
+            vec![Tuple::from(vec![v(2), v(2), DataValue::from("c")])],
             "delta threading must narrow the join to the fresh row only"
         );
     }
@@ -1844,7 +1857,7 @@ mod tests {
     /// search over more than one emitted row per probe. Run explicitly:
     /// `cargo test -p kyzo --release query::ra::tests::stored_prefix_join_segment_probe_cost_vs_storage -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "cost probe; run explicitly to compare segment vs storage prefix-join cost"]
     fn stored_prefix_join_segment_probe_cost_vs_storage() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();

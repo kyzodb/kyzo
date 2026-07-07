@@ -14,10 +14,12 @@ use itertools::{Either, Itertools};
 use miette::{Result, bail};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj};
-use crate::data::tuple::{Tuple, bare_prefix_len, encode_tuple_bare};
 use crate::data::value::DataValue;
+use crate::data::value::{
+    ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
+};
 use crate::query::temp_store::{
-    AdmissionSink, Admitted, EMPTY_TUPLE_REF, MeetAggrStore, MeetLayout, TempStore, TupleInIter,
+    AdmissionSink, Admitted, MeetAggrStore, MeetLayout, TempStore, TupleInIter, empty_tuple_ref,
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -151,14 +153,8 @@ impl NormalLevel {
         (start, lo.max(start))
     }
 
-    fn bounds(
-        &self,
-        lower: &[DataValue],
-        upper: &[DataValue],
-        upper_inclusive: bool,
-    ) -> (usize, usize) {
-        let lower = encode_tuple_bare(lower);
-        let upper = encode_tuple_bare(upper);
+    fn bounds(&self, lower: &[u8], upper: &[u8], upper_inclusive: bool) -> (usize, usize) {
+        let (lower, upper) = (lower.to_vec(), upper.to_vec());
         let mut lo = 0usize;
         let mut hi = self.len();
         while lo < hi {
@@ -409,7 +405,7 @@ impl EpochStore {
                     if let Some(vals) = folded {
                         let row = spec.layout.interleave(&group, &vals);
                         if S::RECORDING {
-                            sink.admit(TupleInIter::new(&row, EMPTY_TUPLE_REF, false));
+                            sink.admit(TupleInIter::new(&row, empty_tuple_ref(), false));
                         }
                         if !spec.layout.is_suffix() {
                             level.by_row.push(row);
@@ -447,37 +443,49 @@ impl EpochStore {
 
     pub(crate) fn range_iter<'s>(
         &'s self,
-        lower: &Tuple,
-        upper: &Tuple,
+        lower: &[ScanBound],
+        upper: &[ScanBound],
         upper_inclusive: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        self.ranged(lower.clone(), upper.clone(), upper_inclusive, false)
+        self.ranged(
+            bare_bounds_lower(lower),
+            bare_bounds_upper(upper),
+            upper_inclusive,
+            false,
+        )
     }
     pub(crate) fn delta_range_iter<'s>(
         &'s self,
-        lower: &Tuple,
-        upper: &Tuple,
+        lower: &[ScanBound],
+        upper: &[ScanBound],
         upper_inclusive: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        self.ranged(lower.clone(), upper.clone(), upper_inclusive, true)
+        self.ranged(
+            bare_bounds_lower(lower),
+            bare_bounds_upper(upper),
+            upper_inclusive,
+            true,
+        )
     }
     pub(crate) fn prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        // `DataValue::Bot` is the maximum variant in the total order, so
-        // `prefix ++ [Bot]` (inclusive) bounds every extension of `prefix`.
-        let mut upper = prefix.to_vec();
-        upper.push(DataValue::Bot);
-        self.ranged(prefix.clone(), upper, true, false)
+        // The 0xFF tail (which no canonical encoding begins) bounds every
+        // extension of `prefix`, inclusively.
+        let lower = encode_tuple_bare(prefix);
+        let mut upper = lower.clone();
+        upper.push(0xFF);
+        self.ranged(lower, upper, true, false)
     }
     pub(crate) fn delta_prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        let mut upper = prefix.to_vec();
-        upper.push(DataValue::Bot);
-        self.ranged(prefix.clone(), upper, true, true)
+        let lower = encode_tuple_bare(prefix);
+        let mut upper = lower.clone();
+        upper.push(0xFF);
+        self.ranged(lower, upper, true, true)
     }
     /// [`prefix_iter`](Self::prefix_iter)/[`delta_prefix_iter`](Self::delta_prefix_iter)
     /// reading the prefix THROUGH a projection of `row` — the zero-clone
@@ -511,24 +519,25 @@ impl EpochStore {
             }
             LevelKind::Meet { spec, levels } => {
                 let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
-                let mut upper = prefix.clone();
-                upper.push(DataValue::Bot);
+                let lower = encode_tuple_bare(&prefix);
+                let mut upper = lower.clone();
+                upper.push(0xFF);
                 let picked: &[MeetLevel] = if delta_only {
                     std::slice::from_ref(levels.last().expect("a level always exists"))
                 } else {
                     levels.as_slice()
                 };
                 let newer: &[MeetLevel] = if delta_only { &[] } else { levels.as_slice() };
-                Either::Right(meet_ranged(spec, picked, newer, prefix, upper, true))
+                Either::Right(meet_ranged(spec, picked, newer, lower, upper, true))
             }
         }
     }
 
     pub(crate) fn all_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
-        self.prefix_iter(&vec![])
+        self.prefix_iter(&Tuple::new())
     }
     pub(crate) fn delta_all_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
-        self.delta_prefix_iter(&vec![])
+        self.delta_prefix_iter(&Tuple::new())
     }
     /// The rows an early-returned (`:limit`-satisfied) entry rule actually
     /// returns: everything not flagged limiter-skipped.
@@ -541,8 +550,8 @@ impl EpochStore {
     /// bound window. Delta scope reads the newest level alone.
     fn ranged<'s>(
         &'s self,
-        lower: Tuple,
-        upper: Tuple,
+        lower: Vec<u8>,
+        upper: Vec<u8>,
         upper_inclusive: bool,
         delta_only: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
@@ -738,13 +747,13 @@ fn meet_ranged<'s>(
     spec: &'s MeetSpec,
     picked: &'s [MeetLevel],
     all: &'s [MeetLevel],
-    lower: Tuple,
-    upper: Tuple,
+    lower: Vec<u8>,
+    upper: Vec<u8>,
     upper_inclusive: bool,
 ) -> Box<dyn Iterator<Item = TupleInIter<'s>> + 's> {
     let within = move |row: TupleInIter<'_>| -> bool {
-        row.cmp_slice(&lower) != Ordering::Less
-            && match row.cmp_slice(&upper) {
+        row.cmp_bare(&lower) != Ordering::Less
+            && match row.cmp_bare(&upper) {
                 Ordering::Less => true,
                 Ordering::Equal => upper_inclusive,
                 Ordering::Greater => false,
@@ -803,7 +812,7 @@ fn meet_ranged<'s>(
                 if owned_by_newer {
                     None
                 } else {
-                    Some(TupleInIter::new(row, EMPTY_TUPLE_REF, false))
+                    Some(TupleInIter::new(row, empty_tuple_ref(), false))
                 }
             })
         });

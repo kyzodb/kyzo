@@ -1072,7 +1072,7 @@ mod tests {
         StoreLifetimes, Unification,
     };
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::tuple::Tuple;
+    use crate::data::value::Tuple;
     use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
     use crate::query::laws::{Literal, Program, Rel, Rule, Term, naive_eval};
     use crate::runtime::relation::KeyspaceKind;

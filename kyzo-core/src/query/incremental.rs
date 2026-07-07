@@ -74,8 +74,8 @@ use miette::{Error, Result};
 
 use crate::data::aggr::{Aggregation, NormalAggrObj};
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::ra::temporal::SignedFact;
 
 /// One rule-body argument: a bound value, or a variable to unify.
@@ -689,7 +689,7 @@ fn eval_one_group(
     }
     match ops {
         None if key_positions.is_empty() => {
-            let mut row = vec![DataValue::Null; signature_len];
+            let mut row: Tuple = vec![DataValue::Null; signature_len];
             for (op, (i, _, _)) in fresh_ops()?.iter().zip(val_positions) {
                 row[*i] = op.get()?;
             }
@@ -697,7 +697,7 @@ fn eval_one_group(
         }
         None => Ok(None),
         Some(ops) => {
-            let mut row = vec![DataValue::Null; signature_len];
+            let mut row: Tuple = vec![DataValue::Null; signature_len];
             for (slot, &i) in key_positions.iter().enumerate() {
                 row[i] = group_key[slot].clone();
             }
@@ -753,7 +753,7 @@ fn eval_aggregating_head_incremental(
     // matters when NO dependency had a delta, in which case there is
     // nothing to re-check anyway.
     if key_positions.is_empty() && rel_deltas.values().any(|d| !d.is_empty()) {
-        affected.insert(Vec::new());
+        affected.insert(Tuple::new());
     }
 
     let mut delta = BTreeSet::new();
@@ -929,7 +929,7 @@ mod tests {
         Symbol::new(name, SourceSpan::default())
     }
     fn v(i: i64) -> DataValue {
-        DataValue::Num(Num::Int(i))
+        DataValue::Num(Num::int(i))
     }
     fn x() -> Term {
         Term::Var(sym("X"))
@@ -1286,7 +1286,7 @@ mod tests {
                             .insert(laws::SignedFact::Minus(victim));
                     } else {
                         let a = v(next_range(4) as i64);
-                        let t = if rel == "p" || rel == "r2" {
+                        let t: Tuple = if rel == "p" || rel == "r2" {
                             vec![a, v(next_range(4) as i64)]
                         } else {
                             vec![a]

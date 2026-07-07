@@ -64,7 +64,7 @@ use miette::{Diagnostic, Result};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::data::tuple::RelationId;
+use crate::data::value::RelationId;
 use crate::storage::ReadTx;
 
 /// The number of `(k,v)` pairs a root scan may touch before it refuses. The
@@ -82,26 +82,9 @@ pub(crate) struct MerkleScanExceeded {
     pub(crate) ceiling: u64,
 }
 
-/// A relation root was asked for an id outside the 48-bit relation-id space
-/// (`data/tuple.rs`: ids stay within 6 bytes). Refused typed rather than
-/// panicking in the id arithmetic — the read path never trusts an
-/// out-of-range id.
-#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
-#[error("relation id {id} is outside the 48-bit relation-id space; cannot root it")]
-#[diagnostic(code(merkle::unscannable))]
-pub(crate) struct MerkleUnscannable {
-    pub(crate) id: u64,
-}
-
 const LEAF_TAG: u8 = 0x00;
 const NODE_TAG: u8 = 0x01;
 const EMPTY_TAG: u8 = 0x02;
-
-/// The upper bound (exclusive) of the relation-id space: ids occupy 48 bits
-/// (`data/tuple.rs::MAX_RELATION_ID` is `1 << 48`). A relation-id root at or
-/// above this is refused, which also keeps the successor arithmetic below
-/// from overflowing the encoded prefix.
-const RELATION_ID_BOUND: u64 = 1 << 48;
 
 /// A 32-byte Merkle hash. Comparison is byte-exact; rendering is lowercase
 /// hex (for golden vectors and the eventual sys-op result column).
@@ -242,12 +225,11 @@ pub(crate) fn relation_root(
     rel: RelationId,
     budget: NonZeroU64,
 ) -> Result<MerkleHash> {
-    if rel.0 >= RELATION_ID_BOUND {
-        return Err(MerkleUnscannable { id: rel.0 }.into());
-    }
-    let lower = rel.0.to_be_bytes();
-    // `rel.0 < 1 << 48` guarantees `rel.0 + 1 <= 1 << 48`, no u64 overflow.
-    let upper = (rel.0 + 1).to_be_bytes();
+    let lower = rel.raw().to_be_bytes();
+    // `RelationId::new`/`raw_decode` refuse any id at or beyond
+    // `RelationId::CAP` (1 << 48), so `raw()` is always below it and the
+    // successor `+ 1` cannot overflow the encoded prefix.
+    let upper = (rel.raw() + 1).to_be_bytes();
     range_root(tx, &lower, &upper, budget)
 }
 
@@ -272,10 +254,9 @@ mod tests {
     use fjall::Slice;
 
     use super::{
-        MerkleHash, RELATION_ID_BOUND, empty_hash, leaf_hash, node_hash, relation_root, root_over,
-        state_root,
+        MerkleHash, empty_hash, leaf_hash, node_hash, relation_root, root_over, state_root,
     };
-    use crate::data::tuple::RelationId;
+    use crate::data::value::RelationId;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{Storage, WriteTx};
 
@@ -540,21 +521,21 @@ mod tests {
         // Two relations sharing the keyspace, separated by the 8-byte id
         // prefix. The per-relation root must equal a root over just that
         // relation's rows, and must be blind to the other relation.
-        let rel_a = RelationId(7);
-        let rel_b = RelationId(9);
+        let rel_a = RelationId::new(7).expect("below cap");
+        let rel_b = RelationId::new(9).expect("below cap");
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
         let mut tx = db.write_tx().unwrap();
         let mut a_pairs = Vec::new();
         for i in 0..10u32 {
-            let mut k = rel_a.0.to_be_bytes().to_vec();
+            let mut k = rel_a.raw().to_be_bytes().to_vec();
             k.extend_from_slice(format!("row{i:02}").as_bytes());
             let v = format!("a{i}").into_bytes();
             tx.put(&k, &v).unwrap();
             a_pairs.push((k, v));
         }
         for i in 0..5u32 {
-            let mut k = rel_b.0.to_be_bytes().to_vec();
+            let mut k = rel_b.raw().to_be_bytes().to_vec();
             k.extend_from_slice(format!("row{i:02}").as_bytes());
             tx.put(&k, format!("b{i}").as_bytes()).unwrap();
         }
@@ -575,7 +556,7 @@ mod tests {
 
         // Editing relation B leaves relation A's root untouched.
         let mut tx = db.write_tx().unwrap();
-        let mut k = rel_b.0.to_be_bytes().to_vec();
+        let mut k = rel_b.raw().to_be_bytes().to_vec();
         k.extend_from_slice(b"row00");
         tx.put(&k, b"changed").unwrap();
         tx.commit().unwrap();
@@ -592,20 +573,10 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let tx = db.read_tx().unwrap();
         assert_eq!(
-            relation_root(&tx, RelationId(3), big_budget()).unwrap(),
+            relation_root(&tx, RelationId::new(3).expect("below cap"), big_budget()).unwrap(),
             empty_hash()
         );
         assert_eq!(state_root(&tx, big_budget()).unwrap(), empty_hash());
-    }
-
-    #[test]
-    fn out_of_range_relation_id_is_a_typed_refusal() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = new_fjall_storage(dir.path()).unwrap();
-        let tx = db.read_tx().unwrap();
-        let err = relation_root(&tx, RelationId(RELATION_ID_BOUND), big_budget())
-            .expect_err("must refuse an out-of-range id");
-        assert!(err.to_string().contains("48-bit"), "{err}");
     }
 
     #[test]

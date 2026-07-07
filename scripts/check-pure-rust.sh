@@ -42,6 +42,13 @@ PURE_SYS='^(linux-raw-sys|windows-sys) '
 # `--target=all` forces cross-platform resolution so every -sys/C-toolchain
 # crate any shipped platform would pull is on the scanned surface, not just
 # the CI runner's own.
+# Warm the registry/dep cache FIRST. `cargo tree` below captures stderr
+# (2>&1) to detect a "not found in workspace" error, but on a COLD cache
+# (e.g. a fresh gate container) that same stderr carries "Updating index /
+# Downloading ..." noise that pollutes the parsed tree and can false-match
+# the banned-crate grep. Fetching first makes the tree parse deterministic.
+cargo fetch --locked >/dev/null 2>&1 || cargo fetch >/dev/null 2>&1 || true
+
 trees=""
 checked=""
 for p in kyzo kyzo-bin; do

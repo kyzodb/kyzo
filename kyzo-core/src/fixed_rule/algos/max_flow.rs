@@ -347,6 +347,7 @@ struct SourceIsSinkError(#[label] SourceSpan);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -363,7 +364,7 @@ mod tests {
         let erows = edges
             .iter()
             .map(|&(a, b, c)| vec![s(a), s(b), DataValue::from(c)])
-            .collect::<Vec<_>>();
+            .collect::<Vec<Tuple>>();
         let got = run_fixed_rule(
             &MaxFlow,
             vec![
@@ -617,7 +618,7 @@ mod tests {
         use crate::fixed_rule::tests_support::prepare_fixed_rule;
 
         let n: u32 = 60_000;
-        let edges: Vec<_> = (0..n - 1)
+        let edges: Vec<Tuple> = (0..n - 1)
             .map(|i| {
                 vec![
                     s(&format!("v{i}")),

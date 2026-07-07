@@ -26,10 +26,10 @@ use std::collections::BTreeMap;
 
 use miette::Result;
 
-use crate::current_validity;
 use crate::data::value::DataValue;
 use crate::fixed_rule::DEFAULT_FIXED_RULES;
 use crate::parse::parse_script;
+use crate::runtime::current_validity;
 
 /// Validate one KyzoScript source string against the real parser and the
 /// real default fixed-rule registry, discarding the parsed AST — the LSP's

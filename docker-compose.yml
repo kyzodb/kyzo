@@ -1,0 +1,60 @@
+# The repo-defined gate environment. EVERY build/test/clippy/bench runs here;
+# there is no native path (pre-bash-guard.sh blocks native cargo/just).
+#
+# Two services, one image. `kyzo-dev` is the gate/dev box (32 GiB RSS ceiling,
+# parallel tests — safe because the limit is real cgroup RSS, not a virtual
+# ulimit). `kyzo-bench` is the measurement box (96 GiB, single-threaded for
+# stable timings). Both bind-mount the repo and share named caches so builds
+# are incremental across runs.
+#
+# Target-dir architecture (why builds are reliable): cargo writes to the
+# `target-cache` NAMED VOLUME at /target (CARGO_TARGET_DIR), NOT the host's
+# ./target. An anonymous volume shadows /workspace/target so the host's target
+# dir — which may hold a binary linked against a different glibc — is INVISIBLE
+# in-container. Result: the only binary the container can run is one it built
+# itself. `just run` executes it; never hand-invoke ./target/... .
+services:
+  kyzo-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      # Shadow the host's ./target with an empty anonymous volume so a
+      # host-built binary (possibly a different glibc) is never visible or
+      # runnable in-container. cargo builds to /target (below) instead.
+      - /workspace/target
+      - cargo-cache:/cargo
+      - target-cache:/target
+    environment:
+      RUST_BACKTRACE: "1"
+      CARGO_TARGET_DIR: /target
+      RUST_TEST_THREADS: "4"
+    mem_limit: 32g
+    cpus: 16
+    command: bash
+
+  kyzo-bench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      # See kyzo-dev: shadow the host ./target so only the container's own
+      # build (in /target) is ever runnable here.
+      - /workspace/target
+      - cargo-cache:/cargo
+      - target-cache:/target
+    environment:
+      RUST_BACKTRACE: "1"
+      CARGO_TARGET_DIR: /target
+      RUST_TEST_THREADS: "1"
+    mem_limit: 96g
+    cpus: 28
+    command: bash
+
+volumes:
+  cargo-cache:
+  target-cache:

@@ -66,7 +66,7 @@ use crate::data::program::{
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue};
 use crate::fixed_rule::{
     CancelFlag, FixedRuleOutput, FixedRulePayload, StoredInputSource, TupleIter,

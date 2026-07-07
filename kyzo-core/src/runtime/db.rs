@@ -80,8 +80,8 @@ use crate::data::program::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
-use crate::data::value::{AsOf, DataValue, ValidityTs, current_validity};
+use crate::data::value::Tuple;
+use crate::data::value::{AsOf, DataValue, ValidityTs};
 use crate::fixed_rule::{CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
@@ -91,6 +91,7 @@ use crate::query::levels::EpochStore;
 use crate::query::normalize::{SessionFixedRule, SessionNormalizer, SessionView};
 use crate::query::sort::sort_and_collect;
 use crate::runtime::callback::{CallbackCollector, EventCallbackRegistry};
+use crate::runtime::current_validity;
 use crate::runtime::relation::{
     AccessLevel, KeyspaceKind, RelationHandle, create_relation, describe_relation,
     destroy_relation, get_relation, list_relations, rename_relation, set_access_level,
@@ -981,11 +982,11 @@ pub struct SessionTx<T> {
     /// Every relation id this transaction wrote (user writes, trigger
     /// writes, index backfills alike) — drained into segment-watermark
     /// bumps BEFORE the storage commit (the segments' soundness rule).
-    pub(crate) touched_relations: std::collections::BTreeSet<crate::data::tuple::RelationId>,
+    pub(crate) touched_relations: std::collections::BTreeSet<crate::data::value::RelationId>,
     /// Relation ids permanently retired by this transaction (destroy /
     /// replace / index drop) — drained into segment-engine evictions
     /// AFTER a successful commit (a rolled-back destroy retires nothing).
-    pub(crate) retired_relations: std::collections::BTreeSet<crate::data::tuple::RelationId>,
+    pub(crate) retired_relations: std::collections::BTreeSet<crate::data::value::RelationId>,
 }
 
 impl<T: ReadTx> SessionTx<T> {
@@ -1871,15 +1872,15 @@ mod tests {
             )
             .unwrap();
         tx.commit().unwrap();
-        let now = crate::data::value::current_validity().unwrap().raw();
+        let now = crate::runtime::current_validity().unwrap().raw();
 
         // (sys=now, valid=200): the record NOW says the fact held at 200.
         let rows = db
             .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
             .expect("two-coordinate read");
+        let want: Vec<Tuple> = vec![vec![DataValue::from("retro")]];
         assert_eq!(
-            rows.rows,
-            vec![vec![DataValue::from("retro")]],
+            rows.rows, want,
             "system-now, valid-200 must see the retroactive claim"
         );
         // Swapped (sys=200, valid=now): at system time 200 µs the record
@@ -1928,10 +1929,8 @@ mod tests {
             "index and base must agree on current state"
         );
         assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
-        assert_eq!(
-            via_base.rows[0],
-            vec![DataValue::from(11), DataValue::from(1)]
-        );
+        let want: Tuple = vec![DataValue::from(11), DataValue::from(1)];
+        assert_eq!(via_base.rows[0], want);
     }
 
     /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
@@ -2379,7 +2378,9 @@ mod tests {
                 "edge",
                 edges
                     .iter()
-                    .map(|(a, b)| vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
+                    .map(|(a, b)| {
+                        Tuple::from(vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
+                    })
                     .collect(),
             )]
             .into_iter()

@@ -26,13 +26,13 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kyzo::{
-    DataValue, EncodedKey, ReadTx, Storage, Validity, ValidityTs, WriteTx, encode_tuple_key,
+    DataValue, EncodedKey, ReadTx, RelationId, Storage, TupleT, Validity, ValidityTs, WriteTx,
     new_fjall_storage,
 };
 use std::cmp::Reverse;
 
 fn key(i: u64) -> EncodedKey {
-    encode_tuple_key(7, &[DataValue::from(i as i64)])
+    [DataValue::from(i as i64)].encode_as_key(RelationId::new(7).expect("below cap"))
 }
 
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> EncodedKey {
@@ -42,7 +42,8 @@ fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> EncodedKey {
             is_assert: Reverse(true),
         })
     };
-    encode_tuple_key(9, &[DataValue::from(name), slot(valid_ts), slot(sys_ts)])
+    [DataValue::from(name), slot(valid_ts), slot(sys_ts)]
+        .encode_as_key(RelationId::new(9).expect("below cap"))
 }
 
 /// Relation-9 header + assert polarity byte: the value every versioned
@@ -175,15 +176,15 @@ fn asof(c: &mut Criterion) {
             }
         }
         tx.commit().unwrap();
-        let lo = encode_tuple_key(9, &[]);
-        let hi = encode_tuple_key(10, &[]);
+        let lo = &[].encode_as_key(RelationId::new(9).expect("below cap"));
+        let hi = &[].encode_as_key(RelationId::new(10).expect("below cap"));
         let at = kyzo::AsOf::current(ValidityTs::from_raw(versions / 2));
 
         let mut g = c.benchmark_group(format!("asof_{label}"));
         g.bench_function("seek_skip_scan", |b| {
             let tx = db.read_tx().unwrap();
             b.iter(|| {
-                black_box(tx.range_skip_scan_tuple(&lo, &hi, at).fold(0usize, |n, r| {
+                black_box(tx.range_skip_scan_tuple(lo, hi, at).fold(0usize, |n, r| {
                     r.unwrap();
                     n + 1
                 }))
@@ -195,17 +196,15 @@ fn asof(c: &mut Criterion) {
             let cutoff = versions / 2;
             b.iter(|| {
                 let mut newest: std::collections::BTreeMap<i64, (i64, bool)> = Default::default();
-                for r in tx.range_scan(&lo, &hi) {
+                for r in tx.range_scan(lo, hi) {
                     let (k, v) = r.unwrap();
                     let t = kyzo::decode_tuple_from_key(&k, 4).unwrap();
-                    let (DataValue::Num(kyzo::Num::Int(name)), DataValue::Validity(vld)) =
-                        (&t[0], &t[1])
-                    else {
+                    let (DataValue::Num(name_n), DataValue::Validity(vld)) = (&t[0], &t[1]) else {
                         unreachable!()
                     };
-                    let name = *name;
-                    // Assert polarity byte after the 8-byte value header.
-                    let assert = v[8] == 0;
+                    let name = name_n.as_int().unwrap();
+                    // Assert polarity byte opens the stored value.
+                    let assert = v[0] == 0;
                     let ts = vld.timestamp.raw();
                     if ts <= cutoff {
                         let e = newest.entry(name).or_insert((ts, assert));

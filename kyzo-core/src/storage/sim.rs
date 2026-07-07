@@ -93,7 +93,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use fjall::Slice;
 use miette::{Result, miette};
 
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};

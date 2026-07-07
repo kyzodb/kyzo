@@ -20,10 +20,10 @@ use arrow::ipc::reader::StreamReader;
 use kyzo::{DataValue, NamedRows, Num};
 
 fn v_int(i: i64) -> DataValue {
-    DataValue::Num(Num::Int(i))
+    DataValue::Num(Num::int(i))
 }
 fn v_float(f: f64) -> DataValue {
-    DataValue::Num(Num::Float(f))
+    DataValue::Num(Num::float(f))
 }
 
 /// Every uniformly-typed `ColumnVec` kind this encoder maps: Int64,

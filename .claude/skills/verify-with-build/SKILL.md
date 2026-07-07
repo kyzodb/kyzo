@@ -22,14 +22,16 @@ Every claim about the code is backed by evidence produced in this session, or it
 
 ## Standard verification commands
 
-    (ulimit -v 12582912 && timeout 1800 cargo build -p kyzo --release)        # core
-    (ulimit -v 12582912 && timeout 1800 cargo test  -p kyzo --release)        # core tests
-    (ulimit -v 12582912 && timeout 1800 cargo build --workspace)              # whole-workspace (the honest scope)
-    (ulimit -v 12582912 && timeout 1800 cargo tree  -p kyzo -e normal,build)  # dependency-graph claims
+EVERY run goes through the pinned container. There is no native path (`pre-bash-guard.sh` blocks
+native `cargo`/`just` and hand-set `ulimit`/`timeout`/`--test-threads`):
 
-Every cargo invocation is memory-capped and timed out — two machines have
-been OOM-killed without this. Mutation runs use the tighter cap:
-`(ulimit -v 8388608 && timeout 600 cargo mutants ...)`.
+    docker compose run --rm kyzo-dev  just gate        # the seal (check, fmt, clippy, unsafe, pure-rust, tests)
+    docker compose run --rm kyzo-dev  just test        # a targeted run (or test-features/clippy/check/memcheck)
+    docker compose run --rm kyzo-dev  just env-report  # environment fingerprint for the report
+    docker compose run --rm kyzo-bench just bench       # benchmarks
+
+Never set a memory or thread limit yourself — the container's `mem_limit` (cgroup RSS) and pinned
+`RUST_TEST_THREADS` are the honest, prebaked limits (see `.claude/rules/environment.md`).
 
 
 ## Exit codes, not pipe output

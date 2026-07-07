@@ -174,6 +174,7 @@ fn page_rank(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
 
     /// The termination metric a Jacobi run stops on. `page_rank` uses
     /// [`Term::Sum`] (`Σ|Δ|`); [`Term::Max`] exists only so a test can pin
@@ -446,7 +447,7 @@ mod tests {
         let edges = [(0u32, 1u32), (0, 2), (1, 2), (2, 0), (3, 0), (1, 3)];
         // Defaults the rule applies: theta 0.85, epsilon 1e-4, iterations 10.
         let want_scores = naive_jacobi(4, &edges, 0.85, 1e-4, 10, Term::Sum);
-        let want: Vec<Vec<DataValue>> = ["a", "b", "c", "d"]
+        let want: Vec<Tuple> = ["a", "b", "c", "d"]
             .iter()
             .zip(want_scores.iter())
             .map(|(name, score)| vec![s(name), DataValue::from(*score as f64)])

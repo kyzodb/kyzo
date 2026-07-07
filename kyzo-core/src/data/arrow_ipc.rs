@@ -7,21 +7,18 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Story #77's Arrow boundary: a dependency-free encoder for the Arrow IPC
-//! STREAMING format (one Schema message, then any number of RecordBatch
-//! messages, then an end-of-stream marker), built directly against
-//! [`ColumnBatch`](crate::data::batch::ColumnBatch) — never against the
-//! `arrow` crate, which is not (and, per the pure-Rust invariant, cannot
-//! be) a dependency of this crate: `arrow-array` unconditionally requires
-//! `chrono`'s `clock` feature, which pulls `iana-time-zone`, which needs
-//! `core-foundation-sys` on macOS and `windows-core` on Windows — the exact
-//! platform-native-binding class this codebase already migrated away from
-//! once (see the time-library history in `Cargo.toml`'s own comments).
-//! Verified, not assumed: `cargo tree -e normal,build --target=all -i
-//! core-foundation-sys` shows arrow's own chrono dependency as the path in;
-//! a Linux-only `cargo tree` (no `--target=all`) hides this, which is why
-//! that check must always use `--target=all` for any dependency question
-//! going forward.
+//! A dependency-free encoder for the Arrow IPC STREAMING format (one Schema
+//! message, then any number of RecordBatch messages, then an end-of-stream
+//! marker), built directly against [`ColumnBatch`] — never against the
+//! `arrow` crate. The `arrow` crate is not (and, per the pure-Rust
+//! invariant, cannot be) a dependency of this crate: `arrow-array`
+//! unconditionally requires `chrono`'s `clock` feature, which pulls
+//! `iana-time-zone`, which needs `core-foundation-sys` on macOS and
+//! `windows-core` on Windows — the exact platform-native-binding class
+//! this codebase migrated away from. Verified through `cargo tree -e
+//! normal,build --target=all -i core-foundation-sys`: arrow's chrono
+//! dependency is the pull-in path; note that Linux-only `cargo tree`
+//! (without `--target=all`) hides this platform-specific path.
 //!
 //! The only new dependency is `flatbuffers`, the pure-Rust metadata-object
 //! runtime library (used here as a plain buffer builder, no code
@@ -31,7 +28,7 @@
 //!
 //! ## Scope
 //!
-//! Every [`ColumnVec`](crate::data::batch::ColumnVec) variant KyzoDB's
+//! Every [`ColumnVec`] variant KyzoDB's
 //! batch machinery already decides between: `I64` -> Arrow `Int64`, `F64`
 //! -> Arrow `Float64`, `Bool` -> Arrow `Bool` (bit-packed), `Str` -> Arrow
 //! `Utf8`. None of these carries a null today (each variant's own doc says
@@ -59,8 +56,114 @@
 use flatbuffers::{FlatBufferBuilder, UOffsetT, WIPOffset};
 use miette::{Result, bail};
 
-use crate::data::batch::{ColumnBatch, ColumnVec};
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, NumRepr, Tuple};
+
+/// One export column, decided once from its values: a uniform typed
+/// vector when every value fits one of the four Arrow-mappable kinds,
+/// `Mixed` otherwise (including any `Null`, which forces the nullable
+/// path). These are the ENCODER'S OWN planning types — the export
+/// boundary's vocabulary, not an execution currency.
+pub(crate) enum ColumnVec {
+    I64(Vec<i64>),
+    F64(Vec<f64>),
+    Bool(Vec<bool>),
+    Str(Vec<String>),
+    Mixed(Vec<DataValue>),
+}
+
+impl ColumnVec {
+    fn from_values(values: Vec<DataValue>) -> ColumnVec {
+        #[derive(PartialEq, Eq, Clone, Copy)]
+        enum Fit {
+            Int,
+            Float,
+            Bool,
+            Str,
+        }
+        let mut fit: Option<Fit> = None;
+        for v in &values {
+            let this = match v {
+                DataValue::Num(n) => match n.repr() {
+                    NumRepr::Int(_) => Fit::Int,
+                    NumRepr::Float(_) => Fit::Float,
+                },
+                DataValue::Bool(_) => Fit::Bool,
+                DataValue::Str(_) => Fit::Str,
+                _ => return ColumnVec::Mixed(values),
+            };
+            match fit {
+                None => fit = Some(this),
+                Some(f) if f == this => {}
+                Some(_) => return ColumnVec::Mixed(values),
+            }
+        }
+        match fit {
+            Some(Fit::Int) => ColumnVec::I64(
+                values
+                    .iter()
+                    .map(|v| v.get_int().expect("uniform int column"))
+                    .collect(),
+            ),
+            Some(Fit::Float) => ColumnVec::F64(
+                values
+                    .iter()
+                    .map(|v| v.get_float().expect("uniform float column"))
+                    .collect(),
+            ),
+            Some(Fit::Bool) => ColumnVec::Bool(
+                values
+                    .iter()
+                    .map(|v| v.get_bool().expect("uniform bool column"))
+                    .collect(),
+            ),
+            Some(Fit::Str) => ColumnVec::Str(
+                values
+                    .into_iter()
+                    .map(|v| match v {
+                        DataValue::Str(s) => s,
+                        _ => unreachable!("uniform str column"),
+                    })
+                    .collect(),
+            ),
+            None => ColumnVec::Mixed(values),
+        }
+    }
+}
+
+/// A row-set pivoted to columns for the export planner.
+pub(crate) struct ColumnBatch {
+    columns: Vec<ColumnVec>,
+    height: usize,
+}
+
+impl ColumnBatch {
+    pub(crate) fn from_rows(rows: Vec<Tuple>, arity: usize) -> ColumnBatch {
+        let height = rows.len();
+        let mut cols: Vec<Vec<DataValue>> =
+            (0..arity).map(|_| Vec::with_capacity(height)).collect();
+        for row in rows {
+            for (i, v) in row.into_iter().enumerate().take(arity) {
+                cols[i].push(v);
+            }
+        }
+        ColumnBatch {
+            columns: cols.into_iter().map(ColumnVec::from_values).collect(),
+            height,
+        }
+    }
+
+    pub(crate) fn width(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub(crate) fn height(&self) -> usize {
+        self.height
+    }
+
+    fn column(&self, i: usize) -> &ColumnVec {
+        &self.columns[i]
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Arrow's flatbuffer IDL constants (org.apache.arrow.flatbuf.*), hand-kept
@@ -260,8 +363,10 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
     for v in values {
         let this = match v {
             DataValue::Null => continue,
-            DataValue::Num(crate::data::value::Num::Int(_)) => Kind::Int,
-            DataValue::Num(crate::data::value::Num::Float(_)) => Kind::Float,
+            DataValue::Num(n) => match n.repr() {
+                NumRepr::Int(_) => Kind::Int,
+                NumRepr::Float(_) => Kind::Float,
+            },
             DataValue::Bool(_) => Kind::Bool,
             DataValue::Str(_) => Kind::Str,
             DataValue::Bytes(_) => Kind::Binary,
@@ -299,13 +404,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             })
         }
         Some(Kind::Int) => {
-            let vals: Vec<i64> = values
-                .iter()
-                .map(|v| match v {
-                    DataValue::Num(crate::data::value::Num::Int(i)) => *i,
-                    _ => 0,
-                })
-                .collect();
+            let vals: Vec<i64> = values.iter().map(|v| v.get_int().unwrap_or(0)).collect();
             Ok(PlannedColumn {
                 arrow_type: TYPE_INT,
                 nullable: true,
@@ -317,7 +416,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let vals: Vec<f64> = values
                 .iter()
                 .map(|v| match v {
-                    DataValue::Num(crate::data::value::Num::Float(f)) => *f,
+                    DataValue::Num(n) => n.as_float().unwrap_or(0.0),
                     _ => 0.0,
                 })
                 .collect();
@@ -544,7 +643,7 @@ mod tests {
     use crate::data::value::Num;
 
     fn v_int(i: i64) -> DataValue {
-        DataValue::Num(Num::Int(i))
+        DataValue::Num(Num::int(i))
     }
 
     #[test]
@@ -613,7 +712,7 @@ mod tests {
     /// marker to start, non-zero length, ends in the EOS marker).
     #[test]
     fn encode_stream_produces_a_framed_byte_sequence() {
-        let batch = ColumnBatch::from_rows(&[vec![v_int(1)], vec![v_int(2)], vec![v_int(3)]], 1);
+        let batch = ColumnBatch::from_rows(vec![vec![v_int(1)], vec![v_int(2)], vec![v_int(3)]], 1);
         let bytes = encode_stream(&batch, &["n"]).unwrap();
         assert!(bytes.len() > 16);
         assert_eq!(&bytes[0..4], &CONTINUATION_MARKER.to_le_bytes());
@@ -626,7 +725,7 @@ mod tests {
 
     #[test]
     fn encode_stream_refuses_a_name_count_mismatch() {
-        let batch = ColumnBatch::from_rows(&[vec![v_int(1)]], 1);
+        let batch = ColumnBatch::from_rows(vec![vec![v_int(1)]], 1);
         let err = encode_stream(&batch, &[]).unwrap_err();
         assert!(err.to_string().contains("column names"));
     }

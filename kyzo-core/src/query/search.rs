@@ -226,7 +226,7 @@ fn take_pos_int(
     match take_const(params, name, span)? {
         None => Ok(None),
         Some(DataValue::Num(n)) => {
-            let i = n.get_int().ok_or(SearchParamInvalid(
+            let i = n.as_int().ok_or(SearchParamInvalid(
                 name.to_string(),
                 "must be a positive integer",
                 span,

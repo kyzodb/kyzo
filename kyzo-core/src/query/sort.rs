@@ -34,7 +34,7 @@ use thiserror::Error;
 use crate::data::program::SortDir;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
 
 /// An `:order` clause names a variable that is not in the entry head.

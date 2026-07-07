@@ -29,6 +29,7 @@ use crate::data::program::WrongFixedRuleOptionError;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::fixed_rule::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
@@ -107,19 +108,19 @@ impl FixedRule for ReorderSort {
 
         let mut count = 0usize;
         let mut rank = 0usize;
-        let mut last = &DataValue::Bot;
+        let mut last: Option<&DataValue> = None;
         let take_plus_skip = take.saturating_add(skip);
         for val in &buffer {
             // Structural: every buffered tuple ends with the sort key
             // pushed above, so it is non-empty.
             let sorter = val.last().unwrap();
 
-            if sorter == last {
+            if last == Some(sorter) {
                 count += 1;
             } else {
                 count += 1;
                 rank = count;
-                last = sorter;
+                last = Some(sorter);
             }
 
             if take != 0 && count > take_plus_skip {
@@ -129,8 +130,9 @@ impl FixedRule for ReorderSort {
             if count <= skip {
                 continue;
             }
-            let mut out_t = vec![DataValue::from(if break_ties { count } else { rank } as i64)];
-            out_t.extend_from_slice(&val[0..val.len() - 1]);
+            let mut out_t: Tuple =
+                vec![DataValue::from(if break_ties { count } else { rank } as i64)];
+            out_t.extend(val[0..val.len() - 1].iter().cloned());
             out.put(out_t)?;
             cancel.check()?;
         }
@@ -214,7 +216,7 @@ mod tests {
     /// 1..=5 in that order, each row (rank, id).
     #[test]
     fn sorts_mixed_types_per_datavalue_order() {
-        let rows = vec![
+        let rows: Vec<Tuple> = vec![
             vec![s("n"), DataValue::Null],
             vec![s("b"), DataValue::from(false)],
             vec![s("h"), DataValue::from(0.5)],
@@ -229,16 +231,14 @@ mod tests {
         )
         .unwrap();
         let i = |v: i64| DataValue::from(v);
-        assert_eq!(
-            got,
-            vec![
-                vec![i(1), s("n")], // Null
-                vec![i(2), s("b")], // Bool(false)
-                vec![i(3), s("h")], // Num(0.5)
-                vec![i(4), s("i")], // Num(1)
-                vec![i(5), s("s")], // Str
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![i(1), s("n")], // Null
+            vec![i(2), s("b")], // Bool(false)
+            vec![i(3), s("h")], // Num(0.5)
+            vec![i(4), s("i")], // Num(1)
+            vec![i(5), s("s")], // Str
+        ];
+        assert_eq!(got, want);
     }
 
     /// VALUE ORACLE for the rank semantics around ties, descending order,
@@ -253,7 +253,7 @@ mod tests {
     ///                       so store order pins the rows regardless)
     #[test]
     fn rank_ties_and_descending() {
-        let rows = || {
+        let rows = || -> Vec<Tuple> {
             vec![
                 vec![s("a"), DataValue::from(1i64)],
                 vec![s("b"), DataValue::from(1i64)],
@@ -269,10 +269,8 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![vec![i(1), s("a")], vec![i(1), s("b")], vec![i(3), s("c")],]
-        );
+        let want: Vec<Tuple> = vec![vec![i(1), s("a")], vec![i(1), s("b")], vec![i(3), s("c")]];
+        assert_eq!(got, want);
 
         let got = run_fixed_rule(
             &ReorderSort,
@@ -281,10 +279,8 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![vec![i(1), s("a")], vec![i(2), s("b")], vec![i(3), s("c")],]
-        );
+        let want: Vec<Tuple> = vec![vec![i(1), s("a")], vec![i(2), s("b")], vec![i(3), s("c")]];
+        assert_eq!(got, want);
 
         let got = run_fixed_rule(
             &ReorderSort,
@@ -293,10 +289,8 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![vec![i(1), s("c")], vec![i(2), s("a")], vec![i(2), s("b")],]
-        );
+        let want: Vec<Tuple> = vec![vec![i(1), s("c")], vec![i(2), s("a")], vec![i(2), s("b")]];
+        assert_eq!(got, want);
     }
 
     /// VALUE ORACLE for skip/take: distinct keys (a,1) (b,2) (c,3) with
@@ -321,6 +315,7 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(got, vec![vec![DataValue::from(2i64), s("b")]]);
+        let want: Vec<Tuple> = vec![vec![DataValue::from(2i64), s("b")]];
+        assert_eq!(got, want);
     }
 }

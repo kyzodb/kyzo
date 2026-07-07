@@ -98,6 +98,7 @@ pub(crate) fn kahn_g(graph: &DirectedCsrGraph, cancel: CancelFlag) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -164,14 +165,12 @@ mod tests {
         )
         .unwrap();
         let i = |v: i64| DataValue::from(v);
-        assert_eq!(
-            got,
-            vec![
-                vec![i(0), s("a")],
-                vec![i(1), s("c")],
-                vec![i(2), s("b")],
-                vec![i(3), s("d")],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![i(0), s("a")],
+            vec![i(1), s("c")],
+            vec![i(2), s("b")],
+            vec![i(3), s("d")],
+        ];
+        assert_eq!(got, want);
     }
 }

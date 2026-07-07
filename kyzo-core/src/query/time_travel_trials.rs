@@ -51,7 +51,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, DataValue, Interval, MAX_VALIDITY_TS, ValidityTs};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, MAX_VALIDITY_TS, ValidityTs};
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
@@ -379,6 +379,8 @@ fn naive_asof_cfg(
             sys: i64::MAX,
         },
     )
+    .into_iter()
+    .collect()
 }
 
 /// The correct oracle: inclusive boundary, last-write-wins at an instant.
@@ -1652,12 +1654,11 @@ fn delta_atom(
 fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTreeSet<Tuple> {
     let mut want = BTreeSet::new();
     for key in keys {
-        for iv in laws::derive_intervals(events, key, laws::Axis::Valid, fixed_sys) {
+        let real_key = crate::data::value::Tuple::from(key.clone());
+        for iv in laws::derive_intervals(events, &real_key, laws::Axis::Valid, fixed_sys) {
             let mut row = iv.tuple.clone();
-            row.push(DataValue::Interval(
-                Interval::new(iv.start, iv.end).expect("derive_intervals proves start < end"),
-            ));
-            want.insert(row);
+            row.push(DataValue::Interval(plane_interval(iv.start, iv.end)));
+            want.insert(row.to_vec());
         }
     }
     want
@@ -2023,11 +2024,24 @@ fn spans_of(db: &FjallStorage, name: &str, sys: Option<i64>) -> BTreeSet<Tuple> 
     compile_and_run(db, prog)
 }
 
+/// Convert an oracle half-open `[start, end)` derived interval to the
+/// plane's closed-normal-form value: an open run (`end == OPEN_END`)
+/// becomes upper-unbounded; a clipped run's exclusive `end` becomes the
+/// closed instant `end - 1`.
+fn plane_interval(start: i64, end: i64) -> Interval {
+    let hi = if end == laws::OPEN_END {
+        Bound::Unbounded
+    } else {
+        Bound::Closed(end - 1)
+    };
+    Interval::new(Bound::Closed(start), hi)
+}
+
 fn one_interval(k: i64, val: i64, start: i64, end: i64) -> Tuple {
     vec![
         v(k),
         v(val),
-        DataValue::Interval(Interval::new(start, end).unwrap()),
+        DataValue::Interval(plane_interval(start, end)),
     ]
 }
 
@@ -2130,7 +2144,7 @@ fn spans_no_zero_width_intervals_ever() {
         let DataValue::Interval(iv) = row.last().unwrap() else {
             panic!("expected an interval column: {row:?}")
         };
-        assert!(iv.start() < iv.end(), "zero-width interval: {iv:?}");
+        assert!(!iv.is_empty(), "empty interval: {iv:?}");
     }
 }
 

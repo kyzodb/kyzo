@@ -1,0 +1,94 @@
+# KyzoDB transitive-closure benchmark
+commit:  db00c49  #119 task 7 remediation 4/10: goldens derived from the format law
+date:    2026-07-07
+machine: Linux 7.0.14-arch1-1 x86_64 | Intel(R) Core(TM) i9-14900K | 32 cores
+workload: transitive closure (canonical 2-rule Datalog) over SNAP graphs, variant=count
+label:    value-plane (#119) vs after-118 baseline (2af0446)
+
+TC graph=email-Eu-core edges=25571 nodes=1005 variant=count load_ms=105.1 query_ms=5350.6 closure_rows=793283 peak_rss_kb=95044
+TC graph=p2p-Gnutella08 edges=20777 nodes=6301 variant=count load_ms=86.3 query_ms=31382.5 closure_rows=13148244 peak_rss_kb=984132
+TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=434.9 query_ms=88757.1 closure_rows=11947132 peak_rss_kb=979112
+
+# INTERPRETED DELTA vs 2af0446 (baseline query_ms in parens):
+#   email-Eu-core   5350.6 (4228.8)  +26.5%   rss 95044 (85596)  +11%
+#   p2p-Gnutella08 31382.5 (26603.2) +18.0%   rss 984132 (785436) +25%
+#   wiki-Vote      88757.1 (69837.7) +27.1%   rss 979112 (870060) +13%
+# closure_rows IDENTICAL on all three: correctness preserved, this is a pure
+# throughput regression. Root-cause below.
+
+# ROOT CAUSE (profiled, and it is NOT intrinsic to the value plane):
+# The fixpoint temp store (query/temp_store.rs RegularTempStore) dedups
+# every derived tuple in the hottest semi-naive loop by keying a BTreeMap on
+# encode_tuple_bare -- the DURABLE canonical encoder. Micro-profile of the
+# hot shape (int-pair tuples, 20M ops):
+#     canonical encode alone : 893 ms   (56% of the dedup insert cost)
+#     BTreeMap<bytes> insert  : 1598 ms  (current path: encode + byte cmp)
+#     BTreeMap<Tuple> insert  : 2103 ms  (structural DataValue::Ord -- SLOWER,
+#                                         so "just use Tuple keys" is NOT the fix)
+# The durable encoder is the dominant cost, and it runs PER TUPLE OPERATION
+# (millions of times) even though transitive closure has only ~thousands of
+# DISTINCT node ids. This is the exact anti-pattern the value plane's two-form
+# law exists to eliminate: the DURABLE form (canonical bytes) is being used as
+# the EXECUTION identity in the hot loop.
+#
+# THE FIX (architectural, primitives already built and proven):
+# Execution must use the EXECUTION currency -- raw admitted codes -- not the
+# durable encoder. Equal values intern to the same code, so a code tuple
+# [code_a, code_b] is exact dedup identity by u32 comparison, and the encoder
+# runs ONCE PER DISTINCT VALUE at the intern boundary instead of once per
+# operation. Ordered iteration is the sealed-code fast lane (raw rank order,
+# proven to sort with ZERO derefs in arena::sealed_code_column_sort_never_derefs).
+# The primitives exist and are proven TODAY: Rows, CodeColumn, Domain, admit,
+# gather, and the sealed-rank sort; query/batch.rs is the seam. What remains is
+# to route the eval pipeline (vm.rs / batch_ops / ra) on codes end to end so a
+# DataValue is never re-encoded mid-loop -- values become codes at ingestion,
+# flow as codes through dedup/join, and materialize canonical bytes ONLY at the
+# storage/scan boundary. A temp-store-only change does NOT recover the cost,
+# because a DataValue->code lookup still re-encodes; the win needs codes to flow
+# THROUGH the pipeline.
+#
+# STATUS: this is a genuine, scoped architectural unit (the code-based eval
+# pipeline, #120's core), not a loss to accept and not a quick tail change to a
+# correctness-critical, oracle-guarded loop. The regression is a recorded
+# finding whose cause is the wrong FORM in the hot path -- not the value plane's
+# format, which is used correctly at the boundaries.
+
+# MEASURED (arena::tests::bench_code_dedup_vs_byte_dedup, TC recurrence
+# pattern: 8M tuple ops, 7000 distinct ids):
+#     encode + BTreeMap<bytes> dedup (current) : 980 ms
+#     intern-per-op + BTreeMap<(u32,u32)>      : 3352 ms  (3.4x SLOWER)
+# A naive code-backed temp store is CATASTROPHICALLY worse: re-interning
+# each cell on every operation (16M interns) costs far more than
+# encode+btree, because arena intern maintains sorted/delta structure, not a
+# bare hash. So the fix is NOT "key the temp store by codes" -- that
+# backfires. The code identity only pays when a value is interned ONCE (at
+# ingestion) and its code FLOWS through the whole pipeline (join,
+# projection, dedup, iteration) without ever being re-derived from a
+# DataValue. That is the code-based eval pipeline end to end -- #120's core
+# -- and this measurement is the design constraint it must honor:
+# intern-once, never per-operation. Attempting the naive shortcut here
+# (measured) would have regressed the loop 3.4x; the real fix is the whole
+# pipeline, not a temp-store patch.
+
+# THE #119 FOUNDATION (data/value/exec.rs) -- why it exists:
+# The regression above is the durable canonical encoder running in the
+# execution hot loop. #119 (the value plane) delivers the LAWFUL FOUNDATION
+# that lets #120 remove it, without any raw-code injection or forged stamp:
+#   - ExecRows: admitted execution rows -- row-major raw u32 codes under one
+#     proven Domain (arena + epoch + visibility). Built ONLY by admitting a
+#     stamp-verified Rows or by the recombine door; no constructor from
+#     arbitrary u32.
+#   - join_project: the narrow recombine door -- hash-join on u32 code
+#     identity (lawful because the Domain proves one arena+epoch), emitting
+#     projected columns by COPYING admitted codes. Admitted rows in,
+#     admitted rows out.
+#   - ExecDedup: packed-u32 tuple dedup under one Domain -- the hot-loop
+#     identity, u32-slice equality, no canonical encode.
+# PROVEN (data::value::exec::tests::recombine_and_dedup_never_intern_encode_or_deref):
+# a full join_project + dedup pass leaves the arena's distinct-value count
+# UNCHANGED (zero re-intern) and its deref counter at ZERO (zero payload
+# encode/deref). This is the measured design constraint (intern-once,
+# u32-in-the-loop) turned into a lawful, tested primitive.
+# #120 spends this: route the recursive RA hot path onto ExecRows/ExecDedup
+# so encode_tuple_bare and per-cell intern leave the loop. #120 owns the
+# 16.5k-line RA migration; #119 owns the authority + the foundation.

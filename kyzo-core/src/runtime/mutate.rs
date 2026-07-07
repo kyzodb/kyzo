@@ -66,8 +66,8 @@ use crate::data::program::{
 use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::{Tuple, TupleT};
 use crate::data::value::{DataValue, ValidityTs};
+use crate::data::value::{Tuple, TupleT};
 use crate::fixed_rule::utilities::Constant;
 use crate::fixed_rule::{FixedRule, FixedRuleHandle, NamedRows};
 use crate::runtime::callback::{CallbackCollector, CallbackOp};
@@ -82,7 +82,7 @@ use crate::storage::{Storage, WriteTx};
 #[diagnostic(code(transact::assertion_failure))]
 pub(crate) struct TransactAssertionFailure {
     relation: String,
-    key: Vec<DataValue>,
+    key: Tuple,
     notice: String,
 }
 
@@ -1148,9 +1148,9 @@ fn temporal_posting_tuple(
     if row.len() < keys_len {
         bail!(ShortTemporalIndexRow(base.name.to_string()));
     }
-    let mut out = Vec::with_capacity(1 + keys_len);
+    let mut out = Tuple::with_capacity(1 + keys_len);
     out.push(crate::data::value::StoredValiditySlot::new(valid).as_datavalue());
-    out.extend_from_slice(&row[..keys_len]);
+    out.extend(row[..keys_len].iter().cloned());
     Ok(out)
 }
 
@@ -1285,7 +1285,7 @@ pub(crate) fn make_const_rule(
     options.insert(
         SmartString::from("data"),
         Expr::Const {
-            val: DataValue::List(data.iter().map(|t| DataValue::List(t.clone())).collect()),
+            val: DataValue::List(data.iter().map(|t| DataValue::List(t.to_vec())).collect()),
             span: SourceSpan::default(),
         },
     );
@@ -1571,7 +1571,7 @@ impl<T: WriteTx> SessionTx<T> {
         if matches!(index_ref.kind, IndexKind::Temporal) {
             let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
             let keys_len = base.metadata.keys.len();
-            let upper = (base.id.0 + 1).to_be_bytes();
+            let upper = (base.id.raw() + 1).to_be_bytes();
             let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
             loop {
                 let batch: Vec<(Slice, Slice)> = self
@@ -1591,7 +1591,7 @@ impl<T: WriteTx> SessionTx<T> {
                     // as-of resolution — resolution is exactly what would
                     // collapse the history this backfill must reproduce
                     // whole), and its polarity from the value.
-                    let tuple = crate::data::tuple::decode_tuple_from_key(k, keys_len + 2)?;
+                    let tuple = crate::data::value::decode_tuple_from_key(k, keys_len + 2)?;
                     let polarity = crate::data::bitemporal::claim_polarity_of_value(v)?;
                     let key_cols = &tuple[..keys_len];
                     let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
@@ -1630,7 +1630,7 @@ impl<T: WriteTx> SessionTx<T> {
             Some(self.manifest_index_ctx(&base, &index_ref)?)
         };
         let stamp = self.system_stamp_routed(base.is_temp);
-        let upper = (base.id.0 + 1).to_be_bytes();
+        let upper = (base.id.raw() + 1).to_be_bytes();
         let keys_len = base.metadata.keys.len();
         let as_of = crate::data::value::AsOf::current(crate::data::value::MAX_VALIDITY_TS);
         let mut lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
@@ -1651,11 +1651,15 @@ impl<T: WriteTx> SessionTx<T> {
                 })
                 .try_collect()?;
             let Some(last) = batch.last() else { break };
-            // Resume past ALL versions of the last fact: `Bot` encodes
-            // above every slot byte, so this bound clears its group.
-            let mut succ = last[0..keys_len].to_vec();
-            succ.push(DataValue::Bot);
-            lower = base.encode_partial_key_for_store(&succ).as_ref().to_vec();
+            // Resume past ALL versions of the last fact: the 0xFF tail
+            // encodes above every slot byte, so this bound clears its
+            // group.
+            let mut succ = base
+                .encode_partial_key_for_store(&last[0..keys_len])
+                .as_bytes()
+                .to_vec();
+            succ.push(0xFF);
+            lower = succ;
             for row in &batch {
                 match &ctx {
                     Some(ctx) => self.apply_manifest_index(&base, ctx, Some(row), None)?,
@@ -1928,6 +1932,7 @@ mod bulk_write_tests {
     use fjall::Slice;
 
     use crate::data::value::DataValue;
+    use crate::data::value::Tuple;
     use crate::runtime::db::Db;
     use crate::storage::sim::SimStorage;
     use crate::storage::{ReadTx, Storage};
@@ -1997,12 +2002,35 @@ mod bulk_write_tests {
              counter and the relation's own catalog row)"
         );
 
-        // Pinned against a run of this exact workload captured against the
-        // pre-fix code (materialize-then-encode `Vec<DataValue>` in both
-        // call sites), via `git stash` of just `relation.rs` — see the PR
-        // description for the before/after diff-free comparison. Any future
-        // change to the bulk-write key/value encoding must keep this equal
-        // or explain, in a FormatVersion bump, why it no longer can.
+        // MEANING ANCHOR. Before pinning the raw bytes, prove they carry
+        // the correct v5 content by DECODING the store back through the
+        // public query path and checking the workload's current state:
+        // keys 0..200 hold `i*7` (re-put), keys 200..400 hold `i*3`
+        // (initial), keys 400..500 are retracted (absent). If the
+        // key/value encoding were wrong, the bytes could still hash to a
+        // stable-but-meaningless value; this makes the pin a witness over
+        // format-CORRECT bytes, not an implementation snapshot.
+        let live = db
+            .run_script("?[k, v] := *w{k, v}", no_params())
+            .expect("scan back")
+            .rows;
+        assert_eq!(live.len(), 400, "200 re-put + 200 untouched, 100 retracted");
+        let mut by_key: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for row in &live {
+            by_key.insert(row[0].get_int().unwrap(), row[1].get_int().unwrap());
+        }
+        assert_eq!(by_key.get(&0), Some(&0)); // re-put i*7 = 0
+        assert_eq!(by_key.get(&1), Some(&7)); // re-put 1*7
+        assert_eq!(by_key.get(&199), Some(&(199 * 7)));
+        assert_eq!(by_key.get(&200), Some(&(200 * 3))); // untouched i*3
+        assert_eq!(by_key.get(&399), Some(&(399 * 3)));
+        assert_eq!(by_key.get(&450), None); // retracted
+
+        // The whole-store byte fingerprint: a drift witness over the v5
+        // canonical key+value format (independently pinned by the value
+        // round-trip/order laws and `number::format_v1_golden_vectors`).
+        // A change to the bulk-write key/value encoding must keep this equal
+        // or land a FormatVersion bump explaining why it cannot.
         let mut hasher_input = Vec::new();
         for (k, v) in &scan {
             hasher_input.extend_from_slice(&(k.len() as u64).to_le_bytes());
@@ -2014,7 +2042,7 @@ mod bulk_write_tests {
         let digest = sha2::Sha256::digest(&hasher_input);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
-            hex, "befcab34181e7818f461e4a439791e0fbcd5ef615ecaac03de3c97f3a491316a",
+            hex, "a559042fc0fc06276b06219a4e09239e5582f80eaaa7de1d2553748fd314643f",
             "store bytes for the seeded bulk workload changed"
         );
     }
@@ -2089,9 +2117,9 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, v] := *wi{k, v}", no_params())
             .expect("read back");
+        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(10)]];
         assert_eq!(
-            out.rows,
-            vec![vec![DataValue::from(1), DataValue::from(10)]],
+            out.rows, want,
             "the refused insert must not overwrite the existing row"
         );
     }
@@ -2143,13 +2171,13 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, a, b] := *wc{k, a, b}", no_params())
             .expect("read back");
+        let want: Vec<Tuple> = vec![vec![
+            DataValue::from(1),
+            DataValue::from(99),
+            DataValue::from(20),
+        ]];
         assert_eq!(
-            out.rows,
-            vec![vec![
-                DataValue::from(1),
-                DataValue::from(99),
-                DataValue::from(20)
-            ]],
+            out.rows, want,
             "a is updated to 99; b (omitted from the :update) carries forward as 20"
         );
     }
@@ -2283,11 +2311,11 @@ mod temporal_index_tests {
             .encode_as_key(idx_handle.id)
             .as_ref()
             .to_vec();
-        let upper = (idx_handle.id.0 + 1).to_be_bytes().to_vec();
+        let upper = (idx_handle.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("posting row decodes cleanly");
-                let tup = crate::data::tuple::decode_tuple_from_key(&k, 4)
+                let tup = crate::data::value::decode_tuple_from_key(&k, 4)
                     .expect("posting key decodes cleanly");
                 let leading = match &tup[0] {
                     DataValue::Validity(vv) => vv.timestamp.raw(),
@@ -2316,11 +2344,11 @@ mod temporal_index_tests {
     /// this module has exactly one Int key column.
     fn scan_base_rows(tx: &impl ReadTx, base: &RelationHandle) -> Vec<DecodedPosting> {
         let lower: Vec<u8> = Tuple::default().encode_as_key(base.id).as_ref().to_vec();
-        let upper = (base.id.0 + 1).to_be_bytes().to_vec();
+        let upper = (base.id.raw() + 1).to_be_bytes().to_vec();
         tx.range_scan(&lower, &upper)
             .map(|r| {
                 let (k, v) = r.expect("base row decodes cleanly");
-                let tup = crate::data::tuple::decode_tuple_from_key(&k, 3)
+                let tup = crate::data::value::decode_tuple_from_key(&k, 3)
                     .expect("base key decodes cleanly");
                 let key_col = tup[0].get_int().expect("int base key column");
                 let valid = match &tup[1] {
@@ -2399,7 +2427,10 @@ mod temporal_index_tests {
         ];
         let expected_key = expected_first_tuple.encode_as_key(idx_handle.id);
         let (got_key, _) = tx
-            .range_scan(expected_key.as_ref(), &(idx_handle.id.0 + 1).to_be_bytes())
+            .range_scan(
+                expected_key.as_ref(),
+                &(idx_handle.id.raw() + 1).to_be_bytes(),
+            )
             .next()
             .expect("at least one posting at or after the hand-encoded key")
             .unwrap();
@@ -2497,7 +2528,7 @@ mod temporal_index_tests {
         let tx_a = db_a.storage.read_tx().unwrap();
         let tx_b = db_b.storage.read_tx().unwrap();
         let lower: Vec<u8> = Tuple::default().encode_as_key(idx_a.id).as_ref().to_vec();
-        let upper = (idx_a.id.0 + 1).to_be_bytes().to_vec();
+        let upper = (idx_a.id.raw() + 1).to_be_bytes().to_vec();
         let raw_a: Vec<(Slice, Slice)> = tx_a
             .range_scan(&lower, &upper)
             .collect::<Result<_>>()

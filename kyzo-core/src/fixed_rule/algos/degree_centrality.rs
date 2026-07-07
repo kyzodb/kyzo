@@ -91,6 +91,7 @@ impl FixedRule for DegreeCentrality {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -127,14 +128,12 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), i(2), i(2), i(0)],
-                vec![s("b"), i(2), i(1), i(1)],
-                vec![s("c"), i(2), i(0), i(2)],
-                vec![s("d"), i(0), i(0), i(0)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), i(2), i(2), i(0)],
+            vec![s("b"), i(2), i(1), i(1)],
+            vec![s("c"), i(2), i(0), i(2)],
+            vec![s("d"), i(0), i(0), i(0)],
+        ];
+        assert_eq!(got, want);
     }
 }

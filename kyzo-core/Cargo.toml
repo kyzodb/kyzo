@@ -20,6 +20,10 @@ twox-hash = "2"
 quadrature = "0.1.2"
 miette = { version = "7", features = ["fancy"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
+# Tuple's inline storage (story #119): three DataValues inline, no heap for
+# the overwhelmingly common narrow row. Pure Rust, already in-tree
+# transitively via other dependencies.
+smallvec = "1.15"
 serde_json = "1.0.116"
 serde = { version = "1.0.199" }
 rand = "0.9"
@@ -41,6 +45,7 @@ ordered-float = "5"
 byteorder = "1.5.0"
 itertools = "0.15"
 regex = "1.10.4"
+regex-syntax = "0.8"   # KyzoRegexV1 construction-time pattern validation (already in-tree via regex)
 uuid = { version = "1.8.0", features = ["v1", "v4", "serde"] }
 ndarray = { version = "0.17", features = ["serde"] }
 sha2 = "0.11.0"
@@ -108,6 +113,10 @@ harness = false
 
 [[bench]]
 name = "db_scan"
+harness = false
+
+[[bench]]
+name = "string_eq"
 harness = false
 
 [[bench]]

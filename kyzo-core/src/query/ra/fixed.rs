@@ -106,7 +106,7 @@ impl InlineFixedRA {
                 let left_join_values = left_join_indices.iter().map(|v| &tuple[*v]).collect_vec();
                 if left_join_values.into_iter().eq(right_join_values.iter()) {
                     let mut ret = tuple;
-                    ret.extend_from_slice(&data);
+                    ret.extend(data.iter().cloned());
                     let ret = eliminate_from_tuple(ret, &eliminate_indices);
                     Some(ret)
                 } else {
@@ -135,7 +135,7 @@ impl InlineFixedRA {
                             v.iter()
                                 .map(|right_values| {
                                     let mut left_data = tuple.clone();
-                                    left_data.extend_from_slice(right_values);
+                                    left_data.extend(right_values.iter().cloned());
                                     left_data
                                 })
                                 .collect_vec()

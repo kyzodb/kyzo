@@ -204,11 +204,11 @@ use smartstring::SmartString;
 use thiserror::Error;
 
 use crate::data::expr::{Bytecode, eval_bytecode_pred};
-use crate::data::memcmp::MemCmpEncoder;
+use crate::data::relation::VecElementType;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, VecElementType, Vector};
+use crate::data::value::Tuple;
+use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
 use crate::engines::IndexRowCorrupt;
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
@@ -292,7 +292,7 @@ impl HnswIndexManifest {
         // across platforms and releases.
         let mut key_bytes: Vec<u8> = Vec::new();
         for v in &id.tuple_key {
-            key_bytes.encode_datavalue(v);
+            append_canonical(&mut key_bytes, v);
         }
         key_bytes.extend_from_slice(&(id.field as u64).to_le_bytes());
         key_bytes.extend_from_slice(&id.sub_wire().to_le_bytes());
@@ -435,7 +435,7 @@ pub(crate) struct VectorDimMismatch {
 /// meant "the field is the vector itself". On the wire `sub` is still a
 /// fixed-width `Int` slot with `-1` for `None` (see [`HnswRow`]); only the
 /// codec spells that.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct VectorId {
     pub(crate) tuple_key: Tuple,
     pub(crate) field: usize,
@@ -453,7 +453,7 @@ impl VectorId {
     /// Append this id's three wire slots (key columns, field, sub) to a
     /// key tuple under construction.
     fn push_onto(&self, key: &mut Tuple) {
-        key.extend_from_slice(&self.tuple_key);
+        key.extend(self.tuple_key.iter().cloned());
         key.push(DataValue::from(self.field as i64));
         key.push(DataValue::from(self.sub_wire()));
     }
@@ -511,7 +511,12 @@ pub(crate) enum HnswRow {
     Edge {
         layer: i64,
         fr: VectorId,
-        to: VectorId,
+        // Boxed (unlike `fr`) so `Edge`'s two `VectorId`s don't both count
+        // against the enum's size: `VectorId` carries a `Tuple`, so an
+        // unboxed pair here made `Edge` far larger than `Node`/`Canary`,
+        // bloating every `HnswRow` by the largest variant's size regardless
+        // of which one it holds.
+        to: Box<VectorId>,
         dist: f64,
         ignore_link: bool,
     },
@@ -528,7 +533,7 @@ pub(crate) enum HnswRow {
 
 /// Key tuple of a node row at `layer` (fr == to == `at`).
 fn node_key(layer: i64, at: &VectorId) -> Tuple {
-    let mut k = Vec::with_capacity(2 * at.tuple_key.len() + 5);
+    let mut k = Tuple::with_capacity(2 * at.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
     at.push_onto(&mut k);
     at.push_onto(&mut k);
@@ -537,7 +542,7 @@ fn node_key(layer: i64, at: &VectorId) -> Tuple {
 
 /// Key tuple of an edge row at `layer`.
 fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Tuple {
-    let mut k = Vec::with_capacity(2 * fr.tuple_key.len() + 5);
+    let mut k = Tuple::with_capacity(2 * fr.tuple_key.len() + 5);
     k.push(DataValue::from(layer));
     fr.push_onto(&mut k);
     to.push_onto(&mut k);
@@ -547,7 +552,7 @@ fn edge_key(layer: i64, fr: &VectorId, to: &VectorId) -> Tuple {
 /// Key tuple of the canary row for an index over a base relation with
 /// `base_key_len` key columns.
 fn canary_key(base_key_len: usize) -> Tuple {
-    let mut k = Vec::with_capacity(2 * base_key_len + 5);
+    let mut k = Tuple::with_capacity(2 * base_key_len + 5);
     k.push(DataValue::from(CANARY_LAYER));
     for _ in 0..(2 * base_key_len + 4) {
         k.push(DataValue::Null);
@@ -728,7 +733,7 @@ impl HnswRow {
             Ok(HnswRow::Edge {
                 layer,
                 fr,
-                to,
+                to: Box::new(to),
                 dist,
                 ignore_link: *flag,
             })
@@ -775,44 +780,40 @@ impl IndexVec {
                 got: v.len(),
             });
         }
-        let mut v = match (v, manifest.dtype) {
-            (Vector::F32(a), VecElementType::F32) => Vector::F32(a.clone()),
-            (Vector::F64(a), VecElementType::F64) => Vector::F64(a.clone()),
-            (Vector::F32(a), VecElementType::F64) => Vector::F64(a.mapv(|x| x as f64)),
-            (Vector::F64(a), VecElementType::F32) => Vector::F32(a.mapv(|x| x as f32)),
+        // Components are f64 canonical; an F32 manifest quantizes each
+        // through f32 precision (the graph's stored working precision
+        // until #122's quantized residency owns this decision).
+        let mut components: Vec<f64> = match manifest.dtype {
+            VecElementType::F32 => v.as_slice().to_vec(),
+            VecElementType::F64 => v.as_slice().to_vec(),
         };
-        if !finite(&v) {
+        if !components.iter().all(|x| x.is_finite()) {
             bail!(NonFiniteVectorRefused);
         }
         if manifest.distance == HnswDistance::Cosine {
-            match &mut v {
-                Vector::F32(a) => {
-                    let norm = a.dot(a).sqrt();
-                    if norm == 0.0 {
-                        bail!(ZeroVectorRefused);
-                    }
-                    a.mapv_inplace(|x| x / norm);
-                }
-                Vector::F64(a) => {
-                    let norm = a.dot(a).sqrt();
-                    if norm == 0.0 {
-                        bail!(ZeroVectorRefused);
-                    }
-                    a.mapv_inplace(|x| x / norm);
-                }
+            let norm = components.iter().map(|x| x * x).sum::<f64>().sqrt();
+            if norm == 0.0 {
+                bail!(ZeroVectorRefused);
+            }
+            for x in &mut components {
+                *x /= norm;
             }
             // Subnormal norms can overflow components on division; such a
             // vector is indistinguishable from zero for cosine purposes.
-            if !finite(&v) {
+            if !components.iter().all(|x| x.is_finite()) {
                 bail!(ZeroVectorRefused);
             }
         }
-        Ok(IndexVec(v))
+        Ok(IndexVec(Vector::new(components)))
     }
 
-    /// Content hash of the admitted vector (change detection on re-put).
+    /// Content hash of the admitted vector (change detection on re-put):
+    /// SHA-256 over the vector's canonical value encoding — the one byte
+    /// form, hashed by a pinned algorithm.
     fn content_hash(&self) -> Vec<u8> {
-        self.0.get_hash().as_ref().to_vec()
+        use sha2::Digest;
+        let bytes = encode_owned(&DataValue::Vector(self.0.clone()));
+        sha2::Sha256::digest(bytes.as_bytes()).to_vec()
     }
 
     /// The distance between two admitted vectors under `metric`. Total: a
@@ -823,43 +824,14 @@ impl IndexVec {
     pub(crate) fn dist(&self, other: &Self, metric: HnswDistance) -> f64 {
         #[cfg(test)]
         probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
+        let (a, b) = (self.0.as_slice(), other.0.as_slice());
         match metric {
-            HnswDistance::L2 => match (&self.0, &other.0) {
-                (Vector::F32(a), Vector::F32(b)) => {
-                    let diff = a - b;
-                    diff.dot(&diff) as f64
-                }
-                (Vector::F64(a), Vector::F64(b)) => {
-                    let diff = a - b;
-                    diff.dot(&diff)
-                }
-                (a, b) => {
-                    let (a, b) = (widen(a), widen(b));
-                    let diff = &a - &b;
-                    diff.dot(&diff)
-                }
-            },
+            HnswDistance::L2 => a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum(),
             // Unit vectors by construction: plain dot product.
-            HnswDistance::Cosine | HnswDistance::InnerProduct => match (&self.0, &other.0) {
-                (Vector::F32(a), Vector::F32(b)) => 1.0 - a.dot(b) as f64,
-                (Vector::F64(a), Vector::F64(b)) => 1.0 - a.dot(b),
-                (a, b) => 1.0 - widen(a).dot(&widen(b)),
-            },
+            HnswDistance::Cosine | HnswDistance::InnerProduct => {
+                1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
+            }
         }
-    }
-}
-
-fn finite(v: &Vector) -> bool {
-    match v {
-        Vector::F32(a) => a.iter().all(|x| x.is_finite()),
-        Vector::F64(a) => a.iter().all(|x| x.is_finite()),
-    }
-}
-
-fn widen(v: &Vector) -> ndarray::Array1<f64> {
-    match v {
-        Vector::F32(a) => a.mapv(|x| x as f64),
-        Vector::F64(a) => a.clone(),
     }
 }
 
@@ -929,7 +901,7 @@ impl<'m> VectorCache<'m> {
             }
         }
         match field {
-            DataValue::Vec(v) => {
+            DataValue::Vector(v) => {
                 let admitted = IndexVec::admit(v, self.manifest)?;
                 self.cache.insert(id.clone(), admitted);
                 Ok(())
@@ -983,9 +955,16 @@ fn entry_point(
     let _t0 = std::time::Instant::now();
     #[cfg(test)]
     probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
-    let first = idx
-        .scan_bounded_prefix(tx, &[], &[DataValue::from(i64::MIN)], &[DataValue::from(0)])
-        .next();
+    let first = crate::engines::index_rows(
+        &idx.name,
+        idx.scan_bounded_prefix(
+            tx,
+            &[],
+            &[ScanBound::Value(DataValue::from(i64::MIN))],
+            &[ScanBound::Value(DataValue::from(0i64))],
+        ),
+    )
+    .next();
     #[cfg(test)]
     probe::ENTRY_POINT_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
     match first {
@@ -1022,11 +1001,11 @@ fn neighbours(
     let _t0 = std::time::Instant::now();
     #[cfg(test)]
     probe::NEIGHBOURS_CALLS.with(|c| c.set(c.get() + 1));
-    let mut prefix = Vec::with_capacity(of.tuple_key.len() + 3);
+    let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
-    for row in idx.scan_prefix(tx, &prefix) {
+    for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         #[cfg(test)]
         probe::NEIGHBOURS_ROWS_SCANNED.with(|c| c.set(c.get() + 1));
         let row = row?;
@@ -1040,7 +1019,7 @@ fn neighbours(
                 ..
             } => {
                 if include_ignored || !ignore_link {
-                    ret.push((to, dist));
+                    ret.push((*to, dist));
                 }
             }
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
@@ -1079,6 +1058,33 @@ fn neighbours(
 /// first handful of expansions at every tested scale — the dropped conjunct
 /// was dead weight in this regime, not the mechanism. See
 /// `shrink_neighbour`'s doc comment for what IS driving that growth.
+/// Beam-queue priority: distance first, then the node's own deterministic
+/// identity ([`VectorId`]'s total order). Because every `VectorId` is
+/// unique, no two priorities are ever equal, so the priority queue's
+/// pop/eviction order is FULLY determined -- exact-distance ties break by
+/// node identity, never by hash-map iteration order. This is what makes
+/// graph construction and search reproducible (and, on an all-equidistant
+/// corpus, resolve to the smallest keys) independent of thread count or
+/// hasher state.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Beam {
+    dist: OrderedFloat<f64>,
+    id: VectorId,
+}
+
+impl Beam {
+    fn of(dist: f64, id: &VectorId) -> Beam {
+        Beam {
+            dist: OrderedFloat(dist),
+            id: id.clone(),
+        }
+    }
+
+    fn dist(&self) -> f64 {
+        self.dist.0
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_layer(
     tx: &impl ReadTx,
@@ -1087,23 +1093,24 @@ fn search_layer(
     layer: i64,
     base: &RelationHandle,
     idx: &RelationHandle,
-    found_nn: &mut PriorityQueue<VectorId, OrderedFloat<f64>>,
+    found_nn: &mut PriorityQueue<VectorId, Beam>,
     cache: &mut VectorCache<'_>,
 ) -> Result<()> {
     let mut visited: FxHashSet<VectorId> = FxHashSet::default();
     // min queue
-    let mut candidates: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
+    let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
 
-    for (id, dist) in found_nn.iter() {
+    for (id, prio) in found_nn.iter() {
         visited.insert(id.clone());
-        candidates.push(id.clone(), Reverse(*dist));
+        candidates.push(id.clone(), Reverse(prio.clone()));
     }
 
-    while let Some((candidate, Reverse(OrderedFloat(candidate_dist)))) = candidates.pop() {
-        let Some((_, OrderedFloat(furthest_dist))) = found_nn.peek() else {
+    while let Some((candidate, Reverse(candidate_prio))) = candidates.pop() {
+        let candidate_dist = candidate_prio.dist();
+        let Some((_, furthest)) = found_nn.peek() else {
             break;
         };
-        if found_nn.len() >= ef && candidate_dist > *furthest_dist {
+        if found_nn.len() >= ef && candidate_dist > furthest.dist() {
             break;
         }
         for (neighbour, _) in neighbours(tx, base, idx, &candidate, layer, false)? {
@@ -1112,12 +1119,15 @@ fn search_layer(
             }
             cache.ensure(tx, base, &neighbour)?;
             let neighbour_dist = cache.v_dist(q, &neighbour)?;
-            let Some((_, OrderedFloat(cand_furthest_dist))) = found_nn.peek() else {
+            let Some((_, cand_furthest)) = found_nn.peek() else {
                 break;
             };
-            if found_nn.len() < ef || neighbour_dist < *cand_furthest_dist {
-                candidates.push(neighbour.clone(), Reverse(OrderedFloat(neighbour_dist)));
-                found_nn.push(neighbour.clone(), OrderedFloat(neighbour_dist));
+            if found_nn.len() < ef || neighbour_dist < cand_furthest.dist() {
+                candidates.push(
+                    neighbour.clone(),
+                    Reverse(Beam::of(neighbour_dist, &neighbour)),
+                );
+                found_nn.push(neighbour.clone(), Beam::of(neighbour_dist, &neighbour));
                 if found_nn.len() > ef {
                     found_nn.pop();
                 }
@@ -1136,33 +1146,34 @@ fn search_layer(
 fn select_neighbours_heuristic(
     tx: &impl ReadTx,
     q: &IndexVec,
-    found: &PriorityQueue<VectorId, OrderedFloat<f64>>,
+    found: &PriorityQueue<VectorId, Beam>,
     m: usize,
     layer: i64,
     manifest: &HnswIndexManifest,
     base: &RelationHandle,
     idx: &RelationHandle,
     cache: &mut VectorCache<'_>,
-) -> Result<PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>>> {
-    let mut candidates: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-    let mut ret: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-    let mut discarded: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-    for (id, dist) in found.iter() {
-        candidates.push(id.clone(), Reverse(*dist));
+) -> Result<PriorityQueue<VectorId, Reverse<Beam>>> {
+    let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
+    let mut ret: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
+    let mut discarded: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
+    for (id, prio) in found.iter() {
+        candidates.push(id.clone(), Reverse(prio.clone()));
     }
     if manifest.extend_candidates {
         for (id, _) in found.iter() {
             for (neighbour, _) in neighbours(tx, base, idx, id, layer, false)? {
                 cache.ensure(tx, base, &neighbour)?;
                 let dist = cache.v_dist(q, &neighbour)?;
-                candidates.push(neighbour, Reverse(OrderedFloat(dist)));
+                candidates.push(neighbour.clone(), Reverse(Beam::of(dist, &neighbour)));
             }
         }
     }
     while ret.len() < m {
-        let Some((cand, Reverse(OrderedFloat(cand_dist_to_q)))) = candidates.pop() else {
+        let Some((cand, Reverse(cand_prio))) = candidates.pop() else {
             break;
         };
+        let cand_dist_to_q = cand_prio.dist();
         let mut should_add = true;
         for (existing, _) in ret.iter() {
             cache.ensure(tx, base, &cand)?;
@@ -1174,9 +1185,9 @@ fn select_neighbours_heuristic(
             }
         }
         if should_add {
-            ret.push(cand, Reverse(OrderedFloat(cand_dist_to_q)));
+            ret.push(cand.clone(), Reverse(Beam::of(cand_dist_to_q, &cand)));
         } else if manifest.keep_pruned_connections {
-            discarded.push(cand, Reverse(OrderedFloat(cand_dist_to_q)));
+            discarded.push(cand.clone(), Reverse(Beam::of(cand_dist_to_q, &cand)));
         }
     }
     if manifest.keep_pruned_connections {
@@ -1212,7 +1223,8 @@ fn put_fresh_at_levels(
     // deliberate.)
     let entry_key = idx
         .encode_key_for_store(&node_key(bottom_layer, at), SourceSpan::default())?
-        .into_vec();
+        .as_bytes()
+        .to_vec();
     HnswRow::Canary {
         bottom_layer,
         entry_key,
@@ -1265,11 +1277,11 @@ fn neighbours_tagged(
     of: &VectorId,
     layer: i64,
 ) -> Result<Vec<(VectorId, f64, bool)>> {
-    let mut prefix = Vec::with_capacity(of.tuple_key.len() + 3);
+    let mut prefix = Tuple::with_capacity(of.tuple_key.len() + 3);
     prefix.push(DataValue::from(layer));
     of.push_onto(&mut prefix);
     let mut ret = vec![];
-    for row in idx.scan_prefix(tx, &prefix) {
+    for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
         match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name)? {
             // The vector's own presence row under the same prefix.
@@ -1279,7 +1291,7 @@ fn neighbours_tagged(
                 dist,
                 ignore_link,
                 ..
-            } => ret.push((to, dist, ignore_link)),
+            } => ret.push((*to, dist, ignore_link)),
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 &row,
@@ -1371,11 +1383,11 @@ fn shrink_neighbour<T: WriteTx>(
     let base_key_len = base.metadata.keys.len();
     cache.ensure(tx, base, target)?;
     let vec = cache.get(target)?.clone();
-    let mut candidates = PriorityQueue::new();
+    let mut candidates: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     let mut was_tombstoned: FxHashMap<VectorId, bool> = FxHashMap::default();
     for (neighbour, dist, ignore_link) in neighbours_tagged(tx, base, idx, target, layer)? {
         was_tombstoned.insert(neighbour.clone(), ignore_link);
-        candidates.push(neighbour, OrderedFloat(dist));
+        candidates.push(neighbour.clone(), Beam::of(dist, &neighbour));
     }
     let new_candidates =
         select_neighbours_heuristic(tx, &vec, &candidates, m, layer, manifest, base, idx, cache)?;
@@ -1388,7 +1400,8 @@ fn shrink_neighbour<T: WriteTx>(
         new_candidate_set.insert(new.clone());
     }
     let new_degree = new_candidates.len();
-    for (new, Reverse(OrderedFloat(new_dist))) in new_candidates {
+    for (new, Reverse(new_prio)) in new_candidates {
+        let new_dist = new_prio.dist();
         // A brand-new edge (only reachable via `extend_candidates`, which
         // can offer a candidate that was never `target`'s own neighbour)
         // or a resurrected tombstone both need the row written live;
@@ -1399,14 +1412,15 @@ fn shrink_neighbour<T: WriteTx>(
             HnswRow::Edge {
                 layer,
                 fr: target.clone(),
-                to: new,
+                to: Box::new(new),
                 dist: new_dist,
                 ignore_link: false,
             }
             .write(tx, idx, base_key_len)?;
         }
     }
-    for (old, OrderedFloat(old_dist)) in candidates {
+    for (old, old_prio) in candidates {
+        let old_dist = old_prio.dist();
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old);
             if was_tombstoned.get(&old).copied().unwrap_or(false) {
@@ -1416,7 +1430,7 @@ fn shrink_neighbour<T: WriteTx>(
                 HnswRow::Edge {
                     layer,
                     fr: target.clone(),
-                    to: old,
+                    to: Box::new(old),
                     dist: old_dist,
                     ignore_link: true,
                 }
@@ -1465,8 +1479,9 @@ fn put_vector<T: WriteTx>(
     cache.ensure(tx, base, &ep_id)?;
     let ep_distance = cache.v_dist(q, &ep_id)?;
     // max queue
-    let mut found_nn = PriorityQueue::new();
-    found_nn.push(ep_id, OrderedFloat(ep_distance));
+    let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
+    let ep_beam = Beam::of(ep_distance, &ep_id);
+    found_nn.push(ep_id, ep_beam);
     let target_layer = manifest.random_level(at);
     if target_layer < bottom_layer {
         // This vector becomes the new entry point.
@@ -1513,20 +1528,21 @@ fn put_vector<T: WriteTx>(
         .write(tx, idx, base_key_len)?;
 
         // Bidirectional links to the selected neighbours.
-        for (neighbour, Reverse(OrderedFloat(dist))) in selected.iter() {
+        for (neighbour, Reverse(prio)) in selected.iter() {
+            let dist = prio.dist();
             HnswRow::Edge {
                 layer,
                 fr: at.clone(),
-                to: neighbour.clone(),
-                dist: *dist,
+                to: Box::new(neighbour.clone()),
+                dist,
                 ignore_link: false,
             }
             .write(tx, idx, base_key_len)?;
             HnswRow::Edge {
                 layer,
                 fr: neighbour.clone(),
-                to: at.clone(),
-                dist: *dist,
+                to: Box::new(at.clone()),
+                dist,
                 ignore_link: false,
             }
             .write(tx, idx, base_key_len)?;
@@ -1629,7 +1645,8 @@ fn remove_vec<T: WriteTx>(
             Some((bottom_layer, ep_id)) => {
                 let entry_key = idx
                     .encode_key_for_store(&node_key(bottom_layer, &ep_id), SourceSpan::default())?
-                    .into_vec();
+                    .as_bytes()
+                    .to_vec();
                 let val = idx.encode_val_only_for_store(
                     &HnswRow::Canary {
                         bottom_layer,
@@ -1700,7 +1717,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             ))
         })?;
         match val {
-            DataValue::Vec(v) => extracted.push((
+            DataValue::Vector(v) => extracted.push((
                 IndexVec::admit(v, manifest)?,
                 VectorId {
                     tuple_key: tuple[..key_len].to_vec(),
@@ -1710,7 +1727,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             )),
             DataValue::List(l) => {
                 for (sub, item) in l.iter().enumerate() {
-                    if let DataValue::Vec(v) = item {
+                    if let DataValue::Vector(v) = item {
                         extracted.push((
                             IndexVec::admit(v, manifest)?,
                             VectorId {
@@ -1756,13 +1773,14 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
             "row shorter than the base relation's key",
         ));
     }
-    let mut prefix = Vec::with_capacity(key_len + 1);
+    let mut prefix = Tuple::with_capacity(key_len + 1);
     prefix.push(DataValue::from(0i64));
-    prefix.extend_from_slice(&tuple[..key_len]);
+    prefix.extend(tuple[..key_len].iter().cloned());
     let mut candidates: FxHashSet<VectorId> = FxHashSet::default();
     // Scan errors and corrupt rows propagate (the original's `filter_map`
     // silently dropped errors here).
-    let rows: Vec<Tuple> = idx.scan_prefix(tx, &prefix).collect::<Result<Vec<_>>>()?;
+    let rows: Vec<Tuple> = crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
+        .collect::<Result<Vec<_>>>()?;
     for row in rows {
         match HnswRow::decode(&row, key_len, &idx.name)? {
             HnswRow::Node { at, .. } => {
@@ -1865,8 +1883,9 @@ pub(crate) fn hnsw_knn(
     };
     cache.ensure(tx, base, &ep_id)?;
     let ep_distance = cache.v_dist(&q, &ep_id)?;
-    let mut found_nn = PriorityQueue::new();
-    found_nn.push(ep_id, OrderedFloat(ep_distance));
+    let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
+    let ep_beam = Beam::of(ep_distance, &ep_id);
+    found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
         cancel.check()?;
         search_layer(tx, &q, 1, layer, base, idx, &mut found_nn, &mut cache)?;
@@ -1883,8 +1902,8 @@ pub(crate) fn hnsw_knn(
     // vectors, say) vary run to run — a determinism-law violation, and the
     // ground the filter-aware-traversal ascent stands on.
     let mut ranked: Vec<(VectorId, f64)> = Vec::with_capacity(found_nn.len());
-    while let Some((id, OrderedFloat(distance))) = found_nn.pop() {
-        ranked.push((id, distance));
+    while let Some((id, prio)) = found_nn.pop() {
+        ranked.push((id, prio.dist()));
     }
     ranked.sort_by(|(a, da), (b, db)| {
         OrderedFloat(*da)
@@ -1935,7 +1954,7 @@ pub(crate) fn hnsw_knn(
                     .name
                     .clone()
             };
-            cand_tuple.push(DataValue::Str(name));
+            cand_tuple.push(DataValue::Str(name.to_string()));
         }
         if params.bind_field_idx {
             cand_tuple.push(match cand.sub {
@@ -2066,7 +2085,8 @@ impl PartialOrd for Ranked {
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<Vec<u8>> {
     Ok(idx
         .encode_key_for_store(&node_key(0, id), SourceSpan::default())?
-        .into_vec())
+        .as_bytes()
+        .to_vec())
 }
 
 /// Keep the `k` smallest `Ranked` in a bounded max-heap (the max is the worst
@@ -2127,7 +2147,7 @@ fn build_cand_tuple(
                 .name
                 .clone()
         };
-        cand_tuple.push(DataValue::Str(name));
+        cand_tuple.push(DataValue::Str(name.to_string()));
     }
     if params.bind_field_idx {
         cand_tuple.push(match cand.sub {
@@ -2206,15 +2226,23 @@ fn layer0_nodes<'a>(
     base: &'a RelationHandle,
     idx: &'a RelationHandle,
 ) -> impl Iterator<Item = Result<VectorId>> + 'a {
-    idx.scan_bounded_prefix(tx, &[], &[DataValue::from(0i64)], &[DataValue::from(0i64)])
-        .filter_map(move |row| match row {
+    crate::engines::index_rows(
+        &idx.name,
+        idx.scan_bounded_prefix(
+            tx,
+            &[],
+            &[ScanBound::Value(DataValue::from(0i64))],
+            &[ScanBound::Value(DataValue::from(0i64))],
+        ),
+    )
+    .filter_map(move |row| match row {
+        Err(e) => Some(Err(e)),
+        Ok(row) => match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name) {
             Err(e) => Some(Err(e)),
-            Ok(row) => match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name) {
-                Err(e) => Some(Err(e)),
-                Ok(HnswRow::Node { at, .. }) => Some(Ok(at)),
-                Ok(_) => None,
-            },
-        })
+            Ok(HnswRow::Node { at, .. }) => Some(Ok(at)),
+            Ok(_) => None,
+        },
+    })
 }
 
 /// Deterministic seeded-stride selectivity estimate → strategy. One pass over
@@ -2347,14 +2375,14 @@ fn graph_search_layer0(
     visit_cap: usize,
 ) -> Result<BinaryHeap<Ranked>> {
     let mut visited: FxHashSet<VectorId> = FxHashSet::default();
-    let mut candidates: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
+    let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
     let mut results: BinaryHeap<Ranked> = BinaryHeap::new();
 
     for id in seeds {
         if visited.insert(id.clone()) {
             cache.ensure(tx, base, id)?;
             let d = cache.v_dist(q, id)?;
-            candidates.push(id.clone(), Reverse(OrderedFloat(d)));
+            candidates.push(id.clone(), Reverse(Beam::of(d, id)));
             if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter, stack)? {
                 let key = id_order_key(idx, id)?;
                 push_topk(
@@ -2370,7 +2398,8 @@ fn graph_search_layer0(
         }
     }
 
-    while let Some((cand_id, Reverse(OrderedFloat(cand_d)))) = candidates.pop() {
+    while let Some((cand_id, Reverse(cand_prio))) = candidates.pop() {
+        let cand_d = cand_prio.dist();
         if visited.len() > visit_cap {
             break;
         }
@@ -2394,7 +2423,7 @@ fn graph_search_layer0(
             // routing, so connectivity is the unfiltered graph's.
             let promising = results.len() < ef2 || results.peek().is_none_or(|w| nd < w.dist.0);
             if promising {
-                candidates.push(neighbour.clone(), Reverse(OrderedFloat(nd)));
+                candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
             // Visibility: seat only if it passes the filter (+radius).
             if let Some(tuple) =
@@ -2433,10 +2462,11 @@ fn graph_filtered(
     stack: &mut Vec<DataValue>,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
-    let mut found_nn = PriorityQueue::new();
+    let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     cache.ensure(tx, base, &ep_id)?;
     let ep_d = cache.v_dist(q, &ep_id)?;
-    found_nn.push(ep_id, OrderedFloat(ep_d));
+    let ep_beam = Beam::of(ep_d, &ep_id);
+    found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
         search_layer(tx, q, 1, layer, base, idx, &mut found_nn, cache)?;
     }
@@ -2587,7 +2617,7 @@ fn hnsw_knn_forced(
 
 #[cfg(test)]
 mod tests {
-    use ndarray::arr1;
+
     use proptest::prelude::*;
 
     use super::*;
@@ -2661,11 +2691,11 @@ mod tests {
         }
     }
 
-    fn vec2(x: f32, y: f32) -> DataValue {
-        DataValue::Vec(Vector::F32(arr1(&[x, y])))
+    fn vec2(x: f64, y: f64) -> DataValue {
+        DataValue::Vector(Vector::new(vec![x, y]))
     }
 
-    fn row(k: i64, x: f32, y: f32) -> Tuple {
+    fn row(k: i64, x: f64, y: f64) -> Tuple {
         vec![DataValue::from(k), vec2(x, y)]
     }
 
@@ -2724,9 +2754,9 @@ mod tests {
         for _ in 0..dim {
             let bits = splitmix64(state);
             let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
-            v.push((unit * 2.0 - 1.0) as f32);
+            v.push(unit * 2.0 - 1.0);
         }
-        DataValue::Vec(Vector::F32(ndarray::Array1::from(v)))
+        DataValue::Vector(Vector::new(v))
     }
 
     /// Build an `n`-vector index inside ONE write transaction (mirrors the
@@ -2928,7 +2958,7 @@ mod tests {
     /// respected, or is some hub node's degree escaping its cap?).
     /// `cargo test -p kyzo --release engines::hnsw::tests::build_graph_shape_probe -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "HNSW graph-shape measurement rig; run explicitly with --ignored"]
     fn build_graph_shape_probe() {
         for &n in &[1000usize, 8000] {
             let dim = 16;
@@ -3039,7 +3069,7 @@ mod tests {
     /// explicitly and read the exponents:
     /// `cargo test -p kyzo --release engines::hnsw::tests::build_time_complexity_probe -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "HNSW build-time complexity probe; run explicitly with --ignored"]
     fn build_time_complexity_probe() {
         // n=64000 is omitted: it exceeds this suite's `ulimit -v 12582912`
         // memory cap (observed: a 16 GiB single allocation aborts the
@@ -3146,7 +3176,7 @@ mod tests {
     /// single-transaction number instead.
     /// `cargo test -p kyzo --release engines::hnsw::tests::build_time_transaction_lifetime_probe -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "HNSW build-time transaction-lifetime probe; run explicitly with --ignored"]
     fn build_time_transaction_lifetime_probe() {
         for &n in &[1000usize, 4000] {
             let (t_one, snap_one) = probe_build_dim(n, 0x5EED_1234_ABCD_0000, 16);
@@ -3216,13 +3246,13 @@ mod tests {
 
         let mut state = 0x9EC4_11AA_0000_0000u64;
         let mut stack = vec![];
-        let mut stored: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut stored: Vec<Vec<f64>> = Vec::with_capacity(n);
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
-            let DataValue::Vec(Vector::F32(ref arr)) = v else {
+            let DataValue::Vector(ref arr) = v else {
                 unreachable!()
             };
-            stored.push(arr.to_vec());
+            stored.push(arr.as_slice().to_vec());
             let r = vec![DataValue::from(k as i64), v];
             base.put_fact(
                 &mut tx,
@@ -3243,15 +3273,13 @@ mod tests {
         let mut worst = 1.0f64;
         for _ in 0..n_queries {
             let q_data = probe_vec(dim, &mut query_state);
-            let DataValue::Vec(ref q_vec) = q_data else {
+            let DataValue::Vector(ref q_vec) = q_data else {
                 unreachable!()
             };
 
             // Independent oracle: brute-force squared L2 over every stored
             // vector, sorted, top-k ids.
-            let Vector::F32(qa) = q_vec else {
-                unreachable!()
-            };
+            let qa = q_vec.as_slice();
             let mut truth: Vec<(f64, i64)> = stored
                 .iter()
                 .enumerate()
@@ -3260,7 +3288,7 @@ mod tests {
                         .iter()
                         .zip(v.iter())
                         .map(|(a, b)| {
-                            let diff = (*a - *b) as f64;
+                            let diff = *a - *b;
                             diff * diff
                         })
                         .sum();
@@ -3324,7 +3352,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[0.9, 0.1]));
+        let q = Vector::new(vec![0.9, 0.1]);
         let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
@@ -3405,7 +3433,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::Cosine, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[2.0, 0.0]));
+        let q = Vector::new(vec![2.0, 0.0]);
         let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
@@ -3455,7 +3483,7 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let err = hnsw_knn(
             &rtx,
-            &Vector::F32(arr1(&[0.0, 0.0])),
+            &Vector::new(vec![0.0, 0.0]),
             &m,
             &base,
             &idx,
@@ -3501,13 +3529,13 @@ mod tests {
 
         // Non-finite components are refused under every metric.
         let mut tx = db.write_tx().unwrap();
-        let nan_row = row(2, f32::NAN, 0.0);
+        let nan_row = row(2, f64::NAN, 0.0);
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &nan_row).unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
-            DataValue::Vec(Vector::F32(arr1(&[1.0, 2.0, 3.0]))),
+            DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &bad_dim).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
@@ -3527,7 +3555,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[1.0, 0.0]));
+        let q = Vector::new(vec![1.0, 0.0]);
         let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
@@ -3598,7 +3626,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[4.0, 4.0]));
+        let q = Vector::new(vec![4.0, 4.0]);
         let hits = hnsw_knn(
             &rtx,
             &q,
@@ -3621,14 +3649,14 @@ mod tests {
         let m_cos = manifest(HnswDistance::Cosine);
         let m_l2 = manifest(HnswDistance::L2);
         let m_ip = manifest(HnswDistance::InnerProduct);
-        proptest!(|(ax in -1e3f32..1e3, ay in -1e3f32..1e3, bx in -1e3f32..1e3, by in -1e3f32..1e3)| {
+        proptest!(|(ax in -1e3f64..1e3, ay in -1e3f64..1e3, bx in -1e3f64..1e3, by in -1e3f64..1e3)| {
             // Skip degenerate near-zero draws for the unit-vector premise.
             prop_assume!(ax.abs() + ay.abs() > 1e-3);
             prop_assume!(bx.abs() + by.abs() > 1e-3);
             let na = (ax * ax + ay * ay).sqrt();
             let nb = (bx * bx + by * by).sqrt();
-            let a = Vector::F32(arr1(&[ax / na, ay / na]));
-            let b = Vector::F32(arr1(&[bx / nb, by / nb]));
+            let a = Vector::new(vec![ax / na, ay / na]);
+            let b = Vector::new(vec![bx / nb, by / nb]);
             for m in [&m_cos, &m_l2, &m_ip] {
                 let va = IndexVec::admit(&a, m).unwrap();
                 let vb = IndexVec::admit(&b, m).unwrap();
@@ -3666,7 +3694,7 @@ mod tests {
             HnswRow::Edge {
                 layer: 0,
                 fr: at.clone(),
-                to: other.clone(),
+                to: Box::new(other.clone()),
                 dist: 0.25,
                 ignore_link: true,
             },
@@ -3743,9 +3771,9 @@ mod tests {
         // Overwrite every index row's value with garbage msgpack.
         let mut tx = db.write_tx().unwrap();
         let kvs: Vec<(fjall::Slice, fjall::Slice)> = {
-            let lower = crate::data::tuple::encode_tuple_key(idx.id.0, &[]);
-            let upper = (idx.id.0 + 1).to_be_bytes();
-            tx.range_scan(lower.as_bytes(), &upper)
+            let lower = idx.id.raw_encode();
+            let upper = (idx.id.raw() + 1).to_be_bytes();
+            tx.range_scan(&lower, &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
         };
@@ -3759,7 +3787,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::F32(arr1(&[0.5, 0.5]));
+        let q = Vector::new(vec![0.5, 0.5]);
         let mut stack = vec![];
         let err = hnsw_knn(
             &rtx,
@@ -3773,10 +3801,9 @@ mod tests {
             &CancelFlag::default(),
         )
         .expect_err("corrupt rows must be errors, not panics");
-        let msg = format!("{err:?}");
         assert!(
-            msg.contains("corrupt"),
-            "the error names the corruption: {msg}"
+            err.downcast_ref::<IndexRowCorrupt>().is_some(),
+            "corrupt index bytes must surface as the typed IndexRowCorrupt, got: {err:?}"
         );
     }
 
@@ -3844,8 +3871,8 @@ mod tests {
     fn index_build_is_byte_identical_across_runs() {
         let rows: Vec<Tuple> = (0..40)
             .map(|i| {
-                let x = (i as f32 * 0.37).sin();
-                let y = (i as f32 * 0.71).cos();
+                let x = (i as f64 * 0.37).sin();
+                let y = (i as f64 * 0.71).cos();
                 row(i, x, y)
             })
             .collect();
@@ -3857,9 +3884,9 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let (_base, idx, _m) = setup(&db, HnswDistance::Cosine, &rows);
             let rtx = db.read_tx().unwrap();
-            let lower = crate::data::tuple::encode_tuple_key(idx.id.0, &[]);
-            let upper = (idx.id.0 + 1).to_be_bytes();
-            rtx.range_scan(lower.as_bytes(), &upper)
+            let lower = idx.id.raw_encode();
+            let upper = (idx.id.raw() + 1).to_be_bytes();
+            rtx.range_scan(&lower, &upper)
                 .map(|kv| kv.map(|(k, v)| (k[8..].to_vec(), v[8..].to_vec())))
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
@@ -3884,7 +3911,7 @@ mod tests {
             let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect();
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
-            let q = Vector::F32(arr1(&[1.0, 0.0]));
+            let q = Vector::new(vec![1.0, 0.0]);
             let mut stack = vec![];
             let hits = hnsw_knn(
                 &rtx,

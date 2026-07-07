@@ -148,8 +148,8 @@ use crate::data::bitemporal::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
-use crate::data::value::{AsOf, DataValue, Interval, StoredValiditySlot, ValidityTs};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
+use crate::data::value::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -286,8 +286,11 @@ pub(crate) struct RawVersion {
 /// of the same public encoding API every caller of this module already
 /// uses.
 pub(crate) fn relation_keyspace_bounds(storage: &RelationHandle) -> (Vec<u8>, Vec<u8>) {
-    let lower = Tuple::default().encode_as_key(storage.id).into_vec();
-    let upper = (storage.id.0 + 1).to_be_bytes().to_vec();
+    let lower = Tuple::default()
+        .encode_as_key(storage.id)
+        .as_bytes()
+        .to_vec();
+    let upper = (storage.id.raw() + 1).to_be_bytes().to_vec();
     (lower, upper)
 }
 
@@ -333,7 +336,7 @@ pub(crate) fn decode_raw_version(
     let polarity = claim_polarity_of_value(val)?;
     let mut row = full.clone();
     extend_tuple_from_bitemporal_v(&mut row, val)?;
-    let payload = row.split_off(key_len);
+    let payload: Tuple = row.drain(key_len..).collect();
     Ok((
         key[..prefix_len].to_vec(),
         full,
@@ -375,7 +378,7 @@ fn resolve_at(
         match governing.map(|e| e.polarity) {
             Some(ClaimPolarity::Assert) => {
                 let e = governing.expect("just matched Some");
-                let mut tuple = key.to_vec();
+                let mut tuple: Tuple = key.to_vec();
                 tuple.extend(e.payload.iter().cloned());
                 return Some(tuple);
             }
@@ -423,9 +426,19 @@ fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Resu
         // `start < end` always; a corrupt stored row that defeated the
         // write-side reservation would surface here as a typed error,
         // never a panic (law 5).
-        let iv = Interval::new(start, end).map_err(|e| {
-            miette!("temporal derivation produced an invalid interval [{start}, {end}): {e}")
-        })?;
+        // Closed normal form on the discrete grid. A fact still in force
+        // (no later break) is valid on `[start, +∞)` — an upper-unbounded
+        // interval, NOT a finite one ending at the sentinel, which would
+        // falsely claim the fact stops being valid. A clipped fact's
+        // stored half-open `[start, end)` becomes the closed `[start,
+        // end - 1]`; `end` is strictly later than `start` by the
+        // write-side reservation, so the subtraction cannot underflow.
+        let hi = if end == i64::MAX {
+            Bound::Unbounded
+        } else {
+            Bound::Closed(end - 1)
+        };
+        let iv = Interval::new(Bound::Closed(start), hi);
         let mut row = tuple;
         row.push(DataValue::Interval(iv));
         out.push(row);
@@ -469,10 +482,7 @@ impl<'a> SpansScanBatches<'a> {
     /// Collect every raw row sharing one fact's key-prefix bytes, starting
     /// from `first` (already pulled from `raw`), leaving the first row of
     /// the NEXT group (if any) in `self.pending_key`.
-    fn collect_group(
-        &mut self,
-        first: (Slice, Slice),
-    ) -> Result<(Vec<DataValue>, Vec<RawVersion>)> {
+    fn collect_group(&mut self, first: (Slice, Slice)) -> Result<(Tuple, Vec<RawVersion>)> {
         let (prefix, key, first_ver) = decode_raw_version(&first.0, &first.1, self.key_len)?;
         let mut group = vec![first_ver];
         loop {
@@ -649,8 +659,8 @@ impl DeltaRA {
 /// which is exactly why this is factored out and named rather than inlined.
 fn posting_window_bounds(posting: &RelationHandle, lo: i64, hi: i64) -> (Vec<u8>, Vec<u8>) {
     let col_at = |ts: i64| vec![StoredValiditySlot::new(ValidityTs::from_raw(ts)).as_datavalue()];
-    let lower = col_at(hi).encode_as_key(posting.id).into_vec();
-    let upper = col_at(lo).encode_as_key(posting.id).into_vec();
+    let lower = col_at(hi).encode_as_key(posting.id).as_bytes().to_vec();
+    let upper = col_at(lo).encode_as_key(posting.id).as_bytes().to_vec();
     (lower, upper)
 }
 
@@ -824,11 +834,15 @@ mod tests {
         tx.commit().expect("commit");
     }
 
+    /// Rows as `(k, val, start, end)` where `end` is `None` for a
+    /// genuinely OPEN run (`Hi::PosUnbounded`) — asserted directly, never
+    /// converted to the old `i64::MAX` sentinel. `@spans` starts are always
+    /// finite, so a missing start is a bug, not an open end.
     fn spans_rows(
         db: &crate::storage::fjall::FjallStorage,
         handle: &RelationHandle,
         sys: i64,
-    ) -> Vec<(i64, i64, i64, i64)> {
+    ) -> Vec<(i64, i64, i64, Option<i64>)> {
         let ra = SpansRA {
             bindings: vec![sym("k"), sym("val"), sym("iv")],
             storage: handle.clone(),
@@ -839,16 +853,23 @@ mod tests {
         let mut out = vec![];
         for batch in ra.iter_batched(&rtx).expect("iter") {
             for row in batch.expect("batch").into_rows() {
-                let DataValue::Num(crate::data::value::Num::Int(k)) = row[0] else {
+                let DataValue::Num(ref n_k) = row[0] else {
                     panic!("key not an int")
                 };
-                let DataValue::Num(crate::data::value::Num::Int(val)) = row[1] else {
+                let k = n_k.as_int().unwrap_or_else(|| panic!("key not an int"));
+                let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
+                let val = n_val.as_int().unwrap_or_else(|| panic!("val not an int"));
                 let DataValue::Interval(iv) = &row[2] else {
                     panic!("third column not an interval: {row:?}")
                 };
-                out.push((k, val, iv.start(), iv.end()));
+                out.push((
+                    k,
+                    val,
+                    iv.start().expect("@spans runs always have a finite start"),
+                    iv.end(), // None iff the run is genuinely open (PosUnbounded)
+                ));
             }
         }
         out.sort();
@@ -861,7 +882,7 @@ mod tests {
         let h = make_relation(&db, "spans_single", 1);
         assert_at(&db, &h, 1, 10, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
     #[test]
@@ -871,7 +892,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 20)]);
+        assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
     }
 
     #[test]
@@ -881,7 +902,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 20), (1, 200, 20, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
     }
 
     #[test]
@@ -891,7 +912,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
     #[test]
@@ -902,7 +923,7 @@ mod tests {
         retract_at(&db, &h, 1, 20);
         assert_at(&db, &h, 1, 30, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 20), (1, 100, 30, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
     }
 
     #[test]
@@ -927,7 +948,7 @@ mod tests {
         // Instant 10 is erased, so the payload is 100 throughout (the
         // instant-0 assert governs everywhere it would have fallen
         // through to) — one interval, not two.
-        assert_eq!(rows, vec![(1, 100, 0, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 0, None)]);
     }
 
     #[test]
@@ -940,7 +961,12 @@ mod tests {
             .into_iter()
             .map(|(k, val, s, e)| (s, e, k, val))
         {
-            assert!(start < end, "zero-width interval [{start}, {end})");
+            // An open run (None end) is trivially non-empty; a finite run
+            // must have start < end. No sentinel stands in for "open".
+            match end {
+                None => {}
+                Some(e) => assert!(start < e, "zero-width interval [{start}, {e})"),
+            }
         }
         // At the OLDER system snapshot the first (pre-correction) write
         // governs — still no zero-width run.
@@ -948,7 +974,7 @@ mod tests {
         let h2 = make_relation(&db2, "spans_no_zero_width2", 1);
         assert_at(&db2, &h2, 1, 10, 100);
         let rows = spans_rows(&db2, &h2, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
     #[test]
@@ -961,7 +987,7 @@ mod tests {
         let rows = spans_rows(&db, &h, i64::MAX);
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
-            vec![(1, 100, 10, i64::MAX), (2, 900, 5, 15)]
+            vec![(1, 100, 10, None), (2, 900, 5, Some(14))]
         );
     }
 
@@ -993,15 +1019,18 @@ mod tests {
         let mut out = vec![];
         for batch in ra.iter_batched(&rtx).expect("iter") {
             for row in batch.expect("batch").into_rows() {
-                let DataValue::Num(crate::data::value::Num::Int(k)) = row[0] else {
+                let DataValue::Num(ref n_k) = row[0] else {
                     panic!("key not an int")
                 };
-                let DataValue::Num(crate::data::value::Num::Int(val)) = row[1] else {
+                let k = n_k.as_int().unwrap_or_else(|| panic!("key not an int"));
+                let DataValue::Num(ref n_val) = row[1] else {
                     panic!("val not an int")
                 };
-                let DataValue::Num(crate::data::value::Num::Int(sgn)) = row[2] else {
+                let val = n_val.as_int().unwrap_or_else(|| panic!("val not an int"));
+                let DataValue::Num(ref n_sgn) = row[2] else {
                     panic!("sign not an int")
                 };
+                let sgn = n_sgn.as_int().unwrap_or_else(|| panic!("sign not an int"));
                 out.push((k, val, sgn));
             }
         }

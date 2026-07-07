@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "kyzo"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "aho-corasick",
  "base64",
@@ -807,6 +807,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "sha2 0.11.0",
+ "smallvec",
  "smartstring",
  "thiserror",
  "twox-hash",

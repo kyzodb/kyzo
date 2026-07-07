@@ -106,8 +106,7 @@ use thiserror::Error;
 use crate::data::expr::{Bytecode, eval_bytecode_pred};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -218,9 +217,10 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
 /// The posting key under construction: `[dim, src_key…]` with the dimension
 /// slot left as `Bot` for the caller to fill per posting.
 fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
-    let mut key = Vec::with_capacity(1 + base_key_len);
-    key.push(DataValue::Bot);
-    key.extend_from_slice(&tuple[..base_key_len]);
+    // Placeholder slot: every caller overwrites key[0] before use.
+    let mut key = Tuple::with_capacity(1 + base_key_len);
+    key.push(DataValue::Null);
+    key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
 
@@ -307,9 +307,8 @@ pub(crate) fn sparse_del<T: WriteTx>(
 /// need `N`), so the RA tier can obtain it once without a hidden per-search
 /// cache in these pure functions.
 pub(crate) fn sparse_total_docs(tx: &impl ReadTx, base: &RelationHandle) -> Result<usize> {
-    let start = base.encode_partial_key_for_store(&[]);
-    let end = base.encode_partial_key_for_store(&[DataValue::Bot]);
-    tx.range_count(start.as_bytes(), end.as_bytes())
+    let (start, end) = base.whole_relation_bounds();
+    tx.range_count(&start, &end)
 }
 
 /// Decode one posting row into `(src_key, weight)`. The row layout is
@@ -397,7 +396,7 @@ pub(crate) fn sparse_search(
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
         let prefix = vec![DataValue::from(dim as i64)];
-        for row in idx.scan_prefix(tx, &prefix) {
+        for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
             let row = row?;
             let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, &row)?;
             *scores.entry(doc_key).or_insert(0.0f32) += q_weight * d_weight;
@@ -748,16 +747,16 @@ mod tests {
 
         let idx_keys = || -> Vec<(fjall::Slice, fjall::Slice)> {
             let rtx = db.read_tx().unwrap();
-            let lower = crate::data::tuple::encode_tuple_key(f.idx.id.0, &[]);
-            let upper = (f.idx.id.0 + 1).to_be_bytes();
+            let lower = crate::data::value::encode_key_with_suffix(f.idx.id, &[], &[]);
+            let upper = (f.idx.id.raw() + 1).to_be_bytes();
             rtx.range_scan(lower.as_bytes(), &upper)
                 .collect::<Result<Vec<_>>>()
                 .unwrap()
         };
-        let search_err = || -> String {
+        let search_err = || -> miette::Report {
             let rtx = db.read_tx().unwrap();
             let mut stack = vec![];
-            let err = sparse_search(
+            sparse_search(
                 &rtx,
                 &[(0, 1.0)],
                 &f.base,
@@ -766,8 +765,7 @@ mod tests {
                 &None,
                 &mut stack,
             )
-            .expect_err("corrupt posting must error, not panic");
-            format!("{err:?}")
+            .expect_err("corrupt posting must error, not panic")
         };
 
         // (a) Garbage msgpack value: the scan's decode fails, still not a panic.
@@ -783,8 +781,10 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt"),
-            "garbage value names corruption"
+            search_err()
+                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "garbage value must surface as the typed IndexRowCorrupt"
         );
 
         // (b) A VALID tuple whose weight column is the wrong type: our own
@@ -804,8 +804,10 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt"),
-            "wrong-typed weight names corruption"
+            search_err()
+                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "wrong-typed weight must surface as the typed IndexRowCorrupt"
         );
 
         // (c) A finite-but-negative stored weight violates the admission
@@ -822,8 +824,10 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt"),
-            "negative stored weight names corruption"
+            search_err()
+                .downcast_ref::<crate::engines::IndexRowCorrupt>()
+                .is_some(),
+            "negative stored weight must surface as the typed IndexRowCorrupt"
         );
     }
 

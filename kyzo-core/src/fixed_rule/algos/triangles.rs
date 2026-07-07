@@ -116,6 +116,7 @@ fn clustering_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
@@ -193,14 +194,12 @@ mod tests {
         )
         .unwrap();
         let two_thirds = DataValue::from(2.0 * 2.0 / (3.0 * 2.0));
-        assert_eq!(
-            got,
-            vec![
-                vec![s("a"), two_thirds.clone(), i(2), i(3)],
-                vec![s("b"), two_thirds, i(2), i(3)],
-                vec![s("c"), DataValue::from(1.0), i(1), i(2)],
-                vec![s("d"), DataValue::from(1.0), i(1), i(2)],
-            ]
-        );
+        let want: Vec<Tuple> = vec![
+            vec![s("a"), two_thirds.clone(), i(2), i(3)],
+            vec![s("b"), two_thirds, i(2), i(3)],
+            vec![s("c"), DataValue::from(1.0), i(1), i(2)],
+            vec![s("d"), DataValue::from(1.0), i(1), i(2)],
+        ];
+        assert_eq!(got, want);
     }
 }

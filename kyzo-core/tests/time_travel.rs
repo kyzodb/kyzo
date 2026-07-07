@@ -16,6 +16,7 @@
 
 mod common;
 use common::*;
+use kyzo::DataValue;
 
 /// The write side names its own valid instant; the read side seeks to
 /// what held at a chosen past instant — an ordinary seek, not a
@@ -113,34 +114,122 @@ fn spans_derives_maximal_runs() {
     )
     .expect("correction at 300");
 
+    // The final run is genuinely OPEN: `interval_end` returns Null, not a
+    // sentinel. i64::MAX is a finite instant, not infinity; the value plane
+    // exposes real unboundedness, so the scripting surface must too.
     let out = db
         .run_script(
-            "?[v, istart, iend] := *hist{id, v @spans iv}, \
-             istart = interval_start(iv), iend = interval_end(iv) \
+            "?[v, istart, iend, has_end, end_unbounded] := *hist{id, v @spans iv}, \
+             istart = interval_start(iv), iend = interval_end(iv), \
+             has_end = interval_has_end(iv), \
+             end_unbounded = interval_is_end_unbounded(iv) \
              :order istart",
             no_params(),
         )
         .expect("spans");
     assert_eq!(out.rows.len(), 3, "three maximal runs, one per correction");
-    let got: Vec<(String, i64, i64)> = out
+    let got: Vec<(String, i64, DataValue, bool, bool)> = out
         .rows
         .iter()
         .map(|r| {
             (
                 r[0].get_str().unwrap().to_string(),
                 r[1].get_int().unwrap(),
-                r[2].get_int().unwrap(),
+                r[2].clone(),
+                r[3].get_bool().unwrap(),
+                r[4].get_bool().unwrap(),
             )
         })
         .collect();
     assert_eq!(
         got,
         vec![
-            ("a".to_string(), 100, 200),
-            ("b".to_string(), 200, 300),
-            ("c".to_string(), 300, i64::MAX),
+            // #119 intervals are CLOSED on the discrete grid: a run
+            // corrected at 200 last holds at instant 199, so interval_end
+            // is 199 (the last included instant), not the exclusive 200.
+            ("a".to_string(), 100, DataValue::from(199i64), true, false),
+            ("b".to_string(), 200, DataValue::from(299i64), true, false),
+            // The open run: end is Null (no upper endpoint), and the
+            // topology predicates confirm it is genuinely unbounded.
+            ("c".to_string(), 300, DataValue::Null, false, true),
         ],
-        "runs [100,200) 'a', [200,300) 'b', [300, MAX) 'c'"
+        "runs [100,199] 'a', [200,299] 'b', [300, ∞) 'c' — the last is open, \
+         so interval_end is Null and interval_is_end_unbounded is true"
+    );
+}
+
+/// The i64::MAX instant is RESERVED as the legacy `@'END'` / open sentinel,
+/// so no user write can name it: a real validity fact at i64::MAX is
+/// unrepresentable. Enforced at every user-facing construction path
+/// (`ValidityTs::for_assertion`, reached by both the `@ <ts>` parser
+/// coordinate and the per-row mutation loop). This is the public-API proof.
+#[test]
+fn user_cannot_assert_a_fact_at_the_reserved_end_instant() {
+    let db = fresh_db();
+    db.run_script("?[id, v] <- [[1, 'a']] :create res {id => v}", no_params())
+        .expect("create res");
+    // i64::MAX = 9223372036854775807 — the reserved terminal tick.
+    let err = db
+        .run_script(
+            "?[id, v] <- [[1, 'b']] :put res {id => v} @ 9223372036854775807",
+            no_params(),
+        )
+        .expect_err("asserting a fact at the reserved END instant must be refused");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("terminal tick") || msg.contains("END") || msg.contains("i64::MAX"),
+        "refusal must name the reserved terminal tick, got: {msg}"
+    );
+}
+
+/// The sentinel does not leak: across a full `@spans` derivation with an
+/// open run, NO `interval_end` value is ever i64::MAX. An open end is Null;
+/// a finite end is strictly below the reserved tick. The old sentinel model
+/// (i64::MAX standing for "forever") cannot reappear at the query surface.
+#[test]
+fn end_sentinel_never_leaks_through_interval_end() {
+    let db = fresh_db();
+    db.run_script(
+        "?[id, v] <- [[1, 'a']] :create leak {id => v} @ 100",
+        no_params(),
+    )
+    .expect("create at 100");
+    db.run_script(
+        "?[id, v] <- [[1, 'b']] :put leak {id => v} @ 200",
+        no_params(),
+    )
+    .expect("correct at 200");
+    let out = db
+        .run_script(
+            "?[iend] := *leak{id, v @spans iv}, iend = interval_end(iv)",
+            no_params(),
+        )
+        .expect("spans");
+    assert!(
+        out.rows.len() >= 2,
+        "at least the clipped run and the open run"
+    );
+    for r in &out.rows {
+        match &r[0] {
+            DataValue::Null => {} // the open run — correct
+            other => {
+                assert_ne!(
+                    other.get_int(),
+                    Some(i64::MAX),
+                    "interval_end leaked the reserved END sentinel as a real value"
+                );
+            }
+        }
+    }
+    // And exactly one open run (the last), so Null actually occurred.
+    let nulls = out
+        .rows
+        .iter()
+        .filter(|r| matches!(r[0], DataValue::Null))
+        .count();
+    assert_eq!(
+        nulls, 1,
+        "the single open run's end must be Null, not a sentinel"
     );
 }
 

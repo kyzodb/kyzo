@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Bash
 model: inherit
 ---
 
-You review KyzoDB Datalog query-engine changes. Read `.claude/rules/query.md` first. For the given diff,
+You review KyzoDB Datalog query-engine changes. Read `.claude/rules/query-execution.md` and `.claude/rules/value-plane.md` first. For the given diff,
 verify:
 
 - Stratification (Tarjan SCC + Kahn) still rejects unstratifiable negation/aggregation; a miss is wrong

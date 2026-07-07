@@ -57,7 +57,7 @@ use fjall::{
 };
 use miette::{Result, bail, miette};
 
-use crate::data::tuple::Tuple;
+use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
@@ -350,7 +350,7 @@ pub fn new_fjall_storage_with(
     let ks = db
         .keyspace(KEYSPACE_NAME, || tuning::main_keyspace_options(opts))
         .map_err(|e| miette!("opening fjall keyspace: {e}"))?;
-    let now = crate::data::value::current_validity()?.raw();
+    let now = crate::runtime::current_validity()?.raw();
     let watermark = match meta
         .get(SYSTEM_CLOCK_WATERMARK_KEY)
         .map_err(|e| miette!("reading system clock watermark: {e}"))?
@@ -412,7 +412,7 @@ impl FjallStorage {
             .watermark_lock
             .lock()
             .map_err(|_| miette!("watermark lock poisoned"))?;
-        let now = crate::data::value::current_validity()?.raw();
+        let now = crate::runtime::current_validity()?.raw();
         let stamp = self.clock.stamp(now);
         self.meta
             .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())
@@ -495,13 +495,14 @@ impl Storage for FjallStorage {
         // could race a live minting writer.
         {
             // The probe's upper bound must clear every real key. Every key
-            // begins with an 8-byte relation id capped at MAX_RELATION_ID,
-            // so its first byte stays below 0xFF — proven at compile time
-            // so a future id-cap bump cannot silently turn a full store
-            // invisible to this check.
+            // begins with an 8-byte relation id strictly below the
+            // EXCLUSIVE allocation ceiling `RelationId::CAP`, so its first
+            // byte stays below 0xFF — proven at compile time so a future
+            // id-cap bump cannot silently turn a full store invisible to
+            // this check.
             const {
                 assert!(
-                    crate::data::tuple::MAX_RELATION_ID < (0xff_u64 << 56),
+                    crate::data::value::RelationId::CAP <= (0xff_u64 << 56),
                     "emptiness probe bound must exceed every relation-id prefix"
                 );
             }

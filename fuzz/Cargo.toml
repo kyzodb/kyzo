@@ -37,7 +37,7 @@ libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 # Pinned to the exact versions kyzo-core depends on: the memcmp target
 # constructs `kyzo::UuidWrapper(uuid::Uuid)` / `kyzo::Vector::F32(Array1<f32>)`
-# / `kyzo::JsonData(serde_json::Value)` / `kyzo::RegexWrapper(regex::Regex)`
+# / `kyzo::JsonData::new(serde_json::Value)` / `kyzo::RegexWrapper(regex::Regex)`
 # directly, which only type-checks if these are the same crate versions
 # kyzo-core itself resolves.
 uuid = { version = "1.8.0", features = ["v1", "v4"] }

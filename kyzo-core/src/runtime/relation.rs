@@ -105,9 +105,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 
-use miette::{Diagnostic, Result, bail, ensure, miette};
-use rmp_serde::Serializer;
-use serde::Serialize;
+use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
@@ -116,13 +114,11 @@ use crate::data::program::InputRelationHandle;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::{
-    EncodedKey, RelationId, Tuple, TupleT, decode_tuple_from_kv, extend_tuple_from_v,
+use crate::data::value::{
+    AsOf, DataValue, EncodedKey, MAX_VALIDITY_TS, RelationId, ScanBound, StoredValiditySlot, Tuple,
+    TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
+    scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
-use crate::data::tuple::{
-    encode_key_with_suffix, encode_projected_key, encode_projected_key_with_suffix,
-};
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, StoredValiditySlot, ValidityTs};
 use crate::storage::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
@@ -187,7 +183,7 @@ pub(crate) struct RelationIdSpaceExhausted;
 /// `data/tuple.rs`; it lives here so this file is the whole draft.)
 fn next_relation_id(cur: RelationId) -> Result<RelationId> {
     // Cannot overflow u64: every minted or decoded id is <= 2^48.
-    let next = cur.0 + 1;
+    let next = cur.raw() + 1;
     RelationId::raw_decode(&next.to_be_bytes()).map_err(|_| RelationIdSpaceExhausted.into())
 }
 
@@ -461,6 +457,83 @@ struct StoredRelArityMismatch {
     span: SourceSpan,
 }
 
+/// # The catalog serialization boundary (RULED, not incidental)
+///
+/// Row VALUES are the value plane's job: canonical `DataValue` encodings
+/// (`data::value::canonical`), byte-order == value-order, no serde. Catalog
+/// METADATA — a relation's schema, access level, index manifests, triggers
+/// — is structured configuration, NOT a tuple of values: it is nested
+/// enums/options/maps that need self-describing struct serialization and
+/// never a memcmp value order (catalog rows are looked up by name, never
+/// range-scanned by value order). msgpack (serde struct maps) is the right
+/// tool for that, and this module is its ONE door.
+///
+/// The boundary is SEALED so it can never become a second value authority:
+/// [`CatalogRecord`] has a private supertrait, so only types declared in
+/// this module can be serialized through it. `DataValue`, `Tuple`, and any
+/// row value CANNOT implement `CatalogRecord`, so no row value can ever be
+/// routed through msgpack. (A compile-fail proof asserts this.)
+///
+/// Corruption is typed ([`RelationDeserError`]); the whole store is stamped
+/// with [`FormatVersion`](crate::FormatVersion), which a mismatched decoder
+/// refuses at the door.
+mod catalog {
+    use super::{RelationDeserError, RelationHandle};
+    use miette::{Result, miette};
+    use rmp_serde::Serializer;
+    use serde::Serialize;
+
+    mod seal {
+        pub trait Sealed {}
+    }
+
+    /// The CLOSED set of types stored as catalog metadata. Sealed: no type
+    /// outside this module can implement it, so a row value can never be
+    /// serialized through the catalog door.
+    pub(super) trait CatalogRecord:
+        Serialize + serde::de::DeserializeOwned + seal::Sealed
+    {
+    }
+
+    impl seal::Sealed for RelationHandle {}
+    impl CatalogRecord for RelationHandle {}
+
+    /// ABSENCE PROOF: a row VALUE cannot be a catalog record, so nothing
+    /// can route `DataValue` (or any value) through the msgpack door. The
+    /// seal (private supertrait) already forbids it structurally; this
+    /// locks it at compile time -- if `DataValue` ever implemented
+    /// `CatalogRecord`, the associated-item lookup below would become
+    /// ambiguous and fail to build.
+    const _: fn() = || {
+        trait AmbiguousIfImpl<A> {
+            fn __proof() {}
+        }
+        impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+        #[allow(dead_code)]
+        struct Marker;
+        impl<T: CatalogRecord> AmbiguousIfImpl<Marker> for T {}
+        let _ = <crate::data::value::DataValue as AmbiguousIfImpl<_>>::__proof;
+    };
+
+    /// Serialize a catalog record: msgpack with struct maps. Infallible in
+    /// practice for these field types, but a failure is a typed error, never
+    /// an unwrap.
+    pub(super) fn encode_catalog_record(rec: &impl CatalogRecord) -> Result<Vec<u8>> {
+        let mut ret = vec![];
+        rec.serialize(&mut Serializer::new(&mut ret).with_struct_map())
+            .map_err(|e| miette!("cannot serialize catalog record: {e}"))?;
+        Ok(ret)
+    }
+
+    /// Parse a claimed catalog record; corrupt bytes are the typed
+    /// [`RelationDeserError`].
+    pub(super) fn decode_catalog_record<T: CatalogRecord>(
+        bytes: &[u8],
+    ) -> std::result::Result<T, RelationDeserError> {
+        rmp_serde::from_slice(bytes).map_err(|_| RelationDeserError)
+    }
+}
+
 impl RelationHandle {
     /// The pure half of relation creation: shape a handle from the parsed
     /// input declaration and an allocated id. Storage writes happen in
@@ -528,15 +601,12 @@ impl RelationHandle {
     /// these field types in practice, but per law 5 a failure is an error,
     /// never an unwrap (the original unwrapped at every serialize site).
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut ret = vec![];
-        self.serialize(&mut Serializer::new(&mut ret).with_struct_map())
-            .map_err(|e| miette!("cannot serialize relation handle for {}: {e}", self.name))?;
-        Ok(ret)
+        catalog::encode_catalog_record(self)
     }
 
     /// Parse a claimed catalog row. Fallible: the bytes may be corrupt.
     pub(crate) fn decode(data: &[u8]) -> Result<Self> {
-        Ok(rmp_serde::from_slice(data).map_err(|_| RelationDeserError)?)
+        Ok(catalog::decode_catalog_record(data)?)
     }
 
     // -- key/value encoding for this relation's keyspace ------------------
@@ -557,7 +627,7 @@ impl RelationHandle {
                 span
             }
         );
-        Ok((&tuple[0..len]).encode_as_key(self.id))
+        Ok(tuple[0..len].encode_as_key(self.id))
     }
 
     /// Encode a key prefix (fewer columns than the full key) for prefix
@@ -652,28 +722,33 @@ impl RelationHandle {
                 span
             }
         );
-        let mut ret = Vec::with_capacity(9 + 16 * (tuple.len() - start));
-        ret.extend(self.id.raw_encode());
+        // The stored value opens with its polarity byte, then — for an
+        // assertion — the non-key columns' canonical encodings. The
+        // relation id is NOT repeated here: it is already the key's
+        // 8-byte prefix, so carrying it in the value too would be pure
+        // redundancy.
+        let mut ret = Vec::with_capacity(1 + 16 * (tuple.len() - start));
         ret.push(polarity.encode());
         if polarity == ClaimPolarity::Assert {
-            crate::data::fact_payload::encode_fact_payload(&tuple[start..], &mut ret)
-                .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+            for v in &tuple[start..] {
+                crate::data::value::append_canonical(&mut ret, v);
+            }
         }
         Ok(ret)
     }
 
     /// Encode the non-key columns of `tuple` as this relation's stored
-    /// value: an 8-byte header (the relation id — carried because the
-    /// kernel's value decoder, `extend_tuple_from_v`, is pinned to skip
-    /// exactly `VALUE_HEADER_LEN` bytes) followed by the msgpack payload.
+    /// value: the columns' canonical encodings concatenated. No header —
+    /// the relation id is the key prefix, not repeated here, and the value
+    /// decoder ([`extend_tuple_from_v`]) reads canonical bytes directly.
     pub(crate) fn encode_val_for_store(
         &self,
         tuple: &[DataValue],
         span: SourceSpan,
     ) -> Result<Vec<u8>> {
         let start = self.metadata.keys.len();
-        // The original sliced `tuple[start..]` unchecked and panicked on a
-        // short tuple (law 5); arity is a caller error, reported as one.
+        // A short tuple is a caller arity error, reported as one — never a
+        // slice-index panic.
         ensure!(
             tuple.len() >= start,
             StoredRelArityMismatch {
@@ -683,26 +758,24 @@ impl RelationHandle {
                 span
             }
         );
-        let mut ret = Vec::with_capacity(8 + 8 * (tuple.len() - start));
-        ret.extend(self.id.raw_encode());
-        tuple[start..]
-            .serialize(&mut Serializer::new(&mut ret))
-            .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+        let mut ret = Vec::with_capacity(16 * (tuple.len() - start));
+        for v in &tuple[start..] {
+            crate::data::value::append_canonical(&mut ret, v);
+        }
         Ok(ret)
     }
 
     /// Encode an arbitrary tuple as a stored value (used where the caller
-    /// has already split keys from dependents).
+    /// has already split keys from dependents). Canonical bytes, no header.
     pub(crate) fn encode_val_only_for_store(
         &self,
         tuple: &[DataValue],
         _span: SourceSpan,
     ) -> Result<Vec<u8>> {
-        let mut ret = Vec::with_capacity(8 + 8 * tuple.len());
-        ret.extend(self.id.raw_encode());
-        tuple
-            .serialize(&mut Serializer::new(&mut ret))
-            .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+        let mut ret = Vec::with_capacity(16 * tuple.len());
+        for v in tuple {
+            crate::data::value::append_canonical(&mut ret, v);
+        }
         Ok(ret)
     }
 
@@ -816,7 +889,7 @@ impl RelationHandle {
     /// original's `id.next()` panicked there).
     fn keyspace_upper(&self) -> [u8; 8] {
         // Cannot overflow u64: ids are <= 2^48, enforced at mint and decode.
-        (self.id.0 + 1).to_be_bytes()
+        (self.id.raw() + 1).to_be_bytes()
     }
 
     /// Scan every fact's CURRENT row (a bitemporal resolution at the
@@ -894,8 +967,8 @@ impl RelationHandle {
         // build (key columns copied, then `Bot` pushed) was one whole heap
         // allocation per row that carried no information the direct
         // encode below doesn't already have.
-        let lower = key_cols.encode_as_key(self.id);
-        let upper = encode_key_with_suffix(self.id, key_cols, &[DataValue::Bot]);
+        let lower = scan_key_lower(self.id, key_cols, &[]);
+        let upper = scan_key_upper(self.id, key_cols, &[]);
         tx.range_skip_scan_tuple(&lower, &upper, as_of)
             .next()
             .transpose()
@@ -915,7 +988,10 @@ impl RelationHandle {
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
                 tx.get(&key_data)?
-                    .map(|val_data| decode_tuple_from_kv(&key_data, &val_data, Some(self.arity())))
+                    .map(|val_data| {
+                        decode_tuple_from_kv(&key_data, &val_data, Some(self.arity()))
+                            .map_err(miette::Report::from)
+                    })
                     .transpose()
             }
         }
@@ -936,7 +1012,7 @@ impl RelationHandle {
                     AsOf::current(MAX_VALIDITY_TS),
                     SourceSpan::default(),
                 )?
-                .map(|row| row[self.metadata.keys.len()..].to_vec())),
+                .map(|row| Tuple::from(row[self.metadata.keys.len()..].to_vec()))),
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
                 match tx.get(&key_data)? {
@@ -997,8 +1073,8 @@ impl RelationHandle {
             }
             KeyspaceKind::AlgorithmState => {
                 let cols = &cols[..cols.len().min(self.metadata.keys.len())];
-                let lower = encode_projected_key(self.id, row, cols);
-                let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+                let lower = scan_key_lower_projected(self.id, row, cols, &[]);
+                let upper = scan_key_upper_projected(self.id, row, cols, &[]);
                 tx.range_scan_tuple(&lower, &upper)
             }
         }
@@ -1027,8 +1103,8 @@ impl RelationHandle {
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let keys_len = self.metadata.keys.len();
         let cols = &cols[..cols.len().min(keys_len)];
-        let lower = encode_projected_key(self.id, row, cols);
-        let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+        let lower = scan_key_lower_projected(self.id, row, cols, &[]);
+        let upper = scan_key_upper_projected(self.id, row, cols, &[]);
         Box::new(
             tx.range_skip_scan_tuple(&lower, &upper, as_of)
                 .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
@@ -1037,20 +1113,24 @@ impl RelationHandle {
 
     /// Scan CURRENT rows under `prefix` whose next key column lies in
     /// `[lower, upper]`.
+    /// The byte bounds bracketing every key of this relation (the
+    /// engines' whole-keyspace scans and counts).
+    pub(crate) fn whole_relation_bounds(&self) -> (Vec<u8>, Vec<u8>) {
+        (
+            scan_key_lower(self.id, &[], &[]),
+            scan_key_upper(self.id, &[], &[]),
+        )
+    }
+
     pub(crate) fn scan_bounded_prefix<'a>(
         &self,
         tx: &'a impl ReadTx,
         prefix: &[DataValue],
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut lower_t = prefix.to_vec();
-        lower_t.extend_from_slice(lower);
-        let mut upper_t = prefix.to_vec();
-        upper_t.extend_from_slice(upper);
-        upper_t.push(DataValue::Bot);
-        let lower_encoded = lower_t.encode_as_key(self.id);
-        let upper_encoded = upper_t.encode_as_key(self.id);
+        let lower_encoded = scan_key_lower(self.id, prefix, lower);
+        let upper_encoded = scan_key_upper(self.id, prefix, upper);
         match self.keyspace_kind {
             KeyspaceKind::Facts => {
                 let keys_len = self.metadata.keys.len();
@@ -1075,13 +1155,11 @@ impl RelationHandle {
         tx: &'a impl ReadTx,
         row: &[DataValue],
         cols: &[usize],
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = encode_projected_key_with_suffix(self.id, row, cols, lower);
-        let mut upper_owned = upper.to_vec();
-        upper_owned.push(DataValue::Bot);
-        let upper_encoded = encode_projected_key_with_suffix(self.id, row, cols, &upper_owned);
+        let lower_encoded = scan_key_lower_projected(self.id, row, cols, lower);
+        let upper_encoded = scan_key_upper_projected(self.id, row, cols, upper);
         match self.keyspace_kind {
             KeyspaceKind::Facts => {
                 let keys_len = self.metadata.keys.len();
@@ -1105,14 +1183,12 @@ impl RelationHandle {
         tx: &'a impl ReadTx,
         row: &[DataValue],
         cols: &[usize],
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = encode_projected_key_with_suffix(self.id, row, cols, lower);
-        let mut upper_owned = upper.to_vec();
-        upper_owned.push(DataValue::Bot);
-        let upper_encoded = encode_projected_key_with_suffix(self.id, row, cols, &upper_owned);
+        let lower_encoded = scan_key_lower_projected(self.id, row, cols, lower);
+        let upper_encoded = scan_key_upper_projected(self.id, row, cols, upper);
         let keys_len = self.metadata.keys.len();
         Box::new(
             tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
@@ -1132,8 +1208,8 @@ impl RelationHandle {
         let len = self.metadata.keys.len();
         debug_assert!(cols.len() >= len, "point probe under key width");
         let cols = &cols[..len];
-        let lower = encode_projected_key(self.id, row, cols);
-        let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+        let lower = scan_key_lower_projected(self.id, row, cols, &[]);
+        let upper = scan_key_upper_projected(self.id, row, cols, &[]);
         tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(MAX_VALIDITY_TS))
             .next()
             .transpose()
@@ -1147,17 +1223,12 @@ impl RelationHandle {
         &self,
         tx: &'a impl ReadTx,
         prefix: &Tuple,
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut lower_t = prefix.clone();
-        lower_t.extend_from_slice(lower);
-        let mut upper_t = prefix.clone();
-        upper_t.extend_from_slice(upper);
-        upper_t.push(DataValue::Bot);
-        let lower_encoded = lower_t.encode_as_key(self.id);
-        let upper_encoded = upper_t.encode_as_key(self.id);
+        let lower_encoded = scan_key_lower(self.id, prefix, lower);
+        let upper_encoded = scan_key_upper(self.id, prefix, upper);
         let keys_len = self.metadata.keys.len();
         Box::new(
             tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
@@ -1244,7 +1315,10 @@ pub(crate) fn list_relations(tx: &impl ReadTx) -> Result<Vec<RelationHandle>> {
     let lower = SystemKey::Relation("").encode();
     // The exclusive upper bound is the next relation prefix; SYSTEM is id
     // zero, so its successor is always in range.
-    let upper = RelationId::SYSTEM.next().raw_encode();
+    let upper = RelationId::SYSTEM
+        .next()
+        .expect("SYSTEM is id zero; its successor exists")
+        .raw_encode();
     let mut ret = vec![];
     for kv in tx.range_scan(&lower, &upper) {
         let (_k, v) = kv?;
@@ -1335,7 +1409,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
     tx.del(&SystemKey::Relation(name).encode())?;
     let lower = Tuple::default().encode_as_key(store.id);
     // Successor prefix as raw bytes; cannot overflow (ids <= 2^48).
-    let upper = (store.id.0 + 1).to_be_bytes();
+    let upper = (store.id.raw() + 1).to_be_bytes();
     tx.del_range(&lower, &upper)
 }
 
@@ -1433,11 +1507,13 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
 
 #[cfg(test)]
 mod tests {
+    use rmp_serde::Serializer;
+    use serde::Serialize;
 
     use super::*;
     use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-    use crate::data::tuple::decode_tuple_from_key;
     use crate::data::value::ValidityTs;
+    use crate::data::value::decode_tuple_from_key;
     use crate::storage::fjall::new_fjall_storage;
     use crate::storage::{ConflictError, Storage};
 
@@ -1491,17 +1567,13 @@ mod tests {
     fn system_key_shapes() {
         let counter = SystemKey::IdCounter.encode();
         assert_eq!(&counter[..8], &[0u8; 8], "SYSTEM prefix");
-        assert_eq!(
-            decode_tuple_from_key(&counter, 1).unwrap(),
-            vec![DataValue::Null]
-        );
+        let want_counter: Tuple = vec![DataValue::Null];
+        assert_eq!(decode_tuple_from_key(&counter, 1).unwrap(), want_counter);
 
         let rel = SystemKey::Relation("stored").encode();
         assert_eq!(&rel[..8], &[0u8; 8], "SYSTEM prefix");
-        assert_eq!(
-            decode_tuple_from_key(&rel, 1).unwrap(),
-            vec![DataValue::from("stored")]
-        );
+        let want_rel: Tuple = vec![DataValue::from("stored")];
+        assert_eq!(decode_tuple_from_key(&rel, 1).unwrap(), want_rel);
 
         assert!(
             counter.as_bytes() < rel.as_bytes(),
@@ -1547,7 +1619,7 @@ mod tests {
 
         // Write and read a row through the handle.
         let span = SourceSpan(0, 0);
-        let row = vec![DataValue::from(1), DataValue::from("one")];
+        let row: Tuple = vec![DataValue::from(1), DataValue::from("one")];
         let mut tx = db.write_tx().unwrap();
         a.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
@@ -1614,7 +1686,7 @@ mod tests {
 
         let shadow = ShadowHandle {
             name: handle.name.clone(),
-            id: crate::data::tuple::MAX_RELATION_ID + 1, // out of the 48-bit bound
+            id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
             put_triggers: handle.put_triggers.clone(),
             rm_triggers: handle.rm_triggers.clone(),
@@ -1668,18 +1740,21 @@ mod tests {
         let first = create_relation(&mut tx, simple_input("one"), KeyspaceKind::Facts).unwrap();
         let second = create_relation(&mut tx, simple_input("two"), KeyspaceKind::Facts).unwrap();
         tx.commit().unwrap();
-        assert_eq!(first.id, RelationId(1));
-        assert_eq!(second.id, RelationId(2));
+        assert_eq!(first.id, RelationId::new(1).expect("below cap"));
+        assert_eq!(second.id, RelationId::new(2).expect("below cap"));
 
         // A later transaction continues where the counter left off.
         let mut tx = db.write_tx().unwrap();
         let third = create_relation(&mut tx, simple_input("three"), KeyspaceKind::Facts).unwrap();
         tx.commit().unwrap();
-        assert_eq!(third.id, RelationId(3));
+        assert_eq!(third.id, RelationId::new(3).expect("below cap"));
 
         let rtx = db.read_tx().unwrap();
         let counter = rtx.get(&SystemKey::IdCounter.encode()).unwrap().unwrap();
-        assert_eq!(RelationId::raw_decode(&counter).unwrap(), RelationId(3));
+        assert_eq!(
+            RelationId::raw_decode(&counter).unwrap(),
+            RelationId::new(3).expect("below cap")
+        );
     }
 
     /// The concurrency story, proven: two transactions racing on the id
@@ -1708,7 +1783,7 @@ mod tests {
         let mut tx3 = db.write_tx().unwrap();
         let right = create_relation(&mut tx3, simple_input("right"), KeyspaceKind::Facts).unwrap();
         tx3.commit().unwrap();
-        assert_eq!(right.id, RelationId(2));
+        assert_eq!(right.id, RelationId::new(2).expect("below cap"));
     }
 
     /// The access ladder gates destructive operations: `Ord` is the
@@ -1761,9 +1836,13 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
 
         let mut tx = db.write_tx().unwrap();
-        // Force the counter to the last allocatable id.
-        tx.put(&SystemKey::IdCounter.encode(), &(1u64 << 48).to_be_bytes())
-            .unwrap();
+        // Force the counter to the last allocatable id, so the next
+        // allocation crosses the ceiling.
+        tx.put(
+            &SystemKey::IdCounter.encode(),
+            &(crate::data::value::RelationId::CAP - 1).to_be_bytes(),
+        )
+        .unwrap();
         let err =
             create_relation(&mut tx, simple_input("too_many"), KeyspaceKind::Facts).unwrap_err();
         assert!(
@@ -1797,7 +1876,7 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
-        let row = vec![DataValue::from(5), DataValue::from("five")];
+        let row: Tuple = vec![DataValue::from(5), DataValue::from("five")];
         rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
             .unwrap();
         rename_relation(
@@ -1862,7 +1941,7 @@ mod tests {
                 vec![col("a", ColType::Int), col("b", ColType::Int)],
                 vec![col("c", ColType::Int)],
             ),
-            RelationId(7),
+            RelationId::new(7).expect("below cap"),
             false,
             KeyspaceKind::Facts,
         );
@@ -1914,7 +1993,7 @@ mod tests {
     fn ensure_compatible_checks_input_dependents() {
         let stored = RelationHandle::new_from_input(
             simple_input("s"),
-            RelationId(1),
+            RelationId::new(1).expect("below cap"),
             false,
             KeyspaceKind::Facts,
         );
@@ -1949,7 +2028,7 @@ mod tests {
                 vec![col("k", ColType::Int)],
                 vec![col("v", ColType::String)],
             ),
-            RelationId(7),
+            RelationId::new(7).expect("below cap"),
             false,
             KeyspaceKind::Facts,
         );

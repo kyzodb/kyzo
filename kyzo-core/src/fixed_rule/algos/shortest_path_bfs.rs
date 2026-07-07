@@ -176,13 +176,14 @@ impl FixedRule for ShortestPathBFS {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::Tuple;
     use crate::fixed_rule::tests_support::{TestInput, run_fixed_rule};
 
     fn s(v: &str) -> DataValue {
         DataValue::from(v)
     }
 
-    fn love_edges() -> Vec<Vec<DataValue>> {
+    fn love_edges() -> Vec<Tuple> {
         [
             ("alice", "eve"),
             ("bob", "alice"),
@@ -253,7 +254,7 @@ mod tests {
         use crate::fixed_rule::tests_support::prepare_fixed_rule;
 
         let n: u32 = 250_000;
-        let edges: Vec<_> = (0..n - 1)
+        let edges: Vec<Tuple> = (0..n - 1)
             .map(|i| vec![s(&format!("n{i}")), s(&format!("n{}", i + 1))])
             .collect();
         // An end node absent from the graph: the frontier never empties, so
@@ -312,9 +313,7 @@ mod tests {
             CancelFlag::default(),
         )
         .unwrap();
-        assert_eq!(
-            got,
-            vec![vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])]]
-        );
+        let want: Vec<Tuple> = vec![vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])]];
+        assert_eq!(got, want);
     }
 }

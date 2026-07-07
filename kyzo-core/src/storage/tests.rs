@@ -26,7 +26,7 @@
 //! time-travel scan is checked against a naive full-scan reference
 //! implementation of the as-of semantics.
 
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use fjall::Slice;
@@ -34,10 +34,9 @@ use proptest::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::tuple::{EncodedKey, RelationId, Tuple, TupleT};
-use crate::data::value::{AsOf, DataValue, Interval, JsonData, Num, Validity, ValidityTs, Vector};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValidityTs, Vector};
+use crate::data::value::{EncodedKey, RelationId, Tuple, TupleT};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -55,27 +54,27 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Null,
         DataValue::Bool(false),
         DataValue::Bool(true),
-        DataValue::Num(Num::Float(f64::NEG_INFINITY)),
-        DataValue::Num(Num::Int(i64::MIN)),
-        DataValue::Num(Num::Int(-1_000_000)),
-        DataValue::Num(Num::Float(-1.5)),
-        DataValue::Num(Num::Int(-1)),
-        DataValue::Num(Num::Float(-0.0)),
-        DataValue::Num(Num::Int(0)),
-        DataValue::Num(Num::Float(0.0)),
-        DataValue::Num(Num::Float(0.5)),
-        DataValue::Num(Num::Int(1)),
-        DataValue::Num(Num::Float(1.0)), // int/float tie
-        DataValue::Num(Num::Float(1.5)),
-        DataValue::Num(Num::Int(2)),
+        DataValue::Num(Num::float(f64::NEG_INFINITY)),
+        DataValue::Num(Num::int(i64::MIN)),
+        DataValue::Num(Num::int(-1_000_000)),
+        DataValue::Num(Num::float(-1.5)),
+        DataValue::Num(Num::int(-1)),
+        DataValue::Num(Num::float(-0.0)),
+        DataValue::Num(Num::int(0)),
+        DataValue::Num(Num::float(0.0)),
+        DataValue::Num(Num::float(0.5)),
+        DataValue::Num(Num::int(1)),
+        DataValue::Num(Num::float(1.0)), // int/float tie
+        DataValue::Num(Num::float(1.5)),
+        DataValue::Num(Num::int(2)),
         // The exact-int boundary: 2^53 ± 1 in both representations.
-        DataValue::Num(Num::Int((1 << 53) - 1)),
-        DataValue::Num(Num::Int(1 << 53)),
-        DataValue::Num(Num::Int((1 << 53) + 1)),
-        DataValue::Num(Num::Float((1u64 << 53) as f64)),
-        DataValue::Num(Num::Int(i64::MAX)),
-        DataValue::Num(Num::Float(f64::INFINITY)),
-        DataValue::Num(Num::Float(f64::NAN)),
+        DataValue::Num(Num::int((1 << 53) - 1)),
+        DataValue::Num(Num::int(1 << 53)),
+        DataValue::Num(Num::int((1 << 53) + 1)),
+        DataValue::Num(Num::float((1u64 << 53) as f64)),
+        DataValue::Num(Num::int(i64::MAX)),
+        DataValue::Num(Num::float(f64::INFINITY)),
+        DataValue::Num(Num::float(f64::NAN)),
         DataValue::Str("".into()),
         DataValue::Str("a".into()),
         DataValue::Str("ab".into()),
@@ -89,38 +88,54 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
-        DataValue::Regex(crate::RegexWrapper("^a.*b$".parse().unwrap())),
-        DataValue::Regex(crate::RegexWrapper("^z+$".parse().unwrap())),
+        DataValue::Regex(
+            crate::data::value::RegexSource::validated(
+                crate::data::value::RegexFlags::NONE,
+                "^a.*b$".into(),
+            )
+            .unwrap(),
+        ),
+        DataValue::Regex(
+            crate::data::value::RegexSource::validated(
+                crate::data::value::RegexFlags::NONE,
+                "^z+$".into(),
+            )
+            .unwrap(),
+        ),
         DataValue::List(vec![]),
-        DataValue::List(vec![DataValue::Num(Num::Int(1))]),
+        DataValue::List(vec![DataValue::Num(Num::int(1))]),
         // prefix ordering: [1] < [1, "x"]
         DataValue::List(vec![
-            DataValue::Num(Num::Int(1)),
+            DataValue::Num(Num::int(1)),
             DataValue::Str("x".into()),
         ]),
         DataValue::Set(Default::default()),
         DataValue::Set(
-            [DataValue::Num(Num::Int(1)), DataValue::Num(Num::Int(2))]
+            [DataValue::Num(Num::int(1)), DataValue::Num(Num::int(2))]
                 .into_iter()
                 .collect(),
         ),
         // Vectors: negative values (raw-bit ordering breaks here), length
         // before content, both element widths.
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[-2.5f32, 0.0, 1.0]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[-2.5f32, 0.5, 1.0]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[1.0f32]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[f32::NAN]))),
+        DataValue::Vector(Vector::new(vec![-2.5f64, 0.0, 1.0])),
+        DataValue::Vector(Vector::new(vec![-2.5f64, 0.5, 1.0])),
+        DataValue::Vector(Vector::new(vec![1.0f64])),
+        DataValue::Vector(Vector::new(vec![f64::NAN])),
         // Signed zero: `OrderedFloat` treats -0.0 == 0.0 (unlike scalar
         // `Num`, which distinguishes them below), so these two must encode
         // byte-identically — see `law_vector_signed_zero_canonicalizes`.
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[-0.0f32]))),
-        DataValue::Vec(Vector::F32(ndarray::arr1(&[0.0f32]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[-7.5f64]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[0.25f64, -7.5]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64]))),
-        DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64]))),
-        DataValue::Json(JsonData(serde_json::json!({"a": 1}))),
-        DataValue::Json(JsonData(serde_json::json!([1, 2, 3]))),
+        DataValue::Vector(Vector::new(vec![-0.0f64])),
+        DataValue::Vector(Vector::new(vec![0.0f64])),
+        DataValue::Vector(Vector::new(vec![-7.5f64])),
+        DataValue::Vector(Vector::new(vec![0.25f64, -7.5])),
+        DataValue::Vector(Vector::new(vec![-0.0f64])),
+        DataValue::Vector(Vector::new(vec![0.0f64])),
+        DataValue::Json(crate::data::json::json_from_serde(
+            &serde_json::json!({"a": 1}),
+        )),
+        DataValue::Json(crate::data::json::json_from_serde(&serde_json::json!([
+            1, 2, 3
+        ]))),
         DataValue::Validity(Validity {
             timestamp: ValidityTs::from_raw(42),
             is_assert: Reverse(true),
@@ -137,33 +152,41 @@ fn corpus() -> Vec<DataValue> {
         // of one equals start of the next), an overlapping pair, and an
         // open-ended interval (end == i64::MAX, the plain-max-tick "END"
         // convention — see `Interval`'s doc comment).
-        DataValue::Interval(Interval::new(i64::MIN, i64::MIN + 1).unwrap()),
-        DataValue::Interval(Interval::new(-100, -1).unwrap()),
-        DataValue::Interval(Interval::new(-1, 0).unwrap()),
-        DataValue::Interval(Interval::new(0, 1).unwrap()),
-        DataValue::Interval(Interval::new(0, 10).unwrap()),
-        DataValue::Interval(Interval::new(5, 15).unwrap()), // overlaps [0,10)
-        DataValue::Interval(Interval::new(10, 20).unwrap()), // meets [0,10)
-        DataValue::Interval(Interval::new(0, 20).unwrap()), // contains [5,15)
-        DataValue::Interval(Interval::new(100, i64::MAX).unwrap()), // open-ended
-        DataValue::Interval(Interval::new(i64::MAX - 1, i64::MAX).unwrap()),
-        DataValue::Bot,
+        DataValue::Interval(Interval::new(
+            Bound::Closed(i64::MIN),
+            Bound::Closed((i64::MIN + 1) - 1),
+        )),
+        DataValue::Interval(Interval::new(Bound::Closed(-100), Bound::Closed((-1) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(-1), Bound::Closed((0) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed(0))),
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((10) - 1))),
+        DataValue::Interval(Interval::new(Bound::Closed(5), Bound::Closed((15) - 1))), // overlaps [0,10)
+        DataValue::Interval(Interval::new(Bound::Closed(10), Bound::Closed((20) - 1))), // meets [0,10)
+        DataValue::Interval(Interval::new(Bound::Closed(0), Bound::Closed((20) - 1))), // contains [5,15)
+        DataValue::Interval(Interval::new(
+            Bound::Closed(100),
+            Bound::Closed((i64::MAX) - 1),
+        )), // open-ended
+        DataValue::Interval(Interval::new(
+            Bound::Closed(i64::MAX - 1),
+            Bound::Closed((i64::MAX) - 1),
+        )),
     ];
     // Nested collections — bound by name so corpus insertions can't silently
     // change which values get nested.
     let nested_set = DataValue::Set(
-        [DataValue::Num(Num::Int(1)), DataValue::Num(Num::Int(2))]
+        [DataValue::Num(Num::int(1)), DataValue::Num(Num::int(2))]
             .into_iter()
             .collect(),
     );
-    let nested_list = DataValue::List(vec![DataValue::Num(Num::Int(1))]);
+    let nested_list = DataValue::List(vec![DataValue::Num(Num::int(1))]);
     c.push(DataValue::List(vec![nested_set, nested_list]));
     c
 }
 
 fn encode(v: &DataValue) -> Vec<u8> {
     let mut buf = vec![];
-    buf.encode_datavalue(v);
+    crate::data::value::append_canonical(&mut buf, v);
     buf
 }
 
@@ -204,39 +227,28 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
     let leaf = prop_oneof![
         Just(DataValue::Null),
         any::<bool>().prop_map(DataValue::Bool),
-        any::<i64>().prop_map(|i| DataValue::Num(Num::Int(i))),
-        any::<f64>().prop_map(|f| DataValue::Num(Num::Float(f))),
-        "[\\PC]{0,12}".prop_map(|s| DataValue::Str(s.into())),
+        any::<i64>().prop_map(|i| DataValue::Num(Num::int(i))),
+        any::<f64>().prop_map(|f| DataValue::Num(Num::float(f))),
+        "[\\PC]{0,12}".prop_map(DataValue::Str),
         // Json's Ord and encoding both reduce to the serialized string, but
         // the reduction is an argument, not a law — fuzz it like the rest.
-        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::value::JsonData(
-            serde_json::Value::String(s)
+        "[\\PC]{0,8}".prop_map(|s| DataValue::Json(crate::data::json::json_from_serde(
+            &serde_json::Value::String(s)
         ))),
         proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
         any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
-        proptest::collection::vec(any::<f32>(), 0..6)
-            .prop_map(|v| DataValue::Vec(Vector::F32(ndarray::Array1::from(v)))),
         proptest::collection::vec(any::<f64>(), 0..6)
-            .prop_map(|v| DataValue::Vec(Vector::F64(ndarray::Array1::from(v)))),
+            .prop_map(|v| DataValue::Vector(Vector::new(v))),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| DataValue::Validity(Validity {
             timestamp: ValidityTs::from_raw(ts),
             is_assert: Reverse(a),
         })),
-        // Two arbitrary i64s, ordered into a valid (non-empty) interval: on
-        // a tie there is no valid interval, so that draw is filtered out
-        // rather than coerced (coercing start==end would hide the very
-        // degenerate case `Interval::new` exists to refuse).
-        (any::<i64>(), any::<i64>()).prop_filter_map("valid interval", |(a, b)| {
-            let (start, end) = match a.cmp(&b) {
-                Ordering::Less => (a, b),
-                Ordering::Greater => (b, a),
-                Ordering::Equal => return None,
-            };
-            Some(DataValue::Interval(
-                Interval::new(start, end).expect("start < end"),
-            ))
+        // Two arbitrary i64s, ordered into a closed interval (a tie is the
+        // single-instant interval, a lawful value of the kind).
+        (any::<i64>(), any::<i64>()).prop_map(|(a, b)| {
+            let (start, end) = if a <= b { (a, b) } else { (b, a) };
+            DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed(end)))
         }),
-        Just(DataValue::Bot),
     ];
     leaf.prop_recursive(3, 24, 4, |inner| {
         prop_oneof![
@@ -294,16 +306,16 @@ proptest! {
         prop_assume!(start.checked_sub(delta).is_some());
         prop_assume!(end > start);
 
-        let same_start_short = DataValue::Interval(Interval::new(start, end).unwrap());
-        let same_start_long = DataValue::Interval(Interval::new(start, end + delta).unwrap());
+        let same_start_short = DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed((end) - 1)));
+        let same_start_long = DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed((end + delta) - 1)));
         prop_assert_eq!(
             same_start_short.cmp(&same_start_long),
             encode(&same_start_short).cmp(&encode(&same_start_long)),
             "same-start pair order disagreement: {:?} vs {:?}", same_start_short, same_start_long
         );
 
-        let same_end_early = DataValue::Interval(Interval::new(start - delta, end).unwrap());
-        let same_end_late = DataValue::Interval(Interval::new(start, end).unwrap());
+        let same_end_early = DataValue::Interval(Interval::new(Bound::Closed(start - delta), Bound::Closed((end) - 1)));
+        let same_end_late = DataValue::Interval(Interval::new(Bound::Closed(start), Bound::Closed((end) - 1)));
         prop_assert_eq!(
             same_end_early.cmp(&same_end_late),
             encode(&same_end_early).cmp(&encode(&same_end_late)),
@@ -320,8 +332,8 @@ proptest! {
 /// vector, exactly as it already does for the two NaN encodings.
 #[test]
 fn law_vector_signed_zero_canonicalizes() {
-    let neg_f32 = DataValue::Vec(Vector::F32(ndarray::arr1(&[-0.0f32])));
-    let pos_f32 = DataValue::Vec(Vector::F32(ndarray::arr1(&[0.0f32])));
+    let neg_f32 = DataValue::Vector(Vector::new(vec![-0.0f64]));
+    let pos_f32 = DataValue::Vector(Vector::new(vec![0.0f64]));
     assert_eq!(neg_f32.cmp(&pos_f32), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f32),
@@ -329,8 +341,8 @@ fn law_vector_signed_zero_canonicalizes() {
         "-0.0 and +0.0 are semantically Equal in a Vector lane but encoded to different bytes"
     );
 
-    let neg_f64 = DataValue::Vec(Vector::F64(ndarray::arr1(&[-0.0f64])));
-    let pos_f64 = DataValue::Vec(Vector::F64(ndarray::arr1(&[0.0f64])));
+    let neg_f64 = DataValue::Vector(Vector::new(vec![-0.0f64]));
+    let pos_f64 = DataValue::Vector(Vector::new(vec![0.0f64]));
     assert_eq!(neg_f64.cmp(&pos_f64), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f64),
@@ -339,23 +351,23 @@ fn law_vector_signed_zero_canonicalizes() {
     );
 
     // Mixed sign, multi-element: only the zero lane should collapse.
-    let neg_mixed = DataValue::Vec(Vector::F32(ndarray::arr1(&[-1.5f32, -0.0, 2.5])));
-    let pos_mixed = DataValue::Vec(Vector::F32(ndarray::arr1(&[-1.5f32, 0.0, 2.5])));
+    let neg_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, -0.0, 2.5]));
+    let pos_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, 0.0, 2.5]));
     assert_eq!(neg_mixed.cmp(&pos_mixed), std::cmp::Ordering::Equal);
     assert_eq!(encode(&neg_mixed), encode(&pos_mixed));
 }
 
-/// Scalar `Num::Float` deliberately does NOT canonicalize signed zero:
-/// `Num::cmp` uses `total_cmp`, which orders `-0.0` strictly below `+0.0`,
-/// so the two must stay distinguishable — this pins that design decision so
-/// a future change to `Vector` canonicalization can't accidentally leak into
-/// the scalar path.
+/// The value plane has ONE canonical zero: `Num::float(-0.0)` collapses to
+/// `+0.0` at construction, so the two are the same value — equal, and
+/// byte-identical under the canonical encoding. This pins that law so a
+/// future change cannot re-introduce a distinct negative zero.
 #[test]
-fn law_scalar_num_signed_zero_stays_distinct() {
-    let neg = DataValue::Num(Num::Float(-0.0));
-    let pos = DataValue::Num(Num::Float(0.0));
-    assert_eq!(neg.cmp(&pos), std::cmp::Ordering::Less);
-    assert!(encode(&neg) < encode(&pos));
+fn law_scalar_num_negative_zero_collapses_to_positive() {
+    let neg = DataValue::Num(Num::float(-0.0));
+    let pos = DataValue::Num(Num::float(0.0));
+    assert_eq!(neg.cmp(&pos), std::cmp::Ordering::Equal);
+    assert_eq!(neg, pos);
+    assert_eq!(encode(&neg), encode(&pos));
 }
 
 // ---------- KV contract vs a model oracle ----------
@@ -514,9 +526,9 @@ fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (EncodedKey, V
     (bitemp_key(rel, name, ts, 1), pol_val(rel, assert))
 }
 
-/// A bitemporal value: relation-id header + polarity byte, no payload.
-fn pol_val(rel: RelationId, assert: bool) -> Vec<u8> {
-    let mut v = rel.raw_encode().to_vec();
+/// A bitemporal value: the polarity byte, no payload.
+fn pol_val(_rel: RelationId, assert: bool) -> Vec<u8> {
+    let mut v = Vec::new();
     v.push(
         if assert {
             ClaimPolarity::Assert
@@ -566,7 +578,7 @@ fn time_travel_matches_naive_oracle() {
         ("e", 3, true),
         ("e", 4, false),
     ];
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
@@ -577,7 +589,7 @@ fn time_travel_matches_naive_oracle() {
     tx.commit().unwrap();
 
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     let tx = db.read_tx().unwrap();
     for at in 0..=10i64 {
         let got: Vec<(String, i64)> = tx
@@ -605,7 +617,7 @@ fn time_travel_matches_naive_oracle() {
 
 #[test]
 fn time_travel_sees_own_writes() {
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
@@ -618,7 +630,7 @@ fn time_travel_sees_own_writes() {
     let (k, v) = vld_row(rel, "b", 2, true);
     tx.put(&k, &v).unwrap();
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     let got: Vec<String> = tx
         .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(5)))
         .map(|r| match &r.unwrap()[0] {
@@ -716,14 +728,14 @@ fn stamped_row(
 fn dump_refuses_a_row_stamped_above_its_own_floor() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rel = RelationId::new(100);
+    let rel = RelationId::new(100).expect("below cap");
     let handle = facts_handle(rel, "floor_test");
 
     // Far enough in the future that it exceeds any floor a store opened
     // "now" could possibly report (mirrors the existing
     // `restore_raises_clock_floor_past_imported_stamps` convention).
     let bad_sys =
-        ValidityTs::from_raw(crate::data::value::current_validity().unwrap().raw() + 1_000_000_000);
+        ValidityTs::from_raw(crate::runtime::current_validity().unwrap().raw() + 1_000_000_000);
     let (key, val) = stamped_row(rel, "evil", 1, bad_sys);
 
     let mut tx = db.write_tx().unwrap();
@@ -778,7 +790,7 @@ fn dump_refuses_a_row_stamped_above_its_own_floor() {
 fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rel = RelationId::new(42);
+    let rel = RelationId::new(42).expect("below cap");
     let handle = facts_handle(rel, "floor_race");
     {
         let mut tx = db.write_tx().unwrap();
@@ -821,7 +833,7 @@ fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers()
     // before any writer has committed a row, which is a scheduling
     // artifact unrelated to the property under test. Rows are never
     // deleted here, so once one appears the store only grows from here.
-    let upper = rel.next().raw_encode();
+    let upper = rel.next().expect("below cap").raw_encode();
     while db
         .read_tx()
         .unwrap()
@@ -878,7 +890,7 @@ fn dumps_never_advertise_a_floor_below_their_own_rows_under_concurrent_writers()
 /// scan must terminate (and skip it) rather than livelock.
 #[test]
 fn skip_scan_terminates_on_retraction_at_min_ts() {
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
@@ -895,7 +907,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
     let got: Vec<String> = tx
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
-            rel.next().raw_encode().as_ref(),
+            rel.next().expect("below cap").raw_encode().as_ref(),
             AsOf::current(ValidityTs::from_raw(5)),
         )
         .map(|r| match &r.unwrap()[0] {
@@ -909,7 +921,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
 /// An assertion at ts == i64::MIN is a legitimate hit and must also terminate.
 #[test]
 fn skip_scan_hit_at_min_ts_terminates() {
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     let mut tx = db.write_tx().unwrap();
@@ -924,7 +936,7 @@ fn skip_scan_hit_at_min_ts_terminates() {
     let got: Vec<Tuple> = tx
         .range_skip_scan_tuple(
             rel.raw_encode().as_ref(),
-            rel.next().raw_encode().as_ref(),
+            rel.next().expect("below cap").raw_encode().as_ref(),
             AsOf::current(ValidityTs::from_raw(0)),
         )
         .map(|r| r.unwrap())
@@ -941,10 +953,13 @@ fn corrupt_inputs_error_never_panic() {
     // bytes, so the requirement is simply no panic, ever.
     let mut k = vec![0xFF; 8];
     let mut enc = vec![];
-    enc.encode_datavalue(&DataValue::Validity(Validity {
-        timestamp: ValidityTs::from_raw(1),
-        is_assert: Reverse(true),
-    }));
+    crate::data::value::append_canonical(
+        &mut enc,
+        &DataValue::Validity(Validity {
+            timestamp: ValidityTs::from_raw(1),
+            is_assert: Reverse(true),
+        }),
+    );
     k.extend(enc);
     let _ = crate::data::bitemporal::check_key_for_bitemporal(
         &k,
@@ -1009,6 +1024,50 @@ fn format_version_stamp_and_mismatch() {
     assert!(
         new_fjall_storage(&path).is_err(),
         "version mismatch must refuse to open"
+    );
+}
+
+/// The #119 migration boundary, made explicit and executable. The value
+/// plane changed the on-disk VALUE format (canonical bytes replace the old
+/// self-describing payload), so `FormatVersion::CURRENT` is 5. Per the
+/// prime directive there are no deployed stores and no in-place migration:
+/// a store written by any PRE-#119 build (version 4) must simply REFUSE to
+/// open, never be silently misread by the new decoder. This pins that the
+/// previous version is the one refused (not just some arbitrary tamper),
+/// and that CURRENT parses as exactly 5.
+#[test]
+fn pre_value_plane_stores_v4_refuse_to_open() {
+    use crate::storage::FormatVersion;
+    // CURRENT is 5, and 5 is what a fresh store stamps.
+    assert_eq!(FormatVersion::CURRENT, FormatVersion::parse(b"5").unwrap());
+    // The immediately-previous format (4) is a DIFFERENT version and so is
+    // refused at the door — the value format is incompatible.
+    let v4 = FormatVersion::parse(b"4").unwrap();
+    assert_ne!(
+        v4,
+        FormatVersion::CURRENT,
+        "v4 must not equal the current format"
+    );
+
+    // End to end: a store carrying the v4 stamp refuses to open.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    {
+        let db = new_fjall_storage(&path).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"k", b"v").unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+        let meta = raw
+            .keyspace("kyzo_meta", fjall::KeyspaceCreateOptions::default)
+            .unwrap();
+        meta.insert(b"format_version", b"4").unwrap();
+    }
+    assert!(
+        new_fjall_storage(&path).is_err(),
+        "a pre-#119 (v4) store must refuse to open, never be misread by the v5 decoder"
     );
 }
 
@@ -1222,13 +1281,13 @@ fn concurrency_bounds_are_compiler_checked() {
 /// payload reaches the RegexWrapper deserializer in 14 bytes.
 #[test]
 fn law3_value_payloads_error_never_panic() {
-    use crate::data::tuple::extend_tuple_from_v;
+    use crate::data::value::extend_tuple_from_v;
     // rmp payload: array[1] { map{ "Regex": "" } } behind the 8-byte header.
     let mut hostile = vec![0u8; 8];
     hostile.extend([0x91, 0x81, 0xa5]);
     hostile.extend(b"Regex");
     hostile.push(0xa0);
-    let mut tup: Tuple = vec![];
+    let mut tup: Tuple = Tuple::new();
     assert!(extend_tuple_from_v(&mut tup, &hostile).is_err());
 }
 
@@ -1236,8 +1295,8 @@ proptest! {
     /// Generative value-side Law 3: arbitrary value bytes never panic.
     #[test]
     fn law3_value_generative(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
-        let mut tup: Tuple = vec![];
-        let _ = crate::data::tuple::extend_tuple_from_v(&mut tup, &bytes);
+        let mut tup: Tuple = Tuple::new();
+        let _ = crate::data::value::extend_tuple_from_v(&mut tup, &bytes);
     }
 }
 
@@ -1546,27 +1605,39 @@ fn conflict_is_typed_and_options_and_stats_work() {
 /// keeps walking rather than stopping at the first wound.
 #[test]
 fn verify_storage_reports_injected_corruption() {
-    use crate::data::tuple::encode_tuple_key;
     use crate::storage::verify::verify_storage;
+
+    use crate::runtime::db::Db;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
+    let clean_checked;
     {
-        let db = new_fjall_storage(&path).unwrap();
-        let mut tx = db.write_tx().unwrap();
-        for i in 0..50i64 {
-            let k = encode_tuple_key(7, &[DataValue::Num(Num::Int(i))]);
-            tx.put(&k, b"").unwrap();
-        }
-        tx.commit().unwrap();
-        let report = verify_storage(&db).unwrap();
+        // A REAL, kernel-written store: the catalog-aware verifier needs the
+        // real entry taxonomy (msgpack catalog + bitemporal data rows), so the
+        // fixture is a genuine relation with genuine rows, not raw puts below
+        // the kernel (which would be dangling, cataloged nowhere).
+        let storage = new_fjall_storage(&path).unwrap();
+        let db = Db::new(storage.clone()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 7], [2, 14], [3, 21], [4, 28], [5, 35]] :create rel {k => v}",
+            std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let report = verify_storage(&storage).unwrap();
         assert!(
             report.is_clean(),
-            "healthy store must verify clean: {report:?}"
+            "a real, healthy store must verify clean (catalog + bitemporal rows): {report:?}"
         );
-        assert_eq!(report.checked, 50);
+        assert!(
+            report.checked >= 5,
+            "the five data rows are walked: {report:?}"
+        );
+        clean_checked = report.checked;
     }
-    // Inject garbage below the kernel: raw fjall write of an undecodable key.
+    // Inject garbage below the kernel: a raw fjall write of a key whose column
+    // bytes do not decode (0xEE is no valid tag). Verification must surface it
+    // and keep walking, not stop at the first wound.
     {
         let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
         let ks = raw
@@ -1576,12 +1647,81 @@ fn verify_storage_reports_injected_corruption() {
             .unwrap();
         raw.persist(fjall::PersistMode::SyncAll).unwrap();
     }
-    let db = new_fjall_storage(&path).unwrap();
-    let report = verify_storage(&db).unwrap();
+    let storage = new_fjall_storage(&path).unwrap();
+    let report = verify_storage(&storage).unwrap();
     assert!(!report.is_clean());
-    assert_eq!(report.checked, 51, "the walk must continue past corruption");
+    assert_eq!(
+        report.checked,
+        clean_checked + 1,
+        "the walk continues past the wound: {report:?}"
+    );
     assert_eq!(report.corrupt.len(), 1);
-    assert!(report.corrupt[0].error.contains("unknown type tag"));
+    // 0xEE is no valid tag: the codec names the exact refusal (BadTag) and the
+    // verifier surfaces it as the corruption reason.
+    assert!(
+        report.corrupt[0].error.contains("BadTag"),
+        "names the decode failure: {}",
+        report.corrupt[0].error
+    );
+}
+
+/// The verifier checks VALUES, not just keys: a base-relation row whose KEY
+/// still decodes but whose VALUE is corrupt (an invalid polarity byte) is
+/// caught, and the reason names the value failure — proof that catalog-aware
+/// per-format value verification is real, not decorative.
+#[test]
+fn verify_storage_catches_a_corrupt_value() {
+    use crate::runtime::db::Db;
+    use crate::storage::verify::verify_storage;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    // Build a real store, capture a base-relation data-row key, then DROP the
+    // store so the raw fjall handle below can take the file lock.
+    let data_key: Vec<u8> = {
+        let storage = new_fjall_storage(&path).unwrap();
+        let db = Db::new(storage.clone()).unwrap();
+        db.run_script(
+            "?[k, v] <- [[1, 7]] :create rel {k => v}",
+            std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let tx = storage.read_tx().unwrap();
+        tx.total_scan()
+            .filter_map(Result::ok)
+            .map(|(k, _)| k.to_vec())
+            // Any non-SYSTEM entry (relation prefix not all-zero): `rel` has no
+            // index, so its base rows are the only non-catalog entries.
+            .find(|k| k.len() >= 8 && k[..8].iter().any(|&b| b != 0))
+            .expect("a rel base-relation data row")
+    };
+    // Overwrite that row's VALUE — not its key — with a single 0xFF byte, which
+    // is no valid `ClaimPolarity`, below the kernel. The key still decodes; only
+    // the value is corrupt, proving verify checks values, not just keys.
+    {
+        let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+        let ks = raw
+            .keyspace("kyzo", fjall::KeyspaceCreateOptions::default)
+            .unwrap();
+        ks.insert(&data_key, [0xFFu8]).unwrap();
+        raw.persist(fjall::PersistMode::SyncAll).unwrap();
+    }
+    let storage = new_fjall_storage(&path).unwrap();
+    let report = verify_storage(&storage).unwrap();
+    assert!(
+        !report.is_clean(),
+        "a corrupt VALUE (with a still-decodable key) must be caught: {report:?}"
+    );
+    assert_eq!(
+        report.corrupt.len(),
+        1,
+        "exactly the one wounded row: {report:?}"
+    );
+    assert!(
+        report.corrupt[0].error.contains("polarity"),
+        "the reason names the VALUE failure, not the key: {}",
+        report.corrupt[0].error
+    );
 }
 
 /// Law 6 (concurrency liveness) through the retry helper: contended
@@ -1631,10 +1771,10 @@ fn retry_on_conflict_reaches_completion_under_contention() {
 #[test]
 fn format_version_rejects_noncanonical_stamps() {
     use crate::storage::FormatVersion;
-    assert_eq!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);
+    assert_eq!(FormatVersion::parse(b"5").unwrap(), FormatVersion::CURRENT);
     // An older stamp still parses (so the mismatch refusal can NAME it) —
     // it is simply not CURRENT.
-    assert_ne!(FormatVersion::parse(b"3").unwrap(), FormatVersion::CURRENT);
+    assert_ne!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);
     for bad in [&b"01"[..], b"+1", b" 1", b"1 ", b""] {
         assert!(
             FormatVersion::parse(bad).is_err(),
@@ -1964,7 +2104,7 @@ fn sim_time_travel_matches_naive_oracle() {
         ("e", 3, true),
         ("e", 4, false),
     ];
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let db = SimStorage::new(2);
     let mut tx = db.write_tx().unwrap();
     for (name, ts, assert) in history {
@@ -1973,7 +2113,7 @@ fn sim_time_travel_matches_naive_oracle() {
     }
     // Own writes are visible to the write transaction's as-of scan.
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     assert!(
         tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(1)))
             .next()
@@ -2433,7 +2573,7 @@ fn sim_campaign_durability_tiers_are_distinct() {
 /// oracle at every timestamp.
 #[test]
 fn sim_campaign_time_travel_under_interleaved_history_writes() {
-    let rel = RelationId::new(9);
+    let rel = RelationId::new(9).expect("below cap");
     for_each_seed(0..200, |seed| {
         let db = SimStorage::with_faults(
             seed,
@@ -2482,7 +2622,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
             .map(|(n, t, a)| (n.as_str(), *t, *a))
             .collect();
         let lower = rel.raw_encode().to_vec();
-        let upper = rel.next().raw_encode().to_vec();
+        let upper = rel.next().expect("below cap").raw_encode().to_vec();
         let tx = db.read_tx().unwrap();
         for at in 0..=10i64 {
             let got: Vec<(String, i64)> = tx
@@ -2895,7 +3035,7 @@ fn sim_retry_liveness_escapes_injected_faults() {
 fn bitemporal_fact_race_aborts_second_committer() {
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     // seed
     let mut tx = db.write_tx().unwrap();
     let (k, v) = vld_row(rel, "ctr", 0, true);
@@ -2903,7 +3043,7 @@ fn bitemporal_fact_race_aborts_second_committer() {
     tx.commit().unwrap();
 
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
     let mut a = db.write_tx().unwrap();
     let mut b = db.write_tx().unwrap();
     // both read the fact range (the current-state probe)
@@ -3006,15 +3146,15 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
 
     let dir = tempfile::tempdir().unwrap();
     let db = std::sync::Arc::new(new_fjall_storage(dir.path()).unwrap());
-    let rel = RelationId::new(7);
+    let rel = RelationId::new(7).expect("below cap");
     let lower = rel.raw_encode().to_vec();
-    let upper = rel.next().raw_encode().to_vec();
+    let upper = rel.next().expect("below cap").raw_encode().to_vec();
 
-    // Assert value with a one-column msgpack payload: the counter.
+    // Assert value: the polarity byte, then the counter column canonical.
     let val_of = |v: i64| -> Vec<u8> {
-        let mut out = rel.raw_encode().to_vec();
+        let mut out = Vec::new();
         out.push(crate::data::bitemporal::ClaimPolarity::Assert.encode());
-        crate::data::fact_payload::encode_fact_payload(&[DataValue::from(v)], &mut out).unwrap();
+        crate::data::value::append_canonical(&mut out, &DataValue::from(v));
         out
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).
@@ -3104,14 +3244,14 @@ fn restore_raises_clock_floor_past_imported_stamps() {
     let src = new_fjall_storage(src_dir.path()).unwrap();
     // Push the source clock far into the future, then write one row so
     // the dump carries both data and the inflated floor.
-    let far_future = crate::data::value::current_validity().unwrap().raw() + 1_000_000_000;
+    let far_future = crate::runtime::current_validity().unwrap().raw() + 1_000_000_000;
     src.raise_clock_floor(ValidityTs::from_raw(far_future))
         .unwrap();
     {
         let mut tx = src.write_tx().unwrap();
         let stamp = tx.system_stamp();
         assert!(stamp.raw() > far_future, "source mints above its floor");
-        let (k, v) = vld_row(RelationId::new(3), "fact", 1, true);
+        let (k, v) = vld_row(RelationId::new(3).expect("below cap"), "fact", 1, true);
         tx.put(&k, &v).unwrap();
         tx.commit().unwrap();
     }

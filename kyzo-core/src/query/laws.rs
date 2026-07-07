@@ -141,13 +141,18 @@
 //! does NOT touch is `query/stratify.rs::aggregation_character` — see its
 //! own doc comment for why that one stays hand-maintained.
 
+// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
+// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
+// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
+#![allow(dead_code)]
+
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::data::aggr::{Aggregation, MeetAggrObj, NormalAggrObj};
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::tuple::Tuple;
 use crate::data::value::DataValue;
+use crate::data::value::Tuple;
 use crate::query::eval::Budget;
 
 pub(crate) type Rel = &'static str;
@@ -272,7 +277,7 @@ impl Event {
         Self::check_valid_not_reserved(valid)?;
         Ok(Event {
             key,
-            payload: Vec::new(),
+            payload: Tuple::new(),
             valid,
             sys,
             polarity: ClaimPolarity::Retract,
@@ -282,7 +287,7 @@ impl Event {
         Self::check_valid_not_reserved(valid)?;
         Ok(Event {
             key,
-            payload: Vec::new(),
+            payload: Tuple::new(),
             valid,
             sys,
             polarity: ClaimPolarity::Erase,
@@ -296,7 +301,7 @@ impl Event {
     pub(crate) fn untimed(tuple: Tuple) -> Self {
         Event {
             key: tuple,
-            payload: Vec::new(),
+            payload: Tuple::new(),
             valid: 0,
             sys: 0,
             polarity: ClaimPolarity::Assert,
@@ -1290,14 +1295,14 @@ fn eval_normal_aggr_head(
 
     let mut out = BTreeSet::new();
     if groups.is_empty() && key_positions.is_empty() && !val_positions.is_empty() {
-        let mut row = Vec::with_capacity(val_positions.len());
+        let mut row = Tuple::with_capacity(val_positions.len());
         for op in fresh_ops()? {
             row.push(op.get().map_err(aggr_err)?);
         }
         out.insert(row);
     }
     for (key, ops) in groups {
-        let mut row = vec![DataValue::Null; signature.len()];
+        let mut row: Tuple = vec![DataValue::Null; signature.len()];
         for (slot, i) in key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
@@ -1380,7 +1385,7 @@ impl MeetState {
         self.acc
             .iter()
             .map(|(key, vals)| {
-                let mut row = vec![DataValue::Null; self.arity];
+                let mut row: Tuple = vec![DataValue::Null; self.arity];
                 for (slot, i) in self.key_positions.iter().enumerate() {
                     row[*i] = key[slot].clone();
                 }
@@ -1603,7 +1608,7 @@ fn naive_eval_at_impl(
                         && !state.ops.is_empty()
                     {
                         let identity: Tuple = state.ops.iter().map(|op| op.init_val()).collect();
-                        state.acc.insert(Vec::new(), identity);
+                        state.acc.insert(Tuple::new(), identity);
                         changed = true;
                     }
                 }
@@ -2082,7 +2087,7 @@ fn eval_one_group(
     }
     match ops {
         None if key_positions.is_empty() => {
-            let mut row = vec![DataValue::Null; signature_len];
+            let mut row: Tuple = vec![DataValue::Null; signature_len];
             for (op, (i, _, _)) in fresh_ops()?.iter().zip(val_positions) {
                 row[*i] = op.get().map_err(aggr_err)?;
             }
@@ -2090,7 +2095,7 @@ fn eval_one_group(
         }
         None => Ok(None),
         Some(ops) => {
-            let mut row = vec![DataValue::Null; signature_len];
+            let mut row: Tuple = vec![DataValue::Null; signature_len];
             for (slot, &i) in key_positions.iter().enumerate() {
                 row[i] = group_key[slot].clone();
             }
@@ -2161,7 +2166,7 @@ fn eval_aggregating_head_incremental(
     // concern when NO dependency had a delta, in which case there is
     // nothing to re-check anyway.
     if key_positions.is_empty() && rel_deltas.values().any(|d| !d.is_empty()) {
-        affected.insert(Vec::new());
+        affected.insert(Tuple::new());
     }
 
     let mut delta = BTreeSet::new();
@@ -3722,7 +3727,7 @@ mod tests {
     #[test]
     fn asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture() {
         use crate::data::bitemporal::check_key_for_bitemporal;
-        use crate::data::tuple::{RelationId, TupleT};
+        use crate::data::value::{RelationId, TupleT};
         use crate::data::value::{Validity, ValidityTs};
         use std::cmp::Reverse;
 
@@ -3741,8 +3746,9 @@ mod tests {
                 DataValue::Validity(slot(valid_ts)),
                 DataValue::Validity(slot(sys_ts)),
             ]
-            .encode_as_key(RelationId(7))
-            .into_vec()
+            .encode_as_key(RelationId::new(7).expect("below cap"))
+            .as_bytes()
+            .to_vec()
         }
         /// A from-scratch skip-walk over the real kernel — the same shape
         /// as `data/bitemporal.rs`'s private `skip_walk` test helper.
@@ -5025,7 +5031,7 @@ mod tests {
                             .insert(SignedFact::Minus(victim));
                     } else {
                         let a = v(rng.range(0, 4));
-                        let t = if rel == "p" || rel == "r2" {
+                        let t: Tuple = if rel == "p" || rel == "r2" {
                             vec![a, v(rng.range(0, 4))]
                         } else {
                             vec![a]

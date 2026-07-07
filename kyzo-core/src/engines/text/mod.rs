@@ -32,7 +32,6 @@
 //!   never trusted to be well-formed just because it was once stored.
 
 use crate::DataValue;
-use crate::data::memcmp::MemCmpEncoder;
 use crate::engines::text::cangjie::tokenizer::CangJieTokenizer;
 use crate::engines::text::tokenizer::{
     AlphaNumOnlyFilter, AsciiFoldingFilter, BoxTokenFilter, Language, LowerCaser, NgramTokenizer,
@@ -114,14 +113,14 @@ impl TokenizerConfig {
         hasher.update(self.name.as_bytes());
         let mut args_vec = vec![];
         for arg in &self.args {
-            args_vec.encode_datavalue(arg);
+            crate::data::value::append_canonical(&mut args_vec, arg);
         }
         hasher.update(&args_vec);
         for filter in filters {
             hasher.update(filter.name.as_bytes());
             args_vec.clear();
             for arg in &filter.args {
-                args_vec.encode_datavalue(arg);
+                crate::data::value::append_canonical(&mut args_vec, arg);
             }
             hasher.update(&args_vec);
         }
@@ -419,9 +418,36 @@ mod tests {
             cfg("Lowercase", vec![]),
             cfg("Stemmer", vec![DataValue::from("english")]),
         ];
+        // INDEPENDENT DERIVATION. config_hash = sha256( name ++
+        // canonical(args) ++ for each filter: name ++ canonical(args) ).
+        // Reconstruct the hashed input entirely from the format law using
+        // HAND-DERIVED canonical bytes (value tag + the key pinned by
+        // `data::value::number::format_v1_golden_vectors`), then hash with a
+        // stock Sha256 -- never the production encoder. If either drifts,
+        // this fails independently of the production path.
+        //   Int(1)      = 10 03 04 39 80 00..(9)
+        //   Int(3)      = 10 03 04 3a c0 00..(9)
+        //   Bool(false) = 08 00                (Tag::Bool, 0x00)
+        //   Str("english") = 18 65 6e 67 6c 69 73 68 00 00  (Tag::Str, bytes, 00 00 term)
+        let mut expected_input: Vec<u8> = Vec::new();
+        expected_input.extend_from_slice(b"NGram");
+        expected_input
+            .extend_from_slice(&[0x10, 0x03, 0x04, 0x39, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        expected_input
+            .extend_from_slice(&[0x10, 0x03, 0x04, 0x3a, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        expected_input.extend_from_slice(&[0x08, 0x00]);
+        expected_input.extend_from_slice(b"Lowercase");
+        expected_input.extend_from_slice(b"Stemmer");
+        expected_input
+            .extend_from_slice(&[0x18, 0x65, 0x6e, 0x67, 0x6c, 0x69, 0x73, 0x68, 0x00, 0x00]);
+        let expected = {
+            use sha2::{Digest, Sha256};
+            hex(Sha256::digest(&expected_input))
+        };
         assert_eq!(
             hex(ngram.config_hash(&filters)),
-            "a5f39a08accfb46f15941d5f64ae383daee547284c313cecf9b647d4a9fbb6ef"
+            expected,
+            "config hash diverged from the hand-derived canonical input"
         );
     }
 

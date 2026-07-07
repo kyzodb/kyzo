@@ -79,13 +79,14 @@ use crate::data::program::{
     InputProgram, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed,
 };
 use crate::data::symb::Symbol;
-use crate::data::tuple::Tuple;
-use crate::data::value::{AsOf, ValidityTs, current_validity};
+use crate::data::value::Tuple;
+use crate::data::value::{AsOf, ValidityTs};
 use crate::fixed_rule::CancelFlag;
 use crate::parse::{Script, parse_script};
 use crate::query::laws;
 use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::stored::StoredWithValidityRA;
+use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::{ReadTx, Storage};
@@ -726,7 +727,7 @@ mod tests {
                 facts
                     .get_mut("edge")
                     .expect("edge was scanned")
-                    .remove(&vec![DataValue::from(3), DataValue::from(4)]);
+                    .remove(&Tuple::from(vec![DataValue::from(3), DataValue::from(4)]));
             })
             .expect("verify_program runs");
         match outcome {
@@ -738,7 +739,7 @@ mod tests {
                     oracle.len() < production.len(),
                     "the sabotaged oracle must be missing rows: {oracle:?}"
                 );
-                let dropped = vec![DataValue::from(3), DataValue::from(4)];
+                let dropped: Tuple = vec![DataValue::from(3), DataValue::from(4)];
                 assert!(
                     !oracle.contains(&dropped) || oracle.len() != production.len(),
                     "sabotage must be visible in the oracle's answer"
