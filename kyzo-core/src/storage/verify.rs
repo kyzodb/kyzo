@@ -18,7 +18,7 @@
 use fjall::Slice;
 use miette::Result;
 
-use crate::data::value::{decode_tuple_from_key, extend_tuple_from_v};
+use crate::data::value::decode_tuple_from_key;
 use crate::storage::{ReadTx, Storage};
 
 /// Cap on recorded corrupt entries: the report proves and locates corruption
@@ -85,9 +85,23 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
             report.ordering_violations += 1;
         }
 
-        let decode_result = decode_tuple_from_key(&k, 16)
-            .and_then(|mut tup| extend_tuple_from_v(&mut tup, &v).map(|()| tup));
-        if let Err(e) = decode_result {
+        // Verify the KEY decodes: every entry — catalog (system), data row,
+        // AND derived-index internal storage — shares one uniform key shape
+        // (relation prefix + canonical column bytes + fixed-width bitemporal
+        // tail), so a key that fails to decode is unambiguous structural
+        // corruption, whatever the entry's kind.
+        //
+        // The VALUE is deliberately NOT decoded here: the store holds four
+        // distinct value formats (msgpack `CatalogRecord` for the catalog,
+        // `[polarity byte][canonical columns]` for data rows, engine-specific
+        // layouts for HNSW/FTS/... index internals, and empty/1-byte key-only
+        // values), and decoding them all as canonical data rows was a real
+        // bug that reported a HEALTHY store as fully corrupt. Verifying a
+        // value in the right codec needs the catalog to resolve each
+        // relation's kind — a catalog-aware pass tracked as future work; this
+        // pass guarantees key-and-ordering integrity uniformly.
+        let _ = &v; // value intentionally unread; see above
+        if let Err(e) = decode_tuple_from_key(&k, 16) {
             if report.corrupt.len() < MAX_RECORDED {
                 report.corrupt.push(CorruptEntry {
                     key_hex: hex_prefix(&k),
