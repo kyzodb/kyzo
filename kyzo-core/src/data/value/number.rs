@@ -106,6 +106,18 @@ impl Num {
         Num(Repr::Float(v))
     }
 
+    /// The read-only representation view: pattern-matching ergonomics
+    /// WITHOUT construction authority — `NumRepr` cannot be turned back
+    /// into a `Num` except through the normalizing constructors, so the
+    /// identity law (`-0.0` collapsed, one NaN) cannot be bypassed by a
+    /// public variant.
+    pub fn repr(self) -> NumRepr {
+        match self.0 {
+            Repr::Int(v) => NumRepr::Int(v),
+            Repr::Float(v) => NumRepr::Float(v),
+        }
+    }
+
     pub fn as_int(self) -> Option<i64> {
         match self.0 {
             Repr::Int(v) => Some(v),
@@ -403,6 +415,14 @@ impl std::hash::Hash for Num {
             }
         }
     }
+}
+
+/// The read-only view of a `Num`'s representation (see [`Num::repr`]):
+/// match on it freely; mint through the normalizing constructors only.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum NumRepr {
+    Int(i64),
+    Float(f64),
 }
 
 /// Typed decode failures: total input handling, never a panic.

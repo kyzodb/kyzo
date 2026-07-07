@@ -56,7 +56,7 @@ pub use canonical::{
 pub use cell::{Minted, Value};
 pub use code::{Code, StampedCode};
 pub use column::{AdmittedCodes, AdmittedWords, CodeColumn, Column, Domain, WordColumn};
-pub use number::Num;
+pub use number::{Num, NumRepr};
 pub use row::{AdmittedRows, EncodedKey, PushError, Rows};
 pub use string::GermanStr;
 pub use tag::Tag;
@@ -215,6 +215,34 @@ impl DataValue {
     pub fn get_slice(&self) -> Option<&[DataValue]> {
         match self {
             DataValue::List(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub fn get_interval(&self) -> Option<Interval> {
+        match self {
+            DataValue::Interval(iv) => Some(*iv),
+            _ => None,
+        }
+    }
+
+    pub fn get_validity(&self) -> Option<Validity> {
+        match self {
+            DataValue::Validity(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn get_json(&self) -> Option<&Json> {
+        match self {
+            DataValue::Json(j) => Some(j),
+            _ => None,
+        }
+    }
+
+    pub fn get_vector(&self) -> Option<&Vector> {
+        match self {
+            DataValue::Vector(v) => Some(v),
             _ => None,
         }
     }
