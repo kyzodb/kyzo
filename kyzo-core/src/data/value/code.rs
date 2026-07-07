@@ -43,8 +43,9 @@ impl Code {
     }
 }
 
-/// A code together with the epoch that gives it meaning: the loose-scalar
-/// currency for holding a value's identity across statements.
+/// A code together with the arena identity and epoch that give it meaning:
+/// the loose-scalar currency for holding a value's identity across
+/// statements.
 ///
 /// Minted by `Arena::intern` (stamping the current epoch) and by
 /// [`EpochRemap::apply`](super::arena::EpochRemap::apply) (restamping into
@@ -57,6 +58,7 @@ impl Code {
 pub struct StampedCode {
     code: Code,
     epoch: super::arena::Epoch,
+    arena: super::arena::ArenaId,
 }
 
 impl StampedCode {
@@ -65,8 +67,19 @@ impl StampedCode {
     /// was issued by the arena — the law is a type boundary, not a
     /// crate-wide convention.
     #[inline]
-    pub(super) fn mint(code: Code, epoch: super::arena::Epoch) -> Self {
-        StampedCode { code, epoch }
+    pub(super) fn mint(
+        code: Code,
+        epoch: super::arena::Epoch,
+        arena: super::arena::ArenaId,
+    ) -> Self {
+        StampedCode { code, epoch, arena }
+    }
+
+    /// The arena this stamp belongs to (plane-internal: observers verify
+    /// it on every admit/spend).
+    #[inline]
+    pub(super) fn arena(self) -> super::arena::ArenaId {
+        self.arena
     }
 
     /// The raw identity, for packing under a container-level stamp.

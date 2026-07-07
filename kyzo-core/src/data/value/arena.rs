@@ -86,8 +86,11 @@
 //! which increments the deref counter — "dereferences only on a tie" is
 //! measured, not asserted.
 //!
-//! Honest limit: epochs are per-`Arena`. Stamps do not distinguish two
-//! distinct `Arena` instances; the value plane owns exactly one.
+//! Arena identity is part of the stamp, not a convention: every
+//! [`StampedCode`] carries the [`ArenaId`] that minted it, and every spend
+//! ([`Frame::admit`], the snapshot checks, [`EpochRemap::apply`]) verifies
+//! it. Two arenas at the same epoch reject each other's stamps instead of
+//! silently resolving wrong values.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -420,6 +423,21 @@ impl Remap {
     }
 }
 
+/// Process-unique arena identity: minted once per [`Arena::new`] from a
+/// monotone counter (creation order — deterministic, no clock), carried by
+/// every stamp and observer, verified on every spend. Never part of any
+/// answer, so determinism of results is untouched.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ArenaId(u64);
+
+static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(0);
+
+impl ArenaId {
+    fn mint() -> ArenaId {
+        ArenaId(NEXT_ARENA_ID.fetch_add(1, AtomicOrd::Relaxed))
+    }
+}
+
 /// The arena's epoch: advances exactly at [`Arena::seal`], which rides
 /// commit boundaries. Codes mean something relative to an epoch; every
 /// spend verifies the stamp.
@@ -478,6 +496,7 @@ impl Delta {
 ///   search, and sorted structures of sealed codes survive by one gather.
 /// - Over **tail** codes it is the arrival -> new-rank permutation.
 pub struct EpochRemap {
+    arena: ArenaId,
     from: Epoch,
     to: Epoch,
     /// Sealed length of the *from* epoch: the boundary between sealed and
@@ -505,9 +524,16 @@ impl EpochRemap {
     ///
     /// # Panics
     ///
-    /// Panics if the stamp is not this remap's `from` epoch, or the code
-    /// was not live in it.
+    /// Panics if the stamp is from a foreign arena, is not this remap's
+    /// `from` epoch, or was not live in it.
     pub fn apply(&self, sc: StampedCode) -> StampedCode {
+        assert_eq!(
+            sc.arena(),
+            self.arena,
+            "remap of arena {:?} fed a code from foreign arena {:?}",
+            self.arena,
+            sc.arena()
+        );
         assert_eq!(
             sc.epoch(),
             self.from,
@@ -516,7 +542,7 @@ impl EpochRemap {
             self.to,
             sc.epoch()
         );
-        StampedCode::mint(self.apply_raw(sc.code()), self.to)
+        StampedCode::mint(self.apply_raw(sc.code()), self.to, self.arena)
     }
 
     /// The raw morphism, for bulk gathers by epoch-stamped containers
@@ -772,6 +798,7 @@ impl FrameCode<'_> {
 /// next mutation.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
+    arena: ArenaId,
     runs: &'a [Arc<Run>],
     sealed_len: usize,
     arrivals: &'a [Entry],
@@ -818,10 +845,11 @@ impl<'a> Frame<'a> {
     /// mintable only by this plane, every mint is in bounds when issued,
     /// the arena only grows within an epoch, and no transition
     /// (`&mut Arena`) can coexist with this frame. The bounds theorem is
-    /// re-checked in debug builds. Returns `None` for a stale stamp: the
-    /// code must cross through [`EpochRemap::apply`] instead.
+    /// re-checked in debug builds. Returns `None` for a stale stamp (cross
+    /// through [`EpochRemap::apply`] instead) and for a foreign arena's
+    /// stamp (which has no lawful crossing at all).
     pub fn admit(&self, sc: StampedCode) -> Option<FrameCode<'a>> {
-        if sc.epoch() == self.epoch {
+        if sc.arena() == self.arena && sc.epoch() == self.epoch {
             debug_assert!(
                 (sc.code().raw() as usize) < self.len(),
                 "minting discipline broken: in-epoch stamp not live in the frame"
@@ -876,6 +904,7 @@ impl<'a> Frame<'a> {
 /// and a compile-time brand that unifies across them would claim a safety
 /// it cannot deliver.)
 pub struct Snapshot {
+    arena: ArenaId,
     runs: Vec<Arc<Run>>,
     sealed_len: usize,
     arrivals: Vec<Entry>,
@@ -915,6 +944,13 @@ impl Snapshot {
     /// match and the code must be within the snapshot's delta cut (a
     /// same-epoch code minted *after* the snapshot is beyond its view).
     fn check(&self, sc: StampedCode) -> usize {
+        assert_eq!(
+            sc.arena(),
+            self.arena,
+            "snapshot of arena {:?} fed a code from foreign arena {:?}",
+            self.arena,
+            sc.arena()
+        );
         assert_eq!(
             sc.epoch(),
             self.epoch,
@@ -972,6 +1008,7 @@ impl Snapshot {
 /// the live borrow, [`Arena::snapshot`] for the pinned owner. See the
 /// module docs for the full type-C contract.
 pub struct Arena {
+    id: ArenaId,
     heap: Heap,
     runs: Vec<Arc<Run>>,
     /// Total sealed values (= sum of run lengths; runs are disjoint).
@@ -983,6 +1020,7 @@ pub struct Arena {
 impl Arena {
     pub fn new() -> Self {
         Arena {
+            id: ArenaId::mint(),
             heap: Heap::new(),
             runs: Vec::new(),
             sealed_len: 0,
@@ -1018,6 +1056,7 @@ impl Arena {
     /// the borrow checker at the next `intern`/`seal`/`snapshot`.
     pub fn frame(&self) -> Frame<'_> {
         Frame {
+            arena: self.id,
             runs: &self.runs,
             sealed_len: self.sealed_len,
             arrivals: &self.delta.arrivals,
@@ -1034,6 +1073,7 @@ impl Arena {
     pub fn snapshot(&mut self) -> Snapshot {
         self.heap.freeze_live();
         Snapshot {
+            arena: self.id,
             runs: self.runs.clone(),
             sealed_len: self.sealed_len,
             arrivals: self.delta.arrivals.clone(),
@@ -1093,7 +1133,7 @@ impl Arena {
                 }
             }
         };
-        StampedCode::mint(code, self.epoch)
+        StampedCode::mint(code, self.epoch, self.id)
     }
 
     /// Seal the epoch: drain the delta into the runs (with geometric
@@ -1158,6 +1198,7 @@ impl Arena {
 
         self.epoch = Epoch(self.epoch.0 + 1);
         EpochRemap {
+            arena: self.id,
             from,
             to: self.epoch,
             from_sealed_len,
@@ -1210,8 +1251,8 @@ mod tests {
 
     /// In-plane stamp mint for law sweeps (tests are part of the plane's
     /// minting authority; production stamps come from intern/apply).
-    fn stamp(c: usize, epoch: Epoch) -> StampedCode {
-        StampedCode::mint(Code(c as u32), epoch)
+    fn stamp(c: usize, epoch: Epoch, arena: ArenaId) -> StampedCode {
+        StampedCode::mint(Code(c as u32), epoch, arena)
     }
 
     // ------------------------------------------------------------------
@@ -1308,7 +1349,9 @@ mod tests {
         // Every live code admits and resolves to the oracle's bytes
         // (dense over 0..len; sealed = sorted ranks, tail = arrivals).
         for c in 0..f.len() {
-            let fc = f.admit(stamp(c, f.epoch())).expect("live stamp admits");
+            let fc = f
+                .admit(stamp(c, f.epoch(), f.arena))
+                .expect("live stamp admits");
             assert_eq!(
                 f.resolve(fc),
                 naive.resolve(c as u32),
@@ -1318,7 +1361,10 @@ mod tests {
         // Sealed codes are strictly byte-ordered.
         let mut prev: Option<&[u8]> = None;
         for c in 0..f.sealed_len() {
-            let v = f.resolve(f.admit(stamp(c, f.epoch())).expect("sealed admits"));
+            let v = f.resolve(
+                f.admit(stamp(c, f.epoch(), f.arena))
+                    .expect("sealed admits"),
+            );
             if let Some(p) = prev {
                 assert!(p < v, "sealed order broken at {c}");
             }
@@ -1333,8 +1379,8 @@ mod tests {
         // cmp_codes is the byte order, over every live pair.
         for i in 0..f.len() {
             for j in 0..f.len() {
-                let a = f.admit(stamp(i, f.epoch())).expect("admits");
-                let b = f.admit(stamp(j, f.epoch())).expect("admits");
+                let a = f.admit(stamp(i, f.epoch(), f.arena)).expect("admits");
+                let b = f.admit(stamp(j, f.epoch(), f.arena)).expect("admits");
                 assert_eq!(
                     f.cmp_codes(a, b),
                     naive.resolve(i as u32).cmp(naive.resolve(j as u32)),
@@ -1356,7 +1402,7 @@ mod tests {
         assert_eq!(snap.epoch().0, frozen.epoch, "snapshot epoch drifted");
         for c in 0..snap.len() {
             assert_eq!(
-                snap.resolve(stamp(c, snap.epoch())),
+                snap.resolve(stamp(c, snap.epoch(), snap.arena)),
                 frozen.resolve(c as u32),
                 "snapshot code {c} drifted"
             );
@@ -1370,7 +1416,10 @@ mod tests {
             for i in 0..snap.len() {
                 for j in 0..snap.len() {
                     assert_eq!(
-                        snap.cmp_codes(stamp(i, snap.epoch()), stamp(j, snap.epoch())),
+                        snap.cmp_codes(
+                            stamp(i, snap.epoch(), snap.arena),
+                            stamp(j, snap.epoch(), snap.arena)
+                        ),
                         frozen.resolve(i as u32).cmp(frozen.resolve(j as u32)),
                         "snapshot cmp drifted"
                     );
@@ -1417,7 +1466,7 @@ mod tests {
                         let f = arena.frame();
                         (0..f.len())
                             .map(|c| {
-                                f.resolve(f.admit(stamp(c, from_epoch)).expect("live"))
+                                f.resolve(f.admit(stamp(c, from_epoch, f.arena)).expect("live"))
                                     .to_vec()
                             })
                             .collect()
@@ -1432,7 +1481,7 @@ mod tests {
                     // door restamps it into the new epoch.
                     let f = arena.frame();
                     for (old, bytes) in live.iter().enumerate() {
-                        let new = remap.apply(stamp(old, from_epoch));
+                        let new = remap.apply(stamp(old, from_epoch, arena.id));
                         assert_eq!(
                             new.code().raw(),
                             expect[old],
@@ -1449,7 +1498,7 @@ mod tests {
                     // Strictly monotone over the old sealed range.
                     let mut prev = None;
                     for old in 0..from_sealed {
-                        let new = remap.apply(stamp(old, from_epoch)).code().raw();
+                        let new = remap.apply(stamp(old, from_epoch, arena.id)).code().raw();
                         if let Some(p) = prev {
                             assert!(p < new, "op {i}: sealed remap not strictly monotone");
                         }
@@ -1632,6 +1681,51 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Cross-arena rejection: two arenas at the same epoch must refuse each
+    // other's stamps loudly, never resolve them to their own values.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn cross_arena_stamps_are_refused_by_frames() {
+        let mut a = Arena::new();
+        let mut b = Arena::new();
+        let sa = a.intern(b"alpha");
+        let sb = b.intern(b"beta");
+        assert_eq!(a.epoch(), b.epoch(), "both at epoch 0: the dangerous case");
+        let fb = b.frame();
+        assert!(
+            fb.admit(sa).is_none(),
+            "arena A's stamp admitted into arena B's frame"
+        );
+        let fa = a.frame();
+        assert!(
+            fa.admit(sb).is_none(),
+            "arena B's stamp admitted into arena A's frame"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "foreign arena")]
+    fn cross_arena_stamp_panics_in_snapshots() {
+        let mut a = Arena::new();
+        let mut b = Arena::new();
+        let sa = a.intern(b"alpha");
+        b.intern(b"beta");
+        b.snapshot().resolve(sa);
+    }
+
+    #[test]
+    #[should_panic(expected = "foreign arena")]
+    fn cross_arena_stamp_panics_in_remaps() {
+        let mut a = Arena::new();
+        let mut b = Arena::new();
+        a.intern(b"alpha");
+        let sb = b.intern(b"beta");
+        let remap = a.seal();
+        remap.apply(sb);
+    }
+
+    // ------------------------------------------------------------------
     // The same-epoch coherence law: observers of one epoch agree on every
     // code both can see, whatever their cuts.
     // ------------------------------------------------------------------
@@ -1708,7 +1802,7 @@ mod tests {
         }
         // Post-seal: dense byte order over all five.
         let all: Vec<&[u8]> = (0..f.len())
-            .map(|c| f.resolve(f.admit(stamp(c, f.epoch())).expect("live")))
+            .map(|c| f.resolve(f.admit(stamp(c, f.epoch(), f.arena)).expect("live")))
             .collect();
         let mut sorted = all.clone();
         sorted.sort();
@@ -1779,7 +1873,7 @@ mod tests {
                     let f = arena.frame();
                     (0..f.len())
                         .map(|c| {
-                            f.resolve(f.admit(stamp(c, f.epoch())).expect("live"))
+                            f.resolve(f.admit(stamp(c, f.epoch(), f.arena)).expect("live"))
                                 .to_vec()
                         })
                         .collect()
@@ -1810,7 +1904,7 @@ mod tests {
         expected.dedup();
         assert_eq!(f.len(), expected.len());
         for (k, v) in expected.iter().enumerate() {
-            let fc = f.admit(stamp(k, f.epoch())).expect("live");
+            let fc = f.admit(stamp(k, f.epoch(), f.arena)).expect("live");
             assert_eq!(f.resolve(fc), v.as_slice(), "rank {k} wrong at scale");
             assert_eq!(f.rank(v), Ok(k));
         }
@@ -1818,7 +1912,10 @@ mod tests {
         if let Some((snap, expect)) = pinned {
             assert_eq!(snap.len(), expect.len(), "snapshot drifted at scale");
             for (c, v) in expect.iter().enumerate() {
-                assert_eq!(snap.resolve(stamp(c, snap.epoch())), v.as_slice());
+                assert_eq!(
+                    snap.resolve(stamp(c, snap.epoch(), snap.arena)),
+                    v.as_slice()
+                );
             }
         }
     }
@@ -1942,7 +2039,7 @@ mod tests {
         arena.intern(b"tail-one");
         let snap = arena.snapshot();
         let world: Vec<Vec<u8>> = (0..snap.len())
-            .map(|c| snap.resolve(stamp(c, snap.epoch())).to_vec())
+            .map(|c| snap.resolve(stamp(c, snap.epoch(), snap.arena)).to_vec())
             .collect();
         // Writer moves far past the snapshot: new values, seals, chunk
         // rollovers, cascades.
@@ -1954,7 +2051,7 @@ mod tests {
         }
         for (c, v) in world.iter().enumerate() {
             assert_eq!(
-                snap.resolve(stamp(c, snap.epoch())),
+                snap.resolve(stamp(c, snap.epoch(), snap.arena)),
                 v.as_slice(),
                 "snapshot drifted"
             );
@@ -1970,7 +2067,7 @@ mod tests {
         // A forged in-epoch stamp beyond len violates the minting
         // discipline; the debug bound catches it at admit, the view's
         // liveness assert in release.
-        let forged = stamp(7, f.epoch());
+        let forged = stamp(7, f.epoch(), f.arena);
         if let Some(fc) = f.admit(forged) {
             f.resolve(fc);
         } else {
