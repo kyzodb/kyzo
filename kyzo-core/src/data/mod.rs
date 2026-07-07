@@ -13,22 +13,17 @@
 // consumer.
 pub(crate) mod aggr;
 pub(crate) mod arrow_ipc;
-pub(crate) mod batch;
 pub(crate) mod bitemporal;
 #[expect(dead_code)]
 pub(crate) mod expr;
-pub(crate) mod fact_payload;
 pub(crate) mod functions;
-pub(crate) mod germanstr;
 pub(crate) mod json;
-pub(crate) mod memcmp;
 #[allow(dead_code)]
 pub(crate) mod program;
 pub(crate) mod relation;
 pub(crate) mod sketch;
 pub(crate) mod span;
 pub(crate) mod symb;
-pub(crate) mod tuple;
 pub(crate) mod value;
 
 #[cfg(test)]

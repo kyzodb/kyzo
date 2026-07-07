@@ -42,8 +42,20 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::functions::to_json;
 use crate::data::value::{
-    DataValue, GermanStr, JsonData, Num, UuidWrapper, Validity, ValidityTs, VecElementType, Vector,
+    DataValue, Num, UuidWrapper, Validity, ValidityTs, Vector,
 };
+
+use crate::data::json::JsonData;
+
+/// Schema vocabulary: a vector column's declared element width. Stored
+/// vector VALUES are always f64 canonical (format v1); `F32` columns
+/// constrain declared width and let engines pack narrower internally —
+/// every f32 is exactly representable as f64, so identity round-trips.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum VecElementType {
+    F32,
+    F64,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct NullableColType {

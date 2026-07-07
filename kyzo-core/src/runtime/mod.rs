@@ -19,6 +19,21 @@
 // remainder — the same pattern as the `parse` module in lib.rs.
 #[allow(dead_code)]
 pub(crate) mod callback;
+
+/// The engine's ONE wall-clock read: the system-time stamp for writes.
+/// Lives in the runtime tier by law — the value plane has no ambient
+/// clock, and determinism campaigns replay stamps rather than minting
+/// them.
+pub(crate) fn current_validity() -> miette::Result<crate::data::value::ValidityTs> {
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| miette::miette!("system clock before the epoch: {e}"))?
+        .as_micros();
+    let micros: i64 = micros
+        .try_into()
+        .map_err(|_| miette::miette!("system clock beyond i64 microseconds"))?;
+    Ok(crate::data::value::ValidityTs::from_raw(micros))
+}
 #[allow(dead_code)]
 pub(crate) mod constraint;
 #[allow(dead_code)]

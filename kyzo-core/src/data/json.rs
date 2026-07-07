@@ -72,8 +72,68 @@ use miette::{
 use serde_json::{Value as JsonValue, json};
 use std::sync::LazyLock;
 
-use crate::data::value::{DataValue, JsonData, Num, Vector};
+use crate::data::value::{DataValue, Json, JsonNum, JsonObj, Num};
 use crate::fixed_rule::NamedRows;
+
+/// The serde bridge value: engine-side JSON carried as `serde_json`
+/// until it crosses into the value plane's identity-lawful [`Json`].
+/// Lives HERE, not in the plane — the plane never depends on serde.
+#[derive(Clone, PartialEq, Debug)]
+pub struct JsonData(pub JsonValue);
+
+impl JsonData {
+    pub fn new(v: JsonValue) -> JsonData {
+        JsonData(v)
+    }
+
+    pub fn value(&self) -> &JsonValue {
+        &self.0
+    }
+}
+
+/// serde → plane: total. serde_json numbers are finite by construction
+/// (standard parsing admits no NaN/inf), and serde maps carry unique
+/// keys, so the plane's refusals cannot fire on this path.
+pub fn json_from_serde(v: &JsonValue) -> Json {
+    match v {
+        JsonValue::Null => Json::Null,
+        JsonValue::Bool(b) => Json::Bool(*b),
+        JsonValue::Number(n) => {
+            let num = match n.as_i64() {
+                Some(i) => Num::int(i),
+                None => Num::float(n.as_f64().unwrap_or(0.0)),
+            };
+            Json::Num(JsonNum::new(num).expect("serde numbers are finite"))
+        }
+        JsonValue::String(s) => Json::Str(s.clone()),
+        JsonValue::Array(a) => Json::Arr(a.iter().map(json_from_serde).collect()),
+        JsonValue::Object(o) => Json::Obj(
+            JsonObj::new(o.iter().map(|(k, x)| (k.clone(), json_from_serde(x))).collect())
+                .expect("serde maps have unique keys"),
+        ),
+    }
+}
+
+/// plane → serde: total (plane numbers are finite by the JsonNum law).
+pub fn serde_from_json(j: &Json) -> JsonValue {
+    match j {
+        Json::Null => JsonValue::Null,
+        Json::Bool(b) => JsonValue::Bool(*b),
+        Json::Num(n) => match (n.num().as_int(), n.num().as_float()) {
+            (Some(i), _) => JsonValue::Number(i.into()),
+            (_, Some(f)) => json!(f),
+            _ => unreachable!("Num is int or float"),
+        },
+        Json::Str(s) => JsonValue::String(s.clone()),
+        Json::Arr(a) => JsonValue::Array(a.iter().map(serde_from_json).collect()),
+        Json::Obj(o) => JsonValue::Object(
+            o.entries()
+                .iter()
+                .map(|(k, x)| (k.clone(), serde_from_json(x)))
+                .collect(),
+        ),
+    }
+}
 
 impl From<JsonValue> for DataValue {
     fn from(v: JsonValue) -> Self {
@@ -91,7 +151,7 @@ impl From<JsonValue> for DataValue {
             JsonValue::Array(arr) => {
                 DataValue::List(arr.into_iter().map(DataValue::from).collect())
             }
-            JsonValue::Object(d) => DataValue::Json(JsonData::new(JsonValue::Object(d))),
+            JsonValue::Object(d) => DataValue::Json(json_from_serde(&JsonValue::Object(d))),
         }
     }
 }
@@ -110,7 +170,7 @@ impl From<&JsonValue> for DataValue {
             },
             JsonValue::String(s) => DataValue::from(s.as_str()),
             JsonValue::Array(arr) => DataValue::List(arr.iter().map(DataValue::from).collect()),
-            JsonValue::Object(d) => DataValue::Json(JsonData::new(JsonValue::Object(d.clone()))),
+            JsonValue::Object(d) => DataValue::Json(json_from_serde(&JsonValue::Object(d.clone()))),
         }
     }
 }
@@ -120,35 +180,45 @@ impl From<&DataValue> for JsonValue {
         match v {
             DataValue::Null => JsonValue::Null,
             DataValue::Bool(b) => JsonValue::Bool(*b),
-            DataValue::Num(Num::Int(i)) => JsonValue::Number((*i).into()),
-            DataValue::Num(Num::Float(f)) => {
-                if f.is_finite() {
-                    json!(f)
-                } else if f.is_nan() {
-                    JsonValue::Null
-                } else if f.is_sign_negative() {
-                    json!("NEGATIVE_INFINITY")
-                } else {
-                    json!("INFINITY")
+            DataValue::Num(n) => match (n.as_int(), n.as_float()) {
+                (Some(i), _) => JsonValue::Number(i.into()),
+                (_, Some(f)) => {
+                    if f.is_finite() {
+                        json!(f)
+                    } else if f.is_nan() {
+                        JsonValue::Null
+                    } else if f.is_sign_negative() {
+                        json!("NEGATIVE_INFINITY")
+                    } else {
+                        json!("INFINITY")
+                    }
                 }
-            }
+                _ => unreachable!("Num is int or float"),
+            },
             DataValue::Str(s) => JsonValue::String(s.to_string()),
             DataValue::Bytes(bytes) => JsonValue::String(STANDARD.encode(bytes)),
             DataValue::List(l) => JsonValue::Array(l.iter().map(JsonValue::from).collect()),
             DataValue::Set(s) => JsonValue::Array(s.iter().map(JsonValue::from).collect()),
-            DataValue::Regex(r) => json!(r.0.as_str()),
+            DataValue::Regex(r) => json!(r.pattern()),
             DataValue::Uuid(u) => json!(u.0.to_string()),
-            DataValue::Vec(v) => match v {
-                Vector::F32(a) => json!(a.iter().copied().collect::<Vec<f32>>()),
-                Vector::F64(a) => json!(a.iter().copied().collect::<Vec<f64>>()),
+            DataValue::Vector(v) => json!(v.as_slice()),
+            DataValue::Validity(v) => json!([v.ts_micros(), v.is_assert()]),
+            DataValue::Interval(iv) => match iv.ends() {
+                None => JsonValue::Null,
+                Some((lo, hi)) => {
+                    use crate::data::value::wide::interval::{Hi, Lo};
+                    let l = match lo {
+                        Lo::NegUnbounded => JsonValue::Null,
+                        Lo::At(t) => JsonValue::Number(t.into()),
+                    };
+                    let h = match hi {
+                        Hi::PosUnbounded => JsonValue::Null,
+                        Hi::At(t) => JsonValue::Number(t.into()),
+                    };
+                    JsonValue::Array(vec![l, h])
+                }
             },
-            DataValue::Validity(v) => json!([v.timestamp.raw(), v.is_assert.0]),
-            DataValue::Interval(iv) => json!([iv.start(), iv.end()]),
-            DataValue::Json(j) => j.value().clone(),
-            // Unreachable in a correct query result (see the port note
-            // above); `Null` keeps this a total function rather than a
-            // panic if it ever is reached.
-            DataValue::Bot => JsonValue::Null,
+            DataValue::Json(j) => serde_from_json(j),
         }
     }
 }

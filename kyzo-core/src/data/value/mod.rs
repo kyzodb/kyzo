@@ -465,6 +465,12 @@ impl std::fmt::Display for DataValue {
     }
 }
 
+/// The largest Unicode scalar value: the query layer's string
+/// prefix-scan upper-bound character (canonical string order is raw byte
+/// order, so `prefix + LARGEST_UTF_CHAR` bounds every extension of
+/// `prefix` by one more character).
+pub const LARGEST_UTF_CHAR: char = '\u{10FFFF}';
+
 /// The execution tuple in owned form: the engine's row currency at the
 /// logical level (the packed-code form is [`Rows`]; the written form is
 /// [`EncodedKey`]).
