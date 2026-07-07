@@ -529,6 +529,14 @@ fn encode_json(out: &mut Vec<u8>, j: &Json) {
         Json::Obj(obj) => {
             out.push(JOBJ);
             for (k, v) in obj.entries() {
+                // Each entry MUST begin with a byte strictly greater than
+                // the `STRUCT_SEQ_END` (0x01) terminator, or a present entry
+                // could sort BELOW a shorter object's terminator and break
+                // the byte-order == `DataValue::Ord` law — a NUL-leading key
+                // encodes to a leading 0x00 < 0x01. Tagging the key `JSTR`
+                // (a key IS a string; 0x18 > 0x01) makes the entry marker
+                // outrank the terminator, exactly as array elements do.
+                out.push(JSTR);
                 encode_terminated(out, k.as_bytes());
                 encode_json(out, v);
             }
@@ -840,8 +848,11 @@ fn decode_json(body: &[u8], depth: usize) -> Result<(Json, usize), DecodeError> 
                             JsonObj::new(entries).map_err(|_| DecodeError::JsonNotCanonical)?;
                         return Ok((Json::Obj(obj), 1 + used + 1));
                     }
-                    Some(_) => {
-                        let (key_bytes, klen) = decode_terminated(&rest[used..])?;
+                    // Each entry is a `JSTR`-tagged key (the marker that
+                    // keeps a present entry above the terminator) then its
+                    // value.
+                    Some(&JSTR) => {
+                        let (key_bytes, klen) = decode_terminated(&rest[used + 1..])?;
                         if let Some(p) = &prev_key
                             && p.as_slice() >= key_bytes.as_slice()
                         {
@@ -850,11 +861,12 @@ fn decode_json(body: &[u8], depth: usize) -> Result<(Json, usize), DecodeError> 
                         let key = String::from_utf8(key_bytes.clone())
                             .map_err(|_| DecodeError::BadUtf8)?;
                         prev_key = Some(key_bytes);
-                        used += klen;
+                        used += 1 + klen; // JSTR marker + terminated key
                         let (val, vlen) = decode_json(&rest[used..], depth + 1)?;
                         used += vlen;
                         entries.push((key, val));
                     }
+                    Some(&other) => return Err(DecodeError::BadJsonMarker(other)),
                 }
             }
         }
@@ -1462,12 +1474,69 @@ mod tests {
         let bytes = enc.as_bytes();
         let value_span = &bytes[1..bytes.len() - 8];
         let value_hex: String = value_span.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(value_hex, "4c6100000501");
+        // JOBJ(4c) JSTR(18) key "a"(61) str-term(00 00) JNULL(05) SEQ_END(01):
+        // each entry is JSTR-tagged so its marker (0x18) outranks the 0x01
+        // terminator, keeping byte order == DataValue::Ord for objects.
+        assert_eq!(value_hex, "4c186100000501");
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in value_span {
             h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
         }
         assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());
+    }
+
+    /// REGRESSION (adversarial storage review): byte order == DataValue::Ord
+    /// for JSON objects even when a key begins with U+0000. Before the
+    /// JSTR-tagged entry marker, `{"\0": null}` encoded to a leading 0x00
+    /// that sorted BELOW the empty object's 0x01 terminator — the two order
+    /// authorities disagreed, silently mis-ordering stored JSON keys.
+    #[test]
+    fn json_object_byte_order_matches_structural_order_with_nul_key() {
+        use crate::data::value::DataValue;
+        let empty = DataValue::Json(crate::data::value::Json::Obj(
+            JsonObj::new(vec![]).expect("lawful"),
+        ));
+        let nul = DataValue::Json(crate::data::value::Json::Obj(
+            JsonObj::new(vec![("\u{0}".into(), Json::Null)]).expect("lawful"),
+        ));
+        // Structural order: fewer entries is less.
+        assert_eq!(empty.cmp(&nul), std::cmp::Ordering::Less);
+        // Byte order must AGREE (the guardrail law).
+        let eb = encode_owned(&empty);
+        let nb = encode_owned(&nul);
+        assert_eq!(
+            eb.as_bytes().cmp(nb.as_bytes()),
+            std::cmp::Ordering::Less,
+            "encode_owned byte order must match DataValue::Ord for objects with a NUL-leading key"
+        );
+        // And both still round-trip.
+        assert_eq!(decode(eb.as_bytes()).unwrap(), empty);
+        assert_eq!(decode(nb.as_bytes()).unwrap(), nul);
+        // The LAW, over several NUL-key-bearing pairs: byte order AGREES
+        // with structural order, whatever the direction. (JsonObj sorts
+        // keys, so a "\0" key leads.)
+        let mk = |kvs: Vec<(String, Json)>| {
+            DataValue::Json(crate::data::value::Json::Obj(
+                JsonObj::new(kvs).expect("lawful"),
+            ))
+        };
+        let objs = [
+            mk(vec![]),
+            mk(vec![("\u{0}".into(), Json::Null)]),
+            mk(vec![("a".into(), Json::Null)]),
+            mk(vec![("\u{0}".into(), Json::Null), ("a".into(), Json::Null)]),
+            mk(vec![("a".into(), Json::Bool(true))]),
+        ];
+        for a in &objs {
+            for b in &objs {
+                let structural = a.cmp(b);
+                let byte = encode_owned(a).as_bytes().cmp(encode_owned(b).as_bytes());
+                assert_eq!(
+                    structural, byte,
+                    "byte order must equal DataValue::Ord for {a:?} vs {b:?}"
+                );
+            }
+        }
     }
 
     /// Decode totality: random bytes and truncations never panic; every
@@ -1515,8 +1584,9 @@ mod tests {
         bad_hash[last] ^= 0xFF;
         assert_eq!(decode(&bad_hash), Err(DecodeError::JsonHashMismatch));
         let mut unsorted_obj = vec![Tag::Json.byte(), 0x4C];
-        unsorted_obj.extend_from_slice(&[0x62, 0x00, 0x00, 0x05]); // "b": null
-        unsorted_obj.extend_from_slice(&[0x61, 0x00, 0x00, 0x05]); // "a": null
+        // Each entry is JSTR(0x18)-tagged key, terminated, then value.
+        unsorted_obj.extend_from_slice(&[0x18, 0x62, 0x00, 0x00, 0x05]); // "b": null
+        unsorted_obj.extend_from_slice(&[0x18, 0x61, 0x00, 0x00, 0x05]); // "a": null
         unsorted_obj.push(STRUCT_SEQ_END);
         let span = unsorted_obj[1..].to_vec();
         let h = fnv1a64(&span);
@@ -1583,6 +1653,7 @@ mod tests {
         let start = dup.len();
         dup.push(0x4C); // JOBJ
         for _ in 0..2 {
+            dup.push(0x18); // JSTR: the entry marker
             dup.extend_from_slice(&[0x00, 0xFF, 0x00, 0x00]); // key "\0"
             dup.push(0x05); // null
         }
