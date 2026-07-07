@@ -22,14 +22,17 @@ Every claim about the code is backed by evidence produced in this session, or it
 
 ## Standard verification commands
 
-    (ulimit -v 12582912 && timeout 1800 cargo build -p kyzo --release)        # core
-    (ulimit -v 12582912 && timeout 1800 cargo test  -p kyzo --release)        # core tests
-    (ulimit -v 12582912 && timeout 1800 cargo build --workspace)              # whole-workspace (the honest scope)
-    (ulimit -v 12582912 && timeout 1800 cargo tree  -p kyzo -e normal,build)  # dependency-graph claims
+Official gates run in the pinned container (real cgroup RSS cap, not `ulimit -v`):
 
-Every cargo invocation is memory-capped and timed out — two machines have
-been OOM-killed without this. Mutation runs use the tighter cap:
-`(ulimit -v 8388608 && timeout 600 cargo mutants ...)`.
+    docker compose run --rm kyzo-dev  just gate        # the seal (check, fmt, clippy, unsafe, pure-rust, tests)
+    docker compose run --rm kyzo-dev  just env-report  # environment fingerprint for the report
+    docker compose run --rm kyzo-bench just bench       # benchmarks (96 GiB, single-threaded)
+
+Individual recipes (`just check` / `test` / `test-features` / `clippy` / `memcheck`) run the same
+commands natively for speed. Do NOT wrap cargo in `ulimit -v` — it caps virtual address space, which
+Rust over-reserves, manufacturing fake OOMs; the container's `mem_limit` is the honest cap (see
+`.claude/rules/environment.md`). Every gate report states native-vs-containerized. Mutation runs:
+`(timeout 600 cargo mutants ...)`.
 
 
 ## Exit codes, not pipe output

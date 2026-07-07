@@ -1,0 +1,46 @@
+# The repo-defined gate environment. Official story gates run here; local
+# native runs are allowed for speed but a report must say which was used.
+#
+# Two services, one image. `kyzo-dev` is the gate/dev box (32 GiB RSS ceiling,
+# parallel tests — safe because the limit is real cgroup RSS, not a virtual
+# ulimit). `kyzo-bench` is the measurement box (96 GiB, single-threaded for
+# stable timings). Both bind-mount the repo and share named caches so builds
+# are incremental across runs.
+services:
+  kyzo-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - cargo-cache:/cargo
+      - target-cache:/target
+    environment:
+      RUST_BACKTRACE: "1"
+      CARGO_TARGET_DIR: /target
+      RUST_TEST_THREADS: "4"
+    mem_limit: 32g
+    cpus: 16
+    command: bash
+
+  kyzo-bench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - cargo-cache:/cargo
+      - target-cache:/target
+    environment:
+      RUST_BACKTRACE: "1"
+      CARGO_TARGET_DIR: /target
+      RUST_TEST_THREADS: "1"
+    mem_limit: 96g
+    cpus: 28
+    command: bash
+
+volumes:
+  cargo-cache:
+  target-cache:

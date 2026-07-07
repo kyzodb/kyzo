@@ -43,16 +43,21 @@ make the repo catch it.
   and push freely as units land; the go-gate is only public/irreversible acts (merge to main, tags,
   releases, new remotes).
 - **Verify, never assert.** Every claim is backed by a real `cargo` run or by reading the file.
-- **Memory caps on every cargo run:** `(ulimit -v 12582912 && timeout 1800 cargo ...)`; mutants
-  `(ulimit -v 8388608 && timeout 600 ...)`.
+- **Gates run in the pinned container; reports say which.** Official gates run in the repo-defined
+  container (`docker compose run --rm kyzo-dev just gate`), whose real cgroup RSS ceiling is the
+  memory cap — NOT `ulimit -v` (it caps virtual address space, which Rust over-reserves, and was the
+  sole source of the "12 GB cap / OOM at -j4" noise). Native runs are allowed for speed; every gate
+  report states native-vs-containerized plus environment/mem-limit/threads/peak-RSS (`rules/environment.md`).
 - **Pure Rust, `#![forbid(unsafe_code)]`, zero exceptions** in first-party code (`rules/unsafe.md`).
   FFI lives only in the bindings; the core depends on nothing of ours.
 - **MPL-2.0.** Preserve every CozoDB copyright header and attribution verbatim; add ours alongside.
 
 ## Build and gate
 
-    (ulimit -v 12582912 && timeout 1800 cargo build -p kyzo --release)
-    (ulimit -v 12582912 && timeout 1800 cargo test  -p kyzo --release)
+    docker compose run --rm kyzo-dev  just gate      # the one-command seal
+    docker compose run --rm kyzo-bench just bench     # measurements (96 GiB, single-threaded)
 
-A seal requires the full suite green, `cargo clippy --release --all-targets -- -D warnings` clean on
-own code in both feature configs, and `cargo fmt --check` clean. Gates: `rules/00-story-gates.md`.
+`just gate` runs: env-report, `cargo check --workspace --all-targets`, fmt, own-code clippy
+`-D warnings` (both feature configs), the unsafe + pure-Rust guards, and the full suite (default +
+features). A seal is all of it green. Gates: `rules/00-story-gates.md`; environment:
+`rules/environment.md`.

@@ -17,7 +17,10 @@
       "Bash(python3:*)",
       "Bash(jq:*)",
       "Bash(scripts/*)",
-      "Bash(.claude/hooks/*)"
+      "Bash(.claude/hooks/*)",
+      "Bash(docker:*)",
+      "Bash(docker compose:*)",
+      "Bash(just:*)"
     ]
   },
   "hooks": {
