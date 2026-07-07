@@ -158,6 +158,68 @@ fn spans_derives_maximal_runs() {
     );
 }
 
+/// The i64::MAX instant is RESERVED as the legacy `@'END'` / open sentinel,
+/// so no user write can name it: a real validity fact at i64::MAX is
+/// unrepresentable. Enforced at every user-facing construction path
+/// (`ValidityTs::for_assertion`, reached by both the `@ <ts>` parser
+/// coordinate and the per-row mutation loop). This is the public-API proof.
+#[test]
+fn user_cannot_assert_a_fact_at_the_reserved_end_instant() {
+    let db = fresh_db();
+    db.run_script(
+        "?[id, v] <- [[1, 'a']] :create res {id => v}",
+        no_params(),
+    )
+    .expect("create res");
+    // i64::MAX = 9223372036854775807 — the reserved terminal tick.
+    let err = db
+        .run_script(
+            "?[id, v] <- [[1, 'b']] :put res {id => v} @ 9223372036854775807",
+            no_params(),
+        )
+        .expect_err("asserting a fact at the reserved END instant must be refused");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("terminal tick") || msg.contains("END") || msg.contains("i64::MAX"),
+        "refusal must name the reserved terminal tick, got: {msg}"
+    );
+}
+
+/// The sentinel does not leak: across a full `@spans` derivation with an
+/// open run, NO `interval_end` value is ever i64::MAX. An open end is Null;
+/// a finite end is strictly below the reserved tick. The old sentinel model
+/// (i64::MAX standing for "forever") cannot reappear at the query surface.
+#[test]
+fn end_sentinel_never_leaks_through_interval_end() {
+    let db = fresh_db();
+    db.run_script("?[id, v] <- [[1, 'a']] :create leak {id => v} @ 100", no_params())
+        .expect("create at 100");
+    db.run_script("?[id, v] <- [[1, 'b']] :put leak {id => v} @ 200", no_params())
+        .expect("correct at 200");
+    let out = db
+        .run_script(
+            "?[iend] := *leak{id, v @spans iv}, iend = interval_end(iv)",
+            no_params(),
+        )
+        .expect("spans");
+    assert!(out.rows.len() >= 2, "at least the clipped run and the open run");
+    for r in &out.rows {
+        match &r[0] {
+            DataValue::Null => {} // the open run — correct
+            other => {
+                assert_ne!(
+                    other.get_int(),
+                    Some(i64::MAX),
+                    "interval_end leaked the reserved END sentinel as a real value"
+                );
+            }
+        }
+    }
+    // And exactly one open run (the last), so Null actually occurred.
+    let nulls = out.rows.iter().filter(|r| matches!(r[0], DataValue::Null)).count();
+    assert_eq!(nulls, 1, "the single open run's end must be Null, not a sentinel");
+}
+
 /// `@delta(lo, hi) sgn`: the axis-parameterized net diff between two
 /// valid-time coordinates. `sgn` binds `+1` for a row present at `hi` but
 /// not `lo`, `-1` for one present at `lo` but not `hi` — a correction
