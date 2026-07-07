@@ -38,7 +38,7 @@
 
 use std::cmp::Ordering;
 
-use super::arena::{ArenaId, BulkObserver, Epoch, EpochRemap};
+use super::arena::{ArenaId, BulkObserver, BulkSpendAuthority, Epoch, EpochRemap};
 use super::cell::{Minted, Value};
 use super::code::StampedCode;
 
@@ -81,8 +81,14 @@ impl Domain {
         self.extent = self.extent.max(raw + 1);
     }
 
-    /// The admission check: arena identity, epoch, AND visibility.
-    fn admit_to<O: BulkObserver>(&self, o: &O, what: &str) {
+    /// The plane-internal arena identity (row containers verify typed).
+    pub(super) fn arena_id(&self) -> ArenaId {
+        self.arena
+    }
+
+    /// The admission check: arena identity, epoch, AND visibility. Mints
+    /// the spend authority the raw observer methods demand.
+    fn admit_to<O: BulkObserver>(&self, o: &O, what: &str) -> BulkSpendAuthority {
         assert_eq!(
             o.bulk_arena(),
             self.arena,
@@ -104,6 +110,7 @@ impl Domain {
             self.extent,
             o.bulk_len()
         );
+        BulkSpendAuthority::after_domain_admission()
     }
 
     pub fn epoch(&self) -> Epoch {
@@ -154,10 +161,11 @@ impl CodeColumn {
     /// The admission: one container-domain check (arena + epoch +
     /// visibility extent), then every read is check-free.
     pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedCodes<'a, O> {
-        self.domain.admit_to(o, "code column");
+        let proof = self.domain.admit_to(o, "code column");
         AdmittedCodes {
             codes: &self.codes,
             obs: o,
+            proof,
             all_sealed: self.domain.extent as usize <= o.bulk_sealed_len(),
         }
     }
@@ -203,6 +211,7 @@ impl CodeColumn {
 pub struct AdmittedCodes<'a, O: BulkObserver> {
     codes: &'a [u32],
     obs: &'a O,
+    proof: BulkSpendAuthority,
     all_sealed: bool,
 }
 
@@ -240,7 +249,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// The canonical bytes of the value at `i`.
     pub fn resolve(&self, i: usize) -> &'a [u8] {
-        self.obs.resolve_raw(self.codes[i] as usize)
+        self.obs.resolve_raw(self.codes[i] as usize, self.proof)
     }
 
     /// Semantic (byte-order) comparison of two positions: numeric when
@@ -253,12 +262,16 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         if self.all_sealed {
             return a.cmp(&b);
         }
-        self.obs.cmp_raw(a as usize, b as usize)
+        self.obs.cmp_raw(a as usize, b as usize, self.proof)
     }
 
     /// A deterministic sort permutation by value order (the kernel the
     /// laws exercise; takes the fast lane when it may).
     pub fn sort_permutation(&self) -> Vec<u32> {
+        assert!(
+            self.codes.len() <= u32::MAX as usize,
+            "column exceeds u32 index space"
+        );
         let mut idx: Vec<u32> = (0..self.codes.len() as u32).collect();
         if self.all_sealed {
             idx.sort_by_key(|&i| self.codes[i as usize]);
@@ -270,9 +283,14 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 }
 
 /// A stamped column of 16-byte words. Inline words are self-contained;
-/// wide words carry codes, so the write door demands the [`Minted`]
-/// pairing and verifies the stamp — a wide word cannot enter without the
-/// proof it was minted in this domain.
+/// wide words carry codes, so the write door consumes the unforgeable
+/// [`Minted`] pairing — a wide word cannot enter without the stamp it was
+/// minted with, and the stamp is verified into the domain.
+///
+/// THE UNIFORM CONTAINER LAW: a column is an epoch-domain container even
+/// when every word happens to be inline — after a seal it is inadmissible
+/// until gathered, like every container. Inline words are self-contained;
+/// columns never are. One law, no special cases.
 pub struct WordColumn {
     domain: Domain,
     words: Vec<Value>,
@@ -290,9 +308,14 @@ impl WordColumn {
     /// context and pass freely; wide words verify their stamp into the
     /// domain.
     pub fn push(&mut self, m: Minted) {
-        match m {
-            Minted::Inline(v) => self.words.push(v),
-            Minted::Wide { value, stamp } => {
+        let value = m.value();
+        match m.stamp() {
+            None => {
+                debug_assert!(value.is_inline(), "Minted coherence broken");
+                self.words.push(value);
+            }
+            Some(stamp) => {
+                debug_assert_eq!(value.code(), Some(stamp.code()), "Minted coherence broken");
                 self.domain.absorb_stamp(stamp, "word column");
                 self.words.push(value);
             }
@@ -312,10 +335,11 @@ impl WordColumn {
     }
 
     pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedWords<'a, O> {
-        self.domain.admit_to(o, "word column");
+        let proof = self.domain.admit_to(o, "word column");
         AdmittedWords {
             words: &self.words,
             obs: o,
+            proof,
         }
     }
 
@@ -362,6 +386,7 @@ impl WordColumn {
 pub struct AdmittedWords<'a, O: BulkObserver> {
     words: &'a [Value],
     obs: &'a O,
+    proof: BulkSpendAuthority,
 }
 
 impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
@@ -385,7 +410,10 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
             Some(bytes) => bytes,
             None => self
                 .obs
-                .resolve_raw(w.code().expect("non-inline word carries a code").raw() as usize)
+                .resolve_raw(
+                    w.code().expect("non-inline word carries a code").raw() as usize,
+                    self.proof,
+                )
                 .to_vec(),
         }
     }
@@ -437,9 +465,9 @@ mod tests {
 
     fn intern_num(arena: &mut Arena, n: i64) -> StampedCode {
         let cb = encode(Datum::Num(Num::int(n)));
-        match Value::mint(&cb, arena) {
-            Minted::Inline(_) => arena_intern_direct(arena, &cb),
-            Minted::Wide { stamp, .. } => stamp,
+        match Value::mint(&cb, arena).stamp() {
+            None => arena_intern_direct(arena, &cb),
+            Some(stamp) => stamp,
         }
     }
 

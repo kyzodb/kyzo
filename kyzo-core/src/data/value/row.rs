@@ -45,6 +45,7 @@
 
 use super::arena::{Arena, BulkObserver, EpochRemap};
 use super::canonical::{DecodeError, decode_one};
+use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
 
 /// The execution form of a relation fragment: `arity`-wide tuples as
@@ -73,6 +74,12 @@ impl Rows {
     }
 
     pub fn len(&self) -> usize {
+        // The write doors only ever push whole tuples; a violation here
+        // would silently hide trailing codes.
+        debug_assert!(
+            self.codes.len().is_multiple_of(self.arity),
+            "row-major invariant broken"
+        );
         self.codes.len() / self.arity
     }
 
@@ -90,32 +97,31 @@ impl Rows {
     /// # Panics
     ///
     /// Panics on arity mismatch or a stamp outside the domain.
-    pub fn push_row(&mut self, stamps: &[super::code::StampedCode]) {
+    pub fn push_row(&mut self, stamps: &[StampedCode]) {
         assert_eq!(stamps.len(), self.arity, "tuple arity mismatch");
         for &sc in stamps {
             self.codes.push(sc);
         }
     }
 
-    /// The bytes→execution door: validate a written key element by
-    /// element (total: typed errors, never trust) and re-intern its
-    /// values into the CURRENT epoch. The stamps the interns mint must
-    /// match this container's domain — pushing into a stale container
-    /// refuses at the write door like any other stale stamp.
-    pub fn push_encoded(&mut self, key: &EncodedKey, arena: &mut Arena) -> Result<(), DecodeError> {
+    /// The bytes→execution door: refuse a stale/foreign container with a
+    /// TYPED error (storage ingestion is a refusal surface, not a panic
+    /// surface), validate the written key element by element (total),
+    /// and only then re-intern into the current epoch.
+    pub fn push_encoded(&mut self, key: &EncodedKey, arena: &mut Arena) -> Result<(), PushError> {
+        if self.domain().arena_id() != arena.id() {
+            return Err(PushError::ForeignArena);
+        }
+        if self.domain().epoch() != arena.epoch() {
+            return Err(PushError::StaleDomain {
+                container: self.domain().epoch(),
+                arena: arena.epoch(),
+            });
+        }
         let bytes = key.as_bytes();
         // Validate and split FIRST — nothing is interned unless the whole
         // key is lawful (no partial tuples on refusal).
-        let mut splits = Vec::with_capacity(self.arity);
-        let mut at = 0usize;
-        for _ in 0..self.arity {
-            let (_, used) = decode_one(&bytes[at..])?;
-            splits.push((at, at + used));
-            at += used;
-        }
-        if at != bytes.len() {
-            return Err(DecodeError::TrailingBytes);
-        }
+        let splits = split_key(bytes, self.arity).map_err(PushError::Decode)?;
         for (lo, hi) in splits {
             let sc = arena.intern(&bytes[lo..hi]);
             self.codes.push(sc);
@@ -202,6 +208,36 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     }
 }
 
+/// Typed refusals of the bytes→execution door.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PushError {
+    /// The key bytes are not `arity` lawful canonical encodings.
+    Decode(DecodeError),
+    /// The container belongs to a different arena than the interning one.
+    ForeignArena,
+    /// The container's epoch is not the arena's: gather first.
+    StaleDomain {
+        container: super::arena::Epoch,
+        arena: super::arena::Epoch,
+    },
+}
+
+/// Split a key into exactly `arity` lawful canonical encodings, refusing
+/// truncation, malformation, and trailing bytes.
+fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeError> {
+    let mut splits = Vec::with_capacity(arity);
+    let mut at = 0usize;
+    for _ in 0..arity {
+        let (_, used) = decode_one(&bytes[at..])?;
+        splits.push((at, at + used));
+        at += used;
+    }
+    if at != bytes.len() {
+        return Err(DecodeError::TrailingBytes);
+    }
+    Ok(splits)
+}
+
 /// The written form of a tuple: concatenated canonical encodings. Byte
 /// order equals elementwise semantic tuple order (self-terminating
 /// elements). No code accessors exist: stored bytes cannot leak execution
@@ -211,6 +247,15 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
 pub struct EncodedKey(Vec<u8>);
 
 impl EncodedKey {
+    /// The storage-facing door: claim stored bytes as a written tuple by
+    /// proving they split into exactly `arity` lawful canonical
+    /// encodings with nothing trailing. The ONLY public byte constructor
+    /// — random bytes cannot masquerade as a key.
+    pub fn from_stored(bytes: Vec<u8>, arity: usize) -> Result<EncodedKey, DecodeError> {
+        split_key(&bytes, arity)?;
+        Ok(EncodedKey(bytes))
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -411,6 +456,56 @@ mod tests {
         for (i, k) in keys_at_fixpoint.iter().enumerate() {
             assert_eq!(&adm.encode_row(i), k);
         }
+    }
+
+    /// The storage door: stored bytes become a key only by proving the
+    /// split; garbage and wrong-arity bytes refuse typed.
+    #[test]
+    fn from_stored_is_a_validating_door() {
+        let mut arena = Arena::new();
+        let mut rows = Rows::new_in(2, &arena.frame());
+        let a = stamp_of(&mut arena, Datum::Num(Num::int(1)));
+        let b = stamp_of(&mut arena, Datum::Str("s"));
+        rows.push_row(&[a, b]);
+        let key = {
+            let f = arena.frame();
+            rows.admit(&f).encode_row(0)
+        };
+        // Lawful bytes round-trip through the storage door.
+        let reclaimed = EncodedKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
+        assert_eq!(reclaimed, key);
+        // Wrong arity, garbage, truncation: typed refusals.
+        assert!(EncodedKey::from_stored(key.as_bytes().to_vec(), 3).is_err());
+        assert!(EncodedKey::from_stored(vec![0xEE, 0x00], 1).is_err());
+        assert!(EncodedKey::from_stored(key.as_bytes()[..key.len() - 1].to_vec(), 2).is_err());
+    }
+
+    /// Storage ingestion refuses stale/foreign containers with typed
+    /// errors, never panics.
+    #[test]
+    fn push_encoded_refuses_stale_and_foreign_domains_typed() {
+        let mut arena = Arena::new();
+        let mut rows = Rows::new_in(1, &arena.frame());
+        let a = stamp_of(&mut arena, Datum::Num(Num::int(9)));
+        rows.push_row(&[a]);
+        let key = {
+            let f = arena.frame();
+            rows.admit(&f).encode_row(0)
+        };
+        // Stale: the container predates the seal.
+        arena.seal();
+        assert!(matches!(
+            rows.push_encoded(&key, &mut arena),
+            Err(PushError::StaleDomain { .. })
+        ));
+        // Foreign: a container from another arena entirely.
+        let other = Arena::new();
+        let mut foreign_rows = Rows::new_in(1, &other.frame());
+        assert!(matches!(
+            foreign_rows.push_encoded(&key, &mut arena),
+            Err(PushError::ForeignArena)
+        ));
+        let _ = other.epoch();
     }
 
     #[test]

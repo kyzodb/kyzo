@@ -44,13 +44,13 @@
 //! never in what a shared code means. Epoch equality alone is therefore
 //! *agreement*, not *visibility*; visibility is the observer's own extent:
 //!
-//! - For a live [`Frame`], visibility is implied rather than checked:
-//!   stamps are mintable only by this plane (`Arena::intern`,
-//!   [`EpochRemap::apply`]), every mint is in bounds when issued, within
-//!   an epoch the arena only grows, and no `&mut Arena` (the only way to
-//!   transition) can coexist with the frame. Epoch equality at
-//!   [`Frame::admit`] is the whole runtime test, with the bounds theorem
-//!   re-checked in debug builds.
+//! - For a live [`Frame`], every spend verifies arena identity, epoch,
+//!   AND liveness bounds exactly ([`Frame::admits`] reports the same
+//!   three facts, so `admits == true` means the spend cannot panic). The
+//!   bounds half is also a theorem for lawfully minted stamps: mints are
+//!   in bounds when issued, the arena only grows within an epoch, and no
+//!   `&mut Arena` can coexist with the frame — the hard assert makes the
+//!   theorem executable rather than trusted.
 //! - For a [`Snapshot`], visibility is **not** implied by the epoch: the
 //!   delta cut is part of the observer, and a same-epoch code minted
 //!   after the cut is invisible to it. Snapshots therefore verify both
@@ -62,12 +62,12 @@
 //!
 //! ## The transition theorem, held by types
 //!
-//! 1. **Every observable value satisfies its law.** [`Run`]'s only mints
-//!    are [`Run::build`] (sorts + dedups: establishes it) and
-//!    [`Run::merge`] (preserves it); a [`Remap`] is mintable only by a
-//!    merge; an [`EpochRemap`] only by [`Arena::seal`]; a [`StampedCode`]
-//!    only by holders of the arena's mint token. None of the unlawful
-//!    states can be written down, and every spend re-verifies its stamp.
+//! 1. **Every observable value satisfies its law.** A [`Run`] is minted
+//!    only sorted-unique (the delta drains pre-sorted; merges preserve
+//!    the law); an [`EpochRemap`] only by [`Arena::seal`]; a
+//!    [`StampedCode`] only by holders of the arena's mint token. None of
+//!    the unlawful states can be written down, and every spend verifies
+//!    its stamp.
 //! 2. **No observer exists during a transition.** `seal` holds
 //!    `&mut self`, so no `Frame` (or witness) survives into it, and
 //!    `Snapshot`s hold only immutable structure — frozen chunks and runs
@@ -123,7 +123,7 @@ trait Store {
 /// fills until it spills or a snapshot freezes it. Payload bytes never
 /// move once written, so spans are stable identities for the heap's whole
 /// life — transitions shuffle *handles*, never payloads.
-pub struct Heap {
+pub(super) struct Heap {
     frozen: Vec<Arc<[u8]>>,
     /// The chunk being filled; its chunk id is always `frozen.len()`, and
     /// freezing pushes it at exactly that index, so ids never move.
@@ -143,7 +143,7 @@ pub struct Heap {
 /// or debug tooling that reads those fields of an empty span is wrong by
 /// definition.
 #[derive(Clone, Copy, Debug)]
-pub struct Span {
+pub(super) struct Span {
     chunk: u32,
     off: u32,
     len: u32,
@@ -321,21 +321,11 @@ impl Entry {
 /// sorted and unique. Runs are shared across observer frames behind
 /// `Arc`; their immutability is what makes an old frame's continued view
 /// of them sound.
-pub struct Run {
+pub(super) struct Run {
     entries: Vec<Entry>,
 }
 
 impl Run {
-    /// Mint a lawful run from arbitrary spans: sorts by payload bytes
-    /// (prefix-first) and drops duplicates. The door where the invariant
-    /// is established.
-    pub fn build(spans: Vec<Span>, heap: &Heap) -> Run {
-        let mut entries: Vec<Entry> = spans.into_iter().map(|s| Entry::new(s, heap)).collect();
-        entries.sort_by(|a, b| a.cmp_entry(b, heap));
-        entries.dedup_by(|a, b| a.cmp_entry(b, heap) == Ordering::Equal);
-        Run { entries }
-    }
-
     /// Mint from entries already sorted and unique (the delta drains
     /// through here). The precondition is the caller's law, re-checked in
     /// debug builds.
@@ -350,54 +340,44 @@ impl Run {
         Run { entries }
     }
 
-    /// The merge: two lawful runs in, one lawful run plus the monotone
-    /// position maps out. Borrows its inputs — runs are immutable and may
-    /// be shared with older frames, which keep observing them unchanged.
-    /// Payloads equal in both inputs collapse to one output entry; both
-    /// remaps then point at it.
-    pub fn merge(a: &Run, b: &Run, heap: &Heap) -> (Run, Remap, Remap) {
+    /// The merge: two lawful runs in, one lawful run out. Borrows its
+    /// inputs — runs are immutable and may be shared with older frames,
+    /// which keep observing them unchanged. Payloads equal in both inputs
+    /// collapse to one output entry. (No per-merge position maps exist:
+    /// sealed codes rank over the RUN UNION, so cascades are
+    /// rank-invariant and the only remap anyone needs is the seal's
+    /// compact [`EpochRemap`].)
+    fn merge(a: &Run, b: &Run, heap: &Heap) -> Run {
+        assert!(
+            a.entries.len() + b.entries.len() <= u32::MAX as usize,
+            "merged run exceeds u32 position space"
+        );
         let mut merged = Vec::with_capacity(a.entries.len() + b.entries.len());
-        let mut remap_a = Vec::with_capacity(a.entries.len());
-        let mut remap_b = Vec::with_capacity(b.entries.len());
         let (mut i, mut j) = (0, 0);
         while i < a.entries.len() && j < b.entries.len() {
             match a.entries[i].cmp_entry(&b.entries[j], heap) {
                 Ordering::Less => {
-                    remap_a.push(merged.len() as u32);
                     merged.push(a.entries[i]);
                     i += 1;
                 }
                 Ordering::Greater => {
-                    remap_b.push(merged.len() as u32);
                     merged.push(b.entries[j]);
                     j += 1;
                 }
                 Ordering::Equal => {
-                    remap_a.push(merged.len() as u32);
-                    remap_b.push(merged.len() as u32);
                     merged.push(a.entries[i]);
                     i += 1;
                     j += 1;
                 }
             }
         }
-        for &e in &a.entries[i..] {
-            remap_a.push(merged.len() as u32);
-            merged.push(e);
-        }
-        for &e in &b.entries[j..] {
-            remap_b.push(merged.len() as u32);
-            merged.push(e);
-        }
-        (Run { entries: merged }, Remap(remap_a), Remap(remap_b))
+        merged.extend_from_slice(&a.entries[i..]);
+        merged.extend_from_slice(&b.entries[j..]);
+        Run { entries: merged }
     }
 
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     /// Rank of `needle` within this run: `Ok(rank)` if present, `Err(rank
@@ -406,27 +386,6 @@ impl Run {
     fn search<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Result<usize, usize> {
         self.entries
             .binary_search_by(|e| e.cmp_needle(np, needle, store))
-    }
-}
-
-/// The old-position -> new-position map a [`Run::merge`] emits for one of
-/// its inputs: strictly monotone by construction, mintable only by a
-/// merge. A `Remap` in hand is proof that applying it to a sorted
-/// sequence of positions yields a sorted sequence.
-pub struct Remap(Vec<u32>);
-
-impl Remap {
-    /// Where the entry that sat at `old` in the merge input sits now.
-    pub fn apply(&self, old: u32) -> u32 {
-        self.0[old as usize]
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
@@ -1072,6 +1031,23 @@ mod sealed {
     impl Sealed for super::Snapshot {}
 }
 
+/// Proof that a container-domain admission verified arena identity,
+/// epoch, and visibility extent against an observer. The only mint is
+/// plane-internal ([`BulkSpendAuthority::after_domain_admission`]), so the
+/// raw spend methods below are UNCALLABLE outside the plane: holding a
+/// `Frame` is not enough — sealing the trait guards who observes, this
+/// token guards who spends.
+#[derive(Clone, Copy)]
+pub struct BulkSpendAuthority(());
+
+impl BulkSpendAuthority {
+    /// Minted exactly once per container admission, after the domain
+    /// checks pass.
+    pub(super) fn after_domain_admission() -> BulkSpendAuthority {
+        BulkSpendAuthority(())
+    }
+}
+
 /// The bulk-spend observer capability for stamped containers — the facts
 /// a container-domain admission verifies (arena identity, epoch,
 /// visibility extent) and the raw spends that are lawful ONLY under such
@@ -1079,10 +1055,10 @@ mod sealed {
 /// nothing else can implement this and forge an observer.
 ///
 /// The raw spend methods take bare indices with no stamp: their safety
-/// precondition is precisely a container admission whose domain extent is
-/// within `bulk_len()`. Calling them outside that proof is the smuggle
-/// this plane exists to prevent — every public path to them goes through
-/// an admitted container.
+/// precondition is a container admission whose domain extent is within
+/// `bulk_len()`, and they DEMAND the [`BulkSpendAuthority`] that only an
+/// admission can mint — a caller with a bare `Frame` can name them but
+/// cannot call them.
 pub trait BulkObserver: sealed::Sealed {
     fn bulk_arena(&self) -> ArenaId;
     fn bulk_epoch(&self) -> Epoch;
@@ -1090,10 +1066,8 @@ pub trait BulkObserver: sealed::Sealed {
     fn bulk_len(&self) -> usize;
     /// Sealed prefix bound (codes below it compare numerically).
     fn bulk_sealed_len(&self) -> usize;
-    #[doc(hidden)]
-    fn resolve_raw(&self, c: usize) -> &[u8];
-    #[doc(hidden)]
-    fn cmp_raw(&self, a: usize, b: usize) -> Ordering;
+    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> &[u8];
+    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Ordering;
 }
 
 impl BulkObserver for Frame<'_> {
@@ -1113,11 +1087,11 @@ impl BulkObserver for Frame<'_> {
         self.sealed_len
     }
 
-    fn resolve_raw(&self, c: usize) -> &[u8] {
+    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
         self.view().resolve(c)
     }
 
-    fn cmp_raw(&self, a: usize, b: usize) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
         self.view().cmp(a, b)
     }
 }
@@ -1139,11 +1113,11 @@ impl BulkObserver for Snapshot {
         self.sealed_len
     }
 
-    fn resolve_raw(&self, c: usize) -> &[u8] {
+    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
         self.view().resolve(c)
     }
 
-    fn cmp_raw(&self, a: usize, b: usize) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
         self.view().cmp(a, b)
     }
 }
@@ -1176,6 +1150,11 @@ impl Arena {
 
     pub fn epoch(&self) -> Epoch {
         self.epoch
+    }
+
+    /// Plane-internal identity (typed refusal surfaces compare it).
+    pub(super) fn id(&self) -> ArenaId {
+        self.id
     }
 
     /// Total distinct values (sealed + delta).
@@ -1343,7 +1322,7 @@ impl Arena {
                 }
                 let b = self.runs.pop().expect("len checked");
                 let a = self.runs.pop().expect("len checked");
-                let (merged, _, _) = Run::merge(&a, &b, &self.heap);
+                let merged = Run::merge(&a, &b, &self.heap);
                 self.runs.push(Arc::new(merged));
             }
             self.sealed_len += delta_n;

@@ -112,8 +112,9 @@ pub enum Datum<'a> {
     /// Writing order and duplicates are irrelevant: the encoder
     /// canonicalizes to the sorted, deduplicated element sequence.
     Set(&'a [Datum<'a>]),
-    /// Textual identity under KyzoRegexV1 (see `wide::regex`); the
-    /// source is writer-door validated; executability is CompiledRegexV1's claim.
+    /// Regex STORAGE identity (see `wide::regex`): writer construction
+    /// validates; decode preserves stored source without re-proof;
+    /// executability is `CompiledRegexV1`'s claim, never this variant's.
     Regex(&'a RegexSource),
     Json(&'a Json),
     /// Components pass through Num's float law at encode.
@@ -138,6 +139,11 @@ pub enum OwnedDatum {
     Json(Json),
     /// Components held as [`Num`] (always the float representation),
     /// so identity is exact under Num's law (`Eq` incl. canonical NaN).
+    /// `OwnedDatum` is a DECODE RESULT surface, not a construction
+    /// surface: decode enforces the float-only invariant; building one
+    /// by hand with an Int component is out of contract (a vector
+    /// witness newtype becomes mandatory the day this is constructed
+    /// outside the plane).
     Vector(Vec<Num>),
     Validity(Validity),
     Interval(Interval),

@@ -66,35 +66,38 @@ pub struct Value {
 
 // The representation contract, not just the size: `repr(transparent)`
 // over `[u8; 16]` pins layout and alignment for raw copies, mmap, and the
-// FFI boundaries the bindings will cross.
+// FFI boundaries the bindings will cross. POD means "a minted word is
+// raw-copyable", NEVER "any 16 bytes are a Value": no `from_bytes`
+// exists, and the only mints are `Value::mint` and the plane-internal
+// `gathered` — arbitrary bytes need a validation door that deliberately
+// does not exist yet.
 const _: () = assert!(std::mem::size_of::<Value>() == 16);
 const _: () = assert!(std::mem::align_of::<Value>() == 1);
 
 /// The result of minting a word: the stamp is structurally inseparable
-/// from an out-of-line value at the construction site — a caller must
-/// match, and `#[must_use]` refuses silent drops. (The word itself still
-/// cannot carry the stamp; the container does. This type is the handoff.)
+/// from an out-of-line value — private fields, minted ONLY by
+/// [`Value::mint`], so a wide word can never be paired with a dropped or
+/// unrelated stamp (the coherence is by construction, not by check).
+/// `#[must_use]` refuses silent drops; container write doors consume it.
 #[must_use = "an out-of-line word without its stamp is unspendable; carry the stamp"]
-pub enum Minted {
-    /// Self-contained word: no context needed.
-    Inline(Value),
-    /// Out-of-line word plus the context stamp its container must carry.
-    Wide { value: Value, stamp: StampedCode },
+pub struct Minted {
+    value: Value,
+    stamp: Option<StampedCode>,
 }
 
 impl Minted {
     pub fn value(&self) -> Value {
-        match self {
-            Minted::Inline(v) => *v,
-            Minted::Wide { value, .. } => *value,
-        }
+        self.value
     }
 
+    /// `Some` exactly for out-of-line words: the context stamp their
+    /// container must carry.
     pub fn stamp(&self) -> Option<StampedCode> {
-        match self {
-            Minted::Inline(_) => None,
-            Minted::Wide { stamp, .. } => Some(*stamp),
-        }
+        self.stamp
+    }
+
+    pub fn is_inline(&self) -> bool {
+        self.stamp.is_none()
     }
 }
 
@@ -115,15 +118,18 @@ impl Value {
         if payload.len() <= INLINE_MAX {
             bytes[1] = payload.len() as u8;
             bytes[2..2 + payload.len()].copy_from_slice(payload);
-            Minted::Inline(Value { bytes })
+            Minted {
+                value: Value { bytes },
+                stamp: None,
+            }
         } else {
             let sc = arena.intern(canonical);
             bytes[1] = LEN_OUT_OF_LINE;
             bytes[2..6].copy_from_slice(&cb.prefix4());
             bytes[6..10].copy_from_slice(&sc.code().raw().to_be_bytes());
-            Minted::Wide {
+            Minted {
                 value: Value { bytes },
-                stamp: sc,
+                stamp: Some(sc),
             }
         }
     }
@@ -208,6 +214,11 @@ impl Value {
     /// out-of-line word's code through the epoch remap (the value, its
     /// tag, and its prefix are unchanged; only the handle moves). Inline
     /// words pass through untouched.
+    ///
+    /// CONTAINMENT: lawful ONLY inside a container gather that has
+    /// already verified arena + epoch against the remap — called bare,
+    /// this is the raw-code remap smuggle at word level. Its only caller
+    /// is `WordColumn::gather`; keep it that way.
     pub(super) fn gathered(self, remap: &super::arena::EpochRemap) -> Value {
         match self.code() {
             None => self,
@@ -243,9 +254,9 @@ mod tests {
         // Canonical payload for a clean string of n chars is n + 2
         // (terminator), so 12 chars = 14 payload bytes = last inline size.
         let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena);
-        assert!(matches!(inline_edge, Minted::Inline(_)));
+        assert!(inline_edge.is_inline());
         let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena);
-        assert!(matches!(outline_edge, Minted::Wide { .. }));
+        assert!(!outline_edge.is_inline());
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
         let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
@@ -261,9 +272,8 @@ mod tests {
         use super::super::wide::json::Json;
         use super::super::wide::validity::Validity;
         let mut arena = Arena::new();
-        let inline = |cb: &CanonicalBytes, arena: &mut Arena| -> bool {
-            matches!(Value::mint(cb, arena), Minted::Inline(_))
-        };
+        let inline =
+            |cb: &CanonicalBytes, arena: &mut Arena| -> bool { Value::mint(cb, arena).is_inline() };
         // Always inline: Null, Bool, every Num (payload <= 13), Validity
         // (payload 9), empty/half-bounded intervals (payload <= 11).
         assert!(inline(&encode(Datum::Null), &mut arena));
