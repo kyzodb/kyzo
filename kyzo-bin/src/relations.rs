@@ -125,7 +125,7 @@ pub fn import_relations(db: &Db<FjallStorage>, data: BTreeMap<String, NamedRows>
         let data_value = DataValue::List(
             rows.rows
                 .into_iter()
-                .map(|t| DataValue::List(t.into_vec()))
+                .map(DataValue::List)
                 .collect(),
         );
         db.run_script(&query, BTreeMap::from([("data".to_string(), data_value)]))
