@@ -1028,6 +1028,46 @@ fn format_version_stamp_and_mismatch() {
     );
 }
 
+/// The #119 migration boundary, made explicit and executable. The value
+/// plane changed the on-disk VALUE format (canonical bytes replace the old
+/// self-describing payload), so `FormatVersion::CURRENT` is 5. Per the
+/// prime directive there are no deployed stores and no in-place migration:
+/// a store written by any PRE-#119 build (version 4) must simply REFUSE to
+/// open, never be silently misread by the new decoder. This pins that the
+/// previous version is the one refused (not just some arbitrary tamper),
+/// and that CURRENT parses as exactly 5.
+#[test]
+fn pre_value_plane_stores_v4_refuse_to_open() {
+    use crate::storage::FormatVersion;
+    // CURRENT is 5, and 5 is what a fresh store stamps.
+    assert_eq!(FormatVersion::CURRENT, FormatVersion::parse(b"5").unwrap());
+    // The immediately-previous format (4) is a DIFFERENT version and so is
+    // refused at the door — the value format is incompatible.
+    let v4 = FormatVersion::parse(b"4").unwrap();
+    assert_ne!(v4, FormatVersion::CURRENT, "v4 must not equal the current format");
+
+    // End to end: a store carrying the v4 stamp refuses to open.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db");
+    {
+        let db = new_fjall_storage(&path).unwrap();
+        let mut tx = db.write_tx().unwrap();
+        tx.put(b"k", b"v").unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let raw = fjall::OptimisticTxDatabase::builder(&path).open().unwrap();
+        let meta = raw
+            .keyspace("kyzo_meta", fjall::KeyspaceCreateOptions::default)
+            .unwrap();
+        meta.insert(b"format_version", b"4").unwrap();
+    }
+    assert!(
+        new_fjall_storage(&path).is_err(),
+        "a pre-#119 (v4) store must refuse to open, never be misread by the v5 decoder"
+    );
+}
+
 // ---------- crash consistency ----------
 
 /// Process-crash consistency: a child process commits one transaction,
