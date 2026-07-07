@@ -86,6 +86,13 @@ impl Domain {
         self.arena
     }
 
+    /// Admit this domain to `o` (arena + epoch + visibility), minting the
+    /// spend authority for a code resolve at a proven boundary. Used by
+    /// the execution-row boundary door.
+    pub(super) fn admit<O: BulkObserver>(&self, o: &O) -> BulkSpendAuthority {
+        self.admit_to(o, "domain resolve")
+    }
+
     /// The admission check: arena identity, epoch, AND visibility. Mints
     /// the spend authority the raw observer methods demand.
     fn admit_to<O: BulkObserver>(&self, o: &O, what: &str) -> BulkSpendAuthority {

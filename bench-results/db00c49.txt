@@ -69,3 +69,26 @@ TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=434.9 query_ms=
 # intern-once, never per-operation. Attempting the naive shortcut here
 # (measured) would have regressed the loop 3.4x; the real fix is the whole
 # pipeline, not a temp-store patch.
+
+# THE #119 FOUNDATION (data/value/exec.rs) -- why it exists:
+# The regression above is the durable canonical encoder running in the
+# execution hot loop. #119 (the value plane) delivers the LAWFUL FOUNDATION
+# that lets #120 remove it, without any raw-code injection or forged stamp:
+#   - ExecRows: admitted execution rows -- row-major raw u32 codes under one
+#     proven Domain (arena + epoch + visibility). Built ONLY by admitting a
+#     stamp-verified Rows or by the recombine door; no constructor from
+#     arbitrary u32.
+#   - join_project: the narrow recombine door -- hash-join on u32 code
+#     identity (lawful because the Domain proves one arena+epoch), emitting
+#     projected columns by COPYING admitted codes. Admitted rows in,
+#     admitted rows out.
+#   - ExecDedup: packed-u32 tuple dedup under one Domain -- the hot-loop
+#     identity, u32-slice equality, no canonical encode.
+# PROVEN (data::value::exec::tests::recombine_and_dedup_never_intern_encode_or_deref):
+# a full join_project + dedup pass leaves the arena's distinct-value count
+# UNCHANGED (zero re-intern) and its deref counter at ZERO (zero payload
+# encode/deref). This is the measured design constraint (intern-once,
+# u32-in-the-loop) turned into a lawful, tested primitive.
+# #120 spends this: route the recursive RA hot path onto ExecRows/ExecDedup
+# so encode_tuple_bare and per-cell intern leave the loop. #120 owns the
+# 16.5k-line RA migration; #119 owns the authority + the foundation.

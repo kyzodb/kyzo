@@ -42,6 +42,7 @@ pub mod canonical;
 pub mod cell;
 pub mod code;
 pub mod column;
+pub mod exec;
 pub mod number;
 pub mod prefix;
 mod proofs;
@@ -57,6 +58,7 @@ pub use canonical::{
 pub use cell::{Minted, Value};
 pub use code::{Code, StampedCode};
 pub use column::{AdmittedCodes, AdmittedWords, CodeColumn, Column, Domain, WordColumn};
+pub use exec::{ExecDedup, ExecRows, Side};
 pub use number::{Num, NumRepr};
 pub use row::{
     AdmittedRows, EncodedKey, PushError, RelationId, Rows, TupleT, encode_key_with_suffix,
