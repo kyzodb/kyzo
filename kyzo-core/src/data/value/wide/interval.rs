@@ -215,11 +215,113 @@ impl Interval {
             Form::Range { lo, hi } => Some((lo, hi)),
         }
     }
+
+    /// Boundary topology, exposed so callers read interval SHAPE directly
+    /// instead of reverse-engineering it from endpoint nullability. The
+    /// empty interval has no boundary of any kind: every predicate below is
+    /// `false` for it (it is neither finitely bounded nor unbounded).
+
+    /// `true` iff there is a finite lower endpoint (`interval_start` is
+    /// non-null).
+    pub fn has_start(self) -> bool {
+        matches!(self.ends(), Some((Lo::At(_), _)))
+    }
+
+    /// `true` iff there is a finite upper endpoint (`interval_end` is
+    /// non-null).
+    pub fn has_end(self) -> bool {
+        matches!(self.ends(), Some((_, Hi::At(_))))
+    }
+
+    /// `true` iff the lower end is genuinely unbounded (`(-∞, ..`), which
+    /// is DISTINCT from a finite `i64::MIN` start.
+    pub fn is_start_unbounded(self) -> bool {
+        matches!(self.ends(), Some((Lo::NegUnbounded, _)))
+    }
+
+    /// `true` iff the upper end is genuinely unbounded (`.., ∞)`), which is
+    /// DISTINCT from a finite `i64::MAX` end.
+    pub fn is_end_unbounded(self) -> bool {
+        matches!(self.ends(), Some((_, Hi::PosUnbounded)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::value::DataValue;
+    use crate::data::value::canonical::{decode, encode_owned};
+
+    /// The ruling's distinctness law: `i64::MAX` is a FINITE instant, not
+    /// infinity. `[300, i64::MAX]` HAS an end (i64::MAX); `[300, ∞)` has no
+    /// end. They must never collapse to the same value, and `end()` must
+    /// tell them apart.
+    #[test]
+    fn finite_max_end_is_distinct_from_unbounded_end() {
+        let finite = Interval::new(Bound::Closed(300), Bound::Closed(i64::MAX));
+        let open = Interval::new(Bound::Closed(300), Bound::Unbounded);
+        assert_ne!(
+            finite, open,
+            "[300, i64::MAX] and [300, ∞) must be distinct"
+        );
+        assert_eq!(
+            finite.end(),
+            Some(i64::MAX),
+            "finite interval's end is i64::MAX"
+        );
+        assert_eq!(open.end(), None, "open interval has no end");
+        assert!(
+            finite.has_end() && !finite.is_end_unbounded(),
+            "finite: has end, not unbounded"
+        );
+        assert!(
+            !open.has_end() && open.is_end_unbounded(),
+            "open: no end, unbounded"
+        );
+        // Symmetrically for the lower end.
+        let open_lo = Interval::new(Bound::Unbounded, Bound::Closed(300));
+        let finite_lo = Interval::new(Bound::Closed(i64::MIN), Bound::Closed(300));
+        assert_ne!(
+            open_lo, finite_lo,
+            "(-∞, 300] and [i64::MIN, 300] must be distinct"
+        );
+        assert_eq!(open_lo.start(), None);
+        assert_eq!(finite_lo.start(), Some(i64::MIN));
+        assert!(open_lo.is_start_unbounded() && !open_lo.has_start());
+        assert!(finite_lo.has_start() && !finite_lo.is_start_unbounded());
+    }
+
+    /// The ruling's round-trip law: the unbounded form survives canonical
+    /// encode/decode WITHOUT becoming an `i64::MAX` sentinel — the two
+    /// intervals stay byte-distinct and decode back to their own shapes.
+    #[test]
+    fn unbounded_end_survives_canonical_round_trip_without_sentinel() {
+        let finite =
+            DataValue::Interval(Interval::new(Bound::Closed(300), Bound::Closed(i64::MAX)));
+        let open = DataValue::Interval(Interval::new(Bound::Closed(300), Bound::Unbounded));
+        let fb = encode_owned(&finite);
+        let ob = encode_owned(&open);
+        assert_ne!(
+            fb.as_bytes(),
+            ob.as_bytes(),
+            "the two ends must encode to distinct bytes"
+        );
+        let f2 = decode(fb.as_bytes()).expect("finite decodes");
+        let o2 = decode(ob.as_bytes()).expect("open decodes");
+        assert_eq!(f2, finite, "finite interval round-trips unchanged");
+        assert_eq!(
+            o2, open,
+            "open interval round-trips unchanged (no sentinel)"
+        );
+        let DataValue::Interval(o2iv) = o2 else {
+            panic!("interval")
+        };
+        assert_eq!(
+            o2iv.end(),
+            None,
+            "the decoded open interval still has NO end"
+        );
+    }
 
     /// Allen partition law: over all nonempty bounded pairs in a small
     /// grid, exactly ONE of the 13 relations (6 primitives + 6 inverses

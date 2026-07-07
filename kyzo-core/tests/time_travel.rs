@@ -16,6 +16,7 @@
 
 mod common;
 use common::*;
+use kyzo::DataValue;
 
 /// The write side names its own valid instant; the read side seeks to
 /// what held at a chosen past instant — an ordinary seek, not a
@@ -113,34 +114,47 @@ fn spans_derives_maximal_runs() {
     )
     .expect("correction at 300");
 
+    // The final run is genuinely OPEN: `interval_end` returns Null, not a
+    // sentinel. i64::MAX is a finite instant, not infinity; the value plane
+    // exposes real unboundedness, so the scripting surface must too.
     let out = db
         .run_script(
-            "?[v, istart, iend] := *hist{id, v @spans iv}, \
-             istart = interval_start(iv), iend = interval_end(iv) \
+            "?[v, istart, iend, has_end, end_unbounded] := *hist{id, v @spans iv}, \
+             istart = interval_start(iv), iend = interval_end(iv), \
+             has_end = interval_has_end(iv), \
+             end_unbounded = interval_is_end_unbounded(iv) \
              :order istart",
             no_params(),
         )
         .expect("spans");
     assert_eq!(out.rows.len(), 3, "three maximal runs, one per correction");
-    let got: Vec<(String, i64, i64)> = out
+    let got: Vec<(String, i64, DataValue, bool, bool)> = out
         .rows
         .iter()
         .map(|r| {
             (
                 r[0].get_str().unwrap().to_string(),
                 r[1].get_int().unwrap(),
-                r[2].get_int().unwrap(),
+                r[2].clone(),
+                r[3].get_bool().unwrap(),
+                r[4].get_bool().unwrap(),
             )
         })
         .collect();
     assert_eq!(
         got,
         vec![
-            ("a".to_string(), 100, 200),
-            ("b".to_string(), 200, 300),
-            ("c".to_string(), 300, i64::MAX),
+            // #119 intervals are CLOSED on the discrete grid: a run
+            // corrected at 200 last holds at instant 199, so interval_end
+            // is 199 (the last included instant), not the exclusive 200.
+            ("a".to_string(), 100, DataValue::from(199i64), true, false),
+            ("b".to_string(), 200, DataValue::from(299i64), true, false),
+            // The open run: end is Null (no upper endpoint), and the
+            // topology predicates confirm it is genuinely unbounded.
+            ("c".to_string(), 300, DataValue::Null, false, true),
         ],
-        "runs [100,200) 'a', [200,300) 'b', [300, MAX) 'c'"
+        "runs [100,199] 'a', [200,299] 'b', [300, ∞) 'c' — the last is open, \
+         so interval_end is Null and interval_is_end_unbounded is true"
     );
 }
 

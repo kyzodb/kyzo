@@ -834,11 +834,15 @@ mod tests {
         tx.commit().expect("commit");
     }
 
+    /// Rows as `(k, val, start, end)` where `end` is `None` for a
+    /// genuinely OPEN run (`Hi::PosUnbounded`) — asserted directly, never
+    /// converted to the old `i64::MAX` sentinel. `@spans` starts are always
+    /// finite, so a missing start is a bug, not an open end.
     fn spans_rows(
         db: &crate::storage::fjall::FjallStorage,
         handle: &RelationHandle,
         sys: i64,
-    ) -> Vec<(i64, i64, i64, i64)> {
+    ) -> Vec<(i64, i64, i64, Option<i64>)> {
         let ra = SpansRA {
             bindings: vec![sym("k"), sym("val"), sym("iv")],
             storage: handle.clone(),
@@ -863,8 +867,8 @@ mod tests {
                 out.push((
                     k,
                     val,
-                    iv.start().unwrap_or(i64::MIN),
-                    iv.end().unwrap_or(i64::MAX),
+                    iv.start().expect("@spans runs always have a finite start"),
+                    iv.end(), // None iff the run is genuinely open (PosUnbounded)
                 ));
             }
         }
@@ -878,7 +882,7 @@ mod tests {
         let h = make_relation(&db, "spans_single", 1);
         assert_at(&db, &h, 1, 10, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
     #[test]
@@ -888,7 +892,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 19)]);
+        assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
     }
 
     #[test]
@@ -898,7 +902,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 19), (1, 200, 20, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
     }
 
     #[test]
@@ -908,7 +912,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
     #[test]
@@ -919,7 +923,7 @@ mod tests {
         retract_at(&db, &h, 1, 20);
         assert_at(&db, &h, 1, 30, 100);
         let rows = spans_rows(&db, &h, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, 19), (1, 100, 30, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
     }
 
     #[test]
@@ -944,7 +948,7 @@ mod tests {
         // Instant 10 is erased, so the payload is 100 throughout (the
         // instant-0 assert governs everywhere it would have fallen
         // through to) — one interval, not two.
-        assert_eq!(rows, vec![(1, 100, 0, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 0, None)]);
     }
 
     #[test]
@@ -957,7 +961,12 @@ mod tests {
             .into_iter()
             .map(|(k, val, s, e)| (s, e, k, val))
         {
-            assert!(start < end, "zero-width interval [{start}, {end})");
+            // An open run (None end) is trivially non-empty; a finite run
+            // must have start < end. No sentinel stands in for "open".
+            match end {
+                None => {}
+                Some(e) => assert!(start < e, "zero-width interval [{start}, {e})"),
+            }
         }
         // At the OLDER system snapshot the first (pre-correction) write
         // governs — still no zero-width run.
@@ -965,7 +974,7 @@ mod tests {
         let h2 = make_relation(&db2, "spans_no_zero_width2", 1);
         assert_at(&db2, &h2, 1, 10, 100);
         let rows = spans_rows(&db2, &h2, i64::MAX);
-        assert_eq!(rows, vec![(1, 100, 10, i64::MAX)]);
+        assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
     #[test]
@@ -978,7 +987,7 @@ mod tests {
         let rows = spans_rows(&db, &h, i64::MAX);
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
-            vec![(1, 100, 10, i64::MAX), (2, 900, 5, 14)]
+            vec![(1, 100, 10, None), (2, 900, 5, Some(14))]
         );
     }
 

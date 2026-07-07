@@ -2844,6 +2844,51 @@ pub(crate) fn op_interval_end(args: &[DataValue]) -> Result<DataValue> {
     })
 }
 
+// Boundary-shape predicates: users read interval topology directly instead
+// of inferring it from endpoint nullability. `i64::MAX` is a finite instant,
+// NOT infinity, so `[300, i64::MAX]` (has a finite end) and `[300, ∞)` (no
+// end) must stay distinguishable at the scripting surface.
+define_op!(OP_INTERVAL_HAS_START, 1, false, true);
+pub(crate) fn op_interval_has_start(args: &[DataValue]) -> Result<DataValue> {
+    let iv = args[0].get_interval().ok_or_else(|| {
+        miette!(
+            "'interval_has_start' expects an interval, got {:?}",
+            args[0]
+        )
+    })?;
+    Ok(DataValue::from(iv.has_start()))
+}
+
+define_op!(OP_INTERVAL_HAS_END, 1, false, true);
+pub(crate) fn op_interval_has_end(args: &[DataValue]) -> Result<DataValue> {
+    let iv = args[0]
+        .get_interval()
+        .ok_or_else(|| miette!("'interval_has_end' expects an interval, got {:?}", args[0]))?;
+    Ok(DataValue::from(iv.has_end()))
+}
+
+define_op!(OP_INTERVAL_IS_START_UNBOUNDED, 1, false, true);
+pub(crate) fn op_interval_is_start_unbounded(args: &[DataValue]) -> Result<DataValue> {
+    let iv = args[0].get_interval().ok_or_else(|| {
+        miette!(
+            "'interval_is_start_unbounded' expects an interval, got {:?}",
+            args[0]
+        )
+    })?;
+    Ok(DataValue::from(iv.is_start_unbounded()))
+}
+
+define_op!(OP_INTERVAL_IS_END_UNBOUNDED, 1, false, true);
+pub(crate) fn op_interval_is_end_unbounded(args: &[DataValue]) -> Result<DataValue> {
+    let iv = args[0].get_interval().ok_or_else(|| {
+        miette!(
+            "'interval_is_end_unbounded' expects an interval, got {:?}",
+            args[0]
+        )
+    })?;
+    Ok(DataValue::from(iv.is_end_unbounded()))
+}
+
 // Allen's relations: six primitives + `intersects`, the workhorse. Equality
 // is already covered by the generic `eq`/`neq` ops (`Interval` derives
 // `PartialEq`/`Eq`), so it gets no dedicated op here. The five inverse
