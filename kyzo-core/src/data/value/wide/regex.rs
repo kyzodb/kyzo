@@ -159,6 +159,27 @@ impl CompiledRegexV1 {
         self.0.is_match(haystack)
     }
 
+    /// First-match replacement (`$name`/`$1` substitution per the
+    /// dialect's underlying engine).
+    pub fn replace<'h>(&self, haystack: &'h str, rep: &str) -> std::borrow::Cow<'h, str> {
+        self.0.replace(haystack, rep)
+    }
+
+    /// All-matches replacement.
+    pub fn replace_all<'h>(&self, haystack: &'h str, rep: &str) -> std::borrow::Cow<'h, str> {
+        self.0.replace_all(haystack, rep)
+    }
+
+    /// The first match's text, if any.
+    pub fn find<'h>(&self, haystack: &'h str) -> Option<&'h str> {
+        self.0.find(haystack).map(|m| m.as_str())
+    }
+
+    /// Every non-overlapping match's text, in order.
+    pub fn find_iter<'h>(&self, haystack: &'h str) -> impl Iterator<Item = &'h str> {
+        self.0.find_iter(haystack).map(|m| m.as_str())
+    }
+
     pub fn as_regex(&self) -> &regex::Regex {
         &self.0
     }

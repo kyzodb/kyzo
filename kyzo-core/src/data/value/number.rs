@@ -160,6 +160,16 @@ impl Num {
         }
     }
 
+    /// The numeric value as f64: ints promote by cast. A NUMERIC read
+    /// for math kernels, never an identity claim (beyond 2^53 the cast
+    /// rounds; comparison sites must use [`Num::cmp_numeric`] instead).
+    pub fn to_f64(self) -> f64 {
+        match self.repr() {
+            NumRepr::Int(i) => i as f64,
+            NumRepr::Float(f) => f,
+        }
+    }
+
     /// The read-only representation view: pattern-matching ergonomics
     /// WITHOUT construction authority — `NumRepr` cannot be turned back
     /// into a `Num` except through the normalizing constructors, so the

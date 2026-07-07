@@ -115,6 +115,100 @@ impl Interval {
     }
 
     /// The canonical ends of a non-empty interval.
+    /// The closed start instant, if one exists (`None` for the empty
+    /// interval and for a negatively-unbounded start).
+    pub fn start(self) -> Option<i64> {
+        match self.ends() {
+            Some((Lo::At(t), _)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The closed end instant, if one exists (`None` for the empty
+    /// interval and for a positively-unbounded end).
+    pub fn end(self) -> Option<i64> {
+        match self.ends() {
+            Some((_, Hi::At(t))) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The ends widened to i128 sentinels for relation arithmetic
+    /// (unbounded ends become the i128 extremes, so `+1` never
+    /// overflows). `None` for the empty interval.
+    fn wide_ends(self) -> Option<(i128, i128)> {
+        self.ends().map(|(lo, hi)| {
+            let l = match lo {
+                Lo::NegUnbounded => i128::MIN,
+                Lo::At(t) => t as i128,
+            };
+            let h = match hi {
+                Hi::PosUnbounded => i128::MAX,
+                Hi::At(t) => t as i128,
+            };
+            (l, h)
+        })
+    }
+
+    /// Allen's relations on the discrete closed normal form. The empty
+    /// interval satisfies NO relation (both operands must be nonempty),
+    /// and on the discrete grid adjacency is `a.hi + 1 == b.lo`: `meets`
+    /// is exactly adjacency, `before` requires a gap — together with
+    /// `overlaps`/`starts`/`during`/`finishes`/equality (the generic
+    /// `eq`) and the argument-swapped inverses, every configuration of
+    /// two nonempty intervals satisfies exactly one relation.
+    pub fn before(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            // checked successor: an end at the +inf sentinel has none,
+            // and is before nothing (the unchecked `+ 1` wrapped).
+            (Some((_, ah)), Some((bl, _))) => ah.checked_add(1).is_some_and(|s| s < bl),
+            _ => false,
+        }
+    }
+
+    pub fn meets(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            (Some((_, ah)), Some((bl, _))) => ah.checked_add(1) == Some(bl),
+            _ => false,
+        }
+    }
+
+    pub fn overlaps(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            (Some((al, ah)), Some((bl, bh))) => al < bl && bl <= ah && ah < bh,
+            _ => false,
+        }
+    }
+
+    pub fn starts(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            (Some((al, ah)), Some((bl, bh))) => al == bl && ah < bh,
+            _ => false,
+        }
+    }
+
+    pub fn during(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            (Some((al, ah)), Some((bl, bh))) => bl < al && ah < bh,
+            _ => false,
+        }
+    }
+
+    pub fn finishes(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            (Some((al, ah)), Some((bl, bh))) => ah == bh && bl < al,
+            _ => false,
+        }
+    }
+
+    /// Nonempty intersection — the workhorse predicate.
+    pub fn intersects(self, other: Interval) -> bool {
+        match (self.wide_ends(), other.wide_ends()) {
+            (Some((al, ah)), Some((bl, bh))) => al.max(bl) <= ah.min(bh),
+            _ => false,
+        }
+    }
+
     pub fn ends(self) -> Option<(Lo, Hi)> {
         match self.0 {
             Form::Empty => None,
@@ -126,6 +220,56 @@ impl Interval {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Allen partition law: over all nonempty bounded pairs in a small
+    /// grid, exactly ONE of the 13 relations (6 primitives + 6 inverses
+    /// + equality) holds.
+    #[test]
+    fn allen_relations_partition_the_configurations() {
+        let mut ivs = Vec::new();
+        for lo in -3..=3i64 {
+            for hi in lo..=3i64 {
+                ivs.push(Interval::new(Bound::Closed(lo), Bound::Closed(hi)));
+            }
+        }
+        ivs.push(Interval::range(Lo::NegUnbounded, Hi::At(0)));
+        ivs.push(Interval::range(Lo::At(0), Hi::PosUnbounded));
+        ivs.push(Interval::range(Lo::NegUnbounded, Hi::PosUnbounded));
+        for &a in &ivs {
+            for &b in &ivs {
+                let rels = [
+                    a.before(b),
+                    b.before(a),
+                    a.meets(b),
+                    b.meets(a),
+                    a.overlaps(b),
+                    b.overlaps(a),
+                    a.starts(b),
+                    b.starts(a),
+                    a.during(b),
+                    b.during(a),
+                    a.finishes(b),
+                    b.finishes(a),
+                    a == b,
+                ];
+                assert_eq!(
+                    rels.iter().filter(|&&r| r).count(),
+                    1,
+                    "partition violated for {a:?} vs {b:?}: {rels:?}"
+                );
+                // intersects consistency: true iff not (before/meets either way).
+                assert_eq!(
+                    a.intersects(b),
+                    !(a.before(b) || b.before(a) || a.meets(b) || b.meets(a)),
+                    "intersects law violated for {a:?} vs {b:?}"
+                );
+            }
+        }
+        // The empty interval satisfies no relation, not even with itself.
+        let e = Interval::EMPTY;
+        let some = ivs[0];
+        assert!(!e.before(some) && !some.before(e) && !e.intersects(e) && !e.starts(e));
+    }
 
     #[test]
     fn closed_normal_form_is_one_identity() {
