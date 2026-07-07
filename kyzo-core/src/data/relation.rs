@@ -263,6 +263,11 @@ impl NullableColType {
             },
             ColType::Uuid => match data {
                 u @ DataValue::Uuid(_) => u,
+                // A UUID string literal coerces by parsing — the embedder
+                // boundary (and KyzoScript) hand UUIDs as strings.
+                DataValue::Str(ref s) => {
+                    DataValue::uuid(uuid::Uuid::try_parse(s).map_err(|_| make_err())?)
+                }
                 _ => bail!(make_err()),
             },
             ColType::List { eltype, len } => {
