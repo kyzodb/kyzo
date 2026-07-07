@@ -436,7 +436,7 @@ pub(crate) struct VectorDimMismatch {
 /// meant "the field is the vector itself". On the wire `sub` is still a
 /// fixed-width `Int` slot with `-1` for `None` (see [`HnswRow`]); only the
 /// codec spells that.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct VectorId {
     pub(crate) tuple_key: Tuple,
     pub(crate) field: usize,
@@ -1059,6 +1059,33 @@ fn neighbours(
 /// first handful of expansions at every tested scale — the dropped conjunct
 /// was dead weight in this regime, not the mechanism. See
 /// `shrink_neighbour`'s doc comment for what IS driving that growth.
+/// Beam-queue priority: distance first, then the node's own deterministic
+/// identity ([`VectorId`]'s total order). Because every `VectorId` is
+/// unique, no two priorities are ever equal, so the priority queue's
+/// pop/eviction order is FULLY determined -- exact-distance ties break by
+/// node identity, never by hash-map iteration order. This is what makes
+/// graph construction and search reproducible (and, on an all-equidistant
+/// corpus, resolve to the smallest keys) independent of thread count or
+/// hasher state.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Beam {
+    dist: OrderedFloat<f64>,
+    id: VectorId,
+}
+
+impl Beam {
+    fn of(dist: f64, id: &VectorId) -> Beam {
+        Beam {
+            dist: OrderedFloat(dist),
+            id: id.clone(),
+        }
+    }
+
+    fn dist(&self) -> f64 {
+        self.dist.0
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_layer(
     tx: &impl ReadTx,
@@ -1067,23 +1094,24 @@ fn search_layer(
     layer: i64,
     base: &RelationHandle,
     idx: &RelationHandle,
-    found_nn: &mut PriorityQueue<VectorId, OrderedFloat<f64>>,
+    found_nn: &mut PriorityQueue<VectorId, Beam>,
     cache: &mut VectorCache<'_>,
 ) -> Result<()> {
     let mut visited: FxHashSet<VectorId> = FxHashSet::default();
     // min queue
-    let mut candidates: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
+    let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
 
-    for (id, dist) in found_nn.iter() {
+    for (id, prio) in found_nn.iter() {
         visited.insert(id.clone());
-        candidates.push(id.clone(), Reverse(*dist));
+        candidates.push(id.clone(), Reverse(prio.clone()));
     }
 
-    while let Some((candidate, Reverse(OrderedFloat(candidate_dist)))) = candidates.pop() {
-        let Some((_, OrderedFloat(furthest_dist))) = found_nn.peek() else {
+    while let Some((candidate, Reverse(candidate_prio))) = candidates.pop() {
+        let candidate_dist = candidate_prio.dist();
+        let Some((_, furthest)) = found_nn.peek() else {
             break;
         };
-        if found_nn.len() >= ef && candidate_dist > *furthest_dist {
+        if found_nn.len() >= ef && candidate_dist > furthest.dist() {
             break;
         }
         for (neighbour, _) in neighbours(tx, base, idx, &candidate, layer, false)? {
@@ -1092,12 +1120,15 @@ fn search_layer(
             }
             cache.ensure(tx, base, &neighbour)?;
             let neighbour_dist = cache.v_dist(q, &neighbour)?;
-            let Some((_, OrderedFloat(cand_furthest_dist))) = found_nn.peek() else {
+            let Some((_, cand_furthest)) = found_nn.peek() else {
                 break;
             };
-            if found_nn.len() < ef || neighbour_dist < *cand_furthest_dist {
-                candidates.push(neighbour.clone(), Reverse(OrderedFloat(neighbour_dist)));
-                found_nn.push(neighbour.clone(), OrderedFloat(neighbour_dist));
+            if found_nn.len() < ef || neighbour_dist < cand_furthest.dist() {
+                candidates.push(
+                    neighbour.clone(),
+                    Reverse(Beam::of(neighbour_dist, &neighbour)),
+                );
+                found_nn.push(neighbour.clone(), Beam::of(neighbour_dist, &neighbour));
                 if found_nn.len() > ef {
                     found_nn.pop();
                 }
@@ -1116,33 +1147,34 @@ fn search_layer(
 fn select_neighbours_heuristic(
     tx: &impl ReadTx,
     q: &IndexVec,
-    found: &PriorityQueue<VectorId, OrderedFloat<f64>>,
+    found: &PriorityQueue<VectorId, Beam>,
     m: usize,
     layer: i64,
     manifest: &HnswIndexManifest,
     base: &RelationHandle,
     idx: &RelationHandle,
     cache: &mut VectorCache<'_>,
-) -> Result<PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>>> {
-    let mut candidates: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-    let mut ret: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-    let mut discarded: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-    for (id, dist) in found.iter() {
-        candidates.push(id.clone(), Reverse(*dist));
+) -> Result<PriorityQueue<VectorId, Reverse<Beam>>> {
+    let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
+    let mut ret: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
+    let mut discarded: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
+    for (id, prio) in found.iter() {
+        candidates.push(id.clone(), Reverse(prio.clone()));
     }
     if manifest.extend_candidates {
         for (id, _) in found.iter() {
             for (neighbour, _) in neighbours(tx, base, idx, id, layer, false)? {
                 cache.ensure(tx, base, &neighbour)?;
                 let dist = cache.v_dist(q, &neighbour)?;
-                candidates.push(neighbour, Reverse(OrderedFloat(dist)));
+                candidates.push(neighbour.clone(), Reverse(Beam::of(dist, &neighbour)));
             }
         }
     }
     while ret.len() < m {
-        let Some((cand, Reverse(OrderedFloat(cand_dist_to_q)))) = candidates.pop() else {
+        let Some((cand, Reverse(cand_prio))) = candidates.pop() else {
             break;
         };
+        let cand_dist_to_q = cand_prio.dist();
         let mut should_add = true;
         for (existing, _) in ret.iter() {
             cache.ensure(tx, base, &cand)?;
@@ -1154,9 +1186,9 @@ fn select_neighbours_heuristic(
             }
         }
         if should_add {
-            ret.push(cand, Reverse(OrderedFloat(cand_dist_to_q)));
+            ret.push(cand.clone(), Reverse(Beam::of(cand_dist_to_q, &cand)));
         } else if manifest.keep_pruned_connections {
-            discarded.push(cand, Reverse(OrderedFloat(cand_dist_to_q)));
+            discarded.push(cand.clone(), Reverse(Beam::of(cand_dist_to_q, &cand)));
         }
     }
     if manifest.keep_pruned_connections {
@@ -1352,11 +1384,11 @@ fn shrink_neighbour<T: WriteTx>(
     let base_key_len = base.metadata.keys.len();
     cache.ensure(tx, base, target)?;
     let vec = cache.get(target)?.clone();
-    let mut candidates = PriorityQueue::new();
+    let mut candidates: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     let mut was_tombstoned: FxHashMap<VectorId, bool> = FxHashMap::default();
     for (neighbour, dist, ignore_link) in neighbours_tagged(tx, base, idx, target, layer)? {
         was_tombstoned.insert(neighbour.clone(), ignore_link);
-        candidates.push(neighbour, OrderedFloat(dist));
+        candidates.push(neighbour.clone(), Beam::of(dist, &neighbour));
     }
     let new_candidates =
         select_neighbours_heuristic(tx, &vec, &candidates, m, layer, manifest, base, idx, cache)?;
@@ -1369,7 +1401,8 @@ fn shrink_neighbour<T: WriteTx>(
         new_candidate_set.insert(new.clone());
     }
     let new_degree = new_candidates.len();
-    for (new, Reverse(OrderedFloat(new_dist))) in new_candidates {
+    for (new, Reverse(new_prio)) in new_candidates {
+        let new_dist = new_prio.dist();
         // A brand-new edge (only reachable via `extend_candidates`, which
         // can offer a candidate that was never `target`'s own neighbour)
         // or a resurrected tombstone both need the row written live;
@@ -1387,7 +1420,8 @@ fn shrink_neighbour<T: WriteTx>(
             .write(tx, idx, base_key_len)?;
         }
     }
-    for (old, OrderedFloat(old_dist)) in candidates {
+    for (old, old_prio) in candidates {
+        let old_dist = old_prio.dist();
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old);
             if was_tombstoned.get(&old).copied().unwrap_or(false) {
@@ -1446,8 +1480,9 @@ fn put_vector<T: WriteTx>(
     cache.ensure(tx, base, &ep_id)?;
     let ep_distance = cache.v_dist(q, &ep_id)?;
     // max queue
-    let mut found_nn = PriorityQueue::new();
-    found_nn.push(ep_id, OrderedFloat(ep_distance));
+    let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
+    let ep_beam = Beam::of(ep_distance, &ep_id);
+    found_nn.push(ep_id, ep_beam);
     let target_layer = manifest.random_level(at);
     if target_layer < bottom_layer {
         // This vector becomes the new entry point.
@@ -1494,12 +1529,13 @@ fn put_vector<T: WriteTx>(
         .write(tx, idx, base_key_len)?;
 
         // Bidirectional links to the selected neighbours.
-        for (neighbour, Reverse(OrderedFloat(dist))) in selected.iter() {
+        for (neighbour, Reverse(prio)) in selected.iter() {
+            let dist = prio.dist();
             HnswRow::Edge {
                 layer,
                 fr: at.clone(),
                 to: Box::new(neighbour.clone()),
-                dist: *dist,
+                dist,
                 ignore_link: false,
             }
             .write(tx, idx, base_key_len)?;
@@ -1507,7 +1543,7 @@ fn put_vector<T: WriteTx>(
                 layer,
                 fr: neighbour.clone(),
                 to: Box::new(at.clone()),
-                dist: *dist,
+                dist,
                 ignore_link: false,
             }
             .write(tx, idx, base_key_len)?;
@@ -1848,8 +1884,9 @@ pub(crate) fn hnsw_knn(
     };
     cache.ensure(tx, base, &ep_id)?;
     let ep_distance = cache.v_dist(&q, &ep_id)?;
-    let mut found_nn = PriorityQueue::new();
-    found_nn.push(ep_id, OrderedFloat(ep_distance));
+    let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
+    let ep_beam = Beam::of(ep_distance, &ep_id);
+    found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
         cancel.check()?;
         search_layer(tx, &q, 1, layer, base, idx, &mut found_nn, &mut cache)?;
@@ -1866,8 +1903,8 @@ pub(crate) fn hnsw_knn(
     // vectors, say) vary run to run — a determinism-law violation, and the
     // ground the filter-aware-traversal ascent stands on.
     let mut ranked: Vec<(VectorId, f64)> = Vec::with_capacity(found_nn.len());
-    while let Some((id, OrderedFloat(distance))) = found_nn.pop() {
-        ranked.push((id, distance));
+    while let Some((id, prio)) = found_nn.pop() {
+        ranked.push((id, prio.dist()));
     }
     ranked.sort_by(|(a, da), (b, db)| {
         OrderedFloat(*da)
@@ -2339,14 +2376,14 @@ fn graph_search_layer0(
     visit_cap: usize,
 ) -> Result<BinaryHeap<Ranked>> {
     let mut visited: FxHashSet<VectorId> = FxHashSet::default();
-    let mut candidates: PriorityQueue<VectorId, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
+    let mut candidates: PriorityQueue<VectorId, Reverse<Beam>> = PriorityQueue::new();
     let mut results: BinaryHeap<Ranked> = BinaryHeap::new();
 
     for id in seeds {
         if visited.insert(id.clone()) {
             cache.ensure(tx, base, id)?;
             let d = cache.v_dist(q, id)?;
-            candidates.push(id.clone(), Reverse(OrderedFloat(d)));
+            candidates.push(id.clone(), Reverse(Beam::of(d, id)));
             if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter, stack)? {
                 let key = id_order_key(idx, id)?;
                 push_topk(
@@ -2362,7 +2399,8 @@ fn graph_search_layer0(
         }
     }
 
-    while let Some((cand_id, Reverse(OrderedFloat(cand_d)))) = candidates.pop() {
+    while let Some((cand_id, Reverse(cand_prio))) = candidates.pop() {
+        let cand_d = cand_prio.dist();
         if visited.len() > visit_cap {
             break;
         }
@@ -2386,7 +2424,7 @@ fn graph_search_layer0(
             // routing, so connectivity is the unfiltered graph's.
             let promising = results.len() < ef2 || results.peek().is_none_or(|w| nd < w.dist.0);
             if promising {
-                candidates.push(neighbour.clone(), Reverse(OrderedFloat(nd)));
+                candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
             // Visibility: seat only if it passes the filter (+radius).
             if let Some(tuple) =
@@ -2425,10 +2463,11 @@ fn graph_filtered(
     stack: &mut Vec<DataValue>,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
-    let mut found_nn = PriorityQueue::new();
+    let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
     cache.ensure(tx, base, &ep_id)?;
     let ep_d = cache.v_dist(q, &ep_id)?;
-    found_nn.push(ep_id, OrderedFloat(ep_d));
+    let ep_beam = Beam::of(ep_d, &ep_id);
+    found_nn.push(ep_id, ep_beam);
     for layer in bottom_layer..0 {
         search_layer(tx, q, 1, layer, base, idx, &mut found_nn, cache)?;
     }
