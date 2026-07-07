@@ -526,9 +526,9 @@ fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (EncodedKey, V
     (bitemp_key(rel, name, ts, 1), pol_val(rel, assert))
 }
 
-/// A bitemporal value: relation-id header + polarity byte, no payload.
-fn pol_val(rel: RelationId, assert: bool) -> Vec<u8> {
-    let mut v = rel.raw_encode().to_vec();
+/// A bitemporal value: the polarity byte, no payload.
+fn pol_val(_rel: RelationId, assert: bool) -> Vec<u8> {
+    let mut v = Vec::new();
     v.push(
         if assert {
             ClaimPolarity::Assert
@@ -3026,9 +3026,9 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
     let lower = rel.raw_encode().to_vec();
     let upper = rel.next().expect("below cap").raw_encode().to_vec();
 
-    // Assert value with a one-column msgpack payload: the counter.
+    // Assert value: the polarity byte, then the counter column canonical.
     let val_of = |v: i64| -> Vec<u8> {
-        let mut out = rel.raw_encode().to_vec();
+        let mut out = Vec::new();
         out.push(crate::data::bitemporal::ClaimPolarity::Assert.encode());
         crate::data::value::append_canonical(&mut out, &DataValue::from(v));
         out

@@ -488,14 +488,8 @@ impl RelAlgebra {
                 let (from, to) = match axis {
                     DeltaAxis::Valid => (AsOf::current(from), AsOf::current(to)),
                     DeltaAxis::Sys => (
-                        AsOf {
-                            valid: from,
-                            sys: MAX_VALIDITY_TS,
-                        },
-                        AsOf {
-                            valid: to,
-                            sys: MAX_VALIDITY_TS,
-                        },
+                        AsOf::at(from, MAX_VALIDITY_TS),
+                        AsOf::at(to, MAX_VALIDITY_TS),
                     ),
                 };
                 Ok(Self::Delta(DeltaRA {

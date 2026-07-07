@@ -354,7 +354,7 @@ mod tests {
     }
 
     fn bval(polarity: ClaimPolarity) -> Vec<u8> {
-        let mut v = REL.raw_encode().to_vec();
+        let mut v = Vec::new();
         v.push(polarity.encode());
         v
     }
@@ -378,10 +378,7 @@ mod tests {
 
     fn walk(store: &MapSeek, sys_at: i64, valid_at: i64) -> Result<Vec<Tuple>> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf {
-            valid: vts(sys_at),
-            sys: vts(valid_at),
-        };
+        let as_of = AsOf::at(vts(sys_at), vts(valid_at));
         let cursor = store.open_skip_cursor(&lo, &hi);
         SkipWalk::new(cursor, &lo, &hi, as_of).take(1000).collect()
     }
@@ -501,7 +498,7 @@ mod tests {
         let mut hostile_sys_tag = bikey(5, 100, 1);
         let n = hostile_sys_tag.len();
         hostile_sys_tag[n - 10] = 0xFE;
-        let mut unknown_polarity = REL.raw_encode().to_vec();
+        let mut unknown_polarity = Vec::new();
         unknown_polarity.push(0xEE);
 
         let scenarios: Vec<Vec<(Vec<u8>, Vec<u8>)>> = vec![

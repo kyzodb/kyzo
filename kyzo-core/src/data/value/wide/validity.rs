@@ -153,6 +153,15 @@ impl AsOf {
             sys: MAX_VALIDITY_TS,
         }
     }
+
+    /// The general two-coordinate historical read: what the record said at
+    /// system time `sys` about valid time `valid`. Argument order is
+    /// `(sys, valid)` — system coordinate first — matching the field
+    /// documentation; [`AsOf::current`] is the special case `sys` pinned
+    /// to the latest coordinate.
+    pub fn at(sys: ValidityTs, valid: ValidityTs) -> AsOf {
+        AsOf { valid, sys }
+    }
 }
 
 #[cfg(test)]

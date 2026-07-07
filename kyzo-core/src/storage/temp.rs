@@ -277,7 +277,7 @@ mod tests {
     /// A bitemporal value: relation-id header, polarity byte, no payload —
     /// the shape the engine writes for a key-only relation.
     fn bv(polarity: ClaimPolarity) -> Vec<u8> {
-        let mut v = REL.raw_encode().to_vec();
+        let mut v = Vec::new();
         v.push(polarity.encode());
         v
     }
@@ -296,10 +296,7 @@ mod tests {
     /// fails fast rather than merely hanging.
     fn scan_at_coord(t: &TempTx, sys: i64, valid: i64) -> Vec<(i64, i64)> {
         let (lo, hi) = rel_bounds();
-        let as_of = AsOf {
-            valid: ValidityTs::from_raw(sys),
-            sys: ValidityTs::from_raw(valid),
-        };
+        let as_of = AsOf::at(ValidityTs::from_raw(sys), ValidityTs::from_raw(valid));
         t.range_skip_scan_tuple(&lo, &hi, as_of)
             .take(1000)
             .map(|r| {
@@ -687,7 +684,7 @@ mod tests {
         let e = || bv(ClaimPolarity::Erase);
         let mut garbage_payload = bv(ClaimPolarity::Assert);
         garbage_payload.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack
-        let mut unknown_polarity = REL.raw_encode().to_vec();
+        let mut unknown_polarity = Vec::new();
         unknown_polarity.push(0xEE);
         let scenarios: Vec<(Vec<(Vec<u8>, Vec<u8>)>, &str)> = vec![
             (
@@ -760,10 +757,7 @@ mod tests {
             }
             for sys in &sys_queries {
                 for ts in &queries {
-                    let at = AsOf {
-                        valid: ValidityTs::from_raw(*sys),
-                        sys: ValidityTs::from_raw(*ts),
-                    };
+                    let at = AsOf::at(ValidityTs::from_raw(*sys), ValidityTs::from_raw(*ts));
                     let a = collect_skip(temp_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let b = collect_skip(fjall_tx.range_skip_scan_tuple(&lower, &upper, at));
                     let c = collect_skip(sim_tx.range_skip_scan_tuple(&lower, &upper, at));

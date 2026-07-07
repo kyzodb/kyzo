@@ -650,8 +650,12 @@ impl RelationHandle {
                 span
             }
         );
-        let mut ret = Vec::with_capacity(9 + 16 * (tuple.len() - start));
-        ret.extend(self.id.raw_encode());
+        // The stored value opens with its polarity byte, then — for an
+        // assertion — the non-key columns' canonical encodings. The
+        // relation id is NOT repeated here: it is already the key's
+        // 8-byte prefix, so carrying it in the value too would be pure
+        // redundancy.
+        let mut ret = Vec::with_capacity(1 + 16 * (tuple.len() - start));
         ret.push(polarity.encode());
         if polarity == ClaimPolarity::Assert {
             for v in &tuple[start..] {
@@ -662,17 +666,17 @@ impl RelationHandle {
     }
 
     /// Encode the non-key columns of `tuple` as this relation's stored
-    /// value: an 8-byte header (the relation id — carried because the
-    /// kernel's value decoder, `extend_tuple_from_v`, is pinned to skip
-    /// exactly `VALUE_HEADER_LEN` bytes) followed by the msgpack payload.
+    /// value: the columns' canonical encodings concatenated. No header —
+    /// the relation id is the key prefix, not repeated here, and the value
+    /// decoder ([`extend_tuple_from_v`]) reads canonical bytes directly.
     pub(crate) fn encode_val_for_store(
         &self,
         tuple: &[DataValue],
         span: SourceSpan,
     ) -> Result<Vec<u8>> {
         let start = self.metadata.keys.len();
-        // The original sliced `tuple[start..]` unchecked and panicked on a
-        // short tuple (law 5); arity is a caller error, reported as one.
+        // A short tuple is a caller arity error, reported as one — never a
+        // slice-index panic.
         ensure!(
             tuple.len() >= start,
             StoredRelArityMismatch {
@@ -682,26 +686,24 @@ impl RelationHandle {
                 span
             }
         );
-        let mut ret = Vec::with_capacity(8 + 8 * (tuple.len() - start));
-        ret.extend(self.id.raw_encode());
-        tuple[start..]
-            .serialize(&mut Serializer::new(&mut ret))
-            .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+        let mut ret = Vec::with_capacity(16 * (tuple.len() - start));
+        for v in &tuple[start..] {
+            crate::data::value::append_canonical(&mut ret, v);
+        }
         Ok(ret)
     }
 
     /// Encode an arbitrary tuple as a stored value (used where the caller
-    /// has already split keys from dependents).
+    /// has already split keys from dependents). Canonical bytes, no header.
     pub(crate) fn encode_val_only_for_store(
         &self,
         tuple: &[DataValue],
         _span: SourceSpan,
     ) -> Result<Vec<u8>> {
-        let mut ret = Vec::with_capacity(8 + 8 * tuple.len());
-        ret.extend(self.id.raw_encode());
-        tuple
-            .serialize(&mut Serializer::new(&mut ret))
-            .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+        let mut ret = Vec::with_capacity(16 * tuple.len());
+        for v in tuple {
+            crate::data::value::append_canonical(&mut ret, v);
+        }
         Ok(ret)
     }
 

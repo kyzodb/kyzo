@@ -1065,10 +1065,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100); // sys stamp 1 (first commit)
         assert_at(&db, &h, 1, 10, 200); // sys stamp 2 (correction, same instant)
         // Fixed valid = MAX (current belief about "now"); sys axis varies.
-        let before = AsOf {
-            valid: vts(0),
-            sys: MAX_VALIDITY_TS,
-        };
+        let before = AsOf::at(vts(0), MAX_VALIDITY_TS);
         let after = AsOf::current(MAX_VALIDITY_TS);
         let rows = delta_rows(&db, &h, before, after);
         assert_eq!(rows, vec![(1, 200, SIGN_PLUS)]);
