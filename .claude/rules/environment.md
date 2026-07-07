@@ -23,16 +23,18 @@ it, and say you did.
 
 ## The rule
 
-- **Official story gates run in the container:** `docker compose run --rm kyzo-dev just gate`. Native
-  runs are allowed for speed, but every gate report states **native vs containerized**.
-- **The memory cap is the container's cgroup RSS ceiling, never `ulimit -v`.** `ulimit -v` caps
-  virtual address space, which Rust's per-thread allocator arenas over-reserve; it manufactures fake
-  OOMs at high parallelism while real RSS is fine. A gate report proving an OOM must show
-  `/sys/fs/cgroup/memory.max`, `RUST_TEST_THREADS`, peak RSS (`/usr/bin/time -v` / `VmHWM`), and
-  whether it was a kernel OOM-kill, a Rust allocation failure, or a timeout.
-- **Benchmark reports include:** environment (native/container + service), CPU count, memory limit,
-  `RUST_TEST_THREADS`, raw results, correctness result, and peak RSS. All bench lives in THIS repo
-  (`bench-results/`, `examples/bench_tc.rs`, `scripts/run-bench.sh`); there is no external bench lane.
+- **EVERY cargo run goes through the container. There is no native path.** Build/test/clippy/bench are
+  ALWAYS `docker compose run --rm kyzo-dev just <recipe>` (or `kyzo-bench just bench`). A raw native
+  `cargo test`/`cargo build`/`cargo clippy` or a bare native `just <compiling-recipe>` is a defect —
+  `pre-bash-guard.sh` blocks it and steers you to the container.
+- **Never hand-set a memory or parallelism limit.** No `ulimit -v`, no `timeout`, no
+  `--test-threads`. The container's cgroup RSS ceiling (`mem_limit`) and pinned `RUST_TEST_THREADS`
+  ARE the limits, prebaked in `docker-compose.yml`. `ulimit -v` caps virtual address space (which Rust
+  over-reserves) and manufactures fake OOMs — it is banned.
+- **Benchmark reports include:** service (`kyzo-dev`/`kyzo-bench`), CPU count, `memory.max`,
+  `RUST_TEST_THREADS`, raw results, correctness result, and peak RSS — all read from inside the
+  container (`just env-report`/`just memcheck`). All bench lives in THIS repo (`bench-results/`,
+  `examples/bench_tc.rs`, `scripts/run-bench.sh`); there is no external bench lane.
 
 ## No mindless ratchet
 

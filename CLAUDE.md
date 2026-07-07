@@ -42,12 +42,13 @@ make the repo catch it.
 - **One tree, one branch.** Real tree, current branch. No worktrees, no parallel patch stacks. Commit
   and push freely as units land; the go-gate is only public/irreversible acts (merge to main, tags,
   releases, new remotes).
-- **Verify, never assert.** Every claim is backed by a real `cargo` run or by reading the file.
-- **Gates run in the pinned container; reports say which.** Official gates run in the repo-defined
-  container (`docker compose run --rm kyzo-dev just gate`), whose real cgroup RSS ceiling is the
-  memory cap — NOT `ulimit -v` (it caps virtual address space, which Rust over-reserves, and was the
-  sole source of the "12 GB cap / OOM at -j4" noise). Native runs are allowed for speed; every gate
-  report states native-vs-containerized plus environment/mem-limit/threads/peak-RSS (`rules/environment.md`).
+- **Verify, never assert.** Every claim is backed by a real run (in the container, below) or by
+  reading the file.
+- **ALL cargo runs go through the container. No exceptions, ever.** Every build/test/clippy/bench is
+  `docker compose run --rm kyzo-dev just <recipe>` (or `kyzo-bench` for measurements). Never run
+  `cargo`/`just` natively, and never hand-set a memory limit (`ulimit -v`, `timeout`, `--test-threads`)
+  — the container's cgroup RSS ceiling and pinned threads ARE the limits. There is no "native for
+  speed" path; a raw native `cargo test` is a defect, blocked by `pre-bash-guard.sh` (`rules/environment.md`).
 - **Pure Rust, `#![forbid(unsafe_code)]`, zero exceptions** in first-party code (`rules/unsafe.md`).
   FFI lives only in the bindings; the core depends on nothing of ours.
 - **MPL-2.0.** Preserve every CozoDB copyright header and attribution verbatim; add ours alongside.
