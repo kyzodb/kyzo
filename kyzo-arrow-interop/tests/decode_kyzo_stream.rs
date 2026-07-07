@@ -39,22 +39,19 @@ fn real_arrow_reader_decodes_a_uniformly_typed_batch() {
                 v_float(1.5),
                 DataValue::Bool(true),
                 DataValue::Str("ab".into()),
-            ]
-            .into(),
+            ],
             vec![
                 v_int(2),
                 v_float(2.5),
                 DataValue::Bool(false),
                 DataValue::Str("".into()),
-            ]
-            .into(),
+            ],
             vec![
                 v_int(3),
                 v_float(3.5),
                 DataValue::Bool(true),
                 DataValue::Str("cde".into()),
-            ]
-            .into(),
+            ],
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");
@@ -111,10 +108,10 @@ fn real_arrow_reader_decodes_nulls_via_the_validity_bitmap() {
     let named = NamedRows::new(
         vec!["n".into()],
         vec![
-            vec![v_int(10)].into(),
-            vec![DataValue::Null].into(),
-            vec![v_int(30)].into(),
-            vec![DataValue::Null].into(),
+            vec![v_int(10)],
+            vec![DataValue::Null],
+            vec![v_int(30)],
+            vec![DataValue::Null],
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");
@@ -154,9 +151,9 @@ fn real_arrow_reader_decodes_a_binary_column() {
     let named = NamedRows::new(
         vec!["blob".into()],
         vec![
-            vec![DataValue::Bytes(vec![0, 1, 2])].into(),
-            vec![DataValue::Bytes(vec![])].into(),
-            vec![DataValue::Bytes(vec![255, 254])].into(),
+            vec![DataValue::Bytes(vec![0, 1, 2])],
+            vec![DataValue::Bytes(vec![])],
+            vec![DataValue::Bytes(vec![255, 254])],
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");
