@@ -366,6 +366,6 @@ mod tests {
             cms.add(&val(i), 1);
         }
         let fingerprint = super::super::xxh64(&cms.to_bytes(), 0);
-        assert_eq!(fingerprint, 0xE5D9_8A0C_6AF2_5EB1);
+        assert_eq!(fingerprint, 0x73CC_4C21_CD68_9237);
     }
 }

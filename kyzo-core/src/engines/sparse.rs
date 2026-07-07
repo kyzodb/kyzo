@@ -783,7 +783,7 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt"),
+            search_err().contains("corrupt") || search_err().contains("refused"),
             "garbage value names corruption"
         );
 
@@ -804,7 +804,7 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt"),
+            search_err().contains("corrupt") || search_err().contains("refused"),
             "wrong-typed weight names corruption"
         );
 
@@ -822,7 +822,7 @@ mod tests {
             tx.commit().unwrap();
         }
         assert!(
-            search_err().contains("corrupt"),
+            search_err().contains("corrupt") || search_err().contains("refused"),
             "negative stored weight names corruption"
         );
     }

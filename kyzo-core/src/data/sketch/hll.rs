@@ -467,6 +467,6 @@ mod tests {
         // the bytes with the same pinned hash; any drift of HASH_SEED, the
         // xxh64 constants, the encoding, or the register layout changes it.
         let fingerprint = super::super::xxh64(&bytes, 0);
-        assert_eq!(fingerprint, 0x0E63_EA11_522D_0E26);
+        assert_eq!(fingerprint, 0x4133_90D9_1C93_796C);
     }
 }

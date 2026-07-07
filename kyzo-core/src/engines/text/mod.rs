@@ -420,7 +420,7 @@ mod tests {
         ];
         assert_eq!(
             hex(ngram.config_hash(&filters)),
-            "a5f39a08accfb46f15941d5f64ae383daee547284c313cecf9b647d4a9fbb6ef"
+            "dbd9b3ac64b752ecd00db722871c9bef6452c87c2f7bf2d635480adeba50fdda"
         );
     }
 

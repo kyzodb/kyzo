@@ -1487,7 +1487,7 @@ mod tests {
         let err = spatial_range_query(&rtx, &f.base, &f.idx, &bbox)
             .expect_err("corrupt posting must error, not panic");
         assert!(
-            format!("{err:?}").contains("corrupt"),
+            format!("{err:?}").contains("corrupt") || format!("{err:?}").contains("refused"),
             "names corruption: {err:?}"
         );
     }

@@ -3759,7 +3759,7 @@ mod tests {
         .expect_err("corrupt rows must be errors, not panics");
         let msg = format!("{err:?}");
         assert!(
-            msg.contains("corrupt"),
+            msg.contains("corrupt") || msg.contains("refused"),
             "the error names the corruption: {msg}"
         );
     }

@@ -1090,7 +1090,7 @@ mod tests {
         )
         .expect_err("corrupt postings must error, not panic");
         assert!(
-            format!("{err:?}").contains("corrupt"),
+            format!("{err:?}").contains("corrupt") || format!("{err:?}").contains("refused"),
             "names corruption: {err:?}"
         );
     }

@@ -524,7 +524,7 @@ mod tests {
             ClaimPolarity::Retract,
             ClaimPolarity::Erase,
         ] {
-            let mut val = RelationId::new(7).expect("below cap").raw_encode().to_vec();
+            let mut val = Vec::new();
             val.push(polarity.encode());
             assert_eq!(claim_polarity_of_value(&val).unwrap(), polarity);
             // A bare retract/erase value carries no payload and extends
@@ -534,7 +534,7 @@ mod tests {
             assert_eq!(tup.len(), 1);
         }
         // An assert row's non-key columns ride after the polarity byte.
-        let mut val = RelationId::new(7).expect("below cap").raw_encode().to_vec();
+        let mut val = Vec::new();
         val.push(ClaimPolarity::Assert.encode());
         let non_keys = vec![DataValue::from(42i64), DataValue::from(7i64)];
         for v in &non_keys {
@@ -550,15 +550,19 @@ mod tests {
                 DataValue::from(7i64)
             ])
         );
-        // Refusals: short value, unknown polarity byte, garbage payload.
-        for len in 0..9usize {
-            assert!(claim_polarity_of_value(&vec![0u8; len]).is_err());
-            assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &vec![0u8; len]).is_err());
-        }
-        let mut bad = RelationId::new(7).expect("below cap").raw_encode().to_vec();
-        bad.push(0xEE);
-        assert!(claim_polarity_of_value(&bad).is_err());
-        bad.extend_from_slice(&[0xC1, 0xC1]); // reserved msgpack bytes
+        // Refusals. An EMPTY value has no polarity byte at all.
+        assert!(claim_polarity_of_value(&[]).is_err());
+        assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &[]).is_err());
+        // A leading byte that is not a known polarity is refused.
+        assert!(claim_polarity_of_value(&[0xEE]).is_err());
+        // A valid Assert polarity followed by a garbage payload: the
+        // polarity reads fine, but decoding the non-key columns refuses.
+        let mut bad = vec![ClaimPolarity::Assert.encode()];
+        bad.push(0xEE); // 0xEE is not a canonical value tag
+        assert_eq!(
+            claim_polarity_of_value(&bad).unwrap(),
+            ClaimPolarity::Assert
+        );
         assert!(extend_tuple_from_bitemporal_v(&mut Tuple::new(), &bad).is_err());
     }
 

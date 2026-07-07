@@ -149,16 +149,20 @@ impl FixedRule for CsvReader {
                                 }
                             }),
                             ColType::Int => {
-                                let f = op_to_float(&[dv]).unwrap_or(DataValue::Null);
-                                match f.get_int() {
-                                    None => {
-                                        if typ.nullable {
-                                            out_tuple.push(DataValue::Null)
-                                        } else {
-                                            bail!("cannot convert {} to type {}", s, typ)
-                                        }
-                                    }
-                                    Some(i) => out_tuple.push(DataValue::from(i)),
+                                // Parse as a float, then take it as an int
+                                // only if it is exactly integral: "1" ->
+                                // 1, "1.5"/"oops" -> null or a typed
+                                // refusal. `get_int` alone is strict on
+                                // representation (a float 1.0 is not an
+                                // int), so the integral check is explicit.
+                                let integral = op_to_float(&[dv])
+                                    .ok()
+                                    .and_then(|v| v.get_float())
+                                    .filter(|x| x.is_finite() && x.fract() == 0.0);
+                                match integral {
+                                    Some(x) => out_tuple.push(DataValue::from(x as i64)),
+                                    None if typ.nullable => out_tuple.push(DataValue::Null),
+                                    None => bail!("cannot convert {} to type {}", s, typ),
                                 };
                             }
                             _ => bail!("cannot convert {} to type {}", s, typ),

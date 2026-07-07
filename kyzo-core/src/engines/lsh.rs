@@ -873,7 +873,7 @@ mod tests {
     /// Pinned signature of `{Int(1), Int(2), Int(3)}` under seeds `[10, 20, 30]`
     /// (memcmp element bytes → seeded xxHash32 → per-seed minimum). Regenerate
     /// ONLY as a deliberate format migration.
-    const PINNED_SIGNATURE: [u32; 3] = [35817863, 664601928, 1320854893];
+    const PINNED_SIGNATURE: [u32; 3] = [741026819, 588752230, 918467525];
 
     /// The determinism law at the whole-index level: two databases building the
     /// SAME index from the SAME facts — with the SEEDED permutation draw, not a

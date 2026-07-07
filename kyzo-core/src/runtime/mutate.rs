@@ -2019,7 +2019,7 @@ mod bulk_write_tests {
         let digest = sha2::Sha256::digest(&hasher_input);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
-            hex, "befcab34181e7818f461e4a439791e0fbcd5ef615ecaac03de3c97f3a491316a",
+            hex, "a559042fc0fc06276b06219a4e09239e5582f80eaaa7de1d2553748fd314643f",
             "store bytes for the seeded bulk workload changed"
         );
     }

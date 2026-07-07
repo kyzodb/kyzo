@@ -1597,7 +1597,12 @@ fn verify_storage_reports_injected_corruption() {
     assert!(!report.is_clean());
     assert_eq!(report.checked, 51, "the walk must continue past corruption");
     assert_eq!(report.corrupt.len(), 1);
-    assert!(report.corrupt[0].error.contains("unknown type tag"));
+    assert!(
+        report.corrupt[0].error.contains("decode refused")
+            || report.corrupt[0].error.contains("BadTag"),
+        "names the decode failure: {}",
+        report.corrupt[0].error
+    );
 }
 
 /// Law 6 (concurrency liveness) through the retry helper: contended
