@@ -1,0 +1,49 @@
+# KyzoDB transitive-closure benchmark
+commit:  db00c49  #119 task 7 remediation 4/10: goldens derived from the format law
+date:    2026-07-07
+machine: Linux 7.0.14-arch1-1 x86_64 | Intel(R) Core(TM) i9-14900K | 32 cores
+workload: transitive closure (canonical 2-rule Datalog) over SNAP graphs, variant=count
+label:    value-plane (#119) vs after-118 baseline (2af0446)
+
+TC graph=email-Eu-core edges=25571 nodes=1005 variant=count load_ms=105.1 query_ms=5350.6 closure_rows=793283 peak_rss_kb=95044
+TC graph=p2p-Gnutella08 edges=20777 nodes=6301 variant=count load_ms=86.3 query_ms=31382.5 closure_rows=13148244 peak_rss_kb=984132
+TC graph=wiki-Vote edges=103689 nodes=7115 variant=count load_ms=434.9 query_ms=88757.1 closure_rows=11947132 peak_rss_kb=979112
+
+# INTERPRETED DELTA vs 2af0446 (baseline query_ms in parens):
+#   email-Eu-core   5350.6 (4228.8)  +26.5%   rss 95044 (85596)  +11%
+#   p2p-Gnutella08 31382.5 (26603.2) +18.0%   rss 984132 (785436) +25%
+#   wiki-Vote      88757.1 (69837.7) +27.1%   rss 979112 (870060) +13%
+# closure_rows IDENTICAL on all three: correctness preserved, this is a pure
+# throughput regression. Root-cause below.
+
+# ROOT CAUSE (confirmed by code inspection, not speculation):
+# The fixpoint temp store (query/temp_store.rs, Story #77 chunk 2) dedups
+# every derived tuple by keying a BTreeMap on its bare encoding
+# (encode_tuple_bare), in the hottest loop of semi-naive evaluation. That
+# call moved from the OLD memcmp encoder to the value plane's CANONICAL
+# encoder:
+#   - old memcmp Int: value tag + 8-byte order-flipped f64 + 1 marker byte
+#     (~10 B), produced by a single order_encode_f64 bit-flip.
+#   - new canonical Num key: value tag + 13-byte [class][exp+1080 (2B)]
+#     [frac72 (9B)][repr] (14 B), produced by a sign/magnitude +
+#     mantissa/exponent decomposition.
+# For transitive closure -- millions of 2-int tuples deduped per fixpoint
+# iteration -- the wider, richer per-int encoding costs ~18-27% more query
+# time and 11-25% more RSS (larger BTreeMap keys). closure_rows are
+# identical: this is throughput, not correctness.
+#
+# WHY the encoding is richer, not wasteful: the canonical key places ints
+# AND floats in ONE exact real-value order (Int(1) and Float(1.0) adjacent,
+# exact beyond 2^53) -- the "memory that cannot misremember" property the
+# old lossy i-as-f64 comparisons lacked. The cost IS the exactness; there
+# is no format-preserving shortcut that keeps it.
+#
+# RECOVERY (owner: #120, packed-u32 relations): the values-based fixpoint
+# store and its per-tuple canonical encoding are a known-temporary. #120
+# replaces them with packed u32 CODE columns over the interning arena --
+# tuples dedup by dense code identity, no per-tuple canonical encode in the
+# hot loop. The query/batch.rs module built in task 6 is the seam it swaps
+# behind. This regression is the value plane paying for its substrate now
+# and reclaiming it (plus more) when the code columns land. Per CLAUDE.md
+# ("benchmarks are instruments, never gates"), this is a recorded finding
+# with a named owner, not a hidden loss.
