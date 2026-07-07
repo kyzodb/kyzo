@@ -42,6 +42,10 @@ make the repo catch it.
 - **One tree, one branch.** Real tree, current branch. No worktrees, no parallel patch stacks. Commit
   and push freely as units land; the go-gate is only public/irreversible acts (merge to main, tags,
   releases, new remotes).
+- **Sub-agent delegation is operator-authorized only.** You have NO authority to spawn, dispatch, or
+  fan out to a sub-agent (reviewer, triager, worker, or any Agent/Task) on your own decision. When a
+  sub-agent would help, describe what you propose to delegate and ASK the operator; spawn only after
+  they say yes.
 - **Verify, never assert.** Every claim is backed by a real run (in the container, below) or by
   reading the file.
 - **ALL cargo runs go through the container. No exceptions, ever.** Every build/test/clippy/bench is
