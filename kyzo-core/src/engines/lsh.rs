@@ -108,11 +108,9 @@ use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
 use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
-use crate::data::memcmp::MemCmpEncoder;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, GermanStr};
+use crate::data::value::{DataValue, Tuple, append_canonical};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
@@ -311,10 +309,10 @@ pub(crate) struct HashValues(pub(crate) Vec<u32>);
 /// integer or a collection writes native-endian words and word-sized length
 /// prefixes (`write_usize`), so the same value produced a different MinHash
 /// signature on a different platform or Rust version — the same index, a
-/// different near-duplicate answer. memcmp is version- and platform-pinned.
+/// different near-duplicate answer. The canonical encoding is version- and platform-pinned.
 fn element_bytes(v: &DataValue) -> Vec<u8> {
     let mut b = Vec::new();
-    b.encode_datavalue(v);
+    append_canonical(&mut b, v);
     b
 }
 
@@ -325,7 +323,7 @@ fn element_bytes(v: &DataValue) -> Vec<u8> {
 fn ngram_bytes(tokens: &[SmartString<LazyCompact>]) -> Vec<u8> {
     let mut b = Vec::new();
     for t in tokens {
-        b.encode_datavalue(&DataValue::Str(GermanStr::from_str(t)));
+        append_canonical(&mut b, &DataValue::Str(t.to_string()));
     }
     b
 }
@@ -491,7 +489,7 @@ fn decode_inv_chunks(
         Some(DataValue::List(l)) => l
             .into_iter()
             .map(|chunk| match chunk {
-                DataValue::Bytes(b) => Ok(b.as_bytes().to_vec()),
+                DataValue::Bytes(b) => Ok(b),
                 other => Err(miette!(IndexRowCorrupt::new(
                     &inv_idx.name,
                     key,
@@ -544,11 +542,12 @@ pub(crate) fn lsh_del<T: WriteTx>(
             decoded
         }
     };
+    // Placeholder slot: every loop below overwrites key[0] before use.
     let mut key = Vec::with_capacity(key_len + 1);
-    key.push(DataValue::Bot);
+    key.push(DataValue::Null);
     key.extend_from_slice(key_part);
     for chunk in chunks {
-        key[0] = DataValue::Bytes(GermanStr::from_bytes(&chunk));
+        key[0] = DataValue::Bytes(chunk.clone());
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
@@ -604,11 +603,12 @@ pub(crate) fn lsh_put<T: WriteTx>(
     };
     let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
 
+    // Placeholder slot: every loop below overwrites key[0] before use.
     let mut key = Vec::with_capacity(key_len + 1);
-    key.push(DataValue::Bot);
+    key.push(DataValue::Null);
     key.extend_from_slice(inv_key_part);
     for chunk in chunks.iter() {
-        key[0] = DataValue::Bytes(GermanStr::from_bytes(chunk));
+        key[0] = DataValue::Bytes(chunk.clone());
         let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
         // Postings carry no value; an empty value decodes as a key-only
         // tuple (pinned kernel behavior).
@@ -616,10 +616,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
     }
 
     let inv_val_part = vec![DataValue::List(
-        chunks
-            .into_iter()
-            .map(|c| DataValue::Bytes(GermanStr::from_bytes(&c)))
-            .collect(),
+        chunks.into_iter().map(DataValue::Bytes).collect(),
     )];
     let inv_key = inv_idx.encode_key_for_store(inv_key_part, SourceSpan::default())?;
     let inv_val = inv_idx.encode_val_only_for_store(&inv_val_part, SourceSpan::default())?;
@@ -690,7 +687,7 @@ pub(crate) fn lsh_search(
     let mut key_prefix = Tuple::with_capacity(1);
     for chunk in chunks {
         key_prefix.clear();
-        key_prefix.push(DataValue::Bytes(GermanStr::from_bytes(&chunk)));
+        key_prefix.push(DataValue::Bytes(chunk.clone()));
         for ks in idx.scan_prefix(tx, &key_prefix) {
             cancel.check()?;
             let ks = ks?;

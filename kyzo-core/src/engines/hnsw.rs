@@ -205,11 +205,11 @@ use smartstring::SmartString;
 use thiserror::Error;
 
 use crate::data::expr::{Bytecode, eval_bytecode_pred};
-use crate::data::memcmp::MemCmpEncoder;
+use crate::data::relation::VecElementType;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::{DataValue, GermanStr, VecElementType, Vector};
+use crate::data::value::Tuple;
+use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
 use crate::engines::IndexRowCorrupt;
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
@@ -293,7 +293,7 @@ impl HnswIndexManifest {
         // across platforms and releases.
         let mut key_bytes: Vec<u8> = Vec::new();
         for v in &id.tuple_key {
-            key_bytes.encode_datavalue(v);
+            append_canonical(&mut key_bytes, v);
         }
         key_bytes.extend_from_slice(&(id.field as u64).to_le_bytes());
         key_bytes.extend_from_slice(&id.sub_wire().to_le_bytes());
@@ -574,14 +574,14 @@ impl HnswRow {
         match self {
             HnswRow::Node {
                 degree, vec_hash, ..
-            } => smallvec![
+            } => vec![
                 DataValue::from(*degree as i64),
-                DataValue::Bytes(GermanStr::from_bytes(vec_hash)),
+                DataValue::Bytes(vec_hash.clone()),
                 DataValue::from(false),
             ],
             HnswRow::Edge {
                 dist, ignore_link, ..
-            } => smallvec![
+            } => vec![
                 DataValue::from(*dist),
                 DataValue::Null,
                 DataValue::from(*ignore_link),
@@ -589,9 +589,9 @@ impl HnswRow {
             HnswRow::Canary {
                 bottom_layer,
                 entry_key,
-            } => smallvec![
+            } => vec![
                 DataValue::from(*bottom_layer),
-                DataValue::Bytes(GermanStr::from_bytes(entry_key)),
+                DataValue::Bytes(entry_key.clone()),
                 DataValue::from(false),
             ],
         }
@@ -648,7 +648,7 @@ impl HnswRow {
             };
             return Ok(HnswRow::Canary {
                 bottom_layer,
-                entry_key: entry_key.as_bytes().to_vec(),
+                entry_key: entry_key.clone(),
             });
         }
         if layer > 0 {
@@ -714,7 +714,7 @@ impl HnswRow {
                 layer,
                 at: fr,
                 degree: degree as usize,
-                vec_hash: vec_hash.as_bytes().to_vec(),
+                vec_hash: vec_hash.clone(),
             })
         } else {
             let dist = tuple[2 * kl + 5].get_float().ok_or_else(|| {
@@ -781,44 +781,40 @@ impl IndexVec {
                 got: v.len(),
             });
         }
-        let mut v = match (v, manifest.dtype) {
-            (Vector::F32(a), VecElementType::F32) => Vector::F32(a.clone()),
-            (Vector::F64(a), VecElementType::F64) => Vector::F64(a.clone()),
-            (Vector::F32(a), VecElementType::F64) => Vector::F64(a.mapv(|x| x as f64)),
-            (Vector::F64(a), VecElementType::F32) => Vector::F32(a.mapv(|x| x as f32)),
+        // Components are f64 canonical; an F32 manifest quantizes each
+        // through f32 precision (the graph's stored working precision
+        // until #122's quantized residency owns this decision).
+        let mut components: Vec<f64> = match manifest.dtype {
+            VecElementType::F32 => v.as_slice().iter().map(|&x| x as f32 as f64).collect(),
+            VecElementType::F64 => v.as_slice().to_vec(),
         };
-        if !finite(&v) {
+        if !components.iter().all(|x| x.is_finite()) {
             bail!(NonFiniteVectorRefused);
         }
         if manifest.distance == HnswDistance::Cosine {
-            match &mut v {
-                Vector::F32(a) => {
-                    let norm = a.dot(a).sqrt();
-                    if norm == 0.0 {
-                        bail!(ZeroVectorRefused);
-                    }
-                    a.mapv_inplace(|x| x / norm);
-                }
-                Vector::F64(a) => {
-                    let norm = a.dot(a).sqrt();
-                    if norm == 0.0 {
-                        bail!(ZeroVectorRefused);
-                    }
-                    a.mapv_inplace(|x| x / norm);
-                }
+            let norm = components.iter().map(|x| x * x).sum::<f64>().sqrt();
+            if norm == 0.0 {
+                bail!(ZeroVectorRefused);
+            }
+            for x in &mut components {
+                *x /= norm;
             }
             // Subnormal norms can overflow components on division; such a
             // vector is indistinguishable from zero for cosine purposes.
-            if !finite(&v) {
+            if !components.iter().all(|x| x.is_finite()) {
                 bail!(ZeroVectorRefused);
             }
         }
-        Ok(IndexVec(v))
+        Ok(IndexVec(Vector::new(components)))
     }
 
-    /// Content hash of the admitted vector (change detection on re-put).
+    /// Content hash of the admitted vector (change detection on re-put):
+    /// SHA-256 over the vector's canonical value encoding — the one byte
+    /// form, hashed by a pinned algorithm.
     fn content_hash(&self) -> Vec<u8> {
-        self.0.get_hash().as_ref().to_vec()
+        use sha2::Digest;
+        let bytes = encode_owned(&DataValue::Vector(self.0.clone()));
+        sha2::Sha256::digest(bytes.as_bytes()).to_vec()
     }
 
     /// The distance between two admitted vectors under `metric`. Total: a
@@ -829,43 +825,14 @@ impl IndexVec {
     pub(crate) fn dist(&self, other: &Self, metric: HnswDistance) -> f64 {
         #[cfg(test)]
         probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
+        let (a, b) = (self.0.as_slice(), other.0.as_slice());
         match metric {
-            HnswDistance::L2 => match (&self.0, &other.0) {
-                (Vector::F32(a), Vector::F32(b)) => {
-                    let diff = a - b;
-                    diff.dot(&diff) as f64
-                }
-                (Vector::F64(a), Vector::F64(b)) => {
-                    let diff = a - b;
-                    diff.dot(&diff)
-                }
-                (a, b) => {
-                    let (a, b) = (widen(a), widen(b));
-                    let diff = &a - &b;
-                    diff.dot(&diff)
-                }
-            },
+            HnswDistance::L2 => a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum(),
             // Unit vectors by construction: plain dot product.
-            HnswDistance::Cosine | HnswDistance::InnerProduct => match (&self.0, &other.0) {
-                (Vector::F32(a), Vector::F32(b)) => 1.0 - a.dot(b) as f64,
-                (Vector::F64(a), Vector::F64(b)) => 1.0 - a.dot(b),
-                (a, b) => 1.0 - widen(a).dot(&widen(b)),
-            },
+            HnswDistance::Cosine | HnswDistance::InnerProduct => {
+                1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
+            }
         }
-    }
-}
-
-fn finite(v: &Vector) -> bool {
-    match v {
-        Vector::F32(a) => a.iter().all(|x| x.is_finite()),
-        Vector::F64(a) => a.iter().all(|x| x.is_finite()),
-    }
-}
-
-fn widen(v: &Vector) -> ndarray::Array1<f64> {
-    match v {
-        Vector::F32(a) => a.mapv(|x| x as f64),
-        Vector::F64(a) => a.clone(),
     }
 }
 
@@ -935,8 +902,8 @@ impl<'m> VectorCache<'m> {
             }
         }
         match field {
-            DataValue::Vec(v) => {
-                let admitted = IndexVec::admit(v, self.manifest)?;
+            DataValue::Vector(v) => {
+                let admitted = IndexVec::admit(&v, self.manifest)?;
                 self.cache.insert(id.clone(), admitted);
                 Ok(())
             }
@@ -990,7 +957,12 @@ fn entry_point(
     #[cfg(test)]
     probe::ENTRY_POINT_CALLS.with(|c| c.set(c.get() + 1));
     let first = idx
-        .scan_bounded_prefix(tx, &[], &[DataValue::from(i64::MIN)], &[DataValue::from(0)])
+        .scan_bounded_prefix(
+            tx,
+            &[],
+            &[ScanBound::Value(DataValue::from(i64::MIN))],
+            &[ScanBound::Value(DataValue::from(0i64))],
+        )
         .next();
     #[cfg(test)]
     probe::ENTRY_POINT_DUR.with(|c| c.set(c.get() + _t0.elapsed()));
@@ -1218,7 +1190,8 @@ fn put_fresh_at_levels(
     // deliberate.)
     let entry_key = idx
         .encode_key_for_store(&node_key(bottom_layer, at), SourceSpan::default())?
-        .into_vec();
+        .as_bytes()
+        .to_vec();
     HnswRow::Canary {
         bottom_layer,
         entry_key,
@@ -1635,7 +1608,8 @@ fn remove_vec<T: WriteTx>(
             Some((bottom_layer, ep_id)) => {
                 let entry_key = idx
                     .encode_key_for_store(&node_key(bottom_layer, &ep_id), SourceSpan::default())?
-                    .into_vec();
+                    .as_bytes()
+                    .to_vec();
                 let val = idx.encode_val_only_for_store(
                     &HnswRow::Canary {
                         bottom_layer,
@@ -1706,7 +1680,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             ))
         })?;
         match val {
-            DataValue::Vec(v) => extracted.push((
+            DataValue::Vector(v) => extracted.push((
                 IndexVec::admit(v, manifest)?,
                 VectorId {
                     tuple_key: tuple[..key_len].to_vec().into(),
@@ -1716,7 +1690,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             )),
             DataValue::List(l) => {
                 for (sub, item) in l.iter().enumerate() {
-                    if let DataValue::Vec(v) = item {
+                    if let DataValue::Vector(v) = item {
                         extracted.push((
                             IndexVec::admit(v, manifest)?,
                             VectorId {
@@ -1941,7 +1915,7 @@ pub(crate) fn hnsw_knn(
                     .name
                     .clone()
             };
-            cand_tuple.push(DataValue::Str(GermanStr::from_str(&name)));
+            cand_tuple.push(DataValue::Str(name.to_string()));
         }
         if params.bind_field_idx {
             cand_tuple.push(match cand.sub {
@@ -2072,7 +2046,8 @@ impl PartialOrd for Ranked {
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<Vec<u8>> {
     Ok(idx
         .encode_key_for_store(&node_key(0, id), SourceSpan::default())?
-        .into_vec())
+        .as_bytes()
+        .to_vec())
 }
 
 /// Keep the `k` smallest `Ranked` in a bounded max-heap (the max is the worst
@@ -2133,7 +2108,7 @@ fn build_cand_tuple(
                 .name
                 .clone()
         };
-        cand_tuple.push(DataValue::Str(GermanStr::from_str(&name)));
+        cand_tuple.push(DataValue::Str(name.to_string()));
     }
     if params.bind_field_idx {
         cand_tuple.push(match cand.sub {
@@ -2212,15 +2187,20 @@ fn layer0_nodes<'a>(
     base: &'a RelationHandle,
     idx: &'a RelationHandle,
 ) -> impl Iterator<Item = Result<VectorId>> + 'a {
-    idx.scan_bounded_prefix(tx, &[], &[DataValue::from(0i64)], &[DataValue::from(0i64)])
-        .filter_map(move |row| match row {
+    idx.scan_bounded_prefix(
+        tx,
+        &[],
+        &[ScanBound::Value(DataValue::from(0i64))],
+        &[ScanBound::Value(DataValue::from(0i64))],
+    )
+    .filter_map(move |row| match row {
+        Err(e) => Some(Err(e)),
+        Ok(row) => match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name) {
             Err(e) => Some(Err(e)),
-            Ok(row) => match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name) {
-                Err(e) => Some(Err(e)),
-                Ok(HnswRow::Node { at, .. }) => Some(Ok(at)),
-                Ok(_) => None,
-            },
-        })
+            Ok(HnswRow::Node { at, .. }) => Some(Ok(at)),
+            Ok(_) => None,
+        },
+    })
 }
 
 /// Deterministic seeded-stride selectivity estimate → strategy. One pass over

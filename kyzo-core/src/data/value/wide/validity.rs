@@ -118,6 +118,10 @@ impl StoredValiditySlot {
         StoredValiditySlot(ts)
     }
 
+    pub fn as_datavalue(self) -> super::super::DataValue {
+        super::super::DataValue::Validity(self.as_validity())
+    }
+
     pub fn as_validity(self) -> Validity {
         Validity {
             timestamp: self.0,

@@ -32,7 +32,6 @@
 //!   never trusted to be well-formed just because it was once stored.
 
 use crate::DataValue;
-use crate::data::memcmp::MemCmpEncoder;
 use crate::engines::text::cangjie::tokenizer::CangJieTokenizer;
 use crate::engines::text::tokenizer::{
     AlphaNumOnlyFilter, AsciiFoldingFilter, BoxTokenFilter, Language, LowerCaser, NgramTokenizer,
@@ -114,14 +113,14 @@ impl TokenizerConfig {
         hasher.update(self.name.as_bytes());
         let mut args_vec = vec![];
         for arg in &self.args {
-            args_vec.encode_datavalue(arg);
+            crate::data::value::append_canonical(&mut args_vec, arg);
         }
         hasher.update(&args_vec);
         for filter in filters {
             hasher.update(filter.name.as_bytes());
             args_vec.clear();
             for arg in &filter.args {
-                args_vec.encode_datavalue(arg);
+                crate::data::value::append_canonical(&mut args_vec, arg);
             }
             hasher.update(&args_vec);
         }

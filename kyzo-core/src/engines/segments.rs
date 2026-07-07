@@ -60,8 +60,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
-use crate::data::tuple::{RelationId, Tuple};
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, RelationId, Tuple};
 
 /// A relation-version witness: proof of "which write-history instant my
 /// snapshot belongs to", obtainable only through

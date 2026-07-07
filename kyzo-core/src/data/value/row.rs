@@ -47,6 +47,7 @@ use super::arena::{Arena, BulkObserver, EpochRemap};
 use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
+use super::{DataValue, ScanBound};
 
 /// The execution form of a relation fragment: `arity`-wide tuples as
 /// row-major packed codes under one container domain.
@@ -245,6 +246,158 @@ fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeEr
 /// held by the type surface.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EncodedKey(Vec<u8>);
+
+/// A stored relation's identity: the 8-byte big-endian keyspace prefix
+/// every key of the relation opens with (storage key layout v1).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RelationId(pub u64);
+
+impl RelationId {
+    /// The system catalog keyspace.
+    pub const SYSTEM: RelationId = RelationId(0);
+
+    pub fn raw_encode(self) -> [u8; 8] {
+        self.0.to_be_bytes()
+    }
+
+    pub fn raw_decode(bytes: &[u8]) -> Result<RelationId, DecodeError> {
+        let Some(head) = bytes.get(..8) else {
+            return Err(DecodeError::Truncated);
+        };
+        Ok(RelationId(u64::from_be_bytes(
+            head.try_into().expect("8 bytes"),
+        )))
+    }
+
+    /// The next id, `None` on exhaustion (the caller owns the typed
+    /// refusal).
+    pub fn next(self) -> Option<RelationId> {
+        self.0.checked_add(1).map(RelationId)
+    }
+}
+
+/// Key encoding for anything that dereferences to a value slice: the
+/// relation prefix, then each value's canonical bytes.
+pub trait TupleT {
+    fn encode_as_key(&self, rel: RelationId) -> EncodedKey;
+}
+
+impl<S: AsRef<[DataValue]> + ?Sized> TupleT for S {
+    fn encode_as_key(&self, rel: RelationId) -> EncodedKey {
+        encode_key_with_suffix(rel, self.as_ref(), &[])
+    }
+}
+
+/// The write path's key mint: prefix, key columns, then a value suffix
+/// (e.g. the two bitemporal slots), in one pass.
+pub fn encode_key_with_suffix(
+    rel: RelationId,
+    cols: &[DataValue],
+    suffix: &[DataValue],
+) -> EncodedKey {
+    let mut out = Vec::with_capacity(8 + 16 * (cols.len() + suffix.len()));
+    out.extend_from_slice(&rel.raw_encode());
+    for v in cols {
+        super::canonical::append_canonical(&mut out, v);
+    }
+    for v in suffix {
+        super::canonical::append_canonical(&mut out, v);
+    }
+    EncodedKey(out)
+}
+
+/// Column-wise bound arrays close a scan key the moment they hit a
+/// sentinel: `Value` columns keep contributing bytes, `Least` ends the
+/// key with nothing (every extension sorts at-or-after), `Greatest` ends
+/// it with the `0xFF` byte no canonical encoding begins (every extension
+/// sorts before). An UPPER key that runs out of bounds without a
+/// sentinel gets the `0xFF` tail — the scan includes every extension of
+/// its value prefix.
+fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
+    for b in bounds {
+        match b {
+            ScanBound::Value(v) => super::canonical::append_canonical(out, v),
+            ScanBound::Least => return,
+            ScanBound::Greatest => {
+                out.push(0xFF);
+                return;
+            }
+        }
+    }
+    if upper {
+        out.push(0xFF);
+    }
+}
+
+/// The LOWER scan key for `prefix` columns then column-wise `bounds`.
+pub fn scan_key_lower(rel: RelationId, prefix: &[DataValue], bounds: &[ScanBound]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + 16 * (prefix.len() + bounds.len()));
+    out.extend_from_slice(&rel.raw_encode());
+    for v in prefix {
+        super::canonical::append_canonical(&mut out, v);
+    }
+    append_bounds(&mut out, bounds, false);
+    out
+}
+
+/// The UPPER scan key (inclusive of every extension; see
+/// [`scan_key_lower`] for the sentinel law).
+pub fn scan_key_upper(rel: RelationId, prefix: &[DataValue], bounds: &[ScanBound]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + 16 * (prefix.len() + bounds.len()));
+    out.extend_from_slice(&rel.raw_encode());
+    for v in prefix {
+        super::canonical::append_canonical(&mut out, v);
+    }
+    append_bounds(&mut out, bounds, true);
+    out
+}
+
+/// [`scan_key_lower`] with the prefix read through a projection of
+/// `row` — the zero-materialization probe path.
+pub fn scan_key_lower_projected(
+    rel: RelationId,
+    row: &[DataValue],
+    cols: &[usize],
+    bounds: &[ScanBound],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + 16 * (cols.len() + bounds.len()));
+    out.extend_from_slice(&rel.raw_encode());
+    for &c in cols {
+        super::canonical::append_canonical(&mut out, &row[c]);
+    }
+    append_bounds(&mut out, bounds, false);
+    out
+}
+
+/// [`scan_key_upper`] through a projection of `row`.
+pub fn scan_key_upper_projected(
+    rel: RelationId,
+    row: &[DataValue],
+    cols: &[usize],
+    bounds: &[ScanBound],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + 16 * (cols.len() + bounds.len()));
+    out.extend_from_slice(&rel.raw_encode());
+    for &c in cols {
+        super::canonical::append_canonical(&mut out, &row[c]);
+    }
+    append_bounds(&mut out, bounds, true);
+    out
+}
+
+impl std::ops::Deref for EncodedKey {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for EncodedKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 impl EncodedKey {
     /// Storage key layout v1: keys open with the relation id as 8
@@ -527,6 +680,43 @@ mod tests {
             Err(PushError::ForeignArena)
         ));
         let _ = other.epoch();
+    }
+
+    /// The scan-key sentinel law: lower <= every key of matching rows
+    /// <= upper, for value bounds and both sentinels.
+    #[test]
+    fn scan_keys_bracket_matching_rows() {
+        use super::super::ScanBound;
+        let rel = RelationId(7);
+        let rows: Vec<Vec<DataValue>> = vec![
+            vec![DataValue::from(0i64), DataValue::from("a")],
+            vec![DataValue::from(0i64), DataValue::from("zz")],
+            vec![DataValue::from(1i64), DataValue::from("a")],
+        ];
+        let keys: Vec<Vec<u8>> = rows
+            .iter()
+            .map(|r| r.encode_as_key(rel).as_bytes().to_vec())
+            .collect();
+        // Bounds [Value(0)]..[Value(0)]: exactly the first-column-0 rows.
+        let lo = scan_key_lower(rel, &[], &[ScanBound::Value(DataValue::from(0i64))]);
+        let hi = scan_key_upper(rel, &[], &[ScanBound::Value(DataValue::from(0i64))]);
+        assert!(lo.as_slice() <= keys[0].as_slice() && keys[1].as_slice() <= hi.as_slice());
+        assert!(keys[2].as_slice() > hi.as_slice());
+        // Full range: Least..Greatest brackets everything in the relation.
+        let lo = scan_key_lower(rel, &[], &[ScanBound::Least]);
+        let hi = scan_key_upper(rel, &[], &[ScanBound::Greatest]);
+        for k in &keys {
+            assert!(lo.as_slice() <= k.as_slice() && k.as_slice() <= hi.as_slice());
+        }
+        // Next relation's keys fall outside.
+        let foreign = rows[0].encode_as_key(RelationId(8));
+        assert!(foreign.as_bytes() > hi.as_slice());
+        // Projected == materialized.
+        let row = vec![DataValue::from("x"), DataValue::from(0i64)];
+        assert_eq!(
+            scan_key_lower_projected(rel, &row, &[1], &[]),
+            scan_key_lower(rel, &row[1..2], &[])
+        );
     }
 
     /// The fixed slot widths the storage layout constants promise are

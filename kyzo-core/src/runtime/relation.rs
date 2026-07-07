@@ -116,13 +116,11 @@ use crate::data::program::InputRelationHandle;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::tuple::{
-    EncodedKey, RelationId, Tuple, TupleT, decode_tuple_from_kv, extend_tuple_from_v,
+use crate::data::value::{
+    AsOf, DataValue, EncodedKey, MAX_VALIDITY_TS, RelationId, ScanBound, StoredValiditySlot, Tuple,
+    TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
+    scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
-use crate::data::tuple::{
-    encode_key_with_suffix, encode_projected_key, encode_projected_key_with_suffix,
-};
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS, StoredValiditySlot, ValidityTs};
 use crate::storage::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
@@ -656,8 +654,9 @@ impl RelationHandle {
         ret.extend(self.id.raw_encode());
         ret.push(polarity.encode());
         if polarity == ClaimPolarity::Assert {
-            crate::data::fact_payload::encode_fact_payload(&tuple[start..], &mut ret)
-                .map_err(|e| miette!("cannot serialize row payload for {}: {e}", self.name))?;
+            for v in &tuple[start..] {
+                crate::data::value::append_canonical(&mut ret, v);
+            }
         }
         Ok(ret)
     }
@@ -894,8 +893,8 @@ impl RelationHandle {
         // build (key columns copied, then `Bot` pushed) was one whole heap
         // allocation per row that carried no information the direct
         // encode below doesn't already have.
-        let lower = key_cols.encode_as_key(self.id);
-        let upper = encode_key_with_suffix(self.id, key_cols, &[DataValue::Bot]);
+        let lower = scan_key_lower(self.id, key_cols, &[]);
+        let upper = scan_key_upper(self.id, key_cols, &[]);
         tx.range_skip_scan_tuple(&lower, &upper, as_of)
             .next()
             .transpose()
@@ -915,7 +914,10 @@ impl RelationHandle {
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
                 tx.get(&key_data)?
-                    .map(|val_data| decode_tuple_from_kv(&key_data, &val_data, Some(self.arity())))
+                    .map(|val_data| {
+                        decode_tuple_from_kv(&key_data, &val_data, Some(self.arity()))
+                            .map_err(miette::Report::from)
+                    })
                     .transpose()
             }
         }
@@ -997,8 +999,8 @@ impl RelationHandle {
             }
             KeyspaceKind::AlgorithmState => {
                 let cols = &cols[..cols.len().min(self.metadata.keys.len())];
-                let lower = encode_projected_key(self.id, row, cols);
-                let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+                let lower = scan_key_lower_projected(self.id, row, cols, &[]);
+                let upper = scan_key_upper_projected(self.id, row, cols, &[]);
                 tx.range_scan_tuple(&lower, &upper)
             }
         }
@@ -1027,8 +1029,8 @@ impl RelationHandle {
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let keys_len = self.metadata.keys.len();
         let cols = &cols[..cols.len().min(keys_len)];
-        let lower = encode_projected_key(self.id, row, cols);
-        let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+        let lower = scan_key_lower_projected(self.id, row, cols, &[]);
+        let upper = scan_key_upper_projected(self.id, row, cols, &[]);
         Box::new(
             tx.range_skip_scan_tuple(&lower, &upper, as_of)
                 .map(move |r| r.map(|t| Self::strip_time_slots(keys_len, t))),
@@ -1037,20 +1039,24 @@ impl RelationHandle {
 
     /// Scan CURRENT rows under `prefix` whose next key column lies in
     /// `[lower, upper]`.
+    /// The byte bounds bracketing every key of this relation (the
+    /// engines' whole-keyspace scans and counts).
+    pub(crate) fn whole_relation_bounds(&self) -> (Vec<u8>, Vec<u8>) {
+        (
+            scan_key_lower(self.id, &[], &[]),
+            scan_key_upper(self.id, &[], &[]),
+        )
+    }
+
     pub(crate) fn scan_bounded_prefix<'a>(
         &self,
         tx: &'a impl ReadTx,
         prefix: &[DataValue],
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut lower_t = prefix.to_vec();
-        lower_t.extend_from_slice(lower);
-        let mut upper_t = prefix.to_vec();
-        upper_t.extend_from_slice(upper);
-        upper_t.push(DataValue::Bot);
-        let lower_encoded = lower_t.encode_as_key(self.id);
-        let upper_encoded = upper_t.encode_as_key(self.id);
+        let lower_encoded = scan_key_lower(self.id, prefix, lower);
+        let upper_encoded = scan_key_upper(self.id, prefix, upper);
         match self.keyspace_kind {
             KeyspaceKind::Facts => {
                 let keys_len = self.metadata.keys.len();
@@ -1075,13 +1081,11 @@ impl RelationHandle {
         tx: &'a impl ReadTx,
         row: &[DataValue],
         cols: &[usize],
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = encode_projected_key_with_suffix(self.id, row, cols, lower);
-        let mut upper_owned = upper.to_vec();
-        upper_owned.push(DataValue::Bot);
-        let upper_encoded = encode_projected_key_with_suffix(self.id, row, cols, &upper_owned);
+        let lower_encoded = scan_key_lower_projected(self.id, row, cols, lower);
+        let upper_encoded = scan_key_upper_projected(self.id, row, cols, upper);
         match self.keyspace_kind {
             KeyspaceKind::Facts => {
                 let keys_len = self.metadata.keys.len();
@@ -1105,14 +1109,12 @@ impl RelationHandle {
         tx: &'a impl ReadTx,
         row: &[DataValue],
         cols: &[usize],
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = encode_projected_key_with_suffix(self.id, row, cols, lower);
-        let mut upper_owned = upper.to_vec();
-        upper_owned.push(DataValue::Bot);
-        let upper_encoded = encode_projected_key_with_suffix(self.id, row, cols, &upper_owned);
+        let lower_encoded = scan_key_lower_projected(self.id, row, cols, lower);
+        let upper_encoded = scan_key_upper_projected(self.id, row, cols, upper);
         let keys_len = self.metadata.keys.len();
         Box::new(
             tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
@@ -1132,8 +1134,8 @@ impl RelationHandle {
         let len = self.metadata.keys.len();
         debug_assert!(cols.len() >= len, "point probe under key width");
         let cols = &cols[..len];
-        let lower = encode_projected_key(self.id, row, cols);
-        let upper = encode_projected_key_with_suffix(self.id, row, cols, &[DataValue::Bot]);
+        let lower = scan_key_lower_projected(self.id, row, cols, &[]);
+        let upper = scan_key_upper_projected(self.id, row, cols, &[]);
         tx.range_skip_scan_tuple(&lower, &upper, AsOf::current(MAX_VALIDITY_TS))
             .next()
             .transpose()
@@ -1147,17 +1149,12 @@ impl RelationHandle {
         &self,
         tx: &'a impl ReadTx,
         prefix: &Tuple,
-        lower: &[DataValue],
-        upper: &[DataValue],
+        lower: &[ScanBound],
+        upper: &[ScanBound],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let mut lower_t = prefix.clone();
-        lower_t.extend(lower.iter().cloned());
-        let mut upper_t = prefix.clone();
-        upper_t.extend(upper.iter().cloned());
-        upper_t.push(DataValue::Bot);
-        let lower_encoded = lower_t.encode_as_key(self.id);
-        let upper_encoded = upper_t.encode_as_key(self.id);
+        let lower_encoded = scan_key_lower(self.id, prefix, lower);
+        let upper_encoded = scan_key_upper(self.id, prefix, upper);
         let keys_len = self.metadata.keys.len();
         Box::new(
             tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)
@@ -1244,7 +1241,10 @@ pub(crate) fn list_relations(tx: &impl ReadTx) -> Result<Vec<RelationHandle>> {
     let lower = SystemKey::Relation("").encode();
     // The exclusive upper bound is the next relation prefix; SYSTEM is id
     // zero, so its successor is always in range.
-    let upper = RelationId::SYSTEM.next().raw_encode();
+    let upper = RelationId::SYSTEM
+        .next()
+        .expect("SYSTEM is id zero; its successor exists")
+        .raw_encode();
     let mut ret = vec![];
     for kv in tx.range_scan(&lower, &upper) {
         let (_k, v) = kv?;

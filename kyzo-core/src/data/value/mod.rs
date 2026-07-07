@@ -57,7 +57,10 @@ pub use cell::{Minted, Value};
 pub use code::{Code, StampedCode};
 pub use column::{AdmittedCodes, AdmittedWords, CodeColumn, Column, Domain, WordColumn};
 pub use number::{Num, NumRepr};
-pub use row::{AdmittedRows, EncodedKey, PushError, Rows};
+pub use row::{
+    AdmittedRows, EncodedKey, PushError, RelationId, Rows, TupleT, encode_key_with_suffix,
+    scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
+};
 pub use string::GermanStr;
 pub use tag::Tag;
 pub use wide::interval::{Bound, Interval};
@@ -540,6 +543,25 @@ pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, Deco
         out.push(v);
         at += used;
     }
+    Ok(out)
+}
+
+/// Append a stored VALUE payload's rows onto `tuple` (plain canonical
+/// concatenation — the non-temporal keyspaces' value form).
+pub fn extend_tuple_from_v(tuple: &mut Tuple, val: &[u8]) -> Result<(), DecodeError> {
+    tuple.extend(decode_values_all(val)?);
+    Ok(())
+}
+
+/// Decode a stored key/value pair into one logical row: the key's
+/// columns (relation prefix skipped), then the value payload's columns.
+pub fn decode_tuple_from_kv(
+    key: &[u8],
+    val: &[u8],
+    size_hint: Option<usize>,
+) -> Result<Tuple, DecodeError> {
+    let mut out = decode_tuple_from_key(key, size_hint.unwrap_or(0))?;
+    extend_tuple_from_v(&mut out, val)?;
     Ok(out)
 }
 

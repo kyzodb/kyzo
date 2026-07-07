@@ -107,8 +107,7 @@ use thiserror::Error;
 use crate::data::expr::{Bytecode, eval_bytecode_pred};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::tuple::Tuple;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -219,8 +218,9 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
 /// The posting key under construction: `[dim, src_key…]` with the dimension
 /// slot left as `Bot` for the caller to fill per posting.
 fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
+    // Placeholder slot: every caller overwrites key[0] before use.
     let mut key = Tuple::with_capacity(1 + base_key_len);
-    key.push(DataValue::Bot);
+    key.push(DataValue::Null);
     key.extend(tuple[..base_key_len].iter().cloned());
     key
 }
@@ -308,9 +308,8 @@ pub(crate) fn sparse_del<T: WriteTx>(
 /// need `N`), so the RA tier can obtain it once without a hidden per-search
 /// cache in these pure functions.
 pub(crate) fn sparse_total_docs(tx: &impl ReadTx, base: &RelationHandle) -> Result<usize> {
-    let start = base.encode_partial_key_for_store(&[]);
-    let end = base.encode_partial_key_for_store(&[DataValue::Bot]);
-    tx.range_count(start.as_bytes(), end.as_bytes())
+    let (start, end) = base.whole_relation_bounds();
+    tx.range_count(&start, &end)
 }
 
 /// Decode one posting row into `(src_key, weight)`. The row layout is
@@ -397,7 +396,7 @@ pub(crate) fn sparse_search(
     // term to a given document).
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
-        let prefix = smallvec![DataValue::from(dim as i64)];
+        let prefix = vec![DataValue::from(dim as i64)];
         for row in idx.scan_prefix(tx, &prefix) {
             let row = row?;
             let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, &row)?;

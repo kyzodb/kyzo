@@ -135,6 +135,23 @@ impl<'de> serde::Deserialize<'de> for DataValue {
     }
 }
 
+/// Typed refusals compose with the engine's diagnostics: default
+/// `Diagnostic` surface over the plane's `Error` impl.
+impl miette::Diagnostic for crate::data::value::DecodeError {}
+
+/// `RelationId`'s wire form: the raw u64 (catalog metadata).
+impl serde::Serialize for crate::data::value::RelationId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for crate::data::value::RelationId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        u64::deserialize(deserializer).map(crate::data::value::RelationId)
+    }
+}
+
 /// serde → plane: total. serde_json numbers are finite by construction
 /// (standard parsing admits no NaN/inf), and serde maps carry unique
 /// keys, so the plane's refusals cannot fire on this path.
