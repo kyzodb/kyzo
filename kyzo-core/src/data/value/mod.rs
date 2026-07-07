@@ -11,5 +11,11 @@
 //! or a dense `Code` into a shared, order-preserving interning arena.
 
 pub mod arena;
+pub mod canonical;
+pub mod cell;
 pub mod code;
+pub mod number;
 pub mod prefix;
+pub mod string;
+pub mod tag;
+pub mod wide;

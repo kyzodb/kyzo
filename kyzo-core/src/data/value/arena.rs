@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! The order-preserving interning dictionary: dedups values, assigns dense `Code`, resolves `Code` -> canonical bytes. The out-of-line home.
+//! The order-preserving interning dictionary: dedups values, assigns dense `Code`; observers resolve admitted stamps to canonical bytes. The out-of-line home.
 //!
 //! ## The type-C contract (ratified on #119)
 //!
@@ -21,10 +21,11 @@
 //!   two ways to open an observer. It has no read methods — there is no
 //!   unnamed frame to smuggle a code through.
 //! - [`Frame`] is the live observer: a borrow of the arena's current
-//!   state. Reads take a [`FrameCode`] witness, minted by
-//!   [`Frame::admit`]. `intern` and `seal` take `&mut Arena`, so the
-//!   borrow checker retires every frame *and every witness minted from
-//!   it* at the next mutation.
+//!   state. Every spend verifies the stamp exactly (arena identity and
+//!   epoch) — deliberately no lifetime-branded witness, because a
+//!   lifetime cannot prove frame identity across coexisting arenas.
+//!   `intern` and `seal` take `&mut Arena`, so the borrow checker retires
+//!   every frame at the next mutation.
 //! - [`Snapshot`] is the pinned observer: run references + a delta cut +
 //!   frozen heap chunks + the epoch — exactly the ruling's "snapshot's
 //!   dictionary", owned and `Send + Sync`. It answers identically forever
@@ -64,9 +65,9 @@
 //! 1. **Every observable value satisfies its law.** [`Run`]'s only mints
 //!    are [`Run::build`] (sorts + dedups: establishes it) and
 //!    [`Run::merge`] (preserves it); a [`Remap`] is mintable only by a
-//!    merge; an [`EpochRemap`] only by [`Arena::seal`]; a [`FrameCode`]
-//!    only by [`Frame::admit`]; a [`StampedCode`] only by this plane.
-//!    None of the unlawful states can be written down.
+//!    merge; an [`EpochRemap`] only by [`Arena::seal`]; a [`StampedCode`]
+//!    only by holders of the arena's mint token. None of the unlawful
+//!    states can be written down, and every spend re-verifies its stamp.
 //! 2. **No observer exists during a transition.** `seal` holds
 //!    `&mut self`, so no `Frame` (or witness) survives into it, and
 //!    `Snapshot`s hold only immutable structure — frozen chunks and runs
@@ -93,7 +94,6 @@
 //! silently resolving wrong values.
 
 use std::cmp::Ordering;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
 
@@ -135,6 +135,13 @@ pub struct Heap {
 
 /// A byte-string's location in a [`Heap`]: chunk id, offset, length. Only
 /// [`Heap::push`] mints one.
+///
+/// **The zero-span law**: a zero-length span owns no bytes, and its chunk
+/// id is MEANINGLESS — it may address a chunk that was never materialized
+/// (empty values append nothing). Every consumer must branch on
+/// `len == 0` before interpreting `chunk`/`off`; serialization, equality,
+/// or debug tooling that reads those fields of an empty span is wrong by
+/// definition.
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
     chunk: u32,
@@ -423,6 +430,14 @@ impl Remap {
     }
 }
 
+/// The stamp-minting authority token: a zero-sized proof whose only
+/// constructor is private to this file. `StampedCode::mint` demands one,
+/// so the set of modules that can mint stamps is exactly the set that can
+/// write `StampMintAuthority(())` — this file, and nothing else, however
+/// large the value plane grows. Deliberately not `Clone`/`Default`: no
+/// path manufactures one from nothing.
+pub(super) struct StampMintAuthority(pub(self) ());
+
 /// Process-unique arena identity: minted once per [`Arena::new`] from a
 /// monotone counter (creation order — deterministic, no clock), carried by
 /// every stamp and observer, verified on every spend. Never part of any
@@ -434,7 +449,12 @@ static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(0);
 
 impl ArenaId {
     fn mint() -> ArenaId {
-        ArenaId(NEXT_ARENA_ID.fetch_add(1, AtomicOrd::Relaxed))
+        let id = NEXT_ARENA_ID.fetch_add(1, AtomicOrd::Relaxed);
+        // The contract says process-unique, so wrap-around is refused,
+        // not silently recycled (2^63 arenas is unreachable; the assert
+        // is the contract made executable).
+        assert!(id < u64::MAX / 2, "ArenaId space exhausted");
+        ArenaId(id)
     }
 }
 
@@ -542,7 +562,12 @@ impl EpochRemap {
             self.to,
             sc.epoch()
         );
-        StampedCode::mint(self.apply_raw(sc.code()), self.to, self.arena)
+        StampedCode::mint(
+            self.apply_raw(sc.code()),
+            self.to,
+            self.arena,
+            StampMintAuthority(()),
+        )
     }
 
     /// The raw morphism, for bulk gathers by epoch-stamped containers
@@ -551,18 +576,22 @@ impl EpochRemap {
         let c = code.0;
         if c < self.from_sealed_len {
             // Old sealed rank r moves to the r-th position not occupied
-            // by an inserted value: r + x where x is the fixpoint of
-            // x = |{d in inserted : d < r + x + 1}|.
+            // by an inserted value: r + k, where k counts the inserted
+            // entries with D[i] - i <= r. (D[i] - i is the number of
+            // non-inserted positions below D[i]; it is non-decreasing
+            // because D is strictly increasing, so k is one binary
+            // search.)
             let r = c as usize;
-            let mut x = 0usize;
-            loop {
-                let nx = self.inserted.partition_point(|&d| (d as usize) < r + x + 1);
-                if nx == x {
-                    break;
+            let (mut lo, mut hi) = (0usize, self.inserted.len());
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if self.inserted[mid] as usize - mid <= r {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
                 }
-                x = nx;
             }
-            Code((r + x) as u32)
+            Code((r + lo) as u32)
         } else {
             let a = (c - self.from_sealed_len) as usize;
             assert!(
@@ -649,6 +678,12 @@ impl<'a, S: Store> View<'a, S> {
     /// Global ordered rank of `value` across sealed and delta together:
     /// `Ok(rank)` if interned, `Err(rank it would take)` if not.
     fn rank(&self, value: &[u8]) -> Result<usize, usize> {
+        // Prefix-first compares narrow lengths to u32; a >4GiB needle
+        // would wrap and mis-compare, so it is refused up front.
+        assert!(
+            value.len() <= u32::MAX as usize,
+            "needle exceeds u32 compare space"
+        );
         let np = prefix4(value);
         let mut rank = 0usize;
         let mut found = false;
@@ -774,28 +809,20 @@ impl<'a, S: Store> View<'a, S> {
     }
 }
 
-/// A code admitted into a specific live [`Frame`]: the spendable witness.
-/// Mintable only by [`Frame::admit`]; dies with its frame — any `intern`
-/// or `seal` takes `&mut Arena` and retires the frame *and every witness
-/// carrying its lifetime*.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct FrameCode<'f> {
-    code: Code,
-    _frame: PhantomData<&'f ()>,
-}
-
-impl FrameCode<'_> {
-    /// The raw identity (for packing results under the frame's epoch).
-    #[inline]
-    pub fn code(self) -> Code {
-        self.code
-    }
-}
-
 /// The live observer frame: a borrow of the arena's current state, and
 /// the only place a code can be spent live. Valid for exactly one
 /// quiescent stretch of one epoch — the borrow checker retires it at the
 /// next mutation.
+///
+/// There is deliberately **no lifetime-branded spendable witness**: a
+/// lifetime cannot prove frame identity (two frames over *different*
+/// arenas can coexist and unify lifetimes), so a witness "admitted" by
+/// one frame would compile as spendable in another — the smuggle would
+/// just move from admission to spending. Instead, every spend verifies
+/// the stamp exactly (arena identity and epoch: two integer asserts),
+/// symmetric with [`Snapshot`]. Bulk amortization of that check belongs
+/// to the epoch-stamped containers, which verify one stamp for a whole
+/// column at kernel admission.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
     arena: ArenaId,
@@ -837,42 +864,72 @@ impl<'a> Frame<'a> {
         self.sealed_len
     }
 
-    /// Admit a stamped code into this frame, turning raw identity into a
-    /// spendable witness.
-    ///
-    /// Validity is epoch equality **plus visibility**; for a live frame
-    /// the visibility half is implied rather than checked: stamps are
-    /// mintable only by this plane, every mint is in bounds when issued,
-    /// the arena only grows within an epoch, and no transition
+    /// Verify a stamp against this frame: arena identity and epoch, both
+    /// exact. Validity is stamp equality **plus visibility**; for a live
+    /// frame the visibility half is a theorem rather than a check: stamps
+    /// are mintable only by this plane, every mint is in bounds when
+    /// issued, the arena only grows within an epoch, and no transition
     /// (`&mut Arena`) can coexist with this frame. The bounds theorem is
-    /// re-checked in debug builds. Returns `None` for a stale stamp (cross
-    /// through [`EpochRemap::apply`] instead) and for a foreign arena's
-    /// stamp (which has no lawful crossing at all).
-    pub fn admit(&self, sc: StampedCode) -> Option<FrameCode<'a>> {
-        if sc.arena() == self.arena && sc.epoch() == self.epoch {
-            debug_assert!(
-                (sc.code().raw() as usize) < self.len(),
-                "minting discipline broken: in-epoch stamp not live in the frame"
-            );
-            Some(FrameCode {
-                code: sc.code(),
-                _frame: PhantomData,
-            })
-        } else {
-            None
-        }
+    /// re-checked in debug builds.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a foreign arena's stamp (no lawful crossing exists) or a
+    /// stale epoch (cross through [`EpochRemap::apply`] instead).
+    fn check(&self, sc: StampedCode) -> usize {
+        assert_eq!(
+            sc.arena(),
+            self.arena,
+            "frame of arena {:?} fed a code from foreign arena {:?}",
+            self.arena,
+            sc.arena()
+        );
+        assert_eq!(
+            sc.epoch(),
+            self.epoch,
+            "frame of epoch {:?} fed a code stamped {:?}: cross through the remap door",
+            self.epoch,
+            sc.epoch()
+        );
+        let c = sc.code().raw() as usize;
+        assert!(
+            c < self.len(),
+            "minting discipline broken: in-epoch stamp {c} not live in the frame ({} values)",
+            self.len()
+        );
+        c
     }
 
-    /// Resolve an admitted code to its bytes.
-    pub fn resolve(&self, fc: FrameCode<'a>) -> &'a [u8] {
-        self.view().resolve(fc.code.0 as usize)
+    /// Whether a stamp is spendable in this frame — the non-panicking
+    /// probe for callers that branch. Exact: arena identity, epoch, AND
+    /// liveness bounds, the same three facts [`Frame::resolve`] asserts,
+    /// so `admits(sc)` true means the spend cannot panic.
+    pub fn admits(&self, sc: StampedCode) -> bool {
+        sc.arena() == self.arena
+            && sc.epoch() == self.epoch
+            && (sc.code().raw() as usize) < self.len()
     }
 
-    /// Semantic comparison of two admitted codes: integer compare when
+    /// Resolve a stamped code to its bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a foreign-arena or stale stamp (see [`Frame::admits`]).
+    pub fn resolve(&self, sc: StampedCode) -> &'a [u8] {
+        let c = self.check(sc);
+        self.view().resolve(c)
+    }
+
+    /// Semantic comparison of two stamped codes: integer compare when
     /// both sealed (rank order is byte order), prefix-first bytes
     /// otherwise.
-    pub fn cmp_codes(&self, a: FrameCode<'a>, b: FrameCode<'a>) -> Ordering {
-        self.view().cmp(a.code.0 as usize, b.code.0 as usize)
+    ///
+    /// # Panics
+    ///
+    /// Panics on foreign-arena or stale stamps.
+    pub fn cmp_codes(&self, a: StampedCode, b: StampedCode) -> Ordering {
+        let (ca, cb) = (self.check(a), self.check(b));
+        self.view().cmp(ca, cb)
     }
 
     /// Global ordered rank of `value` across sealed and delta: `Ok(rank)`
@@ -1092,13 +1149,21 @@ impl Arena {
     /// tail code; a novel value joins the delta and gets the next tail
     /// code. Stamps stay spendable until the next [`Arena::seal`].
     ///
+    /// Plane-internal: the arena is generic byte substrate, and raw bytes
+    /// are not the value plane's production currency. The value layer's
+    /// door is `Value::mint`, which spends a `CanonicalBytes` witness.
+    ///
     /// # Panics
     ///
     /// Panics at capacity (`u32::MAX` distinct values).
-    pub fn intern(&mut self, value: &[u8]) -> StampedCode {
+    pub(super) fn intern(&mut self, value: &[u8]) -> StampedCode {
         assert!(
             self.len() < u32::MAX as usize,
             "arena is full: u32::MAX distinct values"
+        );
+        assert!(
+            value.len() <= u32::MAX as usize,
+            "value exceeds u32 span space"
         );
         let np = prefix4(value);
         // Sealed lookup: global sealed rank accumulates across the
@@ -1133,7 +1198,7 @@ impl Arena {
                 }
             }
         };
-        StampedCode::mint(code, self.epoch, self.id)
+        StampedCode::mint(code, self.epoch, self.id, StampMintAuthority(()))
     }
 
     /// Seal the epoch: drain the delta into the runs (with geometric
@@ -1196,7 +1261,12 @@ impl Arena {
             self.sealed_len += delta_n;
         }
 
-        self.epoch = Epoch(self.epoch.0 + 1);
+        self.epoch = Epoch(
+            self.epoch
+                .0
+                .checked_add(1)
+                .expect("epoch counter is monotone, never wraps"),
+        );
         EpochRemap {
             arena: self.id,
             from,
@@ -1252,7 +1322,7 @@ mod tests {
     /// In-plane stamp mint for law sweeps (tests are part of the plane's
     /// minting authority; production stamps come from intern/apply).
     fn stamp(c: usize, epoch: Epoch, arena: ArenaId) -> StampedCode {
-        StampedCode::mint(Code(c as u32), epoch, arena)
+        StampedCode::mint(Code(c as u32), epoch, arena, StampMintAuthority(()))
     }
 
     // ------------------------------------------------------------------
@@ -1349,11 +1419,8 @@ mod tests {
         // Every live code admits and resolves to the oracle's bytes
         // (dense over 0..len; sealed = sorted ranks, tail = arrivals).
         for c in 0..f.len() {
-            let fc = f
-                .admit(stamp(c, f.epoch(), f.arena))
-                .expect("live stamp admits");
             assert_eq!(
-                f.resolve(fc),
+                f.resolve(stamp(c, f.epoch(), f.arena)),
                 naive.resolve(c as u32),
                 "code {c} resolves differently"
             );
@@ -1361,10 +1428,7 @@ mod tests {
         // Sealed codes are strictly byte-ordered.
         let mut prev: Option<&[u8]> = None;
         for c in 0..f.sealed_len() {
-            let v = f.resolve(
-                f.admit(stamp(c, f.epoch(), f.arena))
-                    .expect("sealed admits"),
-            );
+            let v = f.resolve(stamp(c, f.epoch(), f.arena));
             if let Some(p) = prev {
                 assert!(p < v, "sealed order broken at {c}");
             }
@@ -1379,8 +1443,8 @@ mod tests {
         // cmp_codes is the byte order, over every live pair.
         for i in 0..f.len() {
             for j in 0..f.len() {
-                let a = f.admit(stamp(i, f.epoch(), f.arena)).expect("admits");
-                let b = f.admit(stamp(j, f.epoch(), f.arena)).expect("admits");
+                let a = stamp(i, f.epoch(), f.arena);
+                let b = stamp(j, f.epoch(), f.arena);
                 assert_eq!(
                     f.cmp_codes(a, b),
                     naive.resolve(i as u32).cmp(naive.resolve(j as u32)),
@@ -1450,8 +1514,7 @@ mod tests {
                     assert_eq!(sc.epoch(), arena.epoch(), "op {i}: stamp epoch wrong");
                     {
                         let f = arena.frame();
-                        let fc = f.admit(sc).expect("fresh stamp admits");
-                        assert_eq!(f.resolve(fc), b.as_slice(), "op {i}: round-trip");
+                        assert_eq!(f.resolve(sc), b.as_slice(), "op {i}: round-trip");
                     }
                     // Dedup: immediate re-intern is a hit, no growth.
                     let n = arena.len();
@@ -1465,10 +1528,7 @@ mod tests {
                     let live: Vec<Vec<u8>> = {
                         let f = arena.frame();
                         (0..f.len())
-                            .map(|c| {
-                                f.resolve(f.admit(stamp(c, from_epoch, f.arena)).expect("live"))
-                                    .to_vec()
-                            })
+                            .map(|c| f.resolve(stamp(c, from_epoch, f.arena)).to_vec())
                             .collect()
                     };
                     let from_sealed = arena.sealed_len();
@@ -1488,9 +1548,8 @@ mod tests {
                             "op {i}: remap diverged at {old}"
                         );
                         assert_eq!(new.epoch(), arena.epoch(), "op {i}: restamp wrong");
-                        let fc = f.admit(new).expect("restamped admits");
                         assert_eq!(
-                            f.resolve(fc),
+                            f.resolve(new),
                             bytes.as_slice(),
                             "op {i}: code {old} lost its value crossing the seal"
                         );
@@ -1642,12 +1701,12 @@ mod tests {
         arena.intern(b"a");
         let f = arena.frame();
         assert!(
-            f.admit(sc_b).is_none(),
+            !f.admits(sc_b),
             "stale stamp crossed a seal without the remap door"
         );
         let crossed = remap.apply(sc_b);
-        let fc = f.admit(crossed).expect("remapped stamp admits");
-        assert_eq!(f.resolve(fc), b"b");
+        assert!(f.admits(crossed), "remapped stamp admits");
+        assert_eq!(f.resolve(crossed), b"b");
     }
 
     #[test]
@@ -1658,6 +1717,40 @@ mod tests {
         let r1 = arena.seal();
         let sc_new = arena.intern(b"y"); // epoch 1
         r1.apply(sc_new); // r1 reads epoch-0 codes only
+    }
+
+    #[test]
+    fn admits_is_exact_including_bounds() {
+        let mut arena = Arena::new();
+        let sc = arena.intern(b"x");
+        let f = arena.frame();
+        assert!(f.admits(sc));
+        // A forged in-epoch stamp beyond the frame's length is NOT
+        // spendable: admits must agree with what resolve would assert.
+        let forged = stamp(7, f.epoch(), f.arena);
+        assert!(
+            !f.admits(forged),
+            "admits claimed spendability beyond bounds"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "foreign arena")]
+    fn cross_arena_stamp_panics_in_frame_spend() {
+        let mut a = Arena::new();
+        let mut b = Arena::new();
+        let sa = a.intern(b"alpha");
+        b.intern(b"beta");
+        b.frame().resolve(sa);
+    }
+
+    #[test]
+    #[should_panic(expected = "cross through the remap door")]
+    fn stale_stamp_panics_in_frame_spend() {
+        let mut arena = Arena::new();
+        let sc = arena.intern(b"x");
+        arena.seal();
+        arena.frame().resolve(sc);
     }
 
     #[test]
@@ -1694,12 +1787,12 @@ mod tests {
         assert_eq!(a.epoch(), b.epoch(), "both at epoch 0: the dangerous case");
         let fb = b.frame();
         assert!(
-            fb.admit(sa).is_none(),
+            !fb.admits(sa),
             "arena A's stamp admitted into arena B's frame"
         );
         let fa = a.frame();
         assert!(
-            fa.admit(sb).is_none(),
+            !fa.admits(sb),
             "arena B's stamp admitted into arena A's frame"
         );
     }
@@ -1746,7 +1839,7 @@ mod tests {
         // cannot see (tested above); nothing shared ever disagrees.
         assert_eq!(late.resolve(b), b"aa");
         let f = arena.frame();
-        assert_eq!(f.resolve(f.admit(a).expect("live")), b"zz");
+        assert_eq!(f.resolve(a), b"zz");
     }
 
     // ------------------------------------------------------------------
@@ -1797,12 +1890,11 @@ mod tests {
         let f = arena.frame();
         for (sc, v) in &held {
             let crossed = r2.apply(*sc);
-            let fc = f.admit(crossed).expect("crossed stamp admits");
-            assert_eq!(f.resolve(fc), v.as_slice());
+            assert_eq!(f.resolve(crossed), v.as_slice());
         }
         // Post-seal: dense byte order over all five.
         let all: Vec<&[u8]> = (0..f.len())
-            .map(|c| f.resolve(f.admit(stamp(c, f.epoch(), f.arena)).expect("live")))
+            .map(|c| f.resolve(stamp(c, f.epoch(), f.arena)))
             .collect();
         let mut sorted = all.clone();
         sorted.sort();
@@ -1872,10 +1964,7 @@ mod tests {
                 let expect: Vec<Vec<u8>> = {
                     let f = arena.frame();
                     (0..f.len())
-                        .map(|c| {
-                            f.resolve(f.admit(stamp(c, f.epoch(), f.arena)).expect("live"))
-                                .to_vec()
-                        })
+                        .map(|c| f.resolve(stamp(c, f.epoch(), f.arena)).to_vec())
                         .collect()
                 };
                 pinned = Some((arena.snapshot(), expect));
@@ -1884,9 +1973,8 @@ mod tests {
         {
             let f = arena.frame();
             for (sc, i) in &live {
-                let fc = f.admit(*sc).expect("held stamp is current");
                 assert_eq!(
-                    f.resolve(fc),
+                    f.resolve(*sc),
                     values[*i].as_slice(),
                     "stamp lost across epochs"
                 );
@@ -1896,16 +1984,18 @@ mod tests {
         let f = arena.frame();
         for (sc, i) in live.iter_mut() {
             *sc = final_remap.apply(*sc);
-            let fc = f.admit(*sc).expect("crossed stamp admits");
-            assert_eq!(f.resolve(fc), values[*i].as_slice());
+            assert_eq!(f.resolve(*sc), values[*i].as_slice());
         }
         let mut expected = values;
         expected.sort();
         expected.dedup();
         assert_eq!(f.len(), expected.len());
         for (k, v) in expected.iter().enumerate() {
-            let fc = f.admit(stamp(k, f.epoch(), f.arena)).expect("live");
-            assert_eq!(f.resolve(fc), v.as_slice(), "rank {k} wrong at scale");
+            assert_eq!(
+                f.resolve(stamp(k, f.epoch(), f.arena)),
+                v.as_slice(),
+                "rank {k} wrong at scale"
+            );
             assert_eq!(f.rank(v), Ok(k));
         }
         // The early snapshot still answers its pinned world exactly.
@@ -1977,7 +2067,7 @@ mod tests {
             "empty seal moved a code"
         );
         let f = arena.frame();
-        assert_eq!(f.resolve(f.admit(twice).expect("admits")), b"x");
+        assert_eq!(f.resolve(twice), b"x");
     }
 
     #[test]
@@ -1989,7 +2079,7 @@ mod tests {
         let crossed = remap.apply(sc);
         assert_eq!(crossed.code().raw(), 0);
         let f = arena.frame();
-        assert_eq!(f.resolve(f.admit(crossed).expect("admits")), b"");
+        assert_eq!(f.resolve(crossed), b"");
     }
 
     #[test]
@@ -2018,14 +2108,13 @@ mod tests {
         {
             let f = arena.frame();
             for (sc, v) in &held {
-                assert_eq!(f.resolve(f.admit(*sc).expect("live")), v.as_slice());
+                assert_eq!(f.resolve(*sc), v.as_slice());
             }
         }
         let remap = arena.seal();
         let f = arena.frame();
         for (sc, v) in &held {
-            let fc = f.admit(remap.apply(*sc)).expect("crossed");
-            assert_eq!(f.resolve(fc), v.as_slice());
+            assert_eq!(f.resolve(remap.apply(*sc)), v.as_slice());
         }
     }
 
@@ -2065,14 +2154,9 @@ mod tests {
         arena.intern(b"x");
         let f = arena.frame();
         // A forged in-epoch stamp beyond len violates the minting
-        // discipline; the debug bound catches it at admit, the view's
+        // discipline; the debug bound catches it at check, the view's
         // liveness assert in release.
-        let forged = stamp(7, f.epoch(), f.arena);
-        if let Some(fc) = f.admit(forged) {
-            f.resolve(fc);
-        } else {
-            panic!("not live (refused at admit)");
-        }
+        f.resolve(stamp(7, f.epoch(), f.arena));
     }
 
     #[test]

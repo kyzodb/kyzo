@@ -7,4 +7,36 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! `List` / `Set`: arena-resident collection payloads.
+//! `List` / `Set`: the collection faces ARE the canonical sequence
+//! grammar (see [`super::super::canonical`]) — elements' self-terminating
+//! encodings concatenated under a terminator, with Set canonicalized to
+//! the sorted, deduplicated element sequence at encode and REFUSED (not
+//! repaired) at decode if non-canonical. There is no separate wide
+//! encoding: a big collection goes out of line as the same canonical
+//! bytes behind a `Code`, by the cell's residency threshold — residency
+//! is never identity.
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::canonical::{Datum, OwnedDatum, decode, encode};
+    use super::super::super::number::Num;
+
+    #[test]
+    fn nested_collection_identity_round_trips() {
+        let inner = [Datum::Num(Num::int(2)), Datum::Num(Num::int(1))];
+        let outer = [Datum::Set(&inner), Datum::List(&inner)];
+        let enc = encode(Datum::List(&outer));
+        let back = decode(enc.as_bytes()).expect("round-trip");
+        match &back {
+            OwnedDatum::List(items) => {
+                // The set canonicalized to sorted order; the list kept
+                // writing order.
+                assert!(matches!(&items[0], OwnedDatum::Set(s)
+                    if matches!(s[0], OwnedDatum::Num(n) if n == Num::int(1))));
+                assert!(matches!(&items[1], OwnedDatum::List(l)
+                    if matches!(l[0], OwnedDatum::Num(n) if n == Num::int(2))));
+            }
+            other => panic!("wrong shape: {other:?}"),
+        }
+    }
+}

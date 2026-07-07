@@ -7,6 +7,15 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Arena-resident wide payload kinds: everything that does not fit the
-//! 16-byte cell inline and lives out of line behind a `Code`.
+//! The wide value faces: each kind's identity law, defined before its
+//! bytes. The canonical payload encodings live in [`super::super::canonical`]
+//! (one grammar, one authority); residency (inline vs arena) is the
+//! cell's threshold law, not a per-kind decision.
 
+pub mod collection;
+pub mod interval;
+pub mod json;
+pub mod regex;
+pub mod uuid;
+pub mod validity;
+pub mod vector;

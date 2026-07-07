@@ -45,6 +45,7 @@ ordered-float = "5"
 byteorder = "1.5.0"
 itertools = "0.15"
 regex = "1.10.4"
+regex-syntax = "0.8"   # KyzoRegexV1 construction-time pattern validation (already in-tree via regex)
 uuid = { version = "1.8.0", features = ["v1", "v4", "serde"] }
 ndarray = { version = "0.17", features = ["serde"] }
 sha2 = "0.11.0"

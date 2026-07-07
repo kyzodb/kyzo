@@ -21,11 +21,11 @@
 /// - [`StampedCode`] — code + epoch, minted by `Arena::intern` and by
 ///   [`EpochRemap::apply`](super::arena::EpochRemap::apply) (the morphism
 ///   between frames);
-/// - [`Frame::admit`](super::arena::Frame::admit) — turns a `StampedCode`
-///   into a frame-bound [`FrameCode`](super::arena::FrameCode) witness,
-///   spendable for exactly as long as the borrow checker lets the frame
-///   live;
-/// - snapshots spend `StampedCode` directly under exact runtime asserts.
+/// - live [`Frame`](super::arena::Frame)s and pinned
+///   [`Snapshot`](super::arena::Snapshot)s both spend a `StampedCode`
+///   directly, verifying arena identity and epoch exactly on every spend
+///   (a lifetime-branded witness cannot prove frame identity across
+///   coexisting arenas, so none is offered).
 ///
 /// There is deliberately no `Ord`: order is the arena's to answer, inside
 /// a frame. Structural ordering (deterministic iteration, dedup by
@@ -62,15 +62,17 @@ pub struct StampedCode {
 }
 
 impl StampedCode {
-    /// Minting authority is the value plane only: `Arena::intern`,
-    /// `EpochRemap::apply`, and the plane's own tests. A stamp that exists
-    /// was issued by the arena — the law is a type boundary, not a
-    /// crate-wide convention.
+    /// Minting requires the arena's authority token
+    /// ([`StampMintAuthority`](super::arena::StampMintAuthority)), whose
+    /// only constructor is private to `arena.rs` — neighboring plane
+    /// modules can *name* this mint but cannot *call* it. Authority is a
+    /// per-concept compile fact, not a module-prefix convention.
     #[inline]
     pub(super) fn mint(
         code: Code,
         epoch: super::arena::Epoch,
         arena: super::arena::ArenaId,
+        _authority: super::arena::StampMintAuthority,
     ) -> Self {
         StampedCode { code, epoch, arena }
     }
