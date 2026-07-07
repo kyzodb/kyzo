@@ -861,12 +861,34 @@ mod tests {
     /// the memcmp encoder and xxHash32 under seeds 10/20/30, take the min.
     #[test]
     fn signature_bytes_are_pinned_and_portable() {
+        // INDEPENDENT ANCHOR. The element bytes are the canonical encoding
+        // of `Int(1..3)`, derived from the format law by hand (the value
+        // tag `0x10` = `Tag::Num`, then the 13-byte Num key pinned
+        // byte-for-byte by `data::value::number::format_v1_golden_vectors`
+        // -- `int(1) = 03 04 39 80 00..`, `int(2) = 03 04 3a 80 00..`,
+        // `int(3) = 03 04 3a c0 00..`). If the production encoder drifts
+        // from the format, THIS equality fails first, independent of the
+        // signature below.
+        let hand_derived: Vec<Vec<u8>> = vec![
+            vec![0x10, 0x03, 0x04, 0x39, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0x10, 0x03, 0x04, 0x3a, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![0x10, 0x03, 0x04, 0x3a, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ];
+        assert_eq!(
+            int_bytes(&[1, 2, 3]),
+            hand_derived,
+            "element encoding drifted from the hand-derived canonical format"
+        );
+
         let perms = HashPermutations(vec![10, 20, 30]);
-        let sig = HashValues::new(int_bytes(&[1, 2, 3]).into_iter(), &perms);
+        // The signature is the seeded-xxHash32 MinHash of the FORMAT-VERIFIED
+        // element bytes above -- so this pin catches drift in the MinHash
+        // algorithm, the encoding drift having already been caught.
+        let sig = HashValues::new(hand_derived.into_iter(), &perms);
         assert_eq!(
             sig.0, PINNED_SIGNATURE,
             "the MinHash signature wire value drifted; this is an on-disk \
-             format event (element encoding or hash changed), not a test to bump"
+             format event (the hash algorithm changed), not a test to bump"
         );
     }
 

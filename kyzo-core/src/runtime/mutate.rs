@@ -2002,12 +2002,35 @@ mod bulk_write_tests {
              counter and the relation's own catalog row)"
         );
 
-        // Pinned against a run of this exact workload captured against the
-        // pre-fix code (materialize-then-encode `Vec<DataValue>` in both
-        // call sites), via `git stash` of just `relation.rs` — see the PR
-        // description for the before/after diff-free comparison. Any future
-        // change to the bulk-write key/value encoding must keep this equal
-        // or explain, in a FormatVersion bump, why it no longer can.
+        // MEANING ANCHOR. Before pinning the raw bytes, prove they carry
+        // the correct v5 content by DECODING the store back through the
+        // public query path and checking the workload's current state:
+        // keys 0..200 hold `i*7` (re-put), keys 200..400 hold `i*3`
+        // (initial), keys 400..500 are retracted (absent). If the
+        // key/value encoding were wrong, the bytes could still hash to a
+        // stable-but-meaningless value; this makes the pin a witness over
+        // format-CORRECT bytes, not an implementation snapshot.
+        let live = db
+            .run_script("?[k, v] := *w{k, v}", no_params())
+            .expect("scan back")
+            .rows;
+        assert_eq!(live.len(), 400, "200 re-put + 200 untouched, 100 retracted");
+        let mut by_key: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for row in &live {
+            by_key.insert(row[0].get_int().unwrap(), row[1].get_int().unwrap());
+        }
+        assert_eq!(by_key.get(&0), Some(&0)); // re-put i*7 = 0
+        assert_eq!(by_key.get(&1), Some(&7)); // re-put 1*7
+        assert_eq!(by_key.get(&199), Some(&(199 * 7)));
+        assert_eq!(by_key.get(&200), Some(&(200 * 3))); // untouched i*3
+        assert_eq!(by_key.get(&399), Some(&(399 * 3)));
+        assert_eq!(by_key.get(&450), None); // retracted
+
+        // The whole-store byte fingerprint: a drift witness over the v5
+        // canonical key+value format (independently pinned by the value
+        // round-trip/order laws and `number::format_v1_golden_vectors`).
+        // A change to the bulk-write key/value encoding must keep this equal
+        // or land a FormatVersion bump explaining why it cannot.
         let mut hasher_input = Vec::new();
         for (k, v) in &scan {
             hasher_input.extend_from_slice(&(k.len() as u64).to_le_bytes());

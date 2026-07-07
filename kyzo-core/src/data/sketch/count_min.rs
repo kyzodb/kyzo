@@ -361,10 +361,39 @@ mod tests {
     /// drift fails loudly.
     #[test]
     fn pinned_sketch_fingerprint() {
+        // INPUT ANCHOR. The sketch buckets each value by hashing its
+        // CANONICAL encoding. Pin that encoding to the format law by hand
+        // (value tag 0x10 = Tag::Num, then the Num key pinned by
+        // `data::value::number::format_v1_golden_vectors`), so the
+        // fingerprint below is provably a function of the format-correct
+        // input, not an implementation snapshot:
+        //   Int(0)   = 10 02 00
+        //   Int(1)   = 10 03 04 39 80 00..(9)
+        //   Int(999) = 10 03 04 42 f9 c0 00..(8)
+        let enc = |v: &DataValue| {
+            let mut b = Vec::new();
+            crate::data::value::append_canonical(&mut b, v);
+            b
+        };
+        assert_eq!(enc(&val(0)), vec![0x10, 0x02, 0x00]);
+        assert_eq!(
+            enc(&val(1)),
+            vec![0x10, 0x03, 0x04, 0x39, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            enc(&val(999)),
+            vec![0x10, 0x03, 0x04, 0x42, 0xf9, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+
+        // The fingerprint is xxh64 of the counter array [FORMAT_TAG, depth,
+        // width_le, counters_le...] produced by folding the anchored input
+        // above through the (unchanged) Count-Min bucket hash. A drift in
+        // the counter layout or the bucket hash changes it.
         let mut cms = CountMinSketch::new(2048, 5).unwrap();
         for i in 0..1000i64 {
             cms.add(&val(i), 1);
         }
+        assert_eq!(cms.to_bytes()[..2], [FORMAT_TAG, 5]);
         let fingerprint = super::super::xxh64(&cms.to_bytes(), 0);
         assert_eq!(fingerprint, 0x73CC_4C21_CD68_9237);
     }
