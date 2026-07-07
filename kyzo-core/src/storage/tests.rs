@@ -1044,7 +1044,11 @@ fn pre_value_plane_stores_v4_refuse_to_open() {
     // The immediately-previous format (4) is a DIFFERENT version and so is
     // refused at the door — the value format is incompatible.
     let v4 = FormatVersion::parse(b"4").unwrap();
-    assert_ne!(v4, FormatVersion::CURRENT, "v4 must not equal the current format");
+    assert_ne!(
+        v4,
+        FormatVersion::CURRENT,
+        "v4 must not equal the current format"
+    );
 
     // End to end: a store carrying the v4 stamp refuses to open.
     let dir = tempfile::tempdir().unwrap();

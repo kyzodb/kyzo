@@ -166,11 +166,8 @@ fn spans_derives_maximal_runs() {
 #[test]
 fn user_cannot_assert_a_fact_at_the_reserved_end_instant() {
     let db = fresh_db();
-    db.run_script(
-        "?[id, v] <- [[1, 'a']] :create res {id => v}",
-        no_params(),
-    )
-    .expect("create res");
+    db.run_script("?[id, v] <- [[1, 'a']] :create res {id => v}", no_params())
+        .expect("create res");
     // i64::MAX = 9223372036854775807 — the reserved terminal tick.
     let err = db
         .run_script(
@@ -192,17 +189,26 @@ fn user_cannot_assert_a_fact_at_the_reserved_end_instant() {
 #[test]
 fn end_sentinel_never_leaks_through_interval_end() {
     let db = fresh_db();
-    db.run_script("?[id, v] <- [[1, 'a']] :create leak {id => v} @ 100", no_params())
-        .expect("create at 100");
-    db.run_script("?[id, v] <- [[1, 'b']] :put leak {id => v} @ 200", no_params())
-        .expect("correct at 200");
+    db.run_script(
+        "?[id, v] <- [[1, 'a']] :create leak {id => v} @ 100",
+        no_params(),
+    )
+    .expect("create at 100");
+    db.run_script(
+        "?[id, v] <- [[1, 'b']] :put leak {id => v} @ 200",
+        no_params(),
+    )
+    .expect("correct at 200");
     let out = db
         .run_script(
             "?[iend] := *leak{id, v @spans iv}, iend = interval_end(iv)",
             no_params(),
         )
         .expect("spans");
-    assert!(out.rows.len() >= 2, "at least the clipped run and the open run");
+    assert!(
+        out.rows.len() >= 2,
+        "at least the clipped run and the open run"
+    );
     for r in &out.rows {
         match &r[0] {
             DataValue::Null => {} // the open run — correct
@@ -216,8 +222,15 @@ fn end_sentinel_never_leaks_through_interval_end() {
         }
     }
     // And exactly one open run (the last), so Null actually occurred.
-    let nulls = out.rows.iter().filter(|r| matches!(r[0], DataValue::Null)).count();
-    assert_eq!(nulls, 1, "the single open run's end must be Null, not a sentinel");
+    let nulls = out
+        .rows
+        .iter()
+        .filter(|r| matches!(r[0], DataValue::Null))
+        .count();
+    assert_eq!(
+        nulls, 1,
+        "the single open run's end must be Null, not a sentinel"
+    );
 }
 
 /// `@delta(lo, hi) sgn`: the axis-parameterized net diff between two
