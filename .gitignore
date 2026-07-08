@@ -11,3 +11,4 @@
 .claude/active-story.md
 .claude/outcome-context.md
 .claude/version-horizon.md
+scripts/__pycache__/
