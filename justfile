@@ -14,7 +14,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # The one-command seal: everything that must be true to close a story.
-gate: env-report fetch check fmt clippy unsafe pure-rust test test-features
+gate: env-report fetch check fmt clippy unsafe pure-rust authority test test-features
     @echo "=== GATE PASSED ==="
 
 # Warm the dep cache deterministically so tree/metadata-parsing gates
@@ -68,6 +68,14 @@ unsafe:
 
 pure-rust:
     bash scripts/check-pure-rust.sh
+
+# Type Authority Graph (#139): the tool proves itself on planted violations,
+# then ratchets the tree — no drift class may grow past its committed floor
+# (scripts/authority-baseline.json). Strict mode is the end state once
+# #126/#135/#122 burn the baseline to zero.
+authority:
+    python3 scripts/authority-graph --self-test
+    python3 scripts/authority-graph --root . --mode ratchet
 
 # The seal with peak RSS attached — proves the memory envelope, no vibes.
 memcheck:
