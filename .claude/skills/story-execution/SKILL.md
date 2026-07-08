@@ -32,8 +32,8 @@ said means the world model is lost. Appearance is the enemy; reality is the only
    order never does. Picking ripe work before hard work is deferral in costume (rule 01).
 5. **One coherent target, max energy.** Every file lands in its exact end-state form; never land
    anything "to refactor later", never park a half-built middle — the moment code touches the repo
-   it is the product. Prior art (upstream cozo included) is a dead reference, never a design
-   authority: interrogate every construct (*is this the best way, does it even belong?*) and land
+   it is the product. Prior art is a dead reference, never a design authority: interrogate every
+   construct (*is this the best way, does it even belong?*) and land
    only the best version. "Battle-tested" is not a defense — five real defects hid behind it in the
    storage kernel. Between competing designs the better engine wins, even at the cost of rework; a
    risky design is acceptable when it is explicit, testable, reversible, and signal-bearing.
