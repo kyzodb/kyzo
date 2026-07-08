@@ -53,7 +53,12 @@ item_id=$(find_item)
 if [ -z "$item_id" ]; then
   gh project item-add "$PROJECT" --owner "$OWNER" \
     --url "https://github.com/$OWNER/$REPO/issues/$n" >/dev/null
-  item_id=$(find_item)
+  # item-list lags item-add; retry briefly before declaring failure
+  for _ in 1 2 3 4 5; do
+    item_id=$(find_item)
+    [ -n "$item_id" ] && break
+    sleep 2
+  done
 fi
 [ -n "$item_id" ] || { echo "move-story: could not find or add a card for #$n" >&2; exit 1; }
 
