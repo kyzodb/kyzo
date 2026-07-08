@@ -249,6 +249,15 @@ fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeEr
 /// elements). No code accessors exist: stored bytes cannot leak execution
 /// currency, and codes cannot leak into storage — the code-lifetime law,
 /// held by the type surface.
+///
+/// @authority EncodedKey
+/// @layer value
+/// @owns canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)
+/// @constructs EncodedKey::from_values | EncodedKey::from_stored | encode_row
+/// @forbids leaking codes out of an EncodedKey | forging bytes bypassing canonical encode | confusing storage identity with record/entity identity
+/// @converts EncodedKey -> Domain (admitted into an arena via push_encoded)
+/// @gate round-trip + byte-order law (storage format gate)
+/// @status established #119
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EncodedKey(Vec<u8>);
 

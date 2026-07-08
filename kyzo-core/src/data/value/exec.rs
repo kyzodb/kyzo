@@ -49,6 +49,15 @@ pub enum Side {
 /// `ExecRows` outlives the borrow that admitted it. Every code is `<
 /// domain.extent()` (admission proved it), so it resolves through any
 /// observer of the same arena+epoch whose visibility covers the domain.
+///
+/// @authority ExecRows
+/// @layer value
+/// @owns the admitted execution currency; codes are unforgeable (private field, no raw-code door)
+/// @constructs ExecRows::admit(&Rows, &O) | ExecRows::join_project
+/// @forbids from_raw over raw codes | injecting codes into Rows | reconstruction outside admission
+/// @converts ExecRows -> EncodedKey (canonical bytes only at a storage/output boundary, never durable identity)
+/// @gate no raw-code door exposed; zero-canonical-encode-in-fixpoint law (#120)
+/// @status established #119
 pub struct ExecRows {
     domain: Domain,
     arity: usize,
@@ -176,6 +185,15 @@ impl ExecRows {
 /// Two derived tuples are the SAME iff their code tuples are equal —
 /// `u32`-slice equality, no canonical encode. Every inserted tuple's cells
 /// come from an [`ExecRows`] (admitted), so no arbitrary code enters.
+///
+/// @authority ExecDedup
+/// @layer value
+/// @owns the fixpoint dedup identity: packed admitted code tuples, u32-slice equality, no canonical encode in the hot loop
+/// @constructs ExecDedup::new | ExecDedup::insert | ExecDedup::absorb
+/// @forbids inserting codes that did not come from an admitted ExecRows | mixing domains in one sink
+/// @converts ExecDedup -> ExecRows (to_exec: the distinct rows, same Domain)
+/// @gate zero-canonical-encode-in-fixpoint law (#120)
+/// @status established #119
 pub struct ExecDedup {
     domain: Domain,
     arity: usize,
