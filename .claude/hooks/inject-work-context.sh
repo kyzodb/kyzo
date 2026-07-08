@@ -41,7 +41,10 @@ fi
 
 [ -f "$TEMPLATE" ] || emit_cache_and_exit
 
-mapfile -t FOCUS < <(grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' "$FOCUS_FILE" 2>/dev/null | tr -d '[:space:]')
+# Focus set: integer lines, HTML comment blocks stripped, trimmed per line,
+# deduplicated in order.
+mapfile -t FOCUS < <(sed '/<!--/,/-->/d' "$FOCUS_FILE" 2>/dev/null \
+  | grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' | tr -d ' \t' | awk '!seen[$0]++')
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
