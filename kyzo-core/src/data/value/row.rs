@@ -319,6 +319,15 @@ impl RelationId {
     }
 }
 
+/// Displays as the bare numeric id — the form diagnostics and error
+/// messages carry; the typed identity never has to degrade to a raw `u64`
+/// just to be printed.
+impl std::fmt::Display for RelationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Key encoding for anything that dereferences to a value slice: the
 /// relation prefix, then each value's canonical bytes.
 pub trait TupleT {
