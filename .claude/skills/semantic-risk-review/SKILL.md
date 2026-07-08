@@ -38,6 +38,13 @@ they get their own hostile pass before anything is called resolved. Reviewer
 briefs say REFUTE, name the specific claims to attack, and demand
 CONFIRMED-vs-PLAUSIBLE verdicts with concrete failure scenarios.
 
+## Both constitution lenses, not just bugs
+A brief carries the whole review standard from CLAUDE.md: check for bullshit, AND flag missed
+greatness — the avoided hard architectural choice, types not used as authority, accepted accidental
+complexity, an ordinary-database pattern copied without asking whether KyzoDB's ordered substrate /
+determinism / time / provenance model allows something better, or "works" where a sharper
+engineering bet was available. Safe-looking code that lowers the engine's ceiling is a finding.
+
 ## Steps
 1. Identify which zones the diff touches (`git diff --stat`).
 2. Dispatch the matching reviewer agent(s) with the diff and paths.

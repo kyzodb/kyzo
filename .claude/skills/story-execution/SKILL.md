@@ -5,9 +5,11 @@ description: The discipline for executing one story from the KyzoDB board. Use w
 
 # Story execution
 
-The board (org project KyzoDB Work) is the plan; `.claude/rules/` are the law — 00 gates,
-01 no-deferral, 02 final report, 03 type-driven construction. This skill carries only the story
-lifecycle. It never restates law; where it seems to conflict with a rule, the rule wins.
+This is our own engine, not a migration: every story is an architectural move toward the greatest
+possible engine, judged by the invariant it lands, never by what any prior codebase did. The board
+(org project KyzoDB Work) is the plan; `.claude/rules/` are the law — 00 gates, 01 no-deferral,
+02 final report, 03 type-driven construction. This skill carries only the story lifecycle. It never
+restates law; where it seems to conflict with a rule, the rule wins.
 
 ## The mantra — chant it before every piece of new code
 **Do the work. Prove the work. Tell the truth about the work.** The tells: relief means escaping;
@@ -29,11 +31,12 @@ said means the world model is lost. Appearance is the enemy; reality is the only
    hardest item startable now comes first. Dependency order may override hardest-first; comfort
    order never does. Picking ripe work before hard work is deferral in costume (rule 01).
 5. **One coherent target, max energy.** Every file lands in its exact end-state form; never land
-   anything "to refactor later", never manage a half-migrated middle — the moment code touches the
-   repo it is the product. Copying from upstream cozo is allowed; **blind copying is not** —
-   interrogate every construct (*is this the best way, does it even belong?*) and land only the
-   best version. "Battle-tested" is not a defense: the storage kernel found five real defects
-   hiding behind it.
+   anything "to refactor later", never park a half-built middle — the moment code touches the repo
+   it is the product. Prior art (upstream cozo included) is a dead reference, never a design
+   authority: interrogate every construct (*is this the best way, does it even belong?*) and land
+   only the best version. "Battle-tested" is not a defense — five real defects hid behind it in the
+   storage kernel. Between competing designs the better engine wins, even at the cost of rework; a
+   risky design is acceptable when it is explicit, testable, reversible, and signal-bearing.
 6. **Types are the ontology** (rule 03). The type graph is the system's world model (crate docs in
    `kyzo-core/src/lib.rs`); mint every type against the whole of it, never against one file's
    convenience. Push every invariant up the ladder **compiler > constructor > test**; never let one

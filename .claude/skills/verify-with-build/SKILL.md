@@ -15,7 +15,8 @@ Every claim about the code is backed by evidence produced in this session, or it
   is quoted.
 - **A claim about a file's contents** requires reading that file in this session.
 - **A claim about the dependency graph** requires `cargo tree` / the lockfile, whole-workspace. A
-  pure-Rust claim checked only against `kyzo-core` while silently excluding the bindings is the
+  claim checked only against `kyzo-core` while silently excluding the rest of the workspace
+  (`kyzo-bin`, `kyzo-lsp`, `kyzo-crashfs`, `xtask`, the vendored `fjall`/`lsm-tree` trees) is the
   canonical sabotage on this project: scope every claim explicitly or label it partial.
 - If a claim cannot be verified (toolchain missing, code not yet compiling), **say so plainly** and
   state what was checked instead. An unverifiable claim stated as fact is worse than no claim.
