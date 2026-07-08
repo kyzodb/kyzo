@@ -1,6 +1,6 @@
 ---
 name: ffi-binding-port
-description: The checklist for porting one language binding to KyzoDB (stories #5-#10 in-workspace; #11-#14 separate repos). Use when picking up any binding story. Each binding is an unsafe/foreign-toolchain zone not covered by core CI.
+description: The checklist for porting one language binding to KyzoDB (stories #5-#10 in-workspace; #11-#14 separate repos, milestoned Version 1.0.0 / Future Roadmap). Use when picking up any binding story. Each binding is an unsafe/foreign-toolchain zone not covered by core CI.
 ---
 
 # FFI binding port
@@ -12,9 +12,9 @@ toolchain.
 
 ## Checklist
 
-1. **Depends on product green (#4).** The binding builds against a green, pure-Rust `kyzo-core`.
-   Go (#11) additionally needs the C ABI (#5), Clojure (#12) needs Java (#7), the Python client (#14)
-   needs Python (#6).
+1. **Builds against green main.** The binding builds against the current, pure-Rust `kyzo-core` on
+   main — no pinned engine snapshots, no compatibility shims for a stale API. Go (#11) additionally
+   needs the C ABI (#5), Clojure (#12) needs Java (#7), the Python client (#14) needs Python (#6).
 2. **Rework the FFI surface** against the KyzoDB engine API: the binding's FFI layer (`extern "C"`
    + `cbindgen`, `pyo3`, `jni`, `neon`/napi, `swift-bridge`, `wasm-bindgen`) is intrinsic and stays;
    no storage-backend or C/C++ build plumbing comes with it.

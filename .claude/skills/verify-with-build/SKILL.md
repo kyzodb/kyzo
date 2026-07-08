@@ -25,7 +25,7 @@ Every claim about the code is backed by evidence produced in this session, or it
 EVERY run goes through the pinned container. There is no native path (`pre-bash-guard.sh` blocks
 native `cargo`/`just` and hand-set `ulimit`/`timeout`/`--test-threads`):
 
-    docker compose run --rm kyzo-dev  just gate        # the seal (check, fmt, clippy, unsafe, pure-rust, tests)
+    docker compose run --rm kyzo-dev  just gate        # the seal (check, fmt, clippy, unsafe, pure-rust, authority-graph, tests)
     docker compose run --rm kyzo-dev  just test        # a targeted run (or test-features/clippy/check/memcheck)
     docker compose run --rm kyzo-dev  just env-report  # environment fingerprint for the report
     docker compose run --rm kyzo-bench just bench       # benchmarks
