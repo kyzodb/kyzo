@@ -15,7 +15,7 @@ Gate high-blast-radius changes on the right reviewer before finalizing.
 | `query/**` (Datalog engine) or `engines/**` (index-search operators) | `query-semantics-reviewer` |
 | any `kyzo-lib-*` binding or `unsafe` | `unsafe-ffi-reviewer` |
 | build/clippy/test output to interpret | `cargo-diagnostics-triager` |
-| any diff minting or reshaping a public type | check it against the world model (`kyzo-core/src/lib.rs` crate docs) and rule 03: one name per concept, one concept per name, constructors prove invariants, nothing descends the enforcement ladder. A new/reshaped authority type gets its `@authority` block (`scripts/authority-graph` ratchets drift); run `scripts/smell-scan.sh` on proof code and classify every hit |
+| any diff minting or reshaping a public type | check it against the world model (`kyzo-core/src/lib.rs` crate docs) and rule 03: one name per concept, one concept per name, constructors prove invariants, nothing descends the enforcement ladder. A new/reshaped authority type gets its `@authority` block (`scripts/authority-graph.py` ratchets drift); run `scripts/smell-scan.sh` on proof code and classify every hit |
 
 ## Dispatch is operator-authorized
 Spawning a reviewer is a sub-agent dispatch: describe what will be reviewed and by which agent,

@@ -67,7 +67,7 @@ CANDIDATES; you classify every hit as `real-violation | intentional-boundary | f
 against this rule. Run it when writing or reviewing proof code (verifiers, decoders, catalog
 readers) and storage/test fixtures.
 
-`scripts/authority-graph` (#139) is the GATED complement: authority types declare themselves in
+`scripts/authority-graph.py` (#139) is the GATED complement: authority types declare themselves in
 doc-comment `@authority` blocks near the code; the tool extracts the graph and ratchets drift
 (raw doors, string taxonomies, duplicate generation counters, blob meaning) against a committed
 baseline. New authority types get an `@authority` block; intentional boundaries get a narrow

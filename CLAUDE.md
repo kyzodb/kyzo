@@ -45,11 +45,12 @@ make the repo catch it.
   you touch matching files.
 - `.claude/settings.json` + `.claude/hooks/*.sh` — warn on on-disk-format blast-radius zones, check
   touched files against their zone's law, block container-evasion (`pre-bash-guard.sh`).
-- `scripts/board-context` — read-only board context: generates `.claude/active-story.md`,
-  `.claude/next-work.md`, and `.claude/board-signal.md` from GitHub (injected each prompt). It nudges
-  when the board and reality disagree; a human or dev agent updates the board intentionally — the
-  tooling never moves cards. Completed work writes evidence back with `scripts/story-evidence`.
-- `scripts/authority-graph` — the Type Authority Graph (#139): extracts `@authority` doc-comment
+- `scripts/work-context.sh` — generates `.claude/focus-story.md` from the board (project
+  `KyzoDB Work` #1) and the hook injects it each prompt: work-management rules, then Todo
+  (name+description), Focus/In Progress (full body+comments), and the focus epics' remaining
+  sub-issues in order (name+description+condemned). `scripts/move-story.sh <n> <todo|focus|done>`
+  is the one board verb — it moves the card (done also closes the issue).
+- `scripts/authority-graph.py` — the Type Authority Graph (#139): extracts `@authority` doc-comment
   declarations into the committed `authority/` artifacts (`authority-map.json`,
   `authority-report.md`) and audits type-authority drift (raw doors, string taxonomies, duplicate
   counters, blob meaning). `just gate` runs its self-test + ratchet + artifact freshness check;
@@ -57,9 +58,10 @@ make the repo catch it.
 
 ## Operating essentials
 
-- **The board is the workflow.** The work is the active story (`.claude/active-story.md`, injected
-  every prompt); pick it up with the `story-execution` skill — plan of attack before the first
-  edit, types before mechanism. No active story → no code changes without the operator.
+- **The board is the workflow.** The work is what is In Progress (`.claude/focus-story.md`,
+  injected every prompt); keep the board matching reality with `scripts/move-story.sh` as work
+  lands. Stories and epics are written with the `write-story`/`write-epic` skills. No focus
+  story → no code changes without the operator.
 - **One tree, one branch.** Real tree, current branch. No worktrees, no parallel patch stacks. Commit
   and push freely as units land; the go-gate is only public/irreversible acts (merge to main, tags,
   releases, new remotes).
