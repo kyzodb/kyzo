@@ -71,11 +71,12 @@ pure-rust:
 
 # Type Authority Graph (#139): the tool proves itself on planted violations,
 # then ratchets the tree — no drift class may grow past its committed floor
-# (scripts/authority-baseline.json). Strict mode is the end state once
-# #126/#135/#122 burn the baseline to zero.
+# (scripts/authority-baseline.json) — and the committed authority/ artifacts
+# must match the tree (--check, like fmt --check). Strict mode is the end
+# state once #126/#135/#122 burn the baseline to zero.
 authority:
     python3 scripts/authority-graph --self-test
-    python3 scripts/authority-graph --root . --mode ratchet
+    python3 scripts/authority-graph --root . --mode ratchet --check
 
 # The seal with peak RSS attached — proves the memory envelope, no vibes.
 memcheck:

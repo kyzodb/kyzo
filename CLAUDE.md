@@ -50,9 +50,10 @@ make the repo catch it.
   when the board and reality disagree; a human or dev agent updates the board intentionally — the
   tooling never moves cards. Completed work writes evidence back with `scripts/story-evidence`.
 - `scripts/authority-graph` — the Type Authority Graph (#139): extracts `@authority` doc-comment
-  declarations into `authority-map.json`/`authority-report.md` and audits type-authority drift
-  (raw doors, string taxonomies, duplicate counters, blob meaning). `just gate` runs its self-test
-  + ratchet; strict mode is the end state as the baseline burns to zero.
+  declarations into the committed `authority/` artifacts (`authority-map.json`,
+  `authority-report.md`) and audits type-authority drift (raw doors, string taxonomies, duplicate
+  counters, blob meaning). `just gate` runs its self-test + ratchet + artifact freshness check;
+  strict mode is the end state as the baseline burns to zero.
 
 ## Operating essentials
 

@@ -27,9 +27,12 @@
 #   ratchet  fail if any finding class count exceeds scripts/authority-baseline.json
 #   strict   fail on ANY finding not covered by the narrow allowlist
 #
-# Outputs (default --out target/authority):
+# Outputs (default --out authority/, COMMITTED — they are a pure function of
+# the tree: no timestamps, no commit hashes, so regeneration is idempotent):
 #   authority-map.json     nodes, edges, findings — machine-readable
 #   authority-report.md    the human report
+# --check refuses to write and instead fails if the committed copies are
+# stale (the gate runs it, so the repo's report can never lie).
 #
 # Allowlist (scripts/authority-allowlist.json): narrow entries only — exact
 # file + line substring + reason. A stale (unmatched) entry is itself flagged.
@@ -102,6 +105,9 @@ GEN_FIELD_RE = re.compile(
     r"(?:u8|u16|u32|u64|u128|usize|i32|i64|AtomicU(?:32|64))\b")
 GEN_STRUCT_RE = re.compile(r"\bstruct\s+(\w+Generation)\b")
 RAW_ID_RE = re.compile(r"\bfn\s+\w+\s*[(<][^)]*?\b([a-z]\w*_id)\s*:\s*(?:u8|u16|u32|u64|usize)\b")
+# Fields and multi-line-signature params on their own line ("relation_id: u64,").
+RAW_ID_LINE_RE = re.compile(
+    r"^\s*(?:pub(?:\(\w+\))?\s+)?([a-z]\w*_id)\s*:\s*(?:u8|u16|u32|u64|usize)\s*,?\s*$")
 STRING_TAX_RE = re.compile(
     r"^\s*(?:pub(?:\(\w+\))?\s+)?(?:kind|format|variant|taxonomy|type_name)\s*:\s*(?:String|&\s*'?\w*\s*str)\b")
 BLOB_FIELD_RE = re.compile(r"^\s*(?:pub(?:\(\w+\))?\s+)?\w+\s*:\s*Vec<u8>\s*,?\s*$")
@@ -285,19 +291,25 @@ def scan_code(path, raw_lines, nodes, findings):
                 "unchecked-constructor", path, idx, cs,
                 f"raw-door constructor '{m.group(1)}'"))
 
-        m = re.search(r"\bimpl(?:<[^>]*>)?\s+(?:std::ops::)?(Deref|DerefMut|From<([^>]+)>)\s+for\s+(\w+)", cs)
+        m = re.search(r"\bimpl(?:<[^>]*>)?\s+(?:std::ops::)?(?:(Deref|DerefMut)|From<(.+?)>)\s+for\s+(\w+)", cs)
         if m and m.group(3) in authority_names:
-            kind = m.group(1)
-            if kind.startswith("From<"):
+            if m.group(1):
+                findings.append(Finding(
+                    "illegal-escape", path, idx, cs,
+                    f"{m.group(1)} dissolves the {m.group(3)} authority boundary"))
+            else:
                 src = m.group(2).strip()
                 if re.fullmatch(r"Vec<DataValue>|Vec<u8>|Vec<u32>|&\[u8\]|&\[u32\]|u8|u16|u32|u64|usize|i32|i64|String|&str", src):
                     findings.append(Finding(
                         "illegal-escape", path, idx, cs,
                         f"blanket From<{src}> forges the {m.group(3)} authority"))
-            else:
-                findings.append(Finding(
-                    "illegal-escape", path, idx, cs,
-                    f"{kind} dissolves the {m.group(3)} authority boundary"))
+
+        m = re.search(r"\btype\s+(\w+)\s*=", cs)
+        if m and m.group(1) in authority_names and m.group(1) != "Tuple" \
+                and nodes[m.group(1)]["file"] != path:
+            findings.append(Finding(
+                "duplicate-authority-alias", path, idx, cs,
+                f"story-local redefinition of the {m.group(1)} authority"))
 
         if GEN_FIELD_RE.match(code):
             findings.append(Finding(
@@ -311,12 +323,12 @@ def scan_code(path, raw_lines, nodes, findings):
                 f"{m.group(1)} declared outside the runtime catalog seam"))
 
         if in_sensitive:
-            m = RAW_ID_RE.search(cs)
+            m = RAW_ID_RE.search(cs) or RAW_ID_LINE_RE.match(code)
             if m:
                 findings.append(Finding(
                     "raw-id-crossing", path, idx, cs,
                     f"bare-integer identity '{m.group(1)}' crossing an "
-                    "authority-sensitive signature (newtype it)"))
+                    "authority-sensitive boundary (newtype it)"))
 
         if in_sensitive and not in_parse and STRING_TAX_RE.match(code):
             findings.append(Finding(
@@ -412,23 +424,15 @@ def counts_by_class(findings):
     return dict(sorted(counts.items()))
 
 
-def git_head(root):
-    try:
-        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--short",
-                            "HEAD"], capture_output=True, text=True)
-        return r.stdout.strip() or "unknown"
-    except OSError:
-        return "unknown"
-
-
-def write_outputs(out_dir, root, mode, nodes, edges, planned, findings, nfiles):
-    out_dir.mkdir(parents=True, exist_ok=True)
+def render_outputs(nodes, edges, planned, findings, nfiles):
+    """The two artifacts as strings — a pure function of the scan, so the
+    committed copies never drift for volatile reasons (no clock, no commit
+    hash, no mode)."""
     counts = counts_by_class(findings)
     live = [f for f in findings if f.allowlisted_by is None]
     allowed = [f for f in findings if f.allowlisted_by is not None]
     map_obj = {
         "tool": "authority-graph", "tool_version": TOOL_VERSION,
-        "commit": git_head(root), "mode": mode,
         "scope": "kyzo-core/src", "files_scanned": nfiles,
         "layers": [{"layer": l, "holds": h} for l, h in LAYER_SPINE],
         "nodes": [nodes[k] for k in sorted(nodes)],
@@ -437,15 +441,15 @@ def write_outputs(out_dir, root, mode, nodes, edges, planned, findings, nfiles):
         "findings": [f.as_dict() for f in findings],
         "counts_by_class": counts,
     }
-    (out_dir / "authority-map.json").write_text(
-        json.dumps(map_obj, indent=2) + "\n")
+    map_text = json.dumps(map_obj, indent=2) + "\n"
 
     L = []
     L.append("# Type Authority Graph — drift report")
     L.append("")
-    L.append(f"Generated by `scripts/authority-graph` (v{TOOL_VERSION}) at "
-             f"commit `{map_obj['commit']}` over `kyzo-core/src` "
-             f"({nfiles} files). Mode: **{mode}**.")
+    L.append(f"Generated by `scripts/authority-graph` (v{TOOL_VERSION}) over "
+             f"`kyzo-core/src` ({nfiles} files). Regenerate with "
+             f"`scripts/authority-graph`; the gate fails if this file is "
+             f"stale (`--check`).")
     L.append("")
     L.append("## Layer spine")
     L.append("")
@@ -513,8 +517,7 @@ def write_outputs(out_dir, root, mode, nodes, edges, planned, findings, nfiles):
         for f in allowed:
             L.append(f"- `{f.path}:{f.lineno}` `{f.cls}` — {f.allowlisted_by}")
         L.append("")
-    (out_dir / "authority-report.md").write_text("\n".join(L))
-    return map_obj
+    return map_obj, map_text, "\n".join(L) + "\n"
 
 
 def self_test():
@@ -549,13 +552,17 @@ impl ExecRows {
 pub struct EncodedKey(Vec<u8>);
 pub type Tuple = Vec<DataValue>;
 impl Deref for EncodedKey { type Target = Vec<u8>; }
+impl From<Vec<u8>> for EncodedKey { fn from(b: Vec<u8>) -> EncodedKey { EncodedKey(b) } }
 """,
-        # story-local duplicate alias + raw id crossing + blob field
+        # story-local duplicate alias + raw id crossing + blob field;
+        # the ExecRows alias exercises the generalized declared-name check
         "kyzo-core/src/query/local_types.rs": """\
 type Tuple = Vec<DataValue>;
+type ExecRows = Vec<u32>;
 fn lookup(relation_id: u64) -> bool { relation_id == 0 }
 struct Carrier {
     payload: Vec<u8>,
+    owner_id: u32,
 }
 """,
         # decoded-tuple search seam
@@ -593,9 +600,9 @@ fn eat(input: &str) -> Token { todo!() }
     expect_at_least = {
         "unchecked-constructor": 1,      # the from_raw(Vec<u32>) door
         "tuple-vec-alias": 1,
-        "illegal-escape": 1,             # Deref for EncodedKey
-        "duplicate-authority-alias": 1,  # query-local type Tuple
-        "raw-id-crossing": 1,
+        "illegal-escape": 2,             # Deref + nested-generic From<Vec<u8>>
+        "duplicate-authority-alias": 2,  # local type Tuple + local type ExecRows
+        "raw-id-crossing": 2,            # fn-signature param + own-line field
         "blob-meaning": 1,
         "searchra-decoded-tuples": 1,
         "duplicate-generation-counter": 2,  # raw field + local *Generation struct
@@ -658,6 +665,8 @@ def main():
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--update-baseline", action="store_true")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--check", action="store_true",
+                    help="fail if the committed outputs are stale; never write")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -672,7 +681,7 @@ def main():
         except OSError:
             top = ""
         root = Path(top or ".")
-    out_dir = args.out or root / "target" / "authority"
+    out_dir = args.out or root / "authority"
     baseline_path = root / "scripts" / "authority-baseline.json"
     allowlist_path = root / "scripts" / "authority-allowlist.json"
 
@@ -681,8 +690,23 @@ def main():
         root, allowlist_path, problems)
     for p in problems:
         print(f"WARNING: {p}", file=sys.stderr)
-    map_obj = write_outputs(out_dir, root, args.mode, nodes, edges, planned,
-                            findings, nfiles)
+    map_obj, map_text, report_text = render_outputs(
+        nodes, edges, planned, findings, nfiles)
+    stale = False
+    if args.check:
+        for name, want in (("authority-map.json", map_text),
+                           ("authority-report.md", report_text)):
+            fp = out_dir / name
+            have = fp.read_text() if fp.exists() else ""
+            if have != want:
+                print(f"STALE: {fp} does not match the tree — regenerate "
+                      f"with scripts/authority-graph and commit it",
+                      file=sys.stderr)
+                stale = True
+    else:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "authority-map.json").write_text(map_text)
+        (out_dir / "authority-report.md").write_text(report_text)
     counts = map_obj["counts_by_class"]
     live = sum(counts.values())
 
@@ -719,6 +743,8 @@ def main():
                   file=sys.stderr)
             sys.exit(1)
         print("strict: clean — the tree matches the declared graph")
+    if stale:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

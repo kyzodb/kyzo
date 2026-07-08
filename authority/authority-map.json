@@ -1,0 +1,360 @@
+{
+  "tool": "authority-graph",
+  "tool_version": 1,
+  "scope": "kyzo-core/src",
+  "files_scanned": 172,
+  "layers": [
+    {
+      "layer": "value",
+      "holds": "Tuple \u00b7 Domain \u00b7 ExecRows/ExecDedup \u00b7 EncodedKey"
+    },
+    {
+      "layer": "runtime-catalog",
+      "holds": "CatalogGeneration \u00b7 RelationGeneration \u00b7 IndexGeneration"
+    },
+    {
+      "layer": "storage",
+      "holds": "encoded-key / order integrity (consumes EncodedKey)"
+    },
+    {
+      "layer": "engines",
+      "holds": "ResidentIndexKey (rebuildable projections)"
+    },
+    {
+      "layer": "query",
+      "holds": "QueryDomainAdmission (admission into execution)"
+    },
+    {
+      "layer": "record",
+      "holds": "RecordId / KyzoRecord identity"
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Domain",
+      "layer": "value",
+      "file": "kyzo-core/src/data/value/column.rs",
+      "line": 55,
+      "owns": "arena+epoch+visibility admission; a raw u32 code is meaningful only under a proven Domain; cross-Domain code comparison is invalid",
+      "constructs": [
+        "the arena/observer authority (BulkObserver admission)"
+      ],
+      "forbids": [
+        "fabricating a Domain to bless arbitrary codes",
+        "comparing or joining codes across differing arena or epoch"
+      ],
+      "converts": [
+        "Domain -> ExecRows (Rows::admit(observer) -> AdmittedRows, under this Domain)"
+      ],
+      "gate": "join_project panics cross-arena/epoch; raw-code use requires admission (value-plane.md)",
+      "status": {
+        "kind": "established",
+        "story": 119,
+        "note": ""
+      }
+    },
+    {
+      "name": "EncodedKey",
+      "layer": "value",
+      "file": "kyzo-core/src/data/value/row.rs",
+      "line": 253,
+      "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
+      "constructs": [
+        "EncodedKey::from_values",
+        "EncodedKey::from_stored",
+        "encode_row"
+      ],
+      "forbids": [
+        "leaking codes out of an EncodedKey",
+        "forging bytes bypassing canonical encode",
+        "confusing storage identity with record/entity identity"
+      ],
+      "converts": [
+        "EncodedKey -> Domain (admitted into an arena via push_encoded)"
+      ],
+      "gate": "round-trip + byte-order law (storage format gate)",
+      "status": {
+        "kind": "established",
+        "story": 119,
+        "note": ""
+      }
+    },
+    {
+      "name": "ExecDedup",
+      "layer": "value",
+      "file": "kyzo-core/src/data/value/exec.rs",
+      "line": 189,
+      "owns": "the fixpoint dedup identity: packed admitted code tuples, u32-slice equality, no canonical encode in the hot loop",
+      "constructs": [
+        "ExecDedup::new",
+        "ExecDedup::insert",
+        "ExecDedup::absorb"
+      ],
+      "forbids": [
+        "inserting codes that did not come from an admitted ExecRows",
+        "mixing domains in one sink"
+      ],
+      "converts": [
+        "ExecDedup -> ExecRows (to_exec: the distinct rows, same Domain)"
+      ],
+      "gate": "zero-canonical-encode-in-fixpoint law (#120)",
+      "status": {
+        "kind": "established",
+        "story": 119,
+        "note": ""
+      }
+    },
+    {
+      "name": "ExecRows",
+      "layer": "value",
+      "file": "kyzo-core/src/data/value/exec.rs",
+      "line": 53,
+      "owns": "the admitted execution currency; codes are unforgeable (private field, no raw-code door)",
+      "constructs": [
+        "ExecRows::admit(&Rows, &O)",
+        "ExecRows::join_project"
+      ],
+      "forbids": [
+        "from_raw over raw codes",
+        "injecting codes into Rows",
+        "reconstruction outside admission"
+      ],
+      "converts": [
+        "ExecRows -> EncodedKey (canonical bytes only at a storage/output boundary, never durable identity)"
+      ],
+      "gate": "no raw-code door exposed; zero-canonical-encode-in-fixpoint law (#120)",
+      "status": {
+        "kind": "established",
+        "story": 119,
+        "note": ""
+      }
+    },
+    {
+      "name": "Tuple",
+      "layer": "value",
+      "file": "kyzo-core/src/data/value/mod.rs",
+      "line": 507,
+      "owns": "the decoded-DataValue row form; not interchangeable with ExecRows codes or canonical bytes",
+      "constructs": [
+        "typed row decode paths in data/value"
+      ],
+      "forbids": [
+        "blanket From<Vec<DataValue>>",
+        "Deref to Vec<DataValue> at a row-authority site"
+      ],
+      "converts": [
+        "Tuple -> EncodedKey (encode at the storage boundary)",
+        "Tuple -> ExecRows (only via Domain admission)"
+      ],
+      "gate": "compile-fail once the newtype lands: Vec<DataValue> rejected where Tuple is required",
+      "status": {
+        "kind": "pending",
+        "story": 126,
+        "note": "today a type alias; the tuple-vec-alias drift finding stays open until the newtype"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Domain",
+      "to": "ExecRows",
+      "context": "Rows::admit(observer) -> AdmittedRows, under this Domain",
+      "declared_by": "Domain"
+    },
+    {
+      "from": "ExecRows",
+      "to": "EncodedKey",
+      "context": "canonical bytes only at a storage/output boundary, never durable identity",
+      "declared_by": "ExecRows"
+    },
+    {
+      "from": "ExecDedup",
+      "to": "ExecRows",
+      "context": "to_exec: the distinct rows, same Domain",
+      "declared_by": "ExecDedup"
+    },
+    {
+      "from": "Tuple",
+      "to": "EncodedKey",
+      "context": "encode at the storage boundary",
+      "declared_by": "Tuple"
+    },
+    {
+      "from": "Tuple",
+      "to": "ExecRows",
+      "context": "only via Domain admission",
+      "declared_by": "Tuple"
+    },
+    {
+      "from": "EncodedKey",
+      "to": "Domain",
+      "context": "admitted into an arena via push_encoded",
+      "declared_by": "EncodedKey"
+    }
+  ],
+  "planned": [
+    {
+      "name": "RecordId",
+      "layer": "record",
+      "story": 128
+    }
+  ],
+  "findings": [
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/engines/hnsw.rs",
+      "line": 491,
+      "excerpt": "vec_hash: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/engines/hnsw.rs",
+      "line": 530,
+      "excerpt": "entry_key: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/engines/hnsw.rs",
+      "line": 2059,
+      "excerpt": "key: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/engines/lsh.rs",
+      "line": 157,
+      "excerpt": "pub(crate) perms: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/query/levels.rs",
+      "line": 63,
+      "excerpt": "values: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/query/levels.rs",
+      "line": 553,
+      "excerpt": "lower: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/query/levels.rs",
+      "line": 554,
+      "excerpt": "upper: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/query/levels.rs",
+      "line": 750,
+      "excerpt": "lower: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "kyzo-core/src/query/levels.rs",
+      "line": 751,
+      "excerpt": "upper: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "illegal-escape",
+      "file": "kyzo-core/src/data/value/row.rs",
+      "line": 440,
+      "excerpt": "impl std::ops::Deref for EncodedKey {",
+      "note": "Deref dissolves the EncodedKey authority boundary",
+      "allowlisted": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates \u2014 bytes can be read, never forged"
+    },
+    {
+      "class": "missing-authority",
+      "file": "kyzo-core/src",
+      "line": 0,
+      "excerpt": "CatalogGeneration",
+      "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
+    },
+    {
+      "class": "missing-authority",
+      "file": "kyzo-core/src",
+      "line": 0,
+      "excerpt": "IndexGeneration",
+      "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
+    },
+    {
+      "class": "missing-authority",
+      "file": "kyzo-core/src",
+      "line": 0,
+      "excerpt": "QueryDomainAdmission",
+      "note": "expected authority (layer query) does not exist yet \u2014 owed by #122"
+    },
+    {
+      "class": "missing-authority",
+      "file": "kyzo-core/src",
+      "line": 0,
+      "excerpt": "RelationGeneration",
+      "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
+    },
+    {
+      "class": "missing-authority",
+      "file": "kyzo-core/src",
+      "line": 0,
+      "excerpt": "ResidentIndexKey",
+      "note": "expected authority (layer engines) does not exist yet \u2014 owed by #122"
+    },
+    {
+      "class": "searchra-decoded-tuples",
+      "file": "kyzo-core/src/query/ra/search.rs",
+      "line": 114,
+      "excerpt": "let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {",
+      "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
+    },
+    {
+      "class": "searchra-decoded-tuples",
+      "file": "kyzo-core/src/query/ra/search.rs",
+      "line": 186,
+      "excerpt": "hits: Vec<Tuple>,",
+      "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
+    },
+    {
+      "class": "searchra-decoded-tuples",
+      "file": "kyzo-core/src/query/ra/search.rs",
+      "line": 188,
+      "excerpt": "search: Box<dyn FnMut(&[DataValue]) -> Result<Vec<Tuple>> + 'a>,",
+      "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
+    },
+    {
+      "class": "tuple-vec-alias",
+      "file": "kyzo-core/src/data/value/mod.rs",
+      "line": 515,
+      "excerpt": "pub type Tuple = Vec<DataValue>;",
+      "note": "row authority is a bare Vec<DataValue> alias (newtype owed by #126)"
+    },
+    {
+      "class": "unchecked-constructor",
+      "file": "kyzo-core/src/data/value/arena.rs",
+      "line": 2356,
+      "excerpt": "fn forged_in_epoch_stamp_beyond_len_panics() {",
+      "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_panics'",
+      "allowlisted": "named corruption/bypass TEST asserting that a forged stamp panics \u2014 it proves the door is shut, it is not a door"
+    },
+    {
+      "class": "unchecked-constructor",
+      "file": "kyzo-core/src/data/value/wide/validity.rs",
+      "line": 43,
+      "excerpt": "pub fn from_raw(ts_micros: i64) -> ValidityTs {",
+      "note": "raw-door constructor 'from_raw'",
+      "allowlisted": "total boundary constructor: every i64 is a valid validity-timestamp micros value; parse-at-boundary, not an authority bypass"
+    }
+  ],
+  "counts_by_class": {
+    "blob-meaning": 9,
+    "missing-authority": 5,
+    "searchra-decoded-tuples": 3,
+    "tuple-vec-alias": 1
+  }
+}
