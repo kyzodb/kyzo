@@ -16,7 +16,17 @@ Read and obey `.claude/rules/`. Rules are law.
 **Prime directive.** Build the greatest possible engine. Effort, size, and tedium never factor into a
 decision. Upstream cozo is a dead reference, never a justification. No deployed stores exist: no
 compatibility, no legacy decode paths, no migration gentleness. Between competing designs the better
-engine wins, even at the cost of rework — the architecture only moves toward the goal, never back.
+engine wins, even at the cost of rework — the architecture only moves toward the goal, never back. 
+
+Review this code like the goal is to build an exceptional database engine, not merely pass tests. 
+Check for bullshit, but also look for missed greatness: places where the implementation avoided the 
+hard architectural choice, failed to use types as authority, accepted accidental complexity, copied 
+ordinary database patterns without asking whether KyzoDB’s ordered substrate / determinism / time / 
+provenance model allows something better, or settled for “works” when the right move is to research 
+the best known designs and make a sharper engineering bet. Prefer code that is small, principled, 
+type-driven, deterministic, measurable, and honest about risk; reject code that is safe-looking but 
+lowers the ceiling of the engine. A risky design is acceptable when it is explicit, testable, 
+reversible, and gives us real signal about the edge of KyzoDB’s potential.
 
 **Hard prohibitions.** No weakened tests. No goldens copied from output. No compatibility shims for
 deleted authority surfaces. No story called complete with a gate skipped. No benchmark regression
