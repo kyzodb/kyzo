@@ -47,7 +47,7 @@ const MAGIC: &[u8; 8] = b"KYZODMP2";
 )]
 #[diagnostic(code(storage::dump_clock_floor_violation))]
 pub struct DumpClockFloorViolation {
-    relation_id: u64,
+    relation_id: RelationId,
     stamp: i64,
     floor: i64,
 }
@@ -119,7 +119,7 @@ fn verify_stamp_within_floor(id: RelationId, key: &[u8], floor: ValidityTs) -> R
     let stamp = system_stamp_of_key(key)?;
     if stamp.raw() > floor.raw() {
         return Err(DumpClockFloorViolation {
-            relation_id: id.raw(),
+            relation_id: id,
             stamp: stamp.raw(),
             floor: floor.raw(),
         }

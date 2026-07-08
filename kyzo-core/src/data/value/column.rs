@@ -51,6 +51,15 @@ use super::code::StampedCode;
 /// Extent is `max code + 1` over the contents (0 when empty), so
 /// `extent <= observer.bulk_len()` proves every code inside is visible —
 /// including against a snapshot's cut.
+///
+/// @authority Domain
+/// @layer value
+/// @owns arena+epoch+visibility admission; a raw u32 code is meaningful only under a proven Domain; cross-Domain code comparison is invalid
+/// @constructs the arena/observer authority (BulkObserver admission)
+/// @forbids fabricating a Domain to bless arbitrary codes | comparing or joining codes across differing arena or epoch
+/// @converts Domain -> ExecRows (Rows::admit(observer) -> AdmittedRows, under this Domain)
+/// @gate join_project panics cross-arena/epoch; raw-code use requires admission (value-plane.md)
+/// @status established #119
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Domain {
     arena: ArenaId,

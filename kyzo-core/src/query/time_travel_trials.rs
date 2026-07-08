@@ -51,7 +51,7 @@ use crate::data::program::{
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{AsOf, Bound, DataValue, Interval, MAX_VALIDITY_TS, ValidityTs};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, MAX_VALIDITY_TS, Tuple, ValidityTs};
 use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
@@ -224,8 +224,6 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
     .expect("evaluates");
     outcome.store.all_iter().map(|t| t.into_tuple()).collect()
 }
-
-type Tuple = Vec<DataValue>;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Histories on the kernel, and the naive as-of reference.
