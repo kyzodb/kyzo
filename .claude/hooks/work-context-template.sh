@@ -11,8 +11,9 @@
 #   - queued tier: no self-starting; focus is an operator decision
 #   - focus tier: full contract, hardest first, board moved the moment
 #     reality changes (a lagging board removes operator oversight)
-#   - upcoming tier: build the foundation forward, zero investment in
-#     condemned paths
+#   - upcoming tier: no blanket rule — force the per-story judgment: what to
+#     build for it now, and whether its condemned path must stay green, may
+#     sit red, gets built for, or gets starved
 
 cat <<EOF
 KyzoDB Work Management
@@ -29,7 +30,7 @@ These are your current focus stories. This is the only work that exists. Execute
 
 ${FOCUS_STORIES}
 
-These are what you will be working on next, in this order. Every line you write either stands under this work or is in its way: build the foundations they name, and put zero effort — no fixes, no tests, no compatibility, no polish — into anything they condemn:
+These are what you will be working on next, in this order. Do not apply a blanket rule to them — think each one through against the work in hand and decide out loud: what does it need built now (a foundation, a seam, nothing), and what does its condemned path require right now? Some condemned code is load-bearing and must stay green until its replacement lands; some can sit red; sometimes the transition means building for it, sometimes starving it. Deepening a condemned path by default and keeping it alive by default are the same laziness — make the call per story, and let that call shape every line you write:
 
 ${UPCOMING_STORIES}
 EOF
