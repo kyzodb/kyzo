@@ -2,7 +2,7 @@
 
 Pure-Rust fork of [CozoDB](https://github.com/cozodb/cozo): one Datalog (KyzoScript) over relational,
 graph, vector, and full-text data, with time travel, on one memcomparable transactional KV substrate
-(`fjall`). `README.md` is the product; the board (org project KyzoDB Migration) is the plan.
+(`fjall`). `README.md` is the product; the board (org project KyzoDB Work) is the plan.
 
 ## The constitution
 
@@ -33,9 +33,12 @@ make the repo catch it.
 - `CLAUDE.md` — this constitution.
 - `.claude/rules/*.md` — law. Global (`00`/`01`/`02`) load every session; path-scoped rules load when
   you touch matching files.
-- `.claude/settings.json` + `.claude/hooks/*.sh` — inject the active story, block gate-evasion, check
-  touched files, gate completion.
-- `.claude/active-story.md` — the one story in flight, injected each turn.
+- `.claude/settings.json` + `.claude/hooks/*.sh` — warn on on-disk-format blast-radius zones, check
+  touched files against their zone's law, block container-evasion (`pre-bash-guard.sh`).
+- `scripts/board-context` — read-only board context: generates `.claude/active-story.md`,
+  `.claude/next-work.md`, and `.claude/board-signal.md` from GitHub (injected each prompt). It nudges
+  when the board and reality disagree; a human or dev agent updates the board intentionally — the
+  tooling never moves cards. Completed work writes evidence back with `scripts/story-evidence`.
 
 ## Operating essentials
 

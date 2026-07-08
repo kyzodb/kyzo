@@ -5,3 +5,8 @@
 
 # REPL history written to cwd when the binary runs interactively
 .kyzo_repl_history
+
+# Board context (#140) — generated from GitHub, never truth
+.claude/active-story.md
+.claude/next-work.md
+.claude/board-signal.md
