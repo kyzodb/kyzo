@@ -9,7 +9,7 @@ graph, vector, and full-text data, with time travel, on one memcomparable transa
 Read and obey `.claude/rules/`. Rules are law.
 
 - A rule conflicts with convenience → the rule wins.
-- A rule conflicts with old tests → migrate the tests without weakening them.
+- A rule conflicts with old tests → rewrite the tests to the new law without weakening them.
 - A rule conflicts with release compile → leave the tree red rather than add a compatibility shim.
   (But the shared tree, every feature config and workspace member, must always *build*.)
 

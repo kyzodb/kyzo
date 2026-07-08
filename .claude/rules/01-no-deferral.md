@@ -28,7 +28,7 @@ A remaining red item may move to a later story ONLY with this ledger:
 **Allowed later-story red:**
 
 - old fixture vocabulary deleted by this story
-- a future subsystem migration explicitly owned by the next story
+- a future subsystem rebuild explicitly owned by the next story
 - wiring that requires a foundation created (and proven) by this story
 
 **Not allowed to remain red:**

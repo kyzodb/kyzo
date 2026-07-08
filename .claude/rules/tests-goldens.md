@@ -11,12 +11,13 @@ paths:
 
 Tests are proof, not decoration. Never weaken a test to make the suite green.
 
-## When a test fails after a semantic migration, classify it
+## When a test fails after a story changes semantics, classify it
 
 1. **The test encodes old false behavior.** Replace it with a STRONGER test for the new law, and
    document the semantic ruling. (A weaker test is not a replacement.)
 2. **The implementation violates the new law.** Fix the implementation.
-3. **The fixture speaks deleted vocabulary.** Migrate the fixture. Do not add a compatibility shim.
+3. **The fixture speaks deleted vocabulary.** Rewrite the fixture in the current vocabulary. Do not
+   add a compatibility shim.
 
 ## Forbidden
 
