@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+# Copyright 2026, The KyzoDB Authors. MPL-2.0.
+#
+# pull-forward-check — detect future-scope touches (#140 v2).
+#
+# The agent may NOTICE future work is needed for current correctness; it may
+# NOT silently implement it. This checks touched files against
+# .board-machine/pull-forward-policy.yaml path signals: a file that implies a
+# FUTURE issue/outcome (one the active story does not belong to) is a
+# pull-forward boundary. Output is a CLASSIFICATION PROMPT — true blocker /
+# runway-clearing candidate / false dependency / later optimization — never an
+# implementation. The agent stops and posts a pull-forward candidate on the
+# active story; the operator approves via the `pull-forward-approved` label.
+#
+# Usage:
+#   scripts/pull-forward-check                 # check the working diff vs main
+#   scripts/pull-forward-check --file PATH     # check one path (edit-guard mode)
+#
+# Exit: 0 = no future-scope touch (or approval label present);
+#       2 = future-scope touch, unapproved — stop and post the candidate;
+#       3 = config/usage error.
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(
+    os.environ.get("CLAUDE_PROJECT_DIR")
+    or subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    ).stdout.strip()
+    or "."
+)
+
+
+def front_matter(key):
+    story = ROOT / ".claude" / "active-story.md"
+    if not story.is_file():
+        return None
+    m = re.search(rf"^{key}:\s*(.+)$", story.read_text(), re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def touched_files():
+    base = subprocess.run(
+        ["git", "-C", str(ROOT), "merge-base", "main", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    files = set()
+    if base:
+        files |= set(subprocess.run(
+            ["git", "-C", str(ROOT), "diff", "--name-only", f"{base}...HEAD"],
+            capture_output=True, text=True,
+        ).stdout.split())
+    for line in subprocess.run(
+        ["git", "-C", str(ROOT), "status", "--porcelain"],
+        capture_output=True, text=True,
+    ).stdout.splitlines():
+        files.add(line[3:].strip())
+    return sorted(f for f in files if f)
+
+
+def main():
+    args = sys.argv[1:]
+    files = None
+    if args[:1] == ["--file"]:
+        if len(args) != 2:
+            print("usage: pull-forward-check [--file PATH]", file=sys.stderr)
+            return 3
+        files = [args[1]]
+    elif args:
+        print("usage: pull-forward-check [--file PATH]", file=sys.stderr)
+        return 3
+
+    policy = yaml.safe_load(
+        (ROOT / ".board-machine" / "pull-forward-policy.yaml").read_text()
+    )
+    signals = policy["path_signals"]
+    approval = policy["approval_label"]
+
+    active = front_matter("active_story") or "none"
+    active_milestone = front_matter("milestone") or "none"
+    labels = (front_matter("labels") or "").split(",")
+
+    if approval in labels:
+        print(f"pull-forward-check: `{approval}` present on active story "
+              f"{active} — future-scope touches are operator-approved.")
+        return 0
+
+    if files is None:
+        files = touched_files()
+
+    hits = []
+    for f in files:
+        for s in signals:
+            if s["pattern"] in f and s["outcome"] != active_milestone:
+                hits.append((f, s))
+
+    if not hits:
+        print("pull-forward-check: no future-scope touch detected.")
+        return 0
+
+    print(f"PULL-FORWARD BOUNDARY: active story {active} "
+          f"(outcome `{active_milestone}`) is touching FUTURE scope:")
+    seen = set()
+    for f, s in hits:
+        key = (f, s["outcome"])
+        if key in seen:
+            continue
+        seen.add(key)
+        issues = ", ".join(f"#{n}" for n in s["issues"])
+        print(f"  - {f} -> outcome `{s['outcome']}` ({issues}): {s['note']}")
+    print()
+    print("STOP IMPLEMENTATION. Protocol (#140):")
+    print("  1. Post a board-visible 'Pull-forward candidate' comment on the "
+          "active story naming the future issue/milestone and why current work "
+          "cannot stay pure without it.")
+    print("  2. Classify it: true-blocker | runway-clearing | false-dependency "
+          "| later-optimization.")
+    print(f"  3. Apply `{policy['candidate_label']}` (or "
+          "`needs-operator-decision`) and await the operator.")
+    print(f"  4. Continue only after operator approval (`{approval}` label) "
+          "and a board state change.")
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except FileNotFoundError as e:
+        print(f"pull-forward-check: {e}", file=sys.stderr)
+        sys.exit(3)

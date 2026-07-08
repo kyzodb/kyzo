@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# Copyright 2026, The KyzoDB Authors. MPL-2.0.
+#
+# evidence-writeback — GitHub-visible completion evidence (#140 v2).
+#
+# Completion is not a claim in chat; it is a comment on the board. This posts
+# (or updates in place) ONE structured evidence comment on the active story's
+# issue, shaped by .board-machine/evidence-template.md: branch, commit range,
+# files touched, commands run, gate/test counts, generated artifacts,
+# acceptance checklist, version-dependency impact, pull-forward candidates,
+# remaining open decisions, closure recommendation. The stop gate refuses
+# "complete" until this exists.
+#
+# What it derives automatically (from git / the generated cache): branch,
+# commit range vs main, files touched, version dependency. Everything a
+# machine cannot know honestly (test counts, gate result, acceptance state) is
+# passed in or read from a gate report — never fabricated.
+#
+# Usage:
+#   scripts/evidence-writeback [--issue N] [--gate-report FILE]
+#                              [--tests "PASS/FAIL (+IGNORED)"] [--bench TEXT]
+#                              [--commands FILE|TEXT] [--acceptance FILE|TEXT]
+#                              [--artifacts TEXT] [--pull-forward TEXT]
+#                              [--authority "Tuple, Domain"] [--open "..."]
+#                              [--recommend close|hold] [--note TEXT] [--dry-run]
+#
+# The issue defaults to the active story parsed from .claude/active-story.md.
+set -euo pipefail
+
+root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
+story_file="$root/.claude/active-story.md"
+marker="<!-- board-story-evidence -->"
+
+issue=""
+gate_report=""
+tests=""
+bench=""
+commands=""
+acceptance=""
+artifacts=""
+pull_forward=""
+authority=""
+open_decisions=""
+recommend=""
+note=""
+dry_run=0
+
+# --commands / --acceptance accept either a file path or literal text.
+text_or_file() { if [ -f "$1" ]; then cat "$1"; else printf '%s' "$1"; fi; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --issue) issue="$2"; shift 2 ;;
+    --gate-report) gate_report="$2"; shift 2 ;;
+    --tests) tests="$2"; shift 2 ;;
+    --bench) bench="$2"; shift 2 ;;
+    --commands) commands=$(text_or_file "$2"); shift 2 ;;
+    --acceptance) acceptance=$(text_or_file "$2"); shift 2 ;;
+    --artifacts) artifacts="$2"; shift 2 ;;
+    --pull-forward) pull_forward="$2"; shift 2 ;;
+    --authority) authority="$2"; shift 2 ;;
+    --open) open_decisions="$2"; shift 2 ;;
+    --recommend) recommend="$2"; shift 2 ;;
+    --note) note="$2"; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    *) echo "evidence-writeback: unknown arg $1" >&2; exit 2 ;;
+  esac
+done
+
+# Default the issue + version dependency to the active story's generated cache.
+version_dep="unknown"
+if [ -f "$story_file" ]; then
+  [ -n "$issue" ] || issue=$(grep -m1 '^active_story:' "$story_file" | sed -E 's/^active_story:[[:space:]]*#?//' | tr -d '[:space:]')
+  version_dep=$(grep -m1 '^version:' "$story_file" | sed -E 's/^version:[[:space:]]*//' || echo unknown)
+fi
+case "$issue" in
+  ''|none|ambiguous)
+    echo "evidence-writeback: no single active story to attach evidence to (issue='$issue')." >&2
+    echo "  Label exactly one issue 'active-story' and re-sync first." >&2
+    exit 2 ;;
+esac
+
+branch=$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+base=$(git -C "$root" merge-base main HEAD 2>/dev/null || echo "")
+if [ -n "$base" ]; then
+  range="$base..HEAD"
+  commit_range=$(git -C "$root" log --oneline "$range" 2>/dev/null | sed 's/^/    /')
+  files=$(git -C "$root" diff --name-only "$base"...HEAD 2>/dev/null | sed 's/^/    /')
+else
+  commit_range="    (no merge-base with main)"
+  files="    (unknown)"
+fi
+[ -n "$commit_range" ] || commit_range="    (none)"
+[ -n "$files" ] || files="    (none)"
+
+gate_block="    (not provided — attach with --gate-report or --tests)"
+if [ -n "$gate_report" ] && [ -f "$gate_report" ]; then
+  gate_block=$(sed 's/^/    /' "$gate_report")
+elif [ -n "$tests" ]; then
+  gate_block="    tests: $tests"
+fi
+
+commands_block="    (not provided — attach with --commands)"
+[ -n "$commands" ] && commands_block=$(printf '%s' "$commands" | sed 's/^/    /')
+acceptance_block="(not provided — attach with --acceptance)"
+[ -n "$acceptance" ] && acceptance_block="$acceptance"
+
+# Assemble the comment (shape: .board-machine/evidence-template.md).
+body=$(cat <<EOF
+$marker
+## Story evidence — #$issue
+
+**Branch:** \`$branch\`
+
+**Commits (\`main..HEAD\`):**
+\`\`\`
+$commit_range
+\`\`\`
+
+**Files touched:**
+\`\`\`
+$files
+\`\`\`
+
+**Commands run:**
+\`\`\`
+$commands_block
+\`\`\`
+
+**Gate / tests:**
+\`\`\`
+$gate_block
+\`\`\`
+
+**Generated artifacts:** ${artifacts:-n/a}
+
+**Acceptance checklist:**
+$acceptance_block
+
+**Version-dependency impact:** active story is \`$version_dep\`${bench:+; benchmark evidence: $bench}
+
+**Authority nodes touched:** ${authority:-n/a}
+
+**Pull-forward candidates found:** ${pull_forward:-none}
+
+**Remaining open decisions:** ${open_decisions:-none recorded}
+
+**Closure recommendation:** ${recommend:-hold}
+${note:+
+**Note:** $note}
+
+<sub>Generated by scripts/evidence-writeback. Board is authoritative.</sub>
+EOF
+)
+
+if [ "$dry_run" -eq 1 ]; then
+  printf '%s\n' "$body"
+  exit 0
+fi
+
+# Update the existing evidence comment in place if present, else create one.
+existing_id=$(gh api "repos/{owner}/{repo}/issues/$issue/comments" --paginate \
+                --jq ".[] | select(.body | contains(\"$marker\")) | .id" 2>/dev/null | head -1 || true)
+
+if [ -n "$existing_id" ]; then
+  printf '%s' "$body" | gh api -X PATCH "repos/{owner}/{repo}/issues/comments/$existing_id" \
+    -F body=@- >/dev/null
+  echo "evidence-writeback: updated evidence comment on #$issue (id $existing_id)"
+else
+  printf '%s' "$body" | gh issue comment "$issue" --body-file - >/dev/null
+  echo "evidence-writeback: posted evidence comment on #$issue"
+fi

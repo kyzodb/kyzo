@@ -1,0 +1,33 @@
+# Copyright 2026, The KyzoDB Authors. MPL-2.0.
+#
+# version-dependencies.yaml — version dependency as separate issue metadata
+# (#140 Board Machine v2). The release number is never sprayed across ordinary
+# milestones: milestones are outcomes (outcomes.yaml); an issue's relation to a
+# release is carried by exactly these labels.
+#
+# board-reconcile treats `assignments` as the TARGET state. An issue may carry
+# more than one version label only where listed (e.g. #96/#100 are both
+# before-v1.0 and part of the v1.0 gate). An open issue missing from every
+# assignment list is drift (board-inventory: missing version-dependency label).
+
+labels:
+  version:none: No release dependency
+  version:before-v0.9: Must land before the v0.9.0 release wave
+  version:v0.9-gate: Part of the v0.9.0 release seal gate
+  version:before-v1.0: Must land before the v1.0.0 public API freeze
+  version:v1.0-gate: Part of the v1.0.0 public-api-freeze gate
+  version:post-v1.0: Planned after v1.0.0; must not leak into current scope
+
+assignments:
+  version:before-v0.9: [140, 137, 139, 136]
+  version:v0.9-gate: [82, 126, 135, 120, 121, 122, 88]
+  version:none: [129]
+  version:before-v1.0: [90, 123, 124, 125, 127, 63, 138, 96, 97, 98, 99, 100, 141, 10, 72, 142, 6, 8, 14]
+  version:v1.0-gate: [96, 100]
+  version:post-v1.0: [5, 7, 9, 11, 12, 13, 128, 102, 130, 131, 132, 64, 66, 133, 134, 22, 23, 24, 25, 26, 27, 28, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 67, 71]
+
+# The deliberate distribution split: the API-shape consumers before v1.0 are
+# the surfaces that stress the public API early — WASM/TS (#10/#141), Python
+# (#6), Node/TS (#8), and client shape (#14). C/Java/Swift/Go/Clojure/Android
+# can exist as planned consumers without becoming v1.0 blockers unless the
+# operator decides they are part of the v1.0 public contract.

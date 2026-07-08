@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+# Copyright 2026, The KyzoDB Authors. MPL-2.0.
+#
+# board-inventory — fetch the whole board state and detect drift (#140 v2).
+#
+# The board is a fully reconciled state store; what the machine cannot see, it
+# refuses. This fetches all open issues (labels, milestones, bodies), the
+# KyzoDB Work project items (Status), the active-story label, and branch/commit
+# evidence, then checks every invariant in .board-machine/ policy. It NEVER
+# mutates anything (that is board-reconcile's job).
+#
+# Emits: target/board/board-inventory.json  (machine-readable state + drift)
+#        target/board/board-drift.md        (human/agent-readable drift report)
+#
+# Exit:  0 = no drift; 1 = drift found; 2 = fetch/config error.
+#
+# Drift classes detected:
+#   off-board                 open issue not on the KyzoDB Work board
+#   no-milestone              open issue without a milestone
+#   malformed-milestone       milestone name violates naming policy / not in ontology
+#   version-in-outcome        version number in a non-release-bearing milestone name
+#   no-version-label          issue missing a version:* dependency label
+#   forbidden-language        forbidden board/dev language in title or body
+#   stale-body-reference      retired milestone vocabulary in an issue body
+#   active-off-board          active story not on the board
+#   active-not-in-progress    active story's board Status is not In Progress
+#   in-progress-no-active     a board card is In Progress without active-story
+#   multiple-active           more than one open issue carries active-story
+#   new-issue-off-board       recently created issue never added to the board
+# (zero active stories is recorded as state, not drift: it blocks code edits
+#  via blast-radius-guard, but an idle board between stories is legal.)
+
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(
+    os.environ.get("CLAUDE_PROJECT_DIR")
+    or subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    ).stdout.strip()
+    or "."
+)
+CONF = ROOT / ".board-machine"
+OUT_DIR = ROOT / "target" / "board"
+NEW_ISSUE_WINDOW_DAYS = 14
+
+
+def gh(args):
+    r = subprocess.run(["gh"] + args, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"gh {' '.join(args)}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def gh_json_pages(path):
+    """gh api --paginate concatenates JSON arrays; decode them all."""
+    raw = gh(["api", path, "--paginate"])
+    dec, idx, out = json.JSONDecoder(), 0, []
+    while idx < len(raw):
+        while idx < len(raw) and raw[idx].isspace():
+            idx += 1
+        if idx >= len(raw):
+            break
+        arr, idx = dec.raw_decode(raw, idx)
+        out.extend(arr)
+    return out
+
+
+def main():
+    outcomes = yaml.safe_load((CONF / "outcomes.yaml").read_text())
+    naming = yaml.safe_load((CONF / "naming-policy.yaml").read_text())
+    versions = yaml.safe_load((CONF / "version-dependencies.yaml").read_text())
+
+    owner = outcomes["project"]["owner"]
+    repo = outcomes["project"]["repo"]
+    board_title = outcomes["project"]["board"]
+    release_bearing = {
+        name for name, m in outcomes["milestones"].items() if m.get("release_bearing")
+    }
+    known_milestones = set(outcomes["milestones"])
+    version_labels = set(versions["labels"])
+
+    mnp = naming["milestones"]
+    rb_pat = re.compile(mnp["release_bearing_pattern"])
+    outcome_pat = re.compile(mnp["outcome_pattern"])
+    smell_pat = re.compile(mnp["version_smell_pattern"], re.IGNORECASE)
+    stale_tokens = naming["stale_body_tokens"]
+    forbidden_words = naming["forbidden_language"]
+    strategy_exempt = set(naming.get("strategy_issues") or [])
+    history_exempt = set(naming.get("history_exempt_issues") or [])
+    forbidden_pat = re.compile(
+        r"\b(" + "|".join(re.escape(w) for w in forbidden_words) + r")\b",
+        re.IGNORECASE,
+    )
+
+    # ---- fetch ------------------------------------------------------------
+    issues = [
+        i
+        for i in gh_json_pages(f"repos/{owner}/{repo}/issues?state=open&per_page=100")
+        if "pull_request" not in i
+    ]
+
+    plist = json.loads(gh(["project", "list", "--owner", owner, "--format", "json"]))
+    pnum = next(
+        (p["number"] for p in plist["projects"] if p["title"] == board_title), None
+    )
+    if pnum is None:
+        print(f"board-inventory: project '{board_title}' not found", file=sys.stderr)
+        return 2
+    items = json.loads(
+        gh(
+            [
+                "project",
+                "item-list",
+                str(pnum),
+                "--owner",
+                owner,
+                "--format",
+                "json",
+                "--limit",
+                "500",
+            ]
+        )
+    )["items"]
+    board = {
+        it["content"]["number"]: it.get("status") or "(no status)"
+        for it in items
+        if it.get("content", {}).get("number") is not None
+    }
+
+    milestones_live = {
+        m["title"]
+        for m in gh_json_pages(f"repos/{owner}/{repo}/milestones?state=open&per_page=100")
+    }
+
+    # ---- detect -----------------------------------------------------------
+    drift = []  # {class, subject, detail}
+
+    def flag(cls, subject, detail):
+        drift.append({"class": cls, "subject": subject, "detail": detail})
+
+    now = datetime.now(timezone.utc)
+    active = []
+    for i in issues:
+        n = i["number"]
+        labels = {l["name"] for l in i["labels"]}
+        body = i.get("body") or ""
+        title = i["title"]
+        milestone = (i.get("milestone") or {}).get("title")
+        if "active-story" in labels:
+            active.append(n)
+
+        if n not in board:
+            created = datetime.fromisoformat(i["created_at"].replace("Z", "+00:00"))
+            cls = (
+                "new-issue-off-board"
+                if now - created < timedelta(days=NEW_ISSUE_WINDOW_DAYS)
+                else "off-board"
+            )
+            flag(cls, f"#{n}", f"open issue '{title}' is not on the {board_title} board")
+
+        if not milestone:
+            flag("no-milestone", f"#{n}", f"open issue '{title}' has no milestone")
+        elif milestone not in known_milestones:
+            flag(
+                "malformed-milestone",
+                f"#{n}",
+                f"milestone '{milestone}' is not in .board-machine/outcomes.yaml",
+            )
+
+        if not (labels & version_labels):
+            flag(
+                "no-version-label",
+                f"#{n}",
+                f"open issue '{title}' carries no version:* dependency label",
+            )
+
+        if n not in strategy_exempt:
+            hits = sorted({m.group(0).lower() for m in forbidden_pat.finditer(title + "\n" + body)})
+            if hits:
+                flag(
+                    "forbidden-language",
+                    f"#{n}",
+                    f"forbidden board language {hits} in title/body",
+                )
+
+        if n not in history_exempt:
+            stale = [t for t in stale_tokens if t in body]
+            if stale:
+                flag(
+                    "stale-body-reference",
+                    f"#{n}",
+                    f"retired milestone vocabulary {stale} in body",
+                )
+
+    for name in milestones_live:
+        if name in mnp["forbidden_names"] or not (
+            rb_pat.match(name) or outcome_pat.match(name)
+        ):
+            flag(
+                "malformed-milestone",
+                name,
+                "milestone name violates naming policy (not a release-bearing "
+                "vX.Y.Z-outcome and not a plain outcome name)",
+            )
+        elif smell_pat.search(name) and name not in release_bearing:
+            flag(
+                "version-in-outcome",
+                name,
+                "version number in a non-release-bearing milestone name",
+            )
+
+    # Active-story board invariants.
+    if len(active) > 1:
+        flag("multiple-active", ", ".join(f"#{n}" for n in active),
+             "more than one open issue carries the active-story label")
+    for n in active:
+        if n not in board:
+            flag("active-off-board", f"#{n}", "active story is not on the board")
+        elif board[n] != "In Progress":
+            flag(
+                "active-not-in-progress",
+                f"#{n}",
+                f"active story board Status is '{board[n]}', not 'In Progress'",
+            )
+    for n, status in sorted(board.items()):
+        if status == "In Progress" and n not in active:
+            # Only OPEN issues count; a Done-closed issue cannot be In Progress
+            # anyway, and a closed-but-In-Progress card is exactly the drift.
+            flag(
+                "in-progress-no-active",
+                f"#{n}",
+                "board card is In Progress but the issue does not carry active-story",
+            )
+
+    # Branch/commit evidence for the active story (best-effort).
+    evidence = {}
+    if len(active) == 1:
+        n = active[0]
+        br = subprocess.run(
+            ["git", "-C", str(ROOT), "branch", "--list", f"story-{n}-*",
+             "--format=%(refname:short)"],
+            capture_output=True, text=True,
+        ).stdout.split()
+        head = subprocess.run(
+            ["git", "-C", str(ROOT), "log", "-1", "--oneline"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        evidence = {"story_branches": br, "head": head}
+
+    # ---- emit ---------------------------------------------------------------
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    inventory = {
+        "project": {"owner": owner, "repo": repo, "board": board_title, "number": pnum},
+        "active_story": active[0] if len(active) == 1 else None,
+        "active_story_count": len(active),
+        "active_story_evidence": evidence,
+        "open_issue_count": len(issues),
+        "issues": [
+            {
+                "number": i["number"],
+                "title": i["title"],
+                "milestone": (i.get("milestone") or {}).get("title"),
+                "labels": sorted(l["name"] for l in i["labels"]),
+                "board_status": board.get(i["number"]),
+                "created_at": i["created_at"],
+            }
+            for i in sorted(issues, key=lambda i: i["number"])
+        ],
+        "milestones_open": sorted(milestones_live),
+        "drift": drift,
+    }
+    (OUT_DIR / "board-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
+
+    lines = ["# Board drift report", "",
+             f"Open issues: {len(issues)} · on board: "
+             f"{sum(1 for i in issues if i['number'] in board)} · "
+             f"active stories: {len(active)}", ""]
+    if drift:
+        lines.append(f"**{len(drift)} drift item(s):**")
+        lines.append("")
+        for d in drift:
+            lines.append(f"- `{d['class']}` {d['subject']} — {d['detail']}")
+    else:
+        lines.append("No drift. The board is fully reconciled: every open issue "
+                     "on-board, milestoned, version-labeled; milestone names are "
+                     "outcomes; only release-bearing milestones carry versions.")
+    lines.append("")
+    lines.append("<sub>Generated by scripts/board-inventory. Board is authoritative.</sub>")
+    (OUT_DIR / "board-drift.md").write_text("\n".join(lines) + "\n")
+
+    print(f"board-inventory: {len(issues)} open issues, {len(drift)} drift item(s) "
+          f"-> {OUT_DIR / 'board-drift.md'}")
+    for d in drift:
+        print(f"  {d['class']}: {d['subject']} — {d['detail']}")
+    return 1 if drift else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except RuntimeError as e:
+        print(f"board-inventory: {e}", file=sys.stderr)
+        sys.exit(2)

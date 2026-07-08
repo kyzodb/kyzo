@@ -1,0 +1,45 @@
+# Copyright 2026, The KyzoDB Authors. MPL-2.0.
+#
+# pull-forward-policy.yaml — the pull-forward protocol (#140 Board Machine v2).
+#
+# The agent may NOTICE future work is needed for current correctness; it may
+# NOT silently implement it. scripts/pull-forward-check detects the boundary;
+# the classification decides what happens next. No automatic implementation:
+# the agent stops and posts a pull-forward candidate on the active story.
+
+classifications:
+  - true-blocker          # current work cannot stay honest without the future work
+  - runway-clearing       # not blocking, but doing it now genuinely clears the path
+  - false-dependency      # looked coupled; is not — proceed without it
+  - later-optimization    # merely tempting; belongs to its own story
+
+# Approval: the operator applies the `pull-forward-approved` label to the
+# ACTIVE story (or states approval on the board). Until then, edits matching a
+# future scope are denied by blast-radius-guard.sh.
+approval_label: pull-forward-approved
+candidate_label: pull-forward-candidate
+
+# Path signals: touched files that imply a FUTURE issue/outcome. A signal fires
+# only when the active story does not itself belong to the named outcome. These
+# are candidates for classification, never auto-implementation.
+path_signals:
+  - pattern: 'kyzo-lib-'
+    outcome: developer-distribution
+    issues: [142, 5, 6, 7, 8, 9, 11, 12, 13, 14]
+    note: language bindings consume the sealed API; they are not current scope
+  - pattern: 'wasm'
+    outcome: wasm-edge-runtime
+    issues: [141, 10, 72]
+    note: browser/edge envelope work belongs to wasm-edge-runtime
+  - pattern: 'kyzo-core/src/engines/'
+    outcome: resident-projection-engine
+    issues: [123, 124, 125, 127]
+    note: index-engine hot-path work belongs to the resident projection wave
+  - pattern: 'kyzo-core/src/query/'
+    outcome: v0.9.0-engine-release-seal
+    issues: [120, 121]
+    note: evaluator/runtime rebuild is v0.9-gate work (#120/#121)
+  - pattern: 'kyzo-core/src/storage/'
+    outcome: v0.9.0-engine-release-seal
+    issues: [122, 135]
+    note: residency/catalog-generation work is v0.9-gate work (#122/#135)

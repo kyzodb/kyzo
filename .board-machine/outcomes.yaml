@@ -1,0 +1,237 @@
+# Copyright 2026, The KyzoDB Authors. MPL-2.0.
+#
+# outcomes.yaml — the authoritative milestone ontology (#140 Board Machine v2).
+#
+# Milestone = named outcome / epic-like work container.
+# Version = release consequence.
+# Release-bearing milestone = only when the milestone exists to qualify or cut a release.
+# Version dependency = separate issue metadata (version-dependencies.yaml).
+#
+# board-reconcile treats this file as the TARGET state: milestones listed here
+# must exist with exactly these names, and each listed issue belongs to its
+# milestone. An open issue not listed here is an UNKNOWN and goes to the report,
+# never to a silent mutation. List order is the outcome sequence used by
+# outcome-context / version-horizon.
+
+project:
+  owner: kyzodb
+  repo: kyzo
+  board: KyzoDB Work
+
+milestones:
+  board-work-authority:
+    release_bearing: false
+    purpose: >-
+      Make GitHub the work authority: the board is the deterministic operating
+      machine for agent work. Keeps #137 as the historical alignment/reference
+      artifact consumed by the milestone reset.
+    unlocks: >-
+      type-authority-audit (#139/#136), and through it the entire engine
+      sequence — nothing engine-side starts until this machine is green.
+    must_not_absorb: >-
+      Program type authority (#139) and any engine implementation; work
+      authority only.
+    issues: [140, 137]
+
+  type-authority-audit:
+    release_bearing: false
+    purpose: >-
+      After board authority exists, make program/type authority inspectable:
+      #139 audits code architecture with a generated authority graph; #136 is
+      the bootstrap authority map.
+    unlocks: >-
+      The v0.9.0 engine wave (#82 first) with authority drift visible instead
+      of remembered.
+    must_not_absorb: >-
+      Strict gating, a Rust-analyzer empire, or fixing the drift it reports —
+      report mode first; the fixes belong to their owning stories.
+    issues: [139, 136]
+
+  reproducible-proof-environment:
+    release_bearing: false
+    purpose: >-
+      Make gates and benchmark results attributable to code versus host
+      environment. Useful for release proof, but #88 records it is not a hard
+      prerequisite for v0.9.0.
+    unlocks: >-
+      Environment-attributable gate and bench evidence for release seals.
+    must_not_absorb: >-
+      The release seal itself (#88) or bench campaign content.
+    issues: [129]
+
+  v0.9.0-engine-release-seal:
+    release_bearing: true
+    purpose: >-
+      Seal the next meaningful pre-1.0 engine release from green main. #82
+      re-establishes post-#119 benchmark truth, #120–#122 rebuild core
+      execution/residency authority, #126/#135 harden row/catalog authority,
+      and #88 is the seal gate.
+    unlocks: >-
+      The v0.9.0 release cut; the resident-projection and integrity outcomes
+      that consume #120/#122 admission/residency work.
+    must_not_absorb: >-
+      Post-v0.9 capability work; anything not needed to seal the release.
+    issues: [82, 126, 135, 120, 121, 122, 88]
+
+  catalog-operator-coherence:
+    release_bearing: false
+    purpose: >-
+      Make indexed relation rename a coherent multi-row catalog operation
+      instead of a safe typed refusal.
+    unlocks: >-
+      ::rename on indexed relations as a real operator capability.
+    must_not_absorb: >-
+      General catalog rework beyond the coherent multi-row move.
+    issues: [90]
+
+  resident-projection-engine:
+    release_bearing: false
+    purpose: >-
+      Move vector/text/sparse/geometry/graph search from decoded tuple hot
+      paths into resident rebuildable projections that emit admitted
+      query-domain currency. All four consume the #120/#122
+      admission/residency work.
+    unlocks: >-
+      Resident, allocation-free search hot paths across the index engines.
+    must_not_absorb: >-
+      The admission/residency foundation itself (#120/#122 — v0.9-gate work).
+    issues: [123, 124, 125, 127]
+
+  engine-integrity-core:
+    release_bearing: false
+    purpose: >-
+      Land engine-level integrity/trust primitives below product surfaces.
+      #49 identifies #63 and #138 as implementation children of the
+      integrity/trust epic.
+    unlocks: >-
+      Provenance/constraint primitives that product accountability surfaces
+      (#102, KyzoRecord) build on.
+    must_not_absorb: >-
+      Product-facing explanation surfaces (#102) or federation semantics.
+    issues: [63, 138]
+
+  v1.0.0-public-api-freeze:
+    release_bearing: true
+    purpose: >-
+      Qualify the point where KyzoDB expects the public API shape, query
+      semantics, release artifact, and public consumption surfaces to stop
+      casually breaking. #96 is a documented v1.0 boundary; #97–#100 are the
+      guardrails around public maturity.
+    unlocks: >-
+      The v1.0.0 cut and the post-1.0 long-tail distribution/product waves.
+    must_not_absorb: >-
+      Random post-0.9 work — correctness/API-maturity qualification only.
+    issues: [96, 97, 98, 99, 100]
+
+  wasm-edge-runtime:
+    release_bearing: false
+    purpose: >-
+      One real-engine browser/edge envelope consumed by browser demo, npm/WASM
+      package, playground, Workers, and Durable Objects replay-backed storage.
+    unlocks: >-
+      The WASM-backed Node/TS distribution path and the browser/edge demos.
+    must_not_absorb: >-
+      The full bindings matrix (developer-distribution) or proof campaigns.
+    issues: [141, 10, 72]
+
+  developer-distribution:
+    release_bearing: false
+    purpose: >-
+      Organize public consumer surfaces without making bindings the
+      architecture center. #142 states the topology: WASM/browser/edge first,
+      Python binds directly with pyo3, Node/TS is WASM-backed first, C ABI is
+      external interop, long-tail bindings come later by demand.
+    unlocks: >-
+      Each language's supported consumption path, by demand.
+    must_not_absorb: >-
+      Engine work justified as "needed for a binding"; bindings consume the
+      sealed API.
+    issues: [142, 5, 6, 7, 8, 9, 11, 12, 13, 14]
+
+  accountable-record-substrate:
+    release_bearing: false
+    purpose: >-
+      Define the accountable knowledge unit above KyzoDB and expose proof as a
+      human/agent-facing explanation surface. #128 creates RecordId above
+      engine identity; #102 turns proof from internal artifact into a
+      product-facing explanation surface.
+    unlocks: >-
+      KyzoMem/KyzoKnow product surfaces and the sync/federation record
+      contract.
+    must_not_absorb: >-
+      Engine identity/authority work (that is engine-side), or blocking #120,
+      #122, #88.
+    issues: [128, 102]
+
+  zero-access-local-first-sync:
+    release_bearing: false
+    purpose: >-
+      Client key custody, identical own-storage/Kyzo-storage paths, and scoped
+      database topology with identity-preserving export/import/hosted
+      promotion.
+    unlocks: >-
+      Hosted/local-first product topology with zero-access encryption.
+    must_not_absorb: >-
+      Open federation semantics (open-federation-contract).
+    issues: [130, 131]
+
+  open-federation-contract:
+    release_bearing: false
+    purpose: >-
+      Semantic compatibility, record stream/replay contract, graph state
+      roots, diff/merge, and public federation semantics. #132 defines the
+      product/platform boundary; #64 and #66 supply the verifiable/federated
+      graph semantics.
+    unlocks: >-
+      Federated/verifiable graph interchange across deployments.
+    must_not_absorb: >-
+      Sync/key-custody product mechanics (zero-access-local-first-sync).
+    issues: [132, 64, 66]
+
+  accountable-memory-and-rag:
+    release_bearing: false
+    purpose: >-
+      Product surfaces over KyzoRecord, with evidence, correction semantics,
+      replay, and retrieval as projection rather than truth.
+    unlocks: >-
+      KyzoMem and KyzoKnow as managed accountable products.
+    must_not_absorb: >-
+      The record substrate itself (accountable-record-substrate).
+    issues: [133, 134]
+
+  public-proof-ground:
+    release_bearing: false
+    purpose: >-
+      Build the public proof environment and campaign structure before running
+      headline proof campaigns. #67 is the execution lane; #39–#41 define
+      benchmark/trial/demo rules; #71 onboards SurrealDB as a comparative
+      subject; #33 can begin because parse is sealed.
+    unlocks: >-
+      public-proof-campaigns — dependency-backed campaigns with rules and a
+      lane to run in.
+    must_not_absorb: >-
+      The campaigns themselves before the substrate exists.
+    issues: [67, 39, 40, 41, 71, 33]
+
+  public-proof-campaigns:
+    release_bearing: false
+    purpose: >-
+      Run dependency-backed public proof campaigns only after the substrate
+      that makes each claim true exists.
+    unlocks: >-
+      Published, reproducible comparative proof of the engine's claims.
+    must_not_absorb: >-
+      Engine fixes discovered mid-campaign — those route to owning stories.
+    issues: [22, 23, 24, 25, 26, 27, 28, 32, 35, 36, 37, 38]
+
+  engine-capability-roadmap:
+    release_bearing: false
+    purpose: >-
+      Visible long-range capability map, not current implementation. #51 is
+      the parent capability epic; #42–#50 are the capability families.
+    unlocks: >-
+      A place future capability stories are carved from, deliberately.
+    must_not_absorb: >-
+      Active implementation work — a roadmap entry activates by becoming a
+      story in a real outcome.
+    issues: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]

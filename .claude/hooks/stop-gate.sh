@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Stop hook: refuse to stop with completion language while a story is actively
-# in flight and work is uncommitted. Deliberately narrow so it NEVER wedges
+# Stop hook: refuse to stop while the board is drifting or a story is claiming
+# completion without proof (#140 v2). Deliberately narrow so it NEVER wedges
 # normal conversation:
 #
 #   - honors stop_hook_active (no infinite loop)
 #   - silent unless .claude/active-story.md has `status: in-progress`
-#   - silent when the git tree is clean (work is landed/committed)
-#   - clearable by committing the work, producing .claude/current-gate-report.md,
-#     or flipping the story status.
+#   - DRIFT: a TTL-throttled board-inventory run must be clean — a new issue
+#     left off-board, a missing milestone/version label, a malformed milestone
+#     name, or forbidden board language blocks the stop until reconciled
+#     (offline-safe: an unreachable board never wedges)
+#   - COMPLETION: with uncommitted work, stopping requires BOTH a fresh local
+#     gate report AND GitHub-visible evidence (scripts/evidence-writeback)
+#   - clearable by reconciling the board, committing the work, producing
+#     .claude/current-gate-report.md, or flipping the story status.
 set -euo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
@@ -22,17 +27,44 @@ story="$root/.claude/active-story.md"
 [ -f "$story" ] || exit 0
 grep -Eqi '^[[:space:]]*status:[[:space:]]*in-progress' "$story" || exit 0
 
-# 2. Only bite when there is uncommitted work in flight.
+# 2. Board drift gate. TTL-throttled (one gh sweep per window, not per stop);
+#    best-effort — a fetch failure (exit 2) never wedges, only REAL drift
+#    (exit 1) blocks. What the machine cannot see, it refuses to certify —
+#    but offline it stays silent rather than guessing.
+drift_md="$root/target/board/board-drift.md"
+drift_ttl=600
+run_inventory=1
+if [ -f "$drift_md" ]; then
+  now=$(date +%s)
+  mtime=$(stat -c %Y "$drift_md" 2>/dev/null || echo 0)
+  [ $((now - mtime)) -lt "$drift_ttl" ] && run_inventory=0
+fi
+drift_rc=0
+if [ "$run_inventory" -eq 1 ] && [ -x "$root/scripts/board-inventory" ]; then
+  "$root/scripts/board-inventory" >/dev/null 2>&1 || drift_rc=$?
+elif [ -f "$drift_md" ] && ! grep -q '^No drift' "$drift_md"; then
+  drift_rc=1
+fi
+if [ "$drift_rc" = "1" ]; then
+  summary=$(grep '^- ' "$drift_md" 2>/dev/null | head -10 || true)
+  reason="The board is DRIFTING (#140) — scripts/board-inventory found unreconciled state, and the board is the work authority; do not stop until it is true. Drift:
+$summary
+Fix the board (scripts/board-reconcile --apply for known targets, or classify the unknowns on GitHub), re-run scripts/board-inventory until clean, then stop."
+  jq -cn --arg r "$reason" '{decision:"block",reason:$r}'
+  exit 0
+fi
+
+# 3. Completion gate: only bites when there is uncommitted work in flight.
 cd "$root" 2>/dev/null || exit 0
 dirty=$(git status --porcelain 2>/dev/null || true)
 [ -n "$dirty" ] || exit 0
 
-# 3. Clearing requires BOTH a fresh local gate report AND GitHub-visible
+#    Clearing requires BOTH a fresh local gate report AND GitHub-visible
 #    completion evidence (#140): an evidence comment on the active story issue.
-#    The board is the work authority — a green local report is not completion if
-#    the board shows nothing. The GitHub check is best-effort: if we cannot reach
-#    GitHub, we do not wedge (treat as satisfied), we only ENFORCE when we can
-#    positively see the board lacks evidence.
+#    The board is the work authority — a green local report is not completion
+#    if the board shows nothing. The GitHub check is best-effort: if we cannot
+#    reach GitHub, we do not wedge (treat as satisfied), we only ENFORCE when
+#    we can positively see the board lacks evidence.
 report="$root/.claude/current-gate-report.md"
 gate_ok=0
 if [ -f "$report" ] && [ "$report" -nt "$story" ]; then
@@ -60,9 +92,9 @@ if [ "$gate_ok" = 1 ] && { [ "$evidence_ok" = "yes" ] || [ "$evidence_ok" = "unk
   exit 0
 fi
 
-reason="You are stopping mid-story with uncommitted work and incomplete completion evidence. Before reporting completion, (a) produce a FACTS-ONLY gate ledger (00-story-gates.md / 02-final-report.md): commit range, exact commands, test counts (pass/fail), ignored count, clippy/fmt (own vs vendored), both feature configs, benchmark result if perf touched, compile-fail result if authority touched, remaining-red ledger (01-no-deferral.md) — write it to .claude/current-gate-report.md; AND (b) post GitHub-visible evidence to the active story with scripts/board-story-evidence (the board is the work authority, #140). Or set the story status to paused/done in .claude/active-story.md. No success language until gates pass."
+reason="You are stopping mid-story with uncommitted work and incomplete completion evidence. Before reporting completion, (a) produce a FACTS-ONLY gate ledger (00-story-gates.md / 02-final-report.md): commit range, exact commands, test counts (pass/fail), ignored count, clippy/fmt (own vs vendored), both feature configs, benchmark result if perf touched, compile-fail result if authority touched, remaining-red ledger (01-no-deferral.md) — write it to .claude/current-gate-report.md; AND (b) post GitHub-visible evidence to the active story with scripts/evidence-writeback (the board is the work authority, #140). Or set the story status to paused/done in .claude/active-story.md. No success language until gates pass."
 if [ "$gate_ok" = 1 ] && [ "$evidence_ok" = "no" ]; then
-  reason="Local gate report is fresh, but the board shows NO completion evidence on active story #$active (#140). Completion requires GitHub-visible evidence: run scripts/board-story-evidence to post the branch/commits/gate/test ledger to the issue, then stop. The board is the work authority — a green local report is not completion."
+  reason="Local gate report is fresh, but the board shows NO completion evidence on active story #$active (#140). Completion requires GitHub-visible evidence: run scripts/evidence-writeback to post the branch/commits/gate/test ledger to the issue, then stop. The board is the work authority — a green local report is not completion."
 fi
 
 jq -cn --arg r "$reason" '{decision:"block",reason:$r}'

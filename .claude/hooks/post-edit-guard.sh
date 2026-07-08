@@ -30,7 +30,7 @@ case "$file" in
     base=$(basename "$file")
     if printf '%s' "$base" | grep -Eiq '^(body|issue|story)[-_.].*\.md$|-(body|issue|story)\.md$' \
        || grep -Eqi '^##[[:space:]]*(hardest obligation|acceptance criteria|required invariant)|^failure mode:' "$abs" 2>/dev/null; then
-      block "This is a hidden issue-body draft in a scratchpad/tmp path ($file). The board is the work authority (#140): local markdown must not stand in for a GitHub issue. Edit the issue directly (gh issue edit N --body-file - with transient stdin is fine), or post evidence via scripts/board-story-evidence. No shadow story artifacts as working truth."
+      block "This is a hidden issue-body draft in a scratchpad/tmp path ($file). The board is the work authority (#140): local markdown must not stand in for a GitHub issue. Edit the issue directly (gh issue edit N --body-file - with transient stdin is fine), or post evidence via scripts/evidence-writeback. No shadow story artifacts as working truth."
     fi
     ;;
 esac
