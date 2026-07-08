@@ -57,6 +57,9 @@ make the repo catch it.
 
 ## Operating essentials
 
+- **The board is the workflow.** The work is the active story (`.claude/active-story.md`, injected
+  every prompt); pick it up with the `story-execution` skill — plan of attack before the first
+  edit, types before mechanism. No active story → no code changes without the operator.
 - **One tree, one branch.** Real tree, current branch. No worktrees, no parallel patch stacks. Commit
   and push freely as units land; the go-gate is only public/irreversible acts (merge to main, tags,
   releases, new remotes).
