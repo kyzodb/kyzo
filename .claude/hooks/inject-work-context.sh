@@ -22,7 +22,7 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo 
 OWNER=kyzodb
 REPO=kyzo
 PROJECT=1
-TEMPLATE="$ROOT/.claude/hooks/work-context-template.md"
+TEMPLATE="$ROOT/.claude/hooks/work-context-template.sh"
 FOCUS_FILE="$ROOT/.claude/focus-story.md"
 CACHE="$ROOT/.claude/.work-context-cache.md"
 TTL=120
@@ -142,15 +142,11 @@ else
   [ -s "$tmp/upcoming.md" ] || echo "(the focus stories' epics have no remaining stories)" >"$tmp/upcoming.md"
 fi
 
-# ---- fill the template (skip its leading <!-- --> explainer) ---------------
-awk -v d="$tmp" '
-  NR==1 && /^<!--/ { skip=1 }
-  skip { if (/-->/) skip=0; next }
-  /^\{\{TODO_STORIES\}\}$/     { while ((getline l < (d "/todo.md")) > 0) print l; close(d "/todo.md"); next }
-  /^\{\{FOCUS_STORIES\}\}$/    { while ((getline l < (d "/focus.md")) > 0) print l; close(d "/focus.md"); next }
-  /^\{\{UPCOMING_STORIES\}\}$/ { while ((getline l < (d "/upcoming.md")) > 0) print l; close(d "/upcoming.md"); next }
-  { print }
-' "$TEMPLATE" >"$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
+# ---- render the template (bash heredoc; the three variables expand) --------
+TODO_STORIES="$(cat "$tmp/todo.md")" \
+  FOCUS_STORIES="$(cat "$tmp/focus.md")" \
+  UPCOMING_STORIES="$(cat "$tmp/upcoming.md")" \
+  bash "$TEMPLATE" >"$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
 
 cat "$CACHE"
 exit 0
