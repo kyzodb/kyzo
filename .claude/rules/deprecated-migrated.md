@@ -288,3 +288,211 @@ companions) — closed)
   order_with_nul_key`). encode_owned sorts sets by their ENCODED bytes,
   deliberately not by `Ord`, so the codec stays the independent authority
   the Ord mirror is law-locked against — no circularity.
+
+## data/value/arena.rs (2372 lines; inventory: module doc (execution-
+currency doctrine: codes are epoch-scoped RANKS; sealed code order == byte
+order; seal/remap/observer discipline), `CHUNK_SIZE` + chunked `Heap`
+(append-only byte storage, freeze-on-rollover), `Span`, `FrozenStore`,
+`Entry`, `Run`, `Epoch`, `ArenaId`, `StampedCode` minting discipline +
+`stamp`, `Arena` (new/intern/seal/snapshot/frame/epoch/len +
+`compare_derefs` counter), `Remap` (apply/tail_len, epoch-crossing carry),
+the shared View algorithms + `Frame` (resolve/rank/select/cmp_codes) +
+`Snapshot` (owned, Send+Sync), liveness + foreign-arena + stale-epoch
+asserts, `Default`, and the test battery (seeded xorshift Rng, the
+`Naive` oracle + check_laws/check_snapshot sweeps, the drive harness,
+exhaustive seal/snapshot placement sweeps, the stale-stamp exploit pin,
+cross-arena stamp refusals, same-epoch observer agreement, tail
+arrival-stability, seal-remap carry with post-seal dense byte order, the
+deref-counting trio (distinct-prefix zero-deref / tie-must-deref /
+all-sealed CodeColumn sort with ZERO derefs), the `#[ignore]`d
+bench_code_dedup_vs_byte_dedup micro-benchmark, three 100k multi-epoch
+stress shapes with a pinned early snapshot, and contract edges: Snapshot
+Send+Sync, empty seal is identity yet advances the epoch, empty string is
+a value, chunk-boundary round-trips, snapshot survival across writer
+seals/cascades, forged-stamp and out-of-range panics) — closed)
+- **L1:** preserve-and-move whole → `exec/currency/arena.rs` (seat
+  exists). This is the currency side of the model/currency wall the value
+  core entry names: `Value::mint` reaches ACROSS to it via `&mut Arena`,
+  and the `CanonicalBytes` witness is what crosses. One concept — the
+  interning arena with epoch-sealed rank codes — at its natural size: the
+  ~1000 lines of test battery are the oracle-differential and law sweeps
+  the currency layer's severity demands, not cohabiting concepts. Tests
+  move with it.
+- **L2:** gold, preserve verbatim: sealed-codes-ARE-ranks (the zero-deref
+  sort fast lane, MEASURED by `compare_derefs` in tests — no
+  durable-encoding work in the ordered-iteration hot path);
+  prefix-first-then-deref-only-on-tie for unsealed codes, also
+  counter-measured; the stamp discipline (epoch + arena identity carried
+  in every code; stale stamps and foreign-arena stamps PANIC — the
+  reviewer's stale-stamp exploit is pinned as a test); `Remap` as the
+  only lawful epoch crossing; snapshot immutability proven against 90k+
+  values of writer progress; the `Naive` oracle differential with
+  exhaustive placement sweeps; the seeded no-clock Rng. Arrival check:
+  `bench_code_dedup_vs_byte_dedup` is a micro-benchmark riding as an
+  `#[ignore]`d unit test — on migration it graduates to the bench lane
+  (`benches/`) rather than surviving as an ignored test (rule #11
+  ledger item, pre-existing not new).
+
+## data/value/code.rs (99 lines; inventory: module doc, module-level
+`#![allow(dead_code)]` (#119 foundation note), `Code(u32)` (identity-only
+doc + `raw()`), `StampedCode` (code+epoch+arena; `mint` gated on
+`StampMintAuthority`; arena()/code()/epoch() accessors) — closed)
+- **L1:** preserve-and-move whole → `exec/currency/code.rs` (seat
+  exists). One concept (the dense interned handle and its stamped
+  spendable form) at its natural size.
+- **L2:** gold, preserve verbatim: the no-read-authority doctrine (by
+  design NO read API anywhere accepts a bare `Code` — spending requires a
+  Frame or Snapshot that verifies arena identity and epoch exactly);
+  deliberately no `Ord` (order is the arena's to answer inside a frame;
+  `raw()` claims identity order, never value order — the proofs.rs
+  absence proof pins this); `StampedCode::mint` requiring
+  `StampMintAuthority`, whose only constructor is private to arena.rs —
+  authority as a per-concept COMPILE fact, not a module-prefix
+  convention (the @authority pattern realized). Arrival check: the
+  module-level `#![allow(dead_code)]` is #119-foundation scaffolding
+  ("#120 wires it") — it comes OFF at migration when the target split
+  wires real consumers; it must not cross silently.
+
+## data/value/column.rs (761 lines; inventory: module doc (the admission
+theorem — one container-domain check amortizes a million zero-per-code
+spends, sound only because write doors verify every entering stamp; the
+gather law — epoch crossing only through the consuming gather doors,
+monotone over sealed codes; native arrays as the stamp-free vectorizable
+lane), `#![allow(dead_code)]` (#119/#120 note), `Domain` with its
+@authority block (arena+epoch+extent; for_observer/absorb_stamp/
+admit/admit_to minting `BulkSpendAuthority`; extent ≤ observer visibility
+including a snapshot's cut), `CodeColumn` (new_in, stamp-verifying push,
+admit → `AdmittedCodes`, consuming gather), `AdmittedCodes` (raw
+identity-only view, all_sealed, `raw_sealed` Option gate, resolve,
+cmp_at, sort_permutation), `WordColumn` (uniform-container-law doc; push
+consumes `Minted` — inline free, wide stamp-verified; admit; gather via
+`Value::gathered`), `AdmittedWords` (get/canonical/cmp_at
+local-knowledge-then-tie), `Column` enum (Ints/Floats/Bools/Codes/Words),
+and the test battery (write-door stale + foreign refusals; admission
+refusals for stale containers and contents beyond a snapshot cut;
+one-check-then-free spends; sealed fast lane agrees with byte order;
+tail-bearing columns leave the lane and still order correctly; gather
+preserves values + sortedness and readmits, wrong-remap refusal; word
+columns hold mixed residency, gather rewrites handles only, stale
+wide-word refusal) — closed)
+- **L1:** preserve-and-move whole → `exec/currency/column.rs` (seat
+  exists). One concept — the stamped batch container and its admission
+  discipline — at its natural size; tests move with it. The `Domain`
+  @authority declaration migrates INTACT and the committed authority
+  artifacts re-point at the new path.
+- **L2:** gold, preserve verbatim: the admission theorem stated as doc
+  law with its test pinning the exact snapshot-cut case the theorem
+  names; the gather law (a consuming door is the ONLY mint of a
+  new-epoch container — stale containers aren't fixed, they're
+  inadmissible; monotone remap keeps sorted containers sorted, proven);
+  the uniform container law (an all-inline WordColumn is still an
+  epoch-domain container — "one law, no special cases");
+  `BulkSpendAuthority` minted only by `admit_to` after the three-part
+  proof; `raw()` documented as an identity surface, never an ordering
+  surface; `raw_sealed` returning `Option` so the fast lane is a typed
+  claim, not a caller's guess. Arrival check: the `#![allow(dead_code)]`
+  #119 scaffolding comes off when #120 wires the RA engine — same
+  discipline as code.rs.
+
+## data/value/exec.rs (510 lines; inventory: module doc (the two-form law
+made operational: durable = canonical bytes only at boundaries, execution
+= raw codes under a proven Domain; the narrow door: admitted rows in,
+admitted rows out, no constructor from arbitrary u32),
+`#![allow(dead_code)]` (#119 foundation / naive oracle note; #120 wires
+the RA engine), `Side`, `ExecRows` with its @authority block (THE DOOR in:
+`admit` copying a stamp-verified `Rows`'s codes; row-major accessors; THE
+DOOR recombine: `join_project` — hash-join on code equality, cross-arena/
+epoch panics, output domain = the wider input extent so copied codes stay
+provably in-domain; `raw`; THE DOOR out: `resolve_cell`, the only place a
+code becomes bytes), `ExecDedup` with its @authority block (packed
+u32-tuple identity: new/contains/insert/absorb/to_exec, insertion-ordered
+distinct rows), and the test battery (TC-step vs hand oracle; u32-tuple
+dedup identity; THE FOUNDATIONAL GUARANTEE — a full join+dedup pass
+leaves the arena's intern count unchanged and its compare-deref counter
+at zero, measured by the arena's own instruments; the no-raw-constructor
+structural witness; the differential — join_project equals a naive
+value-level nested-loop join over seven adversarial edge sets;
+determinism — byte-identical left-row-major output, the probe is a
+lookup never a hash-order iteration; cross-arena join panic) — closed)
+- **L1:** two seats, both existing: `Side` + `ExecRows` and its doors →
+  `exec/currency/admitted.rs` ("admitted rows under a proven domain —
+  unforgeable" is this type's exact description); `ExecDedup` →
+  `exec/fixpoint/delta_store.rs` ("working memory keyed on packed-code
+  identity" — this type IS that seed). Tests split with their types; the
+  foundational-guarantee test spans both and lands with the fixpoint,
+  which is the law it protects.
+- **L2:** gold, preserve verbatim: the zero-canonical-encode-in-fixpoint
+  law as an EXECUTABLE test (the arena's own counters prove zero
+  intern/zero deref — verify-never-assert realized); the narrow-door
+  construction (private field, no from_raw; forge vectors proven absent
+  in proofs.rs); the value-oracle differential and the determinism pin
+  (schedule-independence is a stated engine law); both @authority blocks
+  migrate intact. Arrival notes: when #120 lands the production RA join
+  (`exec/op/join.rs`), `join_project`'s naive HashMap probe becomes the
+  law-grade ORACLE the verify battery differentials against — the engine
+  arriving must not delete the oracle. Watch for the destination doc: an
+  empty `out` projection yields `arity.max(1)` with zero codes, so a
+  zero-column projection (semijoin/count shape) silently reports zero
+  rows however many matches occurred — the door has no
+  match-count-without-columns form yet.
+
+## data/value/row.rs (820 lines; inventory: module doc (the code-lifetime
+law — codes never persist across a seal, the durable form is canonical
+bytes, held by TYPE SURFACE: `Rows` has no serialization surface,
+`EncodedKey` has no code accessors, one door each way; the fixpoint
+choreography — read phase/mint phase alternation enforced by `intern`
+taking `&mut Arena`), `#![allow(dead_code)]` (#119/#120 note), `Rows`
+(new_in ≥1-arity, push_row stamp door, push_encoded bytes→execution with
+validate-FIRST-then-intern, admit, gather), `AdmittedRows` (raw/row
+identity currency, resolve_cell, cmp_rows elementwise, encode_row — the
+only execution→bytes mint), `PushError` (Decode/ForeignArena/
+StaleDomain — typed, never panics), `split_key` (exactly-arity lawful
+encodings, refuses trailing bytes), `EncodedKey` with its @authority
+block (layout consts RELATION_PREFIX_LEN/VALIDITY_TAIL_LEN/
+BITEMPORAL_TAIL_LEN, from_values, from_stored — the ONLY public byte
+constructor, validating), `RelationId` (SYSTEM, checked `new`, CAP =
+1<<48 with the 0xFF-headroom rationale, raw_encode, raw_decode exhaustion
+door, next, Display), `TupleT` + blanket impl, `encode_key_with_suffix`
+(bitemporal slots), `append_bounds` (the scan sentinel law:
+Least/Greatest/0xFF upper tail) + scan_key_lower/upper + projected
+variants, and the test battery (durable-across-seals with a VACUITY GUARD
+proving codes actually moved; key byte order == tuple semantic order over
+all pairs; push_encoded round-trip + total refusal, no partial tuples;
+THE FIXPOINT CHOREOGRAPHY LAW test; from_stored as validating door; typed
+stale/foreign refusals; RelationId cap enforced at decode AND
+constructor; scan-key bracket law + projected==materialized; validity
+slot widths pinned against the codec; arity panic at the write door) —
+closed)
+- **L1:** two destinations. The execution half — `Rows`, `AdmittedRows`,
+  `PushError`, `split_key` — → `exec/currency/row.rs` (seat exists:
+  "interned tuple rows; cell views only at boundaries" is this type).
+  The written half — `EncodedKey` + layout consts, `RelationId`,
+  `TupleT`, `encode_key_with_suffix`, the scan-key builders and sentinel
+  law — is the storage keyspace law, and the store zone (which owns key
+  laws: `store/time.rs` is the precedent) has no named file for it.
+  NEW-SEAT proposal (operator ratification required): `store/keys.rs` —
+  storage key layout v1: the relation-id keyspace with its cap, the
+  relation-prefixed canonical tuple form, the validity tails, and the
+  scan-bound sentinel law; consumed by `exec/op/stored.rs`. The
+  schema-tier RelationId serde (see the json.rs entry) must agree with
+  `raw_encode` — one layout, stated once.
+- **L2:** gold, preserve verbatim: the code-lifetime law held by type
+  surface, not convention ("you cannot write codes down; you cannot
+  smuggle execution currency out of stored bytes"); the fixpoint
+  choreography as a LAW TEST with the borrow checker as its enforcement
+  mechanism; the deliberate refusal asymmetry (stamp doors PANIC —
+  programmer error; the bytes door returns typed `PushError` — stored
+  bytes are data, "storage ingestion is a refusal surface, not a panic
+  surface"); validate-then-intern so refusal leaves no partial tuple;
+  the vacuity guard in the durability test (a test that proves itself
+  non-vacuous is house standard); `RelationId::CAP`'s 0xFF-headroom
+  rationale (every assignable prefix stays below the sentinel byte every
+  storage consumer assumes). Finding for the destination law: EncodedKey
+  is ONE type holding TWO shapes with no discriminant — the bare written
+  tuple (encode_row/from_values/from_stored, no prefix; split_key is
+  lawful only here) and the relation-prefixed storage key
+  (encode_key_with_suffix, TupleT), on which `from_stored`'s arity split
+  would REFUSE because the 8-byte prefix is not a canonical encoding.
+  The split at migration resolves it (bare form with the currency,
+  prefixed form in store/keys.rs as its own type) — do not carry the
+  conflation across.
