@@ -5405,3 +5405,85 @@ chain — closed)
   with label_propagation, the completed house pattern for
   stochastic rules; anti-vacuity asserts inside determinism tests.
   Nothing condemned.
+
+## fixed_rule/algos/yen.rs (473 lines; inventory: dual header
+(SEAM(parallelism) closed for the per-(start,goal) fan-out — pair
+list built in sorted BTreeSet order + order-preserving map "so rows
+land exactly as the sequential loop emitted them", the writer never
+shared; structural unwraps annotated; and the MULTIGRAPH FIX pinned
+vs upstream — the root-segment recomputation "took the FIRST
+neighbor matching the next node on the path, ignoring weight...
+Dijkstra built the path over the cheapest — so a candidate's total
+cost could be overstated and mis-ranked"; now the MINIMUM matching
+weight), the `KShortestPathYen` rule (undirected/k options;
+start/goal sets resolved through inv_indices with absent nodes
+silently skipped; arity 4), `k_shortest_path_yen` (the
+ALLOCATOR-ABORT GUARD — "k is a caller-supplied option with no upper
+bound: reserving from it directly would let an absurd k abort the
+allocator"; spur searches over forbidden edges/nodes; the cancel
+poll moved to the TOP of the spur loop "one iteration runs a full
+Dijkstra, so a raised flag must refuse before the next spur search —
+not after |path|−1 of them"; min-weight root recomputation with the
+structural existence argument; dedup + total_cmp sort + pop
+cheapest; infinite candidates filtered), and six tests: pool-vs-pool
+determinism over multi-pair inputs; `parallel_root_edge_uses_min_
+weight` (the mutant quantified — "a first-match recomputation
+reports 12 and fails this test", with the input-order reasoning);
+spur-search cancellation at the dijkstra core; the two-paths
+end-to-end; the VALUE ORACLE `k_shortest_order_is_cheapest_first`
+with the full three-step Yen hand computation and the rationale
+("the store it reads through re-sorts rows, so order must be pinned
+on the algorithm itself"); and the F2 pre-set-flag refusal — closed)
+- **L1:** preserve-and-move whole → `rules/algo/yen.rs`.
+- **L2:** gold: the mis-ranking analysis in the multigraph fix (a
+  wrong-ANSWER class, not a perf nit); the allocator guard on an
+  unbounded user option (the same discipline sparse/fts landed);
+  poll placement quantified by what it saves; order pinned at the
+  algorithm because the store masks it. Nothing condemned.
+
+## fixed_rule/algos/pagerank.rs (538 lines; inventory: dual header
+(the original delegated to the graph crate's page_rank —
+"rayon-parallel, chunk-racing over a shared score array —
+nondeterministic in the low-order float bits — and never polling the
+poison"; the SEAM closed with a DELIBERATE, PINNED SEMANTIC CHANGE,
+pre-authorized by the maintainer on two fronts: from upstream's
+chunk-raced array "nondeterministic above ~16384 nodes" AND from the
+interim sequential Gauss-Seidel port — the scheme is now two-buffer
+JACOBI so nodes are independent within an iteration; the two
+order-dependent float computations kept sequential in fixed order —
+per-node in-neighbor sums folded in CSR ascending-source order, the
+per-iteration Σ|Δ| folded over the node-index-ordered Vec; "Jacobi
+and Gauss-Seidel are the same math family with the same fixpoint...
+but their iterates differ at a fixed iteration count, so the numbers
+change. They agree once converged (pinned by a test)"; upstream's
+dead nalgebra fallback "could not have compiled; dropped"), the
+`PageRank` rule (theta/epsilon/iterations options; arity 2),
+`page_rank` (the frozen-prev Jacobi read; the sink
+divide-by-zero-into-inf note — "the value is never read, because a
+sink is nobody's in-neighbor"; per-node cancel poll; sequential
+install+error fold), and NINE tests: the qualitative sanity; the
+VALUE ORACLE against `naive_jacobi` — an independent reference over
+plain adjacency lists whose values are "computed, not hand-typed",
+byte-identical at 1/2/5/10 iterations ("were page_rank still
+Gauss-Seidel, this would fail"); the WIDE-HUB fold-order pin — 300
+in-neighbors with out-shares spanning magnitudes so "the f32 sum
+[is] genuinely non-associative... the executable proof of the
+docstring's ascending-CSR-order claim"; the TERMINATION-METRIC test
+(Σ|Δ| vs max|Δ| stopping on DIFFERENT iterates at tolerance 0.1,
+with an assert_ne! guarding the test's own discriminating power);
+the through-the-rule plumbing oracle; pool-vs-pool ×20 and
+run-twice determinism; `converges_to_same_fixpoint_as_gauss_seidel`
+on a deliberately degree-IRREGULAR strongly-connected graph ("a
+regular graph would leave both trivially uniform and equal, hiding
+the divergence") WITH the mid-transient disagreement guard
+("guards against the reference collapsing into the
+implementation"); and the cancellation refusal — closed)
+- **L1:** preserve-and-move whole → `rules/algo/pagerank.rs`.
+- **L2:** gold, preserve verbatim: the authorized-divergence record
+  (what changed, from what, why it is safe, and the test that pins
+  each clause — the house form for a semantic change); the wide-hub
+  non-associativity pin (a test that proves a SUMMATION ORDER, the
+  memcmp-law severity applied to floats); the discriminating-power
+  assert inside the metric test; derived-not-hand-typed oracle
+  values; the same-fixpoint-different-path proof with its
+  anti-collapse guard. Nothing condemned.
