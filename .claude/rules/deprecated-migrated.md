@@ -1384,3 +1384,47 @@ closed)
   (2) the `if({extract_filter}, {extractor})` TEXTUAL splice composes
   user expressions by string formatting — same class, dies with the
   same redesign.
+
+## parse/fuzz_tests.rs (1401 lines; inventory: module doc ("the caller
+is a fuzzer with intent, so we fuzz before the callers arrive" — three
+layers: a GRAMMAR-AWARE generator over the real registries because
+"plausible-but-possibly-invalid text stresses far deeper paths than
+random bytes"; a byte-mutation layer whose output goes through
+`from_utf8_lossy` because `&str` is the real API surface; the LAWS —
+Ok or a SPANNED in-bounds error, never a panic, never an abort, and a
+per-case time bound honestly scoped to TERMINATING slowness with
+non-termination named as the harness timeout's job), `CASE_TIME_BOUND`,
+the `PROPTEST_CASES` knob, `walk_labels` (recursive over
+related/diagnostic_source), `check_laws_with` (panic/time/
+label-out-of-bounds/span-less/banned-message laws — spanned-ness
+enforced UNCONDITIONALLY since the fix wave retired the findings
+ledger; future exceptions keyed on `Diagnostic::code()`, "never a
+rendered-string substring, which silently excuses off-target errors"),
+`BANNED_GENERIC_MESSAGES` + prefix with the exact-equality rationale
+(parameterized retirees CANNOT regress to their fixed text, so exact
+match risks no false hit), the generator pools (real aggregation and
+fixed-rule registries plus one deliberate stranger each; radix/i64-edge
+numbers; hostile strings; validity specs), the strategy tower (expr/
+atom/rule-head/fixed-arg/rule/schema/option/query/sys/imperative/
+ceiling-shapes/script + the FTS strategy), the mutation layer
+(invalid-UTF-8 payloads; Truncate/Splice/DupSlice/FlipBracket/Inject
+with self-resolving indices), the proptest law blocks, the regression
+corpus (every FINDING-1..8 minimized input + ceiling shapes + hostile
+bytes + a full bracket-flip sweep, replayed on every run), the FTS
+corpus, `sql_refugee_corpus` + `sql_refugee_mistakes_get_designed_help`
+(one script per keyword the hint table knows, each failure implicating
+ONE keyword; refusal must carry a #[help] naming the KyzoScript idiom —
+"not just a refusal, a designed refusal", additive to the general
+laws), and `former_findings_now_carry_spans` (the retired ledger's
+INVERSE: every former finding still errors, now with an in-bounds
+label) — closed)
+- **L1:** preserve-and-move whole → the parse tier's adversarial suite
+  inside `kyzo-model` (beside parse/); the corpus doubles as seed
+  material for `kyzo-trials/fuzz.rs`'s big-run campaigns via the
+  `PROPTEST_CASES` escalation already documented in the module doc.
+- **L2:** gold, preserve verbatim: laws-not-coverage; the
+  unconditional spanned-ness rule with its exception discipline; the
+  exact-equality banned-message design; the time-bound honesty; the
+  designed-refusal law for SQL refugees (a DoD bullet turned into a
+  permanent test); ledger-retirement expressed as its inverse test.
+  Nothing condemned.
