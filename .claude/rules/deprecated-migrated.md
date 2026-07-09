@@ -1690,3 +1690,27 @@ pops torn rows) — closed)
   error-identity discipline in BOTH sources; performance decisions
   carrying their measurements (the 3× note); torn-row impossibility
   by construction.
+
+## query/ra/neg.rs (423 lines; inventory: split-out header, `NegRight`
+(the CONSTRUCTOR PROOF that only the five negatable shapes reach the
+dispatch — story #86 closed the last gap and
+`NegationOverTimeTravelError` "no longer exists"; the original's
+unreachable! arms STAY unreachable by type), `NegJoin` (semantically a
+filter; introduces no columns; "negation always reads right-side
+TOTALS, never deltas"), `join_type` explain names per strategy,
+`iter_batched` with the five probes (prefix vs materialized for
+temp/stored; the skip-scan anti-join carrying the INHERITED-PROOF doc:
+"the 'never skips a tuple whose absence it is asserting' proof is
+inherited, not reargued" — it reads through the SAME primitives the
+positive join proved, and a first-hit probe "is strictly less work
+over the same, already-proven stream"; @spans/@delta materialize whole
+through the SAME production sweep the positive read uses, with the
+chunk-4 posting-index pushdown gap named), and `NegBatchFilter`
+(the error-identity discipline again: accepted rows emit FIRST) —
+closed)
+- **L1:** preserve-and-move whole → `exec/op/neg.rs` (seat exists:
+  "anti-join").
+- **L2:** gold: unreachability by construction instead of assertion;
+  inherited-not-reargued soundness with the strictly-less-work
+  argument; the named pushdown gap (chunk 4) instead of a silent
+  materialize-everything.
