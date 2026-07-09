@@ -3963,3 +3963,93 @@ tests that DO demonstrate it) — closed)
   disclosures in tests. Nothing condemned. The `#[allow
   (clippy::collapsible_if)]` toolchain-drift note is a dated
   workaround — re-check on the next toolchain bump.
+
+## storage/retry.rs (93 lines; inventory: MPL header, module doc
+("under SSI, a conflicted transaction is not a failure — it is an
+instruction to rerun. This is the single place that instruction is
+obeyed"), `retry_on_conflict` (HOT retry with its audience named:
+"for harnesses whose conflicts are injected or simulated (the DST
+campaigns): pausing there wastes wall-clock on races that virtual
+time already resolves"; the complete-transaction-cycle contract;
+non-conflict errors propagate untouched), `retry_on_conflict_with_
+backoff` (the fairness argument — "hot-spinning loses fairness under
+real contention... the backoff de-synchronizes the herd so every
+writer eventually lands"; "timing is the only thing affected; answers
+never depend on it"), and `backoff` (yield ×3 then 1–64ms doubling;
+the wasm no-op with its one-line reason "single-threaded wasm has no
+rival to wait out") — closed)
+- **L1:** preserve-and-move whole → `store/retry.rs` beside the
+  storage contract (the liveness half of the SSI contract the map's
+  store/contract.rs states; zones are stable, files grow — the name
+  is already the concept).
+- **L2:** gold: the instruction-to-rerun framing; hot-vs-backoff
+  split by AUDIENCE with each variant's reason; the
+  determinism-unaffected note. Nothing condemned.
+
+## storage/verify.rs (224 lines; inventory: MPL header, module doc
+(integrity verification — "a suspect store gets a REPORT, not a chain
+of mystery query failures — corruption is diagnosed, never
+discovered"; CATALOG-AWARE with the three value formats enumerated
+and the stakes named: "a partial verifier reported as 'storage
+verification' is worse than none"), MAX_RECORDED=100 (the report
+"proves and locates corruption without itself growing unboundedly"),
+`CorruptEntry`/`VerifyReport` (+is_clean — clean iff nothing found,
+truncation counts as not-clean), `hex_prefix`, `RelKind` (the TYPED
+dispatch — "the verifier dispatches by match on this kind, never by a
+string test or set membership at the decode site"),
+`verify_catalog_entry` (decoding the catalog row IS the verification
+AND builds the taxonomy; the `index_backings` string set justified as
+a catalog-NAME boundary "resolved here ONCE... It never reaches the
+dispatch site" — a base always sorts before its backing), and
+`verify_storage` (the total walk — "corrupt pairs are recorded and
+the walk continues — one bad page must not hide the rest of the
+damage"; the taxonomy complete before the first non-system entry
+because SYSTEM is id 0; per-pair key decode, kind-dispatched value
+decode, strict ascending-order check, and dangling-data detection) —
+closed)
+- **L1:** preserve-and-move whole → `store/verify_walk.rs` (seat
+  exists: "the whole-store invariant walk"). The catalog-awareness
+  couples it to session/catalog.rs's RelationHandle decode — on the
+  split the walk consumes the catalog's public decode, keeping the
+  one-codec-per-kind dispatch.
+- **L2:** gold: diagnosed-never-discovered; the
+  partial-verifier-worse-than-none doctrine; typed-kind dispatch with
+  the string boundary confined to taxonomy construction and argued;
+  total-walk-past-damage; the bounded report. Nothing condemned.
+
+## storage/backup.rs (247 lines; inventory: MPL header, module doc
+(pure-Rust length-prefixed dump, magic KYZODMP2; pairs in ascending
+key order "which is exactly what batch_put requires on restore"),
+`DumpClockFloorViolation` ("refuse the dump outright rather than hand
+a restorer a file that lies about its own floor"),
+`floor_after_snapshot` (the ORDER-BY-CONSTRUCTION trick — taking the
+open snapshot BY REFERENCE means "there is no way to call this before
+a snapshot exists, so the snapshot-then-floor order the proof depends
+on cannot be reordered by a future edit"; the full PROOF that the
+floor bounds every visible stamp, with the historical
+floor-before-snapshot bug spelled out — "a silent collision"; the
+harmless-overshoot note), `relation_kinds`, `relation_prefix` (the
+whole-store tolerance — "misreading a short or out-of-catalog-range
+key as garbage must never abort the dump"),
+`verify_stamp_within_floor` (the ALWAYS-ON backstop — "cheap by
+construction... so it runs on every fact row unconditionally, not
+just under test — converting ANY future reintroduction of the
+snapshot/floor race... from a silent lost-update into a loud, typed
+refusal"), `dump_storage` (the FormatVersion carried in the dump —
+"a dump of one format can never silently restore into a store of
+another"; SNAPSHOT FIRST, FLOOR SECOND with the pointer to the
+proof), `restore_storage` (EMPTY-target requirement — "recovery is
+always 'discard and re-run' — a partial restore can never be
+mistaken for a complete store"; the floor raised BEFORE importing;
+fsync before return), and the incremental readers
+(`read_len_prefixed` — "a corrupt length prefix yields a truncation
+error — never a giant pre-allocation that aborts the process") —
+closed)
+- **L1:** preserve-and-move whole → `store/backup.rs` (seat exists:
+  "portable whole-store dump and load").
+- **L2:** gold, preserve verbatim: order-by-constructor-signature
+  (the by-reference snapshot argument as an un-reorderable proof
+  obligation — the same pattern stamp_after_snapshot uses);
+  the always-on cheap backstop doctrine; format-version-in-the-dump;
+  empty-target-only restore with its discard-and-rerun recovery
+  story; incremental hostile-input reading. Nothing condemned.
