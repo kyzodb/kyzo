@@ -4635,3 +4635,154 @@ caller looping del") — closed)
   `[sim_crash]:` link-definition line as its entire doc; rustdoc
   renders both functions wrong. Re-seat the comments on their owners
   when the file moves. Nothing else condemned.
+
+## storage/tests.rs (3313 lines; inventory: dual MPL header, module doc
+(THE LAWS-NOT-SCENARIOS DOCTRINE — "each is a universal property
+quantified over all values, because the failure modes that matter here
+(cross-type tag disorder, non-monotone float encodings, NaN order
+divergence) are invisible to example-based tests"; the three encoding
+laws — round-trip, order embedding over ALL pairs, no-panic-on-corrupt;
+the oracle discipline for the storage half), the ENCODING-LAW battery
+(`corpus` with its rules doc — every variant, ≥2 members each so
+cross-type AND within-type pairs exist, the tricky regions enumerated,
+"adding a case is one line", nested collections bound by name;
+law1/law2 corpus arms — law2 EXHAUSTIVE PAIRWISE so "cross-type
+disagreements cannot hide behind sort stability, and a failure names
+the exact offending pair"; `arb_value` with regex excluded FOR A REASON;
+the generative law1/law2/law3 proptests; `law2_order_embedding_shared_
+boundary_generative` — a targeted arm justified by the exact bug shape:
+independent i64 draws "almost never share a boundary... so that generic
+generator has no power against a comparison that drops one field",
+forced same-start and same-end pairs with checked-overflow prop_assume
+guards; the vector signed-zero canonicalization law with its
+Num-vs-OrderedFloat contrast; the scalar -0.0-collapses pin;
+`law3_byte_flip_harness` — every single-byte mutation × three flip
+masks over every corpus encoding, "the structured-corruption space the
+random Law 3 generator misses"; the value-side law-3 pair incl. the
+14-byte hostile rmp payload), the FJALL CONTRACT scenarios
+(kv-vs-BTreeMap model; MVCC conflict/discard; RYOW + snapshot
+isolation; del_range-kills-own-writes; del_range chunk boundaries;
+phantom protection; live-iterator snapshot stability; degenerate
+ranges; `inverted_ranges_under_contention_commit_clean` — the
+store-poisoning regression driven through EVERY range entry point with
+the contention that arms commit-time validation, then proving the
+write-serialize lock unpoisoned; `write_write_race_aborts_second_
+committer` — the contract-v2 pin carrying the v1 history "re-pinned
+KNOWINGLY under the story #3 ruling", put-vs-del races, disjoint
+writers, and the empty-write-set-certifies-nothing arm, with its sim
+twin named — "the two must stay together"; typed-conflict + options +
+stats; 8-thread concurrent writers; compile-time Send+Sync bounds),
+the TIME-TRAVEL oracle arm (bitemp_key/vld_row/pol_val helpers;
+`as_of_oracle` — "slow and obviously correct"; the full-history
+differential at every instant 0..=10; own-writes visibility; the two
+MIN-ts termination pins), the BACKUP battery (round trip;
+`dump_refuses_a_row_stamped_above_its_own_floor` — layer-3
+sabotage-verify with a hand-minted future stamp and the
+legitimate-row control; `dumps_never_advertise_a_floor_below_their_
+own_rows_under_concurrent_writers` — 8 real writer threads × 200 dump
+cycles, each dump's FILE BYTES independently re-parsed "not the
+in-process values dump_storage itself computed", with the
+wait-for-writers scheduling-artifact guard; restore refuses non-empty;
+edge cases — huge length prefix is "an error, not an allocation
+abort", truncation mid-pair, truncated floor field;
+`restore_raises_clock_floor_past_imported_stamps`), FORMAT VERSION
+(stamp + tamper refusal; `pre_value_plane_stores_v4_refuse_to_open` —
+the #119 migration boundary "made explicit and executable", pinning
+that v4 SPECIFICALLY is refused and CURRENT parses as exactly 5;
+canonical-spelling refusals with older-stamps-still-parse "so the
+mismatch refusal can NAME it"), CRASH CONSISTENCY
+(`crash_consistency_process_abort` — a child process commits, stages,
+and `abort()`s, with the SCOPE HONESTY doc: abort simulates a process
+crash, "a power cut is a stronger event... testing THAT honestly
+requires fault-injection infrastructure (e.g. dm-flakey), not a unit
+test that lies about what it simulates"), INTEGRITY (verify_storage
+on a REAL kernel-written store — "the catalog-aware verifier needs
+the real entry taxonomy... not raw puts below the kernel"; corruption
+injected below the kernel surfaces as BadTag and THE WALK CONTINUES
+past the wound; `verify_storage_catches_a_corrupt_value` — a
+still-decodable key over a corrupt polarity byte, "proof that
+catalog-aware per-format value verification is real, not decorative"),
+retry-under-contention, THE DST SECTION (sim KV-vs-model;
+`sim_write_tx_range_scan_overlay_matches_model` — every merge case
+mid-transaction against an overlay model; `sim_mvcc_semantics_smoke`
+— the fjall v2 pin's designated twin; spurious-conflict typed +
+discards; sim time travel vs the same oracle; batch_put clean-prefix
+with the torn-chunk-at-2500 → exactly-2048 assertion;
+`sim_read_faults_transient_and_deterministic`;
+`sim_interleaving_seed_deterministic_and_diverse` — the log key whose
+"final content IS the commit order, and its length proves no update
+was lost"; and the SEVEN CAMPAIGNS: (a) 1000-seed retry survival
+under spurious storms + interleavings vs the model; (b) 150-seed
+crash-at-every-point clean prefix with an uncommitted transaction
+staged at the crash; (c) durability tiers distinct — deterministic
+arm, failed-fsync arm ("committed, crash-survivable,
+power-cut-lost"), 200-seed mixed arm; (d) 200-seed time travel under
+interleaved retrying history writers; (e) WRITE SKEW — overlapping
+snapshots with crossed read/write sets "must abort at least one side
+in EVERY seed", final state one of the two SERIAL outcomes; (f) NO
+LOST PHANTOM — commit order observed through the serialized
+scheduler, the ["B","A"] branch asserting summary=4 AND an abort
+happened, the ["A","B"] branch asserting zero aborts; (g) write-write
+first-committer-wins with EXACTLY-ONE abort per seed), the HARDENING
+SENTINEL (`sim_fault_plan_identical_at_any_thread_count` — fixed
+logical work partitioned across 1/2/4/8 FREE-RUNNING OS threads, no
+scheduler, the (op, attempt)→outcome matrix byte-identical per seed
+and different across seeds, with both-arms anti-vacuity; "a
+positional (global op-counter) fault plan fails this test"),
+`sim_retry_liveness_escapes_injected_faults` (90% storms, the
+missing-attempt-component mutant named as "mutation-verified"),
+`bitemporal_fact_race_aborts_second_committer`, and the CLOCK
+batteries (`system_stamps_survive_reopen_strictly_monotone` — an
+ABANDONED transaction's mint still raises the floor, "a too-high
+floor is safe, a reused stamp is not"; sim stamps through
+crash/powercut; `concurrent_increments_lose_nothing_at_the_storage_
+layer` — THE NAMED REPRODUCER fjall.rs's snapshot-then-mint proof
+cites, 2×200 racing skip-scan increments where "a lost update here
+is a conflict-oracle hole, not a query-tier bug"; the Linux RAM-floor
+pin with its sane-band assertion "catches a unit mixup... without
+pinning an exact host-dependent value") — closed)
+- **L1:** NAMED SPLIT — one tier-wide test file the target decomposes
+  beside its subjects. The encoding-law battery (corpus, laws 1–3,
+  byte-flip, signed-zero, shared-boundary) → kyzo-model beside
+  `model/value/canonical.rs` (it tests the codec, not the store; the
+  corpus doubles as fuzz-seed material for kyzo-trials/fuzz.rs). The
+  fjall-specific pins (inverted-range poisoning, options/stats,
+  format-version stamps incl. the v4 boundary, clock/watermark
+  batteries, the snapshot-then-mint reproducer, the RAM-floor pin) →
+  `store/fjall.rs` + `store/contract.rs` module tests. The backup
+  battery incl. both floor pins → `store/backup.rs`. The verify pair
+  → `store/verify_walk.rs` (note: they drive Db to build a REAL
+  cataloged fixture — on the split that fixture builds through the
+  session crate's public surface). The time-travel-vs-oracle arm and
+  MIN-ts pins → per-backend module tests beside their cursors (the
+  skip-walk theorem already owns the generic proof). The
+  process-abort crash test → `kyzo-trials/src/crash.rs` (real-process
+  territory, same lane as the FUSE matrix). The DST semantics tests +
+  seven campaigns + hardening sentinel + retry-liveness → move with
+  the sim instrument to its ratified seat (they are the instrument's
+  own proof battery), with the campaign SHAPES feeding
+  kyzo-trials/src/dst.rs. CONDEMNED AS SUPERSEDED: the generic
+  KV/MVCC/RYOW/del_range/phantom/concurrent-writers/chunk-boundary/
+  send-sync scenarios here are the story-#79 kit's EXTRACTION SOURCE
+  and are now verbatim-duplicated by conformance.rs's generic laws,
+  which fjall and sim already pass via `run_full_battery` — on
+  migration these per-backend copies die in favor of the kit call,
+  keeping only what the kit deliberately excludes (the per-backend
+  pins above).
+- **L2:** gold, preserve verbatim: laws-not-scenarios with the
+  invisible-to-examples argument; exhaustive-pairwise order checking;
+  generators justified by the exact mutant/bug shape they catch (the
+  shared-boundary arm, the byte-flip harness, the hardening
+  sentinel's positional-plan kill, the retry-liveness mutant); scope
+  honesty on what a test does NOT simulate (the abort-vs-power-cut
+  paragraph); independently-re-parsed artifacts (the dump-file
+  concurrency pin reads bytes, not the writer's own values);
+  commit-order-observed campaign dispatch with per-branch assertions
+  (write skew's serial-outcomes check, the lost-phantom order match);
+  sabotage-verify with a legitimate control; the
+  abandoned-mint-raises-floor ruling; real-fixture-over-raw-puts for
+  catalog-aware verification; walk-continues-past-the-wound;
+  re-pinned-KNOWINGLY contract history in the test doc; sane-band
+  assertions over host-pinned values. The one condemned class is the
+  superseded kit-source duplicates named in L1; everything else
+  crosses.
