@@ -1853,3 +1853,45 @@ proof) — closed)
   oracle pattern (keep the replaced implementation as the judge of its
   replacement); the small-stack proof; up-front validation making all
   later indexing "proven in-range once, here".
+
+## query/gauntlet.rs (688 lines; inventory: module doc (a
+SQLancer-class metamorphic gauntlet adapted from TLP/NoREC/PQS with the
+TERNARY→BINARY argument — KyzoScript has no NULL-as-unknown, so the
+bound/unbound adornment sweep is "this oracle's one-leg-shorter
+analog"; Oracle #1 = the magic-sets NoREC analog: the same script with
+the rewrite on and off plus the sealed naive oracle form a TRIANGLE,
+"a divergence anywhere in this triangle is an engine bug, not a
+gauntlet bug"; PLUS the fully-free identity theorem checked on the
+compiled plan directly — "the symbol-count anomaly that would have
+caught issue #68 with no answer divergence needed"; what it
+deliberately does NOT render, each exclusion reasoned; reuse-not-
+recopy with the shared-file-contention rationale for the transcribed
+RNG), the KyzoScript renderer (`is_idb` as "the real semantic test,
+not 'is it in facts'"), `compiled_magic_symbols` (reimplemented
+against pub(crate) seams — "zero edits to db.rs"), the generator (the
+#68 points-to self-join shape deliberately included; optional
+negation-over-recursion reader), `adornment_patterns` (bound values
+pulled from REAL oracle facts so patterns are non-vacuous; bound-both
+left out with the `?[]`-syntax risk named), `run_one_seed` (the
+triangle + the theorem per adornment), env-scalable seeds
+(`KYZO_GAUNTLET_SEEDS`/`_BASE`), the regression-pin slot ("None to
+date"), generator seed-reproducibility, THE FALSIFICATION CLAUSE
+(issue #29 clause 1: the checker proven to catch a deliberately
+corrupted expectation, with a non-vacuity assert on the fixture), and
+the REFUSAL FENCE (laws' unstratifiable corpus rendered WHOLESALE;
+external EDB relations `:create`d empty so an unknown-relation error
+cannot MASK the stratification refusal; every head tried — "the
+robust form of 'stays refused', not a single guessed entry point";
+the oracle-accepts-now guard routing corpus drift upstream to
+laws.rs; the fixed-rule entry skipped for the same named boundary) —
+closed)
+- **L1:** preserve-and-move whole → `kyzo-trials/gauntlet.rs` (seat
+  exists: "metamorphic logic-bug hunting over generated programs").
+  Its `laws::Program` renderer is REUSED by #80's whole-corpus verify
+  proof (per query/mod.rs's ledger) — the move keeps that consumer
+  pointed at one renderer.
+- **L2:** gold, preserve verbatim: the triangle; the theorem-as-
+  symbol-anomaly check (catching a class of bug answers can't see);
+  the ternary→binary adaptation argument; exclusions with reasons;
+  the falsification clause; refusal-fence design (unmasking, all
+  heads, upstream routing). Nothing condemned.
