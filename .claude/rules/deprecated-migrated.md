@@ -2095,3 +2095,47 @@ totals intact) — closed)
   with its reason; deterministic compaction as a pure function of
   sizes; one admission oracle for guard and barrier. Nothing
   condemned.
+
+## query/stratify.rs (1079 lines; inventory: dual header (typestate
+output — `StratifiedNormalFormProgram::from_reverse_execution_order`
+reverses ONCE and proves the entry sits last, where the original
+returned raw reversed strata "un-reversed by convention"; the entry
+reached through its FIELD, never a re-spelled `?` with a dummy span;
+the POISON-SPAN fix — the refusal labels the atom that ESTABLISHES the
+poison, because the dependency map keys by first occurrence and "the
+first-read symbol's span would mislabel a later negation"; Kahn sized
+by SCC count; one classification helper), module doc (THE REFUSAL IS
+THE FEATURE: "a missed refusal here does not crash, it silently
+yields wrong answers"; the poison taxonomy; the one legal
+aggregation-in-recursion — an all-meet head reading ITSELF,
+positively; "possession of that type IS the proof"),
+`aggregation_character` carrying the DELIBERATE-INDEPENDENCE ruling
+(issue #89: the engine's classification and the oracle's
+`head_classes` are "two separately hand-maintained implementations" —
+sharing them "would collapse that differential into a tautology";
+"keep every future edit here hand-applied, never routed through the
+oracle's copy"), the graph construction "decision for decision" with
+poison-span capture on both insertion and upgrade, `verify_no_cycle`,
+the condensation (self-edges vanish, already proven unpoisoned),
+`into_stratified_program` (nine numbered steps; the two index spaces
+built by DIRECT ENUMERATION — "no n_strata − 1 − i arithmetic
+anywhere"; the stratum-ordering debug_assert at the one place every
+dependency edge passes; the entry-lands-last argument written as a
+PROOF in prose), and the test battery (the upstream test that
+"asserted nothing" ported WITH assertions; the oracle refusal corpus
+through the REAL stratifier — "the two must never drift"; the
+meet-exemption boundary from every side incl. the
+intermediary-recursion refusal preserved deliberately;
+unreachable-rules pruned-not-checked as deliberate upstream behavior
+— "the soundness proof is about what will be evaluated"; the
+ESTABLISHING-ATOM span pin distinguishing the innocent positive read
+from the poisoning `not p`; the 10k-rule chain on a 256 KiB stack) —
+closed)
+- **L1:** preserve-and-move whole → `exec/plan/stratify.rs` (seat
+  exists: "the stratification proof: negation and aggregation are
+  safe").
+- **L2:** gold, preserve verbatim: refusal-is-the-feature; the
+  deliberate-independence ruling (an anti-consolidation law with its
+  tautology argument); establishing-atom diagnostics; direct
+  enumeration over index arithmetic; proofs in prose at the mint
+  sites. Nothing condemned.
