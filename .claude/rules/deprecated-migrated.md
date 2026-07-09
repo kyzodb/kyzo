@@ -4165,3 +4165,98 @@ error reports the durability shortfall, not a rollback") — closed)
   contract prose; the bump-anyway format ruling; honest durability
   semantics on fsync failure; degenerate-range laws stated at the
   trait. Nothing condemned.
+
+## storage/merkle.rs (599 lines; inventory: MPL header, module doc (a
+COLD, deterministic Merkle state root — "a content address the whole
+store can be compared by"; the scan order IS the canonical order by
+the memcmp law, so "two stores with identical logical content produce
+byte-identical roots regardless of the write history"; the INCREMENTAL
+root out of scope BY DESIGN with both reasons on record — fjall's
+serialize point "is not a hook we own", and in-keyspace tree nodes
+"would make every writer conflict on shared tree keys under SSI"; the
+domain-separated RFC-6962 MTH with the 0x00/0x01/0x02 tags and the
+classic second-preimage argument; the streaming O(log n) accumulator
+"not trusted on its own word" — cross-checked against an independent
+recursive MTH), `MerkleScanExceeded` (the MANDATORY ceiling — "never a
+silent truncation (a truncated scan would forge a root for content
+that is not there)"), `MerkleHash`/leaf/node/empty hashes (the
+key-length prefix removing the (ab,c)/(a,bc) boundary collision),
+`MerkleAccumulator` (equal-size merge on push; right-to-left peak
+bagging), `root_over`/`state_root` ("for a validity-keyed relation
+this commits to EVERY stored version... a bitemporal commitment")/
+`range_root` (degenerate = empty hash, "the same contract as
+range_scan")/`relation_root` (the successor arithmetic safe under the
+48-bit cap), and the test battery: GOLDEN VECTORS as literal
+off-tree-computed digests — "these do NOT reference the source *_TAG
+constants — a mutation to a tag must move the digest away from the
+literal, and a golden that reused the const would move with it and
+hide the mutation"; the boundary-ambiguity pin; streaming ≡ recursive
+MTH at every size 0..40 ("a second implementation that shares no
+code"); THE LOAD-BEARING content-address proof (three write
+histories — one big commit, reversed uneven batches, a deterministic
+shuffle — all one root); single-byte value/key flips and a dropped
+pair each changing the root; reopen stability; per-relation prefix
+isolation with the blind-to-sibling edit; empty roots; and the
+ceiling refusal with the exact-count success — closed)
+- **L1:** preserve-and-move whole → `store/merkle.rs` (seat exists:
+  "the deterministic state root over the ordered keyspace (placed
+  here: it is a property OF the store; diff/merge capabilities
+  consume it from above)").
+- **L2:** gold, preserve verbatim: cold-by-design with both rejected-
+  alternative reasons recorded; refuse-never-forge on the ceiling;
+  goldens-as-literals doctrine (rule #18's independently-derived
+  goldens, stated with its mutation argument); the
+  no-shared-code second implementation; the write-history-invariance
+  proof as the module's load-bearing claim. Nothing condemned.
+
+## storage/skip_walk.rs (618 lines; inventory: MPL header, module doc
+(the bitemporal skip-scan walk — "ONE implementation, generic over the
+backend's seek primitive, driving a SINGLE positioned cursor"; the
+previous per-step seek_first shape's fjall cost story — a fresh range
+"re-derives the whole read path from scratch... ALL repeated on every
+single version step"; the resolution kernel "never reimplement[ed],
+only call[ed]"; the SEEK SEAM — open_skip_cursor "runs EXACTLY ONCE
+per walk", seek repositions the SAME cursor with the per-backend cost
+accounting incl. temp/sim's honest no-cheaper-primitive note;
+degenerate bounds never reach a cursor; the FIVE-STEP walk with the
+TERMINATION GUARD stated once — the kernel's bound trusted only if
+strictly advancing, the byte-successor fallback making "forward
+progress unconditional on ANY stored bytes, honest or hostile",
+because the failure it forecloses is "a livelock, not a crash —
+worse, because nothing panics to report it"; the PER-BACKEND WIRING
+incl. fjall's TrackedSeekIter SSI spans and sim's FIDELITY ruling —
+collapsing DST bookkeeping into open "would silently narrow the
+fault-injection and scheduling-interleaving surface... down to one
+decision point per walk instead of one per version step"),
+`SkipCursor` (the non-decreasing-target contract)/`OpenSkipCursor`,
+`SkipWalk`, `advance_past` (pulled out AS ITS OWN NAMED LAW — "that
+unreachability is a property of today's algebra, not a proof
+obligation this driver gets to assume"), the Iterator impl (a corrupt
+key surfaces `Err` WITHOUT advancing — "every subsequent poll
+re-yields the error, so a scan cannot silently step over bytes it
+could not judge"), and the tests: the advance_past pinned law
+(tie/regression/genuine-advance/empty-key); `MapSeek` — "the proof's
+own backend: nothing but a BTreeMap, ~30 lines... NO dependency on
+any of the three production backends", with the open counter; the
+FROM-SCRATCH oracle ("an oracle that shares the kernel's algorithm
+proves nothing about the kernel"); THE THEOREM —
+`skip_walk_matches_independent_oracle_over_2000_seeded_histories`
+(both axes, negative coordinates, all three polarities; issue #78's
+dictation: "this driver IS #79's first theorem... every backend
+inherits it verbatim"); corruption refusal over four hostile
+scenarios with the re-yield pinned; the i64::MIN boundary
+termination; degenerate-bounds emptiness; and
+`skip_walk_opens_exactly_one_cursor_per_walk` — the story's own law,
+structural AND counter-pinned across 100 facts × 10 versions —
+closed)
+- **L1:** preserve-and-move whole → `store/skip_walk.rs` (seat
+  exists, same name: "the ONE bitemporal skip-scan walk, generic
+  over its driver"). The per-backend cursor impls stay with their
+  backends (fjall.rs, scratch.rs, and the sim instrument).
+- **L2:** gold, preserve verbatim: one-walk-one-cursor as the
+  structural law with its counter pin; the termination guard's
+  belt-and-braces doctrine and the livelock-worse-than-crash
+  reasoning; error-without-advancing; the standalone ~30-line proof
+  backend (properties proven against the seam, not a production
+  backend); the sim fidelity ruling; laws extracted into named,
+  directly-tested functions. Nothing condemned.
