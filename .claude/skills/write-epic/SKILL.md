@@ -24,6 +24,8 @@ Use this exact markdown order.
 ```md
 # <Epic Name>
 
+Label: <Feature | Bug | Performance | Security | Demo>
+
 ## Outcome Description
 
 <One paragraph describing the transition this group of stories creates. State what KyzoDB is moving from, what it is moving to, and what shared technical boundary, authority, capability, proof, or failure class makes these stories belong together.>
@@ -33,13 +35,14 @@ Use this exact markdown order.
 
 - An epic is a GitHub issue; its stories are attached as **sub-issues** of it.
 - Sub-issue list order is the execution order of the epic's stories.
-- The epic itself takes no label and no milestone; the stories carry those.
+- The epic carries exactly one of the five labels, matching the dominant character of its stories.
 
 ## Field Rules
 
 | Field                 | Rule                                                                                                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Epic Name`      | Name the value boundary being crossed by the group of stories. Do not name a mood, phase, slogan, release ceremony, or generic work category.                                                 |
+| `Epic Name`      | Name the value boundary being crossed by the group of stories, in Title Case. Do not name a mood, phase, slogan, release ceremony, or generic work category.                                 |
+| `Label`          | Exactly one of `Feature`, `Bug`, `Performance`, `Security`, or `Demo` — the dominant character of the grouped stories.                                                                        |
 | `Outcome Description` | Describe the aggregate state of value change created by the grouped stories. It must explain why the stories belong together and what engineering/value condition changes when they are done. |
 
 ## Invalid Epic Conditions

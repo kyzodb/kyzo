@@ -4,15 +4,17 @@
 # inject-work-context.sh — UserPromptSubmit hook; the whole work-context
 # generator in one script.
 #
-#   focus set   = the integer lines of .claude/focus-story.md (the authority)
-#   TODO        = Todo column of the "KyzoDB Work" board (#1): name + Description
+#   focus set   = open issues In Progress on the board AND carrying the
+#                 "focus" label (the label is the one focus authority)
+#   IN PROGRESS = "In Progress" column minus the focus set — other sessions'
+#                 live work, injected so it is never clobbered: name + Description
 #   FOCUS       = each focus story: full body + comments
 #   UPCOMING    = the focus stories' parent epics -> their remaining OPEN
 #                 sub-issues, in sub-issue order, minus the focus set:
 #                 name + Description + Condemned. Nothing else may enter.
 #
-# Output = .claude/hooks/work-context-template.md with {{TODO_STORIES}},
-# {{FOCUS_STORIES}}, {{UPCOMING_STORIES}} replaced. Cached 120s at
+# Output = work-context-template.sh with IN_PROGRESS_STORIES,
+# FOCUS_STORIES, UPCOMING_STORIES expanded. Cached 120s at
 # .claude/.work-context-cache.md. On any fetch failure emit the stale cache —
 # stale beats invented — and always exit 0: never block a prompt.
 
@@ -23,7 +25,6 @@ OWNER=kyzodb
 REPO=kyzo
 PROJECT=1
 TEMPLATE="$ROOT/.claude/hooks/work-context-template.sh"
-FOCUS_FILE="$ROOT/.claude/focus-story.md"
 CACHE="$ROOT/.claude/.work-context-cache.md"
 TTL=120
 
@@ -41,11 +42,6 @@ fi
 
 [ -f "$TEMPLATE" ] || emit_cache_and_exit
 
-# Focus set: integer lines, HTML comment blocks stripped, trimmed per line,
-# deduplicated in order.
-mapfile -t FOCUS < <(sed '/<!--/,/-->/d' "$FOCUS_FILE" 2>/dev/null \
-  | grep -E '^[[:space:]]*[0-9]+[[:space:]]*$' | tr -d ' \t' | awk '!seen[$0]++')
-
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -53,12 +49,21 @@ items=$(gh project item-list "$PROJECT" --owner "$OWNER" --format json --limit 5
   || emit_cache_and_exit
 open_issues=$(gh issue list --repo "$OWNER/$REPO" --state open --json number,title,body --limit 300 2>/dev/null) \
   || emit_cache_and_exit
+labeled=$(gh issue list --repo "$OWNER/$REPO" --state open --label focus --json number --limit 100 2>/dev/null) \
+  || emit_cache_and_exit
+
+# Focus set: In Progress on the board AND carrying the focus label.
+mapfile -t FOCUS < <(jq -r --argjson lab "$labeled" '.items[]
+  | select(.status=="In Progress")
+  | .content.number // empty
+  | select(. as $x | $lab | map(.number) | index($x) != null)' <<<"$items" | awk '!seen[$0]++')
 
 # Print the body's "## <name>" section, blank lines dropped.
 section() { awk -v h="## $1" '$0==h{f=1;next} /^## /{f=0} f&&NF'; }
 
-# ---- TODO_STORIES: Todo column, name + Description ------------------------
-: >"$tmp/todo.md"
+# ---- IN_PROGRESS_STORIES: In Progress column minus focus, name + Description
+focus_filter=$(printf '%s\n' "${FOCUS[@]:-}" | jq -R 'select(length>0) | tonumber' | jq -s .)
+: >"$tmp/inprogress.md"
 while IFS= read -r n; do
   [ -n "$n" ] || continue
   title=$(jq -r --argjson n "$n" '.[] | select(.number==$n) | .title // empty' <<<"$open_issues")
@@ -67,9 +72,12 @@ while IFS= read -r n; do
     echo "#$n $title"
     jq -r --argjson n "$n" '.[] | select(.number==$n) | .body // ""' <<<"$open_issues" | section "Description"
     echo
-  } >>"$tmp/todo.md"
-done < <(jq -r '.items[] | select(.status=="Todo") | .content.number // empty' <<<"$items")
-[ -s "$tmp/todo.md" ] || echo "(nothing in To Do)" >"$tmp/todo.md"
+  } >>"$tmp/inprogress.md"
+done < <(jq -r --argjson fs "$focus_filter" '.items[]
+  | select(.status=="In Progress")
+  | .content.number // empty
+  | select(. as $x | $fs | index($x) | not)' <<<"$items")
+[ -s "$tmp/inprogress.md" ] || echo "(no other work is in progress)" >"$tmp/inprogress.md"
 
 # ---- FOCUS_STORIES + UPCOMING_STORIES --------------------------------------
 : >"$tmp/focus.md"
@@ -77,11 +85,11 @@ done < <(jq -r '.items[] | select(.status=="Todo") | .content.number // empty' <
 
 if [ "${#FOCUS[@]}" -eq 0 ]; then
   cat >"$tmp/focus.md" <<'EOF'
-There are no focus stories right now. That is a valid state, not an error.
-But you frequently fail to move the story you are actually working on out of
-To Do: if this conversation is working on a story, it belongs in focus — run
-scripts/move-story.sh <n> focus before continuing, so the board reflects the
-current state of work.
+No story is in focus right now (In Progress + the "focus" label). That is a
+valid state — but you frequently fail to mark the story you are actually
+working on: if this conversation is working on a story, run
+.claude/skills/manage-board/manage-board.py move-issue <n> --column focus
+before continuing, so the board reflects the current state of work.
 EOF
   echo "(upcoming derives from the focus stories' epics — none in focus)" >"$tmp/upcoming.md"
 else
@@ -143,7 +151,7 @@ else
 fi
 
 # ---- render the template (bash heredoc; the three variables expand) --------
-TODO_STORIES="$(cat "$tmp/todo.md")" \
+IN_PROGRESS_STORIES="$(cat "$tmp/inprogress.md")" \
   FOCUS_STORIES="$(cat "$tmp/focus.md")" \
   UPCOMING_STORIES="$(cat "$tmp/upcoming.md")" \
   bash "$TEMPLATE" >"$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"

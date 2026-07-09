@@ -81,7 +81,7 @@ Evidence needed: <only for discovery, performance, demo, or evidence-bound stori
 
 | Field                                | Rule                                                                                                                                                         |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Story Name`                         | Name the domain and value-bearing mechanism. Avoid dramatic quality words.                                                                                   |
+| `Story Name`                         | Name the domain and value-bearing mechanism, in Title Case. Avoid dramatic quality words.                                                                    |
 | `Label`                              | Must be exactly one of `Feature`, `Bug`, `Performance`, `Security`, or `Demo`.                                                                               |
 | `Milestone`                          | Use the GitHub milestone name when the story belongs to an epic. Use `None` only when it does not.                                                           |
 | `Description`                        | Must use `As / I want / so that`. The `so that` clause must state a state of value change, not a generic benefit.                                            |
