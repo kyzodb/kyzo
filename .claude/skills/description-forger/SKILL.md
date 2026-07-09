@@ -1,5 +1,5 @@
 ---
-name: claude-frontmatter-description
+name: description-forger
 description: forge skill yaml description fields for claude code routing. use when drafting, shortening, or auditing metadata that must distinguish a skill from nearby skills, remove filler or duplicated trigger language, prevent overbroad activation, and return a revised description with a deletion note.
 ---
 
