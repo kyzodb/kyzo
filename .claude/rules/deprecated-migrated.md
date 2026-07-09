@@ -1641,3 +1641,52 @@ closed)
 - **L2:** gold: the two-frames discipline; the
   resumable-with-held-error executor shape (partial progress is
   delivered before its error, exactly once).
+
+## query/ra/temp.rs (311 lines; inventory: split-out header,
+`TempStoreRA` — WHERE THE SEMI-NAIVE DELTA DISCIPLINE IS IMPLEMENTED:
+delta-vs-total decided by `AtomOccurrence` (this atom's position, not
+its store name — a store mentioned twice compiles to two RAs with two
+occurrences); the anti-join doc law "negated occurrences always read
+totals — negation over a delta would resurrect rows already ruled
+out"; `prefix_join_batched` (kept as its OWN implementation because
+the filter-less branch joins from a borrowed `TupleInIter` without
+ever minting the store row as a Tuple; `compute_bounds` hoisted out
+of the row loop — pure in the left row, the row path recomputed it
+redundantly), and `TempStorePrefixBatchJoin` (order matches the row
+path exactly; bounded probes vs the zero-clone projected prefix
+probe) — closed)
+- **L1:** preserve-and-move whole → `exec/op/delta.rs` (seat exists:
+  "fixpoint total/delta scans").
+- **L2:** gold: occurrence-keyed deltas (the twice-mentioned-store
+  correctness subtlety made structural); negation-reads-totals with
+  its resurrection rationale; zero-clone preserved deliberately and
+  the reason written down.
+
+## query/batch_ops.rs (316 lines; inventory: module doc ("the CURRENCY
+HANDLING every batched operator shares"), `BATCH_ROWS`, `Batch`
+(row-major FLATTENED with the layout argument — row-major serves the
+VM and the scan "as they exist today", columnar remains possible if a
+profile justifies it; "ORDER IS LOAD-BEARING: the determinism law
+rides on this — batching must never reorder observable results";
+`new()` DELIBERATELY unallocated with the measured 3× regression on
+recursive workloads recorded; `push_with`'s torn-row discipline —
+nothing lands unless the fill fully succeeds; `pop` for filtered
+decodes; `into_rows` confined to RA-internal seams with the
+mint-only-on-admission note), `conjunction_pred` (rejoining the
+compiler's split filters so "selection refinement IS the
+short-circuit and the error minimum IS row-major error identity"),
+`refine_batch`, and the two accumulate-then-refine sources
+(`BatchTupleFilter`/`BatchScanFilter`, each carrying the
+`pending_err` row-order law: a stream/decode error must NOT outrank
+an earlier accumulated row's predicate error; the scan decodes raw
+bytes straight into the flat arena — no per-row Tuple survives — and
+pops torn rows) — closed)
+- **L1:** refactor-and-move → `exec/op/` as the operator tier's shared
+  batch substrate. Same #120 seam class as query/batch.rs: the
+  DataValue arena is the declared replacement target for the packed
+  execution currency; the ORDER and ERROR-IDENTITY laws survive the
+  swap verbatim.
+- **L2:** gold: order-is-load-bearing stated as law; the pending_err
+  error-identity discipline in BOTH sources; performance decisions
+  carrying their measurements (the 3× note); torn-row impossibility
+  by construction.
