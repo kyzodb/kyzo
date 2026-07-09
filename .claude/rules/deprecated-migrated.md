@@ -4260,3 +4260,156 @@ closed)
   backend (properties proven against the seam, not a production
   backend); the sim fidelity ruling; laws extracted into named,
   directly-tested functions. Nothing condemned.
+
+## storage/conformance.rs (646 lines; inventory: MPL header, module doc
+(the storage contract AS A CONFORMANCE KIT, story #79 — "one battery of
+generic properties, quantified over `S: Storage`... so a new backend
+passes exactly the same torture the fjall backend does — by CALLING
+this module, not by a maintainer hand-copying fjall's test file and
+swapping type names"; the maintainer-ratified THREE-ARM SCOPE — contract
+laws, DST fault campaigns reusing SimStorage's seeded controls so "the
+property that certifies quiescent correctness is the property the fault
+campaign tortures — one definition, not two", and cross-backend
+differentials generalizing temp.rs's hand-rolled three-way; the
+EXPLICITLY-OUT list with reasons — per-backend time-travel re-proofs
+would duplicate the skip-walk driver's ONE generic proof, backup/clock
+floor are a separate surface; the whole-integration adoption recipe),
+the eight contract laws (`law_send_sync_bounds_are_compiler_checked` —
+"compiler > constructor > test", failing is a compile error;
+`law_kv_matches_model_oracle` — mixed workload vs a BTreeMap model,
+full and bounded scans; `law_mvcc_first_committer_wins` with
+abort-leaves-no-trace; `law_read_your_own_writes_and_snapshot_isolation`;
+`law_del_range_kills_own_writes`; `law_phantom_protection` — a scanned
+range is conflict-tracked as a whole; `law_concurrent_writers_across_
+threads` — 8 real threads, disjoint keys never conflict, a contended
+RMW counter lands every increment exactly once;
+`law_del_range_chunk_boundaries` — probed at 1023/1024/1025/2048 so "a
+backend with a differently-sized chunk still gets an off-by-one probe
+near its own boundary"), `run_full_battery`, the differential arm
+(quantified over bare `WriteTx` SPECIES not Storage backends — TempTx
+belongs "exactly as it belongs in temp.rs's own three-way check"; every
+method used lacks Self: Sized so dyn WriteTx is legal, commit never
+called mid-differential; `Obs` normalized so error MESSAGES differing
+still compare equal on error PRESENCE; `Op`; SCAN_CAP=10_000 — "proof
+that the iterator terminates rather than merely a slow assertion";
+`apply_op`; `gen_key` over an alphabet straddling type-tag boundaries
+incl. the empty key; gen_val/gen_op; `assert_ops_agree` naming the
+first disagreeing pair at its step), the DST arm
+(`read_total_scan_retrying` — reads transient BY DOCTRINE, a bare
+unwrap "would fail the campaign on an injected fault that has nothing
+to do with a correctness bug", the bounded retry "itself the liveness
+half of the same retry doctrine retry.rs documents";
+`dst_fault_campaign_kv_survives_crash` — the KV-vs-model law driven as
+a fault-campaign payload, after EVERY reopen contents equal exactly
+the committed (crash) or fsynced (power cut) prefix, "never more,
+never less, never a panic", with the powercut-rewinds-committed
+bookkeeping), and the five tests: fjall's one-call conformance (with
+the leaked-TempDir scaffolding ruling written in place);
+`sim_passes_the_full_battery` — "proof the battery is backend-agnostic,
+not fjall-shaped in disguise"; the three-species differential
+(fjall/sim/temp × 12 seeds × 120 ops, empty-key puts filtered with the
+8-byte-prefix reason); the 60-seed fault campaign carrying the
+kyzodb/kyzo#91 FIX DOC (sim_crash conflated the synced watermark with
+commit_seq — "a power cut simulated after an intervening crash wrongly
+retained buffer-tier data that was never fsynced", first observed at
+seed 18, reopen now takes the two seqs separately); and the minimal
+seed-free #91 pin (crash-then-powercut must still drop the
+never-synced write) — closed)
+- **L1:** preserve-and-move whole → `kyzo-trials/src/conformance.rs`
+  (seat exists: "the storage-contract kit any backend must pass
+  (public)"). REWIRE at the crate wall, the kit's own kind: today
+  everything is pub(crate) over traits SEALED to kyzo-core — the map
+  makes the kit PUBLIC in trials, so the sealed contract must expose
+  what a generic battery needs (the Storage/ReadTx/WriteTx surface, or
+  a sanctioned trials seam); `SimStorage`/`for_each_seed`/`SimRng` are
+  kyzo-crashfs vocabulary on arrival (trials lawfully depends on it),
+  and the temp species in the differential follows scratch.rs's seat.
+  The #91 fix doc travels with the campaign; the storage/mod.rs entry
+  already routed this file here.
+- **L2:** gold, preserve verbatim: call-the-kit-don't-copy-the-file as
+  the anti-drift design (conformance by invocation, story #79);
+  torture-what-you-certify (the DST arm driving the SAME generic law,
+  one definition); the explicitly-out list with each exclusion's
+  reason; species-not-backends quantification for the differential
+  (dyn WriteTx with the Self: Sized accounting written down);
+  error-presence-normalized observations; SCAN_CAP as a termination
+  proof; the chunk-boundary off-by-one probe design; reads-transient-
+  by-doctrine retry with its liveness framing; the #91 lineage pinned
+  both seeded and seed-free. Nothing condemned. Arrival note: `Obs`
+  and the law assertions speak fjall's `Slice` as their observation
+  currency — a backend-agnostic kit should observe in the CONTRACT's
+  own byte vocabulary, not one backend's refcount type; resolve when
+  the sealed contract names its public read currency.
+
+## storage/temp.rs (770 lines; inventory: dual fork header (the original
+was a `Storage` BACKEND — `Arc<MemStorage>` shared by every session over
+a `ShardedLock<BTreeMap>`; here a plain ReadTx/WriteTx SPECIES owned
+inline by a SessionTx — "no lock, no sharing, no Arc — a session is
+single-threaded by construction, so the interior synchronization had
+nothing left to guard"; the kernel contract implemented directly so the
+catalog and scan surface route unchanged; law-5 skip scan sharing the
+fjall seek loop's strict-advance guarantee; eager del_range replacing
+the original's deferred bounds; the WHAT-THIS-SPECIES-IS-THIS-TIER
+section "verified, not aspirational" — proven at the storage-species
+level by three-way differential + mutation-confirmed oracles, and NOT
+reachable from the public API: "every route in is a TYPED REFUSAL, not
+a silent misplacement", the temp-mutation and temp-read refusals each
+named with their exact error and verified end-to-end; "the file ships
+sealed so the router can adopt it later without a format migration,
+not because the feature is live"; the one-line sealed-module landing
+note), module doc ("a temp relation is a fact a session is
+ENTERTAINING, not one the universe has committed to"), `TempTx`
+(BTreeMap + a logical-time stamp from a process-wide monotone counter —
+"stamps need no wall-clock meaning, and logical time keeps runs
+deterministic"; commit vacuous — "the session's life is the
+transaction"), the ReadTx impl (degenerate bounds empty BY GUARD —
+BTreeMap::range would panic on start>end; skip scan inherited WHOLE
+from skip_walk — "this backend contributes only the OpenSkipCursor impl
+below... never the walk itself"), `TempSkipCursor` + the
+OpenSkipCursor impl (the walk's own loop guard makes every range call
+well-formed by construction — the no-check argument written at the
+cursor), the WriteTx impl, and the test battery: bk/bv/rel_bounds/
+scan_at_coord helpers (values ASSERTED not counted, `.take` capping so
+"a mutant that emits forever fails fast rather than merely hanging");
+basic KV + degenerate laws; last-write-wins (the named
+entry().or_insert_with mutant); validity semantics with the
+EARLIER-DRAFT HONESTY NOTE (the first version stored a shape
+extend_tuple_from_v rejects and asserted a .count() "that cannot tell
+an Ok tuple from a decode Err" — the corrected test asserts returned
+VALUES); the INCLUSIVE re-seek pin at the exact query instant on BOTH
+axes (the Included→Excluded silent-wrong-answer mutant); the
+i64::MIN-adjacent termination pin; degenerate skip bounds; and the
+adopted three-way differential section (temp vs fjall vs sim over
+seeded op streams, 12×120 sized-to-seconds with the 60×300 review
+harness credited; final-state agreement + strict memcmp-ascending
+check; the DynW shim + seven del_range boundary probes incl.
+degenerate-deletes-nothing; and the skip-scan differential over seven
+scenarios planting HOSTILE INHABITANTS — short key, clobbered slot
+tags, garbage rmp payload, missing/unknown polarity bytes, extreme
+timestamps — × 8 sys × 10 valid query instants) — closed)
+- **L1:** preserve-and-move whole → `store/scratch.rs` (seat exists:
+  the session-scratch species). The species contract, cursor impl,
+  and the targeted mutation oracles move as the file's own tests. The
+  three-way differential machinery (Obs/Op/gen_*/apply) is the
+  HAND-ROLLED PREDECESSOR conformance.rs's kit explicitly generalized
+  — on migration the differential arm dissolves into one call to the
+  kit's `assert_ops_agree`/battery (kyzo-trials/src/conformance.rs)
+  with TempTx handed in as one more species, ending the duplicated
+  generator/observation code (the kit's own module doc names this
+  file as what it replaces). The session router that finally reaches
+  the species is session/db.rs's routing seam (`is_temp` the datum,
+  the session the router — runtime/relation.rs's entry carries that
+  law).
+- **L2:** gold, preserve verbatim: the species-not-backend reduction
+  with its nothing-left-to-guard argument; sealed-not-live honesty
+  (shipped for format stability, unreachability enforced by TYPED
+  refusals verified end-to-end); the honorary-transaction framing;
+  the logical-clock determinism choice; walk-inherited-whole with the
+  cursor-contributes-only-the-seek discipline; the earlier-draft
+  correction note kept in the test doc (a test that records its own
+  past weakness); hostile-inhabitant differentials; mutants named at
+  the test that kills them. Nothing condemned. Arrival note: the
+  differential-arm dedup above is the one deliberate deletion — the
+  targeted oracles (inclusive re-seek, MIN-ts termination, degenerate
+  bounds, last-write-wins) stay beside the species; only the generic
+  three-way plumbing yields to the kit.
