@@ -2003,3 +2003,51 @@ checked against itself" — closed)
   discipline; the three-way differential with an independent model;
   the vacuous-check analysis inside a test comment (why the assertion
   order proves what it claims). Nothing condemned.
+
+## query/time_travel_script_laws.rs (835 lines; inventory: header (the
+LANGUAGE-surface as-of laws, story #4 — the named MISSING LAYER: trials
+prove the pipeline through hand-built seams, db.rs proves the clause
+parses, "neither differences a real, multi-entity, multi-transaction
+as-of history against an oracle through parsed KyzoScript text"; THE
+GAP THIS MODULE ONCE DOCUMENTED IS FIXED — write-side `@` landed, one
+coordinate only, the system coordinate "stays engine-minted ... with
+no script syntax able to touch it"; the whole history now built
+through PURE KYZOSCRIPT with no internal-API backdoor, one script =
+one committed transaction so same-instant collisions resolve in event
+order; the HOSTILE-REVIEW FINDING FIXED doc — the old
+current-belief-based supersession broke under historical `@`, three
+failure modes named and pinned), the seeded history generator
+(same-instant collisions by design; redundant retracts as no-op
+probes), `oracle_at` ROUTED THROUGH THE UNIFIED TEMPORAL ORACLE
+(story #62's `laws::resolve_relation`, write order riding the system
+axis — "last write in write order governs" IS "newest system version
+governs"; the sabotaged exclusive boundary is "still the one real
+resolution function, just a deliberately wrong coordinate"), the
+BRIDGE DIFFERENTIAL (oracle_at vs a from-scratch independent
+reference over 300 seeds × every probe instant × both boundaries,
+with a >500-case floor), `probe_instants`
+(before-all/at-every/between-gaps/after-all), the MAIN LAW with
+anti-vacuity gates (≥40 events, ≥40 script transactions, at least
+half the probes nonempty, ≥10 DISTINCT answers "else this harness
+could pass by every probe returning the same thing"), the
+boundary-MUTATION catch (the sabotaged oracle must DISAGREE with the
+engine — "else the differential is blind to the boundary"), the
+two-coordinate flagship (system stamps read off `clock_floor`, "a
+public, engine-owned watermark ... not a fact-write backdoor"), the
+per-row `@` RUNTIME proof (the ts column never stored), and the three
+hostile-review pins (a historical correction stays consistent with
+its INDEX at the corrected instant; `:update` carries forward the
+TARGETED instant's value, never a future one; `:insert` checks
+existence at ITS OWN instant, succeeding over an unrelated current
+row and refusing a genuine same-instant duplicate) — closed)
+- **L1:** preserve-and-move whole → `kyzo-trials/time_travel.rs` (seat
+  exists: "the temporal law and trial batteries") as its
+  language-surface half; it already runs everything through
+  `Db::run_script`, so the crate wall costs nothing.
+- **L2:** gold, preserve verbatim: the missing-layer argument (naming
+  exactly what each sibling test does NOT cover); anti-vacuity gates
+  on every axis a differential could silently hollow out; the
+  mutation-catch on the boundary; one-real-oracle-wrong-coordinate
+  sabotage design; the no-backdoor discipline extended to reading
+  system stamps; hostile-review pins that state the pre-fix failure in
+  the test doc. Nothing condemned.
