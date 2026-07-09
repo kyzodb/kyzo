@@ -1038,12 +1038,14 @@ iterative"), tokenize/is_empty (shallow BY DESIGN; flatten is the
 normalizer)/flatten/do_tokenize, and tests (is_empty edges incl.
 zero-booster; flatten collapse laws; analyzer rewrites incl.
 stopword-vanishing and Near distance preservation) — closed)
-- **L1:** preserve-and-move whole → `project/text/` beside the FTS
-  engine (its `tokenize` needs the analyzer, so it is engine-side by
-  dependency). The mini-language GRAMMAR stays with
-  `model/parse/search.rs`; if the oracle ever answers FTS semantics,
-  the pure-data half (types + flatten/is_empty) lifts to the model and
-  the analyzer rewrite stays behind.
+- **L1:** SPLIT, compelled by the crate wall (correction found at
+  parse/fts.rs's read): `model/parse/search.rs` owns the FTS
+  mini-language and must NAME the AST it produces, and kyzo-model
+  cannot depend on the engine — so the pure-data half (`FtsExpr`/
+  `FtsLiteral`/`FtsNear` + flatten/is_empty + the depth invariant) →
+  `kyzo-model` beside `parse/search.rs`, while the analyzer-coupled
+  `tokenize` rewrite stays engine-side in `project/text/` as an
+  extension over the model type.
 - **L2:** gold, preserve verbatim: the depth-invariant doc (the
   sharpest derived-Drop stack-safety analysis in the tree — bounding
   at the parser is proven STRONGER than an iterative rewrite);
@@ -1225,3 +1227,75 @@ regression-pin slot ("None to date") — closed)
   bug's original surfacing condition instead of a synthetic delay;
   seed-pins-workload-not-interleaving honesty; the regression-pin slot
   convention.
+
+## parse/schema.rs (197 lines; inventory: dual header (typed accessors
+replacing grammar-shape unwraps; `VecElementType` from the value
+model), module doc ("the contract that `coerce` later applies" — what
+is PROVEN: unique column names, real ColTypes, non-negative constant
+list lengths), `parse_schema` (typed `DuplicateNameInCols` across keys
+AND dependents), `parse_col` (type/default/`=` binding; binding
+defaults to the column name), `parse_nullable_type`,
+`parse_type_inner` (every kind; list length as a const-evaled
+non-negative int with a help-bearing refusal; vec dims parsed with
+underscore stripping; tuple recursion) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/schema.rs` (seat
+  exists: "schema clause parsing").
+- **L2:** gold: error structs DEFINED AT their one use site with
+  span labels and help text (the designed-diagnostics house form);
+  the proof-list module doc stating exactly what the parse
+  establishes. Nothing condemned.
+
+## parse/imperative.rs (224 lines; inventory: dual header (typed
+accessors; `either::Either` replaced by the NAMED `QueryOrRelation`
+sum — the original used OPPOSITE Left/Right orientations at its two
+use sites), module doc ("an imperative program is a composition of
+proven programs"), `parse_imperative_block`, `parse_imperative_stmt`
+(break/continue with optional labels; return over
+relations-or-embedded-queries; if/if_not chains; labeled loops;
+%swap via `expect_n`; %debug; embedded sysops and query clauses with
+`as` capture; %ignore_error) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/script.rs` (seat
+  exists: "scripts and imperative chaining").
+- **L2:** gold: composition-of-proven-programs (every embedded `{…}`
+  goes through the SAME `parse_query` proof as a standalone script);
+  the named-sum fix (a fork change justified by a real confusion
+  hazard, not taste). Nothing condemned.
+
+## parse/fts.rs (419 lines; inventory: dual header (the fork ledger:
+integer boosters parse instead of aborting — the original's dispatch
+matched the SILENT `int` rule that never appears in the tree, so
+`word^22` hit `unreachable!`; the Pratt table a LazyLock; the build
+depth- AND operator-bounded with FLAT And/Or construction — the
+original's left-nested spine aborted the process by stack overflow
+from ~15k bracket-free operators), module doc (this grammar applies to
+a VALUE at runtime, not script text — same law: no query string can
+panic or exhaust the stack), `FTS_OPS_CEILING` = 1024 with its full
+rationale (breadth counterpart of the nesting ceiling; "comfortably
+above every real query and an order of magnitude below the old failure
+region — and since build_infix builds flat, the bound is a refusal of
+absurd inputs, not the only thing standing between us and an abort"),
+typed `FtsTooManyOps` + spanned `BadFtsNumber` (replacing a span-less
+passthrough), `parse_fts_query` (nesting pre-scan; ONE operator budget
+threaded through every level), `parse_fts_expr` (guards run on the
+FLAT child list before recursion; NOT counts depth because it boxes,
+AND/OR count only breadth), `build_infix` (flat extension with the
+semantic-identity argument written in place), `build_term` (NEAR
+default distance 10), `build_phrase`, the Pratt table, and tests
+(basics; the integer-booster regression; the reviewer's 300 KiB abort
+shape refused TYPED in linear time, all three operator spellings,
+budget shared across groups; NOT chains refuse as NestingTooDeep;
+ceilings refuse the absurd not the legitimate — a 101-op chain arrives
+FLAT, exactly-at-ceiling parses and one-over refuses; flat
+construction proven semantically invisible) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/search.rs` (seat
+  exists: "the index-search and FTS mini-language"), together with the
+  lifted pure AST (see the corrected ast.rs entry).
+- **L2:** gold: the two-ceiling doctrine (depth vs breadth, each with
+  its own typed refusal); flat-construction-plus-bound as
+  defense-in-depth stated honestly; boundary tests at exactly-the-
+  ceiling and one-over. Two small defects for the migration: the local
+  `is_quoted` in `build_phrase` actually means `is_prefix` (rename —
+  the misnomer invites a real misread); and NEAR's distance does
+  `i as u32` after an i64 parse, silently WRAPPING distances past
+  u32::MAX (`NEAR/4294967306(...)` becomes distance 10) — route it
+  through the same `BadFtsNumber` refusal the parse failure gets.
