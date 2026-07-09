@@ -75,8 +75,8 @@ pure-rust:
 # must match the tree (--check, like fmt --check). Strict mode is the end
 # state once #126/#135/#122 burn the baseline to zero.
 authority:
-    python3 scripts/authority-graph --self-test
-    python3 scripts/authority-graph --root . --mode ratchet --check
+    python3 scripts/authority-graph.py --self-test
+    python3 scripts/authority-graph.py --root . --mode ratchet --check
 
 # The seal with peak RSS attached — proves the memory envelope, no vibes.
 memcheck:

@@ -10,3 +10,6 @@
 .claude/active-story.md
 .claude/next-work.md
 .claude/board-signal.md
+.claude/.work-context-cache.md
+__pycache__/
+.claude/.focus-gate-cache

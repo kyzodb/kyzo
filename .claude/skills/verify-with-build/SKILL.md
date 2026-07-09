@@ -15,7 +15,8 @@ Every claim about the code is backed by evidence produced in this session, or it
   is quoted.
 - **A claim about a file's contents** requires reading that file in this session.
 - **A claim about the dependency graph** requires `cargo tree` / the lockfile, whole-workspace. A
-  pure-Rust claim checked only against `kyzo-core` while silently excluding the bindings is the
+  claim checked only against `kyzo-core` while silently excluding the rest of the workspace
+  (`kyzo-bin`, `kyzo-lsp`, `kyzo-crashfs`, `xtask`, the vendored `fjall`/`lsm-tree` trees) is the
   canonical sabotage on this project: scope every claim explicitly or label it partial.
 - If a claim cannot be verified (toolchain missing, code not yet compiling), **say so plainly** and
   state what was checked instead. An unverifiable claim stated as fact is worse than no claim.
@@ -25,7 +26,7 @@ Every claim about the code is backed by evidence produced in this session, or it
 EVERY run goes through the pinned container. There is no native path (`pre-bash-guard.sh` blocks
 native `cargo`/`just` and hand-set `ulimit`/`timeout`/`--test-threads`):
 
-    docker compose run --rm kyzo-dev  just gate        # the seal (check, fmt, clippy, unsafe, pure-rust, tests)
+    docker compose run --rm kyzo-dev  just gate        # the seal (check, fmt, clippy, unsafe, pure-rust, authority-graph, tests)
     docker compose run --rm kyzo-dev  just test        # a targeted run (or test-features/clippy/check/memcheck)
     docker compose run --rm kyzo-dev  just env-report  # environment fingerprint for the report
     docker compose run --rm kyzo-bench just bench       # benchmarks
