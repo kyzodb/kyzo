@@ -1606,3 +1606,38 @@ discipline executed in prose — closed)
 - **L2:** gold, preserve verbatim: the seven laws with enforcement
   sites (the engine's contract stated where its parts are declared);
   per-attribute justification and the removed-once-proven notes.
+
+## query/ra/transform.rs (266 lines; inventory: split-out header,
+`ReorderRA` (ONLY ever the plan root — "never a join RHS, which
+RelAlgebra::join enforces at construction"; permutation validated with
+a typed PlanInvariantError), `FilteredRA` (compile + eliminate; the
+batched path documented as "same predicate order, same elimination,
+same row order as the iterator path"), `UnificationRA` (ONE columnar
+evaluation per parent batch via vm::eval_expr_batched; the spread form
+flattens in row order; typed BadSpreadUnification; operators never
+yield an EMPTY batch — the all-empty-lists edge filtered) — closed)
+- **L1:** preserve-and-move whole → `exec/op/transform.rs` (seat
+  exists: "streaming transforms: reorder, filter, project").
+- **L2:** gold: invariants enforced at CONSTRUCTION and named where
+  they're relied on; batched-equals-row-path stated per operator.
+
+## query/ra/search.rs (274 lines; inventory: split-out header,
+`SearchRA` ("a vector search is a join" — one engine invocation per
+parent row, hits extend the parent; the TWO FRAMES named: the query
+expression sees the PARENT frame, the filter sees the FULL output
+frame parent ++ own_bindings), typed `SearchQueryTypeError`,
+`iter_batched` (TF-IDF's N hoisted once per plan; per-invocation and
+per-node cancellation), and `SearchBatches` (the resumable batch
+executor: a row whose hits overflow one output batch resumes exactly
+where it left off; an error arriving after a partial batch is HELD as
+`pending_err` and delivered next — no rows lost, no error swallowed) —
+closed)
+- **L1:** preserve-and-move whole → `exec/op/search.rs` (seat exists:
+  "projection searches as relations"). Note: the doc names spatial
+  among the engines but `SearchConfig` has only Hnsw/Fts/Lsh — the
+  spatial wiring is the staged companion patch spatial.rs's entry
+  records; the doc is one patch ahead of the enum, reconcile at the
+  move.
+- **L2:** gold: the two-frames discipline; the
+  resumable-with-held-error executor shape (partial progress is
+  delivered before its error, exactly once).
