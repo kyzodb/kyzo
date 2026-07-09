@@ -945,3 +945,143 @@ equidistant tie-break totality; the `#[path]`-included filter harness)
   recorded. The three `#[ignore]`d probes are rule-#11 ledger items —
   on migration they graduate to the bench lane (they are measurement
   rigs, not tests); `fit_power_law` graduates with them.
+
+## engines/text/cangjie/ (mod.rs 16, options.rs 29, tokenizer.rs 56,
+stream.rs 62 — each read whole; inventories: mod (the dual attribution:
+Cang-jie MIT via CozoDB, preserved verbatim, with per-file provenance
+headers and `KYZO DEVIATION` marks as KyzoDB additions; three module
+decls), options (`TokenizerOption`: All / Default{hmm} /
+ForSearch{hmm} / Unicode), tokenizer (`CangJieTokenizer` over
+`Arc<Jieba>`; Default = empty jieba, no HMM; the Tokenizer impl
+dispatching to cut/cut_all/cut_for_search/char-fold; KYZO DEVIATION:
+the vendored `log::trace!` of every user token REMOVED — kyzo-core
+carries no `log` dependency and never echoes user text to logs),
+stream (`CangjieTokenStream`: cumulative byte-offset advance over
+jieba's contiguous segments) — closed)
+- **L1:** preserve-and-move whole → `project/text/` as its vendored
+  CJK-segmentation subtree, MIT headers intact. Standing obligation
+  (the target-state ruling on the foreign body): this lineage is
+  carried only until it is OWNED — documented and typed to house law —
+  or replaced; the move is not an adoption.
+- **L2:** gold: the attribution discipline (original notice verbatim,
+  deviations marked at the exact line, licenses never blended) and the
+  no-user-text-in-logs deviation. Watch for the owning rework:
+  `CangjieTokenStream` sets `position_length` to the TOTAL token count
+  — nonstandard against the tantivy convention (span length, normally
+  1); harmless today because the FTS engine consumes only
+  offsets/position, but a future consumer of `position_length` would
+  inherit a quiet lie. The offset arithmetic assumes jieba segments
+  tile the input contiguously — true for every current mode; state it
+  as an invariant when the subtree is owned.
+
+## engines/text/tokenizer/ (mod.rs 348, tokenizer_impl.rs 349,
+empty_tokenizer.rs 51, raw_tokenizer.rs 78, simple_tokenizer.rs 96,
+whitespace_tokenizer.rs 96, lower_caser.rs 96, alphanum_only.rs 103,
+remove_long.rs 106, tokenized_string.rs 110, stemmer.rs 135,
+split_compound_words.rs 259, ngram_tokenizer.rs 484,
+ascii_folding_filter.rs 4062, stop_word_filter/mod.rs 188,
+stop_word_filter/stopwords.rs 21891 — code files read whole; the two
+data giants closed by construct-boundary enumeration:
+ascii_folding_filter is header + filter/stream +
+`fold_non_ascii_char` (the Lucene-derived char match table, lines
+62–1537, per-char commented, source link kept) + `to_ascii` + a
+2500-line vendored test block ending in the exhaustive
+`test_all_foldings` fixture; stopwords.rs is a dual-attribution header
+(stopwords-iso MIT via CozoDB, content unchanged) + 58 language `const`
+arrays tiling lines 11–21891, exactly matching `for_lang`'s 58 arms —
+closed)
+- Inventory highlights: tokenizer_impl (Token — "offsets shall not be
+  modified by token filters", default position usize::MAX; TextAnalyzer
+  + `unique_ngrams` for the LSH engine; the trait trio + box-clone
+  machinery), the four base tokenizers (whitespace splits on ASCII
+  whitespace ONLY — U+3000 stays inside tokens, vendored behavior),
+  five filters (lower_caser's no-sigma-special-case note; alphanum
+  drops non-ASCII-alphanumeric tokens entirely; remove_long is a BYTE
+  limit), tokenized_string (PreTokenizedString/Stream — its re-export
+  is COMMENTED OUT: carried but unwired), stemmer (18 languages),
+  split_compound_words (full-decomposition-only aho-corasick), ngram
+  (StutteringIterator with THE KYZO DEVIATION: the vendored
+  `max_gram -= 1` underflowed on post-exhaustion advance — debug panic,
+  release wrap that RESURRECTED the stream to emit garbage —
+  saturating_sub covers both; a large block of vendored tests commented
+  out), and mod.rs carrying the owned LAW-5 HOSTILE SWEEP: every
+  tokenizer × a maximal filter stack × zalgo/RTL-override/NUL/1-MiB
+  token/UTF-8-lossy soup/combining flood/ZWJ emoji/CJK/empty inputs,
+  run to exhaustion AND held exhausted (the underflow deviation's
+  regression), plus a bare-stemmer sweep — "vendored code is not
+  exempt: a panic is a panic wherever it was written".
+- **L1:** preserve-and-move whole → `project/text/`'s tokenizer subtree,
+  MIT attribution intact, under the same own-or-replace foreign-body
+  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and
+  moves as the subtree's gate.
+- **L2:** gold: the hostile sweep's doctrine and its
+  exhaustion-stability check; the ngram deviation's failure-mode prose
+  (names BOTH the debug and the worse release behavior); the per-file
+  attribution form. Cleanup at migration: `tokenized_string.rs` has no
+  consumer and its re-export is commented out — Remove unless the
+  pre-tokenized door lands with the session tier; the commented-out
+  vendored ngram tests either revive against the owned API or go;
+  whitespace/alphanum ASCII-only semantics get stated in the owned
+  docs (they surprise exactly the users FTS serves).
+
+## engines/text/ast.rs (367 lines; inventory: dual MPL header (the
+permanent home of the FTS query AST; bounds-checked `remove(0)`
+replacing unwraps on the user-text path), module doc, `FtsLiteral`
+(+ tokenize — PREFIX literals pass through whole: filtering or
+stemming a prefix pattern would change what it means), `FtsNear`,
+`FtsExpr` with THE DEPTH INVARIANT doc (the parser is the only
+non-test constructor and bounds depth/operator count, so every
+recursive walk INCLUDING the compiler-derived Drop/Clone/PartialEq/
+Hash is stack-safe BECAUSE the bound holds; "a new constructor must
+either enforce the same bound or make every walk, including Drop,
+iterative"), tokenize/is_empty (shallow BY DESIGN; flatten is the
+normalizer)/flatten/do_tokenize, and tests (is_empty edges incl.
+zero-booster; flatten collapse laws; analyzer rewrites incl.
+stopword-vanishing and Near distance preservation) — closed)
+- **L1:** preserve-and-move whole → `project/text/` beside the FTS
+  engine (its `tokenize` needs the analyzer, so it is engine-side by
+  dependency). The mini-language GRAMMAR stays with
+  `model/parse/search.rs`; if the oracle ever answers FTS semantics,
+  the pure-data half (types + flatten/is_empty) lifts to the model and
+  the analyzer rewrite stays behind.
+- **L2:** gold, preserve verbatim: the depth-invariant doc (the
+  sharpest derived-Drop stack-safety analysis in the tree — bounding
+  at the parser is proven STRONGER than an iterative rewrite);
+  prefix-literals-pass-whole as a meaning argument; shallow-is_empty
+  with flatten-as-normalizer stated as a design pair.
+
+## engines/text/mod.rs (584 lines; inventory: dual MPL header
+(`validate` new over Cozo; poisoning recovery; the `indexing` SEAM
+comment for the operator tier), module doc (TWO MOMENTS OF TRUTH:
+definition-time `validate` before a manifest is written — the Cozo
+original stored unknown names and failed at first use — and use-time
+`build` staying lazily fallible because "data is never trusted to be
+well-formed just because it was once stored"), `FtsIndexManifest`,
+`TokenizerConfig` (pure data; `config_hash` = sha256 over names +
+memcmp-encoded args, a STABILITY CONTRACT with the fork-divergence
+note recorded; `validate`; `build`; the two constructor registries
+with typed `NonPositiveRemoveLong` — the Cozo original's `as usize`
+cast silently wrapped a negative into a filter that removed nothing),
+`FtsIndexConfig` (the dedup obligation lsh.rs records — duplicated
+with `parse/sys.rs`, one concept one name when the lifecycle lands),
+`TokenizerCache` (name + config-hash two-level cache; KYZO DEVIATION:
+lock acquisition recovers from poisoning — sound because entries are
+inserted whole, and a panicking thread elsewhere no longer cascades
+into every later FTS query), and tests (`config_hash_is_stable` with
+an INDEPENDENTLY DERIVED expected input — hand-built canonical bytes
+chained to number.rs's golden vectors, hashed with a stock Sha256,
+never the production encoder, plus a `printf | sha256sum`-checkable
+zero-arg vector; cache determinism by `Arc::ptr_eq`; RemoveLong
+refused at BOTH moments; unknown names lazy at construction; the
+validate proof sweep) — closed)
+- **L1:** preserve-and-move whole → `project/text/` as the subtree's
+  config/lifecycle seam; `validate` is what `session/`'s `::fts
+  create` calls; the `TokenizerCache` full-index-name keying contract
+  (recorded in fts.rs and lsh.rs) lives here.
+- **L2:** gold: the two-moments-of-truth doctrine; the config hash's
+  independent-derivation pin (the same anchored-pin form as lsh.rs's
+  signature test — a failure names its layer); the typed refusal for
+  the silent-wrap defect; poisoning recovery argued from the
+  invariant, not asserted. The `FtsIndexConfig`/`parse/sys.rs`
+  duplication remains an open obligation — the lifecycle move is where
+  it dies.
