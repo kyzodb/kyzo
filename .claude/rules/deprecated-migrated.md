@@ -2771,3 +2771,91 @@ not outrank an earlier predicate poison) — closed)
   migration; its measured numbers already satisfy rule #19's
   perf-claims-close-on-a-reproducer standard and move with it.
   Nothing condemned.
+
+## query/time_travel_trials.rs (2526 lines; inventory: dual fork header
+(story #3 item C.10 — the README's as-of claims proven through the FULL
+query path, compile → RA → semi-naive eval, over a real FjallStorage;
+"a disagreement is a finding"; TEST-ONLY, the harness reconstructed
+from compile.rs's private test module; the PINNED BOUNDARY SEMANTICS
+traceable to the key encoding: at-instant reads INCLUSIVE, assert
+encodes 0x00 and beats retract at the same instant, identical triples
+collapse last-write-wins), `#![cfg(test)]`, plumbing (builders incl.
+pred_ge/pred_le that compute_bounds recognizes; compile_and_run),
+`Version` fixtures + `write_history` (ONE transaction = one system
+stamp, "the one-lineage-per-instant law") + `stored_plain` +
+`write_history_multi_tx` (one tx PER version, returning the REAL
+minted system stamps — with the doc explaining why spans/delta
+differentials need real stamps while as-of-at-current does not), THE
+UNIFIED ORACLE (`naive_asof_cfg` routed through laws::resolve_relation
+per story #62's oracle unification — write order becomes the sys axis;
+the two SABOTAGED configs (exclusive boundary, first-write-wins) still
+route through the one real resolution function, "just fed a
+deliberately wrong encoding of which write governs"), the BRIDGE
+differential (`independent_asof_reference` written from scratch
+"without reusing any part of naive_asof_cfg, old or new"; 300 seeds ×
+all four boundary/write-order configs, >500 cases — the sabotaged
+forms must agree with their own from-scratch counterparts too),
+`interesting_instants`, and the batteries: TASK 1 boundary+same-
+instant pins (inclusive boundary; both write orders of assert/retract
+at one instant; identical-key overwrite; retraction-only key never
+present; the multi-key full-history matrix at every interesting
+instant); TASK 2 full-path differentials (transitive closure through
+REAL recursion per instant vs naive close-after-asof; two-relation
+same-instant join; count+sum over as-of with empty→[0,0]; MEET min
+with the empty-population Null identity row PINNED as "a defined
+value, not a silent gap"; the bounded as-of scan driving
+compute_bounds → skip_scan_bounded_prefix with a hand-computed case
+AND the full differential); TASK 3 retraction-is-revision (earlier
+instants still addressable; plain scans read CURRENT state, never raw
+versions); TASK 4 byte-identical across 1/2/4/8 threads; TASK 5 the
+story-#86 negation branches (the prefix-probe branch generative over
+300 seeds with a sentinel candidate, expected = candidates minus
+naive_asof's present set "never by re-deriving the engine's own
+answer"; the materialized non-prefix branch with a
+retraction-discriminating instant; the NoStoredInputs refusing seam
+pinned AS the superseded placeholder it is; validity scans
+constructible at the RA layer); TASK 6 mutation-proofs (a
+boundary-flipped oracle and a retraction-dropping reference must each
+DISAGREE with the engine — "else the harness is blind"); the
+TWO-COORDINATE flagship ("what did the record say at S about V" — the
+correction invisible before its stamp, governing from it, with the
+Reverse-order stamp monotonicity asserted); naive_present_edges/
+naive_transitive_closure; the story-#62 chunk-3 section
+(spans_atom/delta_atom builders, oracle_spans/oracle_delta shaping
+laws output to engine rows, plane_interval converting the oracle's
+half-open form to closed normal form; spans generative ×300 at two
+sys cuts; spans COMPOSES through ordinary rule nesting — ruling item
+3 proven DEFINITIONAL: rule applications have no validity field so
+"the only place a clause can ever be written already IS the leaf",
+plus the two grammar-refusal tests making it structural; delta
+generative BOTH axes; the composition law diff(a,c) == diff(a,b) ⊕
+diff(b,c) through the REAL engine via laws::compose AND separately
+via the PRODUCTION temporal::compose — the story-#77 differential
+that gave the tested-but-unused law its proof on real output); five
+named degenerate pins ("pinned here by name so a regression fails
+with a readable label rather than only a seed"); and the
+hostile-review TEXTUAL PARSE coverage (every other test builds
+MagicAtoms directly — the keyword-boundary bug lived in exactly that
+unexercised seam: four positive clause parses and three
+boundary-refusal tests pinning the CONFIRMED `@spansX` bug and its
+fix's mutant) — closed)
+- **L1:** preserve-and-move → `kyzo-trials/src/time_travel.rs` (seat
+  exists: "the temporal law and trial batteries"). Same crate-wall
+  rewire as dst_query.rs: the harness drives pub(crate) compile/eval
+  seams and must speak the public surface (or real KyzoScript) on
+  arrival; the oracle side already lives across the wall
+  (kyzo-oracle's temporal.rs). EXCEPTION: the textual-parse coverage
+  (the four clause parses, the three keyword-boundary refusals, and
+  the two grammar-structural refusals) tests the GRAMMAR, not the
+  engine — it travels to kyzo-model's parse-tier tests with
+  kyzoscript.pest, not to trials.
+- **L2:** gold, preserve verbatim: sabotaged-oracle mutation-proofing
+  (the harness proves its own eyes work — both directions); the
+  from-scratch bridge whose sabotaged forms are verified against
+  their own counterparts; boundary semantics pinned WITH their
+  encoding-level traceability; named degenerate pins beside seeded
+  campaigns (readable failures); the real-stamps-vs-synthetic-index
+  distinction between the two history writers, with its reasoning;
+  definitional-over-implemented for ruling item 3; the
+  production-twin compose differential kept separate from the
+  oracle's. Nothing condemned.
