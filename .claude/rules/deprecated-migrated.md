@@ -3851,3 +3851,115 @@ puts per mutation kind, 0 dels ever) — closed)
   Carried obligations: the Phase C parsed-substances FLAG; the
   unparsed `::temporal index create` surface (the tests' own
   documented gap) — both operator-visible.
+
+## runtime/db.rs (3076 lines; inventory: dual fork header with six
+re-architectures (session SPECIES — "the read/write distinction is a
+type, not a convention", the session owns its transaction and is Send;
+conflict retry rebuilding "a fresh transaction AND a fresh callback
+collector" so "a conflicted attempt leaks no phantom events"; the
+cleanups machinery gone; BUDGET REQUIRED BY PARAMETER — "there is no
+cooperative-poison thread and nothing sleeps to enforce a limit"; the
+typed catalog; fixed rules RUN) and the INTERIM section carrying a
+stale-comment mea culpa — "an external audit read the stale claim as
+ground truth, which is exactly the failure a comment in this codebase
+must never cause"; only ::explain and ::running/::kill remain
+deferred), the constants (DEFAULT_EPOCH_CEILING 1M;
+MAX_COMMIT_ATTEMPTS 128 with its measured liveness reasoning — "at 32
+it was reachable by three writers under a loaded machine, which is
+contention working, not failing"; and DEFAULT_DERIVED_TUPLE_CEILING
+50M with its extraordinary justification: "not a round guess" —
+bench_api's own ceiling REUSED, verified against kyzo-bench's actual
+recorded real-graph results with headroom arithmetic
+(tc/snap-p2p-Gnutella08's 13.1M rows ≈ 26.3M true spend after the
+entry-copy doubling), the rejected fast-refusing alternative that
+"would have silently regressed these exact already-recorded
+benchmarks", and the structural guarantee that a fixpoint-less query
+ALWAYS crosses it), seven typed refusals (incl.
+`TempRelationNotReachableError` — review finding F2, "without this
+refusal the read path would silently drop the mutation";
+`InvalidTimeout` — "the last line of defense before
+Duration::from_secs_f64 would panic"), `ScriptOptions`, `Db` (+Clone
+— "the handle is a shared view of one universe") and the fixed-rule
+registry surface, `run_script(_with)`, `execute_single` (the F2 temp
+refusal; the write path's ordered ceremony — fresh tx+collector,
+run_query, enforce_constraints, segment bumps BEFORE commit,
+retirement evictions AFTER, callbacks after durable),
+`compile_and_eval` (the shared read-only heart; ONE kill flag shared
+by the budget, every fixed rule's CancelFlag, and every search atom;
+the ONE-MACHINE note — "the row-at-a-time twin was deleted; criterion
+on a loaded 32-core box had it losing or tying everywhere it was
+measured"; the sorted-query limit rule), `finalize_rows`, `run_query`
+(mutation preconditions; Segments::OFF in write sessions — "typed
+dirty-read protection, pinned by the constraint suite"; :returning),
+`run_query_readonly` (segments ON), `run_sys_op` (the full dispatch
+incl. the bounded ::merkle_root scan ceiling and SysOp::Verify),
+`sys_write`, `build_budget` (tighter-of-two deadlines; typed
+InvalidTimeout), the helpers, and `SessionTx` (the routed session
+core: the per-session trigger-parse and index-ctx caches;
+`current_row_routed` with the full valid-is-the-write's-own-instant
+doc AND the SSI range-tracking note; `system_stamp_routed` — "a
+transaction's writes are one instant of recorded history";
+`destroy_relation`'s retired-id FUNNEL — "three sibling destroy
+sites leaked one engine entry per cycle, forever"), and the
+~1900-line test battery: the SEGMENTS LAW end to end
+(fresh-never-dirty through build/orphan/rollback/index-segment, plus
+the issue-#75 join-probe twin); the fixed-rule ceiling and the
+BASELINE-FORWARDING pin (exact spent=73 arithmetic from empirically
+confirmed counts, with the doc explaining why Ok/Err-only tests can
+never catch the regression); the timeout panics closed on both
+paths; the named fuzz-artifact overflow regression; the search
+pipeline end to end (HNSW with exact squared-L2 distances on both
+backends, FTS with post-delete and 1200-hit batch-boundary
+resumption, LSH with drop-then-typed-refusal); the first end-to-end
+query on both backends; :replace atomicity; RETRY UNDER CONTENTION
+losing no update; the reviewers' RETRACTION-GOVERNS pin (the shipped
+defect: retractions keyed off script wall time while asserts used
+the stamp — "on the sim's logical clock the domains were
+incomparable"); the @-clause coordinate-ORDER pin with a
+discriminating history; index-as-of = base; the guard idiom through
+scripts (with the caught vacuous-division earlier version and the
+unguarded mirror proving teeth) and through conjunction pushdown;
+5000-row backfill resumption; the runaway-recursion pin (explicit
+ceiling names DerivedTuples, not Epochs) and the WIDENING recursion
+under the pure DEFAULT budget ("the one deliberately expensive test
+in this file", measured ~30s/~2.4GB to the typed refusal); the
+bracketing test proving a raised ceiling admits a larger TERMINATING
+query (true spend ~999_000 confirmed empirically); obligation 11 —
+the magic-sets END-TO-END differential (symbol introspection proves
+the rewrite FIRED, answers match naive_eval on both demand
+patterns, the disconnected component making demand selective); the
+two #68 unadorned-symbols diagnostics; and obligation 12 — the
+bench-internals-gated magic-vs-bypass differential (byte-identical
+answers AND symbol shape for TC and pointsto, plus the
+hostile-review corpus: mutual bf/ff recursion, negation beside an
+ff sibling, repeated-variable adornment, and the reviewer's orphan
+shape reconstructed WITH the honest disclosure — "included as a
+verified-correct adjacent case, not a positive reproduction of the
+reviewer's exact finding", the sweep's necessity located in the
+tests that DO demonstrate it) — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT inside session/: the
+  entrypoint (Db, run_script*, execute_single, compile_and_eval,
+  finalize_rows, build_budget, the SessionTx core and routing) →
+  `session/db.rs` ("the entrypoint: script string to result rows");
+  the sys-op dispatch splits by op family — jobs (::running/::kill,
+  today's stubs/refusals) → `session/jobs.rs`, operator surface
+  (Compact, MerkleRoot, the index DDL dispatch) → `session/ops.rs`,
+  catalog ops route through session/catalog.rs, Verify through
+  session/verify.rs. The eval.rs entry's carried D3 obligation is
+  DISCHARGED here: fixed rules share the budget's kill flag as
+  CancelFlag with no Poison revival. The trials.rs entry's standing
+  demand-rewriter gap is PARTIALLY discharged by obligations 11–12
+  (an end-to-end demand differential now exists at this seam); the
+  remaining breadth (a generative corpus through the public path)
+  stays open and named.
+- **L2:** gold, preserve verbatim: the stale-comment mea culpa as
+  standing doctrine (rule #20 in its own words); the 50M ceiling's
+  evidence-backed justification (rule #19 exemplary — a default
+  defended by recorded benchmarks and a rejected alternative); the
+  ordered commit ceremony (bumps before, evictions after, callbacks
+  after durable); the one-kill-flag design; the one-machine ruling
+  with its measurement; the retired-id funnel; discriminating-
+  history pins over agreeable fixtures; honest reconstruction
+  disclosures in tests. Nothing condemned. The `#[allow
+  (clippy::collapsible_if)]` toolchain-drift note is a dated
+  workaround — re-check on the next toolchain bump.
