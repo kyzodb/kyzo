@@ -76,3 +76,58 @@ probe noting the sweep once exceeded an 1800 s suite cap) — closed)
   on migration the corrupt sweep belongs in the trials/proving-ground
   lane and the scaling probe in the bench lane, not as ignored unit
   tests.
+
+## engines/hnsw_filter_harness.rs (1530 lines; inventory: module doc
+(Phase-1 "ropes" + Phase-2 climb for the filter-aware ascent, story #3/
+#87; wired by `#[path]` at the foot of hnsw.rs; ADVERSARIAL
+INDEPENDENCE — the oracle re-implements the filter natively and shares
+no code with the engine's bytecode eval or graph walk, "agreement is
+evidence, not tautology"), deterministic generation (splitmix, 24-bit
+f32-exact components, seeded rows/query, Fisher–Yates permutation),
+dim-parameterized schema/manifest/setup, `FilterSpec` (ONE predicate,
+TWO independent realizations: native `passes` for the oracle, compiled
+`bytecode` for the engine; `true_selectivity` verifying the sweep
+generator before any search runs), the four selectivity bands,
+`brute_force_filtered_knn` (total-ordered oracle), recall +
+count-recall meters, the PINNED_BASELINE table (the old post-filter
+path's measured numbers — 0.000 recall at the 1% band — preserved as
+the met-or-beat gate), and nineteen tests: the ropes proven sound
+(sweep hits bands, oracle exact and total-ordered, comparator bites,
+shuffle reorders-but-preserves); THE GATE (meets-or-beats every
+baseline row, EXACT in scan bands); the selector mutation-proofed
+INDEPENDENTLY of the fallback; byte-determinism across runs and
+independent builds; insertion-order invariance of strategy + scan-band
+results (graph band exempt: HNSW's graph IS order-dependent, named as
+inherent); fallback load-bearing (starved beam under-delivers,
+fallback repairs to exact min(k, M)); production-fallback repair with
+the SPLICE-MUTANT analysis (count + membership-recall alone would pass
+a concat-then-truncate mutant — the no-duplicates and
+exact-set-equals-oracle checks are what kill it) and a pinned low-ef
+band whose non-empty-but-short partial is ASSERTED before the repair
+is trusted; the generative min(k, M) law over 64 proptest bands; tiny
+(1/2/3-row) match sets; the near/far translated-cluster corpus with
+the disconnected-match-set case (full-graph routing's raison d'être)
+AND the graph-walk-ALONE crossing test with fallback disabled —
+isolating the routing mutation the backstop would silently mask; zero
+matches; the always-true-filter ≡ unfiltered BYTE-identity
+differential; thread-count invariance (rayon pools 1/2/4/8 + real
+concurrent OS threads on one read transaction); k exceeding the
+ENTIRE population ×10; the graph-plan tie-break at the k boundary with
+its LAWFULNESS paragraph (an approximate index cannot promise global
+smallest keys across disconnected identical-vector clusters — the
+lawful invariant is DETERMINISM, and the test claims exactly that);
+and an `#[ignore]`d recall-table measurement rig — closed)
+- **L1:** moves with hnsw.rs into `project/vector/` as its test module
+  (the `#[path]` wiring already makes it one; the move makes the file
+  layout say so). Nothing rewires.
+- **L2:** everything crosses; this file is the house standard for
+  mutation-driven test design — every test names the exact mutant it
+  kills, preconditions are ASSERTED rather than hoped (the non-empty
+  partial), and the pinned baseline keeps the old path's failure
+  (0.000 recall at 1%) on the record as the thing the design exists to
+  fix. Keep loud: one-predicate-two-realizations; the
+  routing-isolated-from-backstop pattern (disable the safety net to
+  test the mechanism it hides); the lawfulness discipline of claiming
+  only what the structure can honor. The `#[ignore]`d recall table is
+  a measurement rig — bench lane on migration (rule-#11 ledger,
+  pre-existing).

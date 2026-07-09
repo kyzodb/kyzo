@@ -863,3 +863,85 @@ round-trip) — closed)
   admit-only construction. One gap to close at migration: the manifest
   round-trips but its wire bytes are NOT hex-pinned — bring it to the
   LSH manifest's pinned-hex standard (it is equally an on-disk format).
+
+## engines/hnsw.rs (3948 lines; inventory: dual header with a NINE-point
+re-architecture ledger (pure functions over the tx species; `HnswRow`
+sum type replacing three-row-kinds-by-convention and positional offset
+arithmetic; `VectorId` replacing the -1-sentinel CompoundKey — the wire
+keeps Int(-1), only the codec spells it; NaN UNREPRESENTABLE via
+`IndexVec::admit` — the original's zero-vector NaN silently PASSED the
+radius filter; Int degree replacing a float degree in a Float column;
+entry-point scans bounded at layer ≤ 0, killing the canary-as-entry
+bugs; saturating degree decrement; full-VectorId neighbour comparison —
+the original silently skipped same-row different-field edges; law 5
+throughout), module doc (index IS a stored relation; layer convention;
+distance semantics LOUD — L2 is SQUARED, "this surprises people";
+the filtered min(k, M) contract), the test-only `probe` counter module,
+`HnswIndexManifest` (wire hex-pinned) + `HNSW_LEVEL_SEED` + seeded
+identity-folded `random_level` (clamped -64; u=0→1.0 so ln stays
+finite — the original drew from thread_rng, so every rebuild differed),
+`hnsw_index_metadata` (the `dist` column declared `Any` because it IS
+sum-typed — metadata matching reality over claiming Float), three typed
+errors, `VectorId`, `HnswRow` (Node/Edge with the Boxed-`to` size
+rationale/Canary kept as a DELIBERATE belt-and-braces under SSI — "its
+removal is a concurrency-semantics decision, not a port decision") +
+key builders + write + closed-set typed `decode`, `IndexVec` (admit:
+dim/finite/zero-refusal + unit normalization + the subnormal-overflow
+re-check; SHA-256 content hash over canonical bytes; `dist` with a
+per-metric NaN analysis, the InnerProduct edge "recorded honestly
+rather than guarded"), `VectorCache` (loads RE-PROVE through admit),
+`entry_point`/`neighbours` (eager, bounded, probe-instrumented), `Beam`
+(total order — no two priorities ever equal) + `search_layer` (the
+hnswlib-parity termination-guard fix, its non-effect MEASURED
+bit-identically and documented), `select_neighbours_heuristic`
+(Malkov & Yashunin alg. 4), the write half (put_fresh_at_levels,
+read_node_row, neighbours_tagged, `shrink_neighbour` — the
+tombstone-reclaim doctrine: a tombstoned edge is unfinished business,
+resurrected or finally retired, plus the story-#76 investigation doc:
+two candidate mechanisms DISPROVED by direct experiment, the
+v_dist ≤ neighbours_calls·m_max0 ceiling argument, the 16k decay
+signal, and `fit_power_law` left as the reusable instrument),
+`put_vector`/`remove_vec` (inherited disconnect REMARK; graph healing
+a recorded ceiling)/`hnsw_put` (admit everything BEFORE writing
+anything)/`hnsw_remove`/`HnswKnnParams`/`hnsw_knn` (total-order rank;
+appended-column order as a stated contract), the filter-aware block
+(Qdrant learning-from credit with the named divergence — full-graph
+routing + exact-scan fallback instead of payload-aware edges; pinned
+reservoir estimator that only picks WHICH strategy, never correctness;
+`build_cand_tuple` defined ONCE so the estimator and the results see
+byte-identical filter semantics; Design-V routing-vs-visibility split;
+`hnsw_knn_filtered` with the load-bearing fallback; test-only
+plan-exposure and fallback-disabling doors), and the test battery
+(per_insert_search_cost_is_bounded_by_construction — story #76's
+ceiling as a MACHINE-CHECKED LAW; three `#[ignore]`d probes: graph
+shape, build-time complexity to n=32000 with global power-law fit,
+transaction-lifetime discriminator; tombstone-fix recall at 10k against
+an independent brute-force oracle; hand-computed L2-SQUARED layout
+pins; cosine ingest normalization; typed refusals at both doors;
+canary retirement; content-hash re-put; proptest NaN-impossibility;
+row-kind round-trips with wire-shape pins; corruption typed; manifest
+hex pin; deterministic geometric levels; byte-identical builds;
+equidistant tie-break totality; the `#[path]`-included filter harness)
+— closed)
+- **L1:** preserve-and-move whole → `project/vector/` (seat exists:
+  "dense proximity: graph index, quantized search, filtering"). The
+  filter harness moves with it as its test module (see the absorbed
+  entry). Lifecycle (`::hnsw create/drop`) rewires to `session/`;
+  quantized search (RaBitQ line, #122) lands BESIDE it in the same
+  subtree, not inside this file.
+- **L2:** gold, preserve verbatim: the nine-point fork ledger (with
+  lsh.rs and fts.rs, the house form for fork attribution); LOUD
+  distance semantics at every surface a reader could mistake them;
+  NaN-unrepresentable-by-construction with the per-metric analysis and
+  the honestly-recorded InnerProduct edge; the min(k, M) result-set
+  guarantee argued from the relational tier ("a silently short result
+  would be a wrong ANSWER, not a recall miss") with its fallback
+  PROVEN load-bearing by fallback-disabled tests; the story-#76 method
+  — mechanisms disproved by experiment, a ceiling proved by structure,
+  then converted into a permanent law test; the determinism ladder
+  (seeded levels → total-order beams → byte-identical builds →
+  equidistant tie-breaks); metadata-matches-reality (`Any` for the
+  sum-typed column); the deliberate canary retention with its ruling
+  recorded. The three `#[ignore]`d probes are rule-#11 ledger items —
+  on migration they graduate to the bench lane (they are measurement
+  rigs, not tests); `fit_power_law` graduates with them.
