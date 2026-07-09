@@ -1969,3 +1969,37 @@ row-amplifying algorithm refuses mid-run") — closed)
   catalog-boundary ruling for search atoms; brand-with-manifest-arity;
   the global-admission budget arming; superseded code deleted and its
   deletion recorded. Nothing condemned.
+
+## query/ra/stored.rs (770 lines; inventory: split-out header,
+`StoredRA` (keyspace-kind dispatch: Facts resolves bitemporally and
+flattens into batches, AlgorithmState keeps the ZERO-MINT raw byte
+path — extending it to as-of needs "a raw seek scan on the storage
+contract, the columnar leg's next contract change"; `segment_at`
+witnessed/built ONCE per plan-node instantiation with both decline
+paths documented), `prefix_join_batched` (point lookups served from
+the segment's binary search or the zero-clone projected
+current-row get; the BOUNDED prefix case deliberately left on the
+storage scan — "converting it now would spend risk on a path this
+pass has no evidence for", the motivating workload named; the
+once-per-instantiation witness so "the hot probe loop below never
+touches the watermark again"), `StoredWithValidityRA` (as-of scans —
+"bitemporality is the format, not a schema opt-in"; deliberately no
+point-lookup sub-case, matching the row path), `SegmentScanBatches`
+(observationally identical to the storage scan), and the #82
+SEGMENT-GATE BATTERY exercised THROUGH THE PRODUCTION `iter_batched`
+path: write-interleaved reads never build (with the post-read-witness
+check rationale — a pre-read check "would pass vacuously");
+the stable run builds at exactly the documented second miss; an
+intervening write resets the streak end-to-end; and the seeded
+mixed-workload differential comparing segments-on, segments-off, AND
+an independently maintained model — "never a run of the same machine
+checked against itself" — closed)
+- **L1:** preserve-and-move whole → `exec/op/stored.rs` (seat exists:
+  "canonical scans, current and time-travel"); the segment-gate
+  battery travels to `project/current.rs`'s regression suite per the
+  segments.rs entry (it proves the gate at its consumer).
+- **L2:** gold: evidence-gated conversion (cold paths left alone with
+  the reason written); once-per-instantiation synchronization
+  discipline; the three-way differential with an independent model;
+  the vacuous-check analysis inside a test comment (why the assertion
+  order proves what it claims). Nothing condemned.
