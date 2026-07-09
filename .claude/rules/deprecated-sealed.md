@@ -41,3 +41,46 @@ probe_only_not_found) — closed)
   `SimStorage`, DST machinery bound for kyzo-trials — zone benches
   measure the real substrate; `Segments::OFF` and the
   panic-on-fixed-rules closure are door plumbing that dies with it.
+
+## fuzz_api.rs (92 lines; inventory: module doc (opaque façade for the
+fuzz targets, feature-gated, never hands out the AST; the memcmp-codec
+target needs no façade because that surface is already public),
+`fuzz_parse_script` (never-panic-never-hang law; Ok/Err both
+acceptable), `fuzz_decode_fact_payload`, `fuzz_decode_relation_handle_id`
+(discards the internal type, hands back the raw id),
+`MAX_RELATION_ID` re-export, `interval_bounds` (the pub(crate)-accessor
+seam) — closed)
+- **L1:** the DOOR is deleted; the consumers rewire. `fuzz_parse_script`
+  dies naturally: the parse tier becomes kyzo-model's PUBLIC boundary
+  lift, so the fuzz target speaks it directly. The payload/catalog
+  decode targets and the never-panic law → `kyzo-trials/fuzz.rs` ("the
+  ledger's corpus"), driving public store-contract seams.
+  `interval_bounds` dies when Interval's accessors become model-public
+  vocabulary.
+- **L2:** gold: the discard-the-internal-type posture and the
+  fuzz law stated as invariant, not coverage. DEFECT (doc-grade, check
+  the target): the comment names the interval bypass invariant as
+  `start < end`, but interval.rs's closed normal form makes singleton
+  intervals (`start == end`) LAWFUL — if the fuzz target enforces
+  strict `<` it false-positives on lawful values; if it checks `<=`,
+  this comment misstates the law. One of the two must be corrected
+  when the target rewires.
+
+## lsp_api.rs (49 lines; inventory: module doc (validate-without-
+executing for kyzo-lsp, story #92: parse + full resolution, `Err`
+carries the exact designed diagnostic #73 built; same posture as the
+other doors but NOT feature-gated — live diagnostics are a first-class
+product surface), `check_script` (params map optional; an empty map
+still validates everything and reports each `$name` unbound — "a real,
+useful diagnostic on its own") — closed)
+- **L1:** the DOOR is deleted; kyzo-lsp rewires onto kyzo-model's
+  public parse surface (grammar + boundary lift + designed
+  diagnostics live there in the target). Arrival question for the
+  operator: full resolution includes FIXED-RULE references, and the
+  registry (`DEFAULT_FIXED_RULES`) is engine-side — either the model's
+  program vocabulary carries what a fixed rule IS (name/arity) so the
+  LSP can validate references without the engine, or the LSP's
+  validation story stays engine-coupled; the map should say which.
+- **L2:** gold: diagnostics-as-product framing (the door's REASON
+  survives even as the door dies); the empty-params ruling. Nothing
+  condemned beyond the door itself.
