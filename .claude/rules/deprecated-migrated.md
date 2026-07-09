@@ -3065,3 +3065,156 @@ is and is not proven) — closed)
   arities against vacuous passes; the real-landed-ops fold rule for
   references; fixed-order generator vocabularies for seed
   reproducibility. Nothing condemned.
+
+## query/eval.rs (5015 lines; inventory: dual fork header with FIVE
+story-#3 transformations (BUDGET IS A REQUIRED PARAMETER — the
+original's only controls were a Poison flag set by a sleeper thread
+and an unbounded `for epoch in 0u32..`; deterministic dimensions
+checked at epoch barriers ONLY "so a refusal is a pure function of
+program+facts+budget", the deadline read inside rule iteration closing
+the unkillable-scan gap, Poison surviving only as the user-kill flag;
+NO UNBOUNDED FIXPOINT EXISTS; provenance hooks at the admission seam
+with zero-cost-off by monomorphization; THE EVALUATOR CONSUMES A SEAM,
+generic over RuleBody/FixedRuleEval), the THIRTEEN-site Law-5 panic
+audit (every unwrap/unreachable accounted: constructor proofs,
+store_of/store_of_mut, the checked all-aggregated flatten, the landed
+per-group aggregation API), deviations D1–D5 (dead skip-flags removed;
+the D2 intra-epoch limiter dedup fixing upstream's double-count; the
+D3 non-suffix refusal SINCE RETIRED by positional grouping; delta
+iteration over contained_rules keys with typed missing-store; one
+execution closure for all epochs) and notes N1–N2 (N1: "the
+load-bearing re-derivation dedup is merge_in's... removing the filter
+is survivable, removing merge_in's dedup is not"; N2: the preserved
+limiter cross-epoch overshoot, pinned by name), module doc (THE
+DETERMINISM LAW: same program+facts+budget ⇒ identical results AND
+identical refusals at any thread count, with its four supports —
+immutable epoch reads, the sequential canonical-order merge barrier,
+barrier-only deterministic dimensions ("a mid-epoch check would
+observe a schedule-dependent partial count and is therefore a
+determinism bug"), and the sequential entry-under-limit carve-out;
+the three seams incl. the WASM clock note), the budget tier
+(`BudgetDimension` — DerivedTuples/InFlightDerivations/Epochs/
+Deadline with the deterministic-vs-interrupt split; `LimitExceeded`
+carrying rule+span for the mid-epoch dimension only; `Killed`;
+`Budget` with epoch_ceiling/check_interrupt pub(crate) per story #80
+for the oracle's own barrier loop; INTERRUPT_STRIDE=64;
+`InterruptTicker` carrying the FULL mid-epoch spend-guard theory in
+its doc — the determinism law (baseline+in_flight a deterministic
+UNDER-approximation with bounded slack), the NON-PERTURBATION THEOREM
+(plain out-stores hold only admissions so len IS the count; meet
+epochs fold unchanged re-derivations so len OVERCOUNTS — "the refuted
+theorem" — repaired by meet_put_admission_faithful's monotone
+transition counting: "it refuses ONLY queries the barrier would also
+refuse — earlier, before the OOM"), and the BOUNDEDNESS LAW (peak
+resident O(P·(ceiling+STRIDE)), "independent of the input relations'
+product size — that is the guarantee the incident violated")), the
+SEAM (`AtomOccurrence` — positional not name-keyed, with the
+self-join rewrite Δ(P⋈P)=(ΔP⋈P)∪(P⋈ΔP) and the predecessor Many
+collapse named; `Premises`/`PremiseSource`; `RuleBody` with its
+five-clause contract incl. the Cow slice-consuming economy —
+"re-derived and rejected rows — the bulk of every recursive fixpoint
+— therefore allocate nothing on either path"; `FixedRuleEval`
+run-once with the baseline handoff), the evaluable tier
+(`HeadAggrKind` — one concept one name vs data::aggr's;
+`EvalRuleSet::new` classifying with POSITIONAL meet keys and the
+retired-MeetNotSuffix history; `EvalProgram::from_execution_order`'s
+entry proof), the limiter (`RowLimit`/`QueryLimiter`), the witness
+machinery (`Witness` with derivation None for fold/fixed/identity
+rows; `WitnessTable` append-only in admission order;
+`WitnessBinder` recovering meet group keys by projection),
+`stratified_evaluate(_with_stores)` (lifetime-dropped stores; the
+clobbered-store debug_assert with the exactly-one-stratum argument),
+`evaluate_stratum` (the epoch loop, the epoch-fixed baseline, the
+sequential-entry carve-out, rayon-vs-wasm dispatch, THE MERGE
+BARRIER, both barrier refusals), `note_pending` (first-writer-wins),
+`provenance_graph` (`ProvenanceUnsupported`; the COLLAPSE BOUNDARY —
+"aggregation folds and opaque algorithms are not semiring
+operations", their tuples ground out; premise rows VERIFIED against
+their attributed stores; the enumeration ceiling; limiter-blind
+noted), `project_positions`, and the four eval functions
+(initial/incremental plain — the slice-probe prev_store filter;
+initial meet — the identity row inserted ONLY if empty and
+all-aggregated "so the identity can never leak alongside real
+derivations"; incremental meet — the admission-faithful `effective`
+counter with its full justification; initial normal-aggr with the
+empty-fold row), and the ~3200-line test battery: the STREAMING
+ModelBody harness (stream_join replacing the frontier Vec that "grew
+to the whole cross product below the budget's tick seam" — reviewer
+finding F3 — with leaf order proven byte-identical); the transcribed
+stratum assignment; model_arities (the vacuous-pass repair: "an
+oracle-empty relation used to default to arity 1... any
+over-derivation into such a relation was invisible");
+assert_matches_oracle with arity-drift check; fifteen fixed
+differentials (TC, self-join Many, stratified negation,
+normal-aggregation over recursion + the empty fold, meet min on
+cycle, the and/or premature-fixpoint end-to-end pins at BOTH suffix
+and pos0 layouts, interleaved split columns AND interleaved
+recursion, identity-row-feeds-recursion, negation over completed
+meet, fixed rules on boundaries, mutual recursion, two delta-carrying
+deps killing per-delta truncation, the meet self-join Many
+multiplicity reviving dead branch M6, and
+two-recursions-converge-independently pinning `changed |=` against
+last-store-wins); the randomized proptest differential over five
+lattices with the HONEST enumerated list of shapes the generator
+still cannot produce, each cross-referenced to its fixed pin;
+thread-count determinism for results+witnesses, non-suffix meet, and
+refusals; exact-spend budget refusals; the mid-epoch in-flight
+section (refuses BEFORE the barrier with THE BOUNDEDNESS PROOF
+asserted on the emitted counter — "remove the mid-epoch check and
+emitted becomes 160_000"; byte-identical across threads; the
+canonically-first tripping rule); the REFUTED-THEOREM counterexample
+landed as a differential (the 500-cycle equal-seed sweep:
+binary-searched true spend asserted = 502, the barrier refusal's
+spent proven to be TRUE ADMITTED SPEND, and the entire old divergence
+window swept to byte-identical completion); five mutation-hardening
+kills (exact-at-ceiling completes killing `>=`; the stride pinned BY
+LITERAL because "a bound written in terms of the symbol moves with
+the mutant", with the deliberate-change escape hatch named; the
+nonzero-baseline pin at spent=163; its fixed-rule twin proving the
+true-global-baseline handoff both refusing and completing; the F3
+harness killer — a 100M-row cross product refusing typed and
+stride-bounded under the memory cap); deadline-zero; the kill flag
+observed MID-iteration with a promptness bound; the limiter pair
+(take-minus-skip; the TRACED incremental entry recursion pinning D2's
+dedup and N2's overshoot epoch by epoch, expecting exactly take+1
+rows); witness pins (canonical order with exact derivations; meet
+identity None; the non-suffix binding attack; the per-group premises
+KILLER — two groups folding to the same value, where prefix-keyed
+witnessing binds one group's witness to the other's derivation); the
+adopted rev_* attacks (Nulls in group and value, shared key/val
+variable, all-aggregated recursive, negation-below determinism at
+scale, the randomized NON-SUFFIX proptest); and the construction
+refusals (empty set; the retired D3 shape now constructing AND
+answering; missing store typed; entry-less refused; epoch-ceiling-1
+refuses any deriving program while 2 suffices) — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT inside exec/: the
+  fixpoint engine (Budget, InterruptTicker, the seam traits, the
+  evaluable tier, the limiter, evaluate_stratum and the four eval
+  functions) → `exec/fixpoint/eval.rs` ("the loop: recursion over
+  admitted currency" — Admitted IS that currency); the parallel-epoch
+  dispatch and merge-barrier determinism machinery align with
+  `exec/fixpoint/parallel.rs` ("deterministic sharded parallelism");
+  the provenance constructs (Witness/WitnessTable/WitnessBinder/
+  PendingWitnesses/provenance_graph/ProvNode/PremiseSource) →
+  `exec/provenance/` ("derivations that explain themselves"). The
+  differential/determinism test batteries migrate with their zone as
+  module tests; kyzo-trials grows public-surface twins per the
+  sibling entries.
+- **L2:** gold, preserve verbatim: the determinism law with its four
+  supports stated as an invariant system (barrier-only checks named
+  as a determinism REQUIREMENT, not a style choice); the
+  non-perturbation theorem WITH its refutation history and the
+  landed counterexample-as-differential; the boundedness law tied to
+  the incident it forecloses; N1's do-not-strip warning on the
+  load-bearing dedup; refusals as first-class deterministic outputs
+  (byte-identical across threads, exact spends, honest admitted-not-
+  materialized accounting); mutants killed by LITERALS where a
+  symbol-relative bound would move with the mutant; the honest
+  generator-gap list cross-referenced to fixed pins; the traced
+  limiter semantics (D2/N2) preserved as documented behavior rather
+  than silently "fixed". Nothing condemned. Carried obligations:
+  D3's full retirement is complete (the tests prove construct AND
+  answer); the story-#80 pub(crate) widenings (epoch_ceiling,
+  check_interrupt) are the sanctioned oracle seam — the kyzo-oracle
+  split must give the oracle its own budget vocabulary or keep this
+  seam deliberate.
