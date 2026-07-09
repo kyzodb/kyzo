@@ -54,6 +54,7 @@ paths:
   - "kyzo-core/src/lib.rs"
   - "kyzo-core/tests/**"
   - "kyzo-core/benches/**"
+  - "kyzo-core/examples/language_tour.rs"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -6094,3 +6095,30 @@ with its still-compares-per-row argument) — closed)
   design (a flat line indicts the bench itself); planner-aware
   workload construction. The house standard for a public perf claim
   (rule #19 in bench form). Nothing condemned.
+
+## examples/language_tour.rs (371 lines; inventory: header, module doc
+(story #73 — "this file is not narration ABOUT the language, it is a
+KyzoScript program that the engine executes... A comment describing a
+construct this file doesn't also exercise is a defect (CLAUDE.md: doc
+drift), so every claim below is load-bearing"; each chapter is a
+#[test] AND a fn main calls "so CI keeps every example honest without
+a second copy of the scripts to drift from the first"), the fresh-db
+fixture with the leaked-tempdir ruling, and eight chapters in the
+newcomer's order: relations (`=>` key/dependent split, the no-SELECT
+body-atom read); rules (shared-variable-IS-the-join, named rules
+called like functions); recursion (fixpoint as "Datalog's answer to
+WITH RECURSIVE, and it costs no extra syntax"); aggregation (implicit
+grouping over bare head variables); time travel ("now is simply the
+default when @ is omitted, not a distinct write mode"; as-of reads at
+two instants); vector search as a join; FTS in the same shape; and a
+built-in graph algorithm through `<~` — plus main and the eight test
+wrappers — closed)
+- **L1:** preserve-in-place → the target `kyzo-core/examples/` as the
+  public surface's teaching document (story #73's deliverable); like
+  the tests/ suite it is a drift detector for the crate split's
+  re-export decision.
+- **L2:** gold, preserve verbatim: executable-documentation doctrine
+  (every prose claim load-bearing under CI); the chapter order as the
+  designed learning path; teaching prose that states the design
+  argument at each construct (time-as-parameter, search-as-join).
+  Nothing condemned.

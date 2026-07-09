@@ -8,6 +8,10 @@ paths:
   - "kyzo-core/examples/hnsw_build_profile.rs"
   - "kyzo-core/examples/lsm_keyspace_policy_bench.rs"
   - "kyzo-core/examples/determinism_digest.rs"
+  - "kyzo-core/examples/standing_smoke.rs"
+  - "kyzo-core/examples/ra_determinism.rs"
+  - "kyzo-core/examples/ra_profile.rs"
+  - "kyzo-core/examples/bench_tc.rs"
 ---
 
 # Retired — issue-pinned instruments that die with their issues
@@ -139,3 +143,78 @@ full/count/limit10 variants — closed)
   returned, cleanly separating evaluation cost from result-surfacing
   cost. Its SplitMix64 duplicates kyzo-bench's BY DESIGN (byte-parity
   with the reported workload) — parity duplication, not drift.
+
+## examples/standing_smoke.rs (76 lines; inventory: header, module doc
+(independent end-to-end exercise of the PUBLIC standing-query surface,
+"written from the outside as a user would — different query and data
+than the in-tree tests"), no_params, and a print-driven main: register
+an aggregating standing query, commit a new lower min, apply_pending +
+print delta and recompute, then RETRACT the current min ("the hard
+case: the aggregate must rescan the group... which no per-kind delta
+formula can do"), print again — closed)
+- **L1:** retire, superseded: `tests/standing_queries.rs` now drives
+  the identical surface (including the min-retraction rescan, in a
+  multi-commit drain) with ASSERTIONS instead of println eyeballs —
+  the asserting form is strictly stronger, and the tree keeps no
+  museum. Nothing to harvest that the test doesn't already carry.
+- **L2:** nothing condemned beyond the supersession itself; the
+  outside-in posture survives in the tests/ suite.
+
+## examples/ra_determinism.rs (82 lines; inventory: header, module doc
+(the cross-thread determinism probe: workloads that "actually
+parallelize" hashed canonically, the DRIVER re-runs under
+RAYON_NUM_THREADS ∈ {1,2,4,8} and diffs — "identical hashes at every
+thread count == byte-identical output"), `hash_output` (Debug
+serialization through DefaultHasher), and main (five bench_api
+workloads across both backends, per-workload + combined hashes,
+THREADS-stamped output line) — closed)
+- **L1:** graduates → `kyzo-trials/src/determinism.rs`, the same lane
+  determinism_digest's entry already ascends into — the two probes
+  are one campaign (digest covers the public script surface, this one
+  the parallelizing RA workloads); the bench_api dependency dissolves
+  per the sealed door's entry when the workload rigs land in benches/.
+- **L2:** preserve through the ascent: driver-varies-the-axes design
+  (thread count belongs to the driver, the binary is one execution);
+  per-workload hashes so a divergence NAMES its workload. Same
+  arrival check as determinism_digest: DefaultHasher is unspecified
+  across Rust releases — the campaign artifact needs a pinned hash.
+
+## examples/ra_profile.rs (156 lines; inventory: header, module doc
+("perf/valgrind are not available in the proving environment", so the
+where-does-the-time-go question is answered by a counting global
+allocator + wall time; timed region is evaluation only), the
+`Counting` GlobalAlloc (calls + bytes; unsafe instrument outside the
+crate-root forbid boundary — the pointsto_repro precedent),
+`Measured`/`measure` (untimed warm-up paying "any one-time lazy
+costs"), the aligned `row` printer with per-row allocation rate, and
+main (scan_filter at two selectivities, three TC shapes, join3,
+aggregation × both backends) — closed)
+- **L1:** retire when #120's vectorization ascent closes (the same
+  fate-class as fixpoint_mem_profile): its question — the per-row
+  dispatch+allocation tax — is exactly what the ascent removes, and
+  the surviving form of the claim is the committed bench-results
+  rows, not the instrument. Harvest first: the per-row a/row metric
+  and the warm-up-then-measure protocol into the bench lane.
+- **L2:** nothing condemned; the allocation-churn framing is #120
+  evidence vocabulary.
+
+## examples/bench_tc.rs (149 lines; inventory: header, module doc (the
+community-standard workload: "the canonical two-rule transitive-closure
+program run over a REAL SNAP graph... We invent no data and no query";
+everything through the public front door "so the identical file
+measures any engine revision"; the machine-readable output line
+documented), LOAD_CHUNK_ROWS, `peak_rss_kb` (VmHWM — "the honest
+memory high-water mark"), `read_snap_edges` (comment-skipping SNAP
+parser), and main (chunked load through :put; the full-vs-count
+variants; timed load and query; the one-line TC record) — closed)
+- **L1:** graduates → the bench lane as a permanent instrument: this
+  binary PRODUCES the committed bench-results rows the engine's own
+  defaults cite as evidence (runtime/db.rs's 50M derived-tuple
+  ceiling is justified against tc/snap-p2p-Gnutella08's recorded
+  numbers — deleting this instrument would orphan that ledger). It
+  keeps its argv-driven example-binary form (criterion benches can't
+  take a graph file argument); the fetch script and bench-results/
+  are its ledger.
+- **L2:** preserve verbatim: invent-nothing benchmarking (published
+  graph, textbook program, public door); machine-readable one-line
+  records; VmHWM as the honest memory number. Nothing condemned.
