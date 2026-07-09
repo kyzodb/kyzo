@@ -2347,3 +2347,257 @@ closed)
   output; naive-by-ruling with the acceleration landing at the exact
   reserved seam. Nothing condemned — the two duplications are both
   NAMED, argued, and scheduled to die with their causes.
+
+## query/temp_store.rs (1518 lines; inventory: dual fork header naming
+nine modifications (meets resolved ONCE at construction into live
+`MeetAggrObj`s vs the original's per-row Option unwrap; normal-only-to-
+meet-store as constructor error not downstream panic; `merge_in` as the
+ratified admission seam; kind-mismatch as typed internal error; meet
+range scans through DataValue's total order not partial_cmp-unwrap;
+itertools::Either; no-arg meet forms; POSITIONAL grouping via a
+constructed `MeetLayout` proof retiring upstream's suffix-only
+`MeetNotSuffix` refusal, with two views because non-suffix group-key and
+head-tuple orders differ; the corrected changed-flag contract whose
+inverted original could announce "unchanged" on exactly the update that
+changed a value and reach premature fixpoint; original had NO tests —
+all new), module doc (the total/delta discipline IS semi-naive
+evaluation, the equivalence argument written out, "empty deltas
+everywhere are the termination certificate"; the three stores; the
+ADMISSION SEAM: admission happens only inside merge_in at the epoch
+barrier in canonical key order, so the sequence is
+schedule-independent — the deterministic point where provenance
+first-witness recording and budget accounting both attach; "only the
+seam lives here"), `Admitted` (deterministic function of the sets
+merged), `AdmissionSink` (RECORDING as compile-time const —
+provenance-off is zero-cost by monomorphization, not a runtime branch;
+meet admissions carry the group's POST-update value, matching the
+per-group witness boundary) + the `()` off-state, `RegularTempStore`
+(story #77 chunk 2: keyed by encode_tuple_bare memcmp bytes, one
+Box<[u8]> per row instead of the measured ~415 B/row Vec<DataValue>
+tax; the order-embedding law makes the swap representation-only, "the
+adversarial check" being that every determinism test kept its
+assertions unchanged) + exists/len (len IS the admission count on the
+plain path — contrasted explicitly with the meet store's)/put/
+put_with_skip + the edition-2024 use<'s> capture note,
+`empty_tuple_ref`, `MeetLayout` (the constructed positional proof:
+key/val positions partition 0..arity; `is_suffix` — a suffix store
+skips the by_row mirror entirely, keeping the pre-fork footprint;
+`borrow_key` always-an-encode with the zero-alloc-borrow-traded-for-
+smaller-resident-key reasoning; `interleave` the exact inverse),
+`MeetAggrStore` (by_group byte-keyed / VALUES stay DataValue-typed
+with the full argument — byte-backing wins on comparison not
+computation, set/bit/tropical folds need decode regardless, "a
+marginal win traded for less code, not a wall"; by_row materialized
+ONLY non-suffix as a pure mirror; the changed flag named load-bearing
+for termination AND completeness with both failure directions) + len
+(resident size, NOT admission count — "the refuted theorem")/
+`meet_put_admission_faithful` (the mid-epoch spend guard's exact
+count: monotone meet ⇒ admissibility flips false→true at most once ⇒
+the sum equals merge_in's admitted count BY CONSTRUCTION)/new/
+`meet_put` (slice consumer, F2b no-change puts never materialize the
+clone), `TempStore`, `TupleInIter` (three representations — Bytes/
+MeetSuffix/Values; the #77 consequence that accessors return OWNED
+DataValues, "checked against every non-test consumer in the tree")
++ get/should_skip/into_tuple/cmp_bare/cmp_slice + `bare_nth` +
+iterator machinery + Eq/Ord/slice-comparison impls, and the 16-test
+battery: total/delta discipline (first-epoch swap, termination
+certificate, exact-new-tuple delta), empty-epoch fixpoint, canonical
+admission order on both paths, the changed-flag REGRESSION with the
+old flag's failure COMPUTED in the comment (false|true=true but
+old==*l says unchanged ⇒ silent missing answers) plus its benign
+direction, meet_put flag contract on or/min, constructor refusal,
+iteration spanning key/value with bounded range scans, skip flags
+gating early-return only, kind mismatch typed, the interleaved-layout
+round-trip ("the layout proof the whole positional grouping rests on
+— the mutation target"), non-suffix put/scan + group-key-order-not-
+row-order admissions + non-suffix delta, and the adopted adversarial
+rev_* attacks (regime-aware mirror law, all-mutation-paths lockstep,
+empty-group-key single group, insertion-order independence with the
+laundered-out proof) — closed)
+- **L1:** preserve-and-move → `exec/fixpoint/delta_store.rs` (seat
+  exists: "working memory keyed on packed-code identity"), merging
+  with query/levels.rs and ExecDedup per the #120 execution-currency
+  seam already recorded at levels.rs's entry: this file's byte-keyed
+  stores ARE the values-based v1 the packed-u32 code columns swap
+  behind — the store shapes, MeetLayout proof, admission seam, and
+  TupleInIter consumer surface survive; the KEY representation is what
+  #120 replaces. `Admitted`/`AdmissionSink` are the "admitted
+  currency" fixpoint/eval.rs recurses over — they stay at the seam.
+- **L2:** gold, preserve verbatim: the semi-naive equivalence argument
+  and termination certificate written at the store that embodies them;
+  the admission seam's schedule-independence argument (canonical order
+  at the epoch barrier) — provenance and budget BOTH depend on it; the
+  monotonicity-exactness proof on meet_put_admission_faithful
+  (in_flight ≤ admitted by construction, with the refuted len-counting
+  theorem on record); the changed-flag contract with both failure
+  directions named; the constructed-layout-proof pattern (projection
+  arithmetic in exactly one place); zero-cost-by-monomorphization
+  recording; the resident-size-vs-admission-count distinction stated
+  on BOTH len methods; the mutation-targeted round-trip test and the
+  adopted hostile battery. Nothing condemned. Watch on the #120
+  merge: the values-stay-typed reasoning on meet folds is an argued
+  v1 ruling — re-adjudicate it against packed-code columns when the
+  currency lands, and the empty `impl TempStore {}` block dies in
+  passing.
+
+## query/incremental.rs (1562 lines; inventory: MPL header, module doc
+(story #61's production IVM engine: an INDEPENDENTLY-WRITTEN twin of
+laws.rs's `incremental_eval` — "never a shared import... so a bug cannot
+hide behind one implementation covering for the other" — with the
+transitive proof chain named: production == oracle incremental (this
+module's differential) == naive recompute (the oracle's own);
+`SignedFact` reused because it is ALREADY production code, `compose`
+deliberately NOT — candidates-then-verify never composes two patches,
+the same reason the oracle stopped after the multiset-vs-set bug; the
+scope trichotomy: RECURSION refused outright (DRed is separate scope),
+FIXED RULES unrepresentable — "there is nothing to refuse because
+nothing constructs one", AGGREGATION fully covered; the two-phase
+algorithm sketch), the IR (`Term`, `Literal`, `HeadAggr` — the REAL
+landed Aggregation, "never a second hand-rolled implementation of sum
+or min", `Rule` with no fixed-rule variant, `IncrementalProgram` with
+no inline facts — "a standing query's whole point is that its EDB
+changes out from under it", `MaintainedState` with the EpochStore
+contrast written out: monotone-only, no Clone, no before-state — "exactly
+the two things a standing query needs forever", `Bindings` as BTreeMap
+with the hash-randomization doubt removed by construction), `unify`/
+`ground`/`literal_rows`, `edb_relations(_pub)` (a patched relation is
+EDB even when unreferenced; the zero-rows-is-still-EDB misclassification
+guarded a SECOND way after this module's differential caught a silently
+dropped relation), `topological_order` (patched-unreferenced sorted
+first; asserts non-cyclic because refusal already happened),
+`has_any_cycle` (edge-wise reaches(dep, head) — with the caught bug on
+record: reaches(head, head) is trivially true on the first pop, which
+refused EVERY program), `collect_candidates` (subset expansion over
+delta-varying positions, 2^n−1 masks) + `contribute_candidates_subset`
+(drivers iterate deltas regardless of sign; the rest join/gate against
+old state), `head_is_derivable` + `body_bindings_from` (positives
+first so negated literals probe fully bound), `IncrementalRejection`,
+the TRANSLATION tier (section doc: `MagicAtom` is the right source, not
+RelAlgebra — "by the time atoms reach RelAlgebra... there is nothing
+left to translate"; the one real subtlety: post-rewrite constants live
+in Unification atoms, folded back via a substitution map;
+`TranslationRejection` — fixed rules, predicates, index searches,
+non-constant unifications, each "refused, named", never silently
+dropped; `magic_symbol_to_symbol` reusing the Debug rendering as the
+canonical per-adornment identity), the aggregation extension
+(`collect_affected_groups` reusing collect_candidates UNCHANGED,
+`eval_one_group` — bounded by one group's body cost, the empty-key
+global aggregate folds zero rows into the identity row instead of
+vanishing, `eval_aggregating_head_incremental` — groups fully
+re-derived because "a per-kind signed delta does not exist in
+general", with the global-case re-check rationale), `incremental_eval`
+(the well-formed-patch debug_assert — Plus/Minus disjoint per tuple,
+"checked at the one seam every caller must cross"; cycle refusal; one
+topological pass building new_state alongside; the EDB redundancy
+filter — "the exact bug the oracle's differential caught on its first
+run"), and tests: the hard corner both directions, the
+second-untouched-derivation law (the multiset-vs-set bug's direct
+test), recursion refusal, the production-vs-oracle GENERATIVE
+differential (conv_* type converters, old_total minted by the oracle's
+own naive_eval, four shapes incl. min-aggregation ×60 seeds, >100
+cases asserted), and seven translation tests (positive/negated, the
+rule-reference adornment identity, constant folding into head AND
+body, aggregation carried through, all four refusals typed-checked,
+and the composed translate→eval end-to-end) — closed)
+- **L1:** preserve-and-move whole → `react/incremental.rs` (seat
+  exists: "IVM: maintained views provably equal to recompute" — this
+  file IS that provably-equal claim). The oracle twin stays across the
+  crate wall in kyzo-oracle; the differential tests keep the bridge.
+  The translation tier's source type (`StratifiedMagicProgram`) is an
+  exec/plan artifact — on migration the translate() seam sits at the
+  react/plan boundary, inside the engine crate, unaffected by the
+  parse-to-model lift.
+- **L2:** gold, preserve verbatim: the independence doctrine with its
+  transitive proof chain; unrepresentable-over-refused for fixed
+  rules; the refused-never-silently-wrong translation posture with
+  every gap NAMED in its error; the has_any_cycle bug note (a refusal
+  that refused everything is the kind of failure only an adversarial
+  test corpus catches — keep the note); the well-formed-patch
+  invariant checked once at the seam with its bug lineage; the
+  EpochStore-vs-MaintainedState contrast as zone-boundary
+  justification; groups-fully-re-derived over per-kind delta formulas.
+  Nothing condemned. Arrival note: `magic_symbol_to_symbol` keys
+  relation identity on a Debug rendering — lawful today (documented,
+  unique per adornment), but when MagicSymbol moves into the plan
+  tier, give the adornment a first-class canonical name so identity
+  does not ride on Debug format stability.
+
+## query/provenance.rs (1580 lines; inventory: MPL header, module doc
+(the provenance trials: semiring provenance proven against INDEPENDENT
+references — the six judges enumerated: the semiring axioms on
+randomized values, the sealed oracle's naive_eval for boolean≡set
+byte-identity, an independent shortest-derivation Bellman reference
+"written from the model alone — no solver, no graph, no evaluator
+symbol", an independent certificate checker re-deriving every step, the
+1/2/4/8-thread determinism law, and the typed refusals; the ModelBody
+harness named as "the shape of the trials harness"), `#![cfg(test)]`,
+the splitmix64 `Rng`, the model harness (`ModelBody` implementing the
+pub(crate) `RuleBody` seam — naive nested-loop unification over live
+EpochStores, with the occurrence-map ruling that a negated read counts
+for lifetime tracking but is never delta-selected; `premise_sources`
+attributing exactly as a compiled plan will; `UnattributedBody` — the
+deliberate negative control whose premise_sources stays None; `NoFixed`
+unreachable), the transcribed stratum assignment (`dependency_edges`
+over the SHARED laws::head_classes per issue #89 — this harness "used
+to hand-copy them"; `strata_of` Bellman iteration; any valid
+stratification yields the oracle's fixpoint), `compile_for` (retain_all
+extending every store's lifetime to the final stratum — the documented
+provenance requirement), the generous budget/ceiling/solver constants,
+`at_thread_count` (asserting the pool width so "a 1-thread 8-thread
+run would prove nothing"), `run_pipeline`/`PipelineOutput`/`rule_node`,
+the generated positive fragment (`gen_positive`: TC with a coin-flipped
+self-join vs edge-recursion, optional mutual recursion qa/qb, optional
+join over two recursive stores, optional hop2; `gen_weights` 1..=8 per
+(head, rule-index); `engine_weight_fn`), the independent tropical
+reference (`rule_instantiations` asserting positive-fragment-only;
+`reference_min_costs` — "naive and obviously correct", panics if its
+own fixpoint fails to stabilize), the independent certificate checker
+(`verify_model_proof`: leaves are genuine stored facts, steps are valid
+instantiations with ONE binding satisfying head and every premise,
+costs re-derived with checked arithmetic; opaque-store leaves and
+negated-premise rules refused as boundaries), and the seven trials:
+axioms (⊕ assoc/comm/identity/IDEMPOTENT-as-solver-contract, ⊗
+assoc/comm/identity/annihilator, distributivity, ×2000 each semiring);
+tropical overflow as typed SemiringOverflow with ∞-absorbs-lawfully and
+the solver surfacing it "typed, not stringly"; boolean annotation ≡
+naive_eval byte-identical over 24 seeds with the
+nothing-outside-the-fixpoint converse; tropical min-cost vs the
+reference at unit AND random weights (facts cost 0); certificates —
+extracted for the DEEPEST path row, verified structurally against the
+graph AND semantically by the independent checker, four corruptions
+each rejected by BOTH checkers (cost lie, forged leaf, wrong rule
+label, dropped premise), ghost target refused typed NoDerivation;
+thread-count determinism over annotation+costs+proof fingerprints; the
+PA4 aggregation collapse boundary (meet rows enter the graph as ground
+cost-0 facts, the plain reader costed above); and the typed refusals
+(unattributed body, unretained store — exercised by explicitly
+dropping a store because "the map a caller passes is the contract
+surface", enumeration ceiling with exact ceiling/spent, the
+ceiling refusal itself deterministic across threads, solver pass
+ceiling on a reversed 5-chain with the same graph solving at 6 passes,
+and the open-graph closure check) — closed)
+- **L1:** preserve-and-move → `kyzo-trials/src/provenance.rs`
+  (NEW-SEAT, operator ratification required: the trials tree has no
+  provenance lane, and this battery is exactly the map's definition of
+  a campaign — an attack on a public claim, the telos's "explain",
+  rerunnable by strangers). REWIRE at the crate wall, same shape as
+  dst_query.rs: the harness drives pub(crate) seams
+  (stratified_evaluate_with_stores, provenance_graph, RuleBody) —
+  provenance is a product claim, so its graph/solve/extract/verify
+  surface should become sealed-contract-public and the trial attacks
+  it through the door; the independent references and the checker move
+  intact (they already import nothing from the machinery they judge).
+  The semiring axioms trial stays wherever `semiring.rs` seats its
+  public vocabulary (exec/provenance/), as its adjacent battery.
+- **L2:** gold, preserve verbatim: the six-judge architecture with
+  each judge's independence argument stated; the negative-control
+  pattern (UnattributedBody); verify-both-ways with corruption
+  rejected by BOTH checkers (a corrupt proof passing one checker would
+  localize the bug); idempotency named as the solver contract inside
+  the axiom battery; the deepest-row certificate choice; the
+  pool-width assertion; refusals tested for typed identity AND
+  cross-thread determinism. Nothing condemned. Already-repaired
+  lineage note: the issue-#89 consolidation onto laws.rs's shared
+  reference-tier helpers is the sanctioned sharing direction
+  (reference↔reference), distinct from the production↔oracle wall
+  stratify.rs's entry records — keep both rulings visible.
