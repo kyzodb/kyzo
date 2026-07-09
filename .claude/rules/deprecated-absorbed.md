@@ -131,3 +131,52 @@ and an `#[ignore]`d recall-table measurement rig — closed)
   only what the structure can honor. The `#[ignore]`d recall table is
   a measurement rig — bench lane on migration (rule-#11 ledger,
   pre-existing).
+
+## runtime/db_battery.rs (354 lines; inventory: MPL header, module doc
+(the session tier's adversarial battery, "written by its hostile
+reviewer (review-session-3) and ADOPTED into the suite as a review
+requirement: the author's tests were mutation-proven blind to a
+collector that isn't rebuilt per retry attempt, a trigger-cache keyed
+only by source text, and pre-commit callback delivery — the tests here
+kill all three deterministically"), the int_rows/raw_int_rows helpers
+(sorted vs RETURNED-order — the latter for determinism assertions),
+and seven tests: `rs3_independent_e2e_scenario` (schema/put/aggregate/
+:order+:limit/:update/:insert-conflict/:ensure both ways/:rm/
+:returning over real fjall — "the stored.rs arms the author's tests
+never touch"); `rs3_two_put_triggers_fire_distinctly_in_one_session`
+(two on-put triggers each running ITS program — the
+cache-keyed-by-source mutant, "also proves the trigger pipeline works
+at all — nothing else in the tree tests it");
+`rs3_callbacks_exactly_once_under_contention` (the phantom-event law
+exercised: 2×15 contended increments, delivered new-values exactly
+{1..=N} — "a conflicted attempt must leak nothing and a committed one
+must lose nothing"); the reviewer's own 3-writer contention shape;
+`rs3_determinism_across_backends_and_repeats` (same scenario twice on
+one db, across two fresh fjall dbs, and fjall-vs-sim — RAW row order
+byte-identical; a budget refusal's rendered content reproducible ×3);
+the F2 pin `rs3_temp_relation_mutation_is_a_typed_refusal` (the
+silent-drop lineage written in the doc; the
+nothing-half-created companion assert); and
+`rs3_callbacks_exactly_once_under_seeded_spurious_conflicts` (the
+DETERMINISTIC phantom detector — 40% seeded spurious conflicts force
+retry replays "with no thread races"; a collector not rebuilt per
+attempt, or pre-commit delivery, duplicates events) — closed)
+- **L1:** absorbed into the session zone's test suite beside its
+  targets: the e2e/contention/determinism arms beside `session/db.rs`,
+  the trigger-cache kill beside `session/admit.rs` (the trigger
+  pipeline's seat), the two callback exactly-once arms beside
+  `session/observe.rs` (they are the executable form of
+  callback.rs's retry law and its once-per-transaction snapshot),
+  and the F2 pin beside the session router when temp relations land.
+  Named hostile-review sections, per this rule's doctrine —
+  independence lives in the reviewer's authorship and the
+  deterministic mutant-killing constructions, not in file
+  separation.
+- **L2:** everything crosses; nothing condemned. Keep loud: the
+  seeded-spurious-conflict phantom detector (replacing a thread race
+  with a deterministic replay is the sharpest form of the
+  exactly-once proof — the sim's spurious-conflict arm exists
+  precisely to enable tests like this); the blind-spot ledger in the
+  module doc (the three mutants the author's suite missed, named);
+  raw-order determinism assertions distinguished from sorted
+  correctness assertions by helper choice.
