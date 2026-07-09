@@ -3743,3 +3743,111 @@ starting") — closed)
   ungated access setter with its reason. Nothing condemned. The two
   fixes-on-port are silent-wrong-answer classes upstream shipped —
   keep their pins forever.
+
+## runtime/mutate.rs (2741 lines; inventory: dual fork header with six
+re-architectures (mutation on `SessionTx<T: WriteTx>` — "running it
+against a read session does not compile"; the CLEANUPS MACHINERY GONE
+— del_range in-transaction so ":replace and ::remove are atomic with
+the query and an abort rolls them back"; triggers PARSED ONCE PER
+SESSION — sound because a session has one cur_vld, with the
+FLAG(catalog tier) Phase C parsed-substances end state carried; index
+maintenance a typed BY-REFERENCE seam; law-5 fallible decode + typed
+invariant), module doc, the trigger-cascade law
+(MAX_TRIGGER_CASCADE_DEPTH=32, `TriggerCascadeTooDeep` — "never silent
+truncation... and never an unbounded loop"), `execute_relation` (the
+:replace gates — in-trigger, with-indices, below-Normal; old triggers
+carried across the replace; `note_constraints` + `touched_relations`
+noted for the SEGMENT WATERMARK before commit; the seven-op dispatch),
+`put_into_relation` (the SYSTEM-coordinate doc — one transaction, one
+stamp; the VALID-coordinate default doc — the stamp not wall-clock,
+"snapshot-monotone, so a retrying writer can never land its update at
+an instant an already-committed writer has shadowed"; THE LOAD-BEARING
+UNCONDITIONAL SSI PROBE — "bitemporal version keys are distinct per
+transaction stamp, so two writers of the same fact never collide on
+written keys — the fact-range READ this probe conflict-tracks is the
+ONLY thing that makes a same-fact race abort one racer instead of
+losing an update", resolved AT THIS WRITE'S OWN valid "never an
+unrelated later instant"; the :insert duplicate refusal),
+`update_in_relation` (must-exist at the write's own valid; the
+CARRY-FORWARD of omitted non-key columns with a typed
+short-stored-row error), `remove_from_relation` ("retraction is
+revision, not erasure: a Retract row at the coordinate, never a
+physical delete"; the preserved _new-carries-key-columns-only
+asymmetry), ensure/ensure_not (ReadOnly rung; ":ensure can never
+carry a @ clause... 'current' always means the newest instant ever
+recorded"), `collect_mutations` (triggers in-transaction, callbacks
+collected for post-commit), `update_indices` (pub(crate) as the ONE
+write-side seam cross-module tests drive; Plain fires both sides
+because its mirror is payload-mapped; the TEMPORAL SINGLE-FIRE ruling
+with the full hostile-review argument — old and new "compose to the
+IDENTICAL posting key at the IDENTICAL coordinate", dual-fire "would
+silently let the Assert clobber the Retract... a wasted, SSI-tracked
+write, not two events", and the honest epistemics: the invariant is
+"content-equivalent to the old dual-fire shape... so no byte-content
+test can guard it: the guard is the write-count law test"),
+`index_write_row` (the shared scan-shaped seam writing at the base
+write's EXACT coordinate; the index's own watermark bump with its
+demonstrated-stale-read lineage), `temporal_posting_tuple` (+ the
+typed `ShortTemporalIndexRow` for a state "nothing today can
+produce"), `project_mapper` (StaleIndexMapper), the extractor tier
+(DataExtractor; make_update_extractors' None-means-carry-forward),
+`make_const_rule` (the _new/_old Constant injection through
+init_options "so the injected options are in the proven form"), the
+MANIFEST-INDEX tier (`IndexCtx` resolved once per session and cached
+— "a manifest that no longer parses, builds, or decodes is a typed
+refusal at first touch, never mid-scan corruption";
+`apply_manifest_index` per-engine put/del hooks;
+`attach_and_backfill` — temp and duplicate refusals, the
+KeyspaceKind dispatch ("a posting IS a bitemporal fact"), the
+TEMPORAL BACKFILL as a raw whole-history walk — "resolution is
+exactly what would collapse the history this backfill must reproduce
+whole" — versus the plain/manifest current-rows backfill with the
+0xFF group-clearing resume bound and the re-mints-now note; the five
+::create ops incl. HNSW's documented standard derivations and LSH's
+pinned-seed byte-identical builds; remove_index), the
+bulk_write_tests (the STORE-BYTES-UNCHANGED pin: the 802-row
+append-only arithmetic, the MEANING ANCHOR decoding the store back
+through the public path BEFORE the SHA-256 whole-store fingerprint —
+"a witness over format-CORRECT bytes, not an implementation
+snapshot"; the per-row terminal-tick refusal proving whole-mutation
+abort with the no-partial-write property located at run_script's
+never-committing; and THREE story-#88 coverage-gap pins — the
+:insert duplicate branch "ran zero times in every suite run", the
+:update missing-key refusal, the carry-forward branch), and the
+temporal_index_tests (the direct-SessionTx rationale documented —
+no parsed surface for ::temporal index create, Erase has no scripted
+surface, "every function called here is the exact same code the
+eventual parsed surface would call"; the posting-rows-match-history
+fixture WITH the literal hand-encoded first-key-on-disk byte claim;
+BACKFILL-EQUALS-INCREMENTAL across two universes with id alignment
+asserted and raw-byte identity; the base↔posting bijection; the
+production-pipeline both-Some branch test; and THE WRITE-COUNT LAW —
+the confirmation reviewer proved the dual-fire mutant is
+BYTE-IDENTICAL on committed disk, "no scan of the committed keyspace,
+however thorough, can tell the two shapes apart", so the law is a
+COUNT claim guarded by SimStorage's put_call_count oracle: exactly 2
+puts per mutation kind, 0 dels ever) — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT inside session/: the
+  mutation pipeline (execute_relation and its op family, extractors,
+  triggers, make_const_rule, update_indices and the scan-shaped write
+  seam) → `session/admit.rs` ("the write admission path: mutation
+  enters here only" — the zone law's ALL-writes-one-path clause is
+  this file); the index LIFECYCLE (attach_and_backfill, the five
+  ::create ops, remove_index, IndexCtx) → `session/ops.rs` ("operator
+  surface"), with the per-engine put/del hooks remaining project/
+  zone vocabulary the ops call through. The temporal-index write
+  seam's cross-module test contract (ra/temporal.rs drives it)
+  survives the move as an admit-path pub(crate).
+- **L2:** gold, preserve verbatim: the unconditional SSI probe with
+  its lost-update argument (deleting it is a silent-wrong-answer
+  class); the snapshot-monotone valid-default reasoning; resolved-at-
+  this-write's-own-valid discipline on all three mutation kinds;
+  retraction-is-revision; the bounded cascade as typed whole-abort;
+  the temporal single-fire ruling WITH its no-byte-test-can-guard-it
+  epistemics and the count-oracle guard; backfill-equals-incremental
+  as the rebuildability law; the meaning-anchored byte fingerprint
+  pattern; refusal-at-first-touch manifest contexts; coverage-gap
+  pins named by the branch that never ran. Nothing condemned.
+  Carried obligations: the Phase C parsed-substances FLAG; the
+  unparsed `::temporal index create` surface (the tests' own
+  documented gap) — both operator-visible.
