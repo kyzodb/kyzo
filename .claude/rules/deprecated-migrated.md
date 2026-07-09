@@ -1779,3 +1779,45 @@ closed)
   mechanism; the twin-lane NaN checkpoint (belt at both evaluators, one
   diagnostic text); measured-optimization-never-semantic-fork; the
   both-directions short-circuit proof.
+
+## query/semiring.rs (589 lines; inventory: module doc (the
+Green–Karvounarakis–Tannen model; EXACTLY the two idempotent semirings
+whose fixpoints are finite ship — "counting and polynomial provenance
+are refused, not approximated", the PA3 boundary, "nothing here
+silently degrades into them"; the two-phase soundness argument —
+post-set-semantics annotation equals the annotated fixpoint for
+idempotent semirings, and first-witness recording is NOT enough for
+tropical, which is why the graph enumerates ALL grounded derivations;
+the negation/aggregation collapse boundary "stated, not smuggled"),
+the refusal family (`SemiringOverflow` — "costs are exact or absent,
+never saturated: a silently clamped cost would forge a cheapest
+derivation that does not exist"; a DETERMINISTIC budget refusal;
+BadCertificate; NoDerivation; the invariant error), the `Semiring`
+trait (axioms asserted by randomized tests in provenance.rs, plus the
+SOLVER CONTRACT beyond the axioms: idempotent ⊕ with finitely
+stabilizing chains — exactly what counting violates), `Boolean` and
+`Tropical` (`Cost`'s derived Ord IS the tropical order; derivation
+DEPTH deliberately not offered — min-max is not a semiring ⊗),
+`Derivation` (weights `NonZeroU64` BY CONSTRUCTION — a zero-weight
+rule would let a min-cost cycle tie with itself and unfound
+extraction), `DerivationGraph` (hand-written Default with its reason;
+`check_closed` turning a silently-zeroing gap into a loud refusal),
+`SolverBudget` ("there is no unbounded fixpoint in KyzoDB"), `solve`
+(deterministic by construction: list order + BTreeMap, "no iteration
+order depends on a hash or a thread schedule"),
+`extract_min_cost_proof` (well-founded by strict u64 descent — "no
+cycle can be packaged into a certificate"; lowest-index determinism;
+solver/graph disagreement classified as corruption, not user error),
+and `verify_proof` (the STRUCTURAL half — citation + arithmetic; the
+SEMANTIC half re-derived from scratch by the independent checker
+"which imports no evaluator or solver symbol") — closed)
+- **L1:** preserve-and-move whole → `exec/provenance/semiring.rs` (the
+  seat's own line: "annotation algebra: the idempotent pair +
+  certificates"). The counted tier's future home
+  (`exec/provenance/counted.rs`) is the PA3 boundary's named
+  destination — a NEW fixpoint, never a widening of this one.
+- **L2:** gold, preserve verbatim: refused-not-approximated; the
+  two-phase soundness argument with the first-witness insufficiency;
+  exact-or-refused cost law; nonzero weights as the well-foundedness
+  mechanism; the structural/semantic verification split with the
+  no-shared-symbols independence claim.
