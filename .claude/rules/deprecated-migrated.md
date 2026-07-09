@@ -1821,3 +1821,35 @@ SEMANTIC half re-derived from scratch by the independent checker
   exact-or-refused cost law; nonzero weights as the well-foundedness
   mechanism; the structural/semantic verification split with the
   no-shared-symbols independence claim.
+
+## query/graph.rs (612 lines; inventory: dual header (Tarjan and the
+reachability walk on EXPLICIT work stacks — the original recursed once
+per edge and "a rule chain a few thousand deep overflowed the thread
+stack"; `generalized_kahn`'s in-degree bookkeeping checked in EVERY
+build with a typed invariant — the original's `debug_assert_eq!`
+compiled out of release builds, so a cyclic or corrupted condensation
+"would silently yield a truncated stratification — wrong answers, not
+a refusal"; indices validated up front; the Poison cancellation seam
+returns with the runtime tier), the Graph/StratifiedGraph vocabulary,
+`strongly_connected_components` (edges to undefined names ignored by
+design — the stratifier's graphs mention unresolved rules),
+`reachable_components`, `generalized_kahn` (poisoned edges must cross
+stratum boundaries; checked_sub underflow guard; the exit invariant
+"every edge consumed, or some node was never emitted"), `TarjanScc`
+(the frame-stack rewrite documented AGAINST the recursion it
+replaces — open/close mapped to call/return, low-link propagation at
+frame close), and tests (known graphs; SCC vs a naive transitive-
+closure oracle by proptest; the OUTPUT-IDENTICAL proptest against the
+kept-verbatim recursive ORIGINAL — same components, same order, same
+member order, not merely the same partition; the Kahn stratification
+property over random poisoned DAGs; the poisoned-split pin; the
+cyclic-input refusal — the exact case the old debug_assert waved
+through; out-of-range refusals; the 50k-chain small-stack thread
+proof) — closed)
+- **L1:** preserve-and-move whole → `exec/plan/graph.rs` (seat exists:
+  "rule-dependency analysis (SCC, levels)").
+- **L2:** gold, preserve verbatim: debug-assert-to-typed-invariant as
+  a WRONG-ANSWER fix, not a hardening nicety; the output-identical
+  oracle pattern (keep the replaced implementation as the judge of its
+  replacement); the small-stack proof; up-front validation making all
+  later indexing "proven in-range once, here".
