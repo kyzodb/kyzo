@@ -55,6 +55,7 @@ paths:
   - "kyzo-core/tests/**"
   - "kyzo-core/benches/**"
   - "kyzo-core/examples/language_tour.rs"
+  - "kyzo-bin/**"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -6121,4 +6122,308 @@ wrappers — closed)
   (every prose claim load-bearing under CI); the chapter order as the
   designed learning path; teaching prose that states the design
   argument at each construct (time-as-parameter, search-as-join).
+  Nothing condemned.
+
+## kyzo-bin/ — the native host against the map's door layout
+The map keeps the crate and renames doors: client.rs → repl/fetch.rs,
+relations.rs → bulk.rs (the shared codec), repl/output.rs →
+repl/render.rs, server/changes.rs + server/standing.rs → server/feeds.rs,
+server/pages.rs → server/console.rs; main/auth/query/bulk/rules keep
+their names, engine.rs is a lawful unlisted file (zones are stable,
+files grow). Entries below are per-file; the zone law (zone-bin.md)
+adjudicates quality.
+
+## kyzo-bin/src/main.rs (72 lines; inventory: dual header (dead rouille
+server_main dropped; `exit(-1)` → `exit(1)` with the 255-reads-as-crash
+reasoning; errors printed `{e:?}` so "miette's fancy Debug rendering...
+is what a user sees"), the `#![forbid(unsafe_code)]` with its
+check-script note, clap AppArgs/Commands, and main (server under a
+tokio runtime; repl with the exit-1 error path) — closed)
+- **L1:** preserve-in-place → the map's `main.rs`. Watch: the map wants
+  "typed config lifted from args/env — malformed config is a typed
+  refusal"; clap already delivers that for args.
+- **L2:** gold: forbid at the second crate root; exit-code semantics
+  reasoned. Nothing condemned.
+
+## kyzo-bin/src/engine.rs (103 lines; inventory: header, module doc (five
+upstream backends → ONE; "what upstream's mem engine bought a caller
+was 'no persistence, no path to manage'; that is reproduced here as an
+ephemeral fjall store... because a second backend is not what the
+feature ever meant"), `StorageArgs` (clap-flattened), the
+StorageOptions conversion (memtable/table sizes deliberately not
+CLI-exposed), `DbHandle` (the keep-a-clone-before-Db::new ruling — "Db's
+storage field is crate-private by design"; the held ephemeral dir), and
+`open` (mem/fjall dispatch; unknown engine "a refusal, not a silent
+fallback" with a teaching message) — closed)
+- **L1:** preserve-in-place (lawful unlisted bin-zone file; main.rs's
+  config-lift companion).
+- **L2:** gold: the mem-means-ephemeral-not-a-backend ruling; the
+  clone-don't-widen-the-contract pattern for storage access. DOC NIT:
+  the module doc cites "data/memcmp.rs's engine choice" — a path that
+  no longer exists in the tree (the value plane superseded it);
+  re-point at the storage contract on migration. Nothing condemned.
+
+## kyzo-bin/src/client.rs (346 lines; inventory: header, module doc (the
+upstream file was "an empty, licensed placeholder — never referenced by
+anything"; this is NOT a port; the TWO DISCARDED DESIGNS recorded with
+load-bearing reasons — minreq/rustls-ring rejected because ring "shells
+out to cc" (verified via cargo tree), ureq+global-provider rejected
+because it "depended on a GLOBAL default... an invisible dependency
+between two unrelated modules"; what's here: hand-rolled HTTP/1.1 GET
+over TcpStream + rustls with the rustls-rustcrypto provider "passed
+explicitly into this module's own ClientConfig, not installed anywhere
+globally"; "proven end-to-end against a live server before being wired
+in"), MAX_REDIRECTS=5, `get`/`fetch` (redirect resolution with a
+no-Location typed refusal; non-2xx refused), `Target`
+(parse/resolve_redirect/connect with webpki roots), `Transport`
+(Plain/Tls sharing every line of fetch), header/body readers
+(content-length, chunked with trailers, read-to-end justified by
+Connection: close), and six tests (URL parsing incl. defaults and
+refusals; redirect resolution; content-length and chunked bodies over
+byte fixtures) — closed)
+- **L1:** preserve-and-move whole → `repl/fetch.rs` (the map's "%import
+  egress" line).
+- **L2:** gold, preserve verbatim: discarded designs recorded WITH
+  their verification commands (the pure-Rust invariant enforced at
+  dependency-selection time); explicit-provider over global-install;
+  protocol parsing tested over byte fixtures. Nothing condemned.
+
+## kyzo-bin/src/relations.rs (177 lines; inventory: header, module doc
+(upstream reached into live-transaction storage; here composed "from
+the same public entry point every other caller uses" — ::columns + a
+scan + a $data-bound mutation, "every step is a real query the engine
+already proves sound"; the SPLICE-VALIDATION doctrine — every
+relation/column name entering composed KyzoScript is validated against
+the grammar's compound_ident shape, with the honest threat model: "a
+caller reaching either endpoint already has full script privilege...
+this is not privilege escalation either way; it closes off a name
+smuggling extra script syntax"), `validate_identifier`, `columns_of`,
+`export_relations`, `import_relations` (the `-`-prefix :rm convention;
+per-column validation "the same grammar-shaped validation applies"),
+and three tests incl. the INJECTION corpus (ten hostile "names" each
+trying to close the pattern early, start a second statement, or escape
+the identifier position) — closed)
+- **L1:** preserve-and-move whole → `bulk.rs` (the map's "one
+  bulk-movement codec (export/import), shared by both doors" — this
+  file already IS that shared codec; server/bulk.rs and %import both
+  route through it).
+- **L2:** gold: compose-through-the-public-door instead of asking the
+  engine for a private one (zone-bin's forbidden-imports law obeyed
+  under pressure); splice validation with an honest threat model and
+  an injection test corpus. Nothing condemned.
+
+## kyzo-bin/src/repl/mod.rs (164 lines; inventory: dual header
+(rhn's authorship preserved; the flat repl.rs split by concern; the
+behavior-change ledger — no %eval "dropped rather than faked with a
+wrapper query, which would silently change its semantics";
+%backup/%restore now the whole-store dump; Ctrl-C "no longer claims to
+kill a running query" — ::kill isn't landed, so "rather than port a
+loop that iterates nothing and calls a script guaranteed to fail, the
+handler says plainly what it can't do yet"), ReplArgs, `repl_main`
+(the honest Ctrl-C handler; history load/save; double-Ctrl-C exit),
+and `process_line` (%-dispatch vs script, both rendered through
+output::render) — closed)
+- **L1:** preserve-in-place as the repl/ root (the read-eval-render
+  loop). OPERATOR-VISIBLE carried item: the Ctrl-C handler and
+  ::running/::kill stubs discharge together when session/jobs.rs
+  lands — the map's jobs door is the fix's seat.
+- **L2:** gold: dropped-not-faked and says-what-it-cannot-do as
+  ledger discipline; errors rendered with spans intact (zone law).
+  Nothing condemned.
+
+## kyzo-bin/src/repl/editor.rs (76 lines; inventory: dual header (rhn
+authorship; split rationale; the `Completer::update` unreachable!()
+REMOVED with the invariant-lives-in-a-different-method argument — "a
+future change adding real completions here would have to remember to
+touch this one too, silently, or reintroduce a panic reachable from a
+keypress"), the `Indented` helper (Hinter/Highlighter/Completer
+trivially, the continuation Validator — starts-with-space continues
+until a blank line) — closed)
+- **L1:** preserve-in-place → the map's `repl/editor.rs`.
+- **L2:** gold: the cross-method-invariant analysis behind removing an
+  unreachable!() (law 5 applied to a keypress path). Nothing
+  condemned.
+
+## kyzo-bin/src/repl/commands.rs (164 lines; inventory: dual header (one
+function per command replacing nine inline arms; %import grew https
+"client.rs now provides one"; unrecognized %foo "falls through to a
+named error" instead of handing the % to the script parser), module
+doc, `dispatch` (pure routing), and the nine commands (set/unset/
+clear/params over the session param map; backup/restore over
+dump_storage; save arming the next render; run over a script file;
+import over http(s)/file through client::get + relations::
+import_relations) — closed)
+- **L1:** preserve-in-place → the map's `repl/commands.rs` ("each an
+  enumerated deliberate surface" — this file already is that).
+- **L2:** gold: routing/behavior separation; named refusals for
+  unknown commands. Nothing condemned.
+
+## kyzo-bin/src/repl/output.rs (70 lines; inventory: header, module doc
+("the one place in the REPL that turns a NamedRows into something
+shown to the user" — contrasted with the machine-to-machine JSON that
+goes through kyzo-core's own envelope), `render` (save-arm consumed or
+table), `save_to_file` ({column: value} records), `print_table`
+(prettytable, borderless format) — closed)
+- **L1:** preserve-and-move → the map's `repl/render.rs` ("envelope →
+  human: tables and readable errors, adding no meaning").
+- **L2:** gold: one-rendering-site discipline; no meaning added
+  (zone law's rendering clause satisfied). Nothing condemned.
+
+## kyzo-bin/src/server/mod.rs (304 lines; inventory: dual header — the
+richest behavior-change ledger in the crate: no per-request mutability
+override (the engine reads mutability "off the parsed program itself...
+not a caller-supplied claim"; reopening it "is a runtime-tier design
+decision past this story's scope... not a difficulty deferral"); no
+/transact ("dropped, not stubbed; the fix is new kyzo-core runtime-tier
+API, not a bin-crate workaround"); no /import-from-backup
+(restore_storage is whole-store-into-empty by contract, the two real
+entry points named); text_query is one line because the envelope lives
+in kyzo-core "shared with every future binding"; std::mpsc for /rules;
+x-kyzo-auth + the simplified token check with the
+column-this-port-cannot-honor reasoning; CompressionLayer gzip+brotli
+ONLY with the zstd-sys C-dependency exclusion and the cargo-tree
+verification recorded; and the BODY-LIMIT FIX — upstream disabled the
+2 MiB cap router-wide, "one oversized request to any endpoint would
+buffer unbounded... (a one-connection memory-exhaustion DoS)"; only
+/import raises its limit, via --max-import-body-mb — plus module doc,
+ServerArgs, `DbState`, `server_main` (startup: open/restore with
+panic-on-fail; localhost skips auth; the persisted-or-minted 64-char
+token file; CORS; the route table wiring every door; the
+security-warning banner off-localhost), `wrap_json` (ok → 200/400),
+and `internal_error` (JoinError only — "everything the engine itself
+can refuse comes back as Ok(Err(_))") — closed)
+- **L1:** NAMED SPLIT per the map: the route table + state + startup
+  stay as server/ root; changes.rs + standing.rs merge → server/
+  feeds.rs; pages.rs → server/console.rs; the rest keep seats.
+- **L2:** gold, preserve verbatim: the dropped-not-stubbed ledger
+  (each upstream feature's absence argued from a contract, with the
+  fix's real seat named); the per-route body-limit DoS fix; the
+  C-dependency exclusion verified not asserted. Zone-law NOTE:
+  server_main's startup unwraps/panics (bind parse, listener, token
+  file write) are process-entry failures, not request paths — lawful
+  under the zone's no-panic-escapes-a-HANDLER clause, but the map's
+  "malformed config is a typed refusal" line wants the bind/port
+  parse lifted to a typed refusal on arrival. Nothing condemned.
+
+## kyzo-bin/src/server/auth.rs (125 lines; inventory: dual header
+(mechanism here, account in server/mod.rs; the token-table name "an
+operator-supplied --token-table value, not per-request attacker
+input" still validated like relations.rs's splices), module doc (the
+gate every route except / passes; localhost skips), `MyAuth`
+(`token_table_authorizes` — "a broken auth check refuses, it never
+fails open", invalid relation name = operator misconfiguration
+logged and refused), and the AsyncAuthorizeRequest impl (header,
+?auth= query fallback, Bearer-token table check; 401 otherwise) —
+closed)
+- **L1:** preserve-in-place → the map's `server/auth.rs` ("the gate
+  every route passes; the route table is the attack surface").
+- **L2:** gold: never-fails-open stated and implemented; splice
+  validation reused. ZONE-LAW FINDING (operator-visible): the 401
+  arm builds its response with `Response::builder()...unwrap()` — an
+  `unwrap` ON THE REQUEST PATH (zone-bin forbids exactly this).
+  It is infallible today (static builder inputs), but the law is
+  mechanical; replace with an infallible constructor or a
+  const-built response on arrival. Nothing else condemned.
+
+## kyzo-bin/src/server/query.rs (39 lines; inventory: header, module doc
+(all JSON shaping is run_script_json; "this handler only runs it off
+the async runtime's blocking pool and maps the envelope to an HTTP
+status"), QueryPayload, text_query (spawn_blocking + wrap_json/
+internal_error) — closed)
+- **L1:** preserve-in-place → the map's `server/query.rs` ("execute:
+  script + params in, envelope out").
+- **L2:** the thinnest possible door — exactly what zone-bin demands.
+  Nothing condemned.
+
+## kyzo-bin/src/server/bulk.rs (112 lines; inventory: dual header (the
+/import-from-backup absence deferred to mod.rs's doc), module doc
+(HTTP plumbing around crate::relations), export_relations (comma-split
+path param → relations::export), import_relations (JSON-object
+refusal; per-relation NamedRows::from_json), backup (dump_storage) —
+all through spawn_blocking with Ok(Err)/Err(join) split — closed)
+- **L1:** preserve-in-place → the map's `server/bulk.rs`, consuming
+  the shared codec at its bulk.rs seat.
+- **L2:** clean plumbing; refusals rendered as 400 envelopes.
+  Nothing condemned.
+
+## kyzo-bin/src/server/changes.rs (81 lines; inventory: dual header
+(single-argument register_callback matching the port's signature; the
+PANIC FIX — upstream's `Event::json_data(item).unwrap()` "panicked the
+whole per-connection async task... that panic is user-reachable (any
+change to a watched relation drives it)"; now logs and ends the
+stream), module doc, observe_changes (register_callback bridged
+through a blocking forwarder into a tokio channel; the Drop `Guard`
+unregistering the callback; the SSE loop with encode-failure
+log-and-break; KeepAlive) — closed)
+- **L1:** preserve-and-move → `server/feeds.rs` (merging with
+  standing.rs per the map's one-feeds-door line).
+- **L2:** gold: the user-reachable-panic analysis; prompt
+  unregistration by Drop guard (the engine's lossy-by-disconnect
+  contract respected — the host never buffers beyond the channel).
+  Nothing condemned.
+
+## kyzo-bin/src/server/standing.rs (195 lines; inventory: header, module
+doc (the per-query analog of /changes one tier up; the pull-model
+tradeoff "carried through here rather than inventing a second drive
+model at the HTTP tier"), StandingQueryParams (params through "the
+SAME JsonValue → DataValue conversion run_script_json uses... never a
+second hand-rolled one"), tuple/signed-fact JSON shapers, the
+`TeardownGuard` (Option-wrapped because teardown takes owned self —
+the Drop-through-take pattern explained), and observe_standing
+(refused registrations rendered "as a clean 400, never a panic or a
+hung connection"; the init snapshot event; the 150 ms poll loop with
+guard-take/spawn_blocking/guard-restore choreography; the repeated
+crate-boundary clippy-allow with its lib.rs cross-reference;
+encode-failure log-and-break) — closed)
+- **L1:** preserve-and-move → `server/feeds.rs` beside changes.rs.
+- **L2:** gold: no-second-conversion and no-second-drive-model
+  disciplines (host adds no semantics — the zone's core law); the
+  teardown-through-Drop promptness argument; deltas streamed exactly
+  as SignedFacts (guarantees intact). Watch: the 150 ms poll is a
+  host-chosen constant — when react/feed.rs lands a push surface,
+  this door should consume it rather than poll. Nothing condemned.
+
+## kyzo-bin/src/server/rules.rs (159 lines; inventory: dual header
+(std::mpsc following the port; the same json_data panic fix as
+changes.rs "both sites here now log and end the stream"), module doc
+(the downstream-computed fixed-rule bridge: register + SSE of
+invocation requests; POST/DELETE /rule-result/{id} answers),
+post_rule_result (malformed downstream result unblocks the waiting
+rule with a typed error), post_rule_err (downstream cancellation),
+register_rule (rule_with_channel; the rayon forwarder assigning ids
+and parking senders; the Drop Guard unregistering; register-error
+rendered as an SSE event) — closed)
+- **L1:** preserve-in-place → the map's `server/rules.rs` ("extend:
+  downstream-computed fixed rules bridged to the engine").
+- **L2:** gold: the malformed-result path UNBLOCKS the engine-side
+  waiter (a stuck rule would hang a query); register-refusal as a
+  first-class stream event. ZONE-LAW FINDING (same class as
+  auth.rs): `st.rule_senders.lock().unwrap()` at three request-path
+  sites — a poisoned mutex panics the handler; the zone law wants
+  the poison branch rendered as the 500 envelope instead. Nothing
+  else condemned.
+
+## kyzo-bin/src/server/pages.rs (30 lines; inventory: dual header,
+module doc ("the two routes that aren't API calls"), root
+(include_str! console page), not_found (JSON 404) — closed)
+- **L1:** preserve-and-move → the map's `server/console.rs` (with
+  src/index.html riding along).
+- **L2:** nothing condemned.
+
+## kyzo-bin/tests/repl_smoke.rs (98 lines; inventory: header, module doc
+("cargo check proves the CLI COMPILES; it does not prove the binary
+RUNS" — the real built binary via CARGO_BIN_EXE_kyzo, piped stdin,
+"the end-to-end path an actual user takes, which no in-process test
+exercises"), two tests: the script-through-the-REPL run (banner +
+three rendered rows + clean exit, hermetic mem engine, temp cwd
+keeping the history file out of the tree) and
+`repl_survives_a_bad_script` (reported on stderr, exit still clean —
+"the CLI's error path is wired to the engine's typed refusals, not to
+a panic") — closed)
+- **L1:** preserve-in-place as the bin crate's integration test; on
+  the map's layout it gains a sibling for the server door (the route
+  table has no equivalent spawn-the-binary proof — a named gap for
+  the bin zone's own backlog, recorded here, not fixed).
+- **L2:** gold: compiles-vs-runs distinction driving a real-process
+  test; survival-of-bad-input as an explicit exit-code claim.
   Nothing condemned.
