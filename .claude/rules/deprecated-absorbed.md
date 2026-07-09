@@ -13,12 +13,18 @@ state. Standalone battery/harness files are structure masquerading as
 siblings of the code they test; the target test ontology puts internal
 adversarial tests in the module's test submodule, beside what they attack.
 
-## engines/hnsw_filter_harness.rs
-- **L1:** phase-1 scaffolding by its own doc; absorbed by the real filtered
-  vector-search implementation in `project/vector/` and then deleted.
-- **L2:** scaffolding gets no tenure — carry forward the learnings (what
-  the harness proved about the ascent) into the implementing story, not
-  the code.
+## engines/hnsw_filter_harness.rs (~1530 lines)
+- **L1:** CORRECTED by the read — its Phase-2 subject (the filter-aware
+  walk, Design V) has LANDED, and hnsw.rs's own doc now cites this harness
+  as "the proof" of the `min(k, matches)` law. It is not dead scaffolding;
+  it dissolves into `project/vector/`'s test submodule like its hostile
+  siblings, instruments intact.
+- **L2:** gold: the ground-truth oracle, selectivity-sweep generator,
+  recall meter, and determinism harness — and the ADVERSARIAL INDEPENDENCE
+  framing (the oracle re-implements the filter in native Rust and shares
+  no code with the engine's bytecode eval or graph walk, "agreement is
+  evidence, not tautology"). All of it survives the move; only the
+  standalone-file ceremony and the phase framing die.
 
 ## engines/gazetteer_hostile.rs
 - **L1:** dissolves into a `#[cfg(test)]` hostile submodule beside
