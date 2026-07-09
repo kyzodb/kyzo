@@ -4998,3 +4998,130 @@ closed)
   round-trip is not — rule #18's independently-derived goldens
   stated in miniature); the negative-seed wrapping ruling; the
   house-pattern reuse note tying it to SimRng. Nothing condemned.
+
+## fixed_rule/algos/mod.rs (61 lines; inventory: dual header (the
+`graph-algo` feature gate gone — "the ported algorithms are
+dependency-free pure Rust and always compiled"), module doc (the
+built-in taxonomy: traversals, shortest paths, centralities,
+components, community structure, spanning trees, random walks), 19
+module decls and their 20 re-exports — closed)
+- **L1:** structural glue — dies with the directory when algos/
+  becomes the map's `rules/algo/` ("one algorithm per file, named for
+  the algorithm"); the re-export surface re-forms as that module's
+  root, feeding the registry at rules/contract.rs.
+- **L2:** nothing condemned beyond the glue itself; the taxonomy
+  paragraph makes a good algo/ module-root doc.
+
+## fixed_rule/algos/degree_centrality.rs (139 lines; inventory: dual
+header (arity-checked writer; otherwise unchanged), module doc
+(degrees straight off the edge tuples, no graph materialization), the
+`DegreeCentrality` rule (one BTreeMap counting (total, out, in) per
+endpoint; per-tuple cancel poll; the OPTIONAL nodes relation carrying
+the systemic-finding guard with its ruling written in place — "a
+missing (unbound) nodes relation is the 'not provided' case... a
+PROVIDED nullary relation is a real error, not something to silently
+ignore"; arity 4), and the VALUE-ORACLE test (exact hand-counted
+degrees incl. an isolated node from the optional relation) — closed)
+- **L1:** preserve-and-move whole → `rules/algo/degree_centrality.rs`.
+- **L2:** gold: the missing-vs-nullary distinction argued at the site;
+  hand-counted value oracle. Nothing condemned.
+
+## fixed_rule/algos/top_sort.rs (176 lines; inventory: dual header
+(inline CSR; arity-checked writer; and the PRESERVED BEHAVIOR NOTE:
+"on a cyclic graph Kahn's algorithm silently omits the nodes of the
+cycles from the output rather than erroring"), the `TopSort` rule
+(arity 2: position, node), `kahn_g` (in-degree pass, LIFO ready
+stack, per-pop cancel poll), and two tests: the diamond sanity check
+and the VALUE ORACLE pinning the exact order "modulo the documented
+tie rule" — the hand trace written out, ending in the mutant it
+kills ("reversing the adjacency segments would... give a, b, c, d
+instead, so this kills the reversed-CSR-sort mutant") — closed)
+- **L1:** preserve-and-move whole → `rules/algo/top_sort.rs`.
+- **L2:** gold: the exact-order pin with its hand trace and named
+  mutant. FLAG for the destination law (operator-visible, carried
+  from the header): silent cycle omission is preserved upstream
+  behavior — a fixed rule that silently returns a PARTIAL answer on
+  cyclic input sits uneasily beside the engine's refuse-or-answer
+  doctrine; the reforge decision (typed refusal on cycles vs the
+  documented omission) belongs to the rules-zone law when the file
+  arrives, not to this census. Nothing else condemned.
+
+## fixed_rule/algos/triangles.rs (205 lines; inventory: dual header
+(inline CSR; SEAM(parallelism) CLOSED with its determinism argument
+in place — "each node reads only the shared CSR, n_triangles is an
+order-independent integer sum, and cc is a pure function of per-node
+integers, so the result is byte-identical to the sequential map"),
+module doc, the `ClusteringCoefficients` rule (undirected graph;
+arity 4), `clustering_coefficients` (per-node triangle count via
+neighbor-pair closure with the e_src<=e_dst dedup; cc = 2T/d(d−1);
+cancel polled once per degree≥2 node "unchanged from the sequential
+body"), and two tests: DETERMINISM — a 200-node seeded LCG graph
+"large enough that the per-node map splits across rayon workers",
+single-thread pool vs default pool byte-identical over 8 runs,
+pinning "both value AND order"; and the VALUE ORACLE with the full
+hand computation of both triangles and every coefficient — closed)
+- **L1:** preserve-and-move whole → `rules/algo/triangles.rs`.
+- **L2:** gold: a closed parallelism seam carrying its own
+  byte-identity argument at the site; the pool-vs-pool determinism
+  test as the pattern every parallel rule copies; hand-computed
+  oracles. Nothing condemned.
+
+## fixed_rule/algos/prim.rs (206 lines; inventory: dual header (inline
+CSR; arity-checked writer; "algorithm unchanged"), the
+`MinimumSpanningTreePrim` rule (undirected weighted graph with
+negative weights allowed; empty-graph early return; the optional
+starting relation with the systemic-finding guard, typed
+EmptyStarting and StartingNodeNotFound errors DEFINED AT their use
+sites; arity 3), `prim` (visited bitmap + PriorityQueue with
+`push_increase` on (Reverse(cost), from-node) priorities; per-pop
+cancel poll; early break at n−1 edges), and two VALUE-ORACLE tests
+(distinct weights making the MST unique AND directions deterministic,
+hand-traced; the equal-weight CHAIN where "both edges and their
+directions are forced — the pinnable half of tie behavior", with the
+unpinned half stated: "exact ties beyond that follow hash-seeded
+queue order and are deliberately not pinned") — closed)
+- **L1:** preserve-and-move whole → `rules/algo/prim.rs`.
+- **L2:** gold: errors-at-their-use-sites; pinnable-half tie tests
+  with the unpinnable half stated honestly. FLAG for the destination
+  law (operator-visible, determinism class): the tie comment's own
+  admission — exact (cost, from-node) priority ties pop in
+  HASH-SEEDED queue order (the priority_queue crate's internal map),
+  so a tied-weight graph can yield a DIFFERENT spanning tree run to
+  run. That is the same determinism-law breach class rng.rs was
+  built to close for the stochastic rules; on arrival the tiebreak
+  must become total (e.g. to-node id as the final key), a
+  one-line reforge the rules-zone law should demand. Nothing else
+  condemned.
+
+## fixed_rule/algos/bfs.rs (214 lines; inventory: dual header
+(`binding_indices` typed instead of panicking on an unresolved
+binding; the route-reconstruction unwrap annotated structural;
+arity-checked writer), the `Bfs` rule (edges/nodes/optional-starting
+inputs with the min-len guards; limit + compiled condition bytecode;
+`skip_query_nodes` when the condition only touches column 0 — skips
+the per-node relation lookup; FIFO queue; the cancel poll placed AT
+THE TOP of the per-edge unit "so no early exit... can complete a run
+past a raised flag"; backtrace-based route reconstruction with the
+structural argument written at the unwrap; arity 3), and the
+VALUE-ORACLE test (the diamond hand-traced; the upstream-parity
+ruling stated — "the start node itself is never tested against the
+condition... only nodes reached over an edge are 'found'"; d's route
+pinned through b) — closed)
+- **L1:** preserve-and-move whole → `rules/algo/bfs.rs`.
+- **L2:** gold: poll-before-early-exit placement argued in place;
+  structural unwraps carrying their proofs; the exact-route oracle
+  distinguishing BFS from DFS by output alone. Nothing condemned.
+
+## fixed_rule/algos/dfs.rs (215 lines; inventory: dual header (same
+three changes as bfs.rs), the `Dfs` rule (iterative — "an explicit
+to-visit stack, not recursion"; same input/option/skip plumbing as
+BFS; the poll at the top of the per-NODE unit; found-on-pop
+semantics; arity 3), and the VALUE-ORACLE test (same diamond as
+BFS's "so the two traversals are distinguished by their exact
+outputs"; the hand trace naming the two behavioral differences —
+DFS tests the POPPED node so the start itself appears, and d's
+route goes through c where BFS went through b) — closed)
+- **L1:** preserve-and-move whole → `rules/algo/dfs.rs`.
+- **L2:** gold: the paired-oracle design (one fixture, two
+  algorithms, outputs that cannot be confused); iterative-not-
+  recursive stated as the stack-safety posture. Nothing condemned.
