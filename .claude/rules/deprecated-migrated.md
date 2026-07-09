@@ -496,3 +496,61 @@ closed)
   The split at migration resolves it (bare form with the currency,
   prefixed form in store/keys.rs as its own type) — do not carry the
   conflation across.
+
+## data/value/wide/ (mod.rs 21, collection.rs 43, uuid.rs 14, vector.rs
+38, json.rs 161, regex.rs 241, validity.rs 207, interval.rs 415 — each
+read whole; inventories: mod (the faces doctrine: identity law before
+bytes, payload encodings live in canonical.rs, residency is the cell's
+threshold law never a per-kind decision), collection (doc law — Set
+canonicalized at encode, REFUSED not repaired at decode, no separate wide
+encoding — + nested round-trip test), uuid (doc law only: sixteen raw
+bytes, no variant/version interpretation), vector (doc law: identity =
+dimensionality + canonical elements through Num's float law; metrics
+never identity; storage order ≠ semantic order — + Num-law component
+test), json (`Json`, `JsonNum` finite-proven + `NonFiniteJsonNumber`,
+`JsonObj` sorted-unique + `DuplicateKey` typed refusal, `fnv1a64` pinned
+v1, 3 tests incl. independent FNV vectors), regex (three-law doc,
+`RegexFlags` closed bitset with total `from_bits`, `RegexSource` two
+mints — `validated` writer door parsing WITH flags, plane-internal
+`from_stored` deliberately NOT re-proving — `compile` the only execution
+mint, `CompiledRegexV1` witness + match/replace/find surface, 5 tests
+incl. flags-change-the-grammar and flag-vs-inline distinct identities),
+validity (`ValidityTs` with `Reverse` in the FIELDS so derived Ord IS the
+imported as-of law, `for_assertion` refusing the terminal tick,
+`MAX_VALIDITY_TS`, `Validity` + `cmp_as_of_order` named alias,
+`TERMINAL_VALIDITY` as max slot ENCODING not magic timestamp,
+`StoredValiditySlot` pinned-assert, `AsOf` clock-free coordinate pair, 2
+law tests), interval (closed-normal-form doc, `Bound`/`Lo`/`Hi`,
+`Interval` with canonicalizing `new`/`range`, i128-widened `wide_ends` so
+successor arithmetic never overflows, six Allen primitives + intersects,
+boundary-topology predicates, 5 tests incl. the finite-max-vs-unbounded
+distinctness ruling, sentinel-free round-trip, and the Allen PARTITION
+law — exactly one of 13 relations over an exhaustive grid) — closed)
+- **L1:** preserve-and-move each file whole → `model/value/kind/` (seats
+  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,
+  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph
+  becomes the kind/ module root. All are already model-law pure values.
+  One seam to name at the cut: regex.rs's `CompiledRegexV1` +
+  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the
+  model tree and its match methods ARE evaluation — kept with the type
+  because a witness minted anywhere else would need a raw door, and the
+  map's own line seats the kind "under one execution contract"; if the
+  operator rules model must stay evaluation-free, the witness and mint
+  move to `exec/stdlib/text.rs` behind a plane-internal authority token.
+- **L2:** gold, preserve verbatim: refusal-over-repair everywhere
+  (non-canonical Set bytes, duplicate JSON keys, non-finite JSON
+  numbers, reserved regex flag bits, empty-denoting interval bytes all
+  REFUSE typed at a door — unlawful values cannot be written down); the
+  order-by-shape doctrine in validity (`Reverse` in the fields makes the
+  derived Ord unmisreadable); the JSON hash law (FNV-1a trailing,
+  accelerator-never-equality-authority, decode verifies, algorithm
+  pinned against independent vectors); regex's
+  decode-does-not-re-parse ruling ("a decode-side re-check against an
+  evolving parser would turn parser drift into format drift");
+  interval's discrete-grid identity (closed normal form, one empty
+  value, finite `i64::MAX` DISTINCT from unbounded — with the
+  sentinel-free round-trip test) and the Allen partition law test; the
+  no-unicode-normalization choice stated as deliberate. Cosmetic defect
+  to fix on migration: interval.rs's boundary-topology doc block has a
+  stray inline `///` (before `has_start`) fusing two doc paragraphs into
+  one line.
