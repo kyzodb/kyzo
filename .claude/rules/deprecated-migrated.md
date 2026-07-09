@@ -3445,3 +3445,50 @@ failure) — closed)
   retry; the once-per-transaction target snapshot that standing
   queries' consistency proof is built on; coherence-by-named-struct
   over tuple-field convention. Nothing condemned.
+
+## lib.rs (331 lines; inventory: MPL header, THE CRATE DOC (the telos —
+"turn meaning into bytes and back WITHOUT LOSS OF TRUTH"; the
+LLM-adversary framing — "the query authors of the next decade are
+language models — brilliant, adversarial, unbounded — so the engine
+hands them contracts, not hopes"; "the world model is the type graph"
+with one-name-per-concept; the five tier sections each naming its
+proofs — kernel/parse/query/runtime/engines/fixed-rules; THE
+ENFORCEMENT LADDER "compiler > constructor > test" with named exemplars
+at each rung; verification-is-architecture (oracle, differentials, DST,
+fuzzing, mutation); HONEST BOUNDARIES — the dead_code accounting
+promise ("each module's own comment says which, and each attribute
+narrows or vanishes as its items gain a caller") and the closing law
+"No claim here is aspirational; every type and law named above exists
+as named in the tree"), the three crate attributes with their
+justifications (`#![forbid(unsafe_code)]` — "forbid, not deny: the
+strongest standard, which cannot be locally lifted", the future-unsafe
+protocol named; type_complexity; the mutable_key_type false-positive
+account), nine module decls with per-module dead-code honesty notes
+(format awaiting story #92; fixed_rule landed with the superseded
+placeholders kept live by their regression test; parse's Imperative
+genus a typed refusal), `#[cfg(test)] mod jepsen_trials`, the public
+re-export surface (kernel values, storage incl. backup/retry/verify,
+fixed_rule vocabulary, callbacks, Db/ScriptOptions, VerifyOutcome,
+SignedFact, StandingQuery), and the three façade doors (bench_api and
+fuzz_api feature-gated; lsp_api ALWAYS compiled — "live diagnostics
+are a first-class product surface") — closed)
+- **L1:** reforge-in-place → the target `kyzo-core/src/lib.rs` ("the
+  sealed public contract: the one Db façade"). On the crate split: the
+  kernel-value re-exports (DataValue, Tuple, Validity, EncodedKey, …)
+  become kyzo-model's public surface, re-exported or consumed
+  directly; the storage re-exports narrow behind the sealed contract;
+  the three façade doors DIE per deprecated-sealed.md (their
+  consumers rewire); the crate doc's world-model prose survives as
+  the contract's own preamble, re-tiered to the new crate boundaries.
+- **L2:** gold, preserve verbatim: the telos statement and the
+  LLM-adversary framing; the enforcement ladder as organizing
+  doctrine; the no-aspirational-claims closing law (rule #20's
+  same-truth-everywhere, self-imposed); the per-attribute and
+  per-module justification discipline (no naked allow); forbid-not-
+  deny with the deliberate-lowering protocol. DOC DRIFT to correct on
+  arrival (rule #20): the verification section still describes the
+  oracle as "`query::laws`, `cfg(test)` — judge, never production",
+  but story #80's `::verify` door (VerifyOutcome re-exported HERE, in
+  this same file) consumes it in production — the same stale claim
+  laws.rs's entry flags; the target formulation is the map's "the
+  engine summons its judge (kyzo-oracle)". Nothing else condemned.
