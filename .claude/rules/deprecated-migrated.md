@@ -4413,3 +4413,225 @@ timestamps — × 8 sys × 10 valid query instants) — closed)
   targeted oracles (inclusive re-seek, MIN-ts termination, degenerate
   bounds, last-write-wins) stay beside the species; only the generic
   three-way plumbing yields to the kit.
+
+## storage/fjall.rs (857 lines; inventory: dual MPL header, module doc
+(the CONTRACT MAPPING clause by clause — ordered scans are the memcmp
+law realized on LSM byte order; SSI with the contract-v2 note that
+fjall's own oracle validates READS only, so put/del additionally mark
+the written key read; RYOW by write-set overlay; the bitemporal as-of
+scan as ONE positioned cursor — a Snapshot's bare SeekIter or a write
+tx's SSI-tracking TrackedSeekIter with "PostgreSQL SIREAD-lock
+granularity promotion"; species-as-types — "writing through a reader
+and committing twice are not errors, they are programs that do not
+compile"), the meta keys (SYSTEM_CLOCK_WATERMARK with the
+harmless-overshoot floor doc), `StorageOptions` ("a database engine
+does not get to inherit invisible defaults") + `StorageStats`, THE
+TUNING MODULE (issue #118: the ONE-KEYSPACE design decision argued in
+full — bitemporal suffixes make a fact's current row and history
+KEY-ADJACENT, "recency is a moving read-time predicate, not a
+write-time fact", so a point/temporal keyspace split would demand
+"exactly the mid-flight format surgery the storage contract forbids";
+the split the model wants "already exists, just one axis down: LSM
+LEVELS"; `monkey_bits_per_key` — the Monkey per-level bloom allocation
+with its arithmetic derivation (log2(10)≈3.3 bits/level) cited to
+Dayan/Athanassoulis/Idreos; `main_keyspace_options` — the three
+shallowest filter blocks PINNED, expect_point_read_hits with the
+join-into-existence rationale, and the Dostoevsky-lazy-leveling
+MEASUREMENT STORY: true tiered compaction is DEAD in the vendor drop
+(module commented out, choose() unimplemented!), the first pass's
+l0_threshold(8)+ratio+block ramp cost as-of ~10% for no measurable
+ingest win, per-knob isolation placed the blame precisely, so only
+l0_threshold moves by HALF the step (6) — "landing at a measured,
+disclosed -6% on as-of (published as the losing run it is)" — and the
+missing cumulative-bytes-compacted counter named as "a real gap, not
+a hidden one"; the 4→8 KiB block ramp kept as measured-free;
+`meta_keyspace_options` with the nothing-to-act-on honesty; the
+LEVELS==7 const assert), `new_fjall_storage(_with)` (format version
+stamped fresh / refused on mismatch; the clock seeded max(now,
+watermark)), `quarter_system_ram_bytes` (the 25%-of-RAM cache floor —
+"an engine that owns the box should not hand back 15/16ths of it";
+/proc/meminfo because forbid(unsafe_code) rules out libc, "a named
+platform gap, not a silently wrong number"), `FjallStorage`
+(Clone-is-a-handle — "SSI conflict detection spans all clones and all
+threads"; the `watermark_lock` HOSTILE-REVIEW FINDING — fjall resolves
+the watermark key by internal commit order, decoupled from mint order,
+so an unserialized mint+persist pair could leave the on-disk floor
+below a used stamp and a crash re-mints it; held only around the pair,
+never across snapshots or commits), `stamp_after_snapshot` (the
+SIGNATURE IS THE ENFORCEMENT — taking the open snapshot by reference
+makes mint-before-snapshot unrepresentable, "the reproducer catches
+wide reorderings; this catches every one at compile time"), the
+Storage impl (`raise_clock_floor` persisting the CLOCK's floor not the
+argument — "a stale (lower) argument must not regress the disk";
+`write_tx` carrying the SNAPSHOT-FIRST-MINT-SECOND proof in full with
+the shadowed-forever lost-update lineage and its named pin;
+`batch_put` OUTSIDE the SSI surface with its precondition REFUSED not
+documented — the emptiness probe's upper bound proven at COMPILE TIME
+against RelationId::CAP "so a future id-cap bump cannot silently turn
+a full store invisible to this check", unmaterialized Guards costing
+no decode, and 32768-row atomic chunks — "an interrupted import
+leaves a clean prefix of the input rather than a torn write"),
+`stats`, the two species types, `mark_written_key_validated` (the v2
+mechanism: contains_key AFTER the write resolves in the own memtable
+— no disk I/O — while registering the mark_read; "mutating this call
+away breaks write_write_race_aborts_second_committer"), `raw_range`
+(THE DEGENERATE-BOUNDS CHOKE POINT with its poisoning argument — an
+inverted range replayed through BTreeSet::range at commit time panics
+"inside the commit oracle, while holding the global write-serialize
+lock, poisoning the whole store for every later transaction";
+skipping read tracking sound because "an empty range has no phantoms
+to protect against"; borrowed bounds saving two Vecs on the skip
+scan's hottest path), materialize_row/materialize_key (Guard as
+UNDECIDED CURRENCY — "a caller materializes as much of each row as it
+actually needs... rather than this choke point deciding for
+everyone"), the read helpers, `FjallSkipCursor` (Empty/Live) + the
+`FjallSeekStep` unifying trait, the `impl_read_tx!` macro
+instantiated for both species, and the WriteTx impl (del_range's
+chunked RESUMING cursor — "no pass re-walks the tombstones of
+previous passes (a naive rescan-from-lower is quadratic in range
+size)"; consuming commit/commit_durable) — closed)
+- **L1:** preserve-and-move whole → `store/fjall.rs` (seat exists: the
+  fjall backend). Its skip cursor stays with it per skip_walk.rs's
+  per-backend ruling; its conformance proof is one `run_full_battery`
+  call in the trials kit; the `current_validity` clock read it takes
+  at open/mint rewires to the session tier's one-clock accessor when
+  runtime/mod.rs dissolves (the one-clock law's seat is session/db.rs
+  — the store consumes the ambient input through its constructor,
+  never minting wall-clock itself).
+- **L2:** gold, preserve verbatim: the snapshot-then-mint proof at the
+  write_tx site AND its compile-time signature enforcement (the house
+  exemplar of order-by-construction); the watermark-lock finding with
+  its crash-re-mint scenario; the v2 write-marking mechanism with its
+  own-memtable cost argument and named mutant; the degenerate-bounds
+  choke point's store-poisoning rationale (one guard, every path);
+  the tuning module's measurement discipline — a losing run published
+  with its number, blame isolated per knob, a dead vendor primitive
+  named rather than wired, an observability gap disclosed (rule #19
+  at its best); the one-keyspace decision argued from the sealed key
+  format; refused-not-documented preconditions with compile-time
+  probe bounds; Guard-as-undecided-currency; the named Linux-only
+  platform gap. Nothing condemned.
+
+## storage/sim.rs (1216 lines; inventory: dual MPL header, module doc
+(DST at the storage seam — "everything — thread interleavings, injected
+faults, crashes, power cuts — is a pure function of one u64 seed";
+Turso/antithesis-style practice credited, "the contract it checks is
+KyzoDB's own"; WHY THIS MODULE SHIPS NOWHERE — cfg(test) in
+storage/mod.rs, visible to every in-crate test module, and the
+test-support cargo feature REJECTED because it "would leak a fake
+backend into the shipped API surface and invite depending on it"; the
+DETERMINISM DOCTRINE — no wall clock, no OS randomness, no unordered
+iteration; fault injection IDENTITY-KEYED (op kind + semantic content,
+attempt = per-identity occurrence count) so "the plan is positional in
+nothing, and the same seed yields the byte-identical fault schedule at
+ANY thread count"; the attempt component as "the retry-liveness
+guarantee by construction"; the crash epoch salting post-crash streams;
+what is modeled — conservative SSI tracking "legal: SSI false positives
+are permitted", two durability tiers, three fault arms, and the
+token-barrier adversarial scheduler), `SimRng` (inline splitmix64,
+"zero new dependencies"), `FaultConfig` (three ppm rates with
+empty-write-set commits exempt), the salts + op-kind tags,
+`op_identity` (FNV-1a, LENGTH-DELIMITED "so distinct part lists never
+collide by concatenation"; identity captures WHAT, "never when it runs,
+what ran before it, or which thread carries it"), `fault_hit`
+(stateless finalizer over seed/identity/attempt/salt), `SimState`
+(per-key VERSION CHAINS ascending by commit seq; the logical
+next_system_stamp minted under the state lock; the two watermarks; the
+attempts map; total_puts/total_dels — THE WRITE-COUNT LAW'S ORACLE,
+counting CALLS never post-collapse entries because "the two calls are
+indistinguishable on disk", observation-only — "read nowhere in
+commit/conflict/fault logic, so it perturbs no behavior"),
+snapshot_at/modified_since/range_modified_since/`map_range`
+(inverted-bounds-safe), the SCHEDULER (thread-local participant ids;
+token-barrier — "a turn is granted only when EVERY live participant is
+parked... the seeded pick is the ONLY source of interleaving order",
+the pre-first-yield concurrency caveat stated; `DoneGuard` on Drop so
+"a panicking body cannot hang the other participants"),
+`run_interleaved`, `for_each_seed` (the FAILING-SEED stamp — "rerun
+this test with the loop pinned to seed N to replay the schedule and
+fault plan exactly"), `SimCtx` (epoch-salted fault_seed with epoch-0
+untouched; yield_turn no-op off-scheduler; `roll_fault` — counters
+advance EVEN AT RATE 0 "so attempt numbering is identical between
+fault-free and faulted runs"), `SimStorage` (new/with_faults;
+`reopen` carrying the kyzodb/kyzo#91 SIGNATURE FIX doc — commit_seq
+and synced_seq "separate parameters, never one shared seq collapsed
+into both", the prior single-seq shape's bug and its seed-18 catch
+named; `sim_crash` — synced watermark carries UNCHANGED, "a process
+crash neither advances nor loses which prefix was ever fsynced";
+`sim_powercut` — filter to the fsynced prefix, with the HONESTY
+CAVEAT: "this models the contract's guaranteed FLOOR... a property of
+the simulation, not a promise about real hardware"; the
+put/del_call_count accessors), the Storage impl (materialized-snapshot
+read_tx — "simple and obviously correct beats clever"; write_tx
+minting under the lock; `batch_put` with the LIVE-KEYS-ONLY emptiness
+oracle — "tombstones must not make the test double stricter than
+reality" — and chunk size DELIBERATELY 1024 vs fjall's 32768 "so
+chunk-boundary behavior is testable without 100k-row fixtures; the
+clean-prefix LAW is the shared contract, the chunk size is not"),
+`SimReadTx`/`ReadSet`/`SimWriteTx` (reads behind a Mutex because the
+trait reads through &self and requires Sync; per-tx call counters
+"never collapsed to writes.len()'s one entry"), `visible_lazy` (THE
+O(n²)→O(n) FIX with its lineage: the eager clone-the-range build under
+the skip walk's per-seek reopen cost quadratic time ON A REAL PATH —
+"runtime/db.rs routes every write-lock script's WHOLE query body
+through a SimWriteTx"; the sorted two-cursor merge with
+tombstone/shadow semantics written arm by arm), eager `visible` kept
+only for del_range (must collect before mutating), track_key/
+track_range, `commit_inner` (fault identities FIXED BEFORE ANY DICE
+ROLL; commit identity = the write-set KEYS not values so "a retry that
+recomputes new values over the same keys is still the same logical
+commit, on its next attempt"; empty write set vacuous matching fjall
+— though commit_durable's fsync still runs; spurious conflicts that
+"cannot be pinned to a permanent conflict"; real SSI validation over
+reads AND writes per contract v2; the call counters folded in ON THE
+SUCCESS PATH ONLY — "an aborted commit's calls never reached real
+storage, so they must never reach the running total either"; injected
+fsync failure leaving the commit "applied, not power-cut durable"),
+the two skip cursors (per-seek yield + fault roll — THE FIDELITY
+RULING quoted at skip_walk.rs's entry lives here: collapsing into
+open_skip_cursor "would silently narrow the fault surface the sim
+exists to stress down to one decision per walk"; the write cursor
+adding per-step conservative range tracking over visible_lazy), the
+two ReadTx impls (lazy range_scan with the predecessor's quadratic
+note; whole-range conservative tracking), and the WriteTx impl
+(del_range counting each doomed key as its own del CALL "same as a
+caller looping del") — closed)
+- **L1:** preserve-and-move whole; PROPOSED SEAT (operator ratification
+  required): `kyzo-crashfs/src/sim.rs` (NEW-SEAT) — the DST-instrument
+  crate the census has already leaned on twice: dst_query.rs's entry
+  states "SimStorage itself is kyzo-crashfs vocabulary in the target,
+  which trials lawfully depends on", and crash_matrix.rs's oracle
+  "moves with the DST instrument". The physics forcing a move at all:
+  once conformance/dst/crash live in kyzo-trials, a cfg(test) module
+  inside kyzo-core is unreachable across the crate wall — the double
+  must live where trials and kyzo-core's own tests (the write-count
+  law's put_call_count oracle at session/admit) can both reach it.
+  ARRIVAL QUESTION FOR THE OPERATOR, same family as conformance.rs's:
+  SimStorage implements the SEALED Storage/ReadTx/WriteTx traits — a
+  cross-crate double requires the seal to admit it (a named grant in
+  store/contract.rs, mirroring today's in-crate "the contract's own
+  test double... not a second backend" decree) or the alternative
+  seat is trials-owned; whichever way, the module-doc ruling that a
+  shipped-API fake backend is refused must survive the move (crashfs
+  and trials are both instrument crates, so the refusal holds under
+  either answer).
+- **L2:** gold, preserve verbatim: identity-keyed fault planning with
+  the attempt counter as retry-liveness BY CONSTRUCTION (the sharpest
+  determinism design in the tree — positional in nothing); crash-epoch
+  salting with epoch-0 transparency; the token-barrier scheduler and
+  the DoneGuard no-hang discipline; failing-seed-stamped campaign
+  reports; the write-count oracle's three disciplines (calls not
+  entries, observation-only, success-path-only); the #91 two-parameter
+  reopen signature (an API shape that makes the caught bug
+  unrepresentable); the honest power-cut FLOOR caveat; the
+  test-double-no-stricter-than-reality batch_put oracle; law-vs-knob
+  separation on chunk sizes; the visible_lazy quadratic fix with its
+  real-path lineage recorded; identities-before-dice and
+  keys-not-values commit identity; the per-seek fidelity ruling.
+  DEFECT (doc-grade, fix at migration): a misattached doc comment —
+  the "Simulated power cut" prose block INCLUDING the floor caveat is
+  attached to `put_call_count` (the write-count paragraph then flows
+  into it), while `sim_powercut` itself carries only a dangling
+  `[sim_crash]:` link-definition line as its entire doc; rustdoc
+  renders both functions wrong. Re-seat the comments on their owners
+  when the file moves. Nothing else condemned.
