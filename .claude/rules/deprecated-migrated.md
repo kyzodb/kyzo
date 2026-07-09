@@ -58,6 +58,7 @@ paths:
   - "kyzo-bin/**"
   - "kyzo-crashfs/**"
   - "kyzo-arrow-interop/**"
+  - "kyzo-lsp/**"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -6602,3 +6603,91 @@ that exercises the encoder's Arrow Binary type at all") — closed)
   the format — spec-pinned unit tests, this real reader, and the
   encoder — triangulated); only-path coverage notes. Nothing
   condemned.
+
+## kyzo-lsp/src/main.rs (837 lines; inventory: header, module doc (story
+#92 — "the delivery of story #73's designed diagnostics, live in the
+editor instead of only after a real run"; every didOpen/didChange
+re-validates through kyzo::lsp_api::check_script; the TRANSPORT ruling —
+hand-rolled Content-Length framing, no async runtime, "message SHAPES
+are not hand-rolled — every request/notification param... are
+lsp-types, the same crate rust-analyzer uses, so this server speaks the
+real protocol, not an approximation of it"; the CATALOG scope —
+initializationOptions.dbPath opens a real Db "so hover-over-a-relation
+and completion can answer from the connected store's actual catalog...
+not a separately-maintained shadow of it", degrading catalog-free
+without one; the DELIBERATELY-LEXICAL go-to-definition argument — "the
+document being edited is often mid-keystroke and does not parse at all,
+and a feature that only works on valid documents reads as broken to an
+editor user"), the WIRE TRANSPORT (`read_message` — clean-EOF vs
+mid-message-EOF distinguished "so a truncated stream is diagnosable
+instead of read as a quiet shutdown"; `write_message` with the flush
+note; notification/response builders), `LineIndex` (LSP positions are
+UTF-16 CODE UNITS with the rationale naming exactly which diagnostics
+would render at the wrong column — "the escape/codepoint diagnostics
+that carry non-ASCII spans"; `position` CLAMPS past-the-end — "a clamp
+is a wrong-looking diagnostic, never a crashed server"; `offset` the
+honest inverse with the spec's own over-long-position rule), `word_at`,
+the DIAGNOSTICS TRANSLATION (`diagnostics_from_report`/`collect_labels`
+— one Diagnostic per label across the error tree, "the same shape
+parse::fuzz_tests::walk_labels proves every parser error satisfies,
+just walked here from the public Diagnostic trait"; Display + #[help]
+in one message "so the mechanical fix #73 wrote for a SQL-shaped
+mistake shows up in the editor"; the defensive no-label fallback with
+its reason), `validate` (empty-on-success because "clearing any
+previously-published diagnostics... is just as important as reporting
+new ones"), the CATALOG TIER (the `AGGREGATIONS` const with its
+drift-honesty note — mirrors the crate-internal list "in spirit...
+a drift between the two would weaken a hint or a completion
+suggestion, never misreport what the engine actually accepts";
+`KEYWORDS`; `open_catalog_db` — dbPath ONLY, "no guessing from
+rootUri, since pointing an LSP session at the wrong on-disk store (or
+silently creating one nobody asked for) is a worse failure mode";
+list_relations/columns_for_relation with the word-shaped-never-
+interpolated note; completion_items; hover_at — None over guessing),
+the GO-TO-DEFINITION tier (`matching_bracket` — a string/comment-
+skipping mini-lexer, "the same class... reject_excessive_nesting uses
+on the engine side for the identical reason (this file has no access
+to that crate-internal scanner, so it earns its own narrow copy)";
+None on unbalanced — "don't guess"; `rule_definitions` — sigil
+exclusion by construction, the := / <- / <~ confirmation, spans at
+the identifier; `definition_at`), and the SERVER LOOP (initialize
+capabilities: FULL sync/hover/completion/definition; didOpen/
+didChange with the full-sync-only invariant stated; didClose clearing
+stale squiggles; shutdown/exit; unhandled methods ignored; `publish`
+— an unparseable URI "is the client's bug, not ours to crash over")
+— closed)
+- **L1:** SPLIT per the map's kyzo-lsp (main.rs + translate.rs): the
+  transport, server loop, and feature handlers stay `main.rs`; the
+  diagnostics translation (LineIndex, word_at,
+  diagnostics_from_report/collect_labels) → `translate.rs` ("miette →
+  LSP: spans to ranges, errors to diagnostics" is that seat's
+  substance). REWIRE per deprecated-sealed.md's lsp_api entry: the
+  `kyzo::lsp_api::check_script` door dies; validation speaks
+  kyzo-model's public parse surface. TWO OPERATOR QUESTIONS, both
+  already on the record and now given their third citation: (1) the
+  fixed-rule vocabulary cut (lsp_api's entry) — full resolution needs
+  name/arity vocabulary in the model or stays engine-coupled; (2) NEW
+  and sharper — zone-lsp FORBIDS "depending on the engine (storage,
+  execution, session)... the language server needs the language, not
+  the database", yet the catalog features (hover columns, relation
+  completion) open a real fjall Db and run ::relations/::columns
+  through the session tier. The zone law and the shipped feature
+  contradict; either the law gains a sanctioned catalog door (a
+  read-only introspection contract the LSP may consume) or the
+  catalog features move out of the LSP — the operator must rule; the
+  census records, it does not choose.
+- **L2:** gold, preserve verbatim: real-protocol-shapes over
+  hand-rolled ones with the transport-only exception argued; the
+  UTF-16 position law with its which-diagnostics-break rationale;
+  clamp-never-crash and None-never-guess as the server's posture
+  everywhere; the mid-keystroke argument for lexical navigation (a
+  design choice argued from the user's experience of brokenness);
+  worse-failure-mode reasoning on dbPath; drift-honest hand copies
+  with their blast radius stated (weakened hint, never a
+  misreport). Watch items for the split: the AGGREGATIONS/KEYWORDS
+  consts become model vocabulary when the fixed-rule/aggregation
+  name cut lands (three hand-kept lists — parse's, the LSP's, the
+  grammar's keywords — one concept each); zone-lsp's
+  formatter clause is honored today only by absence — when
+  formatting lands it must call kyzo-model's format.rs, never a
+  local one. Nothing condemned.
