@@ -236,3 +236,55 @@ Deref/Hash/Eq/Ord/Display/Debug, 4 tests — closed)
   classifier living on `Symbol` is mild vocabulary bleed — if the schema
   tier grows its own name rules, it moves there rather than gaining
   siblings.
+
+## data/value/ core (tag.rs 192, canonical.rs 1666, cell.rs 419,
+number.rs 841, string.rs 185, prefix.rs 156, proofs.rs 133 — each read
+whole; inventories: tag (v1 table doc with reserved ranges + activation
+rule, STRUCT bytes, `Tag` + byte/from_byte/ALL, 3 pin tests), canonical
+(format doc per kind, `CanonicalBytes` witness, `Datum`, encode family +
+skip/decode families + ts-key helpers, 9 tests incl. the independent
+semantic comparator differential and format_v1_golden_vectors), cell
+(word layout doc + authority discipline, INLINE_MAX, `Value` +
+repr-transparent asserts, `Minted`, mint/tag/inline accessors/code/
+prefix4/try_cmp_storage/gathered/same_word, 6 tests incl. the pinned
+per-kind residency table and the same_word-is-physical trap), number
+(identity law + key format docs, class/repr consts, `Num` +
+int/float/cmp_numeric + key encode/decode + property tests against an
+independent exact comparator), string (GermanStr as a kind-proven Value,
+MintedStr, from_str/from_bytes/from_value/inline accessors, 4 tests),
+prefix (PREFIX_LEN, prefix4, PrefixCmp, cmp_prefixed, exhaustive +
+seeded soundness tests), proofs (`assert_not_impl!` + the absence
+proofs: Code no Ord; Value no Eq/Ord; StampedCode no Default;
+BulkSpendAuthority/Minted/MintedStr no Clone/Copy/Default;
+CanonicalBytes no From/Default; RelationId no From/Default + positive
+companions) — closed)
+- **L1:** → `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,
+  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the
+  crate wall: `Value::mint` and the string mints take `&mut Arena` — the
+  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;
+  the out-of-line mint path IS the currency door (the `CanonicalBytes`
+  witness is what crosses). Arrival check: no execution import rides
+  along.
+- **L2:** already the house standard — preserve verbatim: the pinned v1
+  tag table with reserved-range evolution and the store-level activation
+  rule (FormatVersion never inside comparable bytes); `CanonicalBytes`
+  witness-not-costume (mint-and-type share one file; the token pattern
+  becomes mandatory if the mint ever moves); the independent semantic
+  comparator law-locking codec order; Num's identity law (Int(1) !=
+  Float(1.0) as query semantics forever; one NaN, no -0.0; the closed v1
+  numeric domain — decimal/bigint are NEW kinds, never key extensions);
+  the cell's no-Eq/no-Ord discipline with named exact alternatives; the
+  ONE prefix doctrine ("two lookalike implementations whose divergence
+  would be an undetectable ordering anomaly are structurally impossible
+  because there is exactly one"); deref-only-on-tie measured by counter;
+  compile-time ABSENCE proofs running in every build. Two closure-read
+  finds to keep loud: `Num::to_int_coerced` bounds by the EXACT 2^63
+  (i64::MAX as f64 rounds UP and would admit one-past-the-boundary,
+  silently fabricating a different index key — the comment is the law);
+  and canonical's JSON objects tag every entry key `JSTR` because a
+  NUL-leading key once sorted BELOW a shorter object's terminator,
+  splitting the two order authorities (adversarial-storage-review
+  regression, pinned by `json_object_byte_order_matches_structural_
+  order_with_nul_key`). encode_owned sorts sets by their ENCODED bytes,
+  deliberately not by `Ord`, so the codec stays the independent authority
+  the Ord mirror is law-locked against — no circularity.
