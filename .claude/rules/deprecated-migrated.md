@@ -5645,3 +5645,123 @@ closed)
   simple_adjacency NOTED as deliberate (on migration, k_core and
   cliques share the rules/graph_view simple-adjacency helper — one
   concept, one name). Nothing condemned.
+
+## fixed_rule/utilities/mod.rs (24 lines; inventory: dual header ("module
+docs added; contents unchanged"), module doc, four decls + re-exports —
+closed)
+- **L1:** structural glue — dies with the directory; the readers and
+  constant land in `rules/io/`, reorder_sort in `rules/algo/`.
+- **L2:** nothing beyond the glue.
+
+## fixed_rule/utilities/constant.rs (255 lines; inventory: dual header
+(the re-homing of the Constant impl from its parse/query.rs seam; the
+original's `run` "unwrapped its way to the data... trusting that
+init_options had normalized the option" — those unwraps are the
+`proven_data` path, and DRIFT "is reported as the wrong-option error
+instead of aborting the engine"), module doc (the `data` option IS the
+relation; backs `<-` const rules and the body-less `:create` synthetic
+entry), `proven_data` (the drift detector), the FixedRule impl (run
+emitting proven rows; arity from the first row with the
+EmptyConstRuleError give-it-a-head refusal and head-length fallback;
+init_options — eval_to_const, per-row list check with typed
+ConstRuleRowNotList, ragged rows refused with typed
+ConstRuleRowArityMismatch carrying both lengths, normalized back into
+the options map), and two tests (the three-phase round trip "as
+parse/eval do"; drifted options refusing typed — arity before
+init_options, and ragged rows) — closed)
+- **L1:** preserve-and-move whole → `rules/io/constant.rs` (the map's
+  io/ line names constant data explicitly).
+- **L2:** gold: normalize-once-then-trust-with-a-drift-detector (the
+  proven_data pattern converts convention into a checked invariant);
+  errors defined at use sites with teaching help. Nothing condemned.
+
+## fixed_rule/utilities/reorder_sort.rs (321 lines; inventory: dual
+header (&'static Op deref adjustment; the structural ranking unwrap;
+arity-checked writer), module doc, the `ReorderSort` rule (the `out`
+option as const-list or OP_LIST apply, refused typed otherwise;
+sort_by/descending/break_ties/skip/take options; bindings filled and
+compiled to bytecode; buffer of evaluated out-tuples with the sort key
+appended; stable sort asc/desc on the key; COMPETITION RANKING — rank
+jumps to count after ties — vs break_ties running count; the
+take-plus-skip window with saturating_add; per-row cancel polls;
+arity = |out| + 1), and three VALUE-ORACLE tests (mixed-type keys
+ordered per the DataValue total order, each rank pinned; the
+tie/descending battery with the hand computation and the
+stable-sort-plus-shared-rank note; the skip/take window with the
+overall-rank-preserved assertion) — closed)
+- **L1:** preserve-and-move whole → `rules/algo/reorder_sort.rs` (the
+  algo/ list is open — "one algorithm per file"; this is the one
+  non-graph algorithm in the library).
+- **L2:** gold: competition-vs-dense ranking as explicit options with
+  hand-computed pins; the total-order oracle doubling as a
+  cross-check on DataValue's Ord. Watch for the destination: the
+  rank/window semantics overlap exec/sort.rs's `:order`/`:limit` —
+  the rules-zone doc should say when each is the right tool (the rule
+  exposes RANKS as data; the query options only order the result).
+  Nothing condemned.
+
+## fixed_rule/utilities/jlines.rs (317 lines; inventory: dual header
+(file:// arms fully ported; SEAM(network) — the original fetched
+non-file URLs via minreq behind the `requests` feature; "no network
+dependency is added — the URL arm refuses with the typed
+UrlFetchUnavailable, pending DECISION(maintainer): should a pure
+embedded engine carry an HTTP(S) client for the reader utilities?";
+SEAM(json) — the conversion was local because upstream data/json.rs
+was then-dropped, "re-homes to data/json.rs when that file is
+reinstated... one name per concept"; log::error! gone with the
+fetch), `UrlFetchUnavailable` (the help text naming the open product
+decision), `json_to_datavalue` (ints when integral, floats, decimal
+string fallback, arrays recurse, objects stay opaque Json), the
+`JsonReader` rule (url/json_lines/null_if_absent/prepend_index
+options; typed BadFields; the field projector with
+absent-field-refuses-unless-nullable; STRIDE-POLLED cancellation —
+"every 1024 items — a stride, not per item, since one line's parse
+is cheap"; both file arms; the URL arm refusing), arity from
+fields + prepend_index, and four tests (JSON-lines projection with
+Null absorption; the raised-flag refusal noting the stride fires at
+i==0; the typed network refusal; the conversion battery) — closed)
+- **L1:** preserve-and-move whole → `rules/io/jlines.rs`. TWO
+  standing items travel with it: (1) the network DECISION(maintainer)
+  — operator-visible, unresolved, shared with csv.rs; (2) the
+  SEAM(json) note is now STALE AND DISCHARGEABLE — data/json.rs has
+  since been reinstated (censused above) carrying its own
+  `From<JsonValue> for DataValue` conversions, so `json_to_datavalue`
+  is today a live DUPLICATE of model vocabulary; on migration it
+  dissolves into the model/envelope conversion exactly as the
+  header's own promise says ("one name per concept"), after a
+  differential confirms the two agree on the object/number edge
+  cases.
+- **L2:** gold: seams refused typed with the decision NAMED in the
+  user-facing help; stride-polling argued from per-item cost.
+  Nothing condemned beyond the now-dischargeable duplication.
+
+## fixed_rule/utilities/csv.rs (327 lines; inventory: dual header (the
+csv crate vetted pure Rust — "csv-core/itoa/ryu/serde, no C
+toolchain"; the same SEAM(network) with the fuller product question —
+"whether a pure embedded engine should carry a network stack (TLS
+roots and all)"; structural unwraps after coerce; type-mismatch bails
+gaining spans via WrongFixedRuleOptionError "where they were bare
+strings"), the `CsvReader` rule (single-byte delimiter enforced
+typed; prepend_index/has_headers; the `types` option coerced through
+the REAL schema machinery — NullableColType/ColType::List/`coerce` —
+then each element through the model's `parse_type`; flexible reader;
+per-column coercion arms — Any/String/Uuid/Float via the real ops
+with nullable-absorbs-failure, and the INT-VIA-FLOAT ruling
+documented in place ("get_int alone is strict on representation (a
+float 1.0 is not an int), so the integral check is explicit");
+stride-polled cancellation with the same 1024 argument; the URL arm
+refusing through jlines' shared error), arity from types +
+prepend_index, and three tests (typed read with a nullable column
+absorbing "oops"; the raised-flag refusal; the typed network
+refusal) — closed)
+- **L1:** preserve-and-move whole → `rules/io/csv.rs`; the network
+  DECISION(maintainer) rides with jlines'.
+- **L2:** gold: reusing the engine's own coercion and type-parsing
+  machinery for the option surface (no second type grammar); the
+  integral-check ruling written at the arm; nullable-absorbs vs
+  strict-refuses split per column. DEFECT (doc-grade, fix at
+  migration): despite the header's claim, `process_row` still
+  carries three BARE-STRING `bail!`s on the data path (the non-null
+  violation and both cannot-convert arms) — span-less, stringly
+  refusals on user data; route them through a typed error with the
+  option's span like their siblings. Nothing else condemned.
