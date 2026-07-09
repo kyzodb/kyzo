@@ -2051,3 +2051,47 @@ row and refusing a genuine same-instant duplicate) — closed)
   sabotage design; the no-backdoor discipline extended to reading
   system stamps; hostile-review pins that state the pre-fix failure in
   the test doc. Nothing condemned.
+
+## query/levels.rs (863 lines; inventory: the level-tier doctrine (a
+rule's TOTAL is a stack of immutable sorted levels sealed per epoch
+barrier — dense walks and binary searches, "the shape the semi-naive
+inner loop wants, instead of pointer-chasing a tree that is
+rebalancing under an insert-heavy fixpoint"; THE DELTA IS THE NEWEST
+LEVEL; newest-wins shadowing; meet folds AT the barrier so "a group's
+value is always whole in one level, never split across levels"),
+`NormalLevel` (story #77: rows are MEMCMP BYTES in a flat arena —
+the order-embedding law makes byte compares IDENTICAL to the
+DataValue compares they replace, "a probe value is encoded once per
+call, not once per row visited"; (skip, refresh) flags where refresh
+rows shadow a flag change and are "admitted nowhere, invisible to
+delta iteration"), `MeetLevel`/`MeetSpec` (`would_admit` — ONE
+admission oracle shared by the mid-epoch spend guard and the
+barrier)/`MeetTotalView`, `EpochStore` with THE SEMI-NAIVE INVARIANT
+stated on the type ("after every merge_in ... the newest level's
+non-refresh rows are exactly the tuples admitted this epoch"),
+`merge_in` (the barrier: drop the consumed empty delta — else "a
+converging fixpoint would stack one empty level per epoch" — then
+compact the PRE-epoch stack ONLY, because "the level just sealed IS
+the delta and must survive whole until the next barrier"),
+`has_delta`, the iterator family (ranged/prefix/projected zero-clone
+probes; the 0xFF-tail prefix bound), `normal_merge_next` (k-way
+newest-wins where among equals "the LATEST cursor — newest level —
+speaks"), the compaction pair (the logarithmic half-size schedule "a
+pure function of sizes — deterministic on every run"; a surviving
+refresh row "stops being refresh-marked once its shadowed victim is
+gone"), `meet_ranged` (suffix layout walks groups directly;
+interleaved walks row mirrors skipping newer-owned groups), and the
+bounded-stack test (10 productive + 50 converged epochs, ≤6 levels,
+totals intact) — closed)
+- **L1:** refactor-and-move → `exec/fixpoint/delta_store.rs` (the
+  seat's line "working memory keyed on packed-code identity"): this
+  file is the values-v1 INCUMBENT and data/value/exec.rs's `ExecDedup`
+  is the packed-code SEED — #120 merges them at this seat, keeping the
+  level/shadow/compaction discipline and swapping the row
+  representation beneath it.
+- **L2:** gold, preserve verbatim: the delta-is-the-newest-level
+  identity; the invariant stated on the type; refresh-row semantics
+  (a flag change that must not be a delta); compact-pre-epoch-only
+  with its reason; deterministic compaction as a pure function of
+  sizes; one admission oracle for guard and barrier. Nothing
+  condemned.
