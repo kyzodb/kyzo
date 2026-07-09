@@ -73,3 +73,17 @@ The flow is three loops, and a pass is done only when all three are at rest at o
   `W* = μW. ( seed ⊆ W  ∧  every edge ≥ θ stays inside W )`.
 
 The trivial upper bound is "re-cluster the entire board every time"; coupling-closure computes that same answer over the smallest set that yields it. Anything short of all three fixpoints is the classic failure: a single pass over a fixed seed with the boundary never tested — which returns renamed stories on their original seams, not a re-slice.
+
+## Show your work
+
+Run the pipeline node by node, in the open, printing each node's actual output before moving to the next — never jump to the story-level result. The visible artifacts are the proof the flow ran, and their absence is the tell that it did not:
+
+- **Node 1** — the full numbered atom list, each atom tagged with its source story; state the closure check (every clause is one atom or a stated drop).
+- **Node 2** — each atom's reason-to-change type.
+- **Node 3** — the coupling edges, marking which cross the border of W.
+- **Node 4** — each cluster as its atom set.
+- **Nodes 5–6** — the gate verdicts, PASS or FAIL with the offending atom named; show the re-cluster when a gate fails.
+- **Node 7** — the boundary verdict per round: OPEN (name the admitted stories, show `W ← W ∪ ∂W`) or CLOSED; print every round until closure.
+- **Node 8** — the topological order, and any cycle that sent you back to node 1.
+
+The refusal test: if you cannot show the atom list, you did not atomize — stop and do node 1 before claiming any result. A named result without its nodes is a lie about having run the flow.
