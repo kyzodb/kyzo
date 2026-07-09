@@ -3218,3 +3218,146 @@ refuses any deriving program while 2 suffices) — closed)
   check_interrupt) are the sanctioned oracle seam — the kyzo-oracle
   split must give the oracle its own budget vocabulary or keep this
   seam deliberate.
+
+## query/laws.rs (5058 lines; inventory: MPL header, module doc (THE
+REFERENCE SEMANTICS as executable law — "deliberately naive... written
+to be OBVIOUSLY correct"; the oracle is judge, never production; the
+abstract program form minimal "so it can outlive any concrete AST"; the
+REAL-LANDED-AGGREGATIONS rule — "a bug in an aggregation cannot hide
+behind a parallel test-only reimplementation"; aggregation semantics AS
+LAW — normal folds once at the fixpoint beneath, all-meet heads recurse,
+the all-aggregated identity row inserted only when round one derives
+nothing "exposing it alongside real rows would... derive facts outside
+the least fixpoint", fixed rules on boundaries; THREE deliberate
+upstream divergences all in the oracle's favor — the non-suffix meet
+demotion upstream froze into wrong answers, order-dependent
+aggregations deterministic here but arrival-order artifacts so
+"differential harnesses must avoid or canonicalize them", and
+no-entry-symbol whole-program judging vs upstream's dead-rule pruning;
+THE TIME-TRAVEL NEGATION LIFT — the engine's former refusal "was always
+an operator-implementation gap, not a semantic one", the oracle's
+structural never-gap argument (a negated literal's as_of is a TERM-FREE
+AsOf constructible only as a constant; a historical relation is always
+a SINK in the stratification graph, "exactly like an EDB fact
+relation"), check_time_travel_negation "deleted whole" because general
+safety and stratifiability already prove the lift sound; THE SHARED
+REFERENCE-TIER HELPERS — issue #89's consolidation of three
+byte-for-byte hand copies with the soundness argument ("all three
+modules are reference tier — they judge the ENGINE... never each
+other") and the ONE deliberately-independent copy NOT touched,
+stratify.rs's aggregation_character), the #119/#120 target-split
+dead_code note, the temporal vocabulary (`AsOf` with THE EXACT
+CORRESPONDENCE to the Reverse-wrapped real type — "the two types encode
+the identical total order through inverted representations", proven by
+the kernel cross-check "rather than leaving that claim as an assertion
+in a doc comment"; `Event` with the TERMINAL-TICK RESERVATION at
+construction (the hostile-review ruling keeping a zero-width
+[MAX, MAX) interval UNREPRESENTABLE) and the `untimed` embedding as "a
+real, callable function rather than a comment"; `resolve_events` — the
+brute-force twin of check_key_for_bitemporal with
+Assert-holds/Retract-settles/Erase-transparent; `resolve`/
+`resolve_relation`; `Axis`/`Interval`/`OPEN_END`/`derive_intervals`
+(coalescing definitional; the sys-axis breakpoint filtering rationale);
+`SignedFact`/`diff` (on resolved snapshots, never intervals)/`compose`),
+the program model (`Literal` + four ONE-SEAM constructors carrying "the
+lesson of story #62's compiler-forced fallout across five files";
+`neg_at`'s legality argument at the constructor; `Rule`/`FixedRule`/
+`Program::untimed`; `Rejection`'s five variants), the checkers
+(`check_safety` law 4; `HeadClass`/`head_classes` shared;
+`dependency_edges` with the poisoned-edge rules; `check_stratifiable`
+law 2; the `NameIntroduction` refactor — "one predicate applied
+uniformly, not three separately-argued refusal loops that could drift"
+(issue #85 sharpening #62); `check_wellformed`'s eight refusal families
+incl. facts-XOR-histories and the three-failure-modes comment on the
+historical-namespace law; `strata` Bellman-Ford with its convergence
+argument), the shared `Bindings`/`unify`/`ground`, the evaluator
+(`literal_rows` — per-literal AsOf "pushed down to the stored leaf the
+literal names, never precomputed above it", zero behavior change for
+untimed programs; `body_bindings(_from)` positives-then-negatives;
+`derived_rows` preserving fold multiplicity; `eval_normal_aggr_head`;
+`MeetState`; `naive_eval`/`naive_eval_at`/`naive_eval_at_budgeted` —
+story #80, ADDITIVE never a replacement: "the naive oracle's whole
+reason to exist is the TRUE answer, and a mandatory ceiling would put
+a second, lesser claim in its place", barrier-granularity only with
+the no-per-rule-ticker rationale; `check_oracle_budget` carrying the
+REAL LimitExceeded messages; `naive_eval_at_impl` with the
+identity-row-at-round-one rule and the 100k loud non-termination
+bound), the STORY-#61 INCREMENTAL LAW (the scope doc: recursion
+refused unconditionally — DRed territory, with the DAG-makes-it-sound
+argument; aggregation FULLY covered by group re-derivation because
+"min/max under retraction is the classic case with no such formula";
+fixed rules refused with the empty-delta wrong-answer argument; the
+two-phase candidates-then-verify algorithm with the MULTISET-VS-SET
+pitfall "the generative differential caught the first time it ran";
+`edb_relations` zero-rows-still-EDB; Kahn's `topological_order`;
+`has_any_cycle`; the sign-agnostic subset-expansion candidate
+collectors; `head_is_derivable`; the aggregation extension;
+`incremental_eval` with the redundant-patch filter and its
+caught-phantom-delta lineage), the SHARED `unstratifiable_corpus`
+(eight named refusal programs "shared between the reference checker's
+self-tests and the real compiler's"), and the ~2570-line test battery:
+the five law pins; budgeted-additive proofs; the identity-row REVIEW
+FINDING pair (feeds recursion; INVISIBLE when derivations exist, with
+the larger-lattice argument that and/or cannot tell but min's Null
+can); `FlagMode`/`semi_naive_meet_reach` (upstream's semi-naive
+transcribed) and the inverted-flag differential pinning BOTH the
+honest match and the stranded-at-seed premature fixpoint; the
+naive-vs-semi-naive proptest over five lattices; the unified temporal
+oracle's NINE degenerate pins; the terminal-tick pair; the KERNEL
+CROSS-CHECK (a from-scratch skip walk over the real
+check_key_for_bitemporal, negative valid AND sys coordinates folded
+into the STORED fixture per the hostile-review pin — "sign-boundary
+coverage belongs in the fixture, not only in the probe grid"); the
+three name-collision refusals (rule head with the arity-isolation
+note, fixed head, fixed INPUT closing #85's silent-empty-read); the
+untimed-embedding byte-identity; per-literal pushdown inside
+naive_eval; negation-without-own-as-of not refused; the lift's
+HAND-TRACED fixture (coordinates A, B=A-swapped, and current, chosen
+mutually distinct so axis-swap AND silent-default-fallback mutants
+each fail, with the what-this-proves epistemics doc); the SOURCE-ORDER
+regression (negated literal written FIRST — a deleted reorder panics
+loudly via ground's missing key, "fails loudly, not silently"); the
+two >5000-case grid campaigns (interval-vs-resolve, negation WIRING
+with its full does-not-re-prove-resolution doc); and the incremental
+battery (recompute_patch ground truth; ten fixed pins incl. the
+two-stratum double sign flip, subset expansion at |varying|=2, the
+min rescan, group-vanishes vs global-identity-revert, and both
+refusals; the 4-shape × 80-seed campaign) — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT into kyzo-oracle (THE
+  REFERENCE SEMANTICS — "deliberately slow, small enough to
+  hostile-review line by line... the crate wall makes independence
+  physics"): the program model + checkers + naive evaluator →
+  `kyzo-oracle/src/eval.rs`; the temporal vocabulary (AsOf, Event,
+  resolve*, derive_intervals, diff/compose, Axis/Interval/OPEN_END) →
+  `kyzo-oracle/src/temporal.rs`; the story-#61 incremental reference →
+  NEW-SEAT `kyzo-oracle/src/incremental.rs` (operator ratification;
+  alternatively folds into eval.rs — the react/incremental.rs
+  production twin needs its judge either way); the shared
+  unstratifiable_corpus rides with eval.rs as the judge's contract
+  surface (lib.rs). ARRIVAL QUESTIONS FOR THE OPERATOR, both created
+  by the crate wall's "depends ONLY on kyzo-model": (1) the #80
+  budgeted door (`naive_eval_at_budgeted`) consumes kyzo-core's
+  `eval::Budget` — the oracle must grow its own bounds vocabulary (or
+  model must carry one), and the verify door's direction of dependency
+  (core → oracle for ::verify) must be ratified against the map's
+  dependency arrows; (2) the real-landed-aggregations rule requires
+  `Aggregation`'s FOLD implementations to be model vocabulary the
+  oracle can reach — reconcile with the map's oracle-owns-its-OWN-expr
+  stance (expr.rs): expressions deliberately independent, aggregations
+  deliberately shared, both on the record as rulings. DOC CORRECTION
+  on arrival: the module doc's "cfg(test) only" claim is already
+  superseded by #80's production ::verify consumer — the target
+  formulation is the map's own ("the judge's contract: same question,
+  independent answer"), not test-only.
+- **L2:** gold, preserve verbatim: obviously-correct-by-inspection as
+  the design criterion (optimizing the oracle is a defect); the three
+  upstream divergences recorded WITH their directions; the lift's
+  structural never-gap argument and its deleted-check ruling; the
+  one-seam constructor discipline with its five-file-fallout lesson;
+  the #89 sharing-soundness argument paired with the one
+  deliberately-independent copy; the terminal-tick reservation making
+  the zero-width interval unrepresentable; the exact-correspondence
+  doc PROVEN by the kernel cross-check; additive-budgeting so the true
+  answer stays the oracle's claim; the multiset-vs-set lineage; review
+  findings landed as paired positive/negative pins; loud-failure
+  regressions over silent ones. Nothing condemned.
