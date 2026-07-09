@@ -2859,3 +2859,110 @@ fix's mutant) — closed)
   definitional-over-implemented for ruling item 3; the
   production-twin compose differential kept separate from the
   oracle's. Nothing condemned.
+
+## query/compile.rs (2889 lines; inventory: dual fork header with SIX
+story-#3 transformations (free functions over the kernel's ReadTx
+species — "the operator tree itself is transaction-free data" and the
+temp-relation router named as a session-tier SEAM; strata arrive in
+execution order, the original's .rev() "has no descendant here";
+ruleset invariants as CONSTRUCTOR PROOFS — `CompiledInlineRules::new`
+refuses an empty set and enforces ARG-LEVEL head-aggregation equality,
+"the mirror of the parser's check... re-established where the
+signatures collapse into one"; AggrKind NOT re-declared — "one
+concept, one name", it lives in eval's HeadAggrKind; `contained_rules`
+RE-HOMED here with the occurrence-numbering fix: upstream numbered by
+STORE NAME, collapsing self-join occurrences into a `Many` that forced
+a complete naive re-join every epoch — issue #68's dominant driver,
+confirmed structurally AND by measurement (fixpoint_mem_profile:
+18–43× more allocations per output row, growing super-linearly);
+`CompiledRuleBody` implementing the evaluator's RuleBody seam), the
+THREE-SITE Law-5 panic audit (rules[0] indexing structurally removed;
+the unwrapped set-difference restructured with a typed impossible arm;
+the search-arm debug_asserts deferred to the index tier as typed
+checks), deviations D1–D4 (index refs resolved by name through the
+catalog; dead vectors dropped; budget/interrupt wiring named with the
+"never solved by re-adding Poison" ruling; premises NotRequested — the
+provenance-tier seam), module doc (compilation = proven program to
+executable plan; the left-deep growth walk; positions proven, unbound
+head symbols refused, columns reordered so "the plan's output frame
+equals the rule head, position for position"), the compiled tier
+(`CompiledProgram`, `CompiledRuleSet` + total `arity`,
+`CompiledInlineRules` + `RulesetHeadAggrMismatch` — "no tier between
+parse and eval can smuggle a disagreement through", `CompiledRule`),
+`atom_occurrences` (the numbering lives "in exactly one place"; one id
+per Rule/NegatedRule atom) + `contained_rules` (negated occurrences
+ENTERED — the map is StoreLifetimes' dependency source and "a store
+read only inside a negation is used just as much"; never
+delta-selected in practice, with the if-it-ever-fired soundness
+argument), RuleNotFound/ArityMismatch/UnboundSymbolInRuleHead,
+`stratified_magic_compile` (arities collected across ALL strata),
+`resolve_delta_posting_index` (chunk 4's read-side seam; "returning
+None here is never a correctness gap, only a missed acceleration"),
+`compile_magic_rule_body` (unit seed; gen_symb for repeated variables
+so "the joiner is always positional underneath"; the occurrence
+counter in documented LOCKSTEP with contained_rules; the seven atom
+arms — Rule join with arity proof, Relation with access-level check +
+index selection where temporal clauses ALWAYS scan the base ("an
+index mirrors only the current-state keyspace"), index-only vs
+back-join with residual equality re-checks for join columns the index
+could not bind, NegatedRule consuming-but-never-selecting an
+occurrence id, NegatedRelation where a back-join index is "useless
+under negation", Predicate, Search with the fresh-var-plus-equality
+join discipline, Unification unify-or-filter; the tail: eliminate →
+unit cartesian fix-up → the typed unbound-head refusal with the
+impossible empty-difference arm → reorder-to-head),
+`CompiledRuleBody` (seam impl #2, its contract clauses each named
+WITH where they are discharged; rows cross the seam as borrowed
+slices, "eval... mints an owned row only on admission"), the
+UNINHABITED `NoFixedRules` ("running one is unrepresentable"),
+`bind_for_eval` (fixed-rule evaluator injected by the caller), and
+the test battery: the two CALIBRATED budgets (generous_budget's
+ceiling deliberately low with the measured OOM-before-ceiling
+justification — "Keep this low"; boundary_budget's sizing argued);
+the ported upstream mat_join; TC end-to-end over real fjall; head
+reorder; strategy-path pins via join_type introspection (prefix vs
+materialized, point lookup, both negation strategies); five typed
+refusals (unknown rule, arity, unbound head, the trap-(c) aggr
+mismatch, hidden relation via InsufficientAccessLevel); THE
+RA-vs-oracle differential (the model compiler mirroring eval's
+harness but with REAL stored EDB and compiled plans; both execution
+modes asserted equal to the sealed oracle, which "simultaneously
+proves the batched path equal to the iterator path"); nine
+differential shapes (TC, self-join, THREE-way self-join, stratified
+negation, the meet self-join THROUGH RA carrying its CONFIRMED
+mutation lineage — "mutating scan_epoch made this exact rule shape
+diverge while the model-harness suite stayed green", meet-in-
+recursion, normal aggregation, constant-argument desugaring,
+recursive-right self-join with its named mutation kill); the two
+occurrence pins; the non-prefix set-probe pinning the `contains`
+sense; the law-5 truncated-row pair (a keys-only stored row decodes
+short; point-lookup and neg-prefix joins both surface typed
+StoredRowTooShortError, never a slice panic); and the batched
+section (unification single/spread across boundaries + poison-row
+error identity across runs; scan+filter at eleven sizes × three
+thresholds spanning 0..4097; recursion sizes chosen so the STORE
+straddles BATCH_ROWS; the 120-seed LCG campaign "the vectorization
+ascent's mutation test sabotages"; the direct seam-drive survivor
+count) — closed)
+- **L1:** preserve-and-move whole → `exec/plan/compile.rs` (seat
+  exists: "the plan compiler"). `CompiledRuleBody`/`bind_for_eval`/
+  `NoFixedRules` are the plan→fixpoint bridge and move with it (the
+  RuleBody seam's other half lives in fixpoint/eval.rs). The test
+  module stays attached as the zone's module tests; the RA-vs-oracle
+  differential harness is also the shape kyzo-trials' differential
+  lane will drive through the public surface — migrate the module
+  tests intact and let trials grow its public-surface twin, never
+  thin these.
+- **L2:** gold, preserve verbatim: constructor-proofs-over-
+  conventions (non-empty, signature-uniform, total arity); the
+  one-place occurrence numbering with its lockstep documentation at
+  BOTH consumers; the re-proven-at-every-tier aggr-mismatch law; the
+  measured justification for the occurrence fix (rule #19 satisfied
+  with a named profile); the calibrated-budget notes that tie a test
+  constant to a measured failure mode; the confirmed-mutation
+  lineages naming exactly which sabotage each differential catches;
+  uninhabited-type refusals; the borrowed-slice admission economy at
+  the seam. Nothing condemned. Carried obligation (from D3): when
+  db.rs wires fixed rules, Budget::check_interrupt/ticker go
+  pub(crate) — "never solved by re-adding Poison"; the entry for
+  runtime/db.rs must verify this landed lawfully.
