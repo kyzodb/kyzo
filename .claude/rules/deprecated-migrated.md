@@ -5125,3 +5125,84 @@ route goes through c where BFS went through b) — closed)
 - **L2:** gold: the paired-oracle design (one fixture, two
   algorithms, outputs that cannot be confused); iterative-not-
   recursive stated as the stack-safety posture. Nothing condemned.
+
+## fixed_rule/algos/astar.rs (259 lines; inventory: dual header (the
+back-trace unwrap annotated structural with its proof; arity-checked
+writer; "otherwise unchanged"), module doc (A* over RELATION-SHAPED
+graphs — "edges and nodes stay as tuples (no CSR interning) so the
+user-supplied heuristic expression can read node attributes"), the
+`ShortestPathAStar` rule (four inputs with min-len guards; the
+heuristic's binding map spanning nodes ++ goals columns; every
+start × goal pair searched; arity 4), `astar` (compiled heuristic
+bytecode with NaN refused typed on BOTH the heuristic and edge costs;
+g-score map; PriorityQueue on (Reverse(f), sub_priority) — the
+monotone sub_priority counter as the tie-break; default edge cost
+1.0; unreachable = (∞, []); per-edge cancel poll), and the
+VALUE-ORACLE test (a real ADMISSIBLE heuristic read off the node
+relation's second column, hand-traced f=g+h, "the direct a→c edge
+(cost 3) loses to the guided two-hop route") — closed)
+- **L1:** preserve-and-move whole → `rules/algo/astar.rs`.
+- **L2:** gold: tuples-not-CSR argued from the heuristic's needs;
+  NaN refused at both cost doors; the monotone sub-priority
+  tie-break (NOTE: unlike prim/kruskal this queue's ties ARE totally
+  ordered — the counter makes pop order deterministic; the pattern
+  the flagged files should adopt). Watch for the destination:
+  unreachable pairs emit (∞, empty-list) rows rather than no row —
+  a representation choice the rules-zone law should ratify or
+  convert to absence. Nothing condemned.
+
+## fixed_rule/algos/label_propagation.rs (268 lines; inventory: dual
+header (inline CSR; rand 0.9 re-homes; the structural tie-break
+unwrap; and the DETERMINISM FIX pinned vs upstream — OS-entropy
+seeding made "the SAME facts + query answer differently run to run —
+a determinism-law violation"; randomness now flows from a `seed`
+option with the fixed default through SeededRng), module doc, the
+`LabelPropagation` rule (undirected/max_iter/seed options; arity 2),
+`label_propagation` (per-sweep seeded shuffle; per-node
+weight-heaviest label via a BTreeMap fold; total_cmp sort; tied
+candidates chosen through the SEEDED rng; per-node cancel poll;
+early stop on stability), and three tests: DETERMINISM on a 12-ring
+"where ties and shuffle order are exercised on every sweep" — 8
+byte-identical runs, "the test that a mutation back to rand::rng()
+fails"; the seed-is-LOAD-BEARING test (same seed twice equal, and
+across seeds 2..40 at least one disagreement "proves the seed
+reaches the tie-break; a constant-ignoring-seed mutant makes every
+seed agree"); and the VALUE ORACLE on "the only deterministic ground
+label propagation offers" — two directed stars where no decision
+ever has more than one candidate, interning hand-derived, with the
+adjacency-order note routing the reversed-CSR mutant to the tests
+that DO kill it — closed)
+- **L1:** preserve-and-move whole → `rules/algo/label_propagation.rs`.
+- **L2:** gold, preserve verbatim: the determinism fix with its
+  three-test guard structure (byte-identity, seed-steering
+  anti-vacuity, and a genuinely tie-free oracle) — the house pattern
+  for every stochastic rule; the mutant-routing note (a test that
+  says which OTHER tests kill what it cannot). Nothing condemned.
+
+## fixed_rule/algos/kruskal.rs (278 lines; inventory: dual header
+(inline CSR; union-find unchanged; and the MULTIGRAPH FIX pinned vs
+upstream — the pq is keyed by endpoint pair so parallel edges
+collide, plain `push` overwrote the priority "leaving the LAST-seen
+parallel edge's weight — a bug on a multigraph"; `push_increase`
+keeps Reverse(cost)'s greater = the CHEAPEST, "prim.rs's in-file
+precedent"), the `MinimumSpanningForestKruskal` rule (undirected,
+negative weights permitted; arity 3), `kruskal` (all edges into the
+pq, cheapest-first pops, union-find cycle skip, early break at full
+span), `UnionFind` (path compression + union by size), and three
+tests: the unique-MST VALUE ORACLE over `normalized` rows (min/max
+endpoint + sort, with the honesty note that edge DIRECTION pop order
+"is a tie among equal priorities — hash-seeded, not pinnable");
+`parallel_edges_take_cheapest` (the multigraph pin, with the
+input-order argument for why plain push leaves the EXPENSIVE edge);
+and the equal-weight path forcing both edges ("the pinnable half of
+tie behavior") — closed)
+- **L1:** preserve-and-move whole → `rules/algo/kruskal.rs`.
+- **L2:** gold: the multigraph fix argued and pinned with its mutant
+  named; normalize-then-assert as the honest oracle shape when
+  direction is unpinnable. FLAG (same determinism class as prim.rs,
+  acknowledged twice in this file's own comments): equal-priority
+  pops are HASH-SEEDED — on tied-weight graphs the chosen tree, and
+  on ALL undirected graphs the emitted edge direction, can differ
+  run to run in production output. astar.rs's monotone sub-priority
+  counter is the in-tree fix pattern; the rules-zone law should
+  demand it here and at prim.rs on arrival. Nothing else condemned.
