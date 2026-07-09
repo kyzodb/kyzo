@@ -3644,3 +3644,102 @@ guarantee") — closed)
   with the drift lineage; corpus reuse over second corpora; the
   cheap-assertion-over-expensive-e2e regression judgment. Nothing
   condemned.
+
+## runtime/relation.rs (2070 lines; inventory: dual fork header with TEN
+named re-architectures (the system keyspace TYPED — `SystemKey` a
+closed enum, "no fourth shape can appear by accident", with the
+Where-STORAGE_VERSION-went record: merged into FormatVersion which
+refuses "strictly earlier and stricter"; indices BY REFERENCE — "the
+index relation's own catalog row is the single authority"; the
+original's `lock: bool` DIES — "the kernel is full SSI... there is no
+unlocked read to ask for"; the id counter a transactional RMW replacing
+a process-wide AtomicU64 "which leaked ids on abort and could not
+survive a second process"; destroy's del_range in-transaction so
+"an aborted transaction now rolls the destruction back"; law-5
+fallibility throughout; `amend_key_prefix` DELETED — "splicing a
+different relation id into an EncodedKey's bytes would launder
+unproven provenance into the typed key"; TWO fixes-on-port —
+ensure_compatible's trivially-true self-comparison that never
+type-checked input dependents, and create_relation's dead store +
+opposite-store name check; rename REFUSING with indices attached —
+the original stranded index rows under the old name), module doc (a
+handle is "a decoded catalog row — knowledge, not authority... the
+store's bytes remain the truth"; SSI concurrency with "no catalog
+locks and no process-wide atomics"; SEAMS documented not hidden —
+temp routing owned by the session tier, triggers-as-source with the
+Phase C parsed-substances end state, the landed index manifests,
+IndexPositionUse's provisional home; the WIRE FORMAT law — msgpack
+struct maps "IS an on-disk format... changing it is a migration
+conversation, not a refactor"), `SystemKey`/`RelationIdSpaceExhausted`/
+`next_relation_id` (routed through raw_decode's single bounds check),
+`AccessLevel` ("the Ord derive IS the semantics... Do not reorder the
+variants") + `InsufficientAccessLevel`, `IndexRef` (relation_name —
+"the one place the {base}:{index} convention is spelled"),
+`IndexKind` (Plain; TEMPORAL with its full design doc — the valid
+instant promoted ahead of the base key "answering 'what changed
+at/near instant t' with a contiguous scan", scan-shaped-not-search-
+shaped, "a Plain mapper cannot express this kind... the leading
+column is the WRITE'S OWN coordinate"; Hnsw/Fts/Lsh with the
+MIGRATION RECORD — unit variants grew manifests, "decode-compatible
+with every store ever written" because the seam refused attachment
+before), `TEMPORAL_POSTING_LEADING_COLUMN`, `ConstraintRef`,
+`IndexPositionUse` (provisional home, compile.rs imports it),
+`KeyspaceKind` (Facts vs AlgorithmState — "versioning them would
+corrupt its invariants"), `RelationHandle` (+RelationDeserError with
+its version-mismatch-ruled-out help), THE CATALOG SERIALIZATION
+BOUNDARY (RULED: row values are the value plane's canonical
+encodings, catalog METADATA is structured configuration — msgpack's
+ONE door, SEALED by a private supertrait so "no row value can ever
+be routed through msgpack", with the compile-time ABSENCE PROOF —
+an ambiguity-trick that fails the build if DataValue ever implements
+CatalogRecord), the handle impl (constructors; the encode family
+with zero-clone bitemporal key encoding and its bulk-write
+rationale; put_fact/retract_fact; the polarity-byte value format
+with the id-not-repeated note; ensure_compatible;
+choose_index — longest bound prefix, back-join coverage, law-5
+edges degrading to no-index; and the SCAN SURFACE — "every method
+takes the transaction to read; none of them routes... is_temp is
+the routing DATUM, not the router", skip scans stripping the time
+slots to LOGICAL rows, the zero-clone projected probes with the
+every-mutated-row rationale), the catalog operations (five typed
+errors incl. `TempRelationNotRoutable` — "refused here rather than
+routed" and `RelationHasConstraints`; `allocate_relation_id` with
+THE CONCURRENCY STORY — "uniqueness is isolation's theorem, not an
+atomic's side effect"; `write_relation_row` the single row-update
+funnel; `destroy_relation` gated on indices/constraints/access;
+`set_access_level` DELIBERATELY ungated — "gating it on itself
+would wedge them shut"; rename with four gates), and thirteen
+tests (system-key shapes with Null<Str proven; the full catalog
+lifecycle; the SHADOW-STRUCT corruption test — a hand-serialized
+out-of-range id must refuse decode; destroy-in-one-tx killing own
+writes; counter persistence; the racing-creates CONCURRENCY PROOF
+with typed ConflictError and successful retry; the access ladder;
+typed id exhaustion; temp/duplicate refusals; rename keeping id and
+keyspace; skip-scan time travel; choose_index edges; the
+ensure_compatible fix pin; and the WIRE ROUND-TRIP + PINNED-BYTES
+test — PINNED_HANDLE_HEX, "this test failing is that conversation
+starting") — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT inside session/: the
+  catalog (SystemKey, RelationHandle, the sealed serialization
+  boundary, all catalog operations, the wire-format law) →
+  `session/catalog.rs` ("the store's knowledge of its relations;
+  coherent multi-row moves"); `AccessLevel`/`InsufficientAccessLevel`
+  → `session/access.rs` ("per-relation protection tiers");
+  `IndexPositionUse` relocates to `exec/plan/compile.rs` exactly as
+  its own provisional-home note promises; the handle's bitemporal
+  scan surface consumes store/skip_walk.rs's one walk on arrival
+  (the temporal.rs entry's unfreeze obligation lands HERE: this file
+  is where keyspace bounds and the raw multi-version scan gain their
+  official accessors). `IndexKind`'s manifests remain the projection
+  zones' vocabulary, referenced by the catalog.
+- **L2:** gold, preserve verbatim: knowledge-not-authority; the
+  closed SystemKey with the STORAGE_VERSION merge record; the sealed
+  one-door serialization boundary WITH its compile-time absence
+  proof (the house pattern for two-format discipline); Ord-IS-the-
+  semantics on the access ladder; uniqueness-is-isolation's-theorem;
+  the deleted-amend_key_prefix provenance argument; migration records
+  written where the format changed; the pinned-bytes conversation-
+  starter; refused-rather-than-routed seams; the deliberately
+  ungated access setter with its reason. Nothing condemned. The two
+  fixes-on-port are silent-wrong-answer classes upstream shipped —
+  keep their pins forever.
