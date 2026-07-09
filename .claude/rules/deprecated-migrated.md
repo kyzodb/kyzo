@@ -1742,3 +1742,40 @@ to max(k, ef); LSH appending nothing beyond the base row) — closed)
   build-at-resolution failure hoisting; the refusal-with-a-recipe
   pattern (negation and plain-index both tell the user what to do
   instead).
+
+## query/vm.rs (519 lines; inventory: module doc (one kernel invocation
+per expression node per BATCH; "control flow is SELECTION PARTITIONING,
+not jumps" — short-circuit made columnar, a deciding argument's dead
+rows never touch later arguments so their errors never fire; the
+DuckDB/Velox lineage credited WITH the reason; TWO LAWS:
+observational identity — values, presence, and ERROR IDENTITY, the
+first failing row in row order and first failing subexpression within
+it, kernels never raising mid-batch but recording (row, node)
+candidates in ErrorMin — and totality: every op runs through the
+generic gather-apply-store kernel, "typed kernels substitute as
+measured optimizations, never as semantic forks"), `SelAligned`
+(positional alignment is what lets Cond stitch arms by selection order
+alone), `BatchEval` (monotone node counter = evaluation order;
+children claim ids BEFORE the op's own apply node, matching row-order
+outranking), `eval_expr_batched`/`eval_pred_batched`, `eval_node`
+(the NaN CHECKPOINT mirrored from the row lane — `result_has_nan`
+refused with the SAME typed diagnostic "so no op, present or future,
+can hand a poison value out of this evaluator either"; poisoned rows
+push an UNOBSERVABLE placeholder; Lazy via live-set shrinking over
+Decision Continue/Decided/Refused with undecided rows netting the
+identity; Cond partition-and-stitch with survivors netting null), and
+tests (THE differential — values and error-STRING identity against
+row-by-row eval; guard short-circuit proven in BOTH directions —
+poison untouched behind a false guard, reached behind a true one;
+first-failing-row identity; cond stitching; 500 seeded random
+expression trees with poison/Null/bool leaves over an own LCG) —
+closed)
+- **L1:** preserve-and-move whole → `exec/expr/eval.rs` (seat exists:
+  "kernel-per-expression over code columns" — this file IS that seat's
+  values-v1 form; #120 swaps the ColumnBatch internals beneath it, and
+  both laws survive verbatim).
+- **L2:** gold, preserve verbatim: partitioning-as-control with its
+  credited lineage; error identity as a LAW with its (row, node)
+  mechanism; the twin-lane NaN checkpoint (belt at both evaluators, one
+  diagnostic text); measured-optimization-never-semantic-fork; the
+  both-directions short-circuit proof.
