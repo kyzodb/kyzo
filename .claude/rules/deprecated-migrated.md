@@ -3361,3 +3361,87 @@ refusals; the 4-shape × 80-seed campaign) — closed)
   answer stays the oracle's claim; the multiset-vs-set lineage; review
   findings landed as paired positive/negative pins; loud-failure
   regressions over silent ones. Nothing condemned.
+
+## runtime/mod.rs (52 lines; inventory: MPL header, module doc (the
+session tier: entrypoint, mutation tier, catalog, constraints,
+callbacks), `current_validity` — "the engine's ONE wall-clock read...
+Lives in the runtime tier by law — the value plane has no ambient
+clock, and determinism campaigns replay stamps rather than minting
+them" — with the pre-epoch and beyond-i64 clock refusals typed, and
+eight module decls whose `#[allow(dead_code)]`s each carry an honesty
+note (lib-dead until consumers land; "a mod-level allow covers that
+remainder honestly") — closed)
+- **L1:** structural glue — dies with the directory when runtime/
+  becomes the map's session/ zone (db→session/db.rs,
+  json→session/json.rs, mutate→session/admit.rs,
+  constraint→session/constraint.rs, relation→session/catalog.rs +
+  access.rs, callback→session/observe.rs, verify→session/verify.rs;
+  db_battery is deprecated-absorbed.md's claim). `current_validity`
+  seats at `session/db.rs` beside the entrypoint: the one-clock law
+  travels verbatim — the session tier lifts the ambient input once,
+  and no other zone may mint a stamp.
+- **L2:** gold: the one-clock law and its determinism rationale; the
+  per-allow honesty notes (each dead_code carries its reason and its
+  landing consumer). Nothing condemned. Watch on the split: the
+  target uses `expect` for self-removing dead-code where possible —
+  the notes here already say which allows are principled remainders.
+
+## runtime/json.rs (163 lines; inventory: dual fork header (the wire
+format itself lives in `data::json` — "it needs no live session, so it
+belongs with the value kernel"; this file adds EXACTLY the one piece
+that does need one, composing data::json "not reimplementing any JSON
+shaping"; params as a JSON object so bindings never hand-roll the
+DataValue conversion, with a non-object reported "through the same
+envelope as any other query error, not a separate Result a caller
+could forget to check"; `took` absent on wasm32 "rather than a compile
+error or a stubbed zero that would silently misreport"), module doc,
+`Db::run_script_json` (the ONE "JSON params in, JSON envelope out"
+entry point every binding shares; always Ok at the Rust level; Null
+params = empty map), and five tests (success envelope shape, $param
+binding, parse error without panicking, non-object refusal, and the
+story-#80 product-surface PROOF — "::verify rides this seam like any
+other script... no new kyzo-bin code at all", proven at the seam
+rather than asserted) — closed)
+- **L1:** preserve-and-move whole → `session/json.rs` (seat exists:
+  "the one JSON door over the envelope vocabulary"). Its wire-format
+  half already lives at the model tier per data/json.rs's own entry;
+  this door composes it, unchanged.
+- **L2:** gold: the one-door discipline with failure-through-the-
+  envelope (no forgettable Result); the wasm honesty (absent field
+  over a lying zero); the proven-at-the-seam product claim pattern
+  (a new SysOp reaches every host for free, and a TEST says so).
+  Nothing condemned.
+
+## runtime/callback.rs (212 lines; inventory: dual fork header (the
+registry tuple made a NAMED struct so the two halves' coherence "is at
+least nameable and locally audited — register/unregister/prune are the
+only mutators"; std mpsc over crossbeam with the bounded capacity
+REMOVED — "a bounded channel made send_callbacks... block on a slow
+consumer. Unbounded + lossy-by-disconnect is the whole contract now";
+the two directory unwraps gone — already-unregistered, law 5; THE
+RETRY LAW — the collector is built fresh per commit attempt and
+delivered only after success, "a conflicted attempt can never leak
+phantom events"), module doc (delivery ordering: after
+process-crash-durable commit, in relation order, in mutation order
+within a relation; LOSSY BY DISCONNECT documented — "a notification
+surface, not a replication log — an observer that must not miss
+events should read the relation, not trust the channel"),
+`CallbackOp` (+Display/as_str), `CallbackEvent`,
+`CallbackDeclaration`, `CallbackCollector` ("plain data: building one
+has no side effects"), `EventCallbackRegistry` (register/unregister
+maintaining both maps), and the four Db methods (`register_callback`,
+`unregister_callback`, `current_callback_targets` — "snapshotted once
+per transaction, so a registration racing a commit either sees all of
+it or none of it", the anchor standing.rs's snapshot-consistency
+proof cites, and `send_callbacks` — post-commit only, pruning on send
+failure) — closed)
+- **L1:** preserve-and-move whole → `session/observe.rs` (seat
+  exists: "post-commit callbacks and relation triggers"). The
+  consumers already censused (react/standing.rs) cite this file's
+  contracts by name; the citations survive the rename.
+- **L2:** gold: the lossy-by-disconnect contract stated as product
+  law with its read-the-relation escape hatch; the plain-data
+  collector making phantom events structurally impossible under
+  retry; the once-per-transaction target snapshot that standing
+  queries' consistency proof is built on; coherence-by-named-struct
+  over tuple-field convention. Nothing condemned.
