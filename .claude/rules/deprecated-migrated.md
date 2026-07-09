@@ -554,3 +554,118 @@ law — exactly one of 13 relations over an exhaustive grid) — closed)
   to fix on migration: interval.rs's boundary-topology doc block has a
   stray inline `///` (before `has_start`) fusing two doc paragraphs into
   one line.
+
+## engines/mod.rs (115 lines; inventory: module doc (one shared concept:
+the index-read corruption doctrine), the eight module declarations with
+their per-engine liveness notes (fts/hnsw/lsh live through the db.rs
+surface; gazetteer/sparse/spatial lib-dead awaiting theirs; segments
+wired except one helper; text carrying future surface; the two hostile
+batteries `#[cfg(test)]`), `IndexRowCorrupt` typed Diagnostic error +
+`new`/`from_decode`, and `index_rows` (the scan-wrapping boundary:
+codec refusals become the index's OWN typed corruption by downcast;
+storage/IO errors pass through unchanged) — closed)
+- **L1:** the module tree dissolves into `project/` (each engine to its
+  own subtree — see their entries); the one owned concept —
+  `IndexRowCorrupt` + `index_rows` — → `project/contract.rs` (seat
+  exists): its help text ("the index can be dropped and re-created from
+  its base relation") IS the projection law that file states, and every
+  projection read consumes scans through this boundary.
+- **L2:** gold: corruption-is-an-error-never-a-panic extended to every
+  index read path, defined ONCE because all engines name it; the
+  downcast discipline separating codec corruption from storage/IO
+  errors (a raw `DecodeError` cannot leak out of an engine as its
+  contract). Condemned with the tree: the per-module `#[allow(dead_code)]`
+  liveness ledger — in the target, each projection lands with its
+  surface or doesn't land; the mod-file-as-status-board pattern dies
+  with the monolith crate layout.
+
+## engines/segments.rs (486 lines; inventory: module doc (rebuildable
+index never a second truth; validity TYPED not sequenced — the
+bump-before-commit / witness-after-snapshot pairing, adopted after a
+hostile review proved the documented-ordering version racy; the gated
+rebuild closing issue #82), `Watermark` (monotone, process-local; fresh
+process = zero + empty cache so cross-process staleness cannot arise),
+`Segments<'a>` Copy context + `OFF`, `REBUILD_AFTER_STABLE_MISSES`,
+`SegmentEngine` (marks/segments/misses maps; `slot`;
+`witness_after_snapshot` taking the open snapshot BY SIGNATURE so the
+racy order is unrepresentable; `bump_before_commit` with the
+harmless-early-orphan rollback story; `get` serving on witness equality
+alone; `should_build` — N consecutive misses at the SAME witness;
+`install`; `evict`), `Segment` (dense row-major values + u32 END
+offsets; `build` declining past u32; `row`; `cmp_prefix`;
+`prefix_range`; `partition` binary search), `checked_row_end` (the F7
+total cast, factored out to be testable without 4.3 billion values),
+and the test battery (prefix ranges vs linear-scan oracle across mixed
+types; witness equality governs service incl. orphan + evict + held
+Arc; the stable-miss-streak gate; the #82 alternating-writes shape
+never crossing the gate; miss-map loss only delays rebuild, never
+corrupts serving — the "never a source of truth" doc claim PROVEN;
+empty segment; the u32 boundary) — closed)
+- **L1:** two seats, both existing. The validity discipline —
+  `Watermark`, `witness_after_snapshot`, `bump_before_commit`,
+  `should_build` + miss map — → `project/residency.rs` ("the
+  rebuild/validity discipline (generations, invalidation)": this IS
+  that discipline's first realization, and every other projection needs
+  it). The segment structure and its cache/serving —
+  `Segment`/`SegmentEngine`'s segments map/`Segments`
+  context/`checked_row_end` — → `project/current.rs`. Tests split with
+  their halves; the #82 regression battery travels with the gate.
+- **L2:** gold, preserve verbatim: soundness by SIGNATURE, not calling
+  convention (the enforcement-ladder ruling — same mechanism as the
+  storage layer's `stamp_after_snapshot`); witness equality as the
+  entire serving criterion; declining-is-always-sound (the u32 decline
+  and the gate decline are one doctrine: a projection is optional
+  speed, the fallback pays no more than the build would have); the
+  miss map's never-a-source-of-truth claim proven by a loss test;
+  Arc-held orphans serving mid-scan readers to completion. Arrival
+  notes: `Segments::OFF` threading is door plumbing the #120 operator
+  wiring replaces (see bench_api's entry); the process-local watermark
+  is sound ONLY while segments are memory-only — if projections ever
+  persist, the generation vocabulary must become durable
+  (residency.rs's business, name it there on day one).
+
+## engines/gazetteer.rs (889 lines; inventory: header (wholly new KyzoDB
+work, no Cozo antecedent, built to the ported kernel doctrine), module
+doc (telos: text-to-graph AS A RELATION — tag() yields join-ready tuples;
+the dictionary relation as the one truth, automaton rebuilt per compile;
+leftmost-longest with ALL entities at the winning span; ASCII-only case
+folding derived from the span-truthfulness law — full-Unicode folding is
+length-changing, and the FTS Lowercase filter is full-Unicode CORRECTLY
+because FTS never owes an offset back; three laws; the fixed-rule
+exposure seam), `GazetteerConfig`, typed errors `GazetteerEmptySurface`
+(zero-width pattern = definition error) + `GazetteerBuildFailed`,
+`gazetteer_dict_metadata`, `Gazetteer` (Option<AhoCorasick> so
+correctness never rides on the library's zero-pattern behavior;
+entities_by_pattern sorted/deduped; retained config), `Tag`
+(document-cased surface), `compile_dictionary` (sorted BTreeMap collector
+= pattern order a pure function of relation contents; folded keying
+matches the automaton's own ASCII folding so automaton-equivalent
+patterns can never tie; typed refusals for arity/non-list/non-string/
+empty), `tag` (canonical (start, entity) order), `pattern_count`, and
+the test battery (the naive greedy oracle + agreement across documents;
+the overlap policy pinned; shared-surface ambiguity emits every entity;
+adjacent/repeated; folding keeps document casing; case-variant collapse;
+exact mode; multibyte byte-offset pins; no-match-inside-a-char; zalgo/
+RTL/ZWJ vs oracle; empty dict/doc; two-compile determinism; the three
+typed-corruption cases) — closed)
+- **L1:** preserve-and-move whole. The compiled automaton is a resident
+  rebuildable structure whose source relation stays the truth — the
+  project/ zone's exact kind ("rebuildable speed, never truth") — but no
+  tree line names it. NEW-SEAT proposal (operator ratification
+  required): `project/gazetteer.rs` — dictionary entity tagging: the
+  compiled leftmost-longest automaton over a surface-forms relation.
+  The exposure seam the module doc names (a `GazetteerTag` fixed rule)
+  lands in `rules/` and CONSUMES this seat; it is chartered by the doc,
+  not yet built.
+- **L2:** gold, preserve verbatim: the span-truthfulness law and the
+  ASCII-only folding DERIVATION from it (a law forcing a design choice,
+  stated with the FTS contrast — this is the house's best doc-law
+  writing); spans-on-boundaries BY CONSTRUCTION (a non-empty valid-UTF-8
+  pattern cannot align inside a char — impossibility, not a check);
+  keep-all-ambiguous-entities (dropping a candidate silently is the
+  ambiguity a downstream join exists to resolve); determinism as a pure
+  function of relation contents via sorted collection; corruption typed
+  through the shared `IndexRowCorrupt`. Watch: `compile_dictionary`
+  scans the dictionary on every compile with no residency discipline —
+  when it arrives in project/, it must adopt residency.rs's
+  witness/generation vocabulary instead of growing its own.
