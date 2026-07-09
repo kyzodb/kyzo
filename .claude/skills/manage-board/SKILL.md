@@ -90,8 +90,9 @@ manage-board.py move-issue N  (at least one of:)
 ```
 
 Moves the card and/or reassigns the milestone. `--column focus` sets the
-In Progress column AND adds the "focus" state label; `--column todo|done`
-removes the focus label. Closing on done is the board's own auto-close
+In Progress column AND adds the "focus" state label — and REFUSES unless the
+story has a linked branch (`gh issue develop N --name <branch> --base main`);
+`--column todo|done` removes the focus label. Closing on done is the board's own auto-close
 workflow, not this tool. Never creates a card — an issue with no card is
 drift you must surface, not repair silently.
 

@@ -518,6 +518,16 @@ def _card_id(number: int) -> str | None:
     return ids[0] if ids else None
 
 
+def _linked_branches(number: int) -> list[str]:
+    raw = json.loads(_gh(
+        "api", "graphql", "-F", "n=" + str(number),
+        "-f", "query=query($n: Int!) { repository(owner: \"" + OWNER + "\", name: \"" + REPO + "\") "
+              "{ issue(number: $n) { linkedBranches(first: 10) { nodes { ref { name } } } } } }",
+    ))
+    nodes = raw["data"]["repository"]["issue"]["linkedBranches"]["nodes"]
+    return [n["ref"]["name"] for n in nodes if n.get("ref")]
+
+
 def _place_card(number: int) -> str:
     reply = json.loads(
         _gh("project", "item-add", str(PROJECT), "--owner", OWNER, "--format", "json",
@@ -679,6 +689,12 @@ class MoveIssue(BaseModel):
                 )
             _set_column(item_id, self.column)
             if self.focus:
+                if not _linked_branches(self.number):
+                    raise RuntimeError(
+                        f"#{self.number} has no branch linked to it — focus requires one. "
+                        f"Create it: gh issue develop {self.number} --repo {OWNER}/{REPO} "
+                        f"--name <branch> --base main"
+                    )
                 _gh("issue", "edit", str(self.number), "--repo", f"{OWNER}/{REPO}",
                     "--add-label", "focus")
             else:
