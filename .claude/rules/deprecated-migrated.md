@@ -669,3 +669,94 @@ typed-corruption cases) — closed)
   scans the dictionary on every compile with no residency discipline —
   when it arrives in project/, it must adopt residency.rs's
   witness/generation vocabulary instead of growing its own.
+
+## engines/sparse.rs (966 lines; inventory: header (new to KyzoDB),
+module doc (the SPLADE/BM25-family shape; one inverted relation `[dim,
+src_key…] → weight`; EXACT dot product with FIXED ascending-dimension
+summation order; the three tier laws; RA + mutation seams with the
+del-before-put discipline; the Qdrant design reference — independent
+implementation, no code copied — with the ONE deliberate divergence:
+negative weights REFUSED at admission so future WAND pruning is
+unconditionally sound, lifted only by explicit scope decision), typed
+errors `SparseWeightInvalid` + `SparseDuplicateDimension`,
+`admit_sparse` (the single gate: finite non-negative, sorted ascending,
+duplicates refused; both put and search pass through it),
+`sparse_index_metadata` (dim leading so a posting list is one prefix
+scan), `posting_key_scaffold`, `sparse_put`, `sparse_del`,
+`sparse_total_docs` (hoisted; unused by dot scoring, provided for the
+BM25/df-idf seam), `decode_posting` (typed corruption + RE-CHECKING the
+admission invariant on read so a corrupted store cannot poison a score),
+`SparseSearchParams`, `sparse_search` (positive-only hits; score-desc +
+memcmp-key tiebreak; no-filter truncation up front; `with_capacity`
+capped at `min(k, len)` so a caller-controlled k cannot abort the
+allocator; the check-BEFORE-push k discipline with its cross-engine fix
+note), and the test battery (naive full-scan reference + agreement;
+`summation_order_is_pinned` via the 2^24 ULP construction;
+tie-determinism + truncation; put/del round trip; byte-identical
+two-fresh-builds at BIT level; three corrupt-posting typed refusals
+incl. a stored negative weight; empty/all-zero edges; four admission
+refusals; filter-counts-matching-rows) — closed)
+- **L1:** preserve-and-move whole → `project/sparse/` (seat exists:
+  "sparse-vector inverted lists"). The hostile battery joins it as its
+  named hostile section (see the absorbed entry). The maintenance seam
+  (del-before-put from the mutation tier) rewires to `session/admit.rs`'s
+  write path when the tree lands.
+- **L2:** gold, preserve verbatim: the single admission gate WITH the
+  read-side re-check (unrepresentable downstream AND un-poisonable from
+  storage — belt and suspenders each carrying a different threat); the
+  Qdrant divergence written as a scope ruling with its trade stated;
+  the fixed summation order pinned by a test whose construction (2^24)
+  makes order-sensitivity observable; bit-level cross-build identity;
+  the allocator-abort guard; `sparse_total_docs` documented as
+  present-for-a-named-seam rather than silently unused. Defect to fix
+  at migration: `posting_key_scaffold`'s doc comment says the dimension
+  slot is "left as `Bot`" but the code pushes `DataValue::Null` — a
+  stale reference to the deleted `Bot` variant (the json.rs entry
+  records its other residue); the code is right, the words are wrong.
+
+## engines/fts.rs (1242 lines; inventory: dual MPL header carrying the
+re-architecture LEDGER (each Cozo defect named with its fix: `SessionTx`
+methods → pure functions over the tx species; `unwrap` on every posting
+decode → law-5 typed `IndexRowCorrupt`; `l_iter.next().unwrap()` on
+And/Near → empty nodes contribute nothing, "the engine never trusts the
+shape of an AST it did not itself build"; scoring UNCHANGED and loudly
+NOT BM25; `N` hoisted to `fts_total_docs`), module doc (one relation
+`[word, src_key…]` → parallel occurrence arrays + token count; query
+pipeline; exact scoring formulae; post-filter semantics — k counts
+MATCHING rows; RA/mutation/lifecycle seams incl. TokenizerCache keyed by
+full index handle name), `FtsScoreKind` (the engine's own vocabulary),
+`FtsExtractorType`, `fts_index_metadata`, `extract_text` (Null = not
+indexed), `posting_key_scaffold`, `fts_put` (per-distinct-term
+collector; del-before-put contract), `fts_del`, `fts_total_docs`,
+`LiteralPostings` + `literal_postings` (prefix literals scan
+`[value, value·LARGEST_UTF_CHAR]`; three typed corruption refusals),
+`compute_score`, `eval_ast` (recursion bounded BY THE PARSER's nesting
+limit; And intersects summing, Or maxes, Not subtracts), `eval_near`
+(the original's first-literal re-scan PRESERVED "so the semantics match
+exactly"; live-position chaining; booster = sum), `FtsSearchParams`,
+`fts_search` (CancelFlag checked per fetched row; deterministic
+score-desc + memcmp tiebreak where the original left ties to hash-map
+order; allocator-abort guard; check-before-push), and the test battery
+(naive TF reference; AND/OR/NOT/prefix; NEAR at two distances; the
+TF-IDF formula pinned to its exact closed form; delete withdraws;
+typed extractor + corrupt-posting errors; stopword-only query
+early-returns empty; the k=0 filter-path regression pin — the twin the
+sparse_hostile entry demanded, CONFIRMED present) — closed)
+- **L1:** preserve-and-move whole → `project/text/` (seat exists: "full
+  text: inverted index, analyzers, tokenizers (owned)") as the subtree's
+  index/search file; the analyzer plumbing it consumes arrives from
+  `engines/text/` (its own entries). Lifecycle wiring (`::fts
+  create/drop`) rewires to `session/` when the tree lands.
+- **L2:** gold, preserve verbatim: the header's defect-by-defect
+  fork ledger (the house's best fork-attribution writing — keep the
+  form); NOT-BM25 stated at every seam a reader could confuse it;
+  determinism as an IMPROVEMENT over upstream documented as such;
+  never-trust-unbuilt-ASTs; recursion bounded by the parser so the
+  engine needs no depth guard of its own; byte-compat over elegance in
+  `eval_near` (the redundant first-literal re-scan is a documented
+  semantics pin — reforge it only with a differential proving equality).
+  Question for the trials lane (recorded, not guessed): whether a
+  stored term of the form `prefix·U+10FFFF·tail` can escape the prefix
+  literal's inclusive upper bound `[value, value·LARGEST_UTF_CHAR]` —
+  reachable only if a tokenizer can emit U+10FFFF in a term; the
+  hostile battery for this engine should decide it.
