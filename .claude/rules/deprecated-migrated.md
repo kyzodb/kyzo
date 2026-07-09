@@ -1085,3 +1085,44 @@ validate proof sweep) — closed)
   invariant, not asserted. The `FtsIndexConfig`/`parse/sys.rs`
   duplication remains an open obligation — the lifecycle move is where
   it dies.
+
+## kyzoscript.pest (383 lines; inventory: dual header with TWO
+documented divergences from upstream — (1) backtracking-free separated
+sequences: the upstream `(x ~ ",")* ~ x?` shape parses every item TWICE
+in a non-memoizing PEG, O(2^depth) on recursive rules (a 20-deep nested
+list took ~20 s, 25-deep ~52 s — "a remote DoS from query text"), every
+such rule rewritten to a parse-once shape with the [SEQ]/[SEQ1]
+LANGUAGE-EQUIVALENCE PROOFS in the header and each rewritten rule citing
+its shape inline; (2) compound-atomic strings: `raw_string` (and both
+quoted forms) are `${…}` so implicit whitespace/comments can never open
+inside a token, with the story-#93 fence law — the fence is `"_"+`
+NEVER `"_"*`, because a zero-length fence would make every double-quoted
+string match `raw_string` first and silently switch off ALL escape
+processing ("live in every KyzoScript double-quoted string literal ever
+written against this grammar until the fence was widened") — then the
+full grammar: script alternation, sys ops (:: relations/columns/
+indices/remove/rename/access_level/triggers/constraints-as-denial-rules/
+index+hnsw+fts+lsh create/drop/compact/merkle_root/running/kill/
+explain/verify/fixed_rules), nested block comments, the identifier
+family, the three rule forms (:= / <- / <~), the validity seat with the
+story-#62 keyword block (`@spans`/`@delta_sys`/`@delta` as ATOMIC
+keyword tokens with the ordering rationale — delta_sys before delta or
+a prefix match splits it — and the atomicity rationale for the
+boundary guard), atoms/apply forms/search_apply, the expression grammar,
+options (incl. the write-time `@` note deferring restriction to
+parse.rs), the string/number literal family (PUSH/POP fence,
+underscore digits, hex/octal/binary), table schema and the column type
+grammar, the imperative %-statement family, the FTS mini-language, and
+the expression/param-list entry points — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/grammar.pest`
+  (seat exists: "the KyzoScript grammar — advertises nothing unowned").
+- **L2:** gold, preserve verbatim: the equivalence proofs living IN the
+  grammar file with per-rule citations (a grammar that carries its own
+  correctness argument); the DoS measurements kept as the rewrite's
+  justification; the #93 fence law with its blast radius stated; the
+  keyword-seat block's double rationale. Finding for parse/'s census to
+  settle: `describe_relation_op`, `from_clause`, and `to_clause` are
+  defined but referenced by NO other rule and absent from the
+  `sys_script` alternation — either they are direct pest entry points
+  somewhere in parse/, or they are dead rules to Remove at migration;
+  the parse-tier read decides which.
