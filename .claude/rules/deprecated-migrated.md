@@ -5309,3 +5309,99 @@ closed)
   quadratic-ish on dense communities; fine for the invocable-library
   tier today, a bench-lane candidate when rules/ gets its
   instrumentation. Nothing condemned.
+
+## fixed_rule/algos/k_core.rs (430 lines; inventory: KyzoDB-only MPL
+header, module doc (NEW in KyzoDB, no Cozo precedent — all core
+numbers in one O(V+E) Batagelj–Zaversnik pass; the GRAPH
+INTERPRETATION ruling — coreness is a simple-undirected-graph
+invariant "matches every reference implementation, e.g. NetworkX",
+so the directed relation reads undirected and degree counts DISTINCT
+neighbors, "a deliberate departure from the CSR's parallel-edge
+retention... documented and test-pinned"; the DETERMINISM argument —
+an invariant independent of peel order, plus a fixed peel order
+anyway; fully iterative "law 5 is not even in play"), the test-only
+peel counter (mirroring shortest_path_bfs's observable), the
+`KCoreDecomposition` rule (arity 2), `simple_adjacency` (self-filter
++ dedup over the already-sorted CSR), `core_numbers` (bucket
+counting-sort with in-place offset conversion; the vert/pos/bin
+peel with the swap-slide; "the load-bearing step is the neighbor
+decrement + bucket slide: without it... the result collapses to raw
+degree"; per-vertex cancel poll), and six tests: an INDEPENDENT
+Matula–Beck reference ("O(V²), no bucket trickery — a different
+implementation from the one under test. Keyed by node name so it is
+independent of interning order"); `coreness_differs_from_degree`
+(a's degree 3 vs coreness 2 — the raw-degree mutant); the
+naive-reference differential on a K4 + rim + tails graph; the
+self-loop/parallel-edge invariance pin; determinism over a seeded
+graph; the 200k-cycle scale test with exact all-2s answer; and the
+inner-poll cancellation pin (baseline ~60k peels vs ≤1) — closed)
+- **L1:** preserve-and-move whole → `rules/algo/k_core.rs`.
+- **L2:** gold, preserve verbatim: the simple-graph ruling with its
+  reference-implementation citation and pinned departure from the
+  shared CSR semantics; the independent structurally-different
+  reference; the load-bearing-step note naming the collapse mutant;
+  exact answers at scale; the counter-not-clock cancellation
+  pattern adopted from its exemplar. Nothing condemned.
+
+## fixed_rule/algos/all_pairs_shortest_path.rs (431 lines; inventory:
+dual header (SEAM(parallelism) closed for the per-start Dijkstra
+fan-out with the determinism accounting: order-preserving map AND
+"the only cross-start float reduction — betweenness' accumulation —
+is left as a sequential fold over the ordered per-start segments, so
+the summation order is fixed. Closeness has no cross-start
+reduction"; group_by→chunk_by), `BetweennessCentrality`
+(per-start `dijkstra_keep_ties`, tied paths sharing 1/ties credit to
+interior nodes; the sequential merge fold; arity 2),
+`ClosenessCentrality` (per-start nc²/Σd/(n−1) over finite distances;
+arity 2), `dijkstra_cost_only` (stale-entry skip; push_increase;
+per-pop cancel poll), and the tests: an `#[ignore]`d
+`zz_timing_evidence` rig printing 1-thread vs default-pool timings
+with a byte-equality assert; the two pool-vs-pool DETERMINISM tests
+(betweenness named as "the site where a parallel float reduction
+would bite; the fold is kept sequential, so it does not"); and the
+two hand-computed VALUE ORACLES on the a—b—c path (closeness 1.5/
+2.25/1.5 "all exact in f32"; betweenness 0/2/0 with the
+unnormalized-over-ordered-pairs semantics stated) — closed)
+- **L1:** preserve-and-move whole → `rules/algo/` (the map's
+  "centralities" line — one file for the APSP-derived pair, or split
+  per rule at the operator's preference; `dijkstra_cost_only` stays
+  beside its consumers). The `#[ignore]`d timing rig is a rule-#11
+  ledger item — it graduates to the bench lane on migration
+  (measurement rig, not a test).
+- **L2:** gold: the parallel/sequential boundary drawn exactly at
+  the float fold and argued at both the seam and the test;
+  semantics-as-implemented stated in the oracle docs (unnormalized
+  betweenness, closeness's exact formula — the destination doc
+  should carry both so users don't assume NetworkX normalization).
+  Nothing condemned beyond the rig's lane change.
+
+## fixed_rule/algos/random_walk.rs (462 lines; inventory: dual header
+(LAW-5 FIX — `WeightedIndex::new(..).unwrap()` panicked the engine on
+an unusable user distribution, "all zeros being the reachable case";
+now a typed error naming the offending expression; the structural
+choose unwrap; rand 0.9; and the DETERMINISM FIX — OS entropy made
+"the whole walk" vary run to run; seeded via the `seed` option
+through SeededRng), the `RandomWalk` rule (edges/nodes/starting with
+guards; iterations/steps/seed options; the optional `weight`
+expression compiled over nodes++edges bindings with non-negative
+enforcement; per-step candidate collection, weighted or uniform
+seeded pick, sink break; per-step cancel poll; arity 3 rows
+(counter, start, path)), and six tests: the all-zero-weights TYPED
+refusal regression; the unweighted smoke; the VALUE ORACLE "on the
+one graph where randomness has no choices" (forced path at three
+step bounds incl. sink stop); byte-identity over 8 runs on a
+branching graph WITH the anti-vacuity assert ("the paths are not
+all length-1... so byte-identity is a real determinism claim"); the
+seed-is-load-bearing test; and `default_seed_output_is_golden` —
+the literal path the DEFAULT seed determines, "run_twice above only
+proves the output is STABLE; this proves it is the specific value
+DEFAULT_SEED... determine[s]", the other half of rng.rs's guard
+chain — closed)
+- **L1:** preserve-and-move whole → `rules/algo/random_walk.rs`.
+- **L2:** gold, preserve verbatim: the reachable-panic analysis in
+  the law-5 fix (which input classes are already refused upstream
+  and which one actually reaches the unwrap); the three-layer
+  determinism guard (stability, seed-steering, golden literal) —
+  with label_propagation, the completed house pattern for
+  stochastic rules; anti-vacuity asserts inside determinism tests.
+  Nothing condemned.
