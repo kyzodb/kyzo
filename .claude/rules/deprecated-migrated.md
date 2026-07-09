@@ -5206,3 +5206,106 @@ tie behavior") — closed)
   run to run in production output. astar.rs's monotone sub-priority
   counter is the in-tree fix pattern; the rules-zone law should
   demand it here and at prim.rs on arrival. Nothing else condemned.
+
+## fixed_rule/algos/strongly_connected_components.rs (283 lines;
+inventory: dual header (inline CSR; dead imports/cfg gates dropped;
+and the LAW-5 FIX pinned vs upstream — the recursive `dfs` "one stack
+frame per graph edge, so a stored component a few hundred thousand
+nodes deep overflowed the thread stack and aborted the whole process
+(not a typed refusal, a crash)"; the explicit frame stack is "the
+exact iterative Tarjan proven in query/graph.rs... byte-identical
+component labels"; the cancel poll moved INSIDE the DFS loop), module
+doc (registered as ConnectedComponents too — undirected build makes
+the SCCs weak components), the `StronglyConnectedComponent` rule
+(strong flag at construction; the optional nodes relation with the
+systemic-finding guard and its missing-vs-nullary ruling; isolated
+nodes get fresh group ids; arity 2), `TarjanSccG` (open — discovery
+id + component stack; `dfs` on (node, cursor) frames with the
+recursive-version correspondence argued step by step — the O(1)
+`out_neighbor` cursor "so the cursor walk is linear, not quadratic,
+in degree", the on-stack-guarded low-link propagation at frame close
+"exactly what the recursive if on_stack[to] after the nested call
+did"; per-frame-step cancel poll; low-map grouping), and three tests:
+the SCC/weak/isolated grouping sanity; `deep_chain_does_not_overflow`
+— a 300k-node single cycle where the recursive version "overflowed
+the 8 MiB thread stack and aborted the process", with the exactness
+claim ("the exact answer... also proves the iterative low-link
+propagation is correct at depth, not merely non-crashing"); and
+`cancellation_inside_dfs` — interruptibility now depends ENTIRELY on
+the in-DFS poll, "removing the in-DFS poll makes this run complete
+Ok and fail here" — closed)
+- **L1:** preserve-and-move whole → `rules/algo/scc.rs` (the map's
+  own name for this line).
+- **L2:** gold, preserve verbatim: the crash-to-refusal law-5 fix
+  with its proven-elsewhere pedigree (the same frame-stack shape as
+  exec/plan/graph.rs — two implementations of one pattern, each
+  carrying the correspondence proof); depth tests that assert the
+  ANSWER, not just survival; a cancellation test aimed at the exact
+  poll that carries the property. Nothing condemned.
+
+## fixed_rule/algos/shortest_path_bfs.rs (319 lines; inventory: dual
+header (the duplicated upstream header dropped; structural unwraps
+annotated; the original's DbInstance test ported onto the payload
+harness; and the CANCELLATION FIX pinned vs upstream — "the inner BFS
+traversal polled nothing... a single start over a huge reachable set
+could not be interrupted"; now polled once per dequeued node), module
+doc (one path per (start, end) pair, "Null where unreachable"), the
+TEST-ONLY OBSERVABLE (a thread_local dequeue counter that "lets the
+test assert a DETERMINISTIC effect of the per-node poll... instead
+of a load-sensitive wall-clock ratio"; the non-test build gets "an
+empty inlined no-op, so the production loop is unchanged"), the
+`ShortestPathBFS` rule (starting/ending collected with min-len
+guards; per-start BFS with a pending-endings set enabling early
+break; count-BEFORE-poll ordering "so a pre-set flag lets at most
+this one node through"; route reconstruction; Null rows for
+unreachable pairs; arity 3), and three tests: the ported
+`test_bfs_path`; `honors_cancel_pins_inner_poll` — the setup makes
+the inner poll "the ONLY thing that can stop the run early" (one
+start, 250k chain, an end node ABSENT from the graph so the frontier
+never empties), baseline >200k expansions vs ≤1 under a pre-set
+flag, "load-independent — it holds on a fully-loaded machine", the
+reviewer's line-deletion mutant named; and the VALUE ORACLE pinning
+the exact route ("the direct edge [a,c], never [a,b,c]") — closed)
+- **L1:** preserve-and-move whole → `rules/algo/shortest_path_bfs.rs`
+  (or folded beside bfs.rs per the map's one-algorithm-per-file
+  naming — the operator names the file; the algorithm is distinct
+  from Bfs and keeps its own seat by default).
+- **L2:** gold, preserve verbatim: the deterministic-observable
+  pattern for cancellation proofs (a counter, not a clock — the
+  sharpest cancellation test in the tier); count-before-poll
+  ordering reasoned in place; Null-for-unreachable as the declared
+  contract (contrast astar's ∞-row — the rules-zone law should pick
+  ONE unreachable representation; both are now on the record).
+  Nothing condemned.
+
+## fixed_rule/algos/louvain.rs (389 lines; inventory: dual header
+(inline CSR with "same sorted-adjacency layout and node-count
+derivation"; log::debug! dropped — no `log` in the workspace; the
+structural hierarchy-walk unwrap; the ported sample test), module
+doc, the `CommunityDetectionLouvain` rule (undirected/max_iter/
+delta/keep_depth options; per-node hierarchy labels walked through
+the collected levels, reversed, optionally truncated; arity 2),
+`louvain` (contract until ≤2 nodes or no shrink), `calculate_delta`
+(modularity gain vs a target community), `louvain_step` (weight
+tallies; modularity-guarded sweep loop with the delta threshold;
+per-node cancel poll placed at the top of the community scan with
+its unit-of-work argument; strict `>` best-improvement; community
+renumbering by first appearance; contraction into a BTreeMap-keyed
+coarser graph), and three tests: the ported 16-node sample;
+`adjacency_tie_break_pinned` — the VALUE ORACLE with the full hand
+computation (total_weight 12, every Δ derived) ending in an EXACT
+f32 tie where "the strict > keeps the first candidate met in
+adjacency order — sorted CSR order visits neighbor 1 before 2...
+Reversed adjacency would... flip node 4 into comm{2,3}: this pin
+kills the reversed-CSR-sort mutant"; and the F2 cancellation test —
+closed)
+- **L1:** preserve-and-move whole → `rules/algo/louvain.rs`.
+- **L2:** gold: the tie-break pinned BY hand computation down to the
+  f32-exactness argument (identical expressions summed in the same
+  member order — a tie that is deterministic, not hash-seeded, and
+  the test that owns the reversed-CSR mutant for the whole tier);
+  cancellation placed and argued at the real unit of work. Watch:
+  the modularity recomputation is O(n·comm-size·degree) per sweep —
+  quadratic-ish on dense communities; fine for the invocable-library
+  tier today, a bench-lane candidate when rules/ gets its
+  instrumentation. Nothing condemned.
