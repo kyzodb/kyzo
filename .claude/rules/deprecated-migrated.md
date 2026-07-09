@@ -760,3 +760,106 @@ sparse_hostile entry demanded, CONFIRMED present) — closed)
   literal's inclusive upper bound `[value, value·LARGEST_UTF_CHAR]` —
   reachable only if a tokenizer can emit U+10FFFF in a term; the
   hostile battery for this engine should decide it.
+
+## engines/lsh.rs (1323 lines; inventory: dual header + rust-minhash
+credit, the re-architecture ledger (TWO ratified on-disk format fixes:
+the original's `unsafe` native-endian `Vec<u32>` reinterpretation —
+non-portable AND UB — became explicit little-endian, forced by
+`#![forbid(unsafe_code)]`; and signatures now hash memcmp-ENCODED
+element bytes through seeded portable xxHash32, replacing
+`std::hash::Hash`'s native-endian unpinned writes; permutation seeds
+drawn deterministically via splitmix64 replacing OS entropy; law 5
+replacing `unreachable!()`s; deterministic candidate order replacing
+hash-set truncation of an unspecified subset; the
+tokenizer-cache-keyed-by-FULL-index-name contract), module doc (two
+relations + a persisted manifest; candidate SET not ranking — "fusion
+and ranking are joins and score expressions, not API surface"),
+`MinHashLshIndexManifest` (wire form IS an on-disk format) +
+`get_hash_perms`, the two metadata minters (inverse declared `Bytes`
+upstream but always stored a List — the declaration now truthful),
+`DEFAULT_PERM_SEED`, `splitmix64`, `HashPermutations`
+(seeded new / LE to_bytes / fallible from_bytes), `HashValues`
+(element_bytes + ngram_bytes canonical portable encodings; min-fold;
+`band_chunks` with an EQUALITY arithmetic guard and u16 band tags),
+`LshParams`/`Weights`/`find_optimal_params` (ported intact),
+`decode_inv_chunks` (decode BEFORE delete — the original deleted first
+then hit unreachable), `lsh_del`, `lsh_put` (re-put removes first;
+valueless postings), `LshSearchParams` (unranked-truncation-is-a-
+decision doc), `lsh_search` (BTreeSet candidates; smallest-k-by-key on
+BOTH filter paths), and the test battery (LE pins + round trips; the
+band guard tested against BOTH weakenings of its equality; parameter
+search determinism; the MinHash Jaccard law; seeded-draw determinism;
+`signature_bytes_are_pinned_and_portable` with an INDEPENDENT ANCHOR
+hand-derived from the format law and chained to number.rs's golden
+vectors so drift isolates to encoder vs hash; whole-index
+two-fresh-builds byte-identity; put/search/del round trip; corrupt
+inverse row typed on del AND re-put paths; the manifest wire bytes
+pinned as hex) — closed)
+- **L1:** preserve-and-move whole → `project/dedup/` (seat exists:
+  "MinHash-LSH near-duplicate signatures"). Lifecycle wiring (`::lsh
+  create/drop`) rewires to `session/`; the recorded `FtsIndexConfig`
+  dedup obligation (duplicated between `parse/sys.rs` and the fts tier
+  — one concept, one name) lands with that lifecycle move.
+- **L2:** gold, preserve verbatim: both format fixes with their
+  rationale prose (the UB-and-portability argument is the teaching
+  document for why `forbid(unsafe_code)` is a format-correctness tool);
+  the anchored signature pin (three independent derivations chained so
+  a failure NAMES its layer); unranked truncation defended as a
+  decision (ranking a probabilistic candidate set on signature noise
+  "dresses the result as a ranking the structure cannot honor");
+  decode-before-delete; the equality guard's both-direction tests
+  (mutation-hardened); smallest-k-by-key making the subset
+  filter-invariant and platform-invariant. The `jaccard` helper is
+  `#[cfg(test)]` — keep it test-only; a production similarity claim
+  belongs to the relational tier's explicit expression.
+
+## engines/spatial.rs (1529 lines; inventory: header (wholly new,
+capability #44; the inherited `haversine` scalar is the exact re-scoring
+primitive; the curve encoding lives INSIDE the memcmp law), module doc
+(index = `[curve: 8 BE Morton bytes, src_key…] → (lat, lon)` with the
+exact coordinates DENORMALIZED so the re-check needs no base fetch;
+`CURVE_BITS = 32` as a pinned format decision; the boundary policy —
+non-wrapping boxes, typed `AntimeridianBoxRefused` with the two-box
+recipe, kNN over-scanning full longitude at seams; distances angular
+radians, "the engine takes no stance on the figure of the Earth"),
+format constants incl. `SPLIT_BUDGET`, four typed errors, `GeoPoint`
+(`admit` the ONLY constructor — NaN/range unrepresentable past it),
+monotone `quantize`, the Morton codec (spread32/compact32/encode/decode),
+`SpatialIndexManifest` + `spatial_index_metadata`, `extract_point`/
+`posting_key`/`spatial_put`/`spatial_del`, `BoundingBox` (admit/contains/
+quantized), the quadtree decomposition (`cell_range`/`decompose_box`
+with range merging/`decompose_cell` — a cell is dropped ONLY when
+provably disjoint; budget exhaustion coarsens, never under-approximates),
+`decode_posting` (curve must be exactly 8 bytes)/`fetch_base`/`scan_box`/
+`spatial_range_query`, and the kNN machinery (`KnnParams`,
+`angular_distance` identical to the scalar, `RingBox`/`ring_box`
+pole/antimeridian snap, `inner_radius` — a SAFE UNDER-estimate so the
+stop rule can only be stricter, `Candidate` max-heap with deterministic
+tie-break, `spatial_knn` doubling ring stopping when the kth distance ≤
+the scanned box's inner radius or the box spans the globe), and the
+test battery (memcmp-order == curve-order over 5000 random points —
+THE law; ATTACK R5: the quantization ROUNDING MODE pinned via city
+fixtures with ≥0.5 fractional parts, "hostile-review F1, killer adopted
+verbatim"; pinned curve codes incl. ASYMMETRIC fixtures that kill a
+coherent lat/lon axis-swap mutant symmetric fixtures cannot; -0.0/0.0
+one cell one key; typed admission refusals asserting concrete error
+types; range vs naive full scan 2000×300 + determinism; inclusive
+boundary points; the degenerate point-query box as the sharpest
+boundary adversary; duplicate coordinates distinct; kNN vs exact sort
+1500×120×3; exact ascending distances; antimeridian + over-the-pole
+neighbours found; corruption typed; del withdraws; manifest wire
+round-trip) — closed)
+- **L1:** preserve-and-move whole → `project/spatial/` (seat exists:
+  "the space-filling-curve access path"). Companion RA/lifecycle wiring
+  lands in `exec/op/search.rs` and `session/` as its own staged patch —
+  the file already names that seam.
+- **L2:** gold, preserve verbatim: the safe-direction doctrine (every
+  approximation — monotone quantization, budget coarsening, inner-radius
+  under-estimate, seam over-scan — biased so error costs re-checking,
+  never a missed row, and each bias documented where it lives); the
+  curve-inside-the-memcmp-law test; the asymmetric axis-ownership pins
+  and the rounding-mode pin (mutant-killing tests justified by the
+  exact mutant); the kNN stop rule as a proof, not a heuristic; the
+  admit-only construction. One gap to close at migration: the manifest
+  round-trips but its wire bytes are NOT hex-pinned — bring it to the
+  LSH manifest's pinned-hex standard (it is equally an on-disk format).
