@@ -1714,3 +1714,31 @@ closed)
   inherited-not-reargued soundness with the strictly-less-work
   argument; the named pushdown gap (chunk 4) instead of a silent
   materialize-everything.
+
+## query/search.rs (423 lines; inventory: module doc (claim-becomes-
+proof at the catalog boundary: `SearchInput` is syntax, `SearchAtom`
+holds live handles, decoded manifest, engine params, and the EXACT
+output frame; ONE resolution site so every mistake is "a typed,
+spanned refusal at that boundary, never a downstream surprise"; the
+dataflow contract — the atom binds own_bindings and requires its
+query's variables, "placed exactly like a unification"), `SearchAtom`/
+`SearchConfig` + the three resolved kinds (FTS/LSH analyzers built
+ONCE at resolution — "a manifest that no longer builds is a refusal
+here, not mid-scan"), the typed-refusal family (incl.
+`SearchOverPlainIndex` redirecting to the planner and
+`NegatedSearchUnsupported` with the semantics argument — "'not near'
+has no single sound meaning"), the param-taking helpers (consumption-
+based: LEFTOVER params refuse as unknown-for-this-kind; leftover
+bindings refuse as column-not-found), `base_frame` (user variable or
+generated ignored binding per column), and `resolve_search` (HNSW's
+bind-column order mirroring the engine's append contract; ef defaults
+to max(k, ef); LSH appending nothing beyond the base row) — closed)
+- **L1:** preserve-and-move whole → `exec/plan/` as the search-atom
+  resolution (plan-time vocabulary + the catalog-proof step, reached
+  through the session's handle closure exactly as today); the
+  operator that runs it is exec/op/search.rs (its entry above).
+- **L2:** gold: one-resolution-site; consumption-based unknown
+  detection (remove-then-refuse-leftovers — no allowlist to drift);
+  build-at-resolution failure hoisting; the refusal-with-a-recipe
+  pattern (negation and plain-index both tell the user what to do
+  instead).
