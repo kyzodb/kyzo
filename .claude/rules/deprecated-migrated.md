@@ -1299,3 +1299,46 @@ construction proven semantically invisible) — closed)
   `i as u32` after an i64 parse, silently WRAPPING distances past
   u32::MAX (`NEAR/4294967306(...)` becomes distance 10) — route it
   through the same `BadFtsNumber` refusal the parse failure gets.
+
+## parse/expr.rs (767 lines; inventory: dual header (`expr2bytecode`
+relocated to data/expr.rs — "compiling an expression is the
+expression's own domain"; radix overflow typed where the original
+PANICKED on `0x…` past i64; typed accessors; LazyLock), module doc
+(the proofs established at construction: params resolved, ops resolved
+or deliberately UnboundApply, arity satisfied, literals in range; no
+literal can panic, no shape can overflow the stack), the PRATT_PARSER
+table (the one format.rs's table is transcribed from — the both-tables
+coupling), `InvalidExpression`, `BadIntError` (ONE error for every
+radix), `is_operator` + `build_expr_bounded` (belt and suspenders
+around NESTING_CEILING with the division of labor NAMED: the pre-parse
+scan bounds what pest recurses over, this counter bounds what only the
+Pratt builder recurses over — bracketless `----1` chains; the check
+runs on the flat child list BEFORE recursion), `build_expr_infix`
+(&&/||/~ parse straight to `Expr::Lazy` — "laziness is structural",
+a language form, not an op), `build_term` (typed unbound-param error
+with help; radix/float/string literals; list/object; the apply arm:
+`cond` canonicalization with auto-default, `if` → `Cond` where "2 or 3
+arguments is proven by the shape of the code itself — no counting
+check whose proof an unwrap then re-asserts", named lazy forms,
+UnboundApply for later resolution, arity ensured with the op's own
+requirement text, `post_process_args`), total `parse_radix_int`, the
+three string parsers (escape whitelist; `InvalidUtf8Error` refusing
+the surrogate range; `InvalidEscapeSeqError` teaching the raw-string
+alternative), and tests (radix values + overflow-not-panic incl. the
+decimal symmetry case; THE DECODE-ASSERTION CORPUS — story #93's
+lesson written as a test class: every earlier test asserted only
+"parses", "a passing suite with a dead escape decoder underneath it",
+so these assert the DECODED character; raw-string backslash verbatim;
+lone-surrogate designed error, reachable for the first time after the
+fence fix; unrecognized-escape refusal pinned against grammar
+widening) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/expr.rs` (seat
+  exists: "the Pratt expression parser"). The format.rs precedence
+  table becomes an intra-crate neighbor; keep the both-tables warning
+  live at both ends.
+- **L2:** gold, preserve verbatim: the two-bound division of labor
+  with each bound's blind spot named; laziness-as-structure;
+  shape-proves-arity; the #93 decode-assertion doctrine (assert the
+  decoded VALUE, never merely "parses" — the sharpest test-philosophy
+  statement in the parse tier); errors defined at their use sites with
+  teaching help text. Nothing condemned.
