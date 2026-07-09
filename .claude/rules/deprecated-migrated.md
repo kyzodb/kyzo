@@ -1342,3 +1342,45 @@ widening) — closed)
   decoded VALUE, never merely "parses" — the sharpest test-philosophy
   statement in the parse tier); errors defined at their use sites with
   teaching help text. Nothing condemned.
+
+## parse/sys.rs (928 lines; inventory: dual header, module doc (a SysOp
+is "proven at parse time from pure data"; consumers are runtime-tier,
+the ops parse-tier substance), the `AccessLevel` SEAM declaration (its
+`Ord` derive IS its semantics — Hidden < ReadOnly < Protected < Normal,
+"a landed type-driven win to preserve as-is"), the `SysOp` enum
+(Compact, MerkleRoot as "the federation content-address", Verify —
+story #80, parsed identically to Explain; triggers and constraints
+stored as RAW SOURCE re-parsed at fire time, the inherited convention
+explicitly queued for the "parsed substance with stored provenance"
+redesign; `DescribeRelation` documented as UNREACHABLE-BY-GRAMMAR,
+faithfully ported, wiring it in "a deliberate language decision to make
+separately" — this RESOLVES the kyzoscript.pest entry's
+`describe_relation_op` question: deliberate, not dead; `from_clause`/
+`to_clause` remain unaccounted), the three index-config types
+(`FtsIndexConfig` here being the OTHER half of the recorded dedup
+obligation with `engines/text/mod.rs`), typed spanned errors replacing
+span-less refusals (`ProcessIdNotInteger`; `IndexOptionError` as one
+carrier for the whole option-validation family, with option-value
+spans CAPTURED for post-loop range checks and defaults falling back to
+the clause span), `parse_sys` (every :: op; LSH create with weight
+normalization and the (0,1) threshold; FTS create; HNSW create with
+must-be-set ef/m; plain index create refusing empty columns; the
+shared drop shape), `parse_tokenizer_expr`/`parse_filters_expr` —
+closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/sys.rs` (seat
+  exists: "the :: system-operation surface"). `AccessLevel` re-homes
+  to `session/access.rs` per its own seam note; the FtsIndexConfig
+  duplication dies when the lifecycle tier unifies the two.
+- **L2:** gold: the span-capture-for-later-checks pattern (an
+  out-of-range value labelled where the USER wrote it, defaults
+  falling back honestly); the Ord-is-semantics access ladder; the
+  parsed-substance redesign queued visibly on every stored-source
+  convention. DEFECTS for the migration: (1) `extractor`/
+  `extract_filter` persist as `Expr::to_string()` — the very Display
+  form format.rs declares "neither valid nor round-trippable
+  KyzoScript source"; a string-literal-bearing extractor can store
+  unparseable text — store `format_expr` output (the round-trip-proven
+  renderer that now exists), or land the parsed-substance redesign;
+  (2) the `if({extract_filter}, {extractor})` TEXTUAL splice composes
+  user expressions by string formatting — same class, dies with the
+  same redesign.
