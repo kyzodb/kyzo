@@ -1895,3 +1895,38 @@ closed)
   the ternary→binary adaptation argument; exclusions with reasons;
   the falsification clause; refusal-fence design (unmasking, all
   heads, upstream routing). Nothing condemned.
+
+## query/ra/join.rs (697 lines; inventory: split-out header, the shared
+plumbing (flatten_err/filter_iter/eliminate helpers; `push_joined_row`
+— the joined row "never materialized as its own Tuple", with the
+story-#77 note: right sides yield OWNED values because a byte-backed
+store's decode produces a value, not a borrow), `PrefixProbeBatchJoin`
+(ONE executor shared by Stored and StoredWithValidity, their
+difference captured at construction in `probe`; an in-flight match
+iterator held across output-batch boundaries so "an output-batch
+boundary never re-scans anything"; a defensive empty-batch skip kept
+"even if that invariant is ever loosened"), `join_is_prefix` (the
+partial-index-match judgment written down: `[a, u => c]` with a and c
+bound is NOT prefix "as it is not clear that prefix scanning in that
+case really saves computation"), `Joiner` (the lockstep length
+invariant attributed to its maintainer; typed `join_indices` replacing
+the original's double unwrap), and `InnerJoin` (strategy chosen at
+iteration time from the right side's SHAPE; the Reorder/NegJoin right
+arm a typed error where the original panicked — refused at
+construction; `iter_batched`'s UNIT-LEFT delegation with its
+rationale — it is what lets a scan→filter→project chain run fully
+batched; three native prefix dispatches;
+`materialized_join_batched` — the right side materialized ONCE into a
+sorted deduplicated run keyed join-columns-first, binary-searched per
+left row with NO probe tuple ever built, replacing the row machine's
+hash match with the note "Datalog answers are sets, so the dedup is
+observationally identical"), and `MaterializedBatchJoin` (usize::MAX
+run sentinel; an in-flight run resumes across output batches without
+re-searching) — closed)
+- **L1:** preserve-and-move whole → `exec/op/join.rs` (seat exists:
+  "column joins and storage-probe joins").
+- **L2:** gold: one-executor-two-configurations (the probe closure as
+  the variation point); resumability as a stated property at every
+  batch boundary; strategy-from-shape with panic-to-typed-refusal;
+  observational-identity arguments accompanying every optimization.
+  Nothing condemned.
