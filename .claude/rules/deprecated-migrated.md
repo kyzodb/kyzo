@@ -1482,3 +1482,64 @@ refusal/ensure refusals/unbound name) — closed)
   re-prove-through-the-smart-constructor at conversion points; the
   did-you-mean drift honesty; test docs that carry their own hostile-
   review history ('END' once resolving, now refused, and WHY).
+
+## parse/mod.rs (2037 lines; inventory: dual header, module doc (claimed
+text becomes proven syntax; the TWO LAWS: grammar-shape trust is TYPED —
+drift is a spanned GrammarShapeError naming the rule, "diagnosable, not
+an abort" — and no user text can panic, hang, or overflow the stack),
+`ScriptParser` (the grammar as "the other half of this tier's proofs"),
+the typed-accessor layer (GrammarShapeError/UnexpectedRuleError/
+`unexpected`/`GrammarChildren` with expect/expect_n/`single`/
+`strip_sigil` — "this boundary is where each sigil is looked at for the
+last time"/ExtractSpan/IntoChildren), the `Script` genus + imperative
+AST (`QueryOrRelation` replacing Either's two OPPOSITE orientations;
+`needs_write_locks` walking every statement incl. sysop index names),
+`ParseError::from_pest` ("the single funnel every syntax mistake in
+KyzoScript passes through, so it is the highest-leverage diagnostic in
+the language"): `describe_expected` (dedup on the RENDERED phrase,
+capped at five + "other constructs"), `describe_rule` (~40 hand-written
+phrases with a fallback that "can never bottom out in a bare Rule::foo
+debug print"), `SQL_KEYWORD_HINTS` ordered by earliest appearance +
+window-first `sql_refugee_hint` + whole-word `has_word`; the NESTING
+CEILING = 64 placed BY MEASUREMENT (~2.5 KiB/level release, ~11–12 KiB
+debug; unguarded overflow between 768–1024 release and 160–192 debug on
+a 2 MiB thread; 64 ⇒ ~0.8 MiB worst-case debug, ~7× deeper than any
+real query) with the language-limit-like-i64's-range help text; the
+SHARED string-skip primitives (one per quote form "so a future grammar
+change has exactly one place to change instead of N scanners that can
+silently disagree" — the exact drift class #93's fallout fix repaired);
+`scan_comments` (an independent raw-text walk; un-silencing pest's
+COMMENT was "rejected after a real check, not on suspicion" — a
+two-rule experiment showed it injects a stray pair into every
+`.into_inner()` consumer); `reject_excessive_nesting` (the faithful
+mini-lexer: joint ceiling over brackets, %-blocks, nested comments, and
+OPEN `not` prefixes tracked per bracket level and closed by the
+separators that end an atom; "it over-counts, never under-counts");
+parse_type/parse_expressions/parse_script (species dispatch; trivia
+attached in a separate pass once final spans exist); and the test
+battery (a 37-case named smoke corpus; the LSH negative-option
+wrap-to-allocator-abort regression refused at parse; THE SIZED-STACK
+METHODOLOGY — refusal proven by SURVIVING on a 256 KiB thread,
+acceptance proven on the 2 MiB basis the ceiling is documented against;
+the F1 backtracking wall guard; the refusal label pinned at exactly
+ceiling+1; scattered negations proven non-accumulating; the scan
+proven to ignore string/comment content WITH the #93-fallout
+escaped-quote regression in both directions; raw-string contiguity;
+the [SEQ]/[SEQ1] language pins — ~40 accepted shapes, trailing
+separators still refused on [SEQ1], the grammar-vs-semantic
+empty-index distinction; grammar-drift-errors-not-panics; an eyeball
+rig; the comment-trivia battery ending in the guardrail:
+comments-do-not-change-meaning checked through the formatter with a
+non-vacuity assert) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/` as the tier's
+  module root (the accessor layer, ceilings, the ParseError funnel and
+  scan_comments are the tier's shared substrate; species files land in
+  their named seats). Same `Arc<dyn FixedRule>` blocker cross-reference
+  as parse/query.rs — `parse_script`'s signature threads the live impl.
+- **L2:** gold, preserve verbatim: the two laws; the measured ceiling
+  (a limit PLACED by measurement and documented with its numbers); the
+  single-funnel diagnostic doctrine with the can't-bottom-out fallback;
+  one-skip-primitive-per-quote-form as an anti-drift design; the
+  rejected-alternative recorded WITH its experiment; the sized-stack
+  proof methodology; over-count-never-under-count as the scan's stated
+  bias. Nothing condemned.
