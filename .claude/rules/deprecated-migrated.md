@@ -4053,3 +4053,115 @@ closed)
   the always-on cheap backstop doctrine; format-version-in-the-dump;
   empty-target-only restore with its discard-and-rerun recovery
   story; incremental hostile-input reading. Nothing condemned.
+
+## storage/crash_matrix.rs (395 lines; inventory: MPL header, module
+doc (story #31 phase 2 — the crash matrix over a REAL filesystem
+through kyzo-crashfs, judged against SimStorage "crashed at the
+analogous logical point"; the TWO crash-point classes per the design
+ruling — commit-boundary EXACT triggers "anchored to durability
+barriers", and compaction/segment AMBIENT sweeps for "the design
+ruling's own highest-value unknown: whether a torn SEGMENT write can
+surface as silently wrong bytes", with the pinned lsm-tree finding
+that data blocks are checksummed LAZILY so "'opens clean' is
+necessary, never sufficient"; the FALSIFICATION CLAUSE — "any
+assertion failure here is a genuine engine defect, filed as an issue
+rather than patched in this module (this module drives the kernel,
+it does not fix it)"; SKIPPED never failed without FUSE capability),
+JOURNAL_PATH (empirically verified single-journal premise),
+`round_kv`/`drive_durable_rounds` (ONE generic driver over the
+Storage trait — "never two hand-written copies of the same
+workload"), `total_scan_set`/`oracle_after_powercut`, the
+COMMIT-BOUNDARY test (the fault-free RECORDER pass learning each
+round's fsync count "by OBSERVING it once, honestly — never by
+guessing fjall's internals"; the strictly-increasing premise check
+failing loud "not by mis-triggering later"; one independent campaign
+per boundary on fresh disk; reopen BYPASSING FUSE "exactly as a real
+process reopening after a crash would see the disk"; the forced
+total_scan traversal), the flood fixtures (`flood_val`'s per-index
+content — "never a constant fill a coincidental truncation could
+still satisfy"), `run_bounded` (the found-the-hard-way FUSE-wedge
+lesson: a stuck FUSE request "parks its caller in the kernel... a
+state no ordinary signal — not even SIGKILL — can unwind"; the
+process::exit(90) deadline "is itself the report", naming the
+never-hang property story #31 polices), and the COMPACTION/SEGMENT
+test (ONE simulated crash EVENT per campaign — the earlier
+ambient-rate draft REJECTED with its diagnosis: "a real crash
+corrupts what was in flight at ONE instant, never a sustained
+fraction of every write"; per-segment-file independent trigger
+counters; the unconditional invariants — never a panic nor a hang,
+opens-or-refuses-TYPED, and "every key that IS present after reopen
+holds EXACTLY the bytes it was written with"; absent-is-legitimate
+for best-effort commits) — closed)
+- **L1:** preserve-and-move whole → `kyzo-trials/src/crash.rs` (seat
+  exists: "the crash matrix over real and fault-injected
+  filesystems"). Already speaks kyzo-crashfs's public surface and the
+  Storage trait; the only crate-wall touch is `SimStorage` as the
+  oracle, which moves with the DST instrument (see sim.rs's entry
+  when it lands).
+- **L2:** gold, preserve verbatim: the falsification clause
+  (drives-never-fixes); observe-once-honestly over
+  internals-guessing; the rejected-draft record with its
+  realistic-crash-model argument; the FUSE-wedge lesson and
+  exit-as-report; opens-clean-insufficient forcing reads;
+  discriminating per-index fill content; skip-never-fail on missing
+  environment capability. Nothing condemned.
+
+## storage/mod.rs (549 lines; inventory: MPL header, module doc (THE
+STORAGE CONTRACT — "written for that machine... not for any historical
+backend's shape"; the two-species genus with consuming commit — "a
+committed transaction is not an invalid state to guard against but a
+value that no longer exists"; CONCURRENCY ECONOMICS STATED PLAINLY —
+reads AND writes are the conflict surface, first-committer-wins,
+"uniqueness is enforced by the write itself... a blind put cannot
+silently swallow a concurrent insert", batch_put outside the surface,
+parallel preparation with serial commit application as the throughput
+ceiling, long-reader GC delay, coarse as-of ranges in write
+transactions; and the SEALED CONTRACT HISTORY — v2's write-set
+validation ruling with the industry comparison on record
+("FoundationDB- and badger-class oracles validate reads only...
+PostgreSQL SSI and TiKV/Percolator abort write-write races. KyzoDB
+sides with the latter"); v3's mandatory bitemporality with the
+SNAPSHOT-THEN-MINT proof written in full ("READS-FROM ORDER AGREES
+WITH STAMP ORDER... the mint takes the open snapshot as an argument,
+so the reverse order is unrepresentable") and the shadowed-forever
+lost-update lineage "found live and pinned"; v4's one-cursor-per-walk
+skip scan with no caller-visible semantic change), the module decls
+each carrying its reason (conformance as the reusable trait-surface
+kit; crash_matrix "a separate mechanism on purpose"; sim's
+bench-internals cfg gymnastics justified), `SystemClock`
+(max(now,last+1) CAS mint; floor/raise_floor for restore),
+`FormatVersion` (CURRENT=5 with the whole version history in its doc
+— the v4 BUMP-ANYWAY ruling: "the decodable tag space is part of the
+format's identity same as the tags already in it"; canonical-spelling
+parse refusing non-canonical stamps), `ConflictError` ("retry-on-
+conflict is a control-flow decision, not a string match"), the
+`sealed` module (one backend by decree; the simulator admitted as
+"the contract's own test double... not a second backend"), `Storage`
+(concurrent writes "a core requirement, not an option"; the
+durability levels stated precisely on sync), `ReadTx` (Slice as
+refcount currency; degenerate ranges EMPTY never an error;
+whole-range conflict tracking on open — "the conservative choice,
+and the one phantom protection needs"; the MANDATORY two-axis
+`range_skip_scan_tuple` with the corrupt-key
+error-without-advancing rule — "a scan cannot silently step over
+bytes it could not judge"; keys-only scans so counts never pay value
+I/O), and `WriteTx` (system_stamp minted at snapshot creation;
+put/del joining the conflict surface; del_range's
+degenerate-tracks-nothing caveat; consuming commit; commit_durable's
+honest failure semantics — "the transaction IS committed... the
+error reports the durability shortfall, not a rollback") — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT inside store/: the
+  contract prose, Storage trait, FormatVersion, SystemClock, and the
+  seal → `store/contract.rs` ("the storage contract: ordered scans,
+  SSI, consuming commits"); ReadTx/WriteTx and ConflictError →
+  `store/tx.rs` ("transactions: snapshot isolation, typed
+  conflicts"); the module decls are structural glue dying with the
+  directory; conformance/crash_matrix/sim/tests migrate to their
+  trials/crashfs seats per their own entries.
+- **L2:** gold, preserve verbatim: the sealed-history discipline
+  (every contract change recorded WITH its ruling and industry
+  context); the snapshot-then-mint proof and its unrepresentable-by-
+  signature enforcement; the concurrency economics as caller-facing
+  contract prose; the bump-anyway format ruling; honest durability
+  semantics on fsync failure; degenerate-range laws stated at the
+  trait. Nothing condemned.
