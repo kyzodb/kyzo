@@ -3492,3 +3492,72 @@ are a first-class product surface") — closed)
   this same file) consumes it in production — the same stale claim
   laws.rs's entry flags; the target formulation is the map's "the
   engine summons its judge (kyzo-oracle)". Nothing else condemned.
+
+## runtime/constraint.rs (1103 lines; inventory: MPL header, module doc
+(a constraint is "a NAMED pure query that must derive nothing: the
+Datalog ⊥ :- body shape" — FK, CHECK, and secondary uniqueness "all the
+same species"; the mechanics stated plainly: the body MIRRORED into the
+catalog row of every relation it reads "so an FK fires both when a
+child appears and when its parent disappears"; enforcement after the
+whole trigger cascade, before commit, against the write tx's post-write
+state; budget-armed; DETERMINISTIC WITNESSES — name order, sorted and
+deduped, WITNESS_CAP shown with the total always reported;
+creation-over-existing-data refused with witnesses; and the NAMED
+LIMITATION v1 — bodies checked at cur_vld only, a future-validity
+violation "is NOT caught at commit — there is no later transaction to
+re-check it... This boundary is stated, not silently assumed"),
+WITNESS_CAP=8 (smallest-in-value-order, deterministic) and
+MAX_COMMIT_ATTEMPTS, SEVEN typed refusals (`ConstraintViolation`
+spanned+witnessed with whole-abort help; `ConstraintRejectedOnCreation`;
+`ConstraintNotPure`; `ConstraintReadsNothing` — "refused rather than
+admitted as dead law"; `ConstraintOnTempRelation`;
+`ConstraintNameTaken` — one global namespace; `NoSuchConstraint`),
+`validate_constraint_purity` (mutating bodies, :assert, :limit/:offset
+— ":limit 0 would silently hide every violation", and :timeout/:sleep
+— the :timeout refusal closing a HOSTILE-REVIEW PANIC VECTOR: an
+unbounded value overflows Duration::from_secs_f64 in build_budget),
+`stored_read_set` (positional, named-field, search atoms through
+negation/conjunction/disjunction, and fixed-rule stored args),
+`eval_constraint_body` (Segments::OFF — "constraint bodies read the
+WRITE tx's post-write view; committed-state segments must never serve
+them"; sorted+deduped), `enforce_constraints` (the DEFENSIVE purity
+re-check — "the catalog row's bytes are a claim, not a proof; a
+tampered body must not mutate"), `sys_create_constraint` (purity →
+read-set → temp refusal → global-name scan → L4 full-state evaluation
+inside the creating transaction → Protected-rung check → mirrored
+name-sorted attach, under retry_on_conflict), `sys_remove_constraint`
+(the SAME Protected rung — "::set_access_level r read_only would
+become a backdoor to lifting a denial that the relation's writers
+still rely on"), `sys_list_constraints`, and eleven tests: the CHECK
+end-to-end tripwire (whole-transaction rollback incl. the co-inserted
+good row, with the exact sabotages the test catches named in its
+doc); FK BOTH directions through the mirroring; the creation-refusal/
+repair/create/drop lifecycle; constraint × trigger ATOMIC abort (the
+user's write and the trigger's roll back together); the
+budget-exceeding refusal naming the constraint; witness determinism
+across 1/2/4 threads AND both storage backends (cap, total,
+sorted-smallest pinned); the seven-refusal creation battery with
+exactly-one-attachment-survives; destroy/rename/:replace refused
+while constrained (the PARENT read-set participant held too, via
+RelationHasConstraints); drop-requires-the-same-rung (hostile-review
+finding: "the drop path once ran with no access check" — the
+read_only backdoor closed, refused-drop-detaches-nothing asserted);
+the trigger cascade running past depth 1 with the cycle hitting the
+TYPED depth-32 ceiling and aborting whole; and the uniqueness shape —
+closed)
+- **L1:** preserve-and-move whole → `session/constraint.rs` (seat
+  exists: "integrity as denial rules with witnesses, gating
+  admission" — this file IS the zone law's constraint clause,
+  already satisfied: refusals are values naming the constraint and
+  the offending rows, never error strings).
+- **L2:** gold, preserve verbatim: denial-rules-as-one-species (FK/
+  CHECK/unique unified); the mirroring design with its
+  both-directions rationale; the stated-not-assumed v1 time
+  limitation; witness determinism as product law (sorted, capped,
+  totaled, thread- and backend-invariant); claims-not-proofs
+  defensive re-checking of catalog bytes; the same-rung drop gate
+  with its backdoor argument; purity refusals that double as panic-
+  vector closures; L4 creation-over-violating refusal. Nothing
+  condemned. Carried v1 obligation: the cur_vld-only check is a
+  stated boundary — the target zone law should carry it forward
+  explicitly until a cross-time enforcement story lands.
