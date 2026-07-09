@@ -1126,3 +1126,58 @@ the expression/param-list entry points — closed)
   `sys_script` alternation — either they are direct pest entry points
   somewhere in parse/, or they are dead rules to Remove at migration;
   the parse-tier read decides which.
+
+## format.rs (1107 lines) + format/tests.rs (679 lines; both read whole;
+inventories: format (module doc — "parse is text-becomes-proof; this is
+proof-becomes-one-true-text", every same-meaning spelling collapses to
+ONE; the precedence WARNING — this grammar's table is not the textbook
+one (`%` looser than `+`, `~` tighter than `^`, `->` tighter than unary
+prefixes), transcribed from parse/expr.rs's PRATT_PARSER, "a grammar
+precedence change must edit both tables"; std::fmt-free hand building
+because several Display impls are debug-oriented dumps; the ONE hidden
+AST rewrite (`OP_REGEX_*` args) reversed by `unwrap_hidden_regex_arg`;
+the comments limitation STATED then solved via trivia — `TriviaMode`
+Bare/WithComments where Bare "must never read a trivia field"),
+format_program(+_with_comments)/format_expr, ruleset/rule/fixed-rule
+writers, the AND/OR nesting law block (Disjunction bare, Conjunction
+parenthesized only as a disjunct member, same-kind nesting FLATTENED —
+associative, so meaning-preserving and strictly more canonical),
+plain-atom/unification/search writers, validity-clause writers matching
+parse's coordinate order, out-options + relation-option writers, the
+precedence machinery (`infix_form`/`prefix_form`/`write_operand` with
+the associativity-side equal-precedence rule; prefix chains never
+parenthesize because `unary_op*` is repetition, not a climb),
+`write_const` (constructor-function round-trips for non-literal kinds;
+the Set honesty note), `write_float` (forces a decimal point so a
+whole float cannot silently reparse as Int; NaN/±INF via `to_float`),
+`write_str_literal` (astral-plane characters written literally —
+`\uXXXX` cannot represent them and `ANY` permits them); tests (the two
+laws — idempotence and meaning-preserving round-trip — as a property
+suite: 500 expressions + 300 programs + 300 commented programs over a
+seeded splitmix64 the doc counts as "a fourth independent
+transcription"; the `debug_no_spans` oracle with its spans-are-
+provenance-not-meaning rationale; the empirically-walked precedence
+regression list; sugar-collapse; whole-float; hidden-regex; #93-aware
+string escaping; the comment-attachment battery mirroring parse's own
+tests FROM THE OTHER END incl. the BTreeMap-reorder misattachment trap;
+`fixed_rule_trivia_round_trips` covering the one node kind the derived-
+Debug oracle cannot see because FixedRuleApply's hand-written Debug
+omits trivia; the generator-artifact skip with a `checked > 400` floor
+— no silent cap) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/format.rs` (seat
+  exists: "the canonical formatter: program → one source text,
+  idempotent"); tests ride along as its property suite. The
+  PRATT-table coupling becomes an intra-crate neighbor
+  (model/parse/expr.rs) — keep the both-tables warning at both ends.
+- **L2:** gold, preserve verbatim: the one-true-text doctrine; the
+  both-tables warning with its failure taxonomy (non-minimal parens =
+  safe, associativity disagreement = wrong meaning); flattening
+  justified by associativity; the equal-precedence-by-associativity
+  operand rule; honesty notes where round-trip is impossible (Set;
+  unbounded/empty Interval rendering as Debug). DEFECT (doc, fix at
+  migration): `write_const`'s doc says "`Set` and `Validity`/`Bot`
+  have no KyzoScript constructor at all" — it names the DELETED `Bot`
+  variant (third residue; see json.rs and sparse.rs) AND contradicts
+  its own body, which renders Validity through a `validity(...)` call;
+  verify that constructor is a real callable op and rewrite the
+  sentence to match whichever way the truth lies.
