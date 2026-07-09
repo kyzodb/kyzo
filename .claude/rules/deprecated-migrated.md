@@ -50,6 +50,9 @@ paths:
   - "kyzo-core/src/engines/**"
   - "kyzo-core/src/runtime/**"
   - "kyzo-core/src/storage/**"
+  - "kyzo-core/src/fixed_rule/**"
+  - "kyzo-core/src/lib.rs"
+  - "kyzo-core/tests/**"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -5765,3 +5768,242 @@ refusal) — closed)
   violation and both cannot-convert arms) — span-less, stringly
   refusals on user data; route them through a typed error with the
   option's span like their siblings. Nothing else condemned.
+
+## kyzo-core/tests/ — the story-#88 external public-surface suite
+The fourteen files below are EXTERNAL integration crates: by construction
+of where they live, they reach only the public `kyzo::` façade — the exact
+boundary the target architecture SEALS. Their collective verdict is
+PRESERVE-IN-PLACE: `kyzo-core/tests/` remains the sealed contract's own
+integration suite. The one cross-cutting rewire: on the crate split, the
+model-vocabulary re-exports they import (`DataValue`, `Tuple`, `Validity`,
+`UuidWrapper`, …) resolve per lib.rs's entry (kyzo-model's public surface
+re-exported through the façade), which changes no test text if the façade
+keeps the names — the suite is the drift detector for exactly that
+decision ("if the public API reshapes and breaks a consumer, this test
+breaks first, at the contract").
+
+## tests/common/mod.rs (87 lines; inventory: MPL header, module doc (every
+test file is "forced through the same public API a real embedder uses...
+no pub(crate) internals reachable from here, by construction of where
+this file lives"; fresh REAL fjall store per test), `no_params`,
+`fresh_db` (the leaked-tempdir ruling with its reason, mirroring
+language_tour), and the ints/floats/strs/bools column extractors
+(panic-on-wrong-kind justified: "a test that already knows its own
+schema") — closed)
+- **L1:** preserve-in-place as the suite's shared fixture.
+- **L2:** gold: unreachability-of-internals BY CONSTRUCTION as the
+  suite's independence argument. Nothing condemned.
+
+## tests/unified_scenario.rs (115 lines; inventory: header, module doc
+(the one-substrate thesis as a TEST: "graph, vector, text, and
+aggregation... one substrate with several access paths that compose in a
+single query"), and the single test — six articles with topic vectors,
+bodies, and a citation graph; fts + hnsw indices created; ONE query
+composing recursion (citing-distance reachability), an FTS atom, a k-NN
+atom with bind_distance, and grouped count+min; the expected groups and
+distances hand-computed in comments (0.02 and 1.62 squared-L2) — closed)
+- **L1:** preserve-in-place. This is the README's thesis made
+  executable — the telos test.
+- **L2:** gold: four access paths in one rule body, judged against
+  hand-derived values. Nothing condemned.
+
+## tests/relational_core.rs (312 lines; inventory: header, module doc
+("the way a user actually would... every expected value hand-computed
+from the literal rows written in the same test"), and eight tests:
+create+filter (the language_tour chapter-1 shape "re-verified here with
+its own numbers so this file stands alone"); the three-way join; the
+four filter operators; constants-join-stored; put-overwrites/rm; the
+:replace whole-swap pin ("ids 1,2,3 must be gone"); the
+:ensure/:ensure_not battery ending in the neither-op-mutated re-read;
+and :order/:limit/:offset composed with exact page contents — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: verify-by-reading-back after every mutation kind;
+  self-contained hand oracles. Nothing condemned.
+
+## tests/recursion_and_negation.rs (194 lines; inventory: header, module
+doc, five tests: transitive closure; SAME-GENERATION (the non-linear
+textbook rule, with the root-ancestors-in-the-base-case subtlety
+explained — "otherwise carol/dave's shared-parent recursion has no
+sg[eve, eve] to bottom out on" — and the full expected pair set
+reasoned); ShortestPathDijkstra through the `<~` surface (cheapest
+3900 vs 9000); ConnectedComponents (three components asserted as
+sorted groups); and stratified negation (enrolled-minus-submitted) —
+closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: the same-generation base-case commentary (a test that
+  teaches the semantics it pins). Nothing condemned.
+
+## tests/aggregation.rs (176 lines; inventory: header, module doc, four
+tests: grouped count/sum/min/max/mean with hand values; the global
+no-bare-head aggregate; `collect` with the order-not-pinned honesty
+("collection order isn't part of the contract we're pinning here");
+and the RETRACTION HARD CASE — :rm the row holding the current min,
+recompute to 20, then 30, then the group VANISHES ("an empty group
+must vanish entirely", "there is no incremental subtract-from-running-
+min") — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: the min-retraction ladder run to the vanishing point.
+  Nothing condemned.
+
+## tests/data_types.rs (178 lines; inventory: header, module doc (every
+DataValue kind round-tripped via the public API only; where a Rust
+accessor is crate-internal the check goes through KyzoScript's own
+public functions — "exactly the boundary an external embedder sits
+at"), four tests: the all-kinds round trip (Int/Float/String/Bool/
+Bytes-from-base64/List/Uuid/Json/Validity/Interval-via-interval_start/
+end); validity POLARITY as part of the value; the vector byte-exact
+round trip checked through KyzoScript's own `==` with an inequality
+control; and the #119 COERCION-CLASS REGRESSION — integral floats
+coerce into Int columns ("the rewrite had dropped this... invisible to
+the old corpus, which only inserted 3.5 into Float and 42 into Int")
+with the non-integral refusal companion — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: the corpus-blind-spot lineage on the coercion
+  regression (a gap named by why the old corpus couldn't see it).
+  Nothing condemned.
+
+## tests/errors_and_refusals.rs (127 lines; inventory: header, module doc
+("refusal is a typed Err, never a panic — this file would abort the
+test process on a panic, which is itself part of what's being
+verified"), three tests: the textbook unstratifiable cycle refused
+naming stratification; the recursive standing query refused at
+registration WITH the same-query-runs-fine-as-one-shot companion ("the
+refusal is specific to the standing-query seam, not to recursion in
+general"); and bad coercions (String→Int, 3-element vector→<F32;2>)
+refused with the relation-untouched read-backs — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: refusal-specificity companions (prove the refusal
+  discriminates, not just fires). Nothing condemned.
+
+## tests/adversarial_robustness.rs (271 lines; inventory: header, module
+doc (the torture battery "locked in permanently"; the law — "no query
+text may panic the process"), thirteen tests: i64-overflow arithmetic;
+out-of-range literals; Int-vs-String comparison; unbalanced parens;
+deep-but-LEGAL nesting evaluating correctly ("nesting depth alone is
+not an error"); the unstratifiable cycle (kept here too "so the whole
+torture battery lives in one place"); the reserved i64::MAX temporal
+write refused; the 3^4=81 self-cross-product ("the honest
+cardinality"); aggregation over an emptied relation = the identity
+row (count 0, min Null); the EXCLUDED-CASE NOTE — unbounded recursion
+"currently hangs rather than refusing — a real, tracked bug (issue
+#68: the fixpoint has no default iteration budget)"; division and
+modulo by zero pinned only to NEVER-PANIC ("under active change in a
+concurrent story... whichever typed shape the fix lands on, this
+assertion still holds"); the silent-NaN class refused through the
+query surface (sqrt(-1), ln(0), cos_dist zero-vector, l2_normalize
+zero) with an in-domain control; `to_float('nan')` in every spelling
+refused — a USER-OBSERVABLE BEHAVIOR CHANGE "pinned here... the
+correct, deliberate outcome per the engine's no-silent-poison ethos";
+and the COLUMNAR twin — a runtime-produced inf−inf over a stored
+value "so partial_eval cannot fold it away" — closed)
+- **L1:** preserve-in-place. OPERATOR-VISIBLE STANDING ITEM carried
+  from the file's own note: the unbounded-recursion hang (issue #68's
+  no-default-budget gap) is deliberately untested because it would
+  hang the suite — the default-budget fix is the discharge, and this
+  battery gains the case then.
+- **L2:** gold: excluded cases documented with their tracking issue
+  (an honest hole beats a hanging test); behavior changes pinned AS
+  changes with their ethos argument; the fold-proof columnar twin.
+  Nothing condemned.
+
+## tests/system_ops.rs (141 lines; inventory: header, module doc
+("asserting on the actual NamedRows headers and rows, not just 'it
+didn't error'"), two tests: ::relations/::columns with exact headers,
+arities, and key flags; and the ::index create/list/drop ROUND TRIP
+with the acceleration-not-truth companion ("the index doesn't change
+ordinary query results") and data-untouched-after-drop — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: headers asserted verbatim (the introspection surface
+  is a contract too). Nothing condemned.
+
+## tests/vector_and_fts.rs (168 lines; inventory: header, module doc
+(search as "ordinary relational-algebra operators"), five tests:
+plain k-NN nearest-first; the filtered k-NN with hand squared-L2
+arithmetic; k-NN JOINED to a stored relation; plain FTS; FTS composed
+inside a join sharing `id` — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: search-composes-like-any-relation proven three ways
+  (filter, join, both engines). Nothing condemned.
+
+## tests/time_travel.rs (301 lines; inventory: header, module doc, six
+tests: as-of reads across two corrections plus the
+unqualified-read-is-now pin; :rm at a later instant with before/after
+as-of reads; @spans maximal runs with the #119 CLOSED-GRID ruling in
+the expected values ("interval_end is 199 (the last included
+instant), not the exclusive 200") and the genuinely-OPEN final run
+(end Null, `interval_has_end` false, `interval_is_end_unbounded`
+true — "i64::MAX is a finite instant, not infinity; the value plane
+exposes real unboundedness, so the scripting surface must too"); the
+reserved-END write refusal naming the terminal tick; the
+SENTINEL-NEVER-LEAKS sweep (no interval_end is ever i64::MAX, with
+the exactly-one-Null anti-vacuity count); and @delta(lo, hi) signed
+net change (correction = both signs, removal = −1 only, untouched =
+no row) — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: the closed-grid and open-end semantics pinned at the
+  USER surface with their reasoning quoted; anti-vacuity counts on
+  the leak sweep. Nothing condemned.
+
+## tests/standing_queries.rs (165 lines; inventory: header, module doc
+(the seam "where a real bug slipped through" — multi-commit drains;
+every case checks the maintained answer against a FRESH run_script
+recompute "the real production evaluator, not a second incremental
+registration"), the repeated crate-boundary clippy allow with its
+lib.rs cross-reference, two tests: five commits (correct-twice,
+assert-then-retract, fresh key) before ONE poll — recompute equality
+plus the exactly-once corrected key and the netted-to-nothing key;
+and the aggregation hard case live (retract the current min AND a
+new group in one drain, recompute equality plus the exact (1,20),
+(2,5) values); both tear down — closed)
+- **L1:** preserve-in-place.
+- **L2:** gold: recompute-through-the-real-engine as the judge (the
+  same discipline standing.rs's own differential states); the bug
+  lineage in the module doc. Nothing condemned.
+
+## tests/storage_allocation_law.rs (143 lines; inventory: header, module
+doc (story #118's second law — Slice as the byte currency, "never a
+per-row Vec<u8> copy"; the prior design's two-allocations-per-row
+lineage; the COUNTING GLOBAL ALLOCATOR methodology — real
+alloc/alloc_zeroed/realloc CALLS, two row counts within the SAME
+store "no cross-store confound", and the one-test-binary isolation
+argument: "cargo test runs test BINARIES one at a time... this
+file's own single test can install a process-wide #[global_allocator]
+without racing unrelated tests"), the `Counting` allocator
+(unsafe impl GlobalAlloc — instrument code OUTSIDE the crate-root
+forbid boundary, the pointsto_repro precedent), write_rows (one
+transaction, under flush thresholds "so both scans hit the same
+memtable/SSTable shape"), allocs_for_range (snapshot-open excluded),
+and the law test — 100 vs 10,000 rows, ratio < row_ratio/4 with the
+measured SAME-7-allocations disclosure and the
+deliberately-looser-than-measured thresholds ("the law is about the
+shape of the scaling, not a brittle pin on one number"), plus the
+direct marginal-per-row < 1.0 assertion against the old design's
+2.0 — closed)
+- **L1:** preserve-in-place (the sealed contract's own perf-law
+  test; its store-level imports — ReadTx/WriteTx/Storage — ride the
+  public re-export decision the crate split makes for the trials
+  kit, the same question conformance.rs's entry records).
+- **L2:** gold: allocation LAWS asserted by counting calls, not
+  guessing at bytes; same-store confound control; measured numbers
+  disclosed with thresholds looser than the measurement; the
+  unsafe-bearing instrument confined to an external test binary the
+  forbid cannot and need not reach (rule #2's boundary is the
+  first-party CRATE roots; flag any drift of instrument unsafe INTO
+  a crate). Nothing condemned.
+
+## tests/public_api_surface.rs (186 lines; inventory: header, module doc
+(ONE smoke over "the WHOLE public kyzo:: façade... if the public API
+reshapes and breaks a consumer, this test breaks first, at the
+contract"; dump/restore and verify_storage "covered by NO other
+integration test"), fresh_storage, and the single test walking:
+relational CRUD over six value kinds; the integral-float coercion
+contract; transitive closure (6 pairs); aggregation; hnsw create +
+k-NN; bitemporal create/put/@-read; the typed-refusal path; the
+dump→restore round trip incl. the REBUILT-INDEX search on the
+restored store; and a clean verify_storage report — closed)
+- **L1:** preserve-in-place — this file IS the sealed contract's
+  drift detector; on the crate split it is the first test the
+  re-export decision must keep green.
+- **L2:** gold: the breaks-first-at-the-contract framing; the only
+  integration coverage of backup and verify called out as such.
+  Nothing condemned.
