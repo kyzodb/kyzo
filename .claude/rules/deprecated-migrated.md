@@ -1428,3 +1428,57 @@ label) — closed)
   designed-refusal law for SQL refugees (a DoD bullet turned into a
   permanent test); ledger-retirement expressed as its inverse test.
   Nothing condemned.
+
+## parse/query.rs (1719 lines; inventory: dual header (the whole rule
+map assembled BEFORE `InputProgram::new` is called exactly once — the
+original built a bare struct and patched the entry in afterwards, and
+its first `make_empty_const_rule` site was DEAD CODE, identified and
+not ported; fixed-rule named-relation args strip the `*` their grammar
+rule actually carries — the original stripped `:` and panicked on every
+`rule(*rel{…})`), module doc ("every program has an entry is proven at
+construction, never patched up afterwards"), the option-error family
+(constancy with the CAUSE chained via `#[related]`; non-neg/pos/bool),
+`MultipleRuleDefinitionError` (hand-implemented Diagnostic carrying a
+label per conflicting definition), total `merge_spans`, the parse_query
+loop (rule/fixed/const with head-consistency and conflict checks; every
+option incl. the wasm `:sleep` refusal), the synthetic-entry synthesis
+point for body-less `:create` (binding order preserved from the
+original's one LIVE site), `StagedRelation` (a named sum replacing
+Either), the write-`@` machinery (`RawWriteValidity` staged because a
+`:put` line may parse before its entry rule; two coordinates REFUSED —
+"a script that could choose system time would let a writer forge when
+the database learned a fact"; `@` on `:ensure`/`:ensure_not` refused
+rather than silently ignored; the constant coordinate RE-PROVEN through
+`ValidityTs::for_assertion` at the one place a ValidityTs becomes a
+write coordinate — the #62 terminal-tick ruling; the per-row branch
+resolving the head LAZILY so headless mutations don't regress),
+parse_rule/disjunction/atom (all atom kinds; `_` bindings replaced by
+generated `*^*n` names that cannot collide), `parse_at_expr_clause`
+(shared with fixed-rule args, which deliberately never see the temporal
+alternatives), the #62 clause dispatch (@spans/@delta/@delta_sys),
+`parse_rule_head` + `AggrNotFound` with `suggest_aggr` (an OWN
+Levenshtein — "no crate pulled in for one small function" — offered
+only within edit distance 2, and the hint list's drift honesty: "the
+failure mode is a weaker hint, never a wrong refusal"),
+`parse_fixed_rule` (one binding namespace across the invocation;
+init_options/arity resolved against the live `Arc<dyn FixedRule>`),
+`insert_empty_const_entry`, and tests (THE LANDMINE — body-less
+`:create` synthesizes its entry; the write-`@` battery: Now/Fixed/
+'NOW'-resolves/'END'-REFUSED with the hostile-review history of the
+zero-width-interval finding recorded in the test doc itself/
+literal-MAX refused identically/per-row extractor/two-coordinate
+refusal/ensure refusals/unbound name) — closed)
+- **L1:** preserve-and-move whole → `kyzo-model/parse/query.rs` (the
+  seat's own line: "rules, options, and the proofs that bind them").
+  CROSS-REFERENCE the data/program.rs BLOCKER: `parse_fixed_rule`
+  resolves and CALLS the engine-side `Arc<dyn FixedRule>` at parse time
+  (init_options/arity) — in the target, the model's parse can only
+  bind a declaration-shaped handle (name/arity vocabulary), with the
+  live impl attached at the engine boundary; this file is the other
+  end of that cut.
+- **L2:** gold, preserve verbatim: construct-once-prove-once; the
+  dead-code-identified-not-ported discipline; the forge-prevention
+  argument for engine-minted system time; refuse-not-ignore;
+  re-prove-through-the-smart-constructor at conversion points; the
+  did-you-mean drift honesty; test docs that carry their own hostile-
+  review history ('END' once resolving, now refused, and WHY).
