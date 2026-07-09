@@ -5487,3 +5487,161 @@ implementation"); and the cancellation refusal — closed)
   assert inside the metric test; derived-not-hand-typed oracle
   values; the same-fixpoint-different-path proof with its
   anti-collapse guard. Nothing condemned.
+
+## fixed_rule/algos/shortest_path_dijkstra.rs (668 lines; inventory:
+dual header (inline CSR; SEAM(parallelism) closed — sorted-BTreeSet
+start list + order-preserving map, with the honesty note that
+which tied path wins WITHIN a start "is priority-queue pop order,
+already documented as not pinnable and unaffected by this axis";
+SmallVec dropped for plain Vec; the dead upstream `HeapState` struct
+"referenced nowhere in the file or the workspace" dropped; and the
+CANCELLATION FIX — the plain `dijkstra` core "took no cancel flag and
+never polled, so a keep_ties=false search — and every Yen spur, which
+drives this core — was uninterruptible... the ratified
+budget/deadline design could not stop it"; now polled once per pop,
+with the unset-flag-is-byte-identical argument), the
+`ShortestPathDijkstra` rule (optional termination; undirected/
+keep_ties options; the single-goal Option specialization; arity 4),
+the CAPABILITY TRAITS (`ForbiddenEdge`/`ForbiddenNode`/`Goal` with
+()/Option/BTreeSet impls — zero-cost genericity shared by Yen and
+the centralities), `dijkstra` (stale-pop skip; push_increase
+relaxation; goal-exhaustion early break; unreachable = (∞, []));
+`dijkstra_keep_ties` (multi-back-pointer lists; equal-cost re-push;
+the recursive `CollectPath` tie enumeration), and six tests:
+pool-vs-pool determinism with the tie axis EXCLUDED BY CONSTRUCTION
+("weights are distinct enough that shortest-path costs are unique,
+so no tie resolution... is exercised"); the cheap-route end-to-end;
+the tie graph with its max-heap-mutant hand analysis ("pops d at
+cost 3 first (not stale: 3 == dist(d))... and answers 3 — wrong");
+keep_ties returning BOTH tied paths exactly; keep_ties with
+MULTIPLE goals ("the search must not stop at the first goal it
+visits"); the no-keep_ties single row asserted STRUCTURALLY
+(a → (b|c) → d, the unpinnable middle stated); and
+`plain_dijkstra_honors_cancel` with its never-changes-an-answer
+companion assert — closed)
+- **L1:** preserve-and-move whole → `rules/algo/dijkstra.rs` (the
+  map's name); the capability traits and both cores travel with it
+  as the shared search substrate Yen and the centralities import.
+- **L2:** gold: the capability-trait design (forbidden sets and
+  goals as zero-sized strategies — one core, no copies); the
+  uninterruptible-core fix argued through its CONSUMERS (Yen spurs);
+  tie behavior handled three ways, each honest (excluded by
+  construction, enumerated exactly under keep_ties, asserted
+  structurally when unpinnable); dead upstream code identified and
+  dropped in the ledger. FLAG (third instance of the determinism
+  class, same as prim/kruskal): the no-keep_ties tied-route pick is
+  hash-seeded pop order — production answers on tied graphs vary
+  run to run; astar's monotone counter remains the in-tree fix
+  shape. Nothing else condemned.
+
+## fixed_rule/algos/max_flow.rs (689 lines; inventory: KyzoDB-only MPL
+header, module doc (NEW, no Cozo precedent — max flow / min cut;
+output is the MINIMUM CUT's saturated edges "so the scalar the caller
+usually wants is recovered by summing the third column"; the
+ALGORITHM CHOICE argued — Edmonds–Karp over Dinic because the O(VE)
+augmentation bound "is purely combinatorial and independent of
+capacity magnitude or rationality — so it terminates on real-valued
+capacities where plain Ford–Fulkerson can loop forever", and law 5:
+"every phase is a BFS plus an iterative back-pointer walk — no
+recursion at all"; the PARALLEL-EDGE POLICY — capacities SUM, "two
+independent conduits... the physically correct policy", antiparallel
+arcs independent, self-loops dropped; the DETERMINISM argument —
+sorted (from,to) residual construction, fixed BFS adjacency order,
+sorted cut enumeration), `EPS` = 1e-9 (the saturation threshold
+"load-bearing for termination, so the contract is ENFORCED rather
+than assumed": any aggregated capacity in (0, EPS] refused typed up
+front), the test-only BFS-pop counter (the house observable),
+`MaxFlow` (three inputs; source==sink refused typed; arity 3),
+`single_node` (the Dijkstra/Prim endpoint convention with the
+structural note covering the nullary shape), `ResidualArc`/
+`ResidualNet` (BTreeMap-aggregated construction fixing the sorted
+order the determinism argument relies on; paired reverse arcs;
+`max_flow` — per-pop cancel poll, bottleneck walk, forward+reverse
+push; `min_cut_edges` — residual-reachable source side, cut read
+back over ORIGINAL arcs only), three typed errors (empty endpoint,
+sub-epsilon capacity with its rescale help, source-is-sink), and
+eleven tests: the CLRS figure-26.1 network at the textbook 23
+(antiparallel arcs + flow cancellation); the unique-bottleneck
+pinned cut; `parallel_edges_sum_capacity` (the max/last-wins mutants
+named); the 120-seed differential against `brute_min_cut` — an
+INDEPENDENT oracle enumerating all 2^(n−2) bipartitions, "shares no
+logic with augmenting-path search", and "where flow cancellation
+through reverse arcs is exercised broadly: breaking the reverse-arc
+update makes many of these values wrong"; byte-identical determinism
+×6; the 5k-chain no-recursion scale case; unknown-source /
+source==sink / negative-capacity typed refusals; the inner-poll
+cancellation pin (baseline ≥60k pops vs ≤1); and the F1
+hostile-review pin — a 1e-12 capacity "returned a wrong max flow of
+0" before the up-front refusal, covered for a plain tiny AND an f32
+denormal — closed)
+- **L1:** preserve-and-move whole → `rules/algo/max_flow.rs`.
+- **L2:** gold, preserve verbatim: the algorithm choice argued from
+  termination-on-floats and law 5 (asymptotics traded for
+  guarantees, stated); the EPS contract ENFORCED at the door rather
+  than assumed inside the solver (the F1 fix's shape — a threshold
+  that silently rewrites answers must refuse its own gray zone); the
+  brute-force bipartition oracle (max-flow/min-cut duality used as
+  an independence lever); the physically-argued parallel-edge
+  policy; min-cut-as-output with the sum-recovers-the-scalar
+  contract. Nothing condemned.
+
+## fixed_rule/algos/maximal_cliques.rs (855 lines; inventory:
+KyzoDB-only MPL header, module doc (NEW, no Cozo precedent —
+Bron–Kerbosch with Tomita pivoting in Eppstein–Löffler–Strash
+degeneracy order, near-optimal O(d·n·3^{d/3}); the simple-undirected
+interpretation "matching the k_core interpretation"; CANONICAL CLIQUE
+NUMBERING — members sorted by value, cliques sorted lexicographically,
+id = index, "a pure function of the GRAPH, independent of input edge
+order or the interning"; the efficiency-vs-correctness partition
+stated — pivot and ordering "neither changes the SET of maximal
+cliques", the correctness-critical steps named and mutation-pinned;
+LAW 5 — recursion on an EXPLICIT HEAP STACK because depth is bounded
+by clique size and a dense graph would overflow a recursive form;
+BOUNDED, BUDGET-HONEST — enumeration is exponential (Moon–Ganguli
+3^{n/3}), the `max_cliques` cap (default 2^20) makes exceeding it "a
+typed refusal, never an unbounded allocation — the OOM lesson made
+law"), the THREE test-only observables (degeneracy removals,
+expansion steps, and the raise-at-step-N hook — "the only
+deterministic way to prove the EXPANSION poll reads the flag — a
+pre-raised flag is always caught first by the degeneracy poll"),
+the `MaximalCliques` rule (arity 2 membership rows), a local
+`simple_adjacency` ("kept local so this file is a self-contained
+deliverable"), `degeneracy_order` (Matula–Beck smallest-last with
+BTreeSet buckets, deterministic ascending-id ties, per-removal
+poll), the `Frame`/`Enumeration` iterative machinery
+(`bron_kerbosch` on an explicit stack with per-expansion-step poll;
+`make_frame` carrying the MAXIMALITY GATE doc — "dropping the X half
+would report non-maximal cliques"; `choose_pivot` — Tomita coverage
+max with smallest-id ties; the sorted-slice
+intersect/count/contains helpers), the typed `TooManyCliquesError`
+(with its raise-it-deliberately help), and NINE tests: the
+two-triangles VALUE ORACLE pinned exactly; the brute-force
+differential — an INDEPENDENT all-subsets reference ("a subset is a
+clique iff all its pairs are adjacent; maximal iff no outside
+vertex is adjacent to all of it... shares no logic with
+Bron–Kerbosch") over a wheel, K4+pendant-triangle, and 40 seeded
+graphs; `maximality_gate_rejects_subsets` (the exact weakened-gate
+mutant named); interning-independence determinism (edge order
+REVERSED must not change the numbering); the ceiling refusal at
+cap 3 < 5 disjoint triangles WITH the exactly-enough companion;
+`deep_clique_no_overflow` — K2000's single clique with the honest
+depth note ("the structural point is the explicit stack, not raw
+depth"); and the TWO cancellation pins — the degeneracy poll
+(pre-raised flag, ≤1 removals AND 0 expansion steps) and the
+expansion poll (flag raised BY THE HOOK at step 5, refusal at
+EXACTLY step 5, with both weakenings' failure modes named) —
+closed)
+- **L1:** preserve-and-move whole → `rules/algo/cliques.rs` (the
+  map's name).
+- **L2:** gold, preserve verbatim: the bounded-enumeration law
+  (exponential output capped by a typed, teachable refusal — the
+  allocator-abort discipline applied to combinatorial explosion);
+  canonical numbering as a pure graph function; the
+  efficiency/correctness partition stated so a reviewer knows which
+  mutants the oracle can and cannot see; the two-poll cancellation
+  design with the raise-at-step hook (the sharpest cancellation
+  instrumentation in the tier — a poll proven by the exact step it
+  fires at); the self-contained-deliverable duplication of
+  simple_adjacency NOTED as deliberate (on migration, k_core and
+  cliques share the rules/graph_view simple-adjacency helper — one
+  concept, one name). Nothing condemned.
