@@ -1543,3 +1543,66 @@ non-vacuity assert) — closed)
   rejected-alternative recorded WITH its experiment; the sized-stack
   proof methodology; over-count-never-under-count as the scan's stated
   bias. Nothing condemned.
+
+## query/sort.rs (132 lines; inventory: dual header (free function — the
+original took `&mut SessionTx` and never touched it; law 5 — an `:order`
+naming a non-head variable PANICKED upstream, now the typed
+`SorterNotInHead`; upstream sort semantics preserved DELIBERATELY:
+stable sort over canonical store order makes ties deterministic),
+`sort_and_collect`, two tests incl. the typed-refusal pin — closed)
+- **L1:** preserve-and-move whole → `exec/sort.rs` (seat exists:
+  "result ordering, limits, offsets").
+- **L2:** gold: the parser-validates-but-the-refusal-covers-every-
+  other-road pattern; determinism-under-ties stated with its mechanism.
+
+## query/ra/fixed.rs (149 lines; inventory: split-out header (see
+ra/mod.rs for the transformation record), `InlineFixedRA` (`unit` — no
+columns, one empty row — seeds every rule body; `iter_batched` chunking
+literal data; `do_eliminate_temp_vars`; `join_type` naming
+null/singleton/fixed specializations; `join` with the three shapes:
+empty ⇒ empty, singleton ⇒ filter-extend, many ⇒ hash-grouped
+flatten) — closed)
+- **L1:** preserve-and-move whole → `exec/op/literal.rs` (seat exists:
+  "unit and literal-block relations").
+- **L2:** everything crosses; the singleton/many join specialization
+  is honest micro-structure, keep it.
+
+## query/batch.rs (159 lines; inventory: module doc ("values-based v1
+... story #120's packed-u32 relations replace these internals with code
+columns over the value plane's arena — this module is the seam it swaps
+behind"), `ColumnBatch`/`BatchColumn` (get CLONES; the packed form
+replaces it with an admitted spend), `Selection` (sortedness is the
+CALLER's construction, debug-asserted, never a hidden re-sort),
+`ErrorMin` (the row-ordered minimum-error keeper — "exactly the error
+row-major evaluation would raise first", lazily constructed only when
+it improves), two tests — closed)
+- **L1:** refactor-and-move → `exec/expr/` as the columnar evaluator's
+  batch vocabulary. The DataValue-cloning internals are the declared
+  #120 replacement target (the execution currency's `CodeColumn`/
+  `AdmittedWords` are the successors); `ErrorMin` and `Selection`'s
+  contracts survive the swap unchanged.
+- **L2:** gold: row-lane error identity as a NAMED design goal (the
+  columnar lane may not change which error surfaces); the
+  seam-it-swaps-behind self-description — a module that knows it is
+  scaffolding and says so.
+
+## query/mod.rs (186 lines; inventory: THE ENGINE LAWS module doc —
+seven laws, each with its enforcement site named (answer correctness
+via the deliberately-unoptimized oracle in laws.rs, itself
+cross-checked by a second strategy; stratification-refusal;
+termination; rule safety; total input handling; concurrency liveness;
+operator coherence — "clever execution must be invisible") — and the
+module-declaration LEDGER: every `#[allow(dead_code)]` carries its
+justification (the oracle no longer test-only since #80's `::verify`
+ships it; gauntlet pub(crate) so #80's whole-corpus proof REUSES its
+renderer "rather than re-deriving a second one"), and three attributes
+are recorded as REMOVED after verifying zero warnings — the ratchet
+discipline executed in prose — closed)
+- **L1:** the laws doc → `exec/`'s module root as its constitution;
+  the declarations dissolve into the target tree (each module's
+  liveness note travels to its file). The trials/laws/gauntlet/dst
+  declarations re-home with their files to kyzo-trials per those
+  entries.
+- **L2:** gold, preserve verbatim: the seven laws with enforcement
+  sites (the engine's contract stated where its parts are declared);
+  per-attribute justification and the removed-once-proven notes.
