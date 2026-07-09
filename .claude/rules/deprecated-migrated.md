@@ -2601,3 +2601,173 @@ and the open-graph closure check) — closed)
   reference-tier helpers is the sanctioned sharing direction
   (reference↔reference), distinct from the production↔oracle wall
   stratify.rs's entry records — keep both rulings visible.
+
+## query/magic.rs (1848 lines; inventory: dual fork header naming twelve
+modifications (reverse walk over the landed execution-ordered strata,
+un-reversed exactly once; the adornment phase returns a LOCAL
+`AdornedProgram` keyed by `AdornedHead` — Muggle or Magic BY TYPE,
+turning the original's "remaining options are impossible" comment into
+structure; entry exemption structural via `SymbolKind::Entry`, not a
+seeded dummy-span symbol; `disable_magic_rewrite` once on the tier;
+unwraps as typed internal errors; rule_idx/sup_idx u16 narrowing CHECKED
+— "silent wrap-around would merge distinct supplementary relations —
+extra join tuples, i.e. changed RESULTS, not just changed demand";
+universal bitemporal format retires the keys.last().unwrap() panic
+site; the `StoredRelationSchemaSource` seam mirroring BodyNormalizer;
+index-search atom arms deferred to the index tier; Vec<bool>
+adornments; the exempt walk re-homed onto the stratum;
+NamedFieldNotFound declared here), module doc (magic sets as
+demand-driven rewrite; THE LAW: "the rewrite may change only demand —
+never result semantics... every deviation is a wrong-answers bug, not a
+performance bug"; the FULLY-FREE IDENTITY THEOREM of issue #68 — SIP is
+locally right but uselessly adorns self-join occurrences under a
+fully-free entry, Andersen points-to minting three separately-
+fixpointed pt variants plus ~twenty sup relations; the two load-bearing
+passes IN ORDER, with the hostile-review finding that the redirect
+without the sweep left a whole ORPHAN CLASS — "reachability from the
+roots is the actual invariant"; the standing executable form
+`magic_bypass_differential`; visible-internally-invisible-at-boundary;
+the four exemptions with each one's REASON — the entry's store IS the
+answer, an aggregate over a restricted subset is a DIFFERENT VALUE, the
+flag, and cross-stratum producers), `StoredRelationSchemaSource`,
+`NamedFieldNotFound` + `MagicInvariantError` (returned never panicked,
+"instead of silently changed demand"), `AdornedHead` (+4 methods) +
+`AdornedProgram` ("never leaves this file, which is what keeps the
+Muggle-or-Magic proof airtight"), phase 0 (`magic_sets_rewrite` with
+the walk-direction PROOF written as doc — consumers execute after
+producers so the walk visits consumers first, "an inverted walk does
+not crash: it silently drops or specializes cross-stratum producers...
+wrong answers", pinned by a named regression test;
+`collect_magic_exemptions`; `cross_stratum_dependencies` — fixed-rule
+in-memory args unconditional), phase 1 (`adorn` with the transitive
+pending-adornment loop and two typed impossible-path errors;
+`adorn_fixed_rule_apply` — in-memory args always Muggle because
+"demand cannot restrict an opaque algorithm's input", named-field
+positional resolution with digit-leading filler names that cannot
+collide with grammar identifiers; `NormalFormAtom::adorn` per variant
+— validity extra_var binds like Search's own_bindings, repeated
+variables adorn later positions BOUND (faithful), exempt applications
+deliberately do NOT extend seen_bindings — "that only widens demand...
+which the law permits", negated applications never adorned because
+"negation needs the complete relation to subtract from"), phase 1.5
+(`collapse_ff_redundant_variants` — the #68 driver with the MEASURED
+OOM lineage: pointsto_repro.rs exhausts a 12 GiB cap through the
+rewrite while the bypass completes bounded; sound "regardless of WHY
+the ff variant is demanded"; `sweep_unreachable` — mark-and-sweep from
+Muggle roots, closing the orphan class and subsuming collapse's
+removed retain step), phase 2 (`magic_rewrite`; `push_magic_rule`
+typed collision; `magic_rewrite_ruleset` — the sup-chain SIP: sup₀
+seeded from the Input relation, a cut at every bound-adorned
+application, the callee's Input fed by projection, and the rewritten
+rule's head and aggr UNTOUCHED — "the law: the rewrite may reshape
+bodies, never what a rule returns"), and the ten-test battery
+(strange_case identity under the disabled flag WITH the enabled
+contrast proving the flag load-bearing; the bound-TC rewrite pinned
+store-by-store with the semantics-preservation induction argument in
+its doc; entry/aggregation/flag/cross-stratum exemption pins — the
+last the standing inverted-walk regression; the bfb mixed adornment;
+the repeated-variable pin with its any-change-is-deliberate warning;
+named-stored positional resolution + unknown-field refusal; the
+universal-format time-travel test where keyless relations adorn
+without panicking) — closed)
+- **L1:** preserve-and-move whole → `exec/plan/magic.rs` (seat exists:
+  "the magic-sets demand transform"). The `StoredRelationSchemaSource`
+  seam binds to the session transaction where it already points; the
+  deferred index-search atom arms land with project/ index tiers as
+  the header says.
+- **L2:** gold, preserve verbatim: the demand-vs-results law stated at
+  the head and re-derived at every decision (the checked narrowing,
+  the exempt-doesn't-bind ruling, the untouched head/aggr); the
+  fully-free identity theorem with its two-pass proof and the
+  hostile-review orphan lineage; the walk-direction proof plus its
+  named regression; Muggle-or-Magic-by-type replacing a comment with
+  structure; the measured OOM justification (a perf claim closed on a
+  reproducer, rule #19); exemptions each carrying their reason.
+  Nothing condemned.
+
+## query/ra/mod.rs (2024 lines; inventory: dual fork header with FIVE
+story-#3 transformations (storage access through the kernel's ReadTx
+species — "the operator tree itself is transaction-free data"; the
+Reorder/NegJoin join-RHS invariant made CONSTRUCTURAL — refused at plan
+construction where the original panicked at iteration; negation over
+time travel NOW COMPUTES — story #86 built NegRight::StoredWithValidity
+/Spans/Delta and deleted NegationOverTimeTravelError, "nothing is left
+to refuse"; every-referenced-rule-has-a-store typed via epoch_store_of;
+the index-search operators as seams — since landed as the ONE Search
+variant collapsing upstream's three per-engine node kinds), the
+ELEVEN-SITE Law-5 panic audit with each upstream site's fate on record
+(typed errors, unrepresentable states, and site 9 "RETIRED WITHOUT
+SUCCESSOR" — the universal bitemporal format leaves no per-schema
+validity column to check; slice-index sites argued as compiled
+knowledge with the two cross-function range-slices defensively
+`.unwrap_or(&[])`), and deviations D1–D5 (TupleIter homed here as
+operator-tier currency; transpose over the dissolved utils; log
+dropped, Debug/explain preserved; itertools::Either; Joiner::as_map
+retained for the explain surface), module doc (an operator is a
+TUPLE-STREAM TRANSFORMER; a compiled body is one left-deep tree and
+evaluating a rule is iterating the root; positions-not-names —
+"iteration never looks at a name again"; the POSITIONAL delta
+discipline: only the one TempStoreRA whose AtomOccurrence matches
+delta_rule reads its delta, negation always reads totals, self-joins
+get independently-selectable occurrences — Δ(P⋈P) = (ΔP⋈P) ∪ (P⋈ΔP);
+determinism as a function of stores and plan alone), `TupleIter`,
+`BatchFilter` (an operator never yields an empty batch — "is_empty()
+on a received batch is unambiguous end-of-window bookkeeping, never a
+real datum"), `PlanInvariantError`, `StoredRowTooShortError` (decoded
+length comes from stored bytes, so a short row is CORRUPTION surfaced
+typed), `epoch_store_of`, the 12-variant `RelAlgebra` enum, its
+methods (span; fill_binding_indices_and_compile — Spans/Delta carry no
+Expr by construction, NegJoin's right never carries filters; unit/
+is_unit; derived — occurrence-keyed; `relation` with the four validity
+arms — universal time travel means "construction checks nothing about
+the columns", Spans/Delta's one extra trailing binding pushed by the
+constructor, Delta's posting resolved later at compile's catalog;
+`filter` — per-variant pushdown, the Join arm splitting conjuncts
+left/right/remaining, Spans/Delta wrapped per chunk-3 scope; `join` —
+typed construction-time RHS refusals with each shape's REASON;
+`neg_join` — the total constructor into NegRight; the elimination
+trio; `iter_batched` — TOTAL dispatch, "no row-at-a-time fallback
+exists anywhere (the iterator twin and its chunker were deleted; the
+naive oracle in query/laws.rs is the semantic judge)"), the Debug
+substrate for ::explain (Unit/Singlet compression, unit-left joins
+render as their right), and the 13-test battery: the three
+InlineFixedRA join strategies; the mutant-K4 pin
+(batched_join_singleton_fixed_left_is_not_unit — "the guard must hold
+independent of what constructs the plan", a survivor of the mutation
+campaign pinned at the RA level); the materialized join vs a
+HAND-COMPUTED analytic oracle straddling the output-batch boundary
+twice with join_type routing asserted; spread unification + its typed
+non-list refusal; the time-travel scan; the typed-refusals test that
+ALSO proves #86's shape now constructs; the three-size batch-boundary
+join (BATCH_ROWS−1/±0/+1, half-miss probes); dual-side eliminate
+indices; delta threading narrowing the join to the fresh row; the two
+issue-#75 segment differentials (point-lookup and prefix probes,
+segments ON/OFF byte-identical AND equal to hand-computed expected);
+the `#[ignore]`d segment-vs-storage cost probe carrying its measured
+numbers in the doc (200k probes, storage 1023–1153 vs segment 230–243
+ns/probe, ~4.5x, with the fan-out amortization explanation); and the
+hostile-review error-ordering reproducer (a later stream error must
+not outrank an earlier predicate poison) — closed)
+- **L1:** preserve-and-move → `exec/op/` as the zone's spine (op/mod.rs:
+  the RelAlgebra tree, its total constructors, the typed invariants,
+  the batched dispatch, and the explain Debug substrate — structural
+  glue the map's file list implies; zones are stable, files grow). The
+  submodule re-exports realign to the map's names: fixed.rs →
+  op/literal.rs ("unit and literal-block relations"), temp.rs →
+  op/delta.rs ("fixpoint total/delta scans"), the rest map one-to-one
+  (join/neg/stored/search/temporal/transform). `BatchFilter` travels
+  to op/transform.rs with its kin. `StoredRowTooShortError` stays
+  beside the stored scans that raise it.
+- **L2:** gold, preserve verbatim: the Law-5 audit as a PERMANENT
+  header artifact (every upstream abort accounted for, including the
+  retired-without-successor ruling); constructural-over-runtime
+  refusals (join RHS, NegRight) as the house pattern; the positional
+  delta discipline doc with the self-join rewrite; the
+  no-row-at-a-time-fallback ruling (one machine, oracle-judged); the
+  never-empty-batch contract; judged-against-hand-computed-oracles
+  discipline named inside the tests themselves; the mutation-campaign
+  pin with its survivor lineage. Rule-#11 ledger (pre-existing): the
+  `#[ignore]`d cost probe is a measurement rig — bench lane on
+  migration; its measured numbers already satisfy rule #19's
+  perf-claims-close-on-a-reproducer standard and move with it.
+  Nothing condemned.
