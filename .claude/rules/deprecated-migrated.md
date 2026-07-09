@@ -56,6 +56,8 @@ paths:
   - "kyzo-core/benches/**"
   - "kyzo-core/examples/language_tour.rs"
   - "kyzo-bin/**"
+  - "kyzo-crashfs/**"
+  - "kyzo-arrow-interop/**"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -6427,3 +6429,176 @@ a panic") — closed)
 - **L2:** gold: compiles-vs-runs distinction driving a real-process
   test; survival-of-bad-input as an explicit exit-code claim.
   Nothing condemned.
+
+## kyzo-crashfs/src/lib.rs (77 lines; inventory: header, the crate doc
+(story #31 phase 1 — a pure-Rust FUSE passthrough fault injector on
+`fuser` with "LazyFS's torn-seq / torn-op / clear-cache vocabulary,
+seed-deterministic per the identity-keyed discipline storage/sim.rs
+already proves... lifted here to the real FUSE op level"; the
+NEVER-A-DEPENDENCY ruling — "the dependency edge, if it ever existed,
+would run the other way"; the module map; and the PHASE-2 CHARTER in
+five numbered steps: the compaction-forcing drive with triggers
+"anchored to durability barriers... never raw byte offsets, per the
+design ruling's field-converged lesson", crash-and-reopen, the
+SimStorage oracle, the BINDING lsm-tree finding — "data blocks are
+checksummed lazily... every phase-2 assertion after a crash point MUST
+read every key in the affected range... 'opens clean' is necessary,
+never sufficient" — and the falsification clause: "a large clean run is
+a reportable result on its own, not a reason to inflate seeds looking
+for a hit"), three module decls + re-exports — closed)
+- **L1:** preserve-in-place — the crate IS the map's kyzo-crashfs, its
+  file layout already matching (fault/passthrough/harness). The
+  phase-2 charter is the standing spec kyzo-trials/src/crash.rs (the
+  censused crash_matrix) partially discharges; the sim NEW-SEAT
+  question (storage/sim.rs's entry) decides whether this crate also
+  hosts the storage-double instrument.
+- **L2:** gold: a crate doc that is a bounded charter with its own
+  falsification clause and a binding cross-crate assertion rule (the
+  read-every-key law). Nothing condemned.
+
+## kyzo-crashfs/src/fault.rs (492 lines; inventory: header, module doc
+(every decision "a pure function of (campaign seed, path, op kind,
+byte range, attempt count)"; the sim.rs doctrine mirrored "read for
+the doctrine; that module is not depended on here — this crate stands
+alone"; TRIGGERS vs AMBIENT RATES — "a scenario is authored directly
+instead of hunted for by rate"; outcomes decided at buffering time and
+carried on the pending record), `OpKind` (Write/Fsync), `Fault`
+(TornSeq/TornOp/ClearCache with the power-cut semantics), `Trigger`
+(per-path 1-indexed op counts), `AmbientRates`, `FaultPlan` builders,
+`Counters` (caller-side occurrence state with the RECORDER-PASS hook —
+`count` peeks so a fault-free pass learns "which occurrence count
+coincides with which durability barrier"; restarts on reopen "exactly
+as sim.rs's attempts map"), `glob_match` (*-only, "the vocabulary the
+story calls for and no more"), `op_identity` (FNV-1a length-delimited,
+"mirrors sim.rs::op_identity exactly... independently implemented so
+this crate carries no dependency"), `write_identity` (identity/attempt
+kept orthogonal), `finalize` + salts + `ppm_hit`, `resolve_trigger`
+(first-match-wins, no seed — "an exact trigger's existence is itself
+the authored decision"), `WriteOutcome` + `decide_write_outcome`
+(exact overrides ambient; ClearCache is not a write outcome; the
+tiny-write ruling — "a one-byte (or empty) write torn-op degrades to a
+clean write rather than a phantom split"), and TEN unit tests (glob;
+exact resolution; identity purity + per-component sensitivity;
+same-seed replay ×2000; 500-seed all-three-outcomes coverage;
+zero-rate pure passthrough; trigger-over-ambient; the
+always-interior split point ×200 seeds; phantom-split impossibility;
+per-path/op counter independence) — closed)
+- **L1:** preserve-in-place → the map's `fault.rs` ("fault plans:
+  seed-deterministic torn writes, dropped fsyncs" per the tree).
+- **L2:** gold: the pure-core/IO-shell split ("provably correct
+  independent of whether a live FUSE mount is available in a given
+  sandbox"); deliberate duplication of sim.rs's identity construction
+  WITH its standalone-crate reason stated (one doctrine, two crates,
+  no dependency — mirror-divergence is the watch item: a change to
+  either finalizer must visit both, worth a shared golden vector in
+  phase 2); the recorder-pass hook designed into the counters.
+  Nothing condemned.
+
+## kyzo-crashfs/src/passthrough.rs (734 lines; inventory: header,
+module doc (THE WRITE-BUFFER MODEL — "a plain passthrough that calls
+pwrite on every write() has nothing for a fault to act on"; write()
+appends to an in-memory pending list, reads overlay it (page-cache
+read-your-write), only fsync materializes each entry "subject to
+whatever WriteOutcome was decided for it back when it was buffered";
+FOPEN_DIRECT_IO on every open "the kernel page cache never shortcuts
+around the injector"), PendingWrite/`Handle` (+logical_len — pending
+never shrinks the reported length "a real OS write-buffer doesn't
+retract a prior extend"), `InodeTable` (+rename migration with the
+stale-inode harmlessness note), `FaultCounters` (the cloneable
+counter handle obtained BEFORE spawn_mount2 consumes the fs — the
+crash-matrix two-pass seam), `PassthroughFs` (per-instance fixed
+plan), and the Filesystem impl: lookup/getattr (logical size through
+the handle)/setattr (truncation structural, applied immediately, with
+pending entries past the cut retained-if-below)/create/open (RW,
+DIRECT_IO)/read (the pending overlay merge)/write (outcome decided at
+buffer time; ClearCache "an immediate event, not a per-write outcome
+tag" wiping pending including the trigger)/fsync (the ClearCache-at-
+barrier arm; per-entry materialization; sync_all)/flush (no
+durability, POSIX-faithful)/`release` — carrying the FOUND-THE-HARD-
+WAY ruling: an earlier version discarded pending on ordinary close,
+"which silently lost data on EVERY release, fault-free runs included
+(caught the hard way: a keyspace's own manifest bootstrap write...
+came back permanently empty even with no fault plan active at all)";
+fixed to materialize already-decided outcomes without sync_all —
+/readdir/mkdir/rmdir/unlink/`rename` (structural, "never itself a
+fault target", the manifest pointer-swap pattern named)/`setlk`
+(grant unconditionally — fuser's ENOSYS default breaks fjall's own
+lock-file open, "a real database (phase 2's whole point) must be able
+to open through this mount at all") — closed)
+- **L1:** preserve-in-place → the map's `passthrough.rs`.
+- **L2:** gold, preserve verbatim: the why-not-a-pwrite-shim model
+  argument (the durability tier as the fault surface); the release
+  ruling with its caught-the-hard-way lineage (a fault injector that
+  injects faults it wasn't asked to is the worst kind of wrong); the
+  setlk accommodation argued from the real consumer; structural-ops-
+  are-never-fault-targets as an explicit scope line. Watch for phase
+  2: rename being fault-exempt means torn manifest pointer-swaps are
+  out of the current model — the design ruling's segment-file focus
+  covers today's charter, but the exemption should stay a stated
+  boundary, not become an assumption. Nothing condemned.
+
+## kyzo-crashfs/src/harness.rs (78 lines; inventory: header, module doc
+(lifted out of tests/standalone_mount.rs "so a second consumer —
+kyzo-core's crash-matrix harness — does not hand-copy the same
+mount/skip dance. This is exactly the dependency edge phase 1's design
+doc anticipated"), `can_mount` (/dev/fuse + fusermount-family probe,
+honest about being best-effort — "namespaces, seccomp, and AppArmor
+profiles can all still refuse it"), `mount` (failed mount = "an
+environment limitation, never an injector defect" with the printed
+reason), `wait_for_mount` (the settle loop making callers "robust
+rather than racy") — closed)
+- **L1:** preserve-in-place → the map's `harness.rs` ("mount
+  lifecycle: capability detection, setup, teardown").
+- **L2:** gold: environment-vs-defect separation as the skip
+  doctrine (the same skip-never-fail posture crash_matrix carries).
+  Nothing condemned.
+
+## kyzo-crashfs/tests/standalone_mount.rs (211 lines; inventory: header,
+module doc (the phase-1 deliverable: prove the model "with a plain
+std::fs writer and no knowledge of kyzo-crashfs internals" — the
+decision-logic half lives in fault.rs's tests; the skip doctrine),
+the thin mount wrapper, and three tests:
+`clear_cache_implements_the_power_cut_model` (fsynced payload +
+never-fsynced write wiped by the trigger; the verdict read from the
+BACKING file "bypassing FUSE entirely — this is what a fresh process
+reopening the store after a crash would actually see on disk");
+`torn_op_splits_a_write_at_the_seed_dictated_point` (the expected
+split PRECOMPUTED from the pure decision fn, the backing file
+asserted to exactly that prefix, plus the anti-vacuity length check —
+"otherwise this test would pass vacuously even if TornOp silently
+degraded to Clean"); and
+`read_your_own_write_survives_pre_fsync_through_the_live_mount` (the
+missing-overlay injector bug guarded; the read+write-fd kernel
+requirement explained in place) — closed)
+- **L1:** preserve-in-place as the crate's integration proof.
+- **L2:** gold: outside-in verification (a plain writer, the backing
+  file as the witness); pure-function-predicts-live-behavior (the
+  precomputed split); anti-vacuity guards; kernel-behavior notes
+  where a reader would misattribute a failure. Nothing condemned.
+
+## kyzo-arrow-interop/src/lib.rs (12 lines; inventory: header + the
+crate doc ("No production code lives here; every consumer is a test
+proving a real `arrow` reader parses kyzo-core's own encoder output
+byte-identically") — closed)
+- **L1:** preserve-in-place — the paired external judge
+  data/arrow_ipc.rs's entry names ("deliberately OUTSIDE the
+  purity-gated trees"); when arrow_ipc moves to model/envelope/
+  arrow.rs, this crate re-points at the model crate's re-export.
+- **L2:** nothing condemned.
+
+## kyzo-arrow-interop/tests/decode_kyzo_stream.rs (171 lines;
+inventory: header, module doc ("kyzo-core's own test suite proves the
+byte layout against the spec in isolation; this proves an actual
+Arrow implementation agrees"), value helpers, and four tests: the
+uniformly-typed batch (Int64/Float64/Bool/Utf8 — headers, values,
+null counts, and the exactly-one-RecordBatch assertion); nulls
+through a REAL validity bitmap; the zero-row batch as a legal stream;
+and the Binary column with its coverage note ("a bytes column always
+arrives as Mixed, classified Kind::Binary — so this is the ONLY path
+that exercises the encoder's Arrow Binary type at all") — closed)
+- **L1:** preserve-in-place; re-points with its crate at the model
+  seat on the split.
+- **L2:** gold: the independent-reader judge (three derivations of
+  the format — spec-pinned unit tests, this real reader, and the
+  encoder — triangulated); only-path coverage notes. Nothing
+  condemned.
