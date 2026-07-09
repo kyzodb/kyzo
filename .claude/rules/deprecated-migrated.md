@@ -1181,3 +1181,47 @@ omits trivia; the generator-artifact skip with a `checked > 400` floor
   its own body, which renders Validity through a `validity(...)` call;
   verify that constructor is a real callable op and rewrite the
   sentence to match whichever way the truth lies.
+
+## jepsen_trials.rs (682 lines; inventory: module doc (single-node
+elle/Adya serializability checking over the REAL fjall storage, driven
+through `write_tx`/`commit` directly because `Db::run_script`'s retry
+loop never surfaces a raw abort; SCOPE STATED PLAINLY — the distributed
+rig and public-surface fault injection are out, each with a named
+reason and a sequencing ruling; the four cycle classes G0/G1c/
+G-single/G2; G1a/G1b UNREPRESENTABLE rather than untested — commit
+consumes the transaction, and `plan_txn` never reads and writes one
+register — with a direct dirty/phantom-read check anyway;
+"reproducibility, precisely": the seed pins the WORKLOAD, real
+scheduling owns the interleaving — the honest caveat of testing real
+concurrency), `#![cfg(test)]`, the transcribed splitmix Rng, the
+register workload (values are unique write-ids so every read attributes
+to exactly one writer), `CommittedTxn` carrying THE #95 FIX DOC (the
+old post-commit `commit_seq` increment could invert relative to the
+true internally-serialized commit order — forcing the window produced
+false cycles in 19 of 60 seeds vs ZERO under `system_stamp` ordering on
+IDENTICAL executions; the stamp is a value captured at open, so the
+race class is unrepresentable, not avoided), retry-on-conflict
+`run_txn`, `run_campaign` (plans drawn single-threaded up front; 4×40
+across real threads), the independent checker (stamp-ordered version
+chains → ww/wr/rw edges → white/gray/black DFS cycle witness →
+Adya classification), the CPU-PRESSURE campaign (stressors scaled to
+`available_parallelism`, reproducing #95's original surfacing condition
+on every default run), env-scalable seeds (`KYZO_JEPSEN_SEEDS`/`_BASE`),
+the plain campaign, the FALSIFICATION SEAL (a hand-built write-skew G2
+proving the fixed checker still bites — "0 cycles must mean the engine
+is correct, never the checker is now vacuous"), and the named
+regression-pin slot ("None to date") — closed)
+- **L1:** preserve-and-move whole → `kyzo-trials/serializability.rs`
+  (seat exists: "elle/Adya-style transaction anomaly detection"). It
+  already speaks only the public Storage surface, so the crate wall
+  costs nothing; the two deferred legs are recorded follow-ons that
+  land in trials when replication and the #31 injector exist.
+- **L2:** gold, preserve verbatim: the scope ruling form (out-of-scope
+  named, reasoned, and sequenced — never silent); the
+  unrepresentable-plus-checked-anyway pattern for G1a/G1b; the #95
+  doc's differential proof (same checker, same data, only the ordering
+  witness varied); the falsification-seal discipline as a MANDATORY
+  companion to any false-positive fix; pressure-reproduction of a
+  bug's original surfacing condition instead of a synthetic delay;
+  seed-pins-workload-not-interleaving honesty; the regression-pin slot
+  convention.
