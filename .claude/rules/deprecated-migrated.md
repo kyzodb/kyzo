@@ -1930,3 +1930,42 @@ re-searching) — closed)
   batch boundary; strategy-from-shape with panic-to-typed-refusal;
   observational-identity arguments accompanying every optimization.
   Nothing condemned.
+
+## query/normalize.rs (757 lines; inventory: header (THREE PARTS, each
+with its own landing note: the normalizer — faithful ports of
+upstream logical.rs NNF→DNF and reorder.rs well-ordering, "nothing
+about them is interim ... the logic is final", re-homing when the
+tier lands; the SessionView read surface; the SessionFixedRule
+adapter; an earlier interim nested-loop interpreter RECORDED as
+superseded and deleted; law-5 notes — every upstream `unreachable!`
+a typed invariant), the search-atoms-at-the-catalog-boundary ruling
+(NormalFormAtom carries no search variant "because search atoms join
+the plan at the catalog boundary, not through normalization"),
+`SessionView` (Copy BY DESIGN — two references; `_`-prefix
+namespace-routed catalog; as-of-routed scans; serving the magic
+tier's schema seam and the fixed-rule payload's stored-input seam),
+the NNF/DNF machinery (negated Unification = UnsafeNegation, negated
+Search = the shared NegatedSearchUnsupported; two lookup closures —
+schema for named fields, full handles for search), `normalize_args`
+(expressions → fresh bindings + unifications; REPEATED variables →
+fresh binding + equality unification; ignored → generated), the
+TWO-ROUND well-ordering (positive applications bind; pending atoms
+insert as soon as their inputs are bound; still-pending at the end
+refused with the upstream-verbatim UnsafeNegation/UnboundVariable),
+and `SessionFixedRule` (payload from epoch stores + the view; output
+BRANDED with the manifest arity, "never a caller-supplied one"; the
+budget's kill flag shared so a cancelled query stops the rule; the
+budgeted output armed with the TRUE GLOBAL admitted total "counting
+every prior admission, not just this writer's own rows — so a
+row-amplifying algorithm refuses mid-run") — closed)
+- **L1:** SPLIT along its own three-part structure: the normalizer →
+  `exec/plan/` (the NNF/DNF/well-ordering passes feed compile.rs; the
+  file's own landing note names this re-homing); `SessionView` →
+  `session/` (it IS the session's read surface, serving plan and
+  rules); `SessionFixedRule` → the `rules/contract.rs` boundary
+  (where a fixed rule's payload, branding, and cancellation are the
+  contract's substance).
+- **L2:** gold: parts that know their own destinations; the
+  catalog-boundary ruling for search atoms; brand-with-manifest-arity;
+  the global-admission budget arming; superseded code deleted and its
+  deletion recorded. Nothing condemned.
