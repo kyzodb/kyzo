@@ -53,6 +53,7 @@ paths:
   - "kyzo-core/src/fixed_rule/**"
   - "kyzo-core/src/lib.rs"
   - "kyzo-core/tests/**"
+  - "kyzo-core/benches/**"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -6007,3 +6008,89 @@ restored store; and a clean verify_storage report — closed)
 - **L2:** gold: the breaks-first-at-the-contract framing; the only
   integration coverage of backup and verify called out as such.
   Nothing condemned.
+
+## benches/db_scan.rs (65 lines; inventory: header, module doc ("the
+current-state segment engine's kill-gate instrument. Steady-state
+iterations here run entirely against the served segment; the same bench
+on a segments-reverted tree is the A/B baseline"), seeded_db, and
+bench_scans (one seeded store per size driving both queries with the
+pay-the-seed-once reasoning; the warm read that "builds the segment";
+full and filtered scans at 50k/200k, sample_size 20) — closed)
+- **L1:** preserve-in-place → the target `kyzo-core/benches/`
+  ("permanent performance instrumentation").
+- **L2:** gold: an instrument named for the DECISION it gates (the
+  segments kill-gate) with its A/B protocol stated. Nothing condemned.
+
+## benches/ra_exec.rs (124 lines; inventory: header, module doc ("the
+permanent instrumentation the vectorization ascent measures against";
+four workload classes each named for "a distinct cost the design must
+answer"; both backends; the HISTORICAL-TAG ruling — the id keeps
+"batch" "so its row stays comparable across the iterator twin's
+deletion in the committed bench-results/ logs"; seeded generators,
+machine stamped in the results files not here), DirFactory,
+bench_workload, and the `all` sweep (TC chain/dense/random with the
+O(n²)-pairs sizing note; the 3-way join with the
+measure-parity-not-speedup honesty; scan+filter at three
+selectivities; aggregation at two scales) — closed)
+- **L1:** preserve-in-place → `kyzo-core/benches/`. REWIRE: it
+  consumes `kyzo::bench_api` — the sealed door deprecated-sealed.md
+  deletes; per bench_api's own entry the Workload constructors and
+  Graph shapes land IN benches/, so this file's imports become local
+  bench-rig vocabulary rather than a crate façade (the
+  bench-internals feature stays the gate).
+- **L2:** gold: comparability-across-history as a design constraint
+  (the batch tag ruling — bench identity is part of the recorded
+  evidence chain, rule #19's ledger discipline); workloads named for
+  the cost they isolate. Nothing condemned.
+
+## benches/storage.rs (224 lines; inventory: header, module doc
+("designed around the decisions they inform" — the commit-ceiling
+question, the SSI scan-tracking question, the asof
+earns-its-complexity question, and the ops baseline), the key/
+bitemp_key/assert_val builders, `ops` (get hit/miss, put-1k-commit),
+`scan_tracking_overhead` (read-tx vs write-tx 10k scans, with the
+fresh-write-tx-per-iteration honesty — "read marks accumulate per tx,
+and an honest number includes that cost"), `commit_parallel` (fixed
+total work split across 1/2/4/8 threads — "if commits applied in
+parallel, wall time would fall with N; the ceiling shows as a flat
+line"), and `asof` (TWO SHAPES, same total entries — shallow 1000×8
+"where naive streaming can win on iterator-setup costs" vs deep
+50×160 "where seeking must win — the crossover is the honest
+characterization of the seek design"; the in-bench naive
+scan-and-filter oracle) — closed)
+- **L1:** preserve-in-place → `kyzo-core/benches/`; its store-surface
+  imports ride the same public-currency decision as the trials kit.
+- **L2:** gold: benches framed as questions with a stated
+  interpretation for each outcome (a flat line MEANS the ceiling);
+  the crossover-not-victory framing on asof; per-iteration honesty
+  notes. Nothing condemned.
+
+## benches/string_eq.rs (271 lines; inventory: header, module doc
+(story #119's ">=3x" claim "measured rather than cited"; "this number
+goes public — a rigged or unrepresentative bench is worse than none";
+the three-distribution design; the BRANCH-AGNOSTIC ruling — "nothing
+GermanStr-specific appears in this file's body... the identical file
+compiles against origin/main... so criterion --save-baseline main on
+the former and --baseline main on the latter measures the real delta,
+not two different benchmarks"), the three DISTRIBUTIONS with their
+mechanism analysis (long_shared_prefix — head4 never resolves, both
+sides pay the tail compare; short_strings — both inline, no
+heap-avoidance argument available to either side; early_differ — the
+design claim's home turf, with the honesty note that which wins "is
+exactly what running this bench answers, not what this comment
+asserts"), EQ_SIZES with the flat-line-is-evidence-of-nothing rule,
+`bench_germanstr_eq` (the equality sweep against a seeded shuffle;
+the sort arm with iter_batched re-cloning "rather than a no-op
+re-sort"), and `bench_string_scan` (the applied proof: the NON-KEY
+filter target ruling — "filtering on the indexed key instead would
+risk the query planner turning it into a point seek that never
+compares most rows at all"; the cardinality-preserving self-join
+with its still-compares-per-row argument) — closed)
+- **L1:** preserve-in-place → `kyzo-core/benches/`.
+- **L2:** gold, preserve verbatim: the anti-rigging doctrine stated
+  at the head (distributions chosen to include the design's WORST
+  cases, reported "honestly even where the win is small or absent");
+  branch-agnostic construction as the A/B mechanism; self-diagnosing
+  design (a flat line indicts the bench itself); planner-aware
+  workload construction. The house standard for a public perf claim
+  (rule #19 in bench form). Nothing condemned.
