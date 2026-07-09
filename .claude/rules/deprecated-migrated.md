@@ -2139,3 +2139,211 @@ closed)
   tautology argument); establishing-atom diagnostics; direct
   enumeration over index arithmetic; proofs in prose at the mint
   sites. Nothing condemned.
+
+## query/standing.rs (1085 lines; inventory: MPL header, module doc (the
+snapshot-consistency PROOF: `current_callback_targets` read exactly once
+per transaction means subscribe-FIRST-read-SECOND loses no commit — a
+commit either predates registration (in the initial read; its eventual
+event is redundant, absorbed by `incremental_eval`'s EDB-patch filter) or
+postdates it (missed by the read; the event supplies it); the pull drive
+model ("there is no thread-management infrastructure anywhere in the
+callback seam today" — a Receiver, the caller decides the loop); the
+`CallbackEvent`→`SignedFact` law: Put's new/old are two INDEPENDENT
+non-disjoint row sets, so the SET DIFFERENCE is taken before folding —
+a row on both sides nets to no change; Rm is NOT symmetric, its "new" is
+bare k_bindings keys, only "old" is a fact), `entry_symbol` (the `?`
+identity minted in exactly one place), `Subscription` (id/receiver/
+key_arity cached at registration to avoid a second storage round-trip),
+`no_duplicate_key_prefix` (debug-only invariant; Tuple's Ord puts key
+columns first so duplicate key prefixes are ADJACENT — an O(n) scan, no
+key index), `StandingQuery` (no bare-fields constructor: existing =
+subscribed + snapshot-initialized), `register` (subscribe-then-snapshot
+in the proof's order; the bootstrap is NOT a special case — empty IDB
+state + all-Plus EDB seed patch through the same `incremental_eval`
+walk), `current`/`current_answer` (static EMPTY), `apply_pending` (nets
+each tuple's signed multiplicity IN COMMIT ORDER before evaluating — a
+flat `BTreeSet<SignedFact>` cannot represent assert-then-retract across
+queued events, and the pre-batch redundancy filter cannot recover it:
+the 0.9.0-adversarial-review multi-commit-drain bug, where two puts of
+one key left BOTH values in maintained state), `apply_pending_answer`,
+`teardown` (leak-free even unclosed — the registry's lossy-by-disconnect
+contract prunes idle channels), `Db::register_standing` (the public
+entry: runs `compile_and_eval`'s exact prefix — parse/normalize/
+stratify/magic — then STOPS before RA lowering, the erasure the
+translator cannot afford; refuses sys/imperative scripts and mutations),
+and the test battery: hard corner `p(x), not r(x)` through real commits;
+Symbol-free accessor agreement; the three multi-commit-drain repros
+(put-then-rm nets to nothing, rm-then-put stays present, two puts of one
+key never leave two rows); teardown unregisters all; the recursion
+refusal reaching `has_any_cycle` end-to-end through the public surface;
+the real aggregating query hitting every min() hard case (current-min
+retraction is a rescan, not a tally); and TWO generative real-commit
+differentials whose recompute side is `db.run_script` of the SAME query
+text — never a second `translate()` call, "recomputing via the real
+query engine is what actually proves the maintained answer equals the
+query's own answer" — one per-commit over four shapes, one BATCHED 1–4
+commits per drain against a genuine key-value relation (the batch path
+the per-commit campaigns structurally could not exercise) — closed)
+- **L1:** preserve-and-move whole → `react/standing.rs` (seat exists:
+  the react zone is the standing-query lifecycle's home; query/mod.rs's
+  own ledger already names it). Its imports move with their owners:
+  `incremental` (react/incremental.rs), `SignedFact` (the temporal
+  vocabulary), the callback seam (session-side commit notification).
+- **L2:** gold, preserve verbatim: the snapshot-consistency proof
+  written at the module head (subscribe-first-read-second, with the
+  redundant-case absorption argument); the netting law and its bug
+  history (the module carries WHY a flat signed set is insufficient, in
+  prose, at the code that fixes it); the recompute-through-the-real-
+  engine differential discipline ("two runs of the SAME translation
+  agreeing" named as the tautology it is); the no-bare-constructor
+  existence invariant; the debug-only adjacency scan justified by
+  Tuple's Ord. Nothing condemned. Design note for the destination: the
+  pull model is a deliberate, argued scope cut — the react zone's law
+  should inherit the argument, not silently grow a thread.
+
+## query/dst_query.rs (1272 lines; inventory: MPL header, module doc (DST
+"up the query path": the storage-seam DST proves the KV contract
+seed-reproducible; this tier runs COMPILED Datalog over `SimStorage`
+under a seeded fault plan and pins five query-visible laws — read faults
+never lie, crash consistency is query-visible, snapshot isolation holds
+at the answer level, time travel never tears, and determinism
+"characterized honestly"; plus the rebuilt-helpers rationale: the compile
+tier's builder plumbing is private, so rather than widen an engine
+module's surface for a test this module rebuilds the thin layer over the
+same pub(crate) pipeline entries, with HAND-CHECKED constants as the
+oracle "wholly independent of the pipeline"), `#![cfg(test)]`, builder
+plumbing (sp/sym/v/muggle/entry_symbol, `generous_budget` — "generous,
+but armed": epoch ceiling + derived-tuple ceiling turn divergence into
+typed LimitExceeded, col, rule/neg_rule/rel/rel_asof atom constructors,
+HeadAggr, plain_rule/aggr_rule, program_of, immortal_lifetimes, rows),
+the FALLIBLE TWINS `stored_relation`/`try_run` (every storage touch is
+`?` so an injected fault arrives as a value, "not a panic, and not a
+silently-wrong answer"; the no-fixed-rules closure returns Err, never
+panics), `Fixture` + five corpora (transitive closure over a cycle,
+two-hop join, grouped min, stratified negation, and the multi-head
+stratum built FOR the parallelism probe; SINGLE_HEAD_FIXTURES named by
+the property that eval's par_iter dispatches one element so storage ops
+are not raced), harness helpers (`populate_retrying` — setup faults
+absorbed by bounded retry so the QUERY's single raw attempt is the
+observation, retry count a pure function of the seed; `seeds` with the
+env-scalable KYZO_DST_QUERY_SEEDS knob; `Observed`; `observe_faulted`),
+and the six capability sections: the headline read-fault campaign
+(correct-or-typed-never-wrong, with the 3% recalibration note for the
+one-machine executor's denser read pattern and BOTH-arms anti-vacuity
+asserts); crash consistency (buffer-tier vs durable-tier edges read
+through the closure after sim_crash/sim_powercut; plus the
+under-faults variant where the ONLY legal answers are base-prefix or
+full closure — anything else is a torn history read); snapshot
+isolation via the a+b=C two-row detector under a real OS-thread writer
+(rayon workers are not token-barrier participants, so genuine
+concurrency is used and the doc says why); time travel as-of under
+faults with clean-store anchors at 15/25/35; determinism — pinned for
+single-head fixtures, and for multi-head MEASURED NOT ASSERTED (the
+op-counter fault plan races rayon's head dispatch; the test records
+the divergence rate, demands both Ok and Err arms so "0 diverged" is
+never vacuous, and still asserts completed answers are correct); and
+three anti-vacuity proofs (no faults ⇒ no errors; high rate ⇒ errors
+actually fire; a corrupted reference is caught) — closed)
+- **L1:** preserve-and-move → `kyzo-trials/src/dst.rs` (seat exists:
+  "deterministic simulation: storage seam and query path"). REWIRE
+  REQUIRED at the crate wall: the module today drives pub(crate)
+  pipeline entries (`stratified_magic_compile`, `bind_for_eval`,
+  `stratified_evaluate`) and hand-built `MagicProgram`s, but
+  kyzo-trials "depends on kyzo-core's public surface" — on migration
+  the corpora become real KyzoScript through the public Db (the same
+  move standing.rs's differential already made), or the map must grant
+  trials a deeper seam; the hand-checked constant oracles survive
+  either way. `SimStorage` itself is kyzo-crashfs vocabulary in the
+  target, which trials lawfully depends on.
+- **L2:** gold, preserve verbatim: the fallible-twin discipline
+  (faults as values end-to-end); the anti-vacuity instrument as a
+  first-class capability (both arms must fire, the corrupt-reference
+  self-check, the no-faults control); the measured-not-asserted
+  determinism posture with its named hazard (rayon vs the op-counter
+  fault plan) and the fix shape on record (an order-independent fault
+  plan); the calibration notes that tie fault density to executor
+  shape so the law stays tested; setup-retry-vs-observation
+  separation. Condemned: nothing — but the builder plumbing is the
+  third rebuild of the same rig (compile.rs tests, bench_api, here);
+  the target's public-surface rewire dissolves it into KyzoScript
+  text, which is the real fix for the triplication.
+
+## query/ra/temporal.rs (1339 lines; inventory: MPL header, module doc in
+three ruled sections (the SCAN-DIRECTION MISMATCH: the kernel's
+governing-version resolution is a skip scan that never enumerates a
+fact's full history, `SpansRA` needs every breakpoint, no storage
+primitive yields "every version of one key" today, and the natural home
+— runtime/relation.rs — was frozen under another builder's fix, so the
+module builds the raw scan against the public contract with
+`relation_keyspace_bounds` as "a small, named duplication, not a design
+choice"; the BUFFERING DECISION: one fact key's version set at a time,
+O(one fact's write history) never O(relation), the rejected alternative
+named; the SIGNED-FACT CURRENCY of story #77 — a currency change ONLY,
+not an algorithm change; and the chunk-4 POSTING-INDEX FAST PATH with
+its three-step derivation and the identical-output-by-construction
+claim), `SignedFact` (pub — "the one name for a signed delta fact in
+this engine", Ord matched to the oracle twin so BTreeSets sort
+identically) + `tuple`, `compose` (tally-and-cancel, INDEPENDENTLY
+WRITTEN twin of laws::compose "so the two never share a bug through
+shared code"; first real production caller is the fast path), `SpansRA`
+(trailing interval binding never folded into base columns — the
+SearchAtom shape), `DeltaRA` (+ the `posting: Option<RelationHandle>`
+seam chunk 3 reserved and chunk 4 filled without changing bindings or
+coordinates), SIGN_PLUS/SIGN_MINUS, `RawVersion` (pub(crate) for
+story #80's verify oracle-feed — "reused, not re-derived, exactly as
+this module's own doc argues for itself"), `decode_raw_version` (FOUR
+corruption refusals: short key, missing time slots, a retract flag in a
+stored slot, key-arity mismatch — refused rather than trusted),
+`resolve_at` (Assert holds / Retract settles absent / Erase transparent
+falls through; twin of laws::resolve_events), `derive_group` (maximal-
+run sweep where "coalescing is definitional — un-coalesced output is
+unrepresentable"; closed normal form on the discrete grid; an in-force
+fact gets `Bound::Unbounded`, NEVER a finite sentinel end; the
+start<end argument written at the site, law 5), `SpansRA::iter_batched`
++ `SpansScanBatches` (+`collect_group` with the pending-key carryover
+so each row decodes once), `DeltaRA::iter_batched` (canonical sorted
+output — the determinism law — over two routes), `patch_naive` (naive
+BY RULING, two full snapshots), `patch_via_posting` (bounded posting
+scan → candidate keys → point reads at both endpoints → ONE `compose`),
+`posting_window_bounds` (the load-bearing key-encoding reasoning:
+Validity encodes newest-first so hi is the ascending LOWER bound —
+"backwards from what plain integer bounds would suggest, which is
+exactly why this is factored out and named"),
+`candidate_keys_from_posting` (lo>=hi ⇒ empty window; keys-only scan;
+corrupt posting key refused), `RowChunks`, and tests: helpers incl.
+`erase_at` (raw Erase rows — no production write path exposes Erase, so
+test plumbing writes through the same pub(crate) encoders) and
+`spans_rows` (open ends asserted as None, never the old MAX sentinel);
+nine @spans tests (single assert open, retract clips exclusive, payload
+change splits, idempotent double-assert, reopen after retract, dangling
+retract holds nowhere, Erase transparency, no zero-width at any fixed
+sys, multi-fact independence); four delta tests (Plus, Minus/Plus pair
+"never a modified kind", identical snapshots empty, sys-axis
+correction); and the posting battery — `make_indexed_relation` +
+`write_indexed_event` driving SessionTx's real `update_indices` seam
+(because put_fact never maintains indices — the comment names the trap),
+`assert_paths_agree`, five agreement cases incl. the backward diff
+(min/max not positional role), and the seeded generative campaign —
+closed)
+- **L1:** preserve-and-move whole → `exec/op/temporal.rs` (seat exists:
+  "interval derivation and net-diff operators"). `SignedFact` moves
+  with it and remains the engine-wide delta vocabulary consumed by
+  react/ (standing, incremental) — one name, per its own doc.
+  UNFREEZE ON ARRIVAL: `relation_keyspace_bounds` and the raw
+  multi-version scan exist only because runtime/relation.rs was frozen;
+  the target store zone (contract.rs + skip_walk.rs, "the ONE
+  bitemporal skip-scan walk, generic over its driver") should grow the
+  every-version-of-one-key primitive and the keyspace-bounds accessor,
+  and this module's named duplication dies. The posting-path test
+  writers similarly exist because put_fact bypasses index maintenance;
+  the target's session/admit is the one write door, which dissolves
+  that plumbing.
+- **L2:** gold, preserve verbatim: independently-written-twin
+  discipline (compose, resolve_at) with the differential in the trials
+  crate as the bridge; the buffering decision recorded WITH its
+  rejected alternative; posting_window_bounds' factored-and-named
+  inversion reasoning; the corruption-refused decode posture; closed
+  normal form with Unbounded-not-sentinel; canonical sorted operator
+  output; naive-by-ruling with the acceleration landing at the exact
+  reserved seam. Nothing condemned — the two duplications are both
+  NAMED, argued, and scheduled to die with their causes.
