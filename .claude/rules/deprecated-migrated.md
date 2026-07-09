@@ -3561,3 +3561,86 @@ closed)
   condemned. Carried v1 obligation: the cur_vld-only check is a
   stated boundary — the target zone law should carry it forward
   explicitly until a cross-time enforcement story lands.
+
+## runtime/verify.rs (1162 lines; inventory: MPL header, module doc
+(`::verify`, story #80 — "the self-adversary primitive... 'no competing
+database ships its own adversary'": one query through the production
+evaluator AND the sealed oracle against ONE shared SSI snapshot; the
+SCOPE OF THIS CUT stated plainly — the translator covers plain
+relational Datalog + point-in-time `@` reads and REFUSES TYPED the
+rest (fixed rules, predicate/unification atoms, index searches,
+@spans/@delta with the extra-column shape named, :order/:limit/
+mutations); A FINDING ALONG THE WAY, "named rather than routed
+around" — the wildcard-in-negation safety-notion gap where the
+oracle's check_safety is narrower than production's, isolated in every
+test by binding negated variables positively first and left for the
+refusal-fence work to characterize; THE SNAPSHOT ADAPTER — one ReadTx
+for both evaluators through the SAME scan/decode primitives production
+uses, "so 'byte-identical state' is structural, not a hope", with the
+honest consequence stated: "verify's temporal independence lives in
+the EVALUATION... a bug in decode_raw_version itself would be shared
+by both sides and could escape this check"), `VerifyOutcome` ("never a
+bare bool": Match, Mismatch carrying the reproduction script text and
+BOTH answer sets, Unsupported, OracleRefused — "a genuine finding
+about the QUERY... not evidence of an engine defect") +
+`into_named_rows` (the one-row status/summary/detail product surface),
+`intern` (leak-intern deduplicated by content, bounded by catalog
+vocabulary — with the DESIGN DEBT NAMED PLAINLY: "this is a bridge,
+not the honest end state... the honest long-term fix is laws.rs's
+Rel/Term::Var owning their strings... tracked as follow-up work
+rather than silently left undocumented"), the translator
+(`to_oracle_asof` applying laws.rs's proven exact correspondence;
+`translate_atom` per variant with each refusal REASONED — "@spans
+binds an extra column beyond the relation's own arity, a distinct
+translator shape"; `translate` with the
+all-defs-regardless-of-reachability harmlessness argument and the
+facts-XOR-histories retain), the two scanners (`scan_edb_facts`
+through the production `StoredWithValidityRA` operator — "not a
+second, bespoke decode path"; `scan_full_histories` through
+`decode_raw_version` — "reused, not re-derived, so a bitemporal-tail
+decoding bug is shared rather than independently risked twice"),
+`oracle_budget` (defaults IMPORTED from db.rs's shared constants "so
+the oracle path can never silently drift from build_budget's — the
+exact divergence that once left this path's derived-tuple ceiling
+unbounded"; no kill flag, reasoned), the three entry points
+(`verify_script`, `verify_input_program` for SysOp::Verify, and the
+shared `verify_program` core with the SABOTAGE HOOK — "production
+always sees the real, unsabotaged snapshot — only the oracle's copy
+is perturbed"), and twelve tests: Match on real recursion; THE
+SABOTAGE PROOF (an edge dropped from the oracle's view only must
+surface as a faithful Mismatch, never silent agreement); the
+predicate refusal BY NAME; the `::verify { }` directive end-to-end
+through run_script (grammar + dispatch); the directive naming
+unsupported constructs; the WHOLE-CORPUS proof (40 seeds through
+gauntlet's OWN generator — "reused, not re-derived" — every accepted
+query Matches, with the generator's aggregation gap NAMED and closed
+by the hand-written aggregation test); the REFUSAL-CORPUS proof
+(unstratifiable_corpus never Matches — production refuses first or
+the outcome is named, with the fixed-rule skip documented); the
+point-in-time historical read at three instants incl. empty-not-
+refused; the negated historical read with its positive-binding
+isolation note; @spans refused by name; the starved-ceiling
+propagation (ONE caller ceiling bounds BOTH evaluators by design,
+with the oracle-alone case delegated to laws.rs's own tests where
+"production's independent budget cannot confound it"); the generous-
+budget Match; and the budget-default REGRESSION asserted at
+construction ("rather than by tripping the 50M ceiling end to end,
+which would cost seconds and gigabytes for no extra coverage of THIS
+guarantee") — closed)
+- **L1:** preserve-and-move whole → `session/verify.rs` (seat exists:
+  "the ::verify door: the engine summons its judge (kyzo-oracle)" —
+  and the zone law's clause "::verify summons the oracle crate; it
+  never reimplements any semantics" is already this file's design).
+  The crate split RESOLVES the named intern debt: kyzo-oracle's
+  program model owning its strings (laws.rs's entry's arrival
+  question) deletes the leak-bridge entirely — the two follow-ups
+  are one work item.
+- **L2:** gold, preserve verbatim: never-a-bare-bool outcomes with
+  reproduction bundles; the sabotage-hook pattern (the comparison
+  proves its own eyes); structural byte-identical state via shared
+  scan primitives, WITH the shared-bug consequence honestly stated;
+  refusals reasoned per construct; findings named rather than routed
+  around (the safety-notion gap); defaults imported-never-redeclared
+  with the drift lineage; corpus reuse over second corpora; the
+  cheap-assertion-over-expensive-e2e regression judgment. Nothing
+  condemned.
