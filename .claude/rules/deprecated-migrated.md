@@ -2966,3 +2966,102 @@ count) — closed)
   db.rs wires fixed rules, Budget::check_interrupt/ticker go
   pub(crate) — "never solved by re-adding Poison"; the entry for
   runtime/db.rs must verify this landed lawfully.
+
+## query/trials.rs (2964 lines; inventory: MPL header, module doc (two
+README claims under "The engine keeps its word" demonstrated AT SCALE
+against the sealed oracle; test-only over the pub(crate) eval seams;
+determinism-as-a-law — seed-reproducible generator, finite Budget so
+"a ceiling turns explosion into a typed refusal", answers + witness
+tables + refusals byte-identical across 1/2/4/8 threads; answers-that-
+show-their-work — proof trees reconstructed from the witness table and
+verified by an INDEPENDENT checker; and the STATED OPEN GAP: "the
+demand rewriter has no end-to-end differential anywhere today...
+Closing it is scheduled at the session tier... Boundary stated, not
+smuggled"), `#![cfg(test)]`, the splitmix64 `Rng` (+one_of), the
+ModelBody/ModelFixed RuleBody/FixedRuleEval harness (shared laws
+helpers per issue #89 — "this harness used to hand-copy them"; the
+occurrence-map ruling repeated), the transcribed Bellman stratum
+assignment ("this scaffolding must not lean on the judge's internals —
+any valid stratification yields the oracle's fixpoint"), `compile_for`
+(with fixed rules), `model_arities` (from the MODEL alone — "an
+oracle-empty relation must still carry a real arity, or an
+over-derivation into it would be an invisible vacuous pass"),
+`real_eval`, THE GENERATOR (five meet lattices; `GenParams`'s eleven
+dimensions incl. `cross_join` — a non-self-healing two-delta join
+built to discriminate "a delta-discipline mutant that threads only the
+first contained store's delta (which pj's repair rule masks)";
+`meet_pos0` and `meet_interleaved` exercising the positional
+MeetAggrStore that retired MeetNotSuffix; safe-by-construction strata;
+EDB "sized into the thousands"; opaque `fixed_endpoints`), CAPABILITY
+1 (the pool-width guard — "a 1-thread 8-thread run proves nothing";
+`differential` over every IDB relation; `run_seed`'s four claims incl.
+the empty-witness-table vacuity guard and refusal determinism on BOTH
+budget dimensions with exact spends; KYZO_TRIALS_SEEDS/BASE env knobs;
+the named regression-pin placeholder), CAPABILITY 2 (the `Proof` tree;
+`reconstruct` with the witness-table boundaries documented —
+derivation-less admissions return None; `index_witnesses` first-
+witness-wins; the independent `verify` — "imports no EVALUATOR
+symbol... re-derives each step's binding from scratch, so a corrupted
+proof cannot pass by echoing eval's own reasoning", with the #89 note
+on the REMOVED hand-rolled check_unify — "drift, not a deliberate
+second algorithm"; the negated-premise boundary refused rather than
+pretended; the fixture; every-derived-fact reconstruction incl.
+intermediates; the FOUR-corruption negative control — premise tuple,
+conclusion, out-of-range rule index, and the sibling-rule
+mis-attribution via flip_interior_rule; generator seed
+reproducibility with a substance floor), CAPABILITY 3 (the temporal
+generator twin, with the section doc's precise EPISTEMICS — (a)
+resolve vs derive_intervals are "genuinely TWO independent
+algorithms", (b) diff/compose is "a mathematical identity... not an
+independence claim", (c) the pushdown check proves WIRING not
+algebra; `gen_temporal_history` with same-valid-instant corrections
+at even odds; HIST_RELS in fixed order so reproducibility never
+depends on map iteration; `shuffle_body` carrying the Mutant-C
+lineage — the body-order invariance that survived every campaign
+because generators "happened to always emit positives before
+negatives", now hunted at scale; `program_grid` ±1-and-extremes with
+the i64::MAX−1 sentinel reasoning; the >5000-case grid differential
+over generated PROGRAMS plus union/join wiring; randomized-bounds
+composition on both axes; the pushdown differential; and THREE
+HAND-MUTANT pairs, each proving a weakened generator/grid is
+structurally BLIND to a companion sabotaged oracle twin that the real
+one catches — no-Erase vs erase-as-retract, non-negative-only vs
+abs-value sort, and stored-coordinates-only vs the short-end boundary
+bug with the honest COUNTED comparative claim: "a coordinates-only
+grid CAN still catch this... the honest claim is comparative"),
+CAPABILITY 4 (the refusal-lift coverage: an existential-payload
+temporal generator, `neg_lit_at`, the ReachabilityFixture running
+recursion, THE LIFTED negation-over-as-of shape, and both aggregation
+families over the SAME historical relations at the SAME coordinates,
+bodies shuffled; four independently written references — brute-force
+closure, set complement, group-and-count, and meet propagation whose
+FOLD reuses the real landed Aggregation ops "per this module's own
+header doc: a bug in an aggregation must never hide behind a parallel
+test-only reimplementation" while the LOOP stays independent, with a
+termination guard; ≥800 cases; the section doc stating precisely what
+is and is not proven) — closed)
+- **L1:** preserve-and-move with a NAMED SPLIT across the trials
+  lanes: the generator + Capability 1 → `kyzo-trials/src/gauntlet.rs`
+  (generated-program hunting) with its determinism assertions feeding
+  `determinism.rs`'s lane; Capability 2 → the proposed
+  `kyzo-trials/src/provenance.rs` (NEW-SEAT, shared with
+  query/provenance.rs's entry); Capabilities 3–4 →
+  `kyzo-trials/src/time_travel.rs` beside time_travel_trials.rs's
+  material. Same crate-wall rewire as its siblings (pub(crate) eval
+  seams → public surface or a sanctioned deeper seam; the oracle side
+  is already kyzo-oracle vocabulary). OPERATOR-VISIBLE STANDING ITEM:
+  the module's own stated open gap — no end-to-end demand-rewriter
+  differential — is scheduled at the session tier (runtime/db.rs
+  wave); the migration must carry that obligation forward, not lose
+  it in the move.
+- **L2:** gold, preserve verbatim: the stated-boundary discipline
+  (open gaps named in the doc, never smuggled); generator dimensions
+  justified by the exact mutant each discriminates (cross_join's
+  masking argument); hand-mutant pairs that prove the CAMPAIGN's own
+  eyes (a weakened generator shown blind, the real one shown to
+  catch); the counted comparative claim over a boolean where the
+  boolean would overclaim; the epistemics sections stating what each
+  oracle-vs-oracle check does and does not prove; model-derived
+  arities against vacuous passes; the real-landed-ops fold rule for
+  references; fixed-order generator vocabularies for seed
+  reproducibility. Nothing condemned.
