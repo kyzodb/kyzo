@@ -4786,3 +4786,215 @@ pinning an exact host-dependent value") — closed)
   assertions over host-pinned values. The one condemned class is the
   superseded kit-source duplicates named in L1; everything else
   crosses.
+
+## fixed_rule/mod.rs (1965 lines; inventory: dual fork header with the
+load-bearing changes list (the STORED-INPUT SEAM — the original payload
+held a live &SessionTx; `StoredInputSource` abstracts it, SessionView
+implements it in production, `NoStoredInputs` is "the pre-runtime
+placeholder it superseded, kept only for its own regression test",
+algorithms never see the seam "so their code is final now"; the
+ARITY-BRANDED OUTPUT WRITER — "SimpleFixedRule's check made universal";
+Poison → `CancelFlag` re-homed with the story-#3 budget integration
+named; the `graph` crate replaced by the inline CSR with errors flowing
+by straightforward Result "instead of smuggling a captured
+Option<Report> out of a filter_map closure"; std rendezvous channel
+over crossbeam; LazyLock; the graph-algo feature GONE — "the
+algorithms are dependency-free pure Rust, so they are always compiled";
+Arc<dyn FixedRule> over Arc<Box<dyn>>; the re-homing ledger; the dead
+`InvalidInverseTripleUse` identified and dropped), module doc (a fixed
+rule is "an opaque computation the Datalog engine treats as a single
+stratum-bounded rule... it never participates in recursion"), the five
+module decls, the `TupleIter` SEAM (re-homes note), `CancelFlag` +
+`QueryCancelledError` (the polling doctrine — "at least once per unit
+of unbounded work — a loop that never checks is a loop that cannot be
+killed"; the one-flag integration point: kill switch, timeouts, and the
+deadline half of Budget all set it, "so a rule that honors check honors
+all of them for free"), the `StoredInputSource` trait +
+`StoredInputUnavailable` + `NoStoredInputs`, `FixedRulePayload` /
+`FixedRuleInputRelation` (arity, `ensure_min_len` — a SCHEMA-level
+guard on declared bindings, binding map, iter/prefix_iter over both
+arms, `intern_edges` — the shared skeleton with `checked_node_id`
+minting at the intern site: the original's `indices.len() as u32`
+"silently truncated... aliasing the 2^32-th node onto id 0"; the cap
+is u32::MAX−1 because u32::MAX "stays reserved as the Dijkstra core's
+no-back-pointer sentinel"; "the bound is untestable at scale... it is
+factored into this function precisely so a unit test can pin the
+boundary arithmetic without the allocation"; the two graph builders
+with finite/non-negative weight validation and default weight 1.0),
+the nine option extractors (expr/string/span/integer/pos/non-neg/
+float/unit-interval/bool, each refusing typed with teaching help),
+`FixedRuleOutput` (branded arity, every put width-checked) +
+`OutputSpendGuard` (THE FIXED-RULE TWIN of eval's mid-epoch
+InterruptTicker: a fixed rule "runs to completion INSIDE ONE EPOCH,
+filling its output store before the barrier... ever checks the
+ceiling", so a near-cross-product output "can materialize an unbounded
+intermediate before any ceiling fires — the same hole this story
+closes for ordinary rules"; determinism argued — the count is the
+store's own distinct size "a function of the algorithm's deterministic
+output alone", refusal byte-identical; boundedness ceiling +
+OUTPUT_STRIDE, the stride harmonized with eval's) + its two budget
+tests (refusal bounded by ceiling+stride, never materializing the
+flood; small/unbudgeted never perturbed), the `FixedRule` trait, the
+`NamedRows` SEAM (+`to_arrow_ipc` — "the actual production call site
+of story #77's encoder", refusing heterogeneous columns),
+`SimpleFixedRule` (+`rule_with_channel` rendezvous round trip;
+DisconnectedChannelRule), the handle/registry/error tier
+(`FixedRuleHandle`, `FixedRuleNotFoundError`, `DEFAULT_FIXED_RULES` —
+28 registrations incl. aliases; NotAnEdge/BadEdgeWeight/RuleNotFound/
+NodeNotFound/BadExprValue), `MagicFixedRuleRuleArg::arity`, the
+`tests_support` harness (`PreparedFixedRule` splitting store-build
+from run "so a test can pay that cost once and then time only the
+algorithm body"; the `NeverRun` placeholder), and the test battery:
+arity-brand refusals (writer, lying rule, SimpleFixedRule riding the
+universal check); the stored-seam refusal regression; cancellation
+honored mid-run through BFS's per-edge poll; the registry pins; the
+channel round trip; `intern_site_refuses_at_u32_bound` (F3 — the
+boundary arithmetic pinned at 0 / u32::MAX−1 / u32::MAX); the
+graph-builder battery (interning, undirected doubling, default
+weight, typed not-an-edge and NaN-weight refusals); THE SYSTEMIC
+FINDING TEST `nullary_node_relation_refuses_not_panics_across_algos`
+— ten algorithms read a node relation's first column unguarded, "a
+NULLARY relation (zero columns)... made every one of them panic
+instead of refusing cleanly"; each case built as "a complete, valid,
+non-empty setup — options included — so removing just the one guard
+under test lets execution reach the real indexing site"; and the two
+arrow-ipc wiring tests — closed)
+- **L1:** NAMED SPLIT inside `rules/`: the contract substance —
+  `FixedRule` trait, payload + input-relation surface, the option
+  extractors, `FixedRuleOutput` + `OutputSpendGuard`, `CancelFlag`,
+  handle/registry/errors, `SimpleFixedRule`, the tests_support
+  harness and the trait-level tests → `rules/contract.rs` ("what a
+  fixed rule promises"); the graph-builder half — `intern_edges`,
+  `checked_node_id`, the two `as_directed_*` builders, NotAnEdge/
+  BadEdgeWeight and the builder tests → `rules/graph_view.rs` beside
+  the CSR they build. The two declared seams land as their own notes
+  say: `TupleIter` to the tuple tier's iterator species,
+  `NamedRows` (+to_arrow_ipc) to the session tier's public result
+  type with the encoder call at the envelope boundary. `CancelFlag`
+  is engine-wide cancellation vocabulary (budget deadline, kill,
+  search atoms all share it per db.rs's one-flag design) — it seats
+  at the contract but is consumed across zones; the map's
+  contract.rs line ("determinism, seeded randomness") should name
+  cancellation explicitly. CROSS-REFERENCE the standing
+  parse-tier blocker (data/program.rs, parse/query.rs entries): the
+  registry's `Arc<dyn FixedRule>` is resolved and CALLED at parse
+  time — the model crate can only bind a declaration-shaped handle
+  (name/arity), the live impl attaching at the engine boundary; the
+  registry stays engine-side and the LSP arrival question
+  (deprecated-sealed lsp_api entry) hangs on the same vocabulary cut.
+- **L2:** gold, preserve verbatim: the arity brand as a universal
+  contract ("refused at the first wrong row instead of feeding
+  mis-shaped tuples into downstream joins"); the OutputSpendGuard's
+  hole analysis and its determinism/boundedness laws (the mid-epoch
+  guard doctrine extended to the one place it didn't reach); the
+  checked-at-the-intern-site fix with its reserved-sentinel cap and
+  factored-for-testability honesty; the systemic-finding test's
+  design discipline (every case complete except the guard under
+  test — failure isolation built into the fixture); the
+  superseded-placeholder-kept-for-its-regression pattern; the
+  cancellation polling doctrine; dead code identified-and-dropped in
+  the header ledger; seams declared with named landing sites so "this
+  draft must not reshape a landed file". Nothing condemned.
+
+## fixed_rule/graph.rs (251 lines; inventory: MPL header, module doc
+(new in KyzoDB — the CozoDB original used the external `graph` crate
+v0.3.1, "effectively dormant... drags a ~20-crate subtree (`rayon`
+mandatorily, `dashmap`, `memmap2`, `page_size`→`libc`...) plus heavy
+`unsafe`, for what the algorithms actually consume: CSR construction
+from an edge list and neighbor iteration. This file replaces exactly
+that surface, dependency-free and safe"; the BEHAVIORAL PARITY NOTES
+verified against the original's usage — node count from max endpoint
++1 with the +1 CHECKED where the original overflowed, sorted adjacency
+with parallel edges kept, both out- AND in-adjacency because
+"in_neighbors is load-bearing for PageRank", the by-value yield
+adjustment named as mechanical), `GraphTooLargeError` (u32::MAX
+reserved as the Dijkstra sentinel; the HONESTY NOTE on testability —
+"hitting this bound for real needs ~4 billion distinct nodes... the
+guard is pure arithmetic, factored... precisely so unit tests can pin
+the boundary math without the allocation"), `checked_node_count`,
+`Target<W>` (field names mirroring the original crate "so the
+algorithm bodies read unchanged"), `DirectedCsrGraph<W>` (counting-
+sort CSR build with per-node write cursors and the fills-every-slot
+argument; segment sort for CsrLayout::Sorted parity; node_count/
+out_degree/out_neighbors/`out_neighbor` — the O(1) cursor accessor
+added FOR the iterative Tarjan "where repeatedly re-scanning the
+adjacency with nth would be quadratic in degree"/
+out_neighbors_with_values/in_neighbors), and tests (shape + iteration
+incl. parallel edges and in-adjacency; empty graph; the F3 boundary
+pin at None/0/u32::MAX−1/u32::MAX plus the same refusal surfacing
+through from_edges) — closed)
+- **L1:** preserve-and-move whole → `rules/graph_view.rs` (seat
+  exists: "the graph the algorithms run on (backed by projections)").
+  The payload's interning builders arrive beside it per mod.rs's
+  split. Arrival note: the seat's "(backed by projections)" names a
+  FUTURE the file doesn't yet have — today's view materializes from
+  an edge relation per invocation; the project/graph CSR ("the
+  resident canonical CSR for traversal") is the declared backing when
+  it lands, and this file's build-from-edges remains the fallback for
+  ad-hoc relations.
+- **L2:** gold, preserve verbatim: the dependency-replacement record
+  (what the crate dragged, what was actually consumed, and the
+  parity notes verified point by point — the house form for
+  replacing a dependency); checked-never-wrapping node counts with
+  the reserved-sentinel rationale; factored-for-testability honesty;
+  an accessor added with its complexity argument (out_neighbor's
+  quadratic-nth note). Nothing condemned.
+
+## fixed_rule/parallel.rs (108 lines; inventory: MPL header, module doc
+(the parallelism seam — upstream ran fan-outs under rayon, the port
+left them sequential behind SEAM markers while the workspace carried
+no rayon; eval.rs's direct rayon dependency "closed" the seam; THE ONE
+LAW: "parallel execution must produce byte-identical output to the
+sequential path" — par_try_map is order-preserving BY CONSTRUCTION,
+and cross-item float reductions "stay in a sequential fold the caller
+runs over the returned, canonically ordered Vec; they are never
+handed to a parallel reduction"), the native `par_try_map`
+(rayon collect is index-preserving — "the output order equals the
+input order regardless of how work is scheduled"), the wasm32 twin
+(sequential, "callers need not know which one they got"), and tests
+(the LOAD-BEARING order property; single-thread pool vs default pool
+byte-agreement; error short-circuit) — closed)
+- **L1:** preserve-and-move → `rules/contract.rs` as the determinism
+  law's tooling (the contract line "what a fixed rule promises:
+  determinism" is exactly what this function enforces under
+  fan-out); a standalone `rules/parallel.rs` is the lawful
+  alternative if the operator prefers the file kept whole — zones
+  are stable, files grow.
+- **L2:** gold: the one-law framing with the float-reduction
+  boundary drawn explicitly (what may parallelize and what must
+  not, stated where the tool is defined); the wasm degradation as
+  an indistinguishable twin; order-preservation tested as THE
+  property, not incidentally. Nothing condemned.
+
+## fixed_rule/rng.rs (175 lines; inventory: MPL header, module doc
+(upstream's LabelPropagation and RandomWalk seeded from OS entropy —
+"the SAME facts and query could answer differently run to run — a
+direct violation of the determinism guarantee"; the fix: an explicit
+`seed` option with a pinned default, drawing from `SeededRng` — the
+storage/sim.rs SimRng HOUSE PATTERN wrapped as `rand::RngCore` so the
+algorithms keep Fisher–Yates shuffle/choose/WeightedIndex unchanged,
+"only the entropy source moves"; portability stated — no
+platform-dependent word size or endianness in the math),
+`DEFAULT_SEED` (arbitrary but PINNED, with its guard chain named:
+golden_stream asserts the literal stream, random_walk.rs pins a
+default-seed output row), `new` (negative i64 seeds wrap
+two's-complement — "every distinct i64 still maps to a distinct,
+reproducible stream, which is all the determinism law needs"),
+`step` (mirrors SimRng), the RngCore impl (next_u32 from the high
+half "the finalizer already diffuses the whole word"; fill_bytes
+with the remainder path), and tests (THE GOLDEN VECTOR — literal
+words "computed offline from the splitmix64 definition, independent
+of this implementation", with the epistemics stated: "a
+seed_determines_stream / round-trip test cannot catch such a drift —
+both sides move together"; negative-seed wrap; seed determinism;
+rand-consumer reproducibility; fill_bytes remainder determinism) —
+closed)
+- **L1:** preserve-and-move whole → `rules/rng.rs` (seat exists,
+  same name: "the seed-reproducible randomness every stochastic rule
+  uses").
+- **L2:** gold, preserve verbatim: the determinism-violation lineage
+  (a fork fix argued from the engine's own guarantee); the
+  golden-vector epistemics (why the literal is the guard and a
+  round-trip is not — rule #18's independently-derived goldens
+  stated in miniature); the negative-seed wrapping ruling; the
+  house-pattern reuse note tying it to SimRng. Nothing condemned.
