@@ -31,6 +31,6 @@ fi
 
 count=$(cat "$CACHE" 2>/dev/null || echo 0)
 if [ "${count:-0}" -eq 0 ]; then
-  jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"No story is in focus (In Progress + the focus label) — engine code changes require one. Run: .claude/skills/manage-board/manage-board.py move-issue <n> --column focus, or get the operator to pick the story."}}'
+  jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"No story is in focus (In Progress + the focus label) — engine code changes require one. Call the move_to_in_progress MCP tool (manage-board skill) on it, or get the operator to pick the story."}}'
 fi
 exit 0

@@ -87,9 +87,9 @@ if [ "${#FOCUS[@]}" -eq 0 ]; then
   cat >"$tmp/focus.md" <<'EOF'
 No story is in focus right now (In Progress + the "focus" label). That is a
 valid state — but you frequently fail to mark the story you are actually
-working on: if this conversation is working on a story, run
-.claude/skills/manage-board/manage-board.py move-issue <n> --column focus
-before continuing, so the board reflects the current state of work.
+working on: if this conversation is working on a story, call the
+move_to_in_progress MCP tool (manage-board skill) on it before continuing,
+so the board reflects the current state of work.
 EOF
   echo "(upcoming derives from the focus stories' epics — none in focus)" >"$tmp/upcoming.md"
 else

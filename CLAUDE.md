@@ -31,7 +31,7 @@ Rules teach. Hooks interrupt. Tests prove. Scripts enforce.
   edit (`post-edit-guard.sh`), gate engine edits on a focus story (`focus-gate.sh`).
 - `.claude/hooks/inject-work-context.sh` — reads the board (project `KyzoDB Work` #1); the focus
   set is every open story In Progress with the `focus` label, injected in full each prompt.
-  `.claude/skills/manage-board/manage-board.py` (the manage-board skill) is the ONLY board writer.
+  the manage-board skill (the kyzo MCP server's board tools) is the ONLY board writer.
 - `scripts/authority-graph.py` — the Type Authority Graph: extracts `@authority` doc-comment
   declarations into the committed `authority/` artifacts (`authority-map.json`,
   `authority-report.md`) and audits type-authority drift (raw doors, string taxonomies, duplicate
@@ -62,7 +62,7 @@ full suite.
 5. **The gate covers every first-party crate** — justfile content check.
 6. **`manage-board` is the only board writer** — raw `gh` board-write command patterns are blockable in the hook.
 7. **No focus story → no engine code changes** — `focus-gate.sh` denies Edits under `kyzo-*` paths unless an open story carries the `focus` label.
-8. **No worktrees without operator approval; public/irreversible git acts gated** — `git worktree`, `git tag`, `push` to main, and destructive local acts that discard uncommitted or untracked work (`git reset --hard`, `git clean -f`, discarding `git checkout`/`git restore`, `git push --force`) are interceptable command patterns behind an operator-set flag.
+8. **No worktrees without operator approval; public/irreversible git acts gated** — `git worktree`, `git tag`, `push` to main are interceptable command patterns behind an operator-set flag.
 9. **No sub-agent spawn without operator authorization** — a PreToolUse hook blocks the spawn unless an operator-controlled flag exists.
 10. **MPL headers preserved verbatim on edited files** — header-block diff check.
 11. **New `#[ignore]` flagged on sight** — grep on the diff (the ledger's adequacy is the other bucket).
