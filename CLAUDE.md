@@ -62,7 +62,7 @@ full suite.
 5. **The gate covers every first-party crate** — justfile content check.
 6. **`manage-board` is the only board writer** — raw `gh` board-write command patterns are blockable in the hook.
 7. **No focus story → no engine code changes** — `focus-gate.sh` denies Edits under `kyzo-*` paths unless an open story carries the `focus` label.
-8. **No worktrees without operator approval; public/irreversible git acts gated** — `git worktree`, `git tag`, `push` to main are interceptable command patterns behind an operator-set flag.
+8. **No worktrees without operator approval; public/irreversible git acts gated** — `git worktree`, `git tag`, `push` to main, and destructive local acts that discard uncommitted or untracked work (`git reset --hard`, `git clean -f`, discarding `git checkout`/`git restore`, `git push --force`) are interceptable command patterns behind an operator-set flag.
 9. **No sub-agent spawn without operator authorization** — a PreToolUse hook blocks the spawn unless an operator-controlled flag exists.
 10. **MPL headers preserved verbatim on edited files** — header-block diff check.
 11. **New `#[ignore]` flagged on sight** — grep on the diff (the ledger's adequacy is the other bucket).

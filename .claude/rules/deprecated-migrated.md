@@ -2198,6 +2198,10 @@ the per-commit campaigns structurally could not exercise) — closed)
   own ledger already names it). Its imports move with their owners:
   `incremental` (react/incremental.rs), `SignedFact` (the temporal
   vocabulary), the callback seam (session-side commit notification).
+  NATS boundary (per architecture-map "the fabric boundary"): the compute —
+  incremental recompute and snapshot-consistency — and the emitted delta stream
+  stay ours; the subscriber DELIVERY (registration, fan-out, durable resume
+  cursors) is offloaded to the NATS fabric, never built here.
 - **L2:** gold, preserve verbatim: the snapshot-consistency proof
   written at the module head (subscribe-first-read-second, with the
   redundant-case absorption argument); the netting law and its bug
@@ -3448,6 +3452,9 @@ failure) — closed)
   exists: "post-commit callbacks and relation triggers"). The
   consumers already censused (react/standing.rs) cite this file's
   contracts by name; the citations survive the rename.
+  NATS boundary (per architecture-map "the fabric boundary"): the relation-trigger
+  semantics and the post-commit collector stay ours; external NOTIFICATION delivery
+  becomes a publish-on-commit to the fabric (JetStream), not a host-owned fan-out.
 - **L2:** gold: the lossy-by-disconnect contract stated as product
   law with its read-the-relation escape hatch; the plain-data
   collector making phantom events structurally impossible under
@@ -6360,6 +6367,10 @@ unregistering the callback; the SSE loop with encode-failure
 log-and-break; KeepAlive) — closed)
 - **L1:** preserve-and-move → `server/feeds.rs` (merging with
   standing.rs per the map's one-feeds-door line).
+  NATS boundary (per architecture-map "the fabric boundary"): the SSE DELIVERY is
+  offloaded to NATS/JetStream — the host door shrinks to a guarantee-preserving shim
+  over the fabric, not an SSE fan-out it owns; only the panic-safe/lossy-by-disconnect
+  discipline survives as the shim's contract.
 - **L2:** gold: the user-reachable-panic analysis; prompt
   unregistration by Drop guard (the engine's lossy-by-disconnect
   contract respected — the host never buffers beyond the channel).
@@ -6379,6 +6390,10 @@ guard-take/spawn_blocking/guard-restore choreography; the repeated
 crate-boundary clippy-allow with its lib.rs cross-reference;
 encode-failure log-and-break) — closed)
 - **L1:** preserve-and-move → `server/feeds.rs` beside changes.rs.
+  NATS boundary (per architecture-map "the fabric boundary"): the 150 ms poll and the
+  SSE delivery are offloaded to the NATS fabric; once the record-event log publishes to
+  JetStream, this door consumes the fabric rather than polling or owning delivery — which
+  resolves the L2 "Watch" note below in the fabric's favor.
 - **L2:** gold: no-second-conversion and no-second-drive-model
   disciplines (host adds no semantics — the zone's core law); the
   teardown-through-Drop promptness argument; deltas streamed exactly

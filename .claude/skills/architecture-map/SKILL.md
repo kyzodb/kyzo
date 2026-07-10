@@ -65,6 +65,36 @@ Every capability lands with its judge: a new operator, value kind, or engine
 gets its naive twin in `kyzo-oracle` and (when it carries a public claim) a
 campaign hook in `kyzo-trials` in the same story.
 
+## The fabric boundary — the guarantee line (NATS)
+
+A construct is **ours** when a Kyzo guarantee flows through it — **meaning** (what a record
+or answer *is*), **determinism** (byte-identical, replayable, verifiable), or **accountability**
+(provenance, authority, refusal). A construct is **not ours** when all it needs is a commodity
+infrastructure guarantee — delivery, durability, ordered movement, or zero-trust identity —
+because the NATS fabric already makes those better than we could, and there its overhead is
+dominated by disk/network physics anyway.
+
+You cannot outsource a guarantee to a party that does not make it, and you should not rebuild
+one already made better. The line is therefore derived, not chosen, and it puts almost all of
+the engine on our side. What crosses to the fabric:
+
+- **Change-feed / standing-query DELIVERY** — subscription, fan-out, backpressure, durable
+  resume cursors. The engine keeps *what an event is* and snapshot-consistency and emits the
+  typed record-event log; the fabric carries and delivers it.
+- **Replication / failover** — JetStream replay + engine determinism = provably-equal replicas.
+  We never write a replicator; the store keeps only the portable dump FORMAT, not a shipping
+  mechanism.
+- **Post-commit external notification** — the trigger *semantics* stay; the external delivery is
+  a publish-on-commit to the fabric.
+- **Blob/bundle movement, inter-node RPC, network identity, tenancy** — object-store transport,
+  request/reply, NKeys/JWT/accounts. Semantic authorization stays ours; network trust is the fabric's.
+
+What NEVER crosses: store commit/WAL and the in-memory hot paths (determinism is produced there),
+exec/ evaluation and planning, rules/, project/ indexes, record semantics and verification,
+provenance and authority interpretation, deterministic refusal. The fabric adapters live OUTSIDE
+these crates (`kyzo-net-core` / `kyzo-net-nats` and the product crates); the engine gains only a
+record-event *emit* seam, never fabric machinery.
+
 ## The Target Tree
 
 ```
@@ -128,7 +158,7 @@ kyzo-core/                       # THE ENGINE — everything that computes and p
 │   │   ├── time.rs              # the bitemporal key law: one fact key, a two-axis question
 │   │   ├── skip_walk.rs         # the ONE bitemporal skip-scan walk, generic over its driver
 │   │   ├── scratch.rs           # the session's temporary store species
-│   │   ├── backup.rs            # portable whole-store dump and load
+│   │   ├── backup.rs            # portable dump/load FORMAT (ours); replication is NATS replay, never a replicator
 │   │   ├── verify_walk.rs       # the whole-store invariant walk
 │   │   └── merkle.rs            # the deterministic state root over the ordered keyspace
 │   │                            #   (placed here: it is a property OF the store; diff/merge
@@ -199,8 +229,8 @@ kyzo-core/                       # THE ENGINE — everything that computes and p
 │   │   └── current.rs           # current-state segments over bitemporal bases
 │   ├── react/                   # DERIVED TRUTH KEPT CURRENT — the continuous lifecycle
 │   │   ├── incremental.rs       # IVM: maintained views provably equal to recompute
-│   │   ├── standing.rs          # standing queries: registration and snapshot-consistent results
-│   │   └── feed.rs              # change feeds: the ordered log as subscribable events
+│   │   ├── standing.rs          # standing queries: compute + snapshot-consistency ours; subscriber DELIVERY → NATS
+│   │   └── feed.rs              # change feeds: emit the ordered record-event log (ours); fan-out/DELIVERY → NATS
 │   ├── session/                 # THE ONE DOOR — everything between a caller and the truth
 │   │   ├── db.rs                # the entrypoint: script string to result rows
 │   │   ├── json.rs              # the one JSON door over the envelope vocabulary
@@ -208,7 +238,7 @@ kyzo-core/                       # THE ENGINE — everything that computes and p
 │   │   ├── constraint.rs        # integrity as denial rules with witnesses, gating admission
 │   │   ├── catalog.rs           # the store's knowledge of its relations; coherent multi-row moves
 │   │   ├── access.rs            # per-relation protection tiers
-│   │   ├── observe.rs           # post-commit callbacks and relation triggers
+│   │   ├── observe.rs           # relation triggers ours; post-commit external NOTIFICATION delivery → NATS
 │   │   ├── jobs.rs              # running-query listing and kill
 │   │   ├── ops.rs               # operator surface: compaction, maintenance
 │   │   └── verify.rs            # the ::verify door: the engine summons its judge (kyzo-oracle)
@@ -263,7 +293,7 @@ kyzo-bin/                        # THE NATIVE HOST — an entrypoint, enumerable
 │       ├── auth.rs              # the gate every route passes; the route table is the attack surface
 │       ├── query.rs             # execute: script + params in, envelope out
 │       ├── bulk.rs              # move: export/import over the shared codec
-│       ├── feeds.rs             # subscribe: SSE change feeds and standing queries, guarantees intact
+│       ├── feeds.rs             # subscribe: shrinks — delivery is NATS/JetStream; keeps only guarantee-preserving shape
 │       ├── rules.rs             # extend: downstream-computed fixed rules bridged to the engine
 │       └── console.rs           # inspect: the static human console page
 │
