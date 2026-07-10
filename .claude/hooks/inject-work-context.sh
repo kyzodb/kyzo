@@ -13,44 +13,31 @@
 #                 sub-issues, in sub-issue order, minus the focus set:
 #                 name + Description + Condemned. Nothing else may enter.
 #
-# Output = work-context-template.sh with IN_PROGRESS_STORIES,
-# FOCUS_STORIES, UPCOMING_STORIES expanded. Cached 120s at
-# .claude/.work-context-cache.md. On any fetch failure emit the stale cache —
-# stale beats invented — and always exit 0: never block a prompt.
+# Output = work-context-template.sh with IN_PROGRESS_STORIES, FOCUS_STORIES,
+# UPCOMING_STORIES expanded. On any fetch failure, exit 0 with no output:
+# never block a prompt.
 
-set -uo pipefail # no -e: failures degrade to the cache, never abort the hook
+set -uo pipefail # no -e: failures exit 0 with no output, never abort the hook
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
 OWNER=kyzodb
 REPO=kyzo
 PROJECT=1
 TEMPLATE="$ROOT/.claude/hooks/work-context-template.sh"
-CACHE="$ROOT/.claude/.work-context-cache.md"
-TTL=120
 
 cat >/dev/null 2>&1 || true # consume the hook's stdin JSON
 
-emit_cache_and_exit() {
-  [ -s "$CACHE" ] && cat "$CACHE"
-  exit 0
-}
-
-if [ -s "$CACHE" ]; then
-  age=$(($(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0)))
-  [ "$age" -lt "$TTL" ] && emit_cache_and_exit
-fi
-
-[ -f "$TEMPLATE" ] || emit_cache_and_exit
+[ -f "$TEMPLATE" ] || exit 0
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 items=$(gh project item-list "$PROJECT" --owner "$OWNER" --format json --limit 500 2>/dev/null) \
-  || emit_cache_and_exit
+  || exit 0
 open_issues=$(gh issue list --repo "$OWNER/$REPO" --state open --json number,title,body --limit 300 2>/dev/null) \
-  || emit_cache_and_exit
+  || exit 0
 labeled=$(gh issue list --repo "$OWNER/$REPO" --state open --label focus --json number --limit 100 2>/dev/null) \
-  || emit_cache_and_exit
+  || exit 0
 
 # Focus set: In Progress on the board AND carrying the focus label.
 mapfile -t FOCUS < <(jq -r --argjson lab "$labeled" '.items[]
@@ -154,7 +141,5 @@ fi
 IN_PROGRESS_STORIES="$(cat "$tmp/inprogress.md")" \
   FOCUS_STORIES="$(cat "$tmp/focus.md")" \
   UPCOMING_STORIES="$(cat "$tmp/upcoming.md")" \
-  bash "$TEMPLATE" >"$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
-
-cat "$CACHE"
+  bash "$TEMPLATE"
 exit 0
