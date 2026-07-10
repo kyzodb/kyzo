@@ -64,7 +64,7 @@
           },
           {
             "type": "command",
-            "command": "sed '1,/^---$/d' \"$CLAUDE_PROJECT_DIR\"/.claude/skills/ontology-first-construction/SKILL.md"
+            "command": "printf '%s\\n' '[BUILD GATE] Does this prompt ask you to BUILD (write or modify code, implement a story or task, or construct a design)? If NO, disregard this notice. If YES, you MUST fully re-read .claude/skills/ontology-first-construction/SKILL.md with the Read tool BEFORE any build work begins, even if it is already fully in context, and construct only from that fresh re-read. Being already in context is not an exception.'"
           }
         ]
       }
