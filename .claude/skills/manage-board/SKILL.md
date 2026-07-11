@@ -5,7 +5,7 @@ description: The ONLY way to create, update, move, or delete epics and stories o
 
 # manage-board
 
-The kyzo MCP server (`kyzo-mcp/`) is the board's one authority: 23 live
+The kyzo MCP server (`mcp/`) is the board's one authority: 23 live
 tools instead of a script with subcommands, same underlying `gh` boundary,
 same rules. Tool schemas are deferred (bare names only until fetched) — use
 `ToolSearch` with `select:<name>` to load one before calling it the first

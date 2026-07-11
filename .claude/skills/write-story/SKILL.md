@@ -1,31 +1,36 @@
 ---
 name: write-story
-description: create, review, or revise kyzodb github issues using the kyzodb story contract. use when writing story names, labels, descriptions, condemned blocks, engineering choices, tasks, and definitions of done. enforce explicit database-engine commitments instead of vague cleanup, fake certainty, deferred architecture, or low-ceiling work that merely passes.
+description: create, review, or revise kyzodb github issues using the kyzodb story contract. use when writing story names, descriptions, source citations, condemned blocks, ceiling checks, engineering choices, tasks, and definitions of done. enforce explicit database-engine commitments at the cited sources' full height instead of vague cleanup, fake certainty, deferred architecture, or low-ceiling work that merely passes.
 ---
 
 # Write Story
 
-## Instruction Block
+A KyzoDB story is an executable engineering commitment. A valid story exposes the
+value change, its sources, the condemned path, the ceiling check, the hard engineering
+choice, and the evidence required to close the work.
 
-A KyzoDB story is an executable engineering commitment.
+Do not confuse "works" with "correct." A conservative implementation can be wrong if it
+preserves accidental complexity, duplicate authority, or a low ceiling. An ambitious
+engineering choice is valid even when it fails, when the failure produces real evidence
+about KyzoDB's frontier — the Ceiling section is that doctrine made auditable.
 
-A valid story must expose the value change, the condemned path, the hard engineering choice, and the evidence required to close the work.
+Use direct technical language: mechanism, invariant, consequence, proof — never
+dramatic quality claims. Every major or minor release gets its own story: its
+deliverables are the release notes.
 
-Force the hard choice when enough information exists. Choose the representation, authority boundary, execution currency, cache invalidation rule, storage contract, ordering invariant, admission path, evaluator rule, algorithm, benchmark, failure path, or evidence boundary.
+## GitHub and the board
 
-Do not hide behind flexibility, compatibility, parallel paths, deferred design, cleanup later, or “make it work for now.”
-
-Do not confuse “works” with “correct.” A conservative implementation can be wrong if it preserves accidental complexity, duplicate authority, or a low ceiling. An ambitious engineering choice can be valid even if it fails, when the failure produces real evidence about KyzoDB’s frontier.
-
-Use direct technical language. Replace dramatic quality claims with mechanism, invariant, consequence, and proof.
-
-Every major or minor release gets its own story: its deliverables are the release notes.
-
-## GitHub
-
-- A story is a GitHub issue carrying exactly one of the five labels.
-- Epic membership is the **parent issue** relation (the story is a sub-issue of its epic), never a body field.
-- Milestone is time only: `Now`, `Next`, or `Later`.
+- A story is a GitHub issue carrying exactly one classification label —
+  `Feature`, `Bug`, `Performance`, `Security`, or `Demo` — as the GitHub label
+  itself, never restated in the body (a body copy is a stored twin that goes
+  stale on the first `reclassify_story`).
+- Epic membership is the **parent issue** relation (the story is a sub-issue of
+  its epic), never a body field.
+- **Horizon lives in exactly one place: the parent epic's column** (`Now` /
+  `Next` / `Later`). A story never carries its own horizon — no milestone, no
+  body field, no label. A story's horizon is a derived read through its parent.
+  Milestones do not exist on this board.
+- All board writes go through the manage-board MCP tools, never raw `gh`.
 
 ## Story Schema
 
@@ -34,22 +39,32 @@ Use this exact markdown order.
 ```md
 # <Story Name>
 
-Label: <Feature | Bug | Performance | Security | Demo>
-Milestone: <Now | Next | Later>
-
 ## Description
 
 As a <actor>,
 I want <capability, invariant, or decision>,
 so that <state of value change>.
 
+## Sources
+
+- <atom/desideratum id> — <its asserted property, one line>
+- ...every source this story serves; the planning graph is the registry.
+
 ## Condemned
 
 Path: <old path, fallback, ambiguity, duplicate authority, compatibility path, escape hatch, accidental complexity, low-ceiling implementation, or deferred design this story rejects>
 
-Reason: <why this path is unacceptable for correctness, determinism, authority, performance, security, demo credibility, or KyzoDB’s ceiling>
+Reason: <why this path is unacceptable for correctness, determinism, authority, performance, security, demo credibility, or KyzoDB's ceiling>
 
 Closure test: <how we know the condemned path is removed, bounded, or mechanically rejected>
+
+## Ceiling
+
+Maximum: <the full-height option the cited sources assert — quoted or derived from them, never invented downward>
+
+Chosen: <this story's commitment>
+
+Constraint: <exactly one of: "equal — chosen IS the maximum", or the named measured constraint that forces less, with where that measurement lives>
 
 ## Engineering Choice
 
@@ -59,11 +74,11 @@ Choice type: <Representation | Authority Boundary | Execution Currency | Cache I
 
 Consequence: <what becomes possible, impossible, measurable, or enforceable because of this choice>
 
-Evidence needed: <only for discovery, performance, demo, or evidence-bound stories; otherwise write "None">
+Evidence needed: <only for discovery, performance, demo, or evidence-bound stories; otherwise "None">
 
 ## Context
 
-<Relevant engineering context needed to execute and review the story. Include mechanisms, constraints, tests, benchmarks, artifacts, failure modes, open questions, or prior evidence. Do not dump source text unless converting existing messy work.>
+<Only what is needed to execute and review: mechanisms, constraints, tests, benchmarks, artifacts, failure modes, prior evidence.>
 
 ## Tasks
 
@@ -74,37 +89,58 @@ Evidence needed: <only for discovery, performance, demo, or evidence-bound stori
 - [ ] <the value change is present>
 - [ ] <the condemned path is removed, bounded, or mechanically rejected>
 - [ ] <the engineering choice is implemented, measured, or decided by named evidence>
+- [ ] <every Sources entry is satisfied here or explicitly re-homed to a named story>
 - [ ] <the result is testable, measurable, or mechanically reviewable>
-````
+```
 
 ## Field Rules
 
-| Field                                | Rule                                                                                                                                                         |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Story Name`                         | Name the domain and value-bearing mechanism, in Title Case. Avoid dramatic quality words.                                                                    |
-| `Label`                              | Must be exactly one of `Feature`, `Bug`, `Performance`, `Security`, or `Demo`.                                                                               |
-| `Milestone`                          | Use the GitHub milestone name when the story belongs to an epic. Use `None` only when it does not.                                                           |
-| `Description`                        | Must use `As / I want / so that`. The `so that` clause must state a state of value change, not a generic benefit.                                            |
-| `Condemned.Path`                     | Must name a concrete rejected path. If the wrong path cannot be identified, the story is not sharp enough.                                                   |
-| `Condemned.Reason`                   | Must explain why preserving that path damages the engine or lowers KyzoDB’s ceiling.                                                                         |
-| `Condemned.Closure test`             | Must make the condemned path auditable at completion.                                                                                                        |
-| `Engineering Choice.Choice`          | Must choose something. Do not restate uncertainty as a decision.                                                                                             |
-| `Engineering Choice.Choice type`     | Must select the closest listed type.                                                                                                                         |
-| `Engineering Choice.Consequence`     | Must state what changes because the choice is made.                                                                                                          |
-| `Engineering Choice.Evidence needed` | May block the final choice only when the story is explicitly about discovery, measurement, demo signal, or performance evidence. Otherwise use `None`.       |
-| `Context`                            | Include only context needed to execute and review the story. For cleanup/rewrite work, carry forward relevant engineering obligations without pasting noise. |
-| `Tasks`                              | Each task must produce code, tests, benchmark evidence, committed artifacts, or a decision artifact.                                                         |
-| `Definition of Done`                 | Must close the value change, condemned path, and engineering choice.                                                                                         |
+| Field | Rule |
+| --- | --- |
+| `Story Name` | Name the domain and value-bearing mechanism, in Title Case. No dramatic quality words. |
+| `Description` | `As / I want / so that`; the `so that` clause states a state of value change, not a generic benefit. |
+| `Sources` | Every atom/desideratum this story serves, by id, with its one-line asserted property. These are the height reference the Ceiling is judged against. |
+| `Condemned.Path` | A concrete rejected path. If the wrong path cannot be identified, the story is not sharp enough. |
+| `Condemned.Reason` | Why preserving that path damages the engine or lowers KyzoDB's ceiling. |
+| `Condemned.Closure test` | Makes the condemned path auditable at completion. |
+| `Ceiling.Maximum` | The full-height option the Sources assert. Written from the sources, so falsifying it means falsifying them — side by side. |
+| `Ceiling.Chosen` | The commitment. When it is less than Maximum without a real Constraint, the story is a counterfeit. |
+| `Ceiling.Constraint` | `equal`, or a named measured fact (with its location) — never a feeling, a schedule, or "pragmatism". A legitimate retreat is a recorded measurement. |
+| `Engineering Choice.Choice` | Chooses something. Restated uncertainty is not a decision. |
+| `Engineering Choice.Choice type` | The closest listed type. |
+| `Engineering Choice.Consequence` | What changes because the choice is made. |
+| `Engineering Choice.Evidence needed` | May block the final choice only for discovery, measurement, demo-signal, or performance stories; otherwise `None`. |
+| `Context` | Only execution/review context; carry forward obligations without pasting noise. |
+| `Tasks` | Each produces code, tests, benchmark evidence, committed artifacts, or a decision artifact. |
+| `Definition of Done` | Closes the value change, the condemned path, the engineering choice, and every source. |
+
+## Banned Lexicon
+
+Two mechanically greppable bans:
+
+- **Mood verbs** — improve, harden, polish, finalize, clean up, ensure — banned
+  in Tasks.
+- **Escape-hatch phrases** — "for now", "initially", "fall back" / "fallback",
+  "if needed", "if this proves too hard", "phase 2", "we can later",
+  "optionally", "as a first step" — banned in **every section except inside the
+  Condemned block, where they name the thing being killed**. Anywhere else,
+  such a phrase IS a live escape hatch: the story is smuggling out the hard
+  work it claims to commit to.
 
 ## Invalid Story Conditions
 
 A story is invalid when any of these are true:
 
 * the value change is vague
+* the Sources are missing, or the commitment is lower than what the cited
+  sources assert without a named measured Constraint in the Ceiling
 * the condemned path is missing, abstract, or unauditable
+* the Ceiling's Maximum is invented below what the sources assert — the
+  counterfeit condition
 * the engineering choice does not choose anything
 * both paths remain alive without a named reason and closure boundary
 * architecture is deferred without exact deciding evidence
-* tasks use mood verbs such as improve, harden, polish, finalize, clean up, or ensure
-* the Definition of Done cannot prove closure
-* quality is performed through language instead of proven through mechanism and evidence
+* banned lexicon appears outside the Condemned block
+* the Definition of Done cannot prove closure, or drops a source silently
+* quality is performed through language instead of proven through mechanism
+  and evidence

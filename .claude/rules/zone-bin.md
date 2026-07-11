@@ -16,7 +16,10 @@ A way to reach the engine. Never a place engine meaning lives.
 - Every route passes the auth gate; the route table is enumerable and each
   route is deliberate.
 - Streaming surfaces (SSE feeds, standing queries) preserve the engine's
-  delivery guarantees — the host never reorders, dedups, or drops.
+  delivery guarantees — the host never reorders, dedups, or drops. Subscribe
+  surfaces carry only the guarantee-preserving shape; delivery, fan-out, and
+  durable resume are the fabric's (NATS/JetStream), never a second delivery
+  mechanism built here.
 
 ## Forbidden
 

@@ -16,7 +16,7 @@
 > [!NOTE]
 > **0.9.0: the first public release.** Feature-complete and correctness-proven; pre-1.0 by design:
 > the public API is not frozen and performance is not yet verified at scale (see
-> [VERSIONING.md](VERSIONING.md)). The [board](https://github.com/kyzodb/kyzo/issues) is the live status.
+> [VERSIONING.md](VERSIONING.md)). The [board](https://github.com/orgs/kyzodb/projects/1) is the live status.
 
 When software remembers something and acts on it, the next question is always the same: **can you
 prove why?** Not "did the vector search return something relevant": *which* facts, which
@@ -389,9 +389,14 @@ attribution live in [FORK.md](FORK.md).
 
 ## License
 
-KyzoDB is licensed under [**MPL-2.0**](LICENSE.txt). Every license header and copyright notice from the
-work it builds on is preserved, and incorporated contributor fixes keep their original authorship; see
-[FORK.md](FORK.md) for the project's origins. Issues and bug reports are welcome; the project is not
-accepting external code contributions right now; see [CONTRIBUTING.md](CONTRIBUTING.md).
+KyzoDB is multi-licensed; [LICENSING.md](LICENSING.md) is the authoritative map. The database engine
+and its hosts are [**MPL-2.0**](LICENSE.txt) — KyzoDB is a fork of CozoDB, and the MPL is inherited
+from that lineage and preserved per file (see [FORK.md](FORK.md)). The agent-development and
+tooling — `.claude/` —
+is [**BSL-1.1**](LICENSE-BSL): free to use, modify, and build on for any non-production purpose, not
+for hosted or commercial resale, and it converts to MPL-2.0 on the Change Date. Every license header
+and copyright notice from the work it builds on is preserved, and incorporated contributor fixes keep
+their original authorship. The project is not accepting external code contributions right now; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 </content>
 </invoke>

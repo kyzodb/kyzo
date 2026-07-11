@@ -24,30 +24,35 @@ Use this exact markdown order.
 ```md
 # <Epic Name>
 
-Label: <Feature | Bug | Performance | Security | Demo>
-
 ## Outcome Description
 
 <One paragraph describing the transition this group of stories creates. State what KyzoDB is moving from, what it is moving to, and what shared technical boundary, authority, capability, proof, or failure class makes these stories belong together.>
-````
+```
 
-## GitHub
+## GitHub and the board
 
 - An epic is a GitHub issue; its stories are attached as **sub-issues** of it.
 - Sub-issue list order is the execution order of the epic's stories.
-- The epic carries exactly one of the five labels, matching the dominant character of its stories.
+- The epic carries exactly one of the five labels — `Feature`, `Bug`,
+  `Performance`, `Security`, or `Demo`, matching the dominant character of its
+  stories — as the GitHub label itself, never restated in the body (a body
+  copy is a stored twin that goes stale on reclassification).
+- **The epic is the one carrier of horizon, and it carries it as column
+  position** (`Now` / `Next` / `Later`, moved via the manage-board tools) —
+  never as a milestone or a body field. Milestones do not exist on this board.
+  Its stories read their horizon through the parent relation and never carry
+  their own.
 
 ## Field Rules
 
 | Field                 | Rule                                                                                                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Epic Name`      | Name the value boundary being crossed by the group of stories, in Title Case. Do not name a mood, phase, slogan, release ceremony, or generic work category.                                 |
-| `Label`          | Exactly one of `Feature`, `Bug`, `Performance`, `Security`, or `Demo` — the dominant character of the grouped stories.                                                                        |
 | `Outcome Description` | Describe the aggregate state of value change created by the grouped stories. It must explain why the stories belong together and what engineering/value condition changes when they are done. |
 
 ## Invalid Epic Conditions
 
-A epic is invalid when any of these are true:
+An epic is invalid when any of these are true:
 
 * the name is a slogan, phase, or mood
 * the outcome only says work will be completed
@@ -55,5 +60,7 @@ A epic is invalid when any of these are true:
 * the outcome does not describe a transition from one engineering/value condition to another
 * the epic uses story format
 * the epic includes tasks or Definition of Done
+* the body restates the label, or carries a milestone or horizon field — those
+  live on the GitHub label and the board column, nowhere else
 * the language performs quality instead of naming the shared boundary, authority, capability, proof, or failure class
 

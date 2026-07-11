@@ -16,6 +16,11 @@ Rebuildable speed over canonical truth. Never truth itself.
   queries directly. Exactness and recall contracts are declared types.
 - Maintenance is commit-coupled and generation-stamped; staleness is
   detectable by type, never silent.
+- A projection's building form and its queryable form are distinct types
+  joined by exactly one consuming seal: the building type exposes no search
+  method at all (querying an unsealed index is absent from the interface, not
+  a runtime error), and the sealed generation is part of the type-visible
+  contract.
 - Deterministic construction and search: same facts, same seed, same
   projection, same candidates — on every host.
 - Every engine follows the uniform shape: its maintenance, its search, its

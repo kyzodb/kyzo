@@ -64,7 +64,7 @@ full suite.
 7. **No focus story → no engine code changes** — `focus-gate.sh` denies Edits under `kyzo-*` paths unless an open story carries the `focus` label.
 8. **No worktrees without operator approval; public/irreversible git acts gated** — `git worktree`, `git tag`, `push` to main are interceptable command patterns behind an operator-set flag.
 9. **No sub-agent spawn without operator authorization** — a PreToolUse hook blocks the spawn unless an operator-controlled flag exists.
-10. **MPL headers preserved verbatim on edited files** — header-block diff check.
+10. **MPL headers preserved verbatim on MPL-licensed files; BSL zones carry no MPL header** — header-block diff check. The engine and hosts are MPL-2.0 (cozo lineage); the agent tooling (`.claude/`) is BSL-1.1; `LICENSING.md` is the map.
 11. **New `#[ignore]` flagged on sight** — grep on the diff (the ledger's adequacy is the other bucket).
 12. **The authority ratchets** — raw-door count, `@authority` coverage, string-taxonomy and duplicate-counter audits, allowlist entries only narrowing: deterministic against the committed baseline.
 13. **The mutation-test of the harness runs** — executing it is mechanical; it either passes or doesn't.
@@ -79,6 +79,17 @@ full suite.
 22. **Commit as units land** — "a unit" is judgment.
 23. **The if-ever unsafe protocol's substance** — the named unprovable invariant, the safety case quality: judgment (its trigger is caught in bucket 1).
 24. **Enforcement-is-mechanical itself** — the meta-duty to keep converting judgment rules into mechanical checks (hooks, ratchets, gates) wherever a deterministic form exists.
+25. **Errors are closed typed values** — every first-party crate ships closed refusal enums with typed fields: no `anyhow`/`Box<dyn Error>` erasure and no `Other(String)`/`Unknown` catch-all in shipped code, no wildcard arm over a first-party error enum, and a diagnostic code renders a variant but never dispatches on it. The `anyhow`/box-dyn grep is mechanical; whether a payload is built for a caller to branch on is judgment.
+
+## Licensing
+
+The engine and hosts are **MPL-2.0** (cozo lineage, preserved per file); the agent tooling —
+`.claude/` — is **BSL-1.1**. `LICENSING.md` is the authoritative path→license map. A
+new file's license follows its path: an MPL-covered file keeps its MPL header; a `.claude/`
+file carries no MPL header. Much of the engine is original work currently carried as MPL by
+this policy rather than by copyright obligation; relicensing engine subsystems to BSL is a deliberate
+per-zone decision after the target migration separates the derivative core (`kyzo-model`) from the new
+subsystems, and after legal review — never a drive-by.
 
 ## Origins
 

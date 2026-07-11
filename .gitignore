@@ -13,3 +13,9 @@
 .claude/.work-context-cache.md
 __pycache__/
 .claude/.focus-gate-cache
+
+# The kyzo MCP server and its config are sourced/deployed separately (like codegraph, via
+# deploy.sh) — the source of truth is not this copy, so the whole tree is untracked here.
+# This subsumes the vendored codegraph build artifact and the large local model cache within it.
+.mcp.json
+/mcp/

@@ -23,6 +23,9 @@ observers, operations, the verify summons.
   the executable surface agree: parsed-but-unowned operations are explicitly
   owned typed refusals.
 - `::verify` summons the oracle crate; it never reimplements any semantics.
+- Relation triggers and their semantics are ours; post-commit external
+  NOTIFICATION delivery is a publish-on-commit to the fabric (NATS), never an
+  outbound delivery mechanism built in this zone.
 
 ## Forbidden
 
