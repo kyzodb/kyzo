@@ -4,7 +4,7 @@ This repository is multi-licensed. Which license applies is determined by path,
 and — for the MPL parts — by the per-file license header. This file is the map;
 when in doubt, the per-file header and this map agree.
 
-## Mozilla Public License 2.0 (open source) — `LICENSE.txt`
+## Mozilla Public License 2.0 (open source) — `LICENSE-MPL`
 
 The KyzoDB engine and its hosts are MPL-2.0. KyzoDB is a fork of CozoDB (see
 `FORK.md`); the MPL is inherited from that lineage and preserved per file. These

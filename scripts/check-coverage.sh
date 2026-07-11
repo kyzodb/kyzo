@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Coverage ratchet: workspace line coverage must not drop below the recorded baseline
-# (ci/coverage-baseline.txt, recorded when the workspace first goes green). Until a baseline exists
+# (scripts/coverage-baseline.txt, recorded when the workspace first goes green). Until a baseline exists
 # the gate is REPORT-ONLY and says so loudly — there is no honest threshold before
 # working code exists. Requires cargo-llvm-cov (CI installs it).
 #
@@ -24,13 +24,13 @@ fi
 
 pct=$(cargo llvm-cov --workspace --summary-only --json 2>/dev/null | jq -r '.data[0].totals.lines.percent')
 
-if [ ! -f ci/coverage-baseline.txt ]; then
+if [ ! -f scripts/coverage-baseline.txt ]; then
   echo "coverage gate: REPORT-ONLY — workspace line coverage is ${pct}%."
   echo "No baseline recorded yet; the baseline + ratchet activate when the workspace first goes green."
   exit 0
 fi
 
-baseline=$(cat ci/coverage-baseline.txt)
+baseline=$(cat scripts/coverage-baseline.txt)
 ok=$(awk -v p="$pct" -v b="$baseline" 'BEGIN { print (p + 1e-9 >= b) ? 1 : 0 }')
 if [ "$ok" != "1" ]; then
   echo "FAIL coverage gate: line coverage ${pct}% dropped below baseline ${baseline}%."

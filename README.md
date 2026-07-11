@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/logo_k.png" width="160" alt="KyzoDB logo">
+  <img src="docs/assets/logo_k.png" width="160" alt="KyzoDB logo">
 </p>
 
 <h1 align="center">KyzoDB</h1>
@@ -7,7 +7,7 @@
 <p align="center"><em>One deterministic substrate for facts, graphs, vectors, text, and all of time,<br>where every answer can be replayed, explained, or refused, exactly.</em></p>
 
 <p align="center">
-  <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-MPL--2.0-2F7E52" alt="License: MPL-2.0"></a>
+  <a href="LICENSE-MPL"><img src="https://img.shields.io/badge/license-MPL--2.0-2F7E52" alt="License: MPL-2.0"></a>
   <a href="https://github.com/kyzodb/kyzo/issues"><img src="https://img.shields.io/badge/board-stories-1E4D33" alt="Board"></a>
   <a href="#using-kyzodb"><img src="https://img.shields.io/badge/embeds%20in-2%20lines-1E4D33" alt="Two-line embed"></a>
   <a href="#pure-rust-is-operational-not-aesthetic"><img src="https://img.shields.io/badge/C%2FC%2B%2B%20in%20engine-zero-2F7E52" alt="Zero C/C++"></a>
@@ -31,7 +31,7 @@ them at one transactional instant, and every answer either replays byte-for-byte
 that entailed it, or refuses with a typed reason. It runs embedded like SQLite, or in a browser tab,
 with no C or C++ anywhere in its build.
 
-<p align="center"><img src="static/scorecard.svg" width="860" alt="KyzoDB at a glance: one engine five models, every answer accountable, time is a coordinate, runs everywhere identically, serializable and durable, proven not asserted."></p>
+<p align="center"><img src="docs/assets/scorecard.svg" width="860" alt="KyzoDB at a glance: one engine five models, every answer accountable, time is a coordinate, runs everywhere identically, serializable and durable, proven not asserted."></p>
 
 > LLMs gave software the ability to think out loud. KyzoDB exists so that what such systems come to
 > know can be held: exactly, durably, explainably, and identically every time it's asked for. Not the
@@ -44,7 +44,7 @@ it collapses into a single engine. Numbers land here as they are measured, with 
 seeds, and the losing runs alongside the winning ones. Nothing enters this table that has not been
 reproduced.
 
-<p align="center"><img src="static/benchmarks.svg" width="860" alt="KyzoDB benchmark panel: five public yardsticks (ANN-Benchmarks, BEIR, LDBC SNB, OpenRuleBench, YCSB), each reading TBD until measured."></p>
+<p align="center"><img src="docs/assets/benchmarks.svg" width="860" alt="KyzoDB benchmark panel: five public yardsticks (ANN-Benchmarks, BEIR, LDBC SNB, OpenRuleBench, YCSB), each reading TBD until measured."></p>
 
 The point of one engine is that these are not five products' scores stapled together: they are one
 store, one transaction model, and one memcomparable keyspace, measured five ways.
@@ -57,7 +57,7 @@ past*, under a budget that can refuse. Below, a clinical agent asks it as one qu
 recommends a drug: which known adverse events resemble this patient's symptom, among only the drugs
 they are on or interact with, with the evidence exactly as the record stood at admission:
 
-<p align="center"><img src="static/repl_hero.svg" width="860" alt="A KyzoDB clinical-safety query: interaction-graph recursion finds the drugs at risk, a semantic vector search of adverse events is restricted to them, and each event's evidence is read as the record stood at admission, all in one query."></p>
+<p align="center"><img src="docs/assets/repl_hero.svg" width="860" alt="A KyzoDB clinical-safety query: interaction-graph recursion finds the drugs at risk, a semantic vector search of adverse events is restricted to them, and each event's evidence is read as the record stood at admission, all in one query."></p>
 
 One language, one snapshot, one answer, and if the traversal overspends its budget, one typed
 refusal naming exactly what it hit. That single block *is* the thesis: retrieval that is composable
@@ -65,19 +65,19 @@ and auditable, not a fan-out pipeline whose five copies of the truth drift apart
 the set of decisions that make that query honest, because you cannot evaluate an engine from its
 feature list, and we would not ask you to.
 
-<p align="center"><img src="static/collapse.svg" width="820" alt="The usual stack keeps five copies of the truth, drifting; KyzoDB collapses them to one language, one transaction."></p>
+<p align="center"><img src="docs/assets/collapse.svg" width="820" alt="The usual stack keeps five copies of the truth, drifting; KyzoDB collapses them to one language, one transaction."></p>
 
 ## Using KyzoDB
 
 It runs embedded: in your process, like SQLite, no server and no setup. Add the dependency and open a
 database in a couple of lines:
 
-<p align="center"><img src="static/embed.svg" width="860" alt="Rust: add kyzo as a git dependency, then open a database with Db::new and new_fjall_storage and run a KyzoScript query with run_script."></p>
+<p align="center"><img src="docs/assets/embed.svg" width="860" alt="Rust: add kyzo as a git dependency, then open a database with Db::new and new_fjall_storage and run a KyzoScript query with run_script."></p>
 
 That path is a durable, crash-safe store; point it at a fresh temp directory for an ephemeral one. To
 build the workspace itself (stable Rust, nothing else):
 
-<p align="center"><img src="static/shell.svg" width="860" alt="Shell: git clone the kyzo repo, then cargo build and cargo test the kyzo package in release mode."></p>
+<p align="center"><img src="docs/assets/shell.svg" width="860" alt="Shell: git clone the kyzo repo, then cargo build and cargo test the kyzo package in release mode."></p>
 
 Language bindings (C, Python, Java, Node, Swift, WASM, with Go, Clojure, and Android in separate
 repos) are being ported and published under KyzoDB; the [issues](https://github.com/kyzodb/kyzo/issues)
@@ -91,18 +91,18 @@ here, so they combine in a single query.
 Take an agent's memory of past incidents, each carrying a short summary and a vector embedding, plus a
 relation recording which incident cites which runbook:
 
-<p align="center"><img src="static/repl_setup.svg" width="860" alt="A KyzoDB REPL session creating an incident relation of summaries and embeddings and a references relation of which incident cites which runbook, each returning status OK."></p>
+<p align="center"><img src="docs/assets/repl_setup.svg" width="860" alt="A KyzoDB REPL session creating an incident relation of summaries and embeddings and a references relation of which incident cites which runbook, each returning status OK."></p>
 
 Then index that one relation three ways: dense vectors with HNSW, full text, and near-duplicates with
 MinHash-LSH.
 
-<p align="center"><img src="static/repl_indexes.svg" width="860" alt="A KyzoDB REPL session creating an HNSW vector index, a full-text index, and a MinHash-LSH near-duplicate index over the same incident relation, each returning status OK."></p>
+<p align="center"><img src="docs/assets/repl_indexes.svg" width="860" alt="A KyzoDB REPL session creating an HNSW vector index, a full-text index, and a MinHash-LSH near-duplicate index over the same incident relation, each returning status OK."></p>
 
 A nearest-neighbour search binds with `~` and unifies like any other relation. Joined straight to
 `references`, one query recalls the incidents that most resemble a live alert and then follows to the
 runbooks they cite:
 
-<p align="center"><img src="static/repl_retrieval.svg" width="820" alt="A KyzoDB REPL session: a nearest-neighbour search over incident memories joined to the references graph returns INC-204 with runbook RB-pool-sizing and INC-231 with RB-threadpool-tuning."></p>
+<p align="center"><img src="docs/assets/repl_retrieval.svg" width="820" alt="A KyzoDB REPL session: a nearest-neighbour search over incident memories joined to the references graph returns INC-204 with runbook RB-pool-sizing and INC-231 with RB-threadpool-tuning."></p>
 
 Full text answers `~incident:txt{id | query: 'pool', k: 5}` and near-duplicates answer
 `~incident:sim{id | query: 'Redis pool exhausted under load', k: 5}`; in every case the search result is
@@ -158,13 +158,13 @@ Here `*can_access` is an access graph: which principal can reach which resource.
 compromised service account can reach, by any number of hops, is three lines, and the second rule
 feeds on itself. That set is the blast radius, and it names the crown-jewel database at the end of it:
 
-<p align="center"><img src="static/repl_recursion.svg" width="820" alt="A KyzoDB REPL session: a three-line recursive rule returns every resource reachable from a compromised service account: db-customers, kms-signing, role-deploy, role-prod-ro, s3-artifacts."></p>
+<p align="center"><img src="docs/assets/repl_recursion.svg" width="820" alt="A KyzoDB REPL session: a three-line recursive rule returns every resource reachable from a compromised service account: db-customers, kms-signing, role-deploy, role-prod-ro, s3-artifacts."></p>
 
 For the recursions that graph analysis reaches for constantly, the engine ships whole-graph algorithms
 (PageRank, community detection, shortest paths, centralities, max-flow, k-core, maximal cliques, and
 more) as built-in rules over your relations, with no export to a graph runtime and back:
 
-<p align="center"><img src="static/repl_dijkstra.svg" width="820" alt="A KyzoDB REPL session: the built-in ShortestPathDijkstra rule returns the cheapest privilege-escalation path from svc-ci-deploy to db-customers at cost 4."></p>
+<p align="center"><img src="docs/assets/repl_dijkstra.svg" width="820" alt="A KyzoDB REPL session: the built-in ShortestPathDijkstra rule returns the cheapest privilege-escalation path from svc-ci-deploy to db-customers at cost 4."></p>
 
 And because vector and text search results are relations too, they feed these same recursions: a
 similarity hit can seed a graph traversal in the query that found it.
@@ -180,7 +180,7 @@ both: `@ instant` asks what currently-believed facts held at an instant; `@ syst
 what the record itself said at a past moment about that instant. *"What did we know on Tuesday?"* is a
 parameter of the read, not an archaeology project over change-data-capture logs.
 
-<p align="center"><img src="static/repl_timetravel.svg" width="820" alt="A KyzoDB REPL session: an agent records a customer's coverage as trial, later corrects it to enterprise, then two as-of reads return trial for the incident date and enterprise for today."></p>
+<p align="center"><img src="docs/assets/repl_timetravel.svg" width="820" alt="A KyzoDB REPL session: an agent records a customer's coverage as trial, later corrects it to enterprise, then two as-of reads return trial for the incident date and enterprise for today."></p>
 
 Under the hood, both timestamps live in the storage key itself, so an as-of read is an ordinary
 seek-based ordered scan, not a reconstruction, and it composes: joins, recursion, negation, and
@@ -243,7 +243,7 @@ be worth optimizing, and therefore easy to audit) that speaks the *entire* langu
 stratified negation, aggregation, and time. Every generated workload is answered twice, and the two
 answers must be byte-identical.
 
-<p align="center"><img src="static/oracle.svg" width="760" alt="Every generated program is answered by both the optimized engine and the naive oracle; the answers must be byte-identical or the defect is pinned as a regression forever."></p>
+<p align="center"><img src="docs/assets/oracle.svg" width="760" alt="Every generated program is answered by both the optimized engine and the naive oracle; the answers must be byte-identical or the defect is pinned as a regression forever."></p>
 
 The query engine's front door (`kyzo-core/src/query/mod.rs`) opens with **seven numbered laws**, each
 documented with the mechanism that enforces it: answer correctness (optimized evaluation must equal
@@ -263,7 +263,7 @@ The rest of the machinery holds them to it:
   cannot afford to get wrong, that reads like this (the values illustrate the shape your own rules
   would fill in):
 
-  <img src="static/repl_provenance.svg" width="820" alt="A KyzoDB provenance proof: swap SWAP-88421 must be centrally cleared under EMIR, derived from the trade, the clearing obligation, and the counterparty's gross notional exceeding the threshold, verified Ok by an independent checker.">
+  <img src="docs/assets/repl_provenance.svg" width="820" alt="A KyzoDB provenance proof: swap SWAP-88421 must be centrally cleared under EMIR, derived from the trade, the clearing obligation, and the counterparty's gross notional exceeding the threshold, verified Ok by an independent checker.">
 
   The proof is reconstructed from the evaluator's own witnesses and re-derived independently. The
   checker rejects corrupted proofs, and its structure cannot represent a cyclic one.
@@ -292,7 +292,7 @@ The architecture is three layers, each calling only into the one below. The whol
 idea: every retrieval modality, however exotic it looks at the query level, becomes an ordered range
 scan by the time it reaches storage.
 
-<p align="center"><img src="static/architecture.svg" width="560" alt="A KyzoScript query lowers to relational algebra, fans out into relational, graph, HNSW, FTS/LSH, and as-of access paths, all funnelling through one memcomparable key encoding into a pure-Rust ordered LSM store."></p>
+<p align="center"><img src="docs/assets/architecture.svg" width="560" alt="A KyzoScript query lowers to relational algebra, fans out into relational, graph, HNSW, FTS/LSH, and as-of access paths, all funnelling through one memcomparable key encoding into a pure-Rust ordered LSM store."></p>
 
 **Storage.** A `Storage` trait defines an ordered key-value store with range scans, MVCC commit
 semantics, and validity-in-key as-of reads. The implementation is [`fjall`](https://github.com/fjall-rs/fjall),
@@ -390,7 +390,7 @@ attribution live in [FORK.md](FORK.md).
 ## License
 
 KyzoDB is multi-licensed; [LICENSING.md](LICENSING.md) is the authoritative map. The database engine
-and its hosts are [**MPL-2.0**](LICENSE.txt) — KyzoDB is a fork of CozoDB, and the MPL is inherited
+and its hosts are [**MPL-2.0**](LICENSE-MPL) — KyzoDB is a fork of CozoDB, and the MPL is inherited
 from that lineage and preserved per file (see [FORK.md](FORK.md)). The agent-development and
 tooling — `.claude/` —
 is [**BSL-1.1**](LICENSE-BSL): free to use, modify, and build on for any non-production purpose, not
