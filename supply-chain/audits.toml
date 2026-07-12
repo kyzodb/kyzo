@@ -165,6 +165,20 @@ start = "2021-04-21"
 end = "2027-07-04"
 notes = "Delegated trust: taiki-e is a prolific, well-known Rust ecosystem maintainer; co-owners alexcrichton (rust-lang core team) and cramertj (former Rust async-await team) are legitimate historical publishers of the futures family."
 
+[[trusted.atomic]]
+criteria = "safe-to-deploy"
+user-id = 2915 # Amanieu d'Antras (Amanieu)
+start = "2019-02-22"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for Amanieu d'Antras (Amanieu, parking_lot/lock_api/hashbrown-era maintainer, rust-lang crates team) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.autocfg]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-05-22"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for Josh Stone (cuviper, rust-lang core contributor) as a publisher for other crates in this workspace's dependency tree."
+
 [[trusted.axum]]
 criteria = "safe-to-deploy"
 user-id = 6741 # Alice Ryhl (Darksonn)
@@ -1040,6 +1054,20 @@ start = "2024-02-24"
 end = "2027-07-04"
 notes = "Delegated trust: SteveLauC is the established maintainer/publisher of record for this crate on crates.io."
 
+[[trusted.num-bigint]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-09-04"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for Josh Stone (cuviper, rust-lang core contributor) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.num-complex]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-06-10"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for Josh Stone (cuviper, rust-lang core contributor) as a publisher for other crates in this workspace's dependency tree."
+
 [[trusted.objc2]]
 criteria = "safe-to-deploy"
 user-id = 36629 # Mads Marquart (madsmtm)
@@ -1236,6 +1264,13 @@ start = "2026-01-20"
 end = "2027-07-04"
 notes = "Delegated trust: rust-random org GitHub Actions trusted-publishing signature; dhardy (rand-rs lead, already implicitly vouched via widespread ecosystem use) is the org's maintainer."
 
+[[trusted.rayon]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-06-13"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for Josh Stone (cuviper, rust-lang core contributor) as a publisher for other crates in this workspace's dependency tree."
+
 [[trusted.redox_syscall]]
 criteria = "safe-to-deploy"
 user-id = 2668 # Jeremy Soller (jackpot51)
@@ -1249,6 +1284,20 @@ user-id = 2668 # Jeremy Soller (jackpot51)
 start = "2019-08-07"
 end = "2027-07-04"
 notes = "Delegated trust: jackpot51 is the established maintainer/publisher of record for this crate on crates.io."
+
+[[trusted.ref-cast]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-05"
+end = "2027-07-12"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.ref-cast-impl]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-05"
+end = "2027-07-12"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
 
 [[trusted.regex]]
 criteria = "safe-to-deploy"
@@ -1369,6 +1418,20 @@ start = "2019-05-02"
 end = "2027-07-04"
 notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
 
+[[trusted.same-file]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-16"
+end = "2027-07-12"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree (same publisher already trusted for `regex` in this file)."
+
+[[trusted.scopeguard]]
+criteria = "safe-to-deploy"
+user-id = 2915 # Amanieu d'Antras (Amanieu)
+start = "2020-02-16"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for Amanieu d'Antras (Amanieu, parking_lot/lock_api/hashbrown-era maintainer, rust-lang crates team) as a publisher for other crates in this workspace's dependency tree."
+
 [[trusted.sec1]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
@@ -1410,6 +1473,20 @@ user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-08-20"
 end = "2027-07-04"
 notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.serde_repr]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-26"
+end = "2027-07-12"
+notes = "Delegated trust: already trusted publisher (thiserror) in this file; isrg/mozilla import sets vouch broadly for dtolnay crates."
+
+[[trusted.serde_spanned]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-01-20"
+end = "2027-07-12"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree."
 
 [[trusted.serde_urlencoded]]
 criteria = "safe-to-deploy"
@@ -1563,6 +1640,41 @@ start = "2021-01-12"
 end = "2027-07-04"
 notes = "Delegated trust: mozilla/bytecode-alliance vouch for Darksonn (Alice Ryhl, tokio-rs core maintainer); co-owners are tokio-rs core team + carllerche (tokio founder) — legitimate org ownership."
 
+[[trusted.toml]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-12-14"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger and the toml/toml_edit family — this crate's own upstream) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.toml_datetime]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-10-21"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger and the toml/toml_edit family — this crate's own upstream) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.toml_edit]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-09-13"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger and the toml/toml_edit family — this crate's own upstream) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.toml_parser]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2025-07-08"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger and the toml/toml_edit family — this crate's own upstream) as a publisher for other crates in this workspace's dependency tree."
+
+[[trusted.toml_write]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2025-04-25"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger and the toml/toml_edit family — this crate's own upstream) as a publisher for other crates in this workspace's dependency tree."
+
 [[trusted.tower]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
@@ -1675,6 +1787,41 @@ start = "2019-04-03"
 end = "2027-07-04"
 notes = "Delegated trust: retep998 is the established maintainer/publisher of record for this crate on crates.io."
 
+[[trusted.winapi-util]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2020-01-11"
+end = "2027-07-12"
+notes = "Delegated trust: already trusted by imported audit sets (mozilla/bytecode-alliance/isrg/zcash) as a publisher for other crates in this workspace's dependency tree (same publisher already trusted for `regex` in this file)."
+
+[[trusted.windows-core]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-15"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates, matching the existing windows-sys entry in this file."
+
+[[trusted.windows-interface]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-02-18"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates, matching the existing windows-sys entry in this file."
+
+[[trusted.windows-result]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2024-02-02"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates, matching the existing windows-sys entry in this file."
+
+[[trusted.windows-strings]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2024-02-02"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates, matching the existing windows-sys entry in this file."
+
 [[trusted.windows-sys]]
 criteria = "safe-to-deploy"
 user-id = 64539 # Kenny Kerr (kennykerr)
@@ -1744,6 +1891,13 @@ user-id = 64539 # Kenny Kerr (kennykerr)
 start = "2021-10-27"
 end = "2027-07-04"
 notes = "Delegated trust: isrg/zcash/mozilla vouch for kennykerr (Kenny Kerr, Microsoft windows-rs maintainer); sole current owner of all windows-sys/windows_* target crates."
+
+[[trusted.winnow]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-02-22"
+end = "2027-07-12"
+notes = "Delegated trust: isrg/mozilla/bytecode-alliance vouch for epage (Ed Page, current maintainer of clap/env_logger and the toml/toml_edit family — this crate's own upstream) as a publisher for other crates in this workspace's dependency tree."
 
 [[trusted.wnaf]]
 criteria = "safe-to-deploy"

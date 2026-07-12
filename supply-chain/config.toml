@@ -22,6 +22,12 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
+[policy.fjall]
+audit-as-crates-io = false
+
+[policy.lsm-tree]
+audit-as-crates-io = false
+
 [policy.rustls-rustcrypto]
 audit-as-crates-io = false
 
@@ -31,14 +37,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ahash]]
 version = "0.7.8"
-criteria = "safe-to-deploy"
-
-[[exemptions.atomic]]
-version = "0.6.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.autocfg]]
-version = "1.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.backtrace]]
@@ -217,10 +215,6 @@ criteria = "safe-to-deploy"
 version = "0.17.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.num-complex]]
-version = "0.4.6"
-criteria = "safe-to-deploy"
-
 [[exemptions.object]]
 version = "0.37.3"
 criteria = "safe-to-deploy"
@@ -321,10 +315,6 @@ criteria = "safe-to-deploy"
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.rayon]]
-version = "1.12.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.redox_syscall]]
 version = "0.5.18"
 criteria = "safe-to-deploy"
@@ -344,10 +334,6 @@ criteria = "safe-to-deploy"
 [[exemptions.rusty-fork]]
 version = "0.3.1"
 criteria = "safe-to-run"
-
-[[exemptions.scopeguard]]
-version = "1.2.0"
-criteria = "safe-to-deploy"
 
 [[exemptions.self_cell]]
 version = "1.2.2"
