@@ -279,7 +279,7 @@ jobs:
       # The full suite, on aarch64, never core-only — same law as build-test.
       - run: cargo build --workspace --release
       - run: cargo test --workspace --release
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: determinism-digest-x86_64
       - run: |
