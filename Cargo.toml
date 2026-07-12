@@ -2,7 +2,7 @@
 resolver = "3"
 # xtask (story #81, the resonance gate) and kyzo-arrow-interop (story #77's
 # Arrow cross-check, see its own Cargo.toml) are dev tooling only: neither is
-# part of the shipped engine tree. scripts/check-pure-rust.sh gates only the
+# part of the shipped engine tree. `cargo xtask pure-rust` gates only the
 # kyzo/kyzo-bin dependency trees (`cargo tree -p kyzo|kyzo-bin`), so xtask's
 # syn/quote/proc-macro2 and kyzo-arrow-interop's real `arrow` dependency never
 # reach the purity gate.

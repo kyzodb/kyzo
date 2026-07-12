@@ -6,11 +6,11 @@
   "layers": [
     {
       "layer": "value",
-      "holds": "Tuple \u00b7 Domain \u00b7 ExecRows/ExecDedup \u00b7 EncodedKey"
+      "holds": "Tuple · Domain · ExecRows/ExecDedup · EncodedKey"
     },
     {
       "layer": "runtime-catalog",
-      "holds": "CatalogGeneration \u00b7 RelationGeneration \u00b7 IndexGeneration"
+      "holds": "CatalogGeneration · RelationGeneration · IndexGeneration"
     },
     {
       "layer": "storage",
@@ -269,42 +269,42 @@
       "line": 440,
       "excerpt": "impl std::ops::Deref for EncodedKey {",
       "note": "Deref dissolves the EncodedKey authority boundary",
-      "allowlisted": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates \u2014 bytes can be read, never forged"
+      "allowlisted": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
     },
     {
       "class": "missing-authority",
       "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "CatalogGeneration",
-      "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
+      "note": "expected authority (layer runtime-catalog) does not exist yet — owed by #135"
     },
     {
       "class": "missing-authority",
       "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "IndexGeneration",
-      "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
+      "note": "expected authority (layer runtime-catalog) does not exist yet — owed by #135"
     },
     {
       "class": "missing-authority",
       "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "QueryDomainAdmission",
-      "note": "expected authority (layer query) does not exist yet \u2014 owed by #122"
+      "note": "expected authority (layer query) does not exist yet — owed by #122"
     },
     {
       "class": "missing-authority",
       "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "RelationGeneration",
-      "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
+      "note": "expected authority (layer runtime-catalog) does not exist yet — owed by #135"
     },
     {
       "class": "missing-authority",
       "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "ResidentIndexKey",
-      "note": "expected authority (layer engines) does not exist yet \u2014 owed by #122"
+      "note": "expected authority (layer engines) does not exist yet — owed by #122"
     },
     {
       "class": "searchra-decoded-tuples",
@@ -340,7 +340,7 @@
       "line": 2356,
       "excerpt": "fn forged_in_epoch_stamp_beyond_len_panics() {",
       "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_panics'",
-      "allowlisted": "named corruption/bypass TEST asserting that a forged stamp panics \u2014 it proves the door is shut, it is not a door"
+      "allowlisted": "named corruption/bypass TEST asserting that a forged stamp panics — it proves the door is shut, it is not a door"
     },
     {
       "class": "unchecked-constructor",

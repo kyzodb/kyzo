@@ -176,7 +176,7 @@
 //!   convention: the crate root declares `#![forbid(unsafe_code)]` (below),
 //!   the maximum standard — no exception, not even a locally-liftable one.
 //!   `GermanStr` is a SAFE wrapper over the 16-byte value cell; the
-//!   16-byte layout is achieved entirely in safe Rust. `scripts/check-unsafe.sh`
+//!   16-byte layout is achieved entirely in safe Rust. `cargo xtask unsafe`
 //!   enforces that this claim and the lint agree — zero `unsafe`, zero
 //!   `allow(unsafe_code)`, anywhere in the crate. A [`ReadTx`] cannot write because the
 //!   mutating methods are not on the trait; [`WriteTx::commit`] takes `self`,
@@ -238,7 +238,7 @@
 // Rust, so no exception exists. A future story that genuinely needs unsafe
 // must lower this lint deliberately, at the narrowest scope, with a full
 // safety case; until then, unsafe does not exist in this crate.
-// `scripts/check-unsafe.sh` enforces that this lint stays and that no
+// `cargo xtask unsafe` enforces that this lint stays and that no
 // `allow(unsafe_code)` appears anywhere in kyzo-core.
 #![forbid(unsafe_code)]
 // The transaction traits return boxed iterator types by design; naming them

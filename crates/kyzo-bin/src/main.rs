@@ -18,7 +18,7 @@
  */
 
 // Zero `unsafe` is a compiler guarantee here too, matching kyzo-core
-// (`lib.rs`'s `#![forbid(unsafe_code)]`); `scripts/check-unsafe.sh` checks
+// (`lib.rs`'s `#![forbid(unsafe_code)]`); `cargo xtask unsafe` checks
 // for this attribute at both crate roots.
 #![forbid(unsafe_code)]
 

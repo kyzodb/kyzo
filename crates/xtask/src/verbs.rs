@@ -43,8 +43,8 @@ pub fn env_report() -> Result<(), ProcessFailure> {
         .unwrap_or_else(|_| "native (no cgroup limit)".to_string());
     println!("container memory.max: {mem}");
 
-    let threads = std::env::var("RUST_TEST_THREADS")
-        .unwrap_or_else(|_| "unset (cargo default)".to_string());
+    let threads =
+        std::env::var("RUST_TEST_THREADS").unwrap_or_else(|_| "unset (cargo default)".to_string());
     println!("RUST_TEST_THREADS:    {threads}");
 
     let nproc = std::thread::available_parallelism()
@@ -54,7 +54,9 @@ pub fn env_report() -> Result<(), ProcessFailure> {
 
     let mut cmd = Command::new("rustc");
     cmd.arg("--version");
-    let output = cmd.output().map_err(|e| ProcessFailure::Spawn("env-report", e))?;
+    let output = cmd
+        .output()
+        .map_err(|e| ProcessFailure::Spawn("env-report", e))?;
     if !output.status.success() {
         return Err(match output.status.code() {
             Some(code) => ProcessFailure::ExitCode("env-report", code),
@@ -112,39 +114,54 @@ pub fn clippy() -> Result<(), ProcessFailure> {
     run_step("clippy", clippy_cmd(OTHER_PACKAGES, &[]))
 }
 
-/// `bash scripts/check-unsafe.sh` — the unsafe law: forbid present, zero
-/// allows, no doc claims a nonexistent exception.
-pub fn unsafe_check() -> Result<(), ProcessFailure> {
-    let mut cmd = Command::new("bash");
-    cmd.arg("scripts/check-unsafe.sh");
-    run_step("unsafe", cmd)
+/// The unsafe law (story #322: ported from `scripts/check-unsafe.sh`,
+/// behavior-preserving): forbid present, zero allows, no doc claims a
+/// nonexistent exception.
+pub fn unsafe_check() -> Result<(), crate::checks::unsafe_check::UnsafeCheckError> {
+    let msg = crate::checks::unsafe_check::check()?;
+    println!("{msg}");
+    Ok(())
 }
 
-/// `bash scripts/check-pure-rust.sh` — no C/C++-toolchain crate in the
-/// engine dependency tree.
-pub fn pure_rust() -> Result<(), ProcessFailure> {
-    let mut cmd = Command::new("bash");
-    cmd.arg("scripts/check-pure-rust.sh");
-    run_step("pure-rust", cmd)
+/// No C/C++-toolchain crate in the engine dependency tree (story #322:
+/// ported from `scripts/check-pure-rust.sh`, behavior-preserving).
+pub fn pure_rust() -> Result<(), crate::checks::pure_rust::PureRustError> {
+    let msg = crate::checks::pure_rust::check()?;
+    println!("{msg}");
+    Ok(())
 }
 
 /// The Type Authority Graph (#139): self-test, then the ratchet + committed
-/// artifact freshness check against the tree.
-pub fn authority() -> Result<(), ProcessFailure> {
-    let mut self_test = Command::new("python3");
-    self_test.args(["scripts/authority-graph.py", "--self-test"]);
-    run_step("authority", self_test)?;
+/// artifact freshness check against the tree — the same combination the
+/// condemned justfile's `authority` recipe ran (story #322: ported from
+/// `scripts/authority-graph.py`, behavior-preserving).
+pub fn authority() -> Result<(), crate::checks::authority_graph::AuthorityError> {
+    let self_test_msg = crate::checks::authority_graph::self_test()?;
+    println!("{self_test_msg}");
+    let root = crate::fsutil::repo_root()
+        .map_err(crate::checks::authority_graph::AuthorityError::RepoScan)?;
+    let msg = crate::checks::authority_graph::run_gate_check(&root)?;
+    println!("{msg}");
+    Ok(())
+}
 
-    let mut ratchet = Command::new("python3");
-    ratchet.args([
-        "scripts/authority-graph.py",
-        "--root",
-        ".",
-        "--mode",
-        "ratchet",
-        "--check",
-    ]);
-    run_step("authority", ratchet)
+/// Regenerate the committed `authority/` artifacts (report mode).
+pub fn authority_write() -> Result<(), crate::checks::authority_graph::AuthorityError> {
+    let root = crate::fsutil::repo_root()
+        .map_err(crate::checks::authority_graph::AuthorityError::RepoScan)?;
+    let msg = crate::checks::authority_graph::write_report(&root)?;
+    println!("{msg}");
+    Ok(())
+}
+
+/// Tighten the ratchet floor at `scripts/authority-baseline.json` to the
+/// current tree's finding counts.
+pub fn authority_update_baseline() -> Result<(), crate::checks::authority_graph::AuthorityError> {
+    let root = crate::fsutil::repo_root()
+        .map_err(crate::checks::authority_graph::AuthorityError::RepoScan)?;
+    let msg = crate::checks::authority_graph::update_baseline(&root)?;
+    println!("{msg}");
+    Ok(())
 }
 
 /// Default config, lib + integration, across every first-party package.
@@ -277,7 +294,9 @@ pub fn fuzz_smoke() -> Result<(), ProcessFailure> {
         .map(str::to_string)
         .collect();
     if targets.is_empty() {
-        eprintln!("FAIL: fuzz/ exists but lists zero targets — a dead fuzz gate is a failure, not a pass.");
+        eprintln!(
+            "FAIL: fuzz/ exists but lists zero targets — a dead fuzz gate is a failure, not a pass."
+        );
         return Err(ProcessFailure::ExitCode("fuzz-smoke", 1));
     }
     for t in &targets {

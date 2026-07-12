@@ -8,7 +8,10 @@
  */
 
 pub mod agreement_registry;
+pub mod authority_graph;
 pub mod copy_detector;
 pub mod dead_code_ratchet;
 pub mod derive_bypass;
 pub mod panic_lint;
+pub mod pure_rust;
+pub mod unsafe_check;

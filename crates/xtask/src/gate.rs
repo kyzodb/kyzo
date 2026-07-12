@@ -15,6 +15,9 @@
 
 use std::fmt;
 
+use crate::checks::authority_graph::AuthorityError;
+use crate::checks::pure_rust::PureRustError;
+use crate::checks::unsafe_check::UnsafeCheckError;
 use crate::proc::ProcessFailure;
 use crate::resonance::{self, ResonanceError};
 use crate::verbs;
@@ -29,9 +32,9 @@ pub enum GateError {
     Check(ProcessFailure),
     Fmt(ProcessFailure),
     Clippy(ProcessFailure),
-    Unsafe(ProcessFailure),
-    PureRust(ProcessFailure),
-    Authority(ProcessFailure),
+    Unsafe(UnsafeCheckError),
+    PureRust(PureRustError),
+    Authority(AuthorityError),
     Resonance(ResonanceError),
     Test(ProcessFailure),
     TestFeatures(ProcessFailure),

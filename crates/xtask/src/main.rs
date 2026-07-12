@@ -40,6 +40,9 @@ enum XtaskError {
     Gate(gate::GateError),
     Process(proc::ProcessFailure),
     Resonance(resonance::ResonanceError),
+    UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
+    PureRust(checks::pure_rust::PureRustError),
+    Authority(checks::authority_graph::AuthorityError),
 }
 
 impl fmt::Display for XtaskError {
@@ -49,6 +52,9 @@ impl fmt::Display for XtaskError {
             XtaskError::Gate(e) => write!(f, "{e}"),
             XtaskError::Process(e) => write!(f, "{e}"),
             XtaskError::Resonance(e) => write!(f, "{e}"),
+            XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
+            XtaskError::PureRust(e) => write!(f, "{e}"),
+            XtaskError::Authority(e) => write!(f, "{e}"),
         }
     }
 }
@@ -81,7 +87,17 @@ enum Verb {
     /// No C/C++-toolchain crate in the engine dependency tree.
     PureRust,
     /// The Type Authority Graph: self-test, ratchet, artifact freshness.
-    Authority,
+    Authority {
+        /// Regenerate authority/authority-map.json and
+        /// authority-report.md instead of running the gate check (the
+        /// ported tool's report mode).
+        #[arg(long)]
+        write: bool,
+        /// Tighten scripts/authority-baseline.json to the current tree's
+        /// finding counts instead of running the gate check.
+        #[arg(long)]
+        update_baseline: bool,
+    },
     /// The five resonance-gate ontology checks (story #81).
     Resonance {
         /// Run a single named check instead of all five.
@@ -138,9 +154,16 @@ fn main() -> ExitCode {
         Verb::Check => verbs::check().map_err(XtaskError::Process),
         Verb::Fmt => verbs::fmt().map_err(XtaskError::Process),
         Verb::Clippy => verbs::clippy().map_err(XtaskError::Process),
-        Verb::Unsafe => verbs::unsafe_check().map_err(XtaskError::Process),
-        Verb::PureRust => verbs::pure_rust().map_err(XtaskError::Process),
-        Verb::Authority => verbs::authority().map_err(XtaskError::Process),
+        Verb::Unsafe => verbs::unsafe_check().map_err(XtaskError::UnsafeCheck),
+        Verb::PureRust => verbs::pure_rust().map_err(XtaskError::PureRust),
+        Verb::Authority {
+            write,
+            update_baseline,
+        } => match (write, update_baseline) {
+            (true, _) => verbs::authority_write().map_err(XtaskError::Authority),
+            (false, true) => verbs::authority_update_baseline().map_err(XtaskError::Authority),
+            (false, false) => verbs::authority().map_err(XtaskError::Authority),
+        },
         Verb::Resonance { only } => resonance::run(only.as_deref()).map_err(XtaskError::Resonance),
         Verb::Test => verbs::test().map_err(XtaskError::Process),
         Verb::TestFeatures => verbs::test_features().map_err(XtaskError::Process),
