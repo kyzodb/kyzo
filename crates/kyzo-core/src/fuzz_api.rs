@@ -14,9 +14,13 @@
 //! "does this text parse without panicking or hanging" — never the AST
 //! type itself, which stays crate-internal.
 //!
-//! The memcmp-codec fuzz target needs no façade: `encode_tuple_key` /
-//! `decode_tuple_from_key` ([`crate::data::tuple`], re-exported at the
-//! crate root) are already public and exercise the exact codec under test.
+//! `decode_tuple_from_key` is public at the crate root and needs no
+//! façade, but its encode-side counterpart moved during the value-plane
+//! split: the current `encode_key_with_suffix` (`data/value/row.rs`)
+//! is not re-exported (the key-layout module stays crate-internal), so
+//! `fuzz_encode_tuple_key` below is the same "already public, façade
+//! exists only because the constructor itself isn't" posture as
+//! `fuzz_decode_fact_payload`.
 //!
 //! `fuzz_decode_fact_payload` and `fuzz_decode_relation_handle_id` (story
 //! #62 chunk 2 hostile-review follow-up, `fuzz/fuzz_targets/
@@ -34,8 +38,11 @@ use std::collections::BTreeMap;
 use miette::Result;
 
 use crate::data::value::DataValue;
+use crate::data::value::EncodedKey;
+use crate::data::value::RelationId;
 use crate::data::value::Tuple;
 use crate::data::value::decode_values_all;
+use crate::data::value::encode_key_with_suffix;
 use crate::fixed_rule::DEFAULT_FIXED_RULES;
 use crate::parse::parse_script;
 use crate::runtime::current_validity;
@@ -49,6 +56,17 @@ pub fn fuzz_parse_script(src: &str) -> Result<()> {
     let cur_vld = current_validity()?;
     parse_script(src, &BTreeMap::new(), &DEFAULT_FIXED_RULES, cur_vld)?;
     Ok(())
+}
+
+/// Encode a tuple as a relation-prefixed memcmp key
+/// (`encode_key_with_suffix` with no suffix columns), for the
+/// memcmp-codec fuzz target's round-trip law against
+/// [`crate::decode_tuple_from_key`]. `EncodedKey`/`RelationId`/`Tuple`
+/// are already public; the façade exists only because
+/// `encode_key_with_suffix` itself is crate-internal.
+pub fn fuzz_encode_tuple_key(rel: u64, tuple: &Tuple) -> Option<EncodedKey> {
+    let rel = RelationId::new(rel)?;
+    Some(encode_key_with_suffix(rel, tuple, &[]))
 }
 
 /// Decode arbitrary bytes as a v3 fact payload (`decode_fact_payload`),
@@ -76,11 +94,12 @@ pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
 /// constant.
 pub const MAX_RELATION_ID: u64 = crate::data::value::RelationId::CAP;
 
-/// Extract an `Interval`'s bounds as raw `i64`s. `Interval` (`data/
-/// value.rs`) is public, but its `start()`/`end()` accessors are
-/// `pub(crate)` — this is the seam the fuzz law needs to check the
-/// bypass-detecting invariant (`start < end`) on every successfully-decoded
-/// `DataValue::Interval`, without widening the accessors themselves.
+/// Extract an `Interval`'s bounds as raw `i64`s. `Interval`'s type itself
+/// is crate-internal (never re-exported at the crate root), and its
+/// `start()`/`end()` accessors are `pub(crate)` — this is the seam the
+/// fuzz law needs to check the bypass-detecting invariant (`start < end`)
+/// on every successfully-decoded `DataValue::Interval`, without widening
+/// the accessors or the type themselves.
 pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
     match v {
         DataValue::Interval(iv) => match (iv.start(), iv.end()) {
@@ -89,4 +108,37 @@ pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
         },
         _ => None,
     }
+}
+
+/// Build a `DataValue::Interval` from a canonicalizing `(start, end)`
+/// pair, each bound spelled as a `(kind, value)` primitive pair —
+/// `kind % 3`: 0 = unbounded, 1 = closed at `value`, 2 = open at `value`
+/// — so the memcmp fuzz target can cover every Interval shape without
+/// naming the crate-internal `Bound`/`Interval` construction types.
+/// `Interval::new` itself canonicalizes (empty denotations collapse to
+/// `Interval::EMPTY`), so every input pair yields a lawful value.
+pub fn fuzz_interval(start_kind: u8, start_val: i64, end_kind: u8, end_val: i64) -> DataValue {
+    use crate::data::value::Bound;
+    fn bound(kind: u8, val: i64) -> Bound {
+        match kind % 3 {
+            0 => Bound::Unbounded,
+            1 => Bound::Closed(val),
+            _ => Bound::Open(val),
+        }
+    }
+    DataValue::Interval(crate::data::value::Interval::new(
+        bound(start_kind, start_val),
+        bound(end_kind, end_val),
+    ))
+}
+
+/// Build a `DataValue::Regex` from one of the memcmp fuzz target's fixed
+/// always-valid patterns, with no non-default flags — so the target can
+/// cover the Regex kind without naming the crate-internal `RegexFlags`
+/// construction type (`RegexSource` itself is already public).
+pub fn fuzz_regex(pattern: String) -> Option<DataValue> {
+    let source =
+        crate::data::value::RegexSource::validated(crate::data::value::RegexFlags::NONE, pattern)
+            .ok()?;
+    Some(DataValue::Regex(source))
 }
