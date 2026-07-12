@@ -7,10 +7,16 @@
 #   - A gate is not "done" until it has a recorded pass-proof AND bite-proof
 #     (demonstrated failure on violating input).
 #   - No silent skips: the gate-summary job prints every gate outcome; skipped jobs
-#     are activation-gated on repo state (Cargo.toml, memcmp.rs, fuzz/) and say so.
+#     are activation-gated on repo state (Cargo.toml, fuzz/) and say so.
+#   - An activation probe for a guardian must test for the tests it runs (e.g. a
+#     `cargo test --list`-shaped check), never a source filename: a filename probe
+#     dies silently the next time that file moves or is renamed. The memcmp
+#     on-disk-format tripwire below is the exemplar — it has no `detect`-level
+#     gate at all; running the law tests and failing loud on a zero-match filter
+#     IS its own activation proof.
 #
 # Activation: on a codeless repo the cargo-based gates are ARMED BUT IDLE and print so.
-# Gates activate on repo state: most arm when the first Cargo.toml lands; coverage/fuzz/tripwire when their inputs exist. Binding
+# Gates activate on repo state: most arm when the first Cargo.toml lands; fuzz when its inputs exist. Binding
 # toolchain jobs (CPython/JVM/Node/Swift/wasm) are added as each binding lands.
 
 name: CI
@@ -29,19 +35,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has_workspace: ${{ steps.check.outputs.has_workspace }}
-      has_memcmp: ${{ steps.check.outputs.has_memcmp }}
       has_fuzz: ${{ steps.check.outputs.has_fuzz }}
     steps:
       - uses: actions/checkout@v7
       - id: check
         run: |
           [ -f Cargo.toml ] && w=true || w=false
-          [ -f crates/kyzo-core/src/data/memcmp.rs ] && m=true || m=false
           [ -f fuzz/Cargo.toml ] && f=true || f=false
           echo "has_workspace=$w" >> "$GITHUB_OUTPUT"
-          echo "has_memcmp=$m"    >> "$GITHUB_OUTPUT"
           echo "has_fuzz=$f"      >> "$GITHUB_OUTPUT"
-          echo "workspace=$w memcmp=$m fuzz=$f (skips below are activation-gated on repo state)"
+          echo "workspace=$w fuzz=$f (skips below are activation-gated on repo state)"
 
   # ---------- A. Purity gates ----------
 
@@ -76,7 +79,7 @@ jobs:
       - run: scripts/check-mpl-headers.sh
 
   lint:
-    name: fmt + clippy (whole workspace)
+    name: fmt + clippy (first-party crates)
     runs-on: ubuntu-latest
     needs: detect
     if: needs.detect.outputs.has_workspace == 'true'
@@ -87,7 +90,15 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Scoped to first-party crates exactly as the local seal (justfile's
+      # `clippy` recipe): `--workspace` catches vendor/fjall and
+      # vendor/lsm-tree's `unsafe` blocks, which first-party
+      # `#![forbid(unsafe_code)]` already rules out at compile time and
+      # which are #118's story, not this gate's. `--no-deps` keeps the
+      # vendored dependency trees themselves out of scope too.
+      - run: cargo clippy -p kyzo --release --all-targets --no-deps -- -D warnings
+      - run: cargo clippy -p kyzo --release --all-targets --no-deps --features bench-internals,fuzz-internals -- -D warnings
+      - run: cargo clippy -p kyzo-bin -p kyzo-crashfs -p kyzo-lsp -p kyzo-arrow-interop --release --all-targets --no-deps -- -D warnings
 
   build-test:
     name: Build + test (whole workspace, never core-only)
@@ -153,38 +164,41 @@ jobs:
   # Dependabot config: .github/dependabot.yml (cargo ecosystem activates when Cargo.toml lands).
 
   # ---------- C. Correctness depth ----------
+  #
+  # No coverage job here by design (story #321, pre-commitment c): a
+  # percentage floor measures execution, not assertion — a line can run
+  # under a test that asserts nothing about it and still count as
+  # "covered." The mutation standard (epic #192, story #310) owns
+  # correctness-depth measurement instead; it proves a test actually
+  # fails when the code it covers is wrong. No successor coverage job
+  # exists, and none should be added without a new ruling.
 
-  coverage:
-    name: Coverage ratchet (cargo-llvm-cov)
+  memcmp-invariant:
+    name: memcmp on-disk-format tripwire
     runs-on: ubuntu-latest
     needs: detect
     if: needs.detect.outputs.has_workspace == 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
-      - run: scripts/check-coverage.sh
-
-  memcmp-invariant:
-    name: memcmp on-disk-format tripwire
-    runs-on: ubuntu-latest
-    needs: detect
-    if: needs.detect.outputs.has_memcmp == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Runs the on-disk-format law tests (round-trip identity, order
-      # embedding, corrupt-input safety). If the filter matches zero tests the
-      # job goes RED: a dead tripwire is a failure, fix the filter, never
-      # delete the job.
+      # Activation IS running the tests: no separate `detect`-level filename
+      # probe exists for this job (a probe like "does data/memcmp.rs exist"
+      # would go silently, permanently dark the moment that file is renamed
+      # or split — exactly what happened when the codec moved to
+      # data/value/canonical.rs). Runs the on-disk-format law tests
+      # (round-trip identity, order embedding, corrupt-input safety).
+      # `--lib` scopes the run to the one binary the filter can match
+      # (crates/kyzo-core's own unit tests): every OTHER binary in the
+      # workspace (each integration test file under crates/kyzo-core/tests/)
+      # also reports "running 0 tests" for a filter it can never match,
+      # which would make the zero-tests check below fire unconditionally
+      # over the unscoped combined output — a false RED that is exactly as
+      # useless as the false GREEN this job used to give. If the filter
+      # matches zero tests the job goes RED: a dead tripwire is a failure,
+      # fix the filter, never delete the job.
       - run: |
-          out=$(cargo test -p kyzo --release storage::tests::law 2>&1) || { echo "$out"; exit 1; }
+          out=$(cargo test -p kyzo --release --lib storage::tests::law 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
           if echo "$out" | grep -q "running 0 tests"; then
             echo "FAIL memcmp tripwire: the law-test filter matched zero tests — fix the filter or the tests, do not delete the job."
@@ -199,9 +213,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@v2
         with:
-          tool: cargo-fuzz
+          workspaces: fuzz
+      # taiki-e/install-action does not carry cargo-fuzz in its tool
+      # manifest (verified against TOOLS.md) — the action step failed
+      # outright, before any target ever ran, which is why this job never
+      # got as far as fuzzing anything. `cargo install` is the universal
+      # fallback every tool supports.
+      - run: cargo install cargo-fuzz --locked
       - run: |
           targets=$(cargo fuzz list)
           if [ -z "$targets" ]; then
@@ -292,12 +312,12 @@ jobs:
   gate-summary:
     name: Gate summary (no silent skips)
     runs-on: ubuntu-latest
-    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, coverage, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate]
+    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate]
     if: always()
     steps:
       - name: Print every gate's outcome; fail if any gate failed
         run: |
-          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} coverage:${{ needs.coverage.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }}"
+          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }}"
           echo "$summary" | tr ' ' '\n'
           echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in
