@@ -1,0 +1,302 @@
+# The falsifier map (story #322): the committed rule -> falsifier ->
+# implementation artifact, seeded from the 35-item inventory in #322's
+# Context (five lie-sources: INPUTS, CODE, MEANING, CLAIMS, GUARDIANS).
+#
+# `cargo xtask falsifier-map` (and the `gate` verb) checks this file:
+#   - status = "implemented" entries MUST carry a non-empty `implementation`
+#     pointer, and the file/directory that pointer names MUST exist in the
+#     tree right now (a probe referencing a dead path goes red — the same
+#     law CI's memcmp-invariant job already applies to itself).
+#   - status = "gap" or "retired" entries MUST carry a non-empty `note`
+#     explaining why (a citation, same law as an allowlist waiver). They MAY
+#     also carry an `implementation` pointer citing partial, real coverage
+#     (e.g. "the parser leg is fuzzed, the server leg is not") — if present
+#     it is validated to exist exactly like an implemented entry's; a gap
+#     may show its work, but never point at nothing.
+#   - exactly 35 entries, unique `id`s, every `lie_source` one of the five
+#     named classes.
+#
+# This is how the map's own ceiling is met on day one: gaps are not
+# omitted, they are named, typed, and visible in the map's first commit.
+
+[[falsifier]]
+id = "inputs-c-toolchain-crate"
+lie_source = "inputs"
+rule = "No C/C++ toolchain crate enters any first-party dependency tree."
+falsifier = "A `-sys` crate or a named C/C++-toolchain crate appears in kyzo/kyzo-bin's resolved dependency tree."
+status = "implemented"
+implementation = "scripts/check-pure-rust.sh"
+
+[[falsifier]]
+id = "inputs-vulnerable-unsound-dep"
+lie_source = "inputs"
+rule = "No dependency in the tree carries a known RustSec vulnerability or unsound advisory the workspace has not explicitly, narrowly accepted."
+falsifier = "cargo-deny's advisories check finds an un-ignored RUSTSEC advisory."
+status = "implemented"
+implementation = "deny.toml"
+
+[[falsifier]]
+id = "inputs-egress-capable-crate"
+lie_source = "inputs"
+rule = "kyzo-core carries no dependency capable of independent network egress."
+falsifier = "A crate with socket/HTTP-client capability appears in kyzo-core's dependency tree."
+status = "gap"
+note = "No mechanical egress-capability check exists yet. cargo-deny's `bans` list forbids specific backends, not the general class of egress-capable crates; scripts/check-pure-rust.sh checks toolchain purity, not network capability."
+
+[[falsifier]]
+id = "inputs-duplicate-versions"
+lie_source = "inputs"
+rule = "The dependency tree does not carry silently-drifting duplicate versions of the same crate."
+falsifier = "cargo-deny's bans `multiple-versions` check finds an unreviewed duplicate."
+status = "implemented"
+implementation = "deny.toml"
+
+[[falsifier]]
+id = "inputs-committed-secret"
+lie_source = "inputs"
+rule = "No secret is committed to the repository, at any point in its history."
+falsifier = "gitleaks finds a match scanning full git history."
+status = "implemented"
+implementation = ".github/workflows/ci.yml"
+
+[[falsifier]]
+id = "inputs-license-lineage"
+lie_source = "inputs"
+rule = "Every file's license matches LICENSING.md's path map, for both the MPL-2.0 engine lineage and the BSL-1.1 agent-tooling lineage."
+falsifier = "A tracked .rs file outside vendor/ is missing its Mozilla Public License header (MPL half); or a .claude/ file carries an MPL header it must not (BSL half)."
+status = "gap"
+implementation = "scripts/check-mpl-headers.sh"
+note = "The MPL half is mechanically enforced (scripts/check-mpl-headers.sh, run in CI's mpl-headers job). The BSL half — that .claude/ carries no MPL header (CLAUDE.md law 50) — has no mechanical check yet; marked as a gap rather than claiming full coverage under one implemented pointer."
+
+[[falsifier]]
+id = "code-build-all-targets-configs"
+lie_source = "code"
+rule = "The entire workspace builds under every target and configuration the gate claims to cover."
+falsifier = "`cargo check --workspace --all-targets` fails."
+status = "implemented"
+implementation = "crates/xtask/src/gate.rs"
+
+[[falsifier]]
+id = "code-tests"
+lie_source = "code"
+rule = "The full first-party test suite, and the bench/fuzz-internals feature configuration, both pass."
+falsifier = "`cargo test --workspace --release` (excluding the vendored fork and xtask) or the bench-internals/fuzz-internals feature run fails."
+status = "implemented"
+implementation = "crates/xtask/src/gate.rs"
+
+[[falsifier]]
+id = "code-fmt-clippy"
+lie_source = "code"
+rule = "Every first-party crate is fmt-clean and clippy-clean with -D warnings, own code only."
+falsifier = "`cargo fmt --check` or `cargo clippy --no-deps -- -D warnings` finds a violation in a first-party crate."
+status = "implemented"
+implementation = "crates/xtask/src/gate.rs"
+
+[[falsifier]]
+id = "code-first-party-unsafe"
+lie_source = "code"
+rule = "Both engine crate roots declare #![forbid(unsafe_code)] with zero allow(unsafe_code) exceptions, and no doc claims an unsafe exception that does not exist."
+falsifier = "scripts/check-unsafe.sh finds a missing forbid, an allow(unsafe_code), or lying exception language."
+status = "implemented"
+implementation = "scripts/check-unsafe.sh"
+
+[[falsifier]]
+id = "code-vendored-unsafe-growth"
+lie_source = "code"
+rule = "The vendored fork's (fjall/lsm-tree) unsafe surface does not silently grow beyond its reviewed baseline."
+falsifier = "The count of unsafe blocks in vendor/fjall or vendor/lsm-tree increases without a reviewed story."
+status = "gap"
+note = "No ratchet exists over vendor/'s own unsafe block count. Story #118 owns the vendored fork's gate; a growth ratchet has not been built there yet."
+
+[[falsifier]]
+id = "code-coverage-retired"
+lie_source = "code"
+rule = "Test coverage of changed code is measured."
+falsifier = "N/A — retired falsifier."
+status = "retired"
+note = "A percentage coverage floor measures execution, not assertion (a line can run under a test that asserts nothing and still count covered) — see .github/workflows/ci.yml's own note on this decision (story #321, pre-commitment c). Retired in favor of mutation testing of the enforcement harness (epic #192, story #310), which is not yet built — see the `guardians-mutation-testing` entry below."
+
+[[falsifier]]
+id = "code-silent-ignore"
+lie_source = "code"
+rule = "No test carries a silent, unreviewed #[ignore]."
+falsifier = "A new #[ignore] annotation lands without an explicit ruling (CLAUDE.md law 38)."
+status = "gap"
+note = "Enforced today only by human review of CLAUDE.md law 38 at code-review time; no mechanical ratchet over #[ignore] annotation count exists (several already sit in the tree, e.g. crates/kyzo-core/src/engines/hnsw.rs)."
+
+[[falsifier]]
+id = "code-panics-in-contained-zones"
+lie_source = "code"
+rule = "No panic!/unwrap/expect/assert! is reachable from a declared hostile-input decode surface."
+falsifier = "The resonance gate's panic-lint check (check 2) finds an occurrence reachable from a decode surface in crates/xtask/decode-surfaces.toml."
+status = "implemented"
+implementation = "crates/xtask/src/checks/panic_lint.rs"
+
+[[falsifier]]
+id = "code-uncited-dead-code"
+lie_source = "code"
+rule = "Every #[allow(dead_code)] (or equivalent) carries a citation; the uncited count never grows past its committed floor."
+falsifier = "The resonance gate's dead-concept ratchet (check 4) finds an uncited attribute or a stale allowlist waiver."
+status = "implemented"
+implementation = "crates/xtask/src/checks/dead_code_ratchet.rs"
+
+[[falsifier]]
+id = "meaning-raw-doors"
+lie_source = "meaning"
+rule = "Authority types are not bypassable through a raw, unchecked construction door."
+falsifier = "The authority graph finds a raw construction door beyond the committed ratchet."
+status = "implemented"
+implementation = "scripts/authority-graph.py"
+
+[[falsifier]]
+id = "meaning-string-primitive-meaning"
+lie_source = "meaning"
+rule = "Closed domain meaning is not represented as a string or bare-primitive taxonomy."
+falsifier = "The authority graph finds a string-controlled taxonomy beyond the committed ratchet."
+status = "implemented"
+implementation = "scripts/authority-graph.py"
+
+[[falsifier]]
+id = "meaning-duplicate-truths"
+lie_source = "meaning"
+rule = "No duplicate generation or identity counter can drift from its authority's own counter."
+falsifier = "The authority graph finds a duplicate counter beyond the committed ratchet."
+status = "implemented"
+implementation = "scripts/authority-graph.py"
+
+[[falsifier]]
+id = "meaning-derive-bypass"
+lie_source = "meaning"
+rule = "A derived trait impl never bypasses a type's own fallible constructor invariant."
+falsifier = "The resonance gate's derive-bypass detector (check 1) finds a type deriving a bypassing trait alongside a fallible constructor."
+status = "implemented"
+implementation = "crates/xtask/src/checks/derive_bypass.rs"
+
+[[falsifier]]
+id = "meaning-refusal-law-registry"
+lie_source = "meaning"
+rule = "Every registered agreement law's proving test still exists under its registered name."
+falsifier = "The resonance gate's agreement-registry check (check 5) finds a registry entry whose test function is gone or renamed."
+status = "implemented"
+implementation = "crates/xtask/src/checks/agreement_registry.rs"
+
+[[falsifier]]
+id = "meaning-memcomparable-order-contract"
+lie_source = "meaning"
+rule = "Every value's byte encoding order equals its semantic order — the foundational contract (CLAUDE.md) — the keep-one falsifier if every other check were deleted."
+falsifier = "The on-disk-format law tests (storage::tests::law) fail, or the test filter matches zero tests (a dead tripwire is itself a failure)."
+status = "implemented"
+implementation = "crates/kyzo-core/src/storage/tests.rs"
+
+[[falsifier]]
+id = "claims-determinism-across-runs-threads-arch"
+lie_source = "claims"
+rule = "The same seeded workload reduces to the same result across repeated runs, thread counts, and CPU architectures."
+falsifier = "scripts/determinism-campaign.sh's recorded digest diverges between runs, thread counts, or the x86_64/aarch64 CI legs."
+status = "implemented"
+implementation = "scripts/determinism-campaign.sh"
+
+[[falsifier]]
+id = "claims-oracle-differential-gauntlet"
+lie_source = "claims"
+rule = "The query engine's answers agree with an independent naive-evaluator oracle across the gauntlet corpus."
+falsifier = "crates/kyzo-core/src/query/gauntlet.rs finds a query where the engine and the oracle disagree."
+status = "implemented"
+implementation = "crates/kyzo-core/src/query/gauntlet.rs"
+
+[[falsifier]]
+id = "claims-serializability"
+lie_source = "claims"
+rule = "Concurrent transactions observe a serializable history."
+falsifier = "The Jepsen-style trials (crates/kyzo-core/src/jepsen_trials.rs) find a non-serializable history."
+status = "implemented"
+implementation = "crates/kyzo-core/src/jepsen_trials.rs"
+
+[[falsifier]]
+id = "claims-crash-matrix"
+lie_source = "claims"
+rule = "The store recovers to a consistent state from a crash injected at any point in the matrix of write-path stages."
+falsifier = "crates/kyzo-core/src/storage/crash_matrix.rs finds a crash point that leaves the store inconsistent."
+status = "implemented"
+implementation = "crates/kyzo-core/src/storage/crash_matrix.rs"
+
+[[falsifier]]
+id = "claims-temporal-laws"
+lie_source = "claims"
+rule = "Time-travel queries obey their stated temporal laws (monotonic history, sealed snapshots, no read of a future state)."
+falsifier = "crates/kyzo-core/src/query/time_travel_script_laws.rs finds a temporal-law violation."
+status = "implemented"
+implementation = "crates/kyzo-core/src/query/time_travel_script_laws.rs"
+
+[[falsifier]]
+id = "claims-provenance-witnesses"
+lie_source = "claims"
+rule = "The store's cold on-disk state hash (its provenance witness) matches the state it claims to represent."
+falsifier = "crates/kyzo-core/src/storage/merkle.rs's merkle-root witness disagrees with the store's actual committed state."
+status = "implemented"
+implementation = "crates/kyzo-core/src/storage/merkle.rs"
+
+[[falsifier]]
+id = "claims-fuzz-parser-exec-server"
+lie_source = "claims"
+rule = "Every hostile-input boundary — parser, execution/storage decode, and the server ingress — is fuzzed."
+falsifier = "A fuzz target crashes, or a boundary in the parser -> exec -> server chain has no fuzz target at all."
+status = "gap"
+implementation = "fuzz/fuzz_targets/"
+note = "Parser (kyzoscript_parser.rs) and execution/storage decode (data_block.rs, index_block.rs, table_read.rs, memcmp_codec.rs, fact_payload_decode.rs, compare_prefixed_slice.rs) are covered. The server ingress leg (crates/kyzo-bin's request boundary) has no fuzz target yet — claiming the full chain implemented would be exactly the kind of gap this map exists to surface, not hide."
+
+[[falsifier]]
+id = "claims-honest-published-numbers"
+lie_source = "claims"
+rule = "A published performance number carries its executed command, environment, workload, and configuration — never a bare figure."
+falsifier = "A benchmark result file in bench/results/ cannot be reproduced by scripts/run-bench.sh against the commit it names."
+status = "implemented"
+implementation = "scripts/run-bench.sh"
+
+[[falsifier]]
+id = "guardians-every-checker-bites"
+lie_source = "guardians"
+rule = "Every resonance-gate check demonstrably still catches its own historical bug shape."
+falsifier = "scripts/resonance-bite-proof.sh finds a check that stays green against its planted historical violation."
+status = "implemented"
+implementation = "scripts/resonance-bite-proof.sh"
+
+[[falsifier]]
+id = "guardians-artifact-freshness"
+lie_source = "guardians"
+rule = "The committed authority/ artifacts are a pure function of the current tree — never stale."
+falsifier = "scripts/authority-graph.py --check finds the committed authority-map.json/authority-report.md do not match a fresh regeneration."
+status = "implemented"
+implementation = "scripts/authority-graph.py"
+
+[[falsifier]]
+id = "guardians-no-silent-skips-activation-freshness"
+lie_source = "guardians"
+rule = "No gate silently skips, and an activation probe that references a since-moved path goes red instead of green."
+falsifier = "A CI job reports success without running, or an activation probe's filter matches zero tests without failing loud."
+status = "implemented"
+implementation = ".github/workflows/ci.yml"
+
+[[falsifier]]
+id = "guardians-agent-container-gate-evasion"
+lie_source = "guardians"
+rule = "An agent session cannot run a gate command natively, mask a gate failure, or hand-set an execution limit outside the container."
+falsifier = "pre-bash-guard.sh fails to deny a native cargo/xtask invocation, a `|| true` mask, or a hand-set ulimit/thread-count."
+status = "implemented"
+implementation = ".claude/hooks/pre-bash-guard.sh"
+
+[[falsifier]]
+id = "guardians-release-provenance"
+lie_source = "guardians"
+rule = "A released artifact's provenance (what commit, what builder, what inputs) is verifiable, not merely asserted."
+falsifier = "N/A — not yet built."
+status = "gap"
+note = "Story #293's seat. Not yet landed."
+
+[[falsifier]]
+id = "guardians-reproducible-build"
+lie_source = "guardians"
+rule = "Two independent builds of the same commit produce byte-identical release artifacts."
+falsifier = "N/A — not yet built."
+status = "gap"
+note = "Story #294's seat. Not yet landed."

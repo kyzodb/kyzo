@@ -18,6 +18,58 @@ Use direct technical language: mechanism, invariant, consequence, proof — neve
 dramatic quality claims. Every major or minor release gets its own story: its
 deliverables are the release notes.
 
+## The story is the executor's entire authority
+
+A KyzoDB story is executed by an agent that has exactly two doors: **execute the
+story exactly, or stop and name the blocker to the orchestrator before doing
+anything else.** There is no third "figure it out myself" door — that door is
+re-derivation, and re-derivation is avoidance wearing the costume of diligence.
+Thinking lives upstream: in this story and in the orchestrator. The agent is an
+actuator. See the `spec-authority` skill for the full operating model.
+
+Everything that follows exists to make the story executable **without
+re-derivation.** If executing it requires the agent to re-discover a root cause
+the author already knew, re-confirm a decision already made, or hunt the
+codebase for where a fix goes, the story is under-written — and the cost of that
+gap is not abstract.
+
+### The failure this prevents: the token-burn catastrophe
+
+An under-written story once cost **≈307 million tokens for a ~250-line change.**
+The story had already diagnosed every fix and named every file. The agent
+ignored that and re-derived it anyway: it `sed`- and `cat`-dumped whole source
+files and 500 lines of vendored crate source into a context that grew to 920K
+tokens and never got cleared, then re-paid that near-full context across **632
+API calls.** The diff was tiny; the exploration to re-reach it was enormous and
+resident. The waste looked like diligence — motion through the codebase that
+substitutes for applying the fix already handed over.
+
+A well-written story is the primary defense against this. It does not describe a
+destination and invite the agent to find the path; it **points at the path.**
+Three research-grounded properties, each of which directly starves the failure:
+
+1. **Point at a reference.** Name the concrete artifact the agent works against
+   — the exact file, module, pattern, or spec — so it goes straight there
+   instead of exploring. "Compare against `crates/…/canonical.rs`," not "find
+   where the codec lives." Naming the reference is the specific cure for
+   over-exploration.
+2. **Name the verification gate.** State the exact command or named check that
+   proves done — as a Definition-of-Done item that names the real gate (e.g.
+   the container seal command), so completion is verified, not self-attested,
+   and a failed gate triggers report-not-workaround. Do not invent a gate you
+   cannot confirm is real; if the true gate is unknown, mark it `[OPEN]`.
+3. **Mark decided vs open.** Everything the story decides is immutable and the
+   agent executes it; anything genuinely still to be designed is marked `[OPEN]`
+   with who decides, and the agent escalates it — it never resolves an open
+   question by improvising code. An unmarked open question is an invitation to
+   improvise, which is the failure by another name.
+
+Do not manufacture false specificity to satisfy this. For forward-looking design
+work whose code does not yet exist, the "reference" is the spec and the cited
+frontier atoms, and the genuinely-open sub-decisions are marked `[OPEN]`, not
+invented. False precision — a named file that is wrong — is worse than honest
+openness, because it sends the agent to the wrong place with confidence.
+
 ## GitHub and the board
 
 - A story is a GitHub issue carrying exactly one classification label —
@@ -34,7 +86,8 @@ deliverables are the release notes.
 
 ## Story Schema
 
-Use this exact markdown order.
+Use this exact markdown order. Field labels are bold `**Label:**` markers — they
+are the story's visual skeleton and the parser's anchors.
 
 ```md
 # <Story Name>
@@ -47,38 +100,38 @@ so that <state of value change>.
 
 ## Sources
 
-- <atom/desideratum id> — <its asserted property, one line>
+- **<source authority>:** <its asserted property, one line>
 - ...every source this story serves; the planning graph is the registry.
 
 ## Condemned
 
-Path: <old path, fallback, ambiguity, duplicate authority, compatibility path, escape hatch, accidental complexity, low-ceiling implementation, or deferred design this story rejects>
+**Path:** <old path, fallback, ambiguity, duplicate authority, compatibility path, escape hatch, accidental complexity, low-ceiling implementation, or deferred design this story rejects>
 
-Reason: <why this path is unacceptable for correctness, determinism, authority, performance, security, demo credibility, or KyzoDB's ceiling>
+**Reason:** <why this path is unacceptable for correctness, determinism, authority, performance, security, demo credibility, or KyzoDB's ceiling>
 
-Closure test: <how we know the condemned path is removed, bounded, or mechanically rejected>
+**Closure test:** <how we know the condemned path is removed, bounded, or mechanically rejected>
 
 ## Ceiling
 
-Maximum: <the full-height option the cited sources assert — quoted or derived from them, never invented downward>
+**Maximum:** <the full-height option the cited sources assert — quoted or derived from them, never invented downward>
 
-Chosen: <this story's commitment>
+**Chosen:** <this story's commitment>
 
-Constraint: <exactly one of: "equal — chosen IS the maximum", or the named measured constraint that forces less, with where that measurement lives>
+**Constraint:** <exactly one of: "equal — chosen IS the maximum", or the named measured constraint that forces less, with where that measurement lives>
 
 ## Engineering Choice
 
-Choice: <the hard technical commitment this story makes>
+**Choice:** <the hard technical commitment this story makes; when it decomposes into parts, write them as a real numbered list, never an inline (1)(2)(3) chain>
 
-Choice type: <Representation | Authority Boundary | Execution Currency | Cache Invalidation | Storage Contract | Ordering Invariant | Admission Path | Evaluator Rule | Algorithm | Benchmark | Failure Path | Evidence Boundary>
+**Choice type:** <Representation | Authority Boundary | Execution Currency | Cache Invalidation | Storage Contract | Ordering Invariant | Admission Path | Evaluator Rule | Algorithm | Benchmark | Failure Path | Evidence Boundary>
 
-Consequence: <what becomes possible, impossible, measurable, or enforceable because of this choice>
+**Consequence:** <what becomes possible, impossible, measurable, or enforceable because of this choice>
 
-Evidence needed: <only for discovery, performance, demo, or evidence-bound stories; otherwise "None">
+**Evidence needed:** <only for discovery, performance, demo, or evidence-bound stories; otherwise "None">
 
 ## Context
 
-<Only what is needed to execute and review: mechanisms, constraints, tests, benchmarks, artifacts, failure modes, prior evidence.>
+<Only what is needed to execute and review: mechanisms, constraints, tests, benchmarks, artifacts, failure modes, prior evidence. Point at references by exact name — the file, module, pattern, or spec the executor compares against — so it reads the named slice, never the codebase. Mark any genuinely-undecided sub-decision `[OPEN]` with who decides.>
 
 ## Tasks
 
@@ -90,8 +143,40 @@ Evidence needed: <only for discovery, performance, demo, or evidence-bound stori
 - [ ] <the condemned path is removed, bounded, or mechanically rejected>
 - [ ] <the engineering choice is implemented, measured, or decided by named evidence>
 - [ ] <every Sources entry is satisfied here or explicitly re-homed to a named story>
-- [ ] <the result is testable, measurable, or mechanically reviewable>
+- [ ] <the result is provable by the named verification gate — the exact command or check, e.g. the container seal — not self-attested>
 ```
+
+## Rendering for humans
+
+A story serves three readers at once: the operator building shared
+understanding, the agent bound by its commitments, and the parser enforcing
+its shape. Formatting is not decoration — it is the shared-understanding
+layer, and the same structure serves all three: a bold field label is a
+visual anchor, a parse marker, and an addressable obligation; a numbered
+commitment is scannable and citable in correction ("pre-commitment 2 says
+…"); a `<details>` block gives the human a skimmable surface and the agent
+the exhaustive inventory without forking the truth.
+
+A story body is read far more often than it is written; shape it for the
+scanning eye, not the parser's convenience:
+
+- **Lists over chains** — any enumeration living inline as `(1)… (2)… (3)…`
+  becomes a markdown numbered list. Field values may span lines; use that.
+- **Structure the Context** — it is the longest section and must not be a wall:
+  `###` sub-heads per topic, a table when the evidence is tabular (job → cause
+  → fix), and a `<details>` block for bulk inventories the reader expands on
+  demand.
+- **Backtick every identifier** — paths, commands, crate names, flags, RUSTSEC
+  ids. A bare path in prose is invisible; `crates/xtask` is an anchor.
+- **One clause per task** — a checkbox packing three actions hides partial
+  progress. Split compound tasks unless their halves are inseparable evidence.
+- Never bold anything except the schema's field labels and true emphasis;
+  decoration that isn't structure is noise.
+
+The board is public — outside engineers and investors read it cold. The show
+is utility: a story a stranger can scan in thirty seconds and an agent cannot
+escape IS the demonstration of the planning system. Never add content aimed
+at an audience; polish the working artifact until it demonstrates itself.
 
 ## Field Rules
 
@@ -110,9 +195,9 @@ Evidence needed: <only for discovery, performance, demo, or evidence-bound stori
 | `Engineering Choice.Choice type` | The closest listed type. |
 | `Engineering Choice.Consequence` | What changes because the choice is made. |
 | `Engineering Choice.Evidence needed` | May block the final choice only for discovery, measurement, demo-signal, or performance stories; otherwise `None`. |
-| `Context` | Only execution/review context; carry forward obligations without pasting noise. |
+| `Context` | Only execution/review context; carry forward obligations without pasting noise. Every reference is named by exact path/module/pattern/spec so the executor reads the named slice, never explores. Every genuinely-undecided sub-decision is marked `[OPEN]` with who decides. |
 | `Tasks` | Each produces code, tests, benchmark evidence, committed artifacts, or a decision artifact. |
-| `Definition of Done` | Closes the value change, the condemned path, the engineering choice, and every source. |
+| `Definition of Done` | Closes the value change, the condemned path, the engineering choice, and every source, and one item names the exact verification gate that proves closure. If you cannot name how done is checked, the story is not sharp enough to execute. |
 
 ## Banned Lexicon
 
@@ -144,3 +229,13 @@ A story is invalid when any of these are true:
 * the Definition of Done cannot prove closure, or drops a source silently
 * quality is performed through language instead of proven through mechanism
   and evidence
+* **executing it requires re-derivation** — the agent would have to
+  re-discover a root cause, re-confirm a made decision, or hunt the codebase
+  for where a fix goes, because the story names no reference to work against
+* **its Definition of Done names no verification gate** — no command or check
+  proves it done, so completion could only be self-attested
+* **it leaves a live open question unmarked** — a genuinely-undecided
+  sub-decision is written as if decided, or omitted, inviting the agent to
+  resolve it by improvising code instead of escalating it as `[OPEN]`
+* **it manufactures false specificity** — a named file, line, or fix that is
+  not actually true, sending the executor to the wrong place with confidence

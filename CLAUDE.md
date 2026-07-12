@@ -44,7 +44,7 @@ Existing code, old tests, convenience, release pressure, and upstream precedent 
 
 ## Enforcement stack
 
-Rules teach. Hooks interrupt. Tests prove. Scripts enforce.
+Rules teach. Hooks interrupt. Tests prove. Gates enforce.
 
 * `CLAUDE.md` — repository constitution.
 * `.claude/rules/zone-*.md` — target architecture by path.
@@ -55,8 +55,8 @@ Rules teach. Hooks interrupt. Tests prove. Scripts enforce.
 * `.claude/hooks/pre-bash-guard.sh` — blocks container evasion and prohibited commands.
 * `.claude/hooks/post-edit-guard.sh` — blocks unsafe-policy and edit-time violations.
 * `.claude/hooks/focus-gate.sh` — denies engine edits without a focus story.
-* `scripts/authority-graph.py` — extracts `@authority` declarations, emits committed authority artifacts, and audits authority drift.
-* `just gate` — executes the repository seal.
+* The authority graph — extracts `@authority` declarations, emits committed authority artifacts, and audits authority drift.
+* The repository seal — the full verification stack, executed only in the dev container.
 
 The `manage-board` skill through the Kyzo MCP server is the only board writer.
 
@@ -75,16 +75,17 @@ Move cards when repository reality changes. Do not leave board state knowingly s
 
 Commit complete units as they land. A commit must represent one coherent, verified change rather than an arbitrary checkpoint.
 
+Delegated work is supervised work. While a subagent runs, lurk on its transcript and spot-check its choices mid-flight — behavior observed in action is holistic evidence of the whole, and one early correction replaces an exhaustive post-review. Judge strictly and correct immediately; leniency early is paid for later, twice.
+
+At delegation time, arm recurring check timers in the same motion as the spawn — a monitor ticking observable progress signals every few minutes. The lurk happens on schedule, never on memory; a stalled signal is itself the alarm. Watch the reliable meter: committed artifacts (branch commits, file scope, pathspec discipline) read from git refs, not the working index — never contend with a running agent for the index lock. Transcript size and mtime are the cheap liveness signal (small and recently-written is a lean, live agent); do not conclude bloat or stall from a monitor that cannot read the file — verify with the instant meter before killing. The demonstrated failure of a well-scoped agent is over-caution and non-shipping, not recklessness: an agent that has proven its work but will not commit is the thing to nudge; guard against the stall as hard as against the runaway.
+
+Delegate one task at a time, not a whole story, to a fresh per-task agent that executes it and dies — context never accumulates across tasks, and each committed task is a mandatory checkpoint where the orchestrator verifies scope, bounds, and build before spawning the next. The agent's contract is two doors: execute the task exactly, or escalate a blocker in one line. When an agent escalates a genuine defect in the story itself — a mis-scoped condemned path, an unbuildable requirement — the fix is to repair the story and re-rule, not to force the agent through the wrong instruction. A story the orchestrator over-scoped is trimmed to the real work, in the open, when reality proves the excess.
+
 ## Build and verification
 
-Run Cargo, binaries, tests, gates, and benchmarks only through their declared containers and `just` commands.
+Run Cargo, binaries, tests, gates, and benchmarks only through their declared containers: `kyzo-dev` for verification, `kyzo-bench` for benchmarks. The tree declares the current seal and bench entry points; invoke those and nothing else.
 
-```bash
-docker compose run --rm kyzo-dev just gate
-docker compose run --rm kyzo-bench just bench
-```
-
-`just gate` includes:
+The seal includes:
 
 * environment reporting;
 * `cargo check --workspace --all-targets`;
@@ -92,13 +93,13 @@ docker compose run --rm kyzo-bench just bench
 * first-party Clippy with `-D warnings`;
 * unsafe-code guards;
 * pure-Rust dependency guards;
-* authority-graph self-test, ratchet, and artifact freshness;
+* authority self-test, ratchet, and artifact freshness;
 * mutation testing of the enforcement harness;
 * the full test suite.
 
-Do not run native `cargo` or `just`.
+Do not run native build, test, or lint tooling on the host.
 Do not hand-set `ulimit`, `timeout`, `--test-threads`, or equivalent execution limits.
-Run repository binaries only through `just run`.
+Run repository binaries only through the declared container entry points.
 
 ## Failure triage
 
@@ -115,6 +116,10 @@ Correct tests only when they fail to express the ruling. Never weaken a valid te
 Surface ruling defects instead of working around them.
 
 Tests verify the law; they do not create it. Goldens must be independently derived. Healthy-path tests must construct values through production APIs rather than privileged test-only doors.
+
+## Requirements are not negotiable down
+
+Never propose weakening, deleting, narrowing, or reinterpreting a requirement, acceptance criterion, Condemned item, or engineering contract as an acceptable substitute for implementing it. If you believe the requirement itself is incorrect, state that separately, but classify the current state as "requirement not satisfied." Do not present modifying the requirement as completion of the work.
 
 ## Global laws
 
@@ -209,7 +214,7 @@ When a rule conflicts with release compilation, preserve the rule and expose the
 
 ## Authority graph
 
-`scripts/authority-graph.py` extracts `@authority` declarations into:
+The authority graph extracts `@authority` declarations into:
 
 * `authority/authority-map.json`;
 * `authority/authority-report.md`.
@@ -224,7 +229,7 @@ It audits:
 * ratchet and allowlist drift;
 * committed artifact freshness.
 
-Run the authority graph through `just gate`. Do not manually edit generated authority artifacts.
+Run the authority graph through the repository seal. Do not manually edit generated authority artifacts.
 
 ## Completion
 

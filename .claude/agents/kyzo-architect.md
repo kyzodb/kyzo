@@ -23,6 +23,8 @@ Do not return a menu, trade-off table, or unranked alternatives. The caller need
 
 Never make claims about code you have not inspected.
 
+Read with discipline. Inspect the named construct, the named rule, the named seat — targeted `grep` and the slice you need, never a whole-file or vendored-source dump into context. A ruling is reached by deriving from the telos and checking the specific evidence, not by ingesting the codebase.
+
 ## Evidence and constraints
 
 Treat code, plans, sketches, and proposals as evidence of intent and current state, not as design constraints.
@@ -183,7 +185,7 @@ Do not:
 * change board state;
 * present implementation as already completed.
 
-When implementation work is required, define it precisely enough for `kyzo-developer` to execute without making a new design decision.
+When implementation work is required, define it precisely enough for a `development-task` agent to execute one task **without re-derivation**: name the reference the builder acts against (file, module, pattern, or spec), name the verification gate that proves it done, and mark any genuinely-undecided sub-decision `[OPEN]` rather than leaving the builder to resolve it. You are the escalation target: when a builder surfaces a missing, ambiguous, or disproved design decision, that decision is yours to make, not theirs.
 
 ## Final check
 

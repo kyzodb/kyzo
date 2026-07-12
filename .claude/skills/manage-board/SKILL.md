@@ -1,11 +1,11 @@
 ---
 name: manage-board
-description: The ONLY way to create, update, move, or delete epics and stories on the KyzoDB Work board. Use for every board operation — creating an epic or story, rewriting a body, checking a task, commenting, reparenting, relabeling, moving a card between columns, deleting issues, surveying a column. 23 live tools, prefixed mcp__kyzo__, discovered via ToolSearch since their schemas are deferred; never use raw gh for board writes.
+description: The ONLY way to create, update, move, reorder, or delete epics and stories on the KyzoDB Work board. Use for every board operation — creating an epic or story, rewriting a body, checking a task, commenting, reparenting, relabeling, moving a card between columns, reordering cards or sub-issues, deleting issues, surveying a column. 25 live tools, prefixed mcp__kyzo__, discovered via ToolSearch since their schemas are deferred; never use raw gh for board writes.
 ---
 
 # manage-board
 
-The kyzo MCP server (`mcp/`) is the board's one authority: 23 live
+The kyzo MCP server (`mcp/`) is the board's one authority: 25 live
 tools instead of a script with subcommands, same underlying `gh` boundary,
 same rules. Tool schemas are deferred (bare names only until fetched) — use
 `ToolSearch` with `select:<name>` to load one before calling it the first
@@ -14,17 +14,19 @@ add behavior, never bypass them.
 
 ## The board model
 
-One axis: column position, left to right — `Backlog` (hidden), `Later`,
-`Next`, `Now`, `In Progress`, `Blocked`, `Done`. No milestones, no second
-axis. `Backlog` is where every open card rests unless it's actively `In
+One axis: column position plus order within it, left to right — `Backlog`
+(hidden), `Later`, `Next`, `Now`, `In Progress`, `Blocked`, `Done`. No
+milestones, no second axis; the project's old Priority field is deleted.
+`Backlog` is where every open card rests unless it's actively `In
 Progress` or is an epic deliberately carrying visible horizon on
 `Later`/`Next`/`Now`. A story's own horizon is read off its parent epic,
 never carried on the story itself — nothing enforces this at the type
-level, it's operator discipline. `Blocked` exists in the schema with zero
-wired enforcement — no forcing function yet, use it honestly anyway.
-Entering `In Progress` always requires a linked branch (`gh issue develop N
---name <branch> --base main`) and sets the `focus` label; every other
-column removes it.
+level, it's operator discipline. Entering `Blocked` requires the named
+technical blocker, posted as a comment in the same motion. Entering `In
+Progress` always requires a linked branch (`gh issue develop N --name
+<branch> --base main`), sets the `focus` label, and assigns the operating
+account; every other column removes the label. Entering `Done` refuses
+while a story contract has unchecked Tasks or Definition of Done boxes.
 
 ## Create
 
@@ -40,7 +42,8 @@ column removes it.
 ## Read
 
 - `read_issues(numbers, target?)` — compact rendering per issue: title,
-  state, label, parent, sub-issues, body, comments.
+  state, label, parent, sub-issues, linked branches, body, comments. One
+  GraphQL crossing however many numbers are passed.
 - `read_epic(number, target?)` — an epic plus every one of its sub-issue
   stories, one report.
 - `list_board(column, label?, focus_only?, target?)` — every card
@@ -74,16 +77,30 @@ column removes it.
 - `move_to_next(number, target?)`
 - `move_to_now(number, target?)`
 - `move_to_in_progress(number, target?)` — refuses without a linked
-  branch.
-- `move_to_blocked(number, target?)`
-- `move_to_done(number, target?)` — closing the issue itself is the
-  board's own auto-close workflow, not this tool.
+  branch; assigns the operating account (@me) with the focus label.
+- `move_to_blocked(number, blocker, target?)` — the named blocker is
+  required and posted as a comment in the same motion.
+- `move_to_done(number, target?)` — refuses while a story contract has
+  unchecked boxes; closing the issue itself is the board's own auto-close
+  workflow, not this tool.
+
+## Reorder (position is the priority axis — these write it)
+
+- `reorder_card(number, anchor, target?)` — move a card within the
+  project's single item order: `{"position": "top"}` or
+  `{"position": "after_card", "card": N}`. A column view shows its slice
+  of that order, so top of the order is top of the card's column.
+- `reorder_sub_issue(epic, story, anchor, target?)` — move a story within
+  its epic's sub-issue list (the epic's execution order):
+  `{"position": "first"}` or `{"position": "after_sibling", "sibling": N}`.
 
 ## Delete
 
-- `delete_issues(numbers, target?)` — permanent, cascades (card leaves the
-  board, sub-issue relations die). Irreversible — operator-ordered
-  deletions only.
+- `delete_issues(deletions, target?)` — permanent, cascades (card leaves
+  the board, sub-issue relations die). Each deletion names `number` AND
+  the exact `title` the caller believes it carries; any mismatch refuses
+  the whole batch before anything is destroyed. Irreversible —
+  operator-ordered deletions only.
 
 `target` on every tool defaults to KyzoDB's own board; pass an explicit
 owner/repo/project only to act on a different one (e.g. a disposable test
