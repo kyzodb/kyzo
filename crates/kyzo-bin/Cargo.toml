@@ -26,7 +26,7 @@ base64 = "0.22"
 # Aligned to kyzo-core's miette major version so the tree carries one copy.
 miette = { version = "7", features = ["fancy"] }
 prettytable = "0.10"
-rustyline = "17"
+rustyline = "18"
 # HTTP(S) client for `%import <url>` (see `client.rs`'s module doc for the
 # two designs that were tried and rejected first: `minreq`'s `https-rustls`
 # — ring, C, banned; `ureq`'s `rustls-no-provider` — pure but leans on a
