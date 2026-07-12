@@ -247,13 +247,7 @@ impl Filesystem for PassthroughFs {
         }
     }
 
-    fn getattr(
-        &self,
-        _req: &Request,
-        ino: INodeNo,
-        fh: Option<FileHandle>,
-        reply: ReplyAttr,
-    ) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
         let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
             reply.error(Errno::ENOENT);
             return;
@@ -478,7 +472,14 @@ impl Filesystem for PassthroughFs {
         reply.written(data.len() as u32);
     }
 
-    fn fsync(&self, _req: &Request, _ino: INodeNo, fh: FileHandle, _datasync: bool, reply: ReplyEmpty) {
+    fn fsync(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
         let mut handles = self.handles.lock().unwrap();
         let Some(handle) = handles.get_mut(&fh.0) else {
             reply.error(Errno::EBADF);
