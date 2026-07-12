@@ -1,6 +1,6 @@
 ---
 name: manage-board
-description: The ONLY way to create, update, move, reorder, or delete epics and stories on the KyzoDB Work board. Use for every board operation — creating an epic or story, rewriting a body, checking a task, commenting, reparenting, relabeling, moving a card between columns, reordering cards or sub-issues, deleting issues, surveying a column. 25 live tools, prefixed mcp__kyzo__, discovered via ToolSearch since their schemas are deferred; never use raw gh for board writes.
+description: The ONLY way to create, update, move, reorder, or delete epics and stories on the KyzoDB Work board. Use for every board operation — creating an epic or story, rewriting a body, checking a task, commenting, reparenting, relabeling, moving a card between columns, reordering cards or sub-issues, deleting issues, surveying a column, starting an epic or story on the epic branch. 27 live tools, prefixed mcp__kyzo__, discovered via ToolSearch since their schemas are deferred; never use raw gh for board writes.
 ---
 
 # manage-board
@@ -23,9 +23,10 @@ Progress` or is an epic deliberately carrying visible horizon on
 never carried on the story itself — nothing enforces this at the type
 level, it's operator discipline. Entering `Blocked` requires the named
 technical blocker, posted as a comment in the same motion. Entering `In
-Progress` always requires a linked branch (`gh issue develop N --name
-<branch> --base main`), sets the `focus` label, and assigns the operating
-account; every other column removes the label. Entering `Done` refuses
+Progress` always requires the **epic's** branch — a story rides its parent
+epic's branch, an epic rides its own — sets the `focus` label, and assigns
+the operating account; every other column removes the label. The branch is
+created once per epic by `start_epic`, never per story. Entering `Done` refuses
 while a story contract has unchecked Tasks or Definition of Done boxes.
 
 ## Create
@@ -70,14 +71,32 @@ while a story contract has unchecked Tasks or Definition of Done boxes.
   changed, not for a single-field edit.
 - `rename_story(number, name, target?)` — rename a story's title only.
 
+## Start (deterministic branch-per-epic gates)
+
+- `start_epic(number, branch_name, target?)` — start an epic on its own
+  branch after deterministic git+board checks: clean tree, HEAD on `main`,
+  `main` level with `origin/main`, unused branch name, an open epic with
+  stories that isn't already started, no other epic In Progress with an
+  unmerged branch. On pass: creates `branch_name` off `main` linked to the
+  epic, moves it to In Progress, sets focus, assigns `@me`. Each failed check
+  is a typed refusal.
+- `start_story(number, target?)` — start the next story of the active epic
+  after deterministic checks: HEAD on the epic branch, no merge/rebase/
+  cherry-pick in flight, clean tree, branch not diverged from origin, no
+  sibling story In Progress, this is the next unstarted story in sub-issue
+  order, and the preceding story is Done with every Task and Definition-of-
+  Done box checked with its work on the branch. On pass: moves the story to
+  In Progress on the epic branch. Each failed check is a typed refusal.
+
 ## Move (any card — epic or story; the column mechanism is kind-agnostic)
 
 - `move_to_backlog(number, target?)`
 - `move_to_later(number, target?)`
 - `move_to_next(number, target?)`
 - `move_to_now(number, target?)`
-- `move_to_in_progress(number, target?)` — refuses without a linked
-  branch; assigns the operating account (@me) with the focus label.
+- `move_to_in_progress(number, target?)` — refuses without the epic branch
+  (a story rides its parent epic's branch); assigns the operating account
+  (@me) with the focus label.
 - `move_to_blocked(number, blocker, target?)` — the named blocker is
   required and posted as a comment in the same motion.
 - `move_to_done(number, target?)` — refuses while a story contract has

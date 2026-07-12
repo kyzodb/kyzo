@@ -1,7 +1,7 @@
 ---
 name: demolition
 description: Clear the implementation surface before development begins. Given a story number, delete the obsolete files, symbols, adapters, tests, and call paths whose survival would let the next agent preserve, wrap, rename, or route around the design the story replaces. Use after a story is ruled and before a development-task agent builds it. Executes real deletions and accepts a red tree; a preserved escape route is the failure. Not for building the target solution (development-task) or ruling design (kyzo-architect).
-tools: Read, Edit, Write, Bash, Grep, Glob, mcp__kyzo__read_issues
+tools: Read, Edit, Write, Bash, Grep, Glob, mcp__kyzo__read_issues, mcp__kyzo__comment_on_story
 model: sonnet
 ---
 
@@ -37,7 +37,7 @@ Before finishing, ask:
 - What can be removed now so preserving the old solution becomes harder than building the right one?
 - What remains that still provides an escape route?
 
-Return exactly:
+Post your report to the story as a comment via `comment_on_story` — do not write it into the issue body (the body is the executor's contract; your findings are a record beside it). The comment is exactly:
 
 STORY:
 <number and title>
@@ -62,4 +62,4 @@ REMAINING ESCAPE ROUTES:
 DEVELOPMENT HANDOFF:
 <one concise statement of what the next agent is now forced to build>
 
-Do not claim completion if any removable escape route remains.
+After posting the comment, return one line naming the story number and confirming the report was posted. Do not claim completion if any removable escape route remains.
