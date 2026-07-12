@@ -86,11 +86,20 @@ openness, because it sends the agent to the wrong place with confidence.
 
 ## Story Schema
 
-Use this exact markdown order. Field labels are bold `**Label:**` markers — they
-are the story's visual skeleton and the parser's anchors.
+Use this exact markdown order. The body opens with the parent-epic cross-link
+and a one-sentence lede, then the **human-narrative zone** (Description through
+Engineering Choice), then the **executor-contract zone** (Context, Tasks,
+Definition of Done). Condemned is a `> [!WARNING]` callout, Ceiling is a table,
+Context is wrapped in `<details>`, and each task carries an append-only `T#`
+identifier; the remaining field labels are bold `**Label:**` markers that are
+both visual skeleton and parser anchors.
 
 ```md
 # <Story Name>
+
+**Epic:** #<parent-epic-number>
+
+<one plain-language sentence — the lede — introducing this story for a human reader>
 
 ## Description
 
@@ -105,19 +114,18 @@ so that <state of value change>.
 
 ## Condemned
 
-**Path:** <old path, fallback, ambiguity, duplicate authority, compatibility path, escape hatch, accidental complexity, low-ceiling implementation, or deferred design this story rejects>
-
-**Reason:** <why this path is unacceptable for correctness, determinism, authority, performance, security, demo credibility, or KyzoDB's ceiling>
-
-**Closure test:** <how we know the condemned path is removed, bounded, or mechanically rejected>
+> [!WARNING]
+> **Path:** <old path, fallback, ambiguity, duplicate authority, compatibility path, escape hatch, accidental complexity, low-ceiling implementation, or deferred design this story rejects>
+>
+> **Reason:** <why this path is unacceptable for correctness, determinism, authority, performance, security, demo credibility, or KyzoDB's ceiling>
+>
+> **Closure test:** <how we know the condemned path is removed, bounded, or mechanically rejected>
 
 ## Ceiling
 
-**Maximum:** <the full-height option the cited sources assert — quoted or derived from them, never invented downward>
-
-**Chosen:** <this story's commitment>
-
-**Constraint:** <exactly one of: "equal — chosen IS the maximum", or the named measured constraint that forces less, with where that measurement lives>
+| Maximum | Chosen | Constraint |
+| --- | --- | --- |
+| <the full-height option the cited sources assert — never invented downward> | <this story's commitment> | <"equal — chosen IS the maximum", or the named measured constraint that forces less, with where that measurement lives> |
 
 ## Engineering Choice
 
@@ -131,11 +139,16 @@ so that <state of value change>.
 
 ## Context
 
+<details>
+<summary>Execution context</summary>
+
 <Only what is needed to execute and review: mechanisms, constraints, tests, benchmarks, artifacts, failure modes, prior evidence. Point at references by exact name — the file, module, pattern, or spec the executor compares against — so it reads the named slice, never the codebase. Mark any genuinely-undecided sub-decision `[OPEN]` with who decides.>
+
+</details>
 
 ## Tasks
 
-- [ ] <task that produces code, test coverage, benchmark evidence, committed artifact, or explicit decision artifact>
+- [ ] T1 — <task that produces code, test coverage, benchmark evidence, committed artifact, or explicit decision artifact>
 
 ## Definition of Done
 
@@ -145,6 +158,10 @@ so that <state of value change>.
 - [ ] <every Sources entry is satisfied here or explicitly re-homed to a named story>
 - [ ] <the result is provable by the named verification gate — the exact command or check, e.g. the container seal — not self-attested>
 ```
+
+`T#` identifiers are append-only: assigned once, never renumbered when a task is
+inserted or removed; a new task takes the next unused integer. They are the
+handle the task-completion-judge checks off, so every task line carries one.
 
 ## Rendering for humans
 
@@ -173,10 +190,44 @@ scanning eye, not the parser's convenience:
 - Never bold anything except the schema's field labels and true emphasis;
   decoration that isn't structure is noise.
 
+The new-schema elements each carry a specific legibility job:
+
+- **Two zones** — the human-narrative zone (lede → Engineering Choice) reads as
+  prose for the operator; the executor-contract zone (Context, Tasks, Definition
+  of Done) reads as machine spec. Same fidelity, kept apart so neither degrades
+  the other.
+- **Condemned is a `> [!WARNING]` callout** — the killed path renders as an
+  alarm the eye cannot skip.
+- **Ceiling is a table** — Maximum | Chosen | Constraint side by side, so a
+  Chosen below Maximum without a named Constraint is visible at a glance.
+- **`<details>` wraps Context** — the longest section collapses, giving the
+  human a skimmable surface and the agent the full inventory without forking the
+  truth.
+- **Cross-link the graph** — the `**Epic:** #N` line makes the parent navigable
+  inline; GitHub renders it as a live link.
+- **Lede first** — one plain sentence at the very top a stranger reads before
+  any structure.
+
 The board is public — outside engineers and investors read it cold. The show
 is utility: a story a stranger can scan in thirty seconds and an agent cannot
 escape IS the demonstration of the planning system. Never add content aimed
 at an audience; polish the working artifact until it demonstrates itself.
+
+## The story feeds a three-agent pipeline
+
+A story is consumed by three agents in sequence, and specific fields are their
+handles — write each field for its consumer:
+
+- **The demolition agent** reads the **Condemned** block to clear the
+  implementation surface before construction. Write Condemned specific enough to
+  act on: name the concrete files, symbols, adapters, tests, and call paths to
+  remove, not an abstract "the old approach." A vague Condemned block leaves the
+  demolition agent nothing it can safely delete.
+- **The development-task agent** executes one task at a time; every task carries
+  a `T#` identifier, the handle it and the judge address it by.
+- **The task-completion-judge** checks a task off only against the **Definition
+  of Done** item that names the exact verification-gate command. One DoD item
+  must name that gate, or the judge has nothing to verify completion against.
 
 ## Field Rules
 

@@ -16,7 +16,7 @@ STORY:
 <number>
 
 TASK:
-<exact task being marked complete>
+<the task's T# identifier and its exact text, e.g. "T3 — <exact task text>">
 
 COMPLETION CLAIM:
 <one sentence stating the completed result>

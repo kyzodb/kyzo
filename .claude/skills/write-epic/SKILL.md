@@ -42,15 +42,30 @@ does.
 
 ## Epic Schema
 
-Use this exact markdown order.
+Use this exact markdown order. The body opens with a one-sentence lede, wraps
+the Outcome Description in a `> [!NOTE]` callout, and closes with a `## Stories`
+cross-link list mirroring the epic's sub-issues in execution order.
 
 ```md
 # <Epic Name>
 
+<one plain-language sentence — the lede — introducing this epic for a human reader>
+
 ## Outcome Description
 
-<One paragraph describing the transition this group of stories creates. State what KyzoDB is moving from, what it is moving to, and what shared technical boundary, authority, capability, proof, or failure class makes these stories belong together.>
+> [!NOTE]
+> <One paragraph describing the transition this group of stories creates. State what KyzoDB is moving from, what it is moving to, and what shared technical boundary, authority, capability, proof, or failure class makes these stories belong together.>
+
+## Stories
+
+- #<story-number>
+- ...every story sub-issue of this epic, in execution order
 ```
+
+The `## Stories` list is a **rendered mirror of the sub-issue graph** — the graph
+remains the authority for membership and order; the list is regenerated from it,
+never hand-maintained as a second source of truth. It is navigation, not the
+execution detail the epic is otherwise forbidden to carry.
 
 ## GitHub and the board
 
@@ -95,7 +110,12 @@ An epic is invalid when any of these are true:
 The outcome is one paragraph, but it must be a readable one: a stranger on
 this public board should get the from → to arc in a single pass. Prefer two
 or three real sentences over one 150-word sentence chained with em-dashes;
-backtick every path, crate, and command; bold nothing (the epic has no field
-labels — its structure is the paragraph itself). The show is utility: the
-epic that lets an outside reader grasp the boundary being crossed IS the
-demonstration. Never write for an audience; polish the working artifact.
+backtick every path, crate, and command. The show is utility: the epic that
+lets an outside reader grasp the boundary being crossed IS the demonstration.
+Never write for an audience; polish the working artifact.
+
+The outcome renders inside a `> [!NOTE]` callout so the transition reads as a
+framed statement, not loose prose; the lede sits above it as the one sentence a
+stranger reads first; and the `## Stories` list cross-links each child as `#N`,
+which GitHub renders as a live link into the story. Bold nothing else — the epic
+has no field labels; its structure is the lede, the callout, and the list.

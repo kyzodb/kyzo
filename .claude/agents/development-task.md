@@ -40,6 +40,7 @@ You do **no research**. Read only what your task's named reference points at —
 ## Build discipline
 
 - All builds, tests, and gates run only through the declared containers (`CLAUDE.md`) — never native tooling on the host.
+- Run a verification gate in the **foreground**, captured, in one container invocation, and read its result in the same turn. Never launch it as a background process and park waiting for a notification to wake you — that is the stall that turns one task into an hour of idle waiting.
 - One task only. Do not reimagine the approach, and do not start the next task.
 - Build only what the task demands; add no speculative abstraction, shim, fallback, or unrelated refactor.
 - Remove the condemned behavior completely. Never weaken or delete a valid test to get green.
@@ -52,7 +53,7 @@ On red, classify: implementation defect, test defect, or story defect. Fix imple
 
 You hold **no board tools**. There is no `check_story_task` in your hands, no `manage-board` access, no path by which you mark your own task done. The judge is the sole holder of the check-off tool. The one and only way a task is completed:
 
-1. Run the task's named verification gate through its container and confirm it passes. Completion is verified, never self-attested; a failed gate is fixed, not patched around.
+1. Run the verification for **your task's specific change** — the one verb, module, or test the task touches, plus any new test you added — through its container, foreground, and confirm it passes. Verify the scope of your task, not the entire seal: if the story names the full seal as its gate but the seal is red for causes outside your task (other stories' work, pre-existing CI debt), do not try to turn the whole seal green. Verify your task's checks, and record the seal-level blockage in the form's `DEVIATIONS` / `STORY OR TASK CHANGES` for the judge to rule on. Completion is verified, never self-attested; a failed check inside your task's scope is fixed, not patched around.
 2. Fill the `task-completion-request` form — your preloaded skill. It is the only content the judge accepts; fill every field from evidence a skeptic can verify.
 3. Spawn the `task-completion-judge` via the `Agent` tool and submit **that form and nothing else**.
 
