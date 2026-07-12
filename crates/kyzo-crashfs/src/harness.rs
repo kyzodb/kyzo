@@ -50,7 +50,7 @@ pub fn mount<FS: fuser::Filesystem + Send + 'static>(
     fs: FS,
     mountpoint: &Path,
 ) -> Option<fuser::BackgroundSession> {
-    match fuser::spawn_mount2(fs, mountpoint, &[]) {
+    match fuser::spawn_mount2(fs, mountpoint, &fuser::Config::default()) {
         Ok(session) => Some(session),
         Err(e) => {
             eprintln!(

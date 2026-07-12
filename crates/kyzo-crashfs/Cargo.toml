@@ -13,7 +13,7 @@ description = "Story #31: a pure-Rust FUSE passthrough fault injector (LazyFS-mo
 # libfuse .so, no pkg-config C probe — see build.rs). The default `libfuse`
 # feature would link a real C library, which a test-tooling crate has no
 # reason to pull in even though the kyzo-core purity gate doesn't scan it.
-fuser = { version = "0.15", default-features = false }
+fuser = { version = "0.17", default-features = false }
 libc = "0.2"
 
 [dev-dependencies]

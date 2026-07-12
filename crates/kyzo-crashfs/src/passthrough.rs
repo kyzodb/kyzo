@@ -43,12 +43,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
-use fuser::consts::FOPEN_DIRECT_IO;
 use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request,
+    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, ReplyAttr,
+    ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
 };
-use libc::{EBADF, EIO, ENOENT};
 
 use crate::fault::{
     Counters, Fault, FaultPlan, OpKind, WriteOutcome, decide_write_outcome, resolve_trigger,
@@ -205,7 +203,7 @@ impl PassthroughFs {
             FileType::RegularFile
         };
         FileAttr {
-            ino,
+            ino: INodeNo(ino),
             size: logical_size,
             blocks: logical_size.div_ceil(512),
             atime: meta.accessed().unwrap_or(UNIX_EPOCH),
@@ -223,20 +221,20 @@ impl PassthroughFs {
         }
     }
 
-    fn stat_entry(&self, ino: u64, rel: &Path) -> Result<FileAttr, i32> {
+    fn stat_entry(&self, ino: u64, rel: &Path) -> Result<FileAttr, Errno> {
         let meta = fs::symlink_metadata(self.real_path(rel)).map_err(io_errno)?;
         Ok(Self::attr_from_metadata(ino, &meta, meta.len()))
     }
 }
 
-fn io_errno(err: std::io::Error) -> i32 {
-    err.raw_os_error().unwrap_or(EIO)
+fn io_errno(err: std::io::Error) -> Errno {
+    err.into()
 }
 
 impl Filesystem for PassthroughFs {
-    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
-            reply.error(ENOENT);
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let child_rel = parent_rel.join(name);
@@ -244,14 +242,20 @@ impl Filesystem for PassthroughFs {
         let ino = inodes.ino_for(&child_rel);
         drop(inodes);
         match self.stat_entry(ino, &child_rel) {
-            Ok(attr) => reply.entry(&TTL_ZERO, &attr, 0),
+            Ok(attr) => reply.entry(&TTL_ZERO, &attr, Generation(0)),
             Err(errno) => reply.error(errno),
         }
     }
 
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
-            reply.error(ENOENT);
+    fn getattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: Option<FileHandle>,
+        reply: ReplyAttr,
+    ) {
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let meta = match fs::symlink_metadata(self.real_path(&rel)) {
@@ -265,7 +269,7 @@ impl Filesystem for PassthroughFs {
             self.handles
                 .lock()
                 .unwrap()
-                .get(&fh)
+                .get(&fh.0)
                 .map(|h| h.logical_len(meta.len()))
         }) {
             Some(size) => size,
@@ -273,14 +277,14 @@ impl Filesystem for PassthroughFs {
         };
         reply.attr(
             &TTL_ZERO,
-            &Self::attr_from_metadata(ino, &meta, logical_size),
+            &Self::attr_from_metadata(ino.0, &meta, logical_size),
         );
     }
 
     fn setattr(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
         _mode: Option<u32>,
         _uid: Option<u32>,
         _gid: Option<u32>,
@@ -288,15 +292,15 @@ impl Filesystem for PassthroughFs {
         _atime: Option<fuser::TimeOrNow>,
         _mtime: Option<fuser::TimeOrNow>,
         _ctime: Option<std::time::SystemTime>,
-        fh: Option<u64>,
+        fh: Option<FileHandle>,
         _crtime: Option<std::time::SystemTime>,
         _chgtime: Option<std::time::SystemTime>,
         _bkuptime: Option<std::time::SystemTime>,
-        _flags: Option<u32>,
+        _flags: Option<fuser::BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
-            reply.error(ENOENT);
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         if let Some(new_len) = size {
@@ -311,29 +315,29 @@ impl Filesystem for PassthroughFs {
                 return;
             }
             if let Some(fh) = fh
-                && let Some(handle) = self.handles.lock().unwrap().get_mut(&fh)
+                && let Some(handle) = self.handles.lock().unwrap().get_mut(&fh.0)
             {
                 handle.pending.retain(|pw| pw.offset < new_len);
             }
         }
-        match self.stat_entry(ino, &rel) {
+        match self.stat_entry(ino.0, &rel) {
             Ok(attr) => reply.attr(&TTL_ZERO, &attr),
             Err(errno) => reply.error(errno),
         }
     }
 
     fn create(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
+        &self,
+        _req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         _mode: u32,
         _umask: u32,
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
-            reply.error(ENOENT);
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let child_rel = parent_rel.join(name);
@@ -368,12 +372,18 @@ impl Filesystem for PassthroughFs {
                 pending: Vec::new(),
             },
         );
-        reply.created(&TTL_ZERO, &attr, 0, fh, FOPEN_DIRECT_IO);
+        reply.created(
+            &TTL_ZERO,
+            &attr,
+            Generation(0),
+            FileHandle(fh),
+            FopenFlags::FOPEN_DIRECT_IO,
+        );
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
-            reply.error(ENOENT);
+    fn open(&self, _req: &Request, ino: INodeNo, _flags: fuser::OpenFlags, reply: ReplyOpen) {
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let file = match OpenOptions::new()
@@ -396,26 +406,25 @@ impl Filesystem for PassthroughFs {
                 pending: Vec::new(),
             },
         );
-        reply.opened(fh, FOPEN_DIRECT_IO);
+        reply.opened(FileHandle(fh), FopenFlags::FOPEN_DIRECT_IO);
     }
 
     fn read(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyData,
     ) {
         let handles = self.handles.lock().unwrap();
-        let Some(handle) = handles.get(&fh) else {
-            reply.error(EBADF);
+        let Some(handle) = handles.get(&fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
-        let offset = offset as u64;
         let want_end = offset + u64::from(size);
         let mut buf = vec![0u8; size as usize];
         let mut filled = handle.file.read_at(&mut buf, offset).unwrap_or(0);
@@ -436,33 +445,27 @@ impl Filesystem for PassthroughFs {
     }
 
     fn write(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _write_flags: fuser::WriteFlags,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyWrite,
     ) {
         let mut handles = self.handles.lock().unwrap();
-        let Some(handle) = handles.get_mut(&fh) else {
-            reply.error(EBADF);
+        let Some(handle) = handles.get_mut(&fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
         let rel_key = Self::rel_key(&handle.rel_path);
         let count = self.counters.lock().unwrap().bump(&rel_key, OpKind::Write);
-        let outcome = decide_write_outcome(
-            &self.plan,
-            &rel_key,
-            offset as u64,
-            data.len() as u64,
-            count,
-        );
+        let outcome = decide_write_outcome(&self.plan, &rel_key, offset, data.len() as u64, count);
         handle.pending.push(PendingWrite {
-            offset: offset as u64,
+            offset,
             data: data.to_vec(),
             outcome,
         });
@@ -475,17 +478,10 @@ impl Filesystem for PassthroughFs {
         reply.written(data.len() as u32);
     }
 
-    fn fsync(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        _datasync: bool,
-        reply: ReplyEmpty,
-    ) {
+    fn fsync(&self, _req: &Request, _ino: INodeNo, fh: FileHandle, _datasync: bool, reply: ReplyEmpty) {
         let mut handles = self.handles.lock().unwrap();
-        let Some(handle) = handles.get_mut(&fh) else {
-            reply.error(EBADF);
+        let Some(handle) = handles.get_mut(&fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
         let rel_key = Self::rel_key(&handle.rel_path);
@@ -518,11 +514,11 @@ impl Filesystem for PassthroughFs {
     }
 
     fn flush(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _lock_owner: fuser::LockOwner,
         reply: ReplyEmpty,
     ) {
         // flush() (close(2)/dup path) carries no durability guarantee in
@@ -531,12 +527,12 @@ impl Filesystem for PassthroughFs {
     }
 
     fn release(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         _flush: bool,
         reply: ReplyEmpty,
     ) {
@@ -560,7 +556,7 @@ impl Filesystem for PassthroughFs {
         // power-cut durability, only "the bytes are on the backing file
         // now," matching a real close).
         let mut handles = self.handles.lock().unwrap();
-        if let Some(mut handle) = handles.remove(&fh) {
+        if let Some(mut handle) = handles.remove(&fh.0) {
             for pw in handle.pending.drain(..) {
                 let _ = match pw.outcome {
                     WriteOutcome::Clean => handle.file.write_at(&pw.data, pw.offset),
@@ -574,20 +570,20 @@ impl Filesystem for PassthroughFs {
         reply.ok();
     }
 
-    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, reply: ReplyOpen) {
-        reply.opened(0, 0);
+    fn opendir(&self, _req: &Request, _ino: INodeNo, _flags: fuser::OpenFlags, reply: ReplyOpen) {
+        reply.opened(FileHandle(0), FopenFlags::empty());
     }
 
     fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let Some(rel) = self.inodes.lock().unwrap().path_for(ino) else {
-            reply.error(ENOENT);
+        let Some(rel) = self.inodes.lock().unwrap().path_for(ino.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let real_dir = self.real_path(&rel);
@@ -599,7 +595,7 @@ impl Filesystem for PassthroughFs {
             }
         };
         let mut all: Vec<(u64, FileType, std::ffi::OsString)> =
-            vec![(ino, FileType::Directory, ".".into())];
+            vec![(ino.0, FileType::Directory, ".".into())];
         let parent_ino = if rel.as_os_str().is_empty() {
             ROOT_INO
         } else {
@@ -620,7 +616,7 @@ impl Filesystem for PassthroughFs {
             all.push((child_ino, kind, entry.file_name()));
         }
         for (idx, (ino, kind, name)) in all.into_iter().enumerate().skip(offset as usize) {
-            if reply.add(ino, (idx + 1) as i64, kind, &name) {
+            if reply.add(INodeNo(ino), (idx + 1) as u64, kind, &name) {
                 break;
             }
         }
@@ -628,16 +624,16 @@ impl Filesystem for PassthroughFs {
     }
 
     fn mkdir(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
+        &self,
+        _req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         _mode: u32,
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
-            reply.error(ENOENT);
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let child_rel = parent_rel.join(name);
@@ -647,14 +643,14 @@ impl Filesystem for PassthroughFs {
         }
         let ino = self.inodes.lock().unwrap().ino_for(&child_rel);
         match self.stat_entry(ino, &child_rel) {
-            Ok(attr) => reply.entry(&TTL_ZERO, &attr, 0),
+            Ok(attr) => reply.entry(&TTL_ZERO, &attr, Generation(0)),
             Err(errno) => reply.error(errno),
         }
     }
 
-    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
-            reply.error(ENOENT);
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         match fs::remove_dir(self.real_path(&parent_rel.join(name))) {
@@ -663,9 +659,9 @@ impl Filesystem for PassthroughFs {
         }
     }
 
-    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
-            reply.error(ENOENT);
+    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         match fs::remove_file(self.real_path(&parent_rel.join(name))) {
@@ -682,21 +678,21 @@ impl Filesystem for PassthroughFs {
     /// `unlink` above — not part of the buffered-write/fsync durability
     /// model this crate faults, so it is never itself a fault target.
     fn rename(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
+        &self,
+        _req: &Request,
+        parent: INodeNo,
         name: &OsStr,
-        newparent: u64,
+        newparent: INodeNo,
         newname: &OsStr,
-        _flags: u32,
+        _flags: fuser::RenameFlags,
         reply: ReplyEmpty,
     ) {
-        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent) else {
-            reply.error(ENOENT);
+        let Some(parent_rel) = self.inodes.lock().unwrap().path_for(parent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
-        let Some(newparent_rel) = self.inodes.lock().unwrap().path_for(newparent) else {
-            reply.error(ENOENT);
+        let Some(newparent_rel) = self.inodes.lock().unwrap().path_for(newparent.0) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         let old_rel = parent_rel.join(name);
@@ -717,11 +713,11 @@ impl Filesystem for PassthroughFs {
     /// file at every open, and a real database (phase 2's whole point) must
     /// be able to open through this mount at all.
     fn setlk(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _lock_owner: fuser::LockOwner,
         _start: u64,
         _end: u64,
         _typ: i32,
