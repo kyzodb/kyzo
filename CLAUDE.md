@@ -1,100 +1,264 @@
 # CLAUDE.md — KyzoDB
 
-A pure-Rust engine where relational, graph, vector, text, and time are one substrate — and the 
-database ships its own adversary. One Datalog (KyzoScript) over relational, graph, vector, and 
-full-text data, with time travel, on one memcomparable transactional KV substrate (`fjall`). 
+KyzoDB is a pure-Rust database engine where relational, graph, vector, full-text, geospatial, and temporal data share one ordered substrate and one query language.
 
-`README.md` is the product; the board (org project KyzoDB Work) is the plan.
+One KyzoScript Datalog query operates over one memcomparable transactional KV substrate: `fjall`.
 
-**KyzoDB is built on a single foundational contract: every value the database can hold — numbers,** 
-**strings, vectors, geometry, timestamps, nested collections — encodes to bytes whose binary sort** 
-**order is identical to the value's semantic order.** This memcomparable encoding is the engine's 
-heart. Because one total order governs every type, one ordered key-value substrate (a pure-Rust LSM 
-tree, with no C or C++ anywhere in the build) can serve relational queries, graph traversal, vector 
-similarity, full-text, and geospatial search through a single Datalog query language. The ordering 
-contract is not a convention; it is executable law, enforced by exhaustive cross-type property tests, 
-corruption harnesses, and continuous fuzzing, because in an ordered store a sort-order defect doesn't 
-raise an error — it silently returns wrong query results. KyzoDB treats that layer with corresponding 
-severity.
+`README.md` defines the product.
+The `KyzoDB Work` organization project defines the plan.
 
+## Foundational contract
 
-## The enforcement stack
+Every value KyzoDB can store encodes to bytes whose binary order equals its semantic order.
+
+This applies across numbers, strings, vectors, geometry, timestamps, nested collections, and every other value kind.
+
+That contract allows one ordered KV substrate to support relational queries, graph traversal, vector similarity, full-text search, geospatial search, and time travel through one language.
+
+A sort-order defect in an ordered store may return incorrect results without raising an error. Therefore the encoding contract is executable law, enforced through cross-type property tests, corruption harnesses, mutation testing, and continuous fuzzing.
+
+## Operating model
+
+Read the focus stories, applicable rules, relevant code, and enforcement artifacts before changing the tree. Never claim facts about code you have not inspected.
+
+Implement ruled work directly. Do not merely suggest changes.
+
+Use the smallest implementation that completely satisfies the ruling. Do not introduce speculative flexibility, compatibility behavior, unrelated refactors, or abstractions for hypothetical future work.
+
+When a ruling determines the invariant, behavior, structure, or dependency order, make the implementation decision and continue.
+
+When a ruling is missing, ambiguous, contradictory, or disproved by repository reality, stop and surface the exact unresolved design decision. Do not hide a design decision inside working code.
+
+## Authority order
+
+When instructions conflict, apply this order:
+
+1. This constitution.
+2. Applicable `.claude/rules/*.md`.
+3. The focused story and its accepted architecture ruling.
+4. Target-state placement from `architecture-map`.
+5. Existing implementation and tests.
+6. Upstream Cozo behavior.
+
+Existing code, old tests, convenience, release pressure, and upstream precedent do not override a ruling.
+
+## Enforcement stack
 
 Rules teach. Hooks interrupt. Tests prove. Scripts enforce.
 
-- `CLAUDE.md` — this constitution.
-- `.claude/rules/*.md` — law: path-scoped `zone-*.md` for the target architecture,
-  and `deprecated-*.md` carrying per-file migration guidance for the legacy tree.
-- `.claude/skills/architecture-map/SKILL.md` — the target-state placement authority.
-- `.claude/settings.json` + `.claude/hooks/*.sh` — inject work context and construction doctrine
-  each prompt, block container-evasion (`pre-bash-guard.sh`), block unsafe-policy violations on
-  edit (`post-edit-guard.sh`), gate engine edits on a focus story (`focus-gate.sh`).
-- `.claude/hooks/inject-work-context.sh` — reads the board (project `KyzoDB Work` #1); the focus
-  set is every open story In Progress with the `focus` label, injected in full each prompt.
-  the manage-board skill (the kyzo MCP server's board tools) is the ONLY board writer.
-- `scripts/authority-graph.py` — the Type Authority Graph: extracts `@authority` doc-comment
-  declarations into the committed `authority/` artifacts (`authority-map.json`,
-  `authority-report.md`) and audits type-authority drift (raw doors, string taxonomies, duplicate
-  counters, blob meaning). `just gate` runs its self-test + ratchet + artifact freshness check.
+* `CLAUDE.md` — repository constitution.
+* `.claude/rules/zone-*.md` — target architecture by path.
+* `.claude/rules/deprecated-*.md` — migration law for legacy files.
+* `.claude/skills/architecture-map/SKILL.md` — target-state placement authority.
+* `.claude/settings.json` and `.claude/hooks/*.sh` — context injection and command/edit enforcement.
+* `.claude/hooks/inject-work-context.sh` — injects every open `In Progress` story carrying the `focus` label.
+* `.claude/hooks/pre-bash-guard.sh` — blocks container evasion and prohibited commands.
+* `.claude/hooks/post-edit-guard.sh` — blocks unsafe-policy and edit-time violations.
+* `.claude/hooks/focus-gate.sh` — denies engine edits without a focus story.
+* `scripts/authority-graph.py` — extracts `@authority` declarations, emits committed authority artifacts, and audits authority drift.
+* `just gate` — executes the repository seal.
 
-## The board
+The `manage-board` skill through the Kyzo MCP server is the only board writer.
 
-The work is the focus set: open stories In Progress carrying the `focus` label, injected every
-prompt. Stories and epics are written with the `write-story`/`write-epic` skills and landed with
-`manage-board`.
+## Work authority
 
-## Build and gate
+The active work set is every open board story that:
 
-    docker compose run --rm kyzo-dev  just gate      # the one-command seal
-    docker compose run --rm kyzo-bench just bench     # measurements (96 GiB, single-threaded)
+* is `In Progress`; and
+* carries the `focus` label.
 
-`just gate` runs: env-report, `cargo check --workspace --all-targets`, fmt, own-code clippy
-`-D warnings`, the unsafe + pure-Rust guards, the authority-graph self-test + ratchet, and the
-full suite.
+Stories and epics are created with `write-story` and `write-epic`. Board state changes go through `manage-board`.
 
+Do not change engine code without an active focus story.
 
-## Global Rules
+Move cards when repository reality changes. Do not leave board state knowingly stale.
 
-1. **The tree always builds** — `cargo check --workspace --all-targets` is binary.
-2. **`#![forbid(unsafe_code)]` present in every first-party crate root; zero `#[allow(unsafe_code)]` anywhere; no doc claims a nonexistent unsafe exception** — attribute grep + doc-pattern scan, all mechanical.
-3. **No C/C++ in any first-party dependency tree; no storage-backend feature flags** — `cargo tree` scan, Cargo.toml parse, and the Dockerfile-without-a-C-compiler makes violation a build failure.
-4. **All cargo through the container; no native cargo/just; no hand-set limits (`ulimit -v`, `timeout`, `--test-threads`); binaries run only via `just run`** — command-pattern interception in the Bash hook, deterministic.
-5. **The gate covers every first-party crate** — justfile content check.
-6. **`manage-board` is the only board writer** — raw `gh` board-write command patterns are blockable in the hook.
-7. **No focus story → no engine code changes** — `focus-gate.sh` denies Edits under `kyzo-*` paths unless an open story carries the `focus` label.
-8. **No worktrees without operator approval; public/irreversible git acts gated** — `git worktree`, `git tag`, `push` to main are interceptable command patterns behind an operator-set flag.
-9. **No sub-agent spawn without operator authorization** — a PreToolUse hook blocks the spawn unless an operator-controlled flag exists.
-10. **MPL headers preserved verbatim on MPL-licensed files; BSL zones carry no MPL header** — header-block diff check. The engine and hosts are MPL-2.0 (cozo lineage); the agent tooling (`.claude/`) is BSL-1.1; `LICENSING.md` is the map.
-11. **New `#[ignore]` flagged on sight** — grep on the diff (the ledger's adequacy is the other bucket).
-12. **The authority ratchets** — raw-door count, `@authority` coverage, string-taxonomy and duplicate-counter audits, allowlist entries only narrowing: deterministic against the committed baseline.
-13. **The mutation-test of the harness runs** — executing it is mechanical; it either passes or doesn't.
-14. **The rule wins** — over convenience; over old tests (rewrite them to the new law, never weaker); over release compile (the tree sits red before a compatibility shim exists — but every member and feature config must always build). Detecting a weakened rewrite is semantic judgment: yours.
-15. **Prime directive** — build the greatest possible engine: effort, size, and tedium never enter a decision; the better design wins even at the cost of rework; the architecture never moves backward; upstream cozo is never a justification.
-16. **The review standard** — missed greatness, avoided hard choices, accidental complexity, ceiling-lowering: all judgment.
-17. **Types-are-authority at the decision site** — a grep finds string-compares and bare integers as *candidates*, but "does membership control dispatch," "is this identity," and the four-question classification are judgment; only the ratchet halves (rule #12) are mechanical.
-18. **Never weaken a test; the three-way failure triage; goldens independently derived; healthy paths construct through production** — weakness, correct triage, and a golden's provenance are invisible to a script; a copied golden is byte-identical to a derived one.
-19. **Verify-never-assert; no regression behind narrative; perf claims close on the bench lane** — whether a claim is backed, and whether narrative is hiding a number, is semantic.
-20. **Completion is total; a seal means the same truth everywhere** — the gate's greenness is mechanical, but "docs, code, and stories state the same truth" is meaning-comparison.
-21. **Move cards the moment reality changes** — a script can't know what reality is.
-22. **Commit as units land** — "a unit" is judgment.
-23. **The if-ever unsafe protocol's substance** — the named unprovable invariant, the safety case quality: judgment (its trigger is caught in bucket 1).
-24. **Enforcement-is-mechanical itself** — the meta-duty to keep converting judgment rules into mechanical checks (hooks, ratchets, gates) wherever a deterministic form exists.
-25. **Errors are closed typed values** — every first-party crate ships closed refusal enums with typed fields: no `anyhow`/`Box<dyn Error>` erasure and no `Other(String)`/`Unknown` catch-all in shipped code, no wildcard arm over a first-party error enum, and a diagnostic code renders a variant but never dispatches on it. The `anyhow`/box-dyn grep is mechanical; whether a payload is built for a caller to branch on is judgment.
+Commit complete units as they land. A commit must represent one coherent, verified change rather than an arbitrary checkpoint.
 
-26. **Name/path changes cascade** — generally a name or path update propagates intelligently to every reference in the entire program (code, docs, rules, maps, hooks, baselines, CI) in the same motion, unless otherwise specified; proven by a stale-reference sweep, not assumed from the edit.
+## Build and verification
 
-## Licensing
+Run Cargo, binaries, tests, gates, and benchmarks only through their declared containers and `just` commands.
 
-The engine and hosts are **MPL-2.0** (cozo lineage, preserved per file); the agent tooling —
-`.claude/` — is **BSL-1.1**. `LICENSING.md` is the authoritative path→license map. A
-new file's license follows its path: an MPL-covered file keeps its MPL header; a `.claude/`
-file carries no MPL header. Much of the engine is original work currently carried as MPL by
-this policy rather than by copyright obligation; relicensing engine subsystems to BSL is a deliberate
-per-zone decision after the target migration separates the derivative core (`kyzo-model`) from the new
-subsystems, and after legal review — never a drive-by.
+```bash
+docker compose run --rm kyzo-dev just gate
+docker compose run --rm kyzo-bench just bench
+```
+
+`just gate` includes:
+
+* environment reporting;
+* `cargo check --workspace --all-targets`;
+* formatting;
+* first-party Clippy with `-D warnings`;
+* unsafe-code guards;
+* pure-Rust dependency guards;
+* authority-graph self-test, ratchet, and artifact freshness;
+* mutation testing of the enforcement harness;
+* the full test suite.
+
+Do not run native `cargo` or `just`.
+Do not hand-set `ulimit`, `timeout`, `--test-threads`, or equivalent execution limits.
+Run repository binaries only through `just run`.
+
+## Failure triage
+
+Before changing code in response to red, classify the failure:
+
+1. implementation defect;
+2. test defect;
+3. ruling defect.
+
+Fix implementation defects.
+
+Correct tests only when they fail to express the ruling. Never weaken a valid test, reduce its scope, delete meaningful coverage, or rewrite it around the implementation.
+
+Surface ruling defects instead of working around them.
+
+Tests verify the law; they do not create it. Goldens must be independently derived. Healthy-path tests must construct values through production APIs rather than privileged test-only doors.
+
+## Global laws
+
+### Build integrity
+
+1. The entire workspace always builds under `cargo check --workspace --all-targets`.
+2. Every first-party crate root contains `#![forbid(unsafe_code)]`.
+3. No `#[allow(unsafe_code)]` exists.
+4. Documentation must not claim an unsafe exception that does not exist.
+5. Every first-party crate and feature configuration remains covered by the gate.
+6. A compatibility shim is not an acceptable substitute for the ruled architecture.
+
+When a rule conflicts with release compilation, preserve the rule and expose the failure. Do not make the repository green by moving the architecture backward.
+
+### Pure-Rust substrate
+
+7. No C or C++ may enter any first-party dependency tree.
+8. Do not add storage-backend feature flags.
+9. The build must remain valid in the repository Docker image without a C compiler.
+
+### Scope and execution
+
+10. Change only what the focused story and its necessary consequences require.
+11. Name and path changes cascade across code, tests, documentation, rules, hooks, maps, baselines, CI, and every other reference in the same change unless the ruling explicitly limits the cascade.
+12. Prove a rename or move with a stale-reference sweep.
+13. Remove every condemned path named by the story.
+14. Do not preserve condemned behavior through aliases, shims, duplicate paths, fallback dispatch, or hidden compatibility.
+15. Remove temporary scripts, files, and iteration artifacts before completion.
+16. Do not create worktrees without operator approval.
+17. Do not spawn subagents without operator authorization.
+18. Public, destructive, shared, or difficult-to-reverse actions require their declared operator authorization. Never bypass hooks or checks to perform them.
+
+### Architecture quality
+
+19. Build the strongest ruled engine. Effort, size, repetition, and rework do not justify a weaker design.
+20. The architecture does not move backward.
+21. Upstream Cozo is historical evidence, not design authority.
+22. Avoid accidental complexity, ceiling-lowering compromises, incomplete abstractions, and deferred correctness.
+23. Do not add abstractions, helpers, configurability, validation, fallbacks, or defensive branches unless the current ruling requires them.
+24. Implement the actual general law, not behavior specialized to visible tests.
+25. Continue through long tasks and context compaction. Context pressure is not a completion condition. Preserve progress in repository state and resume from evidence.
+
+### Type authority
+
+26. Types carry domain authority at the decision site.
+27. Do not represent closed domain meaning as string comparisons, bare numeric taxonomies, duplicate counters, raw blobs, or untyped dispatch.
+28. `@authority` declarations must remain complete and accurate.
+29. Raw construction doors, string taxonomies, duplicate counters, and blob meaning may not exceed the committed authority ratchet.
+30. Allowlist changes may only narrow existing exceptions unless a new ruling explicitly authorizes otherwise.
+31. A diagnostic code may render an error variant but must never replace typed dispatch.
+
+### Errors
+
+32. Every first-party crate exposes closed typed refusal values.
+33. Do not erase first-party failures behind `anyhow`, `Box<dyn Error>`, or equivalent shipped interfaces.
+34. Do not add `Other(String)`, `Unknown`, or catch-all error variants.
+35. Do not use wildcard arms over first-party error enums.
+36. Error fields must preserve information a caller is permitted to branch on as typed values.
+
+### Tests and evidence
+
+37. Never weaken a valid test.
+38. New `#[ignore]` annotations are violations unless explicitly ruled.
+39. The enforcement harness mutation test must run and pass.
+40. Verification precedes assertion.
+41. Do not conceal a regression behind explanation, qualification, or progress narrative.
+42. Performance claims close only through the benchmark lane.
+43. A measurement report includes the executed command, environment, workload, relevant configuration, and observed result.
+44. A copied expected value is not an independently derived golden.
+
+### Enforcement
+
+45. Convert semantic rules into deterministic checks whenever a reliable mechanical form becomes possible.
+46. Hooks, ratchets, tests, and gates must reject violations rather than merely document them.
+47. Do not bypass enforcement with alternate commands, paths, tools, environment changes, or equivalent behavior.
+48. `manage-board` is the only board writer. Do not mutate project state through raw `gh` commands or another path.
+
+### Licensing
+
+49. Preserve MPL headers verbatim in MPL-covered files.
+50. Do not place MPL headers in BSL-covered `.claude/` files.
+51. The engine and hosts remain MPL-2.0 unless a deliberate, reviewed zone ruling changes them.
+52. Agent tooling under `.claude/` is BSL-1.1.
+53. `LICENSING.md` is the authoritative path-to-license map.
+54. Relicensing is a deliberate legal and architectural decision, never incidental cleanup.
+
+### Unsafe protocol
+
+55. Unsafe Rust is prohibited by default.
+56. Any proposed exception requires a separate ruling that names the otherwise unprovable invariant, constrains the unsafe surface, supplies a complete safety case, and adds mechanical enforcement.
+57. Until that process completes, the tree remains `forbid(unsafe_code)`.
+
+## Authority graph
+
+`scripts/authority-graph.py` extracts `@authority` declarations into:
+
+* `authority/authority-map.json`;
+* `authority/authority-report.md`.
+
+It audits:
+
+* raw construction doors;
+* missing authority coverage;
+* string-controlled taxonomies;
+* duplicate generation or identity counters;
+* domain meaning hidden in blobs;
+* ratchet and allowlist drift;
+* committed artifact freshness.
+
+Run the authority graph through `just gate`. Do not manually edit generated authority artifacts.
+
+## Completion
+
+Completion is total.
+
+Before claiming a story is done:
+
+1. compare the repository state against every story obligation;
+2. confirm all ruled behavior is implemented;
+3. confirm required constructors and tests exist;
+4. confirm condemned paths and behavior are absent;
+5. run the required builds, tests, gates, and benchmarks;
+6. remove temporary artifacts;
+7. sweep for stale names, paths, documentation, rules, maps, baselines, and CI references;
+8. confirm code, tests, documentation, authority artifacts, and board state describe the same reality;
+9. run the required completion integrity skill.
+
+Do not report `done`, `complete`, `mostly done`, or an equivalent claim while any required work is deferred, narrowed, failing, unverified, or represented inconsistently.
+
+A green gate proves only what the gate measures. You remain responsible for semantic conformance.
+
+## Licensing map
+
+The engine and hosts are MPL-2.0 because of the Cozo lineage and repository policy. Agent tooling under `.claude/` is BSL-1.1.
+
+A new file inherits the license of its path:
+
+* MPL-covered files preserve the applicable MPL header.
+* `.claude/` files carry no MPL header.
+
+Original engine work may currently remain MPL by repository policy rather than copyright necessity. Any later BSL relicensing occurs only by deliberate subsystem ruling after derivative and original zones are separated and legal review is complete.
 
 ## Origins
 
-KyzoDB began as a fork of [CozoDB](https://github.com/cozodb/cozo) by Ziyang Hu and the Cozo Project
-Authors, whose design proved the one-substrate thesis was worth betting on; the full story and
-attribution live in [FORK.md](FORK.md).
+KyzoDB began as a fork of CozoDB by Ziyang Hu and the Cozo Project Authors. Cozo demonstrated that the one-substrate architecture was worth pursuing.
+
+The full history and attribution are in `FORK.md`.

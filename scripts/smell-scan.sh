@@ -11,7 +11,7 @@
 # instead of a typed `enum`, and no gate caught it.
 #
 # Usage:
-#   scripts/smell-scan.sh                 # scan all first-party kyzo-*/src
+#   scripts/smell-scan.sh                 # scan all first-party crates/kyzo-*/src
 #   scripts/smell-scan.sh <path...>       # scan specific paths
 #   scripts/smell-scan.sh --strong        # only the single strongest combined scan
 #
@@ -34,7 +34,7 @@ for a in "$@"; do
   esac
 done
 if [ "${#scope[@]}" -eq 0 ]; then
-  while IFS= read -r d; do scope+=("$d"); done < <(ls -d kyzo-*/src 2>/dev/null)
+  while IFS= read -r d; do scope+=("$d"); done < <(ls -d crates/kyzo-*/src 2>/dev/null)
   [ -d examples ] && scope+=(examples)
 fi
 
