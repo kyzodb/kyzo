@@ -7,220 +7,160 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! xtask: the resonance gate (story #81). `cargo run -p xtask -- resonance`
-//! runs all five deterministic ontology checks over the workspace rooted at
-//! `RESONANCE_ROOT` (default: the real checkout xtask itself lives in) and
-//! exits non-zero if any check finds an unwaived violation, a stale
-//! allowlist/registry entry, or a config error. Each check can also run
-//! alone (`-- resonance --only <name>`) — what the bite-proof harness uses
-//! against a throwaway rsync copy.
+//! xtask: the gate program (story #322). Every invocable action —
+//! developer, agent, hook, or CI — is one typed verb of this one program,
+//! run through the container (`docker compose run --rm kyzo-dev cargo
+//! xtask <verb>`). There is no other door: no justfile, no scripts run
+//! directly, no floating toolchain. `cargo xtask gate` is the seal.
+//!
+//! Story #81's resonance gate (five deterministic ontology checks) is the
+//! `resonance` verb; it joins `gate`'s sequence on day one.
 
 mod allowlist;
 mod checks;
 mod fsutil;
+mod gate;
+mod proc;
+mod resonance;
 mod synutil;
+mod verbs;
 
+use std::fmt;
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("resonance") => run_resonance(&args[1..]),
-        _ => {
-            eprintln!("usage: cargo run -p xtask -- resonance [--only <check>]");
-            eprintln!(
-                "checks: derive_bypass, panic_lint, copy_detector, dead_code_ratchet, agreement_registry"
-            );
-            ExitCode::FAILURE
+use clap::{Parser, Subcommand};
+
+/// The one closed sum of every verb's own closed refusal type. `main`'s
+/// dispatch match arm is the only place a per-verb error is converted into
+/// this — never a trait object, never an erased first-party failure
+/// (CLAUDE.md law 33): each variant still names exactly which verb's own
+/// typed error it carries.
+enum XtaskError {
+    RepoRoot(anyhow::Error),
+    Gate(gate::GateError),
+    Process(proc::ProcessFailure),
+    Resonance(resonance::ResonanceError),
+}
+
+impl fmt::Display for XtaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            XtaskError::RepoRoot(e) => write!(f, "could not locate workspace root: {e:#}"),
+            XtaskError::Gate(e) => write!(f, "{e}"),
+            XtaskError::Process(e) => write!(f, "{e}"),
+            XtaskError::Resonance(e) => write!(f, "{e}"),
         }
     }
 }
 
-fn run_resonance(args: &[String]) -> ExitCode {
-    let only = args
-        .iter()
-        .position(|a| a == "--only")
-        .and_then(|i| args.get(i + 1))
-        .cloned();
+#[derive(Parser)]
+#[command(
+    name = "xtask",
+    about = "KyzoDB's gate program: one door, every caller, one verdict."
+)]
+struct Cli {
+    #[command(subcommand)]
+    verb: Verb,
+}
 
-    let root = match fsutil::repo_root() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("FAIL resonance gate: {e:#}");
-            return ExitCode::FAILURE;
-        }
-    };
+#[derive(Subcommand)]
+enum Verb {
+    /// The one-command seal: everything that must be true to close a story.
+    Gate,
+    /// The environment fingerprint: cgroup memory limit, test thread count,
+    /// core count, toolchain version.
+    EnvReport,
+    /// `cargo check --workspace --all-targets`.
+    Check,
+    /// `cargo fmt --check` over every first-party package.
+    Fmt,
+    /// `cargo clippy --no-deps -- -D warnings` over every first-party package.
+    Clippy,
+    /// The unsafe law: forbid present, zero allows, no lying docs.
+    Unsafe,
+    /// No C/C++-toolchain crate in the engine dependency tree.
+    PureRust,
+    /// The Type Authority Graph: self-test, ratchet, artifact freshness.
+    Authority,
+    /// The five resonance-gate ontology checks (story #81).
+    Resonance {
+        /// Run a single named check instead of all five.
+        #[arg(long)]
+        only: Option<String>,
+    },
+    /// The full first-party test suite.
+    Test,
+    /// The bench-internals/fuzz-internals feature configuration's tests.
+    TestFeatures,
+    /// Run the freshly-built binary in the container.
+    Run {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// The transitive-closure benchmark over the SNAP graphs.
+    Bench {
+        #[arg(trailing_var_arg = true)]
+        graphs: Vec<String>,
+    },
+    /// MPL header preservation over every tracked .rs file.
+    MplHeaders,
+    /// `cargo deny check bans licenses advisories`.
+    Deny,
+    /// Supply-chain vetting (`cargo vet check`).
+    SupplyChain,
+    /// The memcmp on-disk-format tripwire.
+    MemcmpInvariant,
+    /// Every fuzz target, 60s smoke each (requires a nightly toolchain).
+    FuzzSmoke,
+    /// The cross-run/thread/architecture determinism campaign.
+    DeterminismCampaign {
+        /// Where to write this run's digest.
+        out: String,
+        /// An earlier run's digest to compare against (e.g. a downloaded
+        /// cross-architecture artifact).
+        compare: Option<String>,
+    },
+}
 
-    let files = match fsutil::walk_engine_sources(&root) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("FAIL resonance gate: {e:#}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if files.is_empty() {
-        eprintln!(
-            "FAIL resonance gate: no source files found under crates/kyzo-core/src or crates/kyzo-bin/src at {}",
-            root.display()
-        );
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    // Validates we are being run from within the repo; no verb below
+    // consumes the path itself (each shells out relative to the container's
+    // working directory).
+    if let Err(e) = fsutil::repo_root() {
+        eprintln!("FAIL: {}", XtaskError::RepoRoot(e));
         return ExitCode::FAILURE;
     }
 
-    let allow = match allowlist::load(&root) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("FAIL resonance gate: {e:#}");
-            return ExitCode::FAILURE;
+    let result: Result<(), XtaskError> = match cli.verb {
+        Verb::Gate => gate::run().map_err(XtaskError::Gate),
+        Verb::EnvReport => verbs::env_report().map_err(XtaskError::Process),
+        Verb::Check => verbs::check().map_err(XtaskError::Process),
+        Verb::Fmt => verbs::fmt().map_err(XtaskError::Process),
+        Verb::Clippy => verbs::clippy().map_err(XtaskError::Process),
+        Verb::Unsafe => verbs::unsafe_check().map_err(XtaskError::Process),
+        Verb::PureRust => verbs::pure_rust().map_err(XtaskError::Process),
+        Verb::Authority => verbs::authority().map_err(XtaskError::Process),
+        Verb::Resonance { only } => resonance::run(only.as_deref()).map_err(XtaskError::Resonance),
+        Verb::Test => verbs::test().map_err(XtaskError::Process),
+        Verb::TestFeatures => verbs::test_features().map_err(XtaskError::Process),
+        Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),
+        Verb::Bench { graphs } => verbs::bench(&graphs).map_err(XtaskError::Process),
+        Verb::MplHeaders => verbs::mpl_headers().map_err(XtaskError::Process),
+        Verb::Deny => verbs::deny().map_err(XtaskError::Process),
+        Verb::SupplyChain => verbs::supply_chain().map_err(XtaskError::Process),
+        Verb::MemcmpInvariant => verbs::memcmp_invariant().map_err(XtaskError::Process),
+        Verb::FuzzSmoke => verbs::fuzz_smoke().map_err(XtaskError::Process),
+        Verb::DeterminismCampaign { out, compare } => {
+            verbs::determinism_campaign(&out, compare.as_deref()).map_err(XtaskError::Process)
         }
     };
 
-    let mut overall_ok = true;
-    let want = |name: &str| only.as_deref().map(|o| o == name).unwrap_or(true);
-
-    if want("derive_bypass") {
-        overall_ok &= run_derive_bypass(&files, &allow);
-    }
-    if want("panic_lint") {
-        overall_ok &= run_panic_lint(&files, &allow, &root);
-    }
-    if want("copy_detector") {
-        overall_ok &= run_copy_detector(&files, &allow);
-    }
-    if want("dead_code_ratchet") {
-        overall_ok &= run_dead_code_ratchet(&files, &allow);
-    }
-    if want("agreement_registry") {
-        overall_ok &= run_agreement_registry(&files, &root);
-    }
-
-    if overall_ok {
-        println!(
-            "resonance gate: ALL CHECKS PASSED ({} source files scanned)",
-            files.len()
-        );
-        ExitCode::SUCCESS
-    } else {
-        eprintln!("FAIL: resonance gate found violations (see above).");
-        ExitCode::FAILURE
-    }
-}
-
-fn run_derive_bypass(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
-    println!("== check 1: derive-bypass detector ==");
-    let (violations, stale) = checks::derive_bypass::check(files, allow);
-    for v in &violations {
-        println!(
-            "FAIL {}:{}: `{}` derives {:?} but also has a fallible `{}` (line {}) — the derive bypasses the constructor's invariant",
-            v.file, v.def_line, v.type_name, v.derives, v.ctor_name, v.ctor_line
-        );
-    }
-    for s in &stale {
-        println!("FAIL (stale allowlist) {s}");
-    }
-    let ok = violations.is_empty() && stale.is_empty();
-    println!(
-        "check 1: {} ({} violation(s), {} stale waiver(s))",
-        if ok { "PASS" } else { "FAIL" },
-        violations.len(),
-        stale.len()
-    );
-    ok
-}
-
-fn run_panic_lint(
-    files: &[fsutil::SourceFile],
-    allow: &allowlist::Allowlist,
-    root: &std::path::Path,
-) -> bool {
-    println!("== check 2: panic-on-hostile-bytes lint ==");
-    let surfaces = match checks::panic_lint::load_config(root) {
-        Ok(s) => s,
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            println!("FAIL check 2 config: {e:#}");
-            return false;
+            eprintln!("FAIL: {e}");
+            ExitCode::FAILURE
         }
-    };
-    let (occurrences, missing) = checks::panic_lint::check(files, &surfaces, allow);
-    for m in &missing {
-        println!("FAIL {m}");
     }
-    for o in &occurrences {
-        println!(
-            "FAIL {}:{} in `{}`: {}(...) reachable from a declared decode surface",
-            o.file, o.line, o.function, o.kind
-        );
-    }
-    let ok = occurrences.is_empty() && missing.is_empty();
-    println!(
-        "check 2: {} ({} occurrence(s), {} config problem(s))",
-        if ok { "PASS" } else { "FAIL" },
-        occurrences.len(),
-        missing.len()
-    );
-    ok
-}
-
-fn run_copy_detector(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
-    println!("== check 3: copy-detector ==");
-    let (violations, _pairs, units) = checks::copy_detector::check(files, allow);
-    for v in &violations {
-        println!(
-            "FAIL near-identical bodies (similarity {:.2}): {}:{} `{}`  <->  {}:{} `{}`",
-            v.similarity, v.file_a, v.line_a, v.label_a, v.file_b, v.line_b, v.label_b
-        );
-    }
-    let ok = violations.is_empty();
-    println!(
-        "check 3: {} ({} unwaived near-duplicate pair(s), {} comparison units >= {} tokens)",
-        if ok { "PASS" } else { "FAIL" },
-        violations.len(),
-        units.len(),
-        checks::copy_detector::MIN_TOKENS
-    );
-    ok
-}
-
-fn run_dead_code_ratchet(files: &[fsutil::SourceFile], allow: &allowlist::Allowlist) -> bool {
-    println!("== check 4: dead-concept ratchet ==");
-    let (violations, stale) = checks::dead_code_ratchet::check(files, allow);
-    for v in &violations {
-        println!("FAIL {}:{}: uncited `{}`", v.file, v.line, v.attr_text);
-    }
-    for s in &stale {
-        println!("FAIL (stale allowlist) {s}");
-    }
-    let ok = violations.is_empty() && stale.is_empty();
-    println!(
-        "check 4: {} ({} uncited, {} stale waiver(s))",
-        if ok { "PASS" } else { "FAIL" },
-        violations.len(),
-        stale.len()
-    );
-    ok
-}
-
-fn run_agreement_registry(files: &[fsutil::SourceFile], root: &std::path::Path) -> bool {
-    println!("== check 5: agreement-law registry ==");
-    let registry = match checks::agreement_registry::load(root) {
-        Ok(r) => r,
-        Err(e) => {
-            println!("FAIL check 5 config: {e:#}");
-            return false;
-        }
-    };
-    let violations = checks::agreement_registry::check(files, &registry);
-    for v in &violations {
-        println!(
-            "FAIL registry entry \"{}\" ({}::{}): {}",
-            v.name, v.file, v.test_fn, v.reason
-        );
-    }
-    let ok = violations.is_empty();
-    println!(
-        "check 5: {} ({} law(s) registered, {} missing)",
-        if ok { "PASS" } else { "FAIL" },
-        registry.len(),
-        violations.len()
-    );
-    ok
 }

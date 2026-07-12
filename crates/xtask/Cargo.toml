@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Story #81: the resonance gate — machine-checked ontology invariants over crates/kyzo-core/kyzo-bin, run from CI. Never shipped: this crate is dev tooling, not part of the engine tree (scripts/check-pure-rust.sh only walks the kyzo/kyzo-bin dependency trees, so xtask's own dependencies — syn, quote, proc-macro2 — never touch the purity gate)."
+description = "Story #322: the gate program — one door, entered through the container, that every caller (developer, agent, hook, CI) runs to get a verdict. Story #81's resonance gate (machine-checked ontology invariants over crates/kyzo-core/kyzo-bin) is one verb of it. Never shipped: this crate is dev tooling, not part of the engine tree (scripts/check-pure-rust.sh only walks the kyzo/kyzo-bin dependency trees, so xtask's own dependencies — syn, quote, proc-macro2, clap — never touch the purity gate)."
 
 [dependencies]
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
@@ -18,3 +18,5 @@ walkdir = "2"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
+# The verb CLI (story #322): closed subcommand dispatch, one variant per verb.
+clap = { version = "4", features = ["derive"] }
