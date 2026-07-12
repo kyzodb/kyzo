@@ -58,7 +58,7 @@ jobs:
         if: needs.detect.outputs.has_workspace == 'true'
       - uses: Swatinem/rust-cache@v2
         if: needs.detect.outputs.has_workspace == 'true'
-      - run: scripts/check-pure-rust.sh
+      - run: cargo run -p xtask --release -- pure-rust
 
   cargo-deny:
     name: cargo-deny (bans, licenses, advisories)
@@ -137,10 +137,12 @@ jobs:
     if: needs.detect.outputs.has_workspace == 'true'
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       # The gate is the grep ratchet + #![forbid(unsafe_code)] (compile-time);
       # a geiger report added minutes of source-compiling for output nothing
       # gated on, so it earns no place here.
-      - run: scripts/check-unsafe.sh
+      - run: cargo run -p xtask --release -- unsafe
 
   supply-chain:
     name: Supply-chain vetting (cargo vet)

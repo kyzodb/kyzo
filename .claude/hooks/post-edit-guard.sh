@@ -39,8 +39,8 @@ case "$file" in
       block "lib.rs claims an unsafe exception that does not exist. First-party code is pure safe Rust; delete the phantom-exception language."
     fi
     ;;
-  *scripts/check-unsafe.sh)
-    warn "You edited the unsafe guard. Run it now: bash scripts/check-unsafe.sh — a guard that lies is itself a failure."
+  *crates/xtask/src/checks/unsafe_check.rs)
+    warn "You edited the unsafe guard. Run it now: docker compose run --rm kyzo-dev cargo xtask unsafe — a guard that lies is itself a failure."
     ;;
 esac
 
