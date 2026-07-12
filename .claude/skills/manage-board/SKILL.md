@@ -12,6 +12,24 @@ same rules. Tool schemas are deferred (bare names only until fetched) — use
 time. Never use raw `gh` for board writes; never widen these tools, never
 add behavior, never bypass them.
 
+## The loop
+
+The board carries the plan; these tools move it. The full engineering pipeline
+— architect rules the design, `write-story`/`write-epic` author the ticket,
+`demolition` clears the condemned surface, `development-task` executes one task,
+`task-completion-judge` checks it off — lives in the repository `CLAUDE.md`.
+Here is the board operator's slice:
+
+- Author the epic and its stories (`create_epic`, then `create_story` per
+  story; sub-issue order is execution order).
+- `start_epic` opens the epic's one branch behind deterministic checks. Work its
+  stories one at a time, never two In Progress at once.
+- `start_story` moves the next story to In Progress on that branch behind its own
+  checks. A task box is flipped only by the judge through `check_story_task`,
+  never by hand.
+- Finish and merge the epic once, then move its card to Done (closing the issue
+  is the board's own auto-close).
+
 ## The board model
 
 One axis: column position plus order within it, left to right — `Backlog`
