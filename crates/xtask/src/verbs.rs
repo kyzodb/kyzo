@@ -154,7 +154,7 @@ pub fn authority_write() -> Result<(), crate::checks::authority_graph::Authority
     Ok(())
 }
 
-/// Tighten the ratchet floor at `scripts/authority-baseline.json` to the
+/// Tighten the ratchet floor at `crates/xtask/authority-baseline.json` to the
 /// current tree's finding counts.
 pub fn authority_update_baseline() -> Result<(), crate::checks::authority_graph::AuthorityError> {
     let root = crate::fsutil::repo_root()

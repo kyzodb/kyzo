@@ -90,8 +90,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      # Scoped to first-party crates exactly as the local seal (justfile's
-      # `clippy` recipe): `--workspace` catches vendor/fjall and
+      # Scoped to first-party crates exactly as the local seal (the xtask
+      # `clippy` verb, crates/xtask/src/verbs.rs): `--workspace` catches vendor/fjall and
       # vendor/lsm-tree's `unsafe` blocks, which first-party
       # `#![forbid(unsafe_code)]` already rules out at compile time and
       # which are #118's story, not this gate's. `--no-deps` keeps the

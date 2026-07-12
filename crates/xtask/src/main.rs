@@ -93,7 +93,7 @@ enum Verb {
         /// ported tool's report mode).
         #[arg(long)]
         write: bool,
-        /// Tighten scripts/authority-baseline.json to the current tree's
+        /// Tighten crates/xtask/authority-baseline.json to the current tree's
         /// finding counts instead of running the gate check.
         #[arg(long)]
         update_baseline: bool,

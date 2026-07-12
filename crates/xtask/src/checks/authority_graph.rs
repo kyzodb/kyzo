@@ -1383,11 +1383,11 @@ pub fn self_test() -> Result<String, AuthorityError> {
 
 /// The verdict the gate actually checks (justfile's `authority` recipe,
 /// preserved 1:1): scan the real tree, ratchet the finding counts against
-/// `scripts/authority-baseline.json`, and require the committed
+/// `crates/xtask/authority-baseline.json`, and require the committed
 /// `authority/` artifacts to already match what this scan would produce.
 pub fn run_gate_check(root: &Path) -> Result<String, AuthorityError> {
-    let allowlist_path = root.join("scripts/authority-allowlist.json");
-    let baseline_path = root.join("scripts/authority-baseline.json");
+    let allowlist_path = root.join("crates/xtask/authority-allowlist.json");
+    let baseline_path = root.join("crates/xtask/authority-baseline.json");
     let out_dir = root.join("authority");
 
     let (scan, problems) = run_scan(root, &allowlist_path).map_err(AuthorityError::RepoScan)?;
@@ -1436,7 +1436,7 @@ pub fn run_gate_check(root: &Path) -> Result<String, AuthorityError> {
 /// after a legitimate declaration change now that the Python generator is
 /// gone.
 pub fn write_report(root: &Path) -> Result<String, AuthorityError> {
-    let allowlist_path = root.join("scripts/authority-allowlist.json");
+    let allowlist_path = root.join("crates/xtask/authority-allowlist.json");
     let out_dir = root.join("authority");
 
     let (scan, problems) = run_scan(root, &allowlist_path).map_err(AuthorityError::RepoScan)?;
@@ -1462,12 +1462,12 @@ pub fn write_report(root: &Path) -> Result<String, AuthorityError> {
     ))
 }
 
-/// Regenerate `scripts/authority-baseline.json` from the current tree's
+/// Regenerate `crates/xtask/authority-baseline.json` from the current tree's
 /// finding counts — the ratchet floor, tightened after a genuine
 /// improvement (a class count went down and stays down).
 pub fn update_baseline(root: &Path) -> Result<String, AuthorityError> {
-    let allowlist_path = root.join("scripts/authority-allowlist.json");
-    let baseline_path = root.join("scripts/authority-baseline.json");
+    let allowlist_path = root.join("crates/xtask/authority-allowlist.json");
+    let baseline_path = root.join("crates/xtask/authority-baseline.json");
     let (scan, _problems) = run_scan(root, &allowlist_path).map_err(AuthorityError::RepoScan)?;
     let counts = counts_by_class(&scan.findings);
     let text = serde_json::to_string_pretty(&counts).unwrap_or_default() + "\n";

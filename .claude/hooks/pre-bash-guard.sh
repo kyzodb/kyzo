@@ -30,21 +30,18 @@ warn() {
 }
 
 # 0. CONTAINER-ONLY. Every build/test/clippy/bench runs in the pinned
-#    container; a native cargo/just or a hand-set memory/thread limit is a
+#    container; a native cargo or a hand-set memory/thread limit is a
 #    defect (environment.md). Commands that invoke docker are the container
 #    path and pass through.
 if ! printf '%s' "$cmd" | grep -q 'docker'; then
-  if printf '%s' "$cmd" | grep -Eq '(^|[^a-z])cargo[[:space:]]+(test|build|clippy|bench|run|fix|check|mutants|miri)([[:space:]]|$)'; then
-    deny "Native cargo is banned. Run it in the container: docker compose run --rm kyzo-dev just <recipe> (gate | test | test-features | clippy | check | bench). The container's cgroup RSS ceiling and pinned RUST_TEST_THREADS ARE the limits — set none yourself (environment.md)."
-  fi
-  if printf '%s' "$cmd" | grep -Eq '(^|[^a-z])just[[:space:]]+(gate|test|test-features|clippy|check|memcheck|bench|unsafe|pure-rust|fetch)([[:space:]]|$)'; then
-    deny "Run gate recipes IN the container: docker compose run --rm kyzo-dev just <recipe> (or kyzo-bench just bench). Never natively (environment.md)."
+  if printf '%s' "$cmd" | grep -Eq '(^|[^a-z])cargo[[:space:]]+(test|build|clippy|bench|run|fix|check|mutants|miri|xtask)([[:space:]]|$)'; then
+    deny "Native cargo is banned. Run it in the container: docker compose run --rm kyzo-dev cargo xtask <verb> (gate | check | fmt | clippy | unsafe | pure-rust | authority | test | test-features). The container's cgroup RSS ceiling and pinned RUST_TEST_THREADS ARE the limits — set none yourself (environment.md)."
   fi
 fi
 # Hand-set memory/parallelism limits are banned outright — the container
 # prebakes them.
 if printf '%s' "$cmd" | grep -Eq 'ulimit[[:space:]]+-[vm]|--test-threads|RUST_TEST_THREADS='; then
-  deny "Never hand-set a memory or thread limit (ulimit -v / --test-threads / RUST_TEST_THREADS). The container's mem_limit and pinned RUST_TEST_THREADS are the honest, prebaked limits. Use: docker compose run --rm kyzo-dev just <recipe> (environment.md)."
+  deny "Never hand-set a memory or thread limit (ulimit -v / --test-threads / RUST_TEST_THREADS). The container's mem_limit and pinned RUST_TEST_THREADS are the honest, prebaked limits. Use: docker compose run --rm kyzo-dev cargo xtask <verb> (environment.md)."
 fi
 
 # 1. Masking a cargo gate's failure with `|| true` (or `|| :`) — never allowed.

@@ -5,7 +5,7 @@
 # NOT install any C-SOURCE build tooling — no clang, cmake, protobuf, or
 # openssl-dev. A dependency that tries to compile C therefore fails to build
 # in the gate container, machine-enforcing the pure-Rust invariant one rung
-# above scripts/check-pure-rust.sh.
+# above the xtask `pure-rust` verb (crates/xtask/src/checks/pure_rust.rs).
 #
 # The exact toolchain is pinned by rust-toolchain.toml (1.96.1); rustup honors
 # it on the first cargo invocation regardless of the base tag.
@@ -17,10 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       time \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# `just` is the command runner (pure Rust; not in Debian's default apt).
-# Compiled once into the image layer.
-RUN cargo install just --locked
 
 # Caches and artifacts live OUTSIDE the bind-mounted repo (named volumes in
 # compose), so container builds never contaminate the host's native target/

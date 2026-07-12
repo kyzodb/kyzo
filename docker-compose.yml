@@ -1,5 +1,5 @@
 # The repo-defined gate environment. EVERY build/test/clippy/bench runs here;
-# there is no native path (pre-bash-guard.sh blocks native cargo/just).
+# there is no native path (pre-bash-guard.sh blocks native cargo).
 #
 # Two services, one image. `kyzo-dev` is the gate/dev box (32 GiB RSS ceiling,
 # parallel tests — safe because the limit is real cgroup RSS, not a virtual
@@ -12,7 +12,7 @@
 # ./target. An anonymous volume shadows /workspace/target so the host's target
 # dir — which may hold a binary linked against a different glibc — is INVISIBLE
 # in-container. Result: the only binary the container can run is one it built
-# itself. `just run` executes it; never hand-invoke ./target/... .
+# itself. `cargo xtask run` executes it; never hand-invoke ./target/... .
 services:
   kyzo-dev:
     build:
