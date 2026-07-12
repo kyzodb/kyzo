@@ -5,10 +5,10 @@
 # community-standard datasets. We download them from their canonical source
 # rather than inventing or committing data; the URLs below ARE the provenance.
 #
-# Writes uncompressed edge lists to bench-data/ (gitignored). Idempotent.
+# Writes uncompressed edge lists to bench/data/. Idempotent.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-mkdir -p bench-data
+mkdir -p bench/data
 
 # name -> SNAP URL. Small-to-medium graphs whose transitive closure completes
 # under the memory cap on every engine revision we measure.
@@ -21,7 +21,7 @@ GRAPHS=(
 for entry in "${GRAPHS[@]}"; do
   name="${entry%%|*}"
   url="${entry##*|}"
-  out="bench-data/${name}.txt"
+  out="bench/data/${name}.txt"
   if [[ -s "$out" ]]; then
     echo "have  $out"
     continue
@@ -29,4 +29,4 @@ for entry in "${GRAPHS[@]}"; do
   echo "fetch $name <- $url"
   curl -sSL "$url" | gunzip > "$out"
 done
-echo "done -> bench-data/"
+echo "done -> bench/data/"

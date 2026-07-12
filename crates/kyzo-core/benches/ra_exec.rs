@@ -25,9 +25,9 @@
 //! Each runs on both backends (`mem` = in-memory MVCC double, `fjall` =
 //! on-disk LSM). A single execution path runs today; the benchmark id keeps
 //! the historical `batch` tag so its row stays comparable across the
-//! iterator twin's deletion in the committed `bench-results/` logs
-//! (see `bench-results/README.md`; `bench_workload`). Generators are seeded;
-//! the machine is stamped in each `bench-results/` file, not here.
+//! iterator twin's deletion in the committed `bench/results/` logs
+//! (see `bench/results/README.md`; `bench_workload`). Generators are seeded;
+//! the machine is stamped in each `bench/results/` file, not here.
 //!
 //! Run: `cargo bench -p kyzo --features bench-internals --bench ra_exec`.
 
@@ -65,7 +65,7 @@ impl DirFactory {
 
 fn bench_workload(c: &mut Criterion, group_name: &str, w: &Workload) {
     let mut g = c.benchmark_group(group_name);
-    // The id keeps the historical "batch" tag so its `bench-results/` row
+    // The id keeps the historical "batch" tag so its `bench/results/` row
     // stays comparable across the twin's deletion.
     g.bench_with_input(BenchmarkId::new(w.label(), "batch"), &(), |b, _| {
         b.iter(|| black_box(w.run()));

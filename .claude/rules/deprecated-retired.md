@@ -192,7 +192,7 @@ aggregation × both backends) — closed)
 - **L1:** retire when #120's vectorization ascent closes (the same
   fate-class as fixpoint_mem_profile): its question — the per-row
   dispatch+allocation tax — is exactly what the ascent removes, and
-  the surviving form of the claim is the committed bench-results
+  the surviving form of the claim is the committed bench/results
   rows, not the instrument. Harvest first: the per-row a/row metric
   and the warm-up-then-measure protocol into the bench lane.
 - **L2:** nothing condemned; the allocation-churn framing is #120
@@ -208,12 +208,12 @@ memory high-water mark"), `read_snap_edges` (comment-skipping SNAP
 parser), and main (chunked load through :put; the full-vs-count
 variants; timed load and query; the one-line TC record) — closed)
 - **L1:** graduates → the bench lane as a permanent instrument: this
-  binary PRODUCES the committed bench-results rows the engine's own
+  binary PRODUCES the committed bench/results rows the engine's own
   defaults cite as evidence (runtime/db.rs's 50M derived-tuple
   ceiling is justified against tc/snap-p2p-Gnutella08's recorded
   numbers — deleting this instrument would orphan that ledger). It
   keeps its argv-driven example-binary form (criterion benches can't
-  take a graph file argument); the fetch script and bench-results/
+  take a graph file argument); the fetch script and bench/results/
   are its ledger.
 - **L2:** preserve verbatim: invent-nothing benchmarking (published
   graph, textbook program, public door); machine-readable one-line

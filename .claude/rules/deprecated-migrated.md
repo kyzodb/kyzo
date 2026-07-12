@@ -6038,7 +6038,7 @@ permanent instrumentation the vectorization ascent measures against";
 four workload classes each named for "a distinct cost the design must
 answer"; both backends; the HISTORICAL-TAG ruling — the id keeps
 "batch" "so its row stays comparable across the iterator twin's
-deletion in the committed bench-results/ logs"; seeded generators,
+deletion in the committed bench/results/ logs"; seeded generators,
 machine stamped in the results files not here), DirFactory,
 bench_workload, and the `all` sweep (TC chain/dense/random with the
 O(n²)-pairs sizing note; the 3-way join with the

@@ -81,6 +81,8 @@ full suite.
 24. **Enforcement-is-mechanical itself** — the meta-duty to keep converting judgment rules into mechanical checks (hooks, ratchets, gates) wherever a deterministic form exists.
 25. **Errors are closed typed values** — every first-party crate ships closed refusal enums with typed fields: no `anyhow`/`Box<dyn Error>` erasure and no `Other(String)`/`Unknown` catch-all in shipped code, no wildcard arm over a first-party error enum, and a diagnostic code renders a variant but never dispatches on it. The `anyhow`/box-dyn grep is mechanical; whether a payload is built for a caller to branch on is judgment.
 
+26. **Name/path changes cascade** — generally a name or path update propagates intelligently to every reference in the entire program (code, docs, rules, maps, hooks, baselines, CI) in the same motion, unless otherwise specified; proven by a stale-reference sweep, not assumed from the edit.
+
 ## Licensing
 
 The engine and hosts are **MPL-2.0** (cozo lineage, preserved per file); the agent tooling —
