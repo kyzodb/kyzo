@@ -34,8 +34,15 @@ pub(crate) fn current_validity() -> miette::Result<crate::data::value::ValidityT
         .map_err(|_| miette::miette!("system clock beyond i64 microseconds"))?;
     Ok(crate::data::value::ValidityTs::from_raw(micros))
 }
+// constraint has no production caller yet, unlike db/relation below,
+// which have landed; kept live only by its own in-file tests.
 #[allow(dead_code)]
 pub(crate) mod constraint;
+// db's core production entrypoint (Db, run_script, compile_and_eval) is
+// fully live and re-exported at the crate root; `#[allow(dead_code)]`
+// stays for residual routed accessors (get_routed/exists_routed/
+// del_routed) no production path reaches yet, kept live by this
+// module's own tests.
 #[allow(dead_code)]
 pub(crate) mod db;
 #[cfg(test)]
@@ -47,6 +54,11 @@ pub(crate) mod json;
 // `allow` covers that remainder honestly.
 #[allow(dead_code)]
 pub(crate) mod mutate;
+// relation's catalog is fully live in production; `#[allow(dead_code)]`
+// stays for residual accessors (raw_binding_map, has_index, put_fact,
+// retract_fact, encode_val_for_store, ensure_compatible, exists,
+// skip_scan_bounded_prefix, relation_exists) no production path reaches
+// yet, kept live by this module's own tests.
 #[allow(dead_code)]
 pub(crate) mod relation;
 pub(crate) mod verify;

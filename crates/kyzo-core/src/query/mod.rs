@@ -175,10 +175,20 @@ pub(crate) mod stratify;
 // zero warnings, so the attribute is gone.
 pub(crate) mod batch_ops;
 pub(crate) mod levels;
+// normalize's production caller (runtime/db.rs and runtime/verify.rs's
+// `SessionNormalizer::new`) has landed; `#[allow(dead_code)]` stays for
+// residual items no production path reaches yet, kept live by this
+// module's own tests — same posture as `compile`/`ra`/`eval` above.
 #[allow(dead_code)]
 pub(crate) mod normalize;
+// search's one resolution site (`resolve_search`) is called from
+// normalize's body normalizer, itself production-called; the same
+// residual-items posture as normalize above.
 #[allow(dead_code)]
 pub(crate) mod search;
+// sort's production caller (runtime/db.rs's `sort_and_collect`) has
+// landed; `#[allow(dead_code)]` stays for residual items no production
+// path reaches yet, kept live by this module's own tests.
 #[allow(dead_code)]
 pub(crate) mod sort;
 pub(crate) mod temp_store;

@@ -509,6 +509,9 @@ mod catalog {
             fn __proof() {}
         }
         impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+        // Marker exists only to give the second blanket impl below a
+        // distinct type parameter; the ambiguity trick never constructs
+        // it, so a plain dead_code lint fires by design.
         #[allow(dead_code)]
         struct Marker;
         impl<T: CatalogRecord> AmbiguousIfImpl<Marker> for T {}

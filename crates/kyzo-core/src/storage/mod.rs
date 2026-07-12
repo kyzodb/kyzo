@@ -175,6 +175,11 @@ mod skip_walk;
 #[cfg(any(test, feature = "bench-internals"))]
 #[cfg_attr(all(feature = "bench-internals", not(test)), allow(dead_code))]
 pub(crate) mod sim;
+// temp.rs's own module doc ("WHAT THIS SPECIES IS, THIS TIER"): TempTx
+// is proven at the storage-species level but not yet reachable from the
+// public API — every route in refuses typed, and no production path
+// constructs a TempTx that holds data; the `tests` module is its only
+// instantiator until the session router adopts it.
 #[allow(dead_code)]
 pub(crate) mod temp;
 #[cfg(test)]

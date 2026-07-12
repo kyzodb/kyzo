@@ -22,6 +22,8 @@
 // no `db.rs` surface yet and are still lib-dead by construction; their
 // in-file tests keep them live under test, so a plain `allow` covers them.
 pub(crate) mod fts;
+// gazetteer has no `db.rs` surface yet (see the block comment above);
+// its in-file tests keep it live under test, so a plain `allow` covers it.
 #[allow(dead_code)]
 pub(crate) mod gazetteer;
 #[cfg(test)]
@@ -35,10 +37,14 @@ pub(crate) mod lsh;
 /// one residual unused helper (`SegmentEngine::is_empty`).
 #[allow(dead_code)]
 pub(crate) mod segments;
+// sparse has no `db.rs` surface yet (see the block comment above); its
+// in-file tests keep it live under test, so a plain `allow` covers it.
 #[allow(dead_code)]
 pub(crate) mod sparse;
 #[cfg(test)]
 mod sparse_hostile;
+// spatial has no `db.rs` surface yet (see the block comment above); its
+// in-file tests keep it live under test, so a plain `allow` covers it.
 #[allow(dead_code)]
 pub(crate) mod spatial;
 /// Text analysis (tokenizers, filters, the tantivy-derived pipeline) —
