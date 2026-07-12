@@ -98,7 +98,7 @@ record-event *emit* seam, never fabric machinery.
 ## The Target Tree
 
 ```
-kyzo-model/                      # THE SHARED VOCABULARY — what engine, judges, and hosts
+crates/kyzo-model/                      # THE SHARED VOCABULARY — what engine, judges, and hosts
 │                                #   must all agree on before any execution exists.
 │                                #   Pure data + boundary lifts. No IO, no evaluation,
 │                                #   no storage. Everything downstream depends on this;
@@ -145,7 +145,7 @@ kyzo-model/                      # THE SHARED VOCABULARY — what engine, judges
 │       ├── json.rs              # DataValue <-> JSON, rows <-> the JSON envelope
 │       └── arrow.rs             # the dependency-free Arrow IPC stream encoding
 │
-kyzo-core/                       # THE ENGINE — everything that computes and persists truth.
+crates/kyzo-core/                       # THE ENGINE — everything that computes and persists truth.
 │                                #   Depends on kyzo-model and kyzo-oracle (for the verify
 │                                #   door), never on trials or hosts.
 ├── src/
@@ -244,7 +244,7 @@ kyzo-core/                       # THE ENGINE — everything that computes and p
 │   │   └── verify.rs            # the ::verify door: the engine summons its judge (kyzo-oracle)
 │   └── benches/                 # permanent performance instrumentation (bench-internals feature)
 │
-kyzo-oracle/                     # THE REFERENCE SEMANTICS — the engine's naive twin.
+crates/kyzo-oracle/                     # THE REFERENCE SEMANTICS — the engine's naive twin.
 │                                #   Depends ONLY on kyzo-model. Deliberately slow, small
 │                                #   enough to hostile-review line by line. Optimizing it
 │                                #   is a defect. The crate wall makes independence physics.
@@ -256,7 +256,7 @@ kyzo-oracle/                     # THE REFERENCE SEMANTICS — the engine's naiv
 │   ├── provenance.rs            # reference annotations: independent support and cost
 │   └── checker.rs               # the proof-tree checker: re-derives witnesses from scratch
 │
-kyzo-trials/                     # THE CAMPAIGNS — attacks on public claims, rerunnable by
+crates/kyzo-trials/                     # THE CAMPAIGNS — attacks on public claims, rerunnable by
 │                                #   strangers. Depends on kyzo-core's public surface,
 │                                #   kyzo-oracle, and kyzo-crashfs. Nothing depends on it.
 ├── src/
@@ -270,14 +270,14 @@ kyzo-trials/                     # THE CAMPAIGNS — attacks on public claims, r
 │   ├── fuzz.rs                  # generative fuzzing drivers and the ledger's corpus
 │   └── time_travel.rs           # the temporal law and trial batteries
 │
-kyzo-crashfs/                    # THE FAULT INJECTOR — a standalone instrument whose nature
+crates/kyzo-crashfs/                    # THE FAULT INJECTOR — a standalone instrument whose nature
 │                                #   dictates its three parts: a plan, an application, a mount
 ├── src/
 │   ├── fault.rs                 # the fault plan: every decision a pure function of the seed
 │   ├── passthrough.rs           # the filesystem that applies the plan to a backing dir
 │   └── harness.rs               # mount lifecycle: capability detection, setup, teardown
 │
-kyzo-bin/                        # THE NATIVE HOST — an entrypoint, enumerable doors, and
+crates/kyzo-bin/                        # THE NATIVE HOST — an entrypoint, enumerable doors, and
 │                                #   rendering. Every door derives from the sealed contract;
 │                                #   a module the contract does not entail has no seat here.
 ├── src/
@@ -297,7 +297,7 @@ kyzo-bin/                        # THE NATIVE HOST — an entrypoint, enumerable
 │       ├── rules.rs             # extend: downstream-computed fixed rules bridged to the engine
 │       └── console.rs           # inspect: the static human console page
 │
-kyzo-wasm/                       # (reserved) THE RUNTIME ENVELOPE — the real engine in foreign
+crates/kyzo-wasm/                       # (reserved) THE RUNTIME ENVELOPE — the real engine in foreign
 │                                #   hosts. Its nature dictates three parts and no more:
 ├── src/
 │   ├── request.rs               # the typed request/response/error envelope (the one shape)
@@ -305,7 +305,7 @@ kyzo-wasm/                       # (reserved) THE RUNTIME ENVELOPE — the real 
 │   └── host.rs                  # host glue: deterministic inputs in, serialized results out,
 │                                #   byte-identical to native by standing proof
 │
-kyzo-lsp/                        # THE EDITOR HOST — a protocol adapter over model's parse tier
+crates/kyzo-lsp/                        # THE EDITOR HOST — a protocol adapter over model's parse tier
 ├── src/
 │   ├── main.rs                  # the LSP protocol loop
 │   └── translate.rs             # parse refusals -> diagnostics verbatim; the canonical formatter
@@ -336,7 +336,7 @@ scripts/
 authority/                       # the committed ratchet artifacts (map + report)
 ci/                              # the remote mirror of the gate: pure scripts, no agent,
                                  #   depending on neither compliance nor maintainer
-xtask/                           # guards that need Rust to express (workspace-level checks);
+crates/xtask/                           # guards that need Rust to express (workspace-level checks);
                                  #   same law as scripts/: each traces to a rule or has no seat
 ```
 
@@ -349,8 +349,8 @@ xtask/                           # guards that need Rust to express (workspace-l
   sharing machinery with the engine is impossible, not just forbidden.
 - **Campaigns against public claims**: `kyzo-trials` — everything a stranger
   should be able to rerun.
-- **Public-API batteries**: `kyzo-core/tests/` — the end-to-end surface proofs.
-- **Performance instrumentation**: `kyzo-core/benches/` and the kyzo-bench
+- **Public-API batteries**: `crates/kyzo-core/tests/` — the end-to-end surface proofs.
+- **Performance instrumentation**: `crates/kyzo-core/benches/` and the kyzo-bench
   proving ground. Issue-pinned reproducers die with their issues — the tree
   keeps no museum.
 

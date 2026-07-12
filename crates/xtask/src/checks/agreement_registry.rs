@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Check 5: the world-model agreement-law registry (`xtask/agreements.toml`)
+//! Check 5: the world-model agreement-law registry (`crates/xtask/agreements.toml`)
 //! enumerates every cross-file agreement-law test by name. This check does
 //! not re-derive the taxonomy — it verifies the registry hasn't drifted
 //! from the tree: every listed `test_fn` must still exist, as a `fn`, in
@@ -32,7 +32,7 @@ pub struct LawEntry {
 }
 
 pub fn load(root: &std::path::Path) -> anyhow::Result<Vec<LawEntry>> {
-    let path = root.join("xtask/agreements.toml");
+    let path = root.join("crates/xtask/agreements.toml");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
     let reg: Registry =

@@ -36,7 +36,7 @@ jobs:
       - id: check
         run: |
           [ -f Cargo.toml ] && w=true || w=false
-          [ -f kyzo-core/src/data/memcmp.rs ] && m=true || m=false
+          [ -f crates/kyzo-core/src/data/memcmp.rs ] && m=true || m=false
           [ -f fuzz/Cargo.toml ] && f=true || f=false
           echo "has_workspace=$w" >> "$GITHUB_OUTPUT"
           echo "has_memcmp=$m"    >> "$GITHUB_OUTPUT"
@@ -217,10 +217,10 @@ jobs:
 
   # ---------- D. Determinism across axes (story #30) ----------
   #
-  # The engine's own in-process campaigns (kyzo-core/src/query/trials.rs,
+  # The engine's own in-process campaigns (crates/kyzo-core/src/query/trials.rs,
   # time_travel_trials.rs) already prove cross-thread determinism inside one
   # test binary; these two jobs cover what only a second machine can prove:
-  # the same seeded workload (kyzo-core/examples/determinism_digest.rs, run
+  # the same seeded workload (crates/kyzo-core/examples/determinism_digest.rs, run
   # via scripts/determinism-campaign.sh) reduces to the SAME digest on a
   # completely different CPU architecture. x86_64 records; aarch64 checks
   # against the recording and fails loudly on any divergence — a real
@@ -280,7 +280,7 @@ jobs:
       # The five deterministic checks over the whole tree (derive-bypass,
       # panic-on-hostile-bytes, copy-detector, dead-concept ratchet,
       # agreement-law registry). Reads resonance-allow.toml and
-      # xtask/{decode-surfaces,agreements}.toml at the repo root.
+      # crates/xtask/{decode-surfaces,agreements}.toml at the repo root.
       - run: cargo run -p xtask --release -- resonance
       # Re-proves every check against its historical bug shape, each in its
       # own throwaway rsync copy (never the real tree) — so the gate isn't

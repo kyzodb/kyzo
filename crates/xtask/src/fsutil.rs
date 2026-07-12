@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 /// One parsed source file: its path (relative to `root`), the raw text (for
 /// line lookups), and its `syn` AST.
 pub struct SourceFile {
-    /// Repo-root-relative path, e.g. `kyzo-core/src/data/tuple.rs`. Stable
+    /// Repo-root-relative path, e.g. `crates/kyzo-core/src/data/tuple.rs`. Stable
     /// across a bite-proof's throwaway rsync copy, so allowlist entries
     /// (which cite this form) still resolve there.
     pub rel_path: String,
@@ -26,13 +26,13 @@ pub struct SourceFile {
     pub ast: syn::File,
 }
 
-/// Every `.rs` file under `kyzo-core/src` and `kyzo-bin/src`, relative to
+/// Every `.rs` file under `crates/kyzo-core/src` and `crates/kyzo-bin/src`, relative to
 /// `root` (the workspace root — a real checkout or a bite-proof's rsync
 /// copy). Both engine crates, never the bindings: the ontology gate is
 /// scoped to the isolated core, same boundary as the pure-Rust gate.
 pub fn walk_engine_sources(root: &Path) -> Result<Vec<SourceFile>> {
     let mut out = Vec::new();
-    for crate_dir in ["kyzo-core/src", "kyzo-bin/src"] {
+    for crate_dir in ["crates/kyzo-core/src", "crates/kyzo-bin/src"] {
         let abs = root.join(crate_dir);
         if !abs.exists() {
             continue;

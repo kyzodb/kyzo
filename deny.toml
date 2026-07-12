@@ -15,7 +15,7 @@ yanked = "deny"
 ignore = [
   # fxhash is unmaintained (advisory-class: unmaintained, not a vulnerability).
   # It is reached only through the deliberate jieba-rs =0.7.0 purity pin (the
-  # FTS tokenizer tier; see kyzo-core/Cargo.toml). Accepted knowingly; the
+  # FTS tokenizer tier; see crates/kyzo-core/Cargo.toml). Accepted knowingly; the
   # revisit — pure-Rust jieba alternatives — is recorded on issue #18.
   "RUSTSEC-2025-0057",
   # bincode 1.x is unmaintained (same advisory class, not a vulnerability).
@@ -92,7 +92,7 @@ allow-git = [
   # kyzo-bin's TLS crypto provider is pinned to a git rev, not the published
   # 0.0.2-alpha, because that release drags four RUSTSEC advisories in via
   # rustls-webpki 0.102.8 — see the pin's justification comment in
-  # kyzo-bin/Cargo.toml. Remove this entry together with that pin once a
+  # crates/kyzo-bin/Cargo.toml. Remove this entry together with that pin once a
   # release lands without the rustls-webpki dependency.
   "https://github.com/RustCrypto/rustls-rustcrypto",
 ]

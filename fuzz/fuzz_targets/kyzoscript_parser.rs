@@ -10,11 +10,11 @@
 #![no_main]
 
 //! Fuzzes the KyzoScript parser entry point used by `Db::run_script`
-//! (`kyzo-core/src/parse/mod.rs::parse_script`).
+//! (`crates/kyzo-core/src/parse/mod.rs::parse_script`).
 //!
 //! `parse_script` lives in `pub(crate) mod parse`, so it isn't reachable
 //! from an external crate. Rather than widen the parse module's own
-//! visibility, `kyzo-core/src/fuzz_api.rs` adds one `#[cfg(feature =
+//! visibility, `crates/kyzo-core/src/fuzz_api.rs` adds one `#[cfg(feature =
 //! "fuzz-internals")]` function — `fuzz_parse_script` — mirroring the
 //! existing `bench_api` façade pattern: it discards the parsed AST and
 //! hands back only `Result<()>`, so no crate-internal type crosses the

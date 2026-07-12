@@ -54,7 +54,7 @@
  * adopt it later without a format migration, not because the feature is
  * live.
  *
- * LANDING NOTE (wiring): this file homes at `kyzo-core/src/storage/temp.rs`
+ * LANDING NOTE (wiring): this file homes at `crates/kyzo-core/src/storage/temp.rs`
  * and needs one line in `storage/mod.rs`'s `sealed` module:
  * `impl Sealed for super::temp::TempTx {}` — the same in-crate admission
  * the sealing comment already anticipates for engine-internal stores.

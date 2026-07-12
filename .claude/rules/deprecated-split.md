@@ -1,18 +1,18 @@
 ---
 paths:
-  - "kyzo-core/src/data/expr.rs"
-  - "kyzo-core/src/data/functions.rs"
-  - "kyzo-core/src/data/program.rs"
-  - "kyzo-core/src/data/value/row.rs"
-  - "kyzo-core/src/query/batch.rs"
-  - "kyzo-core/src/query/batch_ops.rs"
-  - "kyzo-core/src/query/temp_store.rs"
-  - "kyzo-core/src/query/vm.rs"
-  - "kyzo-core/src/query/levels.rs"
-  - "kyzo-core/src/query/normalize.rs"
-  - "kyzo-core/src/data/mod.rs"
-  - "kyzo-core/src/data/value/mod.rs"
-  - "kyzo-core/src/data/tests/**"
+  - "crates/kyzo-core/src/data/expr.rs"
+  - "crates/kyzo-core/src/data/functions.rs"
+  - "crates/kyzo-core/src/data/program.rs"
+  - "crates/kyzo-core/src/data/value/row.rs"
+  - "crates/kyzo-core/src/query/batch.rs"
+  - "crates/kyzo-core/src/query/batch_ops.rs"
+  - "crates/kyzo-core/src/query/temp_store.rs"
+  - "crates/kyzo-core/src/query/vm.rs"
+  - "crates/kyzo-core/src/query/levels.rs"
+  - "crates/kyzo-core/src/query/normalize.rs"
+  - "crates/kyzo-core/src/data/mod.rs"
+  - "crates/kyzo-core/src/data/value/mod.rs"
+  - "crates/kyzo-core/src/data/tests/**"
 ---
 
 # Split — files whose constructs scatter; the file itself dies
@@ -176,7 +176,7 @@ MagicFixedRuleRuleArg, MagicAtom, magic apply atoms, MagicProgram,
 StratifiedMagicProgram), and the 14-test battery — closed)
 - **L1:** splits on the tier line: the INPUT tier + options vocabulary +
   Trivia/Comment + WriteValidity/ValidityClause/DeltaAxis →
-  `kyzo-model/program/{rule,query}.rs` (what engine, oracle, and hosts
+  `crates/kyzo-model/program/{rule,query}.rs` (what engine, oracle, and hosts
   agree a query IS). The NORMAL/STRATIFIED/MAGIC tiers + StoreLifetimes +
   the BodyNormalizer seam are plan artifacts minted and consumed inside
   compilation → `exec/plan/` (the oracle never sees a magic program).

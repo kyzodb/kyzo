@@ -1,9 +1,9 @@
 ---
 paths:
-  - "kyzo-core/src/engines/hnsw_filter_harness.rs"
-  - "kyzo-core/src/engines/gazetteer_hostile.rs"
-  - "kyzo-core/src/engines/sparse_hostile.rs"
-  - "kyzo-core/src/runtime/db_battery.rs"
+  - "crates/kyzo-core/src/engines/hnsw_filter_harness.rs"
+  - "crates/kyzo-core/src/engines/gazetteer_hostile.rs"
+  - "crates/kyzo-core/src/engines/sparse_hostile.rs"
+  - "crates/kyzo-core/src/runtime/db_battery.rs"
 ---
 
 # Absorbed — scaffolding and batteries dissolving into their proper homes

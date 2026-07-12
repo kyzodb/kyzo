@@ -1,17 +1,17 @@
 ---
 paths:
-  - "kyzo-core/examples/pointsto_repro.rs"
-  - "kyzo-core/examples/fixpoint_mem_profile.rs"
-  - "kyzo-core/examples/oltp_mixed_profile.rs"
-  - "kyzo-core/examples/tc_regress.rs"
-  - "kyzo-core/examples/bulk_ingest_profile.rs"
-  - "kyzo-core/examples/hnsw_build_profile.rs"
-  - "kyzo-core/examples/lsm_keyspace_policy_bench.rs"
-  - "kyzo-core/examples/determinism_digest.rs"
-  - "kyzo-core/examples/standing_smoke.rs"
-  - "kyzo-core/examples/ra_determinism.rs"
-  - "kyzo-core/examples/ra_profile.rs"
-  - "kyzo-core/examples/bench_tc.rs"
+  - "crates/kyzo-core/examples/pointsto_repro.rs"
+  - "crates/kyzo-core/examples/fixpoint_mem_profile.rs"
+  - "crates/kyzo-core/examples/oltp_mixed_profile.rs"
+  - "crates/kyzo-core/examples/tc_regress.rs"
+  - "crates/kyzo-core/examples/bulk_ingest_profile.rs"
+  - "crates/kyzo-core/examples/hnsw_build_profile.rs"
+  - "crates/kyzo-core/examples/lsm_keyspace_policy_bench.rs"
+  - "crates/kyzo-core/examples/determinism_digest.rs"
+  - "crates/kyzo-core/examples/standing_smoke.rs"
+  - "crates/kyzo-core/examples/ra_determinism.rs"
+  - "crates/kyzo-core/examples/ra_profile.rs"
+  - "crates/kyzo-core/examples/bench_tc.rs"
 ---
 
 # Retired — issue-pinned instruments that die with their issues
@@ -45,7 +45,7 @@ merkle-exclusion doctrine, `no_params`, `hash_named_rows`, `run`, `main`
 with graph/bitemporal/interval workloads + merkle print — closed)
 - **L1:** the one graduate: public-surface byte-identity probing ascends
   into `kyzo-trials`' determinism campaign (seat exists:
-  `kyzo-trials/determinism.rs`). One concept at its natural size.
+  `crates/kyzo-trials/determinism.rs`). One concept at its natural size.
 - **L2:** preserve through the ascent: row ORDER hashed as part of the
   claim ("the right SET in the wrong ROW ORDER is exactly the bug");
   driver-varies-the-axes design (threads/repetition/architecture belong
@@ -168,7 +168,7 @@ thread count == byte-identical output"), `hash_output` (Debug
 serialization through DefaultHasher), and main (five bench_api
 workloads across both backends, per-workload + combined hashes,
 THREADS-stamped output line) — closed)
-- **L1:** graduates → `kyzo-trials/src/determinism.rs`, the same lane
+- **L1:** graduates → `crates/kyzo-trials/src/determinism.rs`, the same lane
   determinism_digest's entry already ascends into — the two probes
   are one campaign (digest covers the public script surface, this one
   the parallelizing RA workloads); the bench_api dependency dissolves

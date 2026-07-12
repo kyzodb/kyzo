@@ -13,7 +13,7 @@
 //! stored catalog bytes by `RelationHandle::decode`; a corrupt row could
 //! panic the whole process instead of refusing typed).
 //!
-//! The decode surface is DECLARED, not inferred: `xtask/decode-surfaces.toml`
+//! The decode surface is DECLARED, not inferred: `crates/xtask/decode-surfaces.toml`
 //! names the exact entrypoint functions/methods per file. From each
 //! entrypoint the check closes over same-file callees only (one function
 //! calling another defined in the same file) — a narrow, deterministic,
@@ -41,7 +41,7 @@ struct Surface {
 }
 
 pub fn load_config(root: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<String>)>> {
-    let path = root.join("xtask/decode-surfaces.toml");
+    let path = root.join("crates/xtask/decode-surfaces.toml");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
     let cfg: SurfaceConfig =

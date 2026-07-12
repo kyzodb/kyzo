@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "KyzoScript",
   "scopeName": "source.kyzoscript",
-  "comment": "Hand-written from kyzo-core/src/kyzoscript.pest (story #73's editor-tooling scaffold), not a generated artifact -- every pattern below cites the grammar rule it renders. Re-derive against the grammar when the two drift; a stale highlighter is the same defect class as a stale doc.",
+  "comment": "Hand-written from crates/kyzo-core/src/kyzoscript.pest (story #73's editor-tooling scaffold), not a generated artifact -- every pattern below cites the grammar rule it renders. Re-derive against the grammar when the two drift; a stale highlighter is the same defect class as a stale doc.",
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },

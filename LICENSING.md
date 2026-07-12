@@ -10,13 +10,13 @@ The KyzoDB engine and its hosts are MPL-2.0. KyzoDB is a fork of CozoDB (see
 `FORK.md`); the MPL is inherited from that lineage and preserved per file. These
 paths, and every file carrying an MPL header, are MPL-2.0:
 
-- `kyzo-core/`
-- `kyzo-bin/`
-- `kyzo-lsp/`
-- `kyzo-crashfs/`
-- `kyzo-arrow-interop/`
+- `crates/kyzo-core/`
+- `crates/kyzo-bin/`
+- `crates/kyzo-lsp/`
+- `crates/kyzo-crashfs/`
+- `crates/kyzo-arrow-interop/`
 - `fuzz/`
-- `xtask/`
+- `crates/xtask/`
 - `vendor/` — the owned storage fork; upstream licenses preserved as noted there.
 
 You may not relicense these files. Modifications to MPL-covered files remain

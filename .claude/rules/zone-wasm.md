@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-wasm/**/*.rs"
+  - "crates/kyzo-wasm/**/*.rs"
 ---
 
 # Zone: Host, WASM — the runtime envelope

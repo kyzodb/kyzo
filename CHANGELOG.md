@@ -19,14 +19,14 @@ against its own oracle before the next layer stood on it.
   [`fjall`](https://github.com/fjall-rs/fjall), a pure-Rust LSM store — providing ordered range
   scans, MVCC commit with write-write conflict detection, and validity-in-key as-of reads (time
   travel) at the storage layer.
-- **memcmp key encoding** (`kyzo-core/src/data/memcmp.rs`): a memcomparable row/tuple encoding where
+- **memcmp key encoding** (`crates/kyzo-core/src/data/memcmp.rs`): a memcomparable row/tuple encoding where
   bytewise key order equals semantic value order, the invariant every access path above storage
   relies on. FormatVersion 4 on disk.
 - **Pure-Rust backup and interchange**: dump/restore of relations with no C/C++ dependency anywhere
   in the codec.
 - **KyzoScript**: a Datalog dialect compiling through parse, normalize, stratify, magic-sets
   rewriting, relational algebra, and semi-naive fixpoint evaluation, over the storage kernel.
-- **Query semantics proven against an independent oracle** (`kyzo-core/src/query/laws.rs`): a
+- **Query semantics proven against an independent oracle** (`crates/kyzo-core/src/query/laws.rs`): a
   deliberately naive reference implementation of stratified Datalog, compiled only into test
   builds; every generated workload is answered by both the optimized engine and the oracle and the
   two answers must be byte-identical.

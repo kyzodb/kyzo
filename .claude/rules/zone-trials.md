@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-trials/**/*.rs"
+  - "crates/kyzo-trials/**/*.rs"
 ---
 
 # Zone: Trials — the campaigns

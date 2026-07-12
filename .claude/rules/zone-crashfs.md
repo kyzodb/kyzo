@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-crashfs/**/*.rs"
+  - "crates/kyzo-crashfs/**/*.rs"
 ---
 
 # Zone: Crashfs — the fault injector

@@ -64,8 +64,8 @@ check_crate() {
   checked="$checked $root"
 }
 
-check_crate "kyzo-bin/src/main.rs" "kyzo-bin/src"
-check_crate "kyzo-core/src/lib.rs" "kyzo-core/src"
+check_crate "crates/kyzo-bin/src/main.rs" "crates/kyzo-bin/src"
+check_crate "crates/kyzo-core/src/lib.rs" "crates/kyzo-core/src"
 
 if [ -z "$checked" ]; then
   echo "unsafe gate: workspace exists but no engine crate roots yet — armed but idle"

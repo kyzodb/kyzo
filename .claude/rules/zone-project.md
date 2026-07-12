@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-core/src/project/**/*.rs"
+  - "crates/kyzo-core/src/project/**/*.rs"
 ---
 
 # Zone: Project — projections

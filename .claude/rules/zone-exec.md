@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-core/src/exec/**/*.rs"
+  - "crates/kyzo-core/src/exec/**/*.rs"
 ---
 
 # Zone: Exec — derived truth

@@ -1,64 +1,64 @@
 ---
 paths:
-  - "kyzo-core/src/query/laws.rs"
-  - "kyzo-core/src/query/gauntlet.rs"
-  - "kyzo-core/src/query/dst_query.rs"
-  - "kyzo-core/src/query/provenance.rs"
-  - "kyzo-core/src/query/trials.rs"
-  - "kyzo-core/src/query/time_travel_script_laws.rs"
-  - "kyzo-core/src/query/time_travel_trials.rs"
-  - "kyzo-core/src/jepsen_trials.rs"
-  - "kyzo-core/src/storage/conformance.rs"
-  - "kyzo-core/src/storage/crash_matrix.rs"
-  - "kyzo-core/src/storage/sim.rs"
-  - "kyzo-core/src/parse/fuzz_tests.rs"
-  - "kyzo-core/src/data/bitemporal.rs"
-  - "kyzo-core/src/data/aggr.rs"
-  - "kyzo-core/src/data/sketch/**"
-  - "kyzo-core/src/data/json.rs"
-  - "kyzo-core/src/data/arrow_ipc.rs"
-  - "kyzo-core/src/data/span.rs"
-  - "kyzo-core/src/data/symb.rs"
-  - "kyzo-core/src/data/relation.rs"
-  - "kyzo-core/src/data/value/tag.rs"
-  - "kyzo-core/src/data/value/canonical.rs"
-  - "kyzo-core/src/data/value/cell.rs"
-  - "kyzo-core/src/data/value/number.rs"
-  - "kyzo-core/src/data/value/string.rs"
-  - "kyzo-core/src/data/value/prefix.rs"
-  - "kyzo-core/src/data/value/proofs.rs"
-  - "kyzo-core/src/data/value/wide/**"
-  - "kyzo-core/src/data/value/arena.rs"
-  - "kyzo-core/src/data/value/code.rs"
-  - "kyzo-core/src/data/value/column.rs"
-  - "kyzo-core/src/data/value/exec.rs"
-  - "kyzo-core/src/parse/**"
-  - "kyzo-core/src/format.rs"
-  - "kyzo-core/src/format/tests.rs"
-  - "kyzo-core/src/kyzoscript.pest"
-  - "kyzo-core/src/query/compile.rs"
-  - "kyzo-core/src/query/stratify.rs"
-  - "kyzo-core/src/query/magic.rs"
-  - "kyzo-core/src/query/graph.rs"
-  - "kyzo-core/src/query/eval.rs"
-  - "kyzo-core/src/query/sort.rs"
-  - "kyzo-core/src/query/search.rs"
-  - "kyzo-core/src/query/semiring.rs"
-  - "kyzo-core/src/query/ra/**"
-  - "kyzo-core/src/query/incremental.rs"
-  - "kyzo-core/src/query/standing.rs"
-  - "kyzo-core/src/engines/**"
-  - "kyzo-core/src/runtime/**"
-  - "kyzo-core/src/storage/**"
-  - "kyzo-core/src/fixed_rule/**"
-  - "kyzo-core/src/lib.rs"
-  - "kyzo-core/tests/**"
-  - "kyzo-core/benches/**"
-  - "kyzo-core/examples/language_tour.rs"
-  - "kyzo-bin/**"
-  - "kyzo-crashfs/**"
-  - "kyzo-arrow-interop/**"
-  - "kyzo-lsp/**"
+  - "crates/kyzo-core/src/query/laws.rs"
+  - "crates/kyzo-core/src/query/gauntlet.rs"
+  - "crates/kyzo-core/src/query/dst_query.rs"
+  - "crates/kyzo-core/src/query/provenance.rs"
+  - "crates/kyzo-core/src/query/trials.rs"
+  - "crates/kyzo-core/src/query/time_travel_script_laws.rs"
+  - "crates/kyzo-core/src/query/time_travel_trials.rs"
+  - "crates/kyzo-core/src/jepsen_trials.rs"
+  - "crates/kyzo-core/src/storage/conformance.rs"
+  - "crates/kyzo-core/src/storage/crash_matrix.rs"
+  - "crates/kyzo-core/src/storage/sim.rs"
+  - "crates/kyzo-core/src/parse/fuzz_tests.rs"
+  - "crates/kyzo-core/src/data/bitemporal.rs"
+  - "crates/kyzo-core/src/data/aggr.rs"
+  - "crates/kyzo-core/src/data/sketch/**"
+  - "crates/kyzo-core/src/data/json.rs"
+  - "crates/kyzo-core/src/data/arrow_ipc.rs"
+  - "crates/kyzo-core/src/data/span.rs"
+  - "crates/kyzo-core/src/data/symb.rs"
+  - "crates/kyzo-core/src/data/relation.rs"
+  - "crates/kyzo-core/src/data/value/tag.rs"
+  - "crates/kyzo-core/src/data/value/canonical.rs"
+  - "crates/kyzo-core/src/data/value/cell.rs"
+  - "crates/kyzo-core/src/data/value/number.rs"
+  - "crates/kyzo-core/src/data/value/string.rs"
+  - "crates/kyzo-core/src/data/value/prefix.rs"
+  - "crates/kyzo-core/src/data/value/proofs.rs"
+  - "crates/kyzo-core/src/data/value/wide/**"
+  - "crates/kyzo-core/src/data/value/arena.rs"
+  - "crates/kyzo-core/src/data/value/code.rs"
+  - "crates/kyzo-core/src/data/value/column.rs"
+  - "crates/kyzo-core/src/data/value/exec.rs"
+  - "crates/kyzo-core/src/parse/**"
+  - "crates/kyzo-core/src/format.rs"
+  - "crates/kyzo-core/src/format/tests.rs"
+  - "crates/kyzo-core/src/kyzoscript.pest"
+  - "crates/kyzo-core/src/query/compile.rs"
+  - "crates/kyzo-core/src/query/stratify.rs"
+  - "crates/kyzo-core/src/query/magic.rs"
+  - "crates/kyzo-core/src/query/graph.rs"
+  - "crates/kyzo-core/src/query/eval.rs"
+  - "crates/kyzo-core/src/query/sort.rs"
+  - "crates/kyzo-core/src/query/search.rs"
+  - "crates/kyzo-core/src/query/semiring.rs"
+  - "crates/kyzo-core/src/query/ra/**"
+  - "crates/kyzo-core/src/query/incremental.rs"
+  - "crates/kyzo-core/src/query/standing.rs"
+  - "crates/kyzo-core/src/engines/**"
+  - "crates/kyzo-core/src/runtime/**"
+  - "crates/kyzo-core/src/storage/**"
+  - "crates/kyzo-core/src/fixed_rule/**"
+  - "crates/kyzo-core/src/lib.rs"
+  - "crates/kyzo-core/tests/**"
+  - "crates/kyzo-core/benches/**"
+  - "crates/kyzo-core/examples/language_tour.rs"
+  - "crates/kyzo-bin/**"
+  - "crates/kyzo-crashfs/**"
+  - "crates/kyzo-arrow-interop/**"
+  - "crates/kyzo-lsp/**"
 ---
 
 # Migrated — files with a 1:1 successor that move whole to their target home
@@ -1125,7 +1125,7 @@ parse.rs), the string/number literal family (PUSH/POP fence,
 underscore digits, hex/octal/binary), table schema and the column type
 grammar, the imperative %-statement family, the FTS mini-language, and
 the expression/param-list entry points — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/grammar.pest`
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/grammar.pest`
   (seat exists: "the KyzoScript grammar — advertises nothing unowned").
 - **L2:** gold, preserve verbatim: the equivalence proofs living IN the
   grammar file with per-rule citations (a grammar that carries its own
@@ -1175,7 +1175,7 @@ tests FROM THE OTHER END incl. the BTreeMap-reorder misattachment trap;
 Debug oracle cannot see because FixedRuleApply's hand-written Debug
 omits trivia; the generator-artifact skip with a `checked > 400` floor
 — no silent cap) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/format.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-model/format.rs` (seat
   exists: "the canonical formatter: program → one source text,
   idempotent"); tests ride along as its property suite. The
   PRATT-table coupling becomes an intra-crate neighbor
@@ -1222,7 +1222,7 @@ the plain campaign, the FALSIFICATION SEAL (a hand-built write-skew G2
 proving the fixed checker still bites — "0 cycles must mean the engine
 is correct, never the checker is now vacuous"), and the named
 regression-pin slot ("None to date") — closed)
-- **L1:** preserve-and-move whole → `kyzo-trials/serializability.rs`
+- **L1:** preserve-and-move whole → `crates/kyzo-trials/serializability.rs`
   (seat exists: "elle/Adya-style transaction anomaly detection"). It
   already speaks only the public Storage surface, so the crate wall
   costs nothing; the two deferred legs are recorded follow-ons that
@@ -1247,7 +1247,7 @@ defaults to the column name), `parse_nullable_type`,
 `parse_type_inner` (every kind; list length as a const-evaled
 non-negative int with a help-bearing refusal; vec dims parsed with
 underscore stripping; tuple recursion) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/schema.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/schema.rs` (seat
   exists: "schema clause parsing").
 - **L2:** gold: error structs DEFINED AT their one use site with
   span labels and help text (the designed-diagnostics house form);
@@ -1263,7 +1263,7 @@ proven programs"), `parse_imperative_block`, `parse_imperative_stmt`
 relations-or-embedded-queries; if/if_not chains; labeled loops;
 %swap via `expect_n`; %debug; embedded sysops and query clauses with
 `as` capture; %ignore_error) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/script.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/script.rs` (seat
   exists: "scripts and imperative chaining").
 - **L2:** gold: composition-of-proven-programs (every embedded `{…}`
   goes through the SAME `parse_query` proof as a standalone script);
@@ -1296,7 +1296,7 @@ budget shared across groups; NOT chains refuse as NestingTooDeep;
 ceilings refuse the absurd not the legitimate — a 101-op chain arrives
 FLAT, exactly-at-ceiling parses and one-over refuses; flat
 construction proven semantically invisible) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/search.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/search.rs` (seat
   exists: "the index-search and FTS mini-language"), together with the
   lifted pure AST (see the corrected ast.rs entry).
 - **L2:** gold: the two-ceiling doctrine (depth vs breadth, each with
@@ -1341,7 +1341,7 @@ so these assert the DECODED character; raw-string backslash verbatim;
 lone-surrogate designed error, reachable for the first time after the
 fence fix; unrecognized-escape refusal pinned against grammar
 widening) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/expr.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/expr.rs` (seat
   exists: "the Pratt expression parser"). The format.rs precedence
   table becomes an intra-crate neighbor; keep the both-tables warning
   live at both ends.
@@ -1376,7 +1376,7 @@ normalization and the (0,1) threshold; FTS create; HNSW create with
 must-be-set ef/m; plain index create refusing empty columns; the
 shared drop shape), `parse_tokenizer_expr`/`parse_filters_expr` —
 closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/sys.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/sys.rs` (seat
   exists: "the :: system-operation surface"). `AccessLevel` re-homes
   to `session/access.rs` per its own seam note; the FtsIndexConfig
   duplication dies when the lifecycle tier unifies the two.
@@ -1429,7 +1429,7 @@ INVERSE: every former finding still errors, now with an in-bounds
 label) — closed)
 - **L1:** preserve-and-move whole → the parse tier's adversarial suite
   inside `kyzo-model` (beside parse/); the corpus doubles as seed
-  material for `kyzo-trials/fuzz.rs`'s big-run campaigns via the
+  material for `crates/kyzo-trials/fuzz.rs`'s big-run campaigns via the
   `PROPTEST_CASES` escalation already documented in the module doc.
 - **L2:** gold, preserve verbatim: laws-not-coverage; the
   unconditional spanned-ness rule with its exception discipline; the
@@ -1477,7 +1477,7 @@ init_options/arity resolved against the live `Arc<dyn FixedRule>`),
 zero-width-interval finding recorded in the test doc itself/
 literal-MAX refused identically/per-row extractor/two-coordinate
 refusal/ensure refusals/unbound name) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/query.rs` (the
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/query.rs` (the
   seat's own line: "rules, options, and the proofs that bind them").
   CROSS-REFERENCE the data/program.rs BLOCKER: `parse_fixed_rule`
   resolves and CALLS the engine-side `Arc<dyn FixedRule>` at parse time
@@ -1540,7 +1540,7 @@ empty-index distinction; grammar-drift-errors-not-panics; an eyeball
 rig; the comment-trivia battery ending in the guardrail:
 comments-do-not-change-meaning checked through the formatter with a
 non-vacuity assert) — closed)
-- **L1:** preserve-and-move whole → `kyzo-model/parse/` as the tier's
+- **L1:** preserve-and-move whole → `crates/kyzo-model/parse/` as the tier's
   module root (the accessor layer, ceilings, the ParseError funnel and
   scan_comments are the tier's shared substrate; species files land in
   their named seats). Same `Arc<dyn FixedRule>` blocker cross-reference
@@ -1894,7 +1894,7 @@ robust form of 'stays refused', not a single guessed entry point";
 the oracle-accepts-now guard routing corpus drift upstream to
 laws.rs; the fixed-rule entry skipped for the same named boundary) —
 closed)
-- **L1:** preserve-and-move whole → `kyzo-trials/gauntlet.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-trials/gauntlet.rs` (seat
   exists: "metamorphic logic-bug hunting over generated programs").
   Its `laws::Program` renderer is REUSED by #80's whole-corpus verify
   proof (per query/mod.rs's ledger) — the move keeps that consumer
@@ -2049,7 +2049,7 @@ its INDEX at the corrected instant; `:update` carries forward the
 TARGETED instant's value, never a future one; `:insert` checks
 existence at ITS OWN instant, succeeding over an unrelated current
 row and refusing a genuine same-instant duplicate) — closed)
-- **L1:** preserve-and-move whole → `kyzo-trials/time_travel.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-trials/time_travel.rs` (seat
   exists: "the temporal law and trial batteries") as its
   language-surface half; it already runs everything through
   `Db::run_script`, so the crate wall costs nothing.
@@ -2257,7 +2257,7 @@ the divergence rate, demands both Ok and Err arms so "0 diverged" is
 never vacuous, and still asserts completed answers are correct); and
 three anti-vacuity proofs (no faults ⇒ no errors; high rate ⇒ errors
 actually fire; a corrupted reference is caught) — closed)
-- **L1:** preserve-and-move → `kyzo-trials/src/dst.rs` (seat exists:
+- **L1:** preserve-and-move → `crates/kyzo-trials/src/dst.rs` (seat exists:
   "deterministic simulation: storage seam and query path"). REWIRE
   REQUIRED at the crate wall: the module today drives pub(crate)
   pipeline entries (`stratified_magic_compile`, `bind_for_eval`,
@@ -2589,7 +2589,7 @@ surface", enumeration ceiling with exact ceiling/spent, the
 ceiling refusal itself deterministic across threads, solver pass
 ceiling on a reversed 5-chain with the same graph solving at 6 passes,
 and the open-graph closure check) — closed)
-- **L1:** preserve-and-move → `kyzo-trials/src/provenance.rs`
+- **L1:** preserve-and-move → `crates/kyzo-trials/src/provenance.rs`
   (NEW-SEAT, operator ratification required: the trials tree has no
   provenance lane, and this battery is exactly the map's definition of
   a campaign — an attack on a public claim, the telos's "explain",
@@ -2852,7 +2852,7 @@ MagicAtoms directly — the keyword-boundary bug lived in exactly that
 unexercised seam: four positive clause parses and three
 boundary-refusal tests pinning the CONFIRMED `@spansX` bug and its
 fix's mutant) — closed)
-- **L1:** preserve-and-move → `kyzo-trials/src/time_travel.rs` (seat
+- **L1:** preserve-and-move → `crates/kyzo-trials/src/time_travel.rs` (seat
   exists: "the temporal law and trial batteries"). Same crate-wall
   rewire as dst_query.rs: the harness drives pub(crate) compile/eval
   seams and must speak the public surface (or real KyzoScript) on
@@ -3054,12 +3054,12 @@ test-only reimplementation" while the LOOP stays independent, with a
 termination guard; ≥800 cases; the section doc stating precisely what
 is and is not proven) — closed)
 - **L1:** preserve-and-move with a NAMED SPLIT across the trials
-  lanes: the generator + Capability 1 → `kyzo-trials/src/gauntlet.rs`
+  lanes: the generator + Capability 1 → `crates/kyzo-trials/src/gauntlet.rs`
   (generated-program hunting) with its determinism assertions feeding
   `determinism.rs`'s lane; Capability 2 → the proposed
-  `kyzo-trials/src/provenance.rs` (NEW-SEAT, shared with
+  `crates/kyzo-trials/src/provenance.rs` (NEW-SEAT, shared with
   query/provenance.rs's entry); Capabilities 3–4 →
-  `kyzo-trials/src/time_travel.rs` beside time_travel_trials.rs's
+  `crates/kyzo-trials/src/time_travel.rs` beside time_travel_trials.rs's
   material. Same crate-wall rewire as its siblings (pub(crate) eval
   seams → public surface or a sanctioned deeper seam; the oracle side
   is already kyzo-oracle vocabulary). OPERATOR-VISIBLE STANDING ITEM:
@@ -3340,10 +3340,10 @@ refusals; the 4-shape × 80-seed campaign) — closed)
   REFERENCE SEMANTICS — "deliberately slow, small enough to
   hostile-review line by line... the crate wall makes independence
   physics"): the program model + checkers + naive evaluator →
-  `kyzo-oracle/src/eval.rs`; the temporal vocabulary (AsOf, Event,
+  `crates/kyzo-oracle/src/eval.rs`; the temporal vocabulary (AsOf, Event,
   resolve*, derive_intervals, diff/compose, Axis/Interval/OPEN_END) →
-  `kyzo-oracle/src/temporal.rs`; the story-#61 incremental reference →
-  NEW-SEAT `kyzo-oracle/src/incremental.rs` (operator ratification;
+  `crates/kyzo-oracle/src/temporal.rs`; the story-#61 incremental reference →
+  NEW-SEAT `crates/kyzo-oracle/src/incremental.rs` (operator ratification;
   alternatively folds into eval.rs — the react/incremental.rs
   production twin needs its judge either way); the shared
   unstratifiable_corpus rides with eval.rs as the judge's contract
@@ -3488,7 +3488,7 @@ fixed_rule vocabulary, callbacks, Db/ScriptOptions, VerifyOutcome,
 SignedFact, StandingQuery), and the three façade doors (bench_api and
 fuzz_api feature-gated; lsp_api ALWAYS compiled — "live diagnostics
 are a first-class product surface") — closed)
-- **L1:** reforge-in-place → the target `kyzo-core/src/lib.rs` ("the
+- **L1:** reforge-in-place → the target `crates/kyzo-core/src/lib.rs` ("the
   sealed public contract: the one Db façade"). On the crate split: the
   kernel-value re-exports (DataValue, Tuple, Validity, EncodedKey, …)
   become kyzo-model's public surface, re-exported or consumed
@@ -4108,7 +4108,7 @@ counters; the unconditional invariants — never a panic nor a hang,
 opens-or-refuses-TYPED, and "every key that IS present after reopen
 holds EXACTLY the bytes it was written with"; absent-is-legitimate
 for best-effort commits) — closed)
-- **L1:** preserve-and-move whole → `kyzo-trials/src/crash.rs` (seat
+- **L1:** preserve-and-move whole → `crates/kyzo-trials/src/crash.rs` (seat
   exists: "the crash matrix over real and fault-injected
   filesystems"). Already speaks kyzo-crashfs's public surface and the
   Storage trait; the only crate-wall touch is `SimStorage` as the
@@ -4331,7 +4331,7 @@ retained buffer-tier data that was never fsynced", first observed at
 seed 18, reopen now takes the two seqs separately); and the minimal
 seed-free #91 pin (crash-then-powercut must still drop the
 never-synced write) — closed)
-- **L1:** preserve-and-move whole → `kyzo-trials/src/conformance.rs`
+- **L1:** preserve-and-move whole → `crates/kyzo-trials/src/conformance.rs`
   (seat exists: "the storage-contract kit any backend must pass
   (public)"). REWIRE at the crate wall, the kit's own kind: today
   everything is pub(crate) over traits SEALED to kyzo-core — the map
@@ -4409,7 +4409,7 @@ timestamps — × 8 sys × 10 valid query instants) — closed)
   three-way differential machinery (Obs/Op/gen_*/apply) is the
   HAND-ROLLED PREDECESSOR conformance.rs's kit explicitly generalized
   — on migration the differential arm dissolves into one call to the
-  kit's `assert_ops_agree`/battery (kyzo-trials/src/conformance.rs)
+  kit's `assert_ops_agree`/battery (crates/kyzo-trials/src/conformance.rs)
   with TempTx handed in as one more species, ending the duplicated
   generator/observation code (the kit's own module doc names this
   file as what it replaces). The session router that finally reaches
@@ -4613,7 +4613,7 @@ note; whole-range conservative tracking), and the WriteTx impl
 (del_range counting each doomed key as its own del CALL "same as a
 caller looping del") — closed)
 - **L1:** preserve-and-move whole; PROPOSED SEAT (operator ratification
-  required): `kyzo-crashfs/src/sim.rs` (NEW-SEAT) — the DST-instrument
+  required): `crates/kyzo-crashfs/src/sim.rs` (NEW-SEAT) — the DST-instrument
   crate the census has already leaned on twice: dst_query.rs's entry
   states "SimStorage itself is kyzo-crashfs vocabulary in the target,
   which trials lawfully depends on", and crash_matrix.rs's oracle
@@ -4761,7 +4761,7 @@ pinning an exact host-dependent value") — closed)
   beside its subjects. The encoding-law battery (corpus, laws 1–3,
   byte-flip, signed-zero, shared-boundary) → kyzo-model beside
   `model/value/canonical.rs` (it tests the codec, not the store; the
-  corpus doubles as fuzz-seed material for kyzo-trials/fuzz.rs). The
+  corpus doubles as fuzz-seed material for crates/kyzo-trials/fuzz.rs). The
   fjall-specific pins (inverted-range poisoning, options/stats,
   format-version stamps incl. the v4 boundary, clock/watermark
   batteries, the snapshot-then-mint reproducer, the RAM-floor pin) →
@@ -4772,12 +4772,12 @@ pinning an exact host-dependent value") — closed)
   session crate's public surface). The time-travel-vs-oracle arm and
   MIN-ts pins → per-backend module tests beside their cursors (the
   skip-walk theorem already owns the generic proof). The
-  process-abort crash test → `kyzo-trials/src/crash.rs` (real-process
+  process-abort crash test → `crates/kyzo-trials/src/crash.rs` (real-process
   territory, same lane as the FUSE matrix). The DST semantics tests +
   seven campaigns + hardening sentinel + retry-liveness → move with
   the sim instrument to its ratified seat (they are the instrument's
   own proof battery), with the campaign SHAPES feeding
-  kyzo-trials/src/dst.rs. CONDEMNED AS SUPERSEDED: the generic
+  crates/kyzo-trials/src/dst.rs. CONDEMNED AS SUPERSEDED: the generic
   KV/MVCC/RYOW/del_range/phantom/concurrent-writers/chunk-boundary/
   send-sync scenarios here are the story-#79 kit's EXTRACTION SOURCE
   and are now verbatim-duplicated by conformance.rs's generic laws,
@@ -5782,11 +5782,11 @@ refusal) — closed)
   refusals on user data; route them through a typed error with the
   option's span like their siblings. Nothing else condemned.
 
-## kyzo-core/tests/ — the story-#88 external public-surface suite
+## crates/kyzo-core/tests/ — the story-#88 external public-surface suite
 The fourteen files below are EXTERNAL integration crates: by construction
 of where they live, they reach only the public `kyzo::` façade — the exact
 boundary the target architecture SEALS. Their collective verdict is
-PRESERVE-IN-PLACE: `kyzo-core/tests/` remains the sealed contract's own
+PRESERVE-IN-PLACE: `crates/kyzo-core/tests/` remains the sealed contract's own
 integration suite. The one cross-cutting rewire: on the crate split, the
 model-vocabulary re-exports they import (`DataValue`, `Tuple`, `Validity`,
 `UuidWrapper`, …) resolve per lib.rs's entry (kyzo-model's public surface
@@ -6028,7 +6028,7 @@ on a segments-reverted tree is the A/B baseline"), seeded_db, and
 bench_scans (one seeded store per size driving both queries with the
 pay-the-seed-once reasoning; the warm read that "builds the segment";
 full and filtered scans at 50k/200k, sample_size 20) — closed)
-- **L1:** preserve-in-place → the target `kyzo-core/benches/`
+- **L1:** preserve-in-place → the target `crates/kyzo-core/benches/`
   ("permanent performance instrumentation").
 - **L2:** gold: an instrument named for the DECISION it gates (the
   segments kill-gate) with its A/B protocol stated. Nothing condemned.
@@ -6044,7 +6044,7 @@ bench_workload, and the `all` sweep (TC chain/dense/random with the
 O(n²)-pairs sizing note; the 3-way join with the
 measure-parity-not-speedup honesty; scan+filter at three
 selectivities; aggregation at two scales) — closed)
-- **L1:** preserve-in-place → `kyzo-core/benches/`. REWIRE: it
+- **L1:** preserve-in-place → `crates/kyzo-core/benches/`. REWIRE: it
   consumes `kyzo::bench_api` — the sealed door deprecated-sealed.md
   deletes; per bench_api's own entry the Workload constructors and
   Graph shapes land IN benches/, so this file's imports become local
@@ -6070,7 +6070,7 @@ line"), and `asof` (TWO SHAPES, same total entries — shallow 1000×8
 50×160 "where seeking must win — the crossover is the honest
 characterization of the seek design"; the in-bench naive
 scan-and-filter oracle) — closed)
-- **L1:** preserve-in-place → `kyzo-core/benches/`; its store-surface
+- **L1:** preserve-in-place → `crates/kyzo-core/benches/`; its store-surface
   imports ride the same public-currency decision as the trials kit.
 - **L2:** gold: benches framed as questions with a stated
   interpretation for each outcome (a flat line MEANS the ceiling);
@@ -6098,7 +6098,7 @@ filter target ruling — "filtering on the indexed key instead would
 risk the query planner turning it into a point seek that never
 compares most rows at all"; the cardinality-preserving self-join
 with its still-compares-per-row argument) — closed)
-- **L1:** preserve-in-place → `kyzo-core/benches/`.
+- **L1:** preserve-in-place → `crates/kyzo-core/benches/`.
 - **L2:** gold, preserve verbatim: the anti-rigging doctrine stated
   at the head (distributions chosen to include the design's WORST
   cases, reported "honestly even where the win is small or absent");
@@ -6124,7 +6124,7 @@ default when @ is omitted, not a distinct write mode"; as-of reads at
 two instants); vector search as a join; FTS in the same shape; and a
 built-in graph algorithm through `<~` — plus main and the eight test
 wrappers — closed)
-- **L1:** preserve-in-place → the target `kyzo-core/examples/` as the
+- **L1:** preserve-in-place → the target `crates/kyzo-core/examples/` as the
   public surface's teaching document (story #73's deliverable); like
   the tests/ suite it is a drift detector for the crate split's
   re-export decision.
@@ -6134,7 +6134,7 @@ wrappers — closed)
   argument at each construct (time-as-parameter, search-as-join).
   Nothing condemned.
 
-## kyzo-bin/ — the native host against the map's door layout
+## crates/kyzo-bin/ — the native host against the map's door layout
 The map keeps the crate and renames doors: client.rs → repl/fetch.rs,
 relations.rs → bulk.rs (the shared codec), repl/output.rs →
 repl/render.rs, server/changes.rs + server/standing.rs → server/feeds.rs,
@@ -6143,7 +6143,7 @@ their names, engine.rs is a lawful unlisted file (zones are stable,
 files grow). Entries below are per-file; the zone law (zone-bin.md)
 adjudicates quality.
 
-## kyzo-bin/src/main.rs (72 lines; inventory: dual header (dead rouille
+## crates/kyzo-bin/src/main.rs (72 lines; inventory: dual header (dead rouille
 server_main dropped; `exit(-1)` → `exit(1)` with the 255-reads-as-crash
 reasoning; errors printed `{e:?}` so "miette's fancy Debug rendering...
 is what a user sees"), the `#![forbid(unsafe_code)]` with its
@@ -6155,7 +6155,7 @@ tokio runtime; repl with the exit-1 error path) — closed)
 - **L2:** gold: forbid at the second crate root; exit-code semantics
   reasoned. Nothing condemned.
 
-## kyzo-bin/src/engine.rs (103 lines; inventory: header, module doc (five
+## crates/kyzo-bin/src/engine.rs (103 lines; inventory: header, module doc (five
 upstream backends → ONE; "what upstream's mem engine bought a caller
 was 'no persistence, no path to manage'; that is reproduced here as an
 ephemeral fjall store... because a second backend is not what the
@@ -6173,7 +6173,7 @@ fallback" with a teaching message) — closed)
   no longer exists in the tree (the value plane superseded it);
   re-point at the storage contract on migration. Nothing condemned.
 
-## kyzo-bin/src/client.rs (346 lines; inventory: header, module doc (the
+## crates/kyzo-bin/src/client.rs (346 lines; inventory: header, module doc (the
 upstream file was "an empty, licensed placeholder — never referenced by
 anything"; this is NOT a port; the TWO DISCARDED DESIGNS recorded with
 load-bearing reasons — minreq/rustls-ring rejected because ring "shells
@@ -6198,7 +6198,7 @@ byte fixtures) — closed)
   dependency-selection time); explicit-provider over global-install;
   protocol parsing tested over byte fixtures. Nothing condemned.
 
-## kyzo-bin/src/relations.rs (177 lines; inventory: header, module doc
+## crates/kyzo-bin/src/relations.rs (177 lines; inventory: header, module doc
 (upstream reached into live-transaction storage; here composed "from
 the same public entry point every other caller uses" — ::columns + a
 scan + a $data-bound mutation, "every step is a real query the engine
@@ -6222,7 +6222,7 @@ the identifier position) — closed)
   under pressure); splice validation with an honest threat model and
   an injection test corpus. Nothing condemned.
 
-## kyzo-bin/src/repl/mod.rs (164 lines; inventory: dual header
+## crates/kyzo-bin/src/repl/mod.rs (164 lines; inventory: dual header
 (rhn's authorship preserved; the flat repl.rs split by concern; the
 behavior-change ledger — no %eval "dropped rather than faked with a
 wrapper query, which would silently change its semantics";
@@ -6241,7 +6241,7 @@ output::render) — closed)
   ledger discipline; errors rendered with spans intact (zone law).
   Nothing condemned.
 
-## kyzo-bin/src/repl/editor.rs (76 lines; inventory: dual header (rhn
+## crates/kyzo-bin/src/repl/editor.rs (76 lines; inventory: dual header (rhn
 authorship; split rationale; the `Completer::update` unreachable!()
 REMOVED with the invariant-lives-in-a-different-method argument — "a
 future change adding real completions here would have to remember to
@@ -6254,7 +6254,7 @@ until a blank line) — closed)
   unreachable!() (law 5 applied to a keypress path). Nothing
   condemned.
 
-## kyzo-bin/src/repl/commands.rs (164 lines; inventory: dual header (one
+## crates/kyzo-bin/src/repl/commands.rs (164 lines; inventory: dual header (one
 function per command replacing nine inline arms; %import grew https
 "client.rs now provides one"; unrecognized %foo "falls through to a
 named error" instead of handing the % to the script parser), module
@@ -6268,7 +6268,7 @@ import_relations) — closed)
 - **L2:** gold: routing/behavior separation; named refusals for
   unknown commands. Nothing condemned.
 
-## kyzo-bin/src/repl/output.rs (70 lines; inventory: header, module doc
+## crates/kyzo-bin/src/repl/output.rs (70 lines; inventory: header, module doc
 ("the one place in the REPL that turns a NamedRows into something
 shown to the user" — contrasted with the machine-to-machine JSON that
 goes through kyzo-core's own envelope), `render` (save-arm consumed or
@@ -6279,7 +6279,7 @@ table), `save_to_file` ({column: value} records), `print_table`
 - **L2:** gold: one-rendering-site discipline; no meaning added
   (zone law's rendering clause satisfied). Nothing condemned.
 
-## kyzo-bin/src/server/mod.rs (304 lines; inventory: dual header — the
+## crates/kyzo-bin/src/server/mod.rs (304 lines; inventory: dual header — the
 richest behavior-change ledger in the crate: no per-request mutability
 override (the engine reads mutability "off the parsed program itself...
 not a caller-supplied claim"; reopening it "is a runtime-tier design
@@ -6315,7 +6315,7 @@ can refuse comes back as Ok(Err(_))") — closed)
   "malformed config is a typed refusal" line wants the bind/port
   parse lifted to a typed refusal on arrival. Nothing condemned.
 
-## kyzo-bin/src/server/auth.rs (125 lines; inventory: dual header
+## crates/kyzo-bin/src/server/auth.rs (125 lines; inventory: dual header
 (mechanism here, account in server/mod.rs; the token-table name "an
 operator-supplied --token-table value, not per-request attacker
 input" still validated like relations.rs's splices), module doc (the
@@ -6335,7 +6335,7 @@ closed)
   mechanical; replace with an infallible constructor or a
   const-built response on arrival. Nothing else condemned.
 
-## kyzo-bin/src/server/query.rs (39 lines; inventory: header, module doc
+## crates/kyzo-bin/src/server/query.rs (39 lines; inventory: header, module doc
 (all JSON shaping is run_script_json; "this handler only runs it off
 the async runtime's blocking pool and maps the envelope to an HTTP
 status"), QueryPayload, text_query (spawn_blocking + wrap_json/
@@ -6345,7 +6345,7 @@ internal_error) — closed)
 - **L2:** the thinnest possible door — exactly what zone-bin demands.
   Nothing condemned.
 
-## kyzo-bin/src/server/bulk.rs (112 lines; inventory: dual header (the
+## crates/kyzo-bin/src/server/bulk.rs (112 lines; inventory: dual header (the
 /import-from-backup absence deferred to mod.rs's doc), module doc
 (HTTP plumbing around crate::relations), export_relations (comma-split
 path param → relations::export), import_relations (JSON-object
@@ -6356,7 +6356,7 @@ all through spawn_blocking with Ok(Err)/Err(join) split — closed)
 - **L2:** clean plumbing; refusals rendered as 400 envelopes.
   Nothing condemned.
 
-## kyzo-bin/src/server/changes.rs (81 lines; inventory: dual header
+## crates/kyzo-bin/src/server/changes.rs (81 lines; inventory: dual header
 (single-argument register_callback matching the port's signature; the
 PANIC FIX — upstream's `Event::json_data(item).unwrap()` "panicked the
 whole per-connection async task... that panic is user-reachable (any
@@ -6376,7 +6376,7 @@ log-and-break; KeepAlive) — closed)
   contract respected — the host never buffers beyond the channel).
   Nothing condemned.
 
-## kyzo-bin/src/server/standing.rs (195 lines; inventory: header, module
+## crates/kyzo-bin/src/server/standing.rs (195 lines; inventory: header, module
 doc (the per-query analog of /changes one tier up; the pull-model
 tradeoff "carried through here rather than inventing a second drive
 model at the HTTP tier"), StandingQueryParams (params through "the
@@ -6401,7 +6401,7 @@ encode-failure log-and-break) — closed)
   host-chosen constant — when react/feed.rs lands a push surface,
   this door should consume it rather than poll. Nothing condemned.
 
-## kyzo-bin/src/server/rules.rs (159 lines; inventory: dual header
+## crates/kyzo-bin/src/server/rules.rs (159 lines; inventory: dual header
 (std::mpsc following the port; the same json_data panic fix as
 changes.rs "both sites here now log and end the stream"), module doc
 (the downstream-computed fixed-rule bridge: register + SSE of
@@ -6421,14 +6421,14 @@ rendered as an SSE event) — closed)
   the poison branch rendered as the 500 envelope instead. Nothing
   else condemned.
 
-## kyzo-bin/src/server/pages.rs (30 lines; inventory: dual header,
+## crates/kyzo-bin/src/server/pages.rs (30 lines; inventory: dual header,
 module doc ("the two routes that aren't API calls"), root
 (include_str! console page), not_found (JSON 404) — closed)
 - **L1:** preserve-and-move → the map's `server/console.rs` (with
   src/index.html riding along).
 - **L2:** nothing condemned.
 
-## kyzo-bin/tests/repl_smoke.rs (98 lines; inventory: header, module doc
+## crates/kyzo-bin/tests/repl_smoke.rs (98 lines; inventory: header, module doc
 ("cargo check proves the CLI COMPILES; it does not prove the binary
 RUNS" — the real built binary via CARGO_BIN_EXE_kyzo, piped stdin,
 "the end-to-end path an actual user takes, which no in-process test
@@ -6446,7 +6446,7 @@ a panic") — closed)
   test; survival-of-bad-input as an explicit exit-code claim.
   Nothing condemned.
 
-## kyzo-crashfs/src/lib.rs (77 lines; inventory: header, the crate doc
+## crates/kyzo-crashfs/src/lib.rs (77 lines; inventory: header, the crate doc
 (story #31 phase 1 — a pure-Rust FUSE passthrough fault injector on
 `fuser` with "LazyFS's torn-seq / torn-op / clear-cache vocabulary,
 seed-deterministic per the identity-keyed discipline storage/sim.rs
@@ -6464,7 +6464,7 @@ a reportable result on its own, not a reason to inflate seeds looking
 for a hit"), three module decls + re-exports — closed)
 - **L1:** preserve-in-place — the crate IS the map's kyzo-crashfs, its
   file layout already matching (fault/passthrough/harness). The
-  phase-2 charter is the standing spec kyzo-trials/src/crash.rs (the
+  phase-2 charter is the standing spec crates/kyzo-trials/src/crash.rs (the
   censused crash_matrix) partially discharges; the sim NEW-SEAT
   question (storage/sim.rs's entry) decides whether this crate also
   hosts the storage-double instrument.
@@ -6472,7 +6472,7 @@ for a hit"), three module decls + re-exports — closed)
   falsification clause and a binding cross-crate assertion rule (the
   read-every-key law). Nothing condemned.
 
-## kyzo-crashfs/src/fault.rs (492 lines; inventory: header, module doc
+## crates/kyzo-crashfs/src/fault.rs (492 lines; inventory: header, module doc
 (every decision "a pure function of (campaign seed, path, op kind,
 byte range, attempt count)"; the sim.rs doctrine mirrored "read for
 the doctrine; that module is not depended on here — this crate stands
@@ -6510,7 +6510,7 @@ per-path/op counter independence) — closed)
   phase 2); the recorder-pass hook designed into the counters.
   Nothing condemned.
 
-## kyzo-crashfs/src/passthrough.rs (734 lines; inventory: header,
+## crates/kyzo-crashfs/src/passthrough.rs (734 lines; inventory: header,
 module doc (THE WRITE-BUFFER MODEL — "a plain passthrough that calls
 pwrite on every write() has nothing for a fault to act on"; write()
 appends to an in-memory pending list, reads overlay it (page-cache
@@ -6553,7 +6553,7 @@ to open through this mount at all") — closed)
   covers today's charter, but the exemption should stay a stated
   boundary, not become an assumption. Nothing condemned.
 
-## kyzo-crashfs/src/harness.rs (78 lines; inventory: header, module doc
+## crates/kyzo-crashfs/src/harness.rs (78 lines; inventory: header, module doc
 (lifted out of tests/standalone_mount.rs "so a second consumer —
 kyzo-core's crash-matrix harness — does not hand-copy the same
 mount/skip dance. This is exactly the dependency edge phase 1's design
@@ -6569,7 +6569,7 @@ rather than racy") — closed)
   doctrine (the same skip-never-fail posture crash_matrix carries).
   Nothing condemned.
 
-## kyzo-crashfs/tests/standalone_mount.rs (211 lines; inventory: header,
+## crates/kyzo-crashfs/tests/standalone_mount.rs (211 lines; inventory: header,
 module doc (the phase-1 deliverable: prove the model "with a plain
 std::fs writer and no knowledge of kyzo-crashfs internals" — the
 decision-logic half lives in fault.rs's tests; the skip doctrine),
@@ -6592,7 +6592,7 @@ requirement explained in place) — closed)
   precomputed split); anti-vacuity guards; kernel-behavior notes
   where a reader would misattribute a failure. Nothing condemned.
 
-## kyzo-arrow-interop/src/lib.rs (12 lines; inventory: header + the
+## crates/kyzo-arrow-interop/src/lib.rs (12 lines; inventory: header + the
 crate doc ("No production code lives here; every consumer is a test
 proving a real `arrow` reader parses kyzo-core's own encoder output
 byte-identically") — closed)
@@ -6602,7 +6602,7 @@ byte-identically") — closed)
   arrow.rs, this crate re-points at the model crate's re-export.
 - **L2:** nothing condemned.
 
-## kyzo-arrow-interop/tests/decode_kyzo_stream.rs (171 lines;
+## crates/kyzo-arrow-interop/tests/decode_kyzo_stream.rs (171 lines;
 inventory: header, module doc ("kyzo-core's own test suite proves the
 byte layout against the spec in isolation; this proves an actual
 Arrow implementation agrees"), value helpers, and four tests: the
@@ -6619,7 +6619,7 @@ that exercises the encoder's Arrow Binary type at all") — closed)
   encoder — triangulated); only-path coverage notes. Nothing
   condemned.
 
-## kyzo-lsp/src/main.rs (837 lines; inventory: header, module doc (story
+## crates/kyzo-lsp/src/main.rs (837 lines; inventory: header, module doc (story
 #92 — "the delivery of story #73's designed diagnostics, live in the
 editor instead of only after a real run"; every didOpen/didChange
 re-validates through kyzo::lsp_api::check_script; the TRANSPORT ruling —

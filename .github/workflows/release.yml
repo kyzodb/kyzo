@@ -215,7 +215,7 @@ jobs:
             echo
             echo "## FormatVersion"
             echo
-            fv=$(grep -oP 'pub const CURRENT: FormatVersion = FormatVersion\(\K[0-9]+' kyzo-core/src/storage/mod.rs || echo "unknown")
+            fv=$(grep -oP 'pub const CURRENT: FormatVersion = FormatVersion\(\K[0-9]+' crates/kyzo-core/src/storage/mod.rs || echo "unknown")
             echo "FormatVersion: ${fv} — see VERSIONING.md for the migration stance."
             echo
             echo "## Benchmark status"

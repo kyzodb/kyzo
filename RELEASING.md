@@ -11,7 +11,7 @@ this file is wrong and gets fixed.
 - [ ] The story-wave being released is sealed: every story in the wave is `Done` on the board
       (`gh project item-list 1 --owner kyzodb`), not "mostly done" or "green except one flake."
 - [ ] The board reflects reality: no story claimed by this release is still `In Progress`.
-- [ ] `kyzo-core/Cargo.toml`'s `version` (workspace-inherited) has been bumped per the SemVer rule in
+- [ ] `crates/kyzo-core/Cargo.toml`'s `version` (workspace-inherited) has been bumped per the SemVer rule in
       VERSIONING.md and that bump is itself a commit on `main`, ancestor of the tag you're about to
       cut.
 

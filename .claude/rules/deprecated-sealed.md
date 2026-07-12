@@ -1,8 +1,8 @@
 ---
 paths:
-  - "kyzo-core/src/bench_api.rs"
-  - "kyzo-core/src/fuzz_api.rs"
-  - "kyzo-core/src/lsp_api.rs"
+  - "crates/kyzo-core/src/bench_api.rs"
+  - "crates/kyzo-core/src/fuzz_api.rs"
+  - "crates/kyzo-core/src/lsp_api.rs"
 ---
 
 # Sealed — bespoke doors deleted outright; the opening was the defect
@@ -27,7 +27,7 @@ PUT_PARAM_SCRIPT, param_pool_of, parse_put_literal, parse_put_param,
 run_put_batches, bare_fjall_put_batches, encode_only,
 probe_only_not_found) — closed)
 - **L1:** the DOOR is deleted; the contents scatter by kind of truth. The
-  seeded workload constructors + `Graph` shapes → `kyzo-core/benches/`
+  seeded workload constructors + `Graph` shapes → `crates/kyzo-core/benches/`
   (permanent instrumentation; benches may see internals per the test
   ontology). The #74 attribution probes → the benches of the zones they
   isolate (model/parse for the parse pair, session/admit for
@@ -53,7 +53,7 @@ seam) — closed)
 - **L1:** the DOOR is deleted; the consumers rewire. `fuzz_parse_script`
   dies naturally: the parse tier becomes kyzo-model's PUBLIC boundary
   lift, so the fuzz target speaks it directly. The payload/catalog
-  decode targets and the never-panic law → `kyzo-trials/fuzz.rs` ("the
+  decode targets and the never-panic law → `crates/kyzo-trials/fuzz.rs` ("the
   ledger's corpus"), driving public store-contract seams.
   `interval_bounds` dies when Interval's accessors become model-public
   vocabulary.

@@ -2,7 +2,7 @@
 
 Syntax highlighting for KyzoScript (`.kz`, `.kzs`), the Datalog dialect KyzoDB queries and mutates
 in. This is the editor-tooling scaffold from story #73 (KyzoScript devex): a hand-written TextMate
-grammar derived directly from `kyzo-core/src/kyzoscript.pest`, wrapped as a minimal VS Code
+grammar derived directly from `crates/kyzo-core/src/kyzoscript.pest`, wrapped as a minimal VS Code
 extension. The playground's own editor consumes the same `syntaxes/kyzoscript.tmLanguage.json`
 (TextMate grammars are the shared artifact between a VS Code extension and a Monaco-based web
 editor).
@@ -26,7 +26,7 @@ code --install-extension .   # or: open this folder in VS Code and F5 to launch 
 
 The grammar was checked against a real TextMate tokenizer (`vscode-textmate` + `vscode-oniguruma`,
 the same engine VS Code and Monaco embed) over a sample program covering every chapter of
-`kyzo-core/examples/language_tour.rs` — relations, rules, recursion, aggregation, both `@` forms,
+`crates/kyzo-core/examples/language_tour.rs` — relations, rules, recursion, aggregation, both `@` forms,
 vector/FTS search atoms, and an imperative block — not just eyeballed as JSON. There is no
 checked-in test harness for this yet (it needs a `node_modules` this pure-Rust repo doesn't
 otherwise carry); the smallest useful next step here is wiring that verification into CI as its own

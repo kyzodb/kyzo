@@ -1,7 +1,7 @@
 ---
 paths:
-  - "kyzo-model/**/*.rs"
-  - "kyzo-model/**/*.pest"
+  - "crates/kyzo-model/**/*.rs"
+  - "crates/kyzo-model/**/*.pest"
 ---
 
 # Zone: Model — the shared vocabulary

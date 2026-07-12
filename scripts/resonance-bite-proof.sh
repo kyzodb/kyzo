@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Story #81: bite-proof every resonance-gate check against its historical bug.
 # Each proof works in a throwaway rsync copy (never the real tree): copies
-# just the files a check reads (kyzo-core/src, kyzo-bin/src,
-# resonance-allow.toml, xtask/*.toml), reintroduces the bug's exact shape,
+# just the files a check reads (crates/kyzo-core/src, crates/kyzo-bin/src,
+# resonance-allow.toml, crates/xtask/*.toml), reintroduces the bug's exact shape,
 # and shows the relevant check alone (`--only <check>`) going RED against
 # the mutated copy — then, where relevant, GREEN again once the mutation is
 # reverted or an allowlist citation is added, proving the allowlist
@@ -33,8 +33,8 @@ fresh_copy() {
   rsync -a --exclude target "$ROOT/kyzo-bin" "$dst/"
   cp "$ROOT/resonance-allow.toml" "$dst/resonance-allow.toml"
   mkdir -p "$dst/xtask"
-  cp "$ROOT/xtask/decode-surfaces.toml" "$dst/xtask/decode-surfaces.toml"
-  cp "$ROOT/xtask/agreements.toml" "$dst/xtask/agreements.toml"
+  cp "$ROOT/crates/xtask/decode-surfaces.toml" "$dst/crates/xtask/decode-surfaces.toml"
+  cp "$ROOT/crates/xtask/agreements.toml" "$dst/crates/xtask/agreements.toml"
 }
 
 run_check() {
@@ -74,7 +74,7 @@ bite_derive_bypass() {
   # instead of the hand-written impl. This is the literal shape issue #62's
   # hostile review found — a derived Deserialize builds `start`/`end` by
   # direct field assignment, bypassing `Interval::new`'s `end > start` law.
-  python3 - "$copy/kyzo-core/src/data/value.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-core/src/data/value.rs" <<'PY'
 import sys, re
 path = sys.argv[1]
 text = open(path).read()
@@ -93,7 +93,7 @@ bite_panic_lint() {
   fresh_copy "$copy"
   # Reintroduce the RelationId shape: an assert! sitting in a real decode
   # path (raw_decode), instead of the typed refusal it currently is.
-  python3 - "$copy/kyzo-core/src/data/tuple.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-core/src/data/tuple.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
@@ -134,7 +134,7 @@ bite_dead_code_ratchet() {
   # silently fixing, per its disjointness boundary — see the report).
   # Prove the ratchet catches a BRAND NEW uncited one instead, added to a
   # function that starts out with no attribute at all.
-  python3 - "$copy/kyzo-core/src/data/tuple.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-core/src/data/tuple.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
@@ -151,7 +151,7 @@ bite_agreement_registry() {
   echo "=== bite-proof: check 5 (agreement-law registry) — a law quietly deleted ==="
   local copy="$WORK/agreement_registry"
   fresh_copy "$copy"
-  python3 - "$copy/kyzo-core/src/query/stratify.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-core/src/query/stratify.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
@@ -161,7 +161,7 @@ assert old in text, "test not found — has stratify.rs changed shape?"
 text = text.replace(old, new)
 open(path, "w").write(text)
 PY
-  expect_red "$copy" agreement_registry "the refusal-boundary test renamed without updating xtask/agreements.toml"
+  expect_red "$copy" agreement_registry "the refusal-boundary test renamed without updating crates/xtask/agreements.toml"
 }
 
 if [ "$#" -eq 0 ]; then

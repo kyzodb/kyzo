@@ -8,7 +8,7 @@
  */
 
 //! Story #118's second law: the fjall adapter's byte currency is `Slice`
-//! (Arc-backed, `kyzo-core/src/storage/mod.rs`'s `ReadTx::get`/`range_scan`/
+//! (Arc-backed, `crates/kyzo-core/src/storage/mod.rs`'s `ReadTx::get`/`range_scan`/
 //! `total_scan`), never a per-row `Vec<u8>` copy. The prior design converted
 //! every scanned key AND value with `.to_vec()` (`storage/fjall.rs`'s
 //! `raw_range`/`read_get`/`read_total_scan`) — two heap allocations on EVERY

@@ -14,7 +14,7 @@ TTL=60
 
 file=$(jq -r '.tool_input.file_path // ""')
 case "$file" in
-  *kyzo-core/*|*kyzo-bin/*|*kyzo-crashfs/*|*kyzo-lsp/*|*kyzo-arrow-interop/*|*kyzo-model/*|*kyzo-oracle/*|*kyzo-trials/*|*kyzo-wasm/*) ;;
+  *crates/kyzo-core/*|*crates/kyzo-bin/*|*crates/kyzo-crashfs/*|*crates/kyzo-lsp/*|*crates/kyzo-arrow-interop/*|*crates/kyzo-model/*|*crates/kyzo-oracle/*|*crates/kyzo-trials/*|*crates/kyzo-wasm/*) ;;
   *) exit 0 ;;
 esac
 

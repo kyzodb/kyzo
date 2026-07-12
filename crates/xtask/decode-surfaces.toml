@@ -6,7 +6,7 @@
 # inferred: adding a new decode path means adding its entrypoint here.
 
 [[surface]]
-file = "kyzo-core/src/data/memcmp.rs"
+file = "crates/kyzo-core/src/data/memcmp.rs"
 # `decode_bytes` decodes a memcmp-encoded byte-string group (any DataValue's
 # String/Bytes payload); `Num::decode_from_key` and `DataValue::decode_from_key`
 # (which forwards to `decode_from_key_at_depth`) decode the tagged key
@@ -15,13 +15,13 @@ file = "kyzo-core/src/data/memcmp.rs"
 entrypoints = ["decode_bytes", "Num::decode_from_key", "DataValue::decode_from_key"]
 
 [[surface]]
-file = "kyzo-core/src/data/fact_payload.rs"
+file = "crates/kyzo-core/src/data/fact_payload.rs"
 # `decode_fact_payload` is the value-side (non-key) column decode; it calls
 # `decode_fact_field` per field (picked up by same-file reachability).
 entrypoints = ["decode_fact_payload"]
 
 [[surface]]
-file = "kyzo-core/src/data/bitemporal.rs"
+file = "crates/kyzo-core/src/data/bitemporal.rs"
 # The bitemporal read paths: claim-polarity byte decode, the skip-scan's
 # key-side bitemporal resolution, the system-stamp read, and the
 # value-side extension read.
@@ -33,7 +33,7 @@ entrypoints = [
 ]
 
 [[surface]]
-file = "kyzo-core/src/data/tuple.rs"
+file = "crates/kyzo-core/src/data/tuple.rs"
 # Every public tuple decode entrypoint, plus RelationId's raw byte decode —
 # the exact seam the historical bug (assert!-bounded, fed corrupt catalog
 # bytes) lived on.

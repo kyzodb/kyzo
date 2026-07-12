@@ -60,7 +60,7 @@ fn run_resonance(args: &[String]) -> ExitCode {
     };
     if files.is_empty() {
         eprintln!(
-            "FAIL resonance gate: no source files found under kyzo-core/src or kyzo-bin/src at {}",
+            "FAIL resonance gate: no source files found under crates/kyzo-core/src or crates/kyzo-bin/src at {}",
             root.display()
         );
         return ExitCode::FAILURE;

@@ -65,7 +65,7 @@ rand_chacha = "0.9"
 tempfile = "3"
 
 [dependencies.kyzo]
-path = "../kyzo-core"
+path = "../crates/kyzo-core"
 features = ["fuzz-internals"]
 
 # The vendored fjall-rs/lsm-tree fork itself (story #118: we own this LSM

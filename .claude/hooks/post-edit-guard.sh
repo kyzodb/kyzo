@@ -31,9 +31,9 @@ if printf '%s' "$file" | grep -Eq 'kyzo-[a-z-]+/src/'; then
 fi
 
 case "$file" in
-  *kyzo-core/src/lib.rs)
+  *crates/kyzo-core/src/lib.rs)
     if ! grep -q '#!\[forbid(unsafe_code)\]' "$abs"; then
-      block "kyzo-core/src/lib.rs no longer declares #![forbid(unsafe_code)]. Restore it — removing forbid is an in-story reviewed decision with a safety case, not an edit."
+      block "crates/kyzo-core/src/lib.rs no longer declares #![forbid(unsafe_code)]. Restore it — removing forbid is an in-story reviewed decision with a safety case, not an edit."
     fi
     if grep -Eqi 'germanstr[^a-z]*unsafe|reviewed exception|Miri-audited exception' "$abs"; then
       block "lib.rs claims an unsafe exception that does not exist. First-party code is pure safe Rust; delete the phantom-exception language."

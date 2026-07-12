@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-lsp/**/*.rs"
+  - "crates/kyzo-lsp/**/*.rs"
 ---
 
 # Zone: Host, LSP — the language server

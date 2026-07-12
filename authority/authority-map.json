@@ -1,7 +1,7 @@
 {
   "tool": "authority-graph",
   "tool_version": 1,
-  "scope": "kyzo-core/src",
+  "scope": "crates/kyzo-core/src",
   "files_scanned": 172,
   "layers": [
     {
@@ -33,7 +33,7 @@
     {
       "name": "Domain",
       "layer": "value",
-      "file": "kyzo-core/src/data/value/column.rs",
+      "file": "crates/kyzo-core/src/data/value/column.rs",
       "line": 55,
       "owns": "arena+epoch+visibility admission; a raw u32 code is meaningful only under a proven Domain; cross-Domain code comparison is invalid",
       "constructs": [
@@ -56,7 +56,7 @@
     {
       "name": "EncodedKey",
       "layer": "value",
-      "file": "kyzo-core/src/data/value/row.rs",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
       "line": 253,
       "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
       "constructs": [
@@ -82,7 +82,7 @@
     {
       "name": "ExecDedup",
       "layer": "value",
-      "file": "kyzo-core/src/data/value/exec.rs",
+      "file": "crates/kyzo-core/src/data/value/exec.rs",
       "line": 189,
       "owns": "the fixpoint dedup identity: packed admitted code tuples, u32-slice equality, no canonical encode in the hot loop",
       "constructs": [
@@ -107,7 +107,7 @@
     {
       "name": "ExecRows",
       "layer": "value",
-      "file": "kyzo-core/src/data/value/exec.rs",
+      "file": "crates/kyzo-core/src/data/value/exec.rs",
       "line": 53,
       "owns": "the admitted execution currency; codes are unforgeable (private field, no raw-code door)",
       "constructs": [
@@ -132,7 +132,7 @@
     {
       "name": "Tuple",
       "layer": "value",
-      "file": "kyzo-core/src/data/value/mod.rs",
+      "file": "crates/kyzo-core/src/data/value/mod.rs",
       "line": 507,
       "owns": "the decoded-DataValue row form; not interchangeable with ExecRows codes or canonical bytes",
       "constructs": [
@@ -202,70 +202,70 @@
   "findings": [
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/engines/hnsw.rs",
+      "file": "crates/kyzo-core/src/engines/hnsw.rs",
       "line": 491,
       "excerpt": "vec_hash: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/engines/hnsw.rs",
+      "file": "crates/kyzo-core/src/engines/hnsw.rs",
       "line": 530,
       "excerpt": "entry_key: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/engines/hnsw.rs",
+      "file": "crates/kyzo-core/src/engines/hnsw.rs",
       "line": 2059,
       "excerpt": "key: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/engines/lsh.rs",
+      "file": "crates/kyzo-core/src/engines/lsh.rs",
       "line": 157,
       "excerpt": "pub(crate) perms: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/query/levels.rs",
+      "file": "crates/kyzo-core/src/query/levels.rs",
       "line": 63,
       "excerpt": "values: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/query/levels.rs",
+      "file": "crates/kyzo-core/src/query/levels.rs",
       "line": 553,
       "excerpt": "lower: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/query/levels.rs",
+      "file": "crates/kyzo-core/src/query/levels.rs",
       "line": 554,
       "excerpt": "upper: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/query/levels.rs",
+      "file": "crates/kyzo-core/src/query/levels.rs",
       "line": 750,
       "excerpt": "lower: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
-      "file": "kyzo-core/src/query/levels.rs",
+      "file": "crates/kyzo-core/src/query/levels.rs",
       "line": 751,
       "excerpt": "upper: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "illegal-escape",
-      "file": "kyzo-core/src/data/value/row.rs",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
       "line": 440,
       "excerpt": "impl std::ops::Deref for EncodedKey {",
       "note": "Deref dissolves the EncodedKey authority boundary",
@@ -273,70 +273,70 @@
     },
     {
       "class": "missing-authority",
-      "file": "kyzo-core/src",
+      "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "CatalogGeneration",
       "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
     },
     {
       "class": "missing-authority",
-      "file": "kyzo-core/src",
+      "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "IndexGeneration",
       "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
     },
     {
       "class": "missing-authority",
-      "file": "kyzo-core/src",
+      "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "QueryDomainAdmission",
       "note": "expected authority (layer query) does not exist yet \u2014 owed by #122"
     },
     {
       "class": "missing-authority",
-      "file": "kyzo-core/src",
+      "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "RelationGeneration",
       "note": "expected authority (layer runtime-catalog) does not exist yet \u2014 owed by #135"
     },
     {
       "class": "missing-authority",
-      "file": "kyzo-core/src",
+      "file": "crates/kyzo-core/src",
       "line": 0,
       "excerpt": "ResidentIndexKey",
       "note": "expected authority (layer engines) does not exist yet \u2014 owed by #122"
     },
     {
       "class": "searchra-decoded-tuples",
-      "file": "kyzo-core/src/query/ra/search.rs",
+      "file": "crates/kyzo-core/src/query/ra/search.rs",
       "line": 114,
       "excerpt": "let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {",
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
     {
       "class": "searchra-decoded-tuples",
-      "file": "kyzo-core/src/query/ra/search.rs",
+      "file": "crates/kyzo-core/src/query/ra/search.rs",
       "line": 186,
       "excerpt": "hits: Vec<Tuple>,",
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
     {
       "class": "searchra-decoded-tuples",
-      "file": "kyzo-core/src/query/ra/search.rs",
+      "file": "crates/kyzo-core/src/query/ra/search.rs",
       "line": 188,
       "excerpt": "search: Box<dyn FnMut(&[DataValue]) -> Result<Vec<Tuple>> + 'a>,",
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
     {
       "class": "tuple-vec-alias",
-      "file": "kyzo-core/src/data/value/mod.rs",
+      "file": "crates/kyzo-core/src/data/value/mod.rs",
       "line": 515,
       "excerpt": "pub type Tuple = Vec<DataValue>;",
       "note": "row authority is a bare Vec<DataValue> alias (newtype owed by #126)"
     },
     {
       "class": "unchecked-constructor",
-      "file": "kyzo-core/src/data/value/arena.rs",
+      "file": "crates/kyzo-core/src/data/value/arena.rs",
       "line": 2356,
       "excerpt": "fn forged_in_epoch_stamp_beyond_len_panics() {",
       "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_panics'",
@@ -344,7 +344,7 @@
     },
     {
       "class": "unchecked-constructor",
-      "file": "kyzo-core/src/data/value/wide/validity.rs",
+      "file": "crates/kyzo-core/src/data/value/wide/validity.rs",
       "line": 43,
       "excerpt": "pub fn from_raw(ts_micros: i64) -> ValidityTs {",
       "note": "raw-door constructor 'from_raw'",

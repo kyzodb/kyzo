@@ -25,7 +25,7 @@
 //! `assert!`-panicked the process in `RelationId::new`). Both are now
 //! hand-written `Deserialize` impls that re-validate (`data/value.rs`,
 //! `data/tuple.rs`). `decode_fact_payload` and `RelationHandle::decode` are
-//! `pub(crate)`, so `kyzo-core/src/fuzz_api.rs` adds three narrow
+//! `pub(crate)`, so `crates/kyzo-core/src/fuzz_api.rs` adds three narrow
 //! `fuzz-internals`-gated façades — same posture as the existing
 //! `fuzz_parse_script` target — to reach them without widening the crate's
 //! normal public surface.

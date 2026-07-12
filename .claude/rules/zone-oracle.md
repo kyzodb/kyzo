@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-oracle/**/*.rs"
+  - "crates/kyzo-oracle/**/*.rs"
 ---
 
 # Zone: Oracle — the reference semantics

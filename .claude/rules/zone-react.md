@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-core/src/react/**/*.rs"
+  - "crates/kyzo-core/src/react/**/*.rs"
 ---
 
 # Zone: React — derived truth kept current

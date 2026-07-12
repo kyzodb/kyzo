@@ -46,7 +46,7 @@
  *   self-join shape: `tc(x,z), tc(z,y)`; Andersen's `load`/`store` rules,
  *   each mentioning `pt` twice). That shape's memory blowup is issue #68's
  *   dominant driver, confirmed both structurally (this collapse) and by
- *   measurement (`kyzo-core/examples/fixpoint_mem_profile.rs`: 18-43×
+ *   measurement (`crates/kyzo-core/examples/fixpoint_mem_profile.rs`: 18-43×
  *   more allocations per output row than an equivalent single-occurrence
  *   rule, growing super-linearly with scale where the single-occurrence
  *   case stays flat). The fix here numbers by OCCURRENCE — this body's

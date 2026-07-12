@@ -36,7 +36,7 @@
  * - **Ctrl-C no longer claims to kill a running query.** Upstream's
  *   handler ran `::kill $id` for every row of `::running`. In this port
  *   `::running` always returns zero rows and `::kill` refuses with
- *   `IndexOpNotLanded` (`kyzo-core/src/runtime/db.rs`): the live-query
+ *   `IndexOpNotLanded` (`crates/kyzo-core/src/runtime/db.rs`): the live-query
  *   registry is runtime-tier work that has not landed. Rather than port a
  *   loop that iterates nothing and calls a script guaranteed to fail, the
  *   handler says plainly what it can't do yet.

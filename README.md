@@ -245,7 +245,7 @@ answers must be byte-identical.
 
 <p align="center"><img src="docs/assets/oracle.svg" width="760" alt="Every generated program is answered by both the optimized engine and the naive oracle; the answers must be byte-identical or the defect is pinned as a regression forever."></p>
 
-The query engine's front door (`kyzo-core/src/query/mod.rs`) opens with **seven numbered laws**, each
+The query engine's front door (`crates/kyzo-core/src/query/mod.rs`) opens with **seven numbered laws**, each
 documented with the mechanism that enforces it: answer correctness (optimized evaluation must equal
 the naive fixpoint), stratification safety (unsound programs are refused, never mis-answered),
 termination, rule safety, total input handling (no query text and no stored bytes may panic the

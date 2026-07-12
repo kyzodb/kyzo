@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-core/src/rules/**/*.rs"
+  - "crates/kyzo-core/src/rules/**/*.rs"
 ---
 
 # Zone: Rules — algorithms as rules

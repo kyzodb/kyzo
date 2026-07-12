@@ -1,19 +1,19 @@
 [
   {
     "class": "unchecked-constructor",
-    "file": "kyzo-core/src/data/value/wide/validity.rs",
+    "file": "crates/kyzo-core/src/data/value/wide/validity.rs",
     "contains": "pub fn from_raw(ts_micros: i64) -> ValidityTs",
     "reason": "total boundary constructor: every i64 is a valid validity-timestamp micros value; parse-at-boundary, not an authority bypass"
   },
   {
     "class": "unchecked-constructor",
-    "file": "kyzo-core/src/data/value/arena.rs",
+    "file": "crates/kyzo-core/src/data/value/arena.rs",
     "contains": "fn forged_in_epoch_stamp_beyond_len_panics",
     "reason": "named corruption/bypass TEST asserting that a forged stamp panics — it proves the door is shut, it is not a door"
   },
   {
     "class": "illegal-escape",
-    "file": "kyzo-core/src/data/value/row.rs",
+    "file": "crates/kyzo-core/src/data/value/row.rs",
     "contains": "impl std::ops::Deref for EncodedKey",
     "reason": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
   }

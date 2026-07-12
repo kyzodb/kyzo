@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Story #30: the determinism campaign's outward-facing driver. The engine's
-# own in-process campaigns (kyzo-core/src/query/trials.rs,
+# own in-process campaigns (crates/kyzo-core/src/query/trials.rs,
 # time_travel_trials.rs) already prove cross-thread determinism *inside one
 # test binary*; this script proves the same claim across axes that can only
 # be varied from OUTSIDE a single process: repeated runs, a real
 # RAYON_NUM_THREADS sweep, and — the remaining gap issue #30 named — CPU
 # architecture, by diffing digests recorded on two different runners.
 #
-# It drives kyzo-core/examples/determinism_digest.rs, a single-shot probe
+# It drives crates/kyzo-core/examples/determinism_digest.rs, a single-shot probe
 # that runs a seeded mutation+time-travel+query workload through the public
 # `Db` API and prints one `COMBINED` hex digest (query answers, in returned
 # row order, plus the `::merkle_root` cold on-disk state hash — see the

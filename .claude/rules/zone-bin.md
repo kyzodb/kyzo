@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-bin/**/*.rs"
+  - "crates/kyzo-bin/**/*.rs"
 ---
 
 # Zone: Host, Native — the CLI, REPL, and HTTP server

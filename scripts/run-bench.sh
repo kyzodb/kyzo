@@ -12,7 +12,7 @@
 #
 # No invented data and no invented queries: the graphs are fetched from their
 # canonical SNAP source (scripts/fetch-bench-data.sh) and the program is the
-# textbook transitive closure (kyzo-core/examples/bench_tc.rs).
+# textbook transitive closure (crates/kyzo-core/examples/bench_tc.rs).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p bench-results

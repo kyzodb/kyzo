@@ -1,6 +1,6 @@
 ---
 paths:
-  - "kyzo-core/src/store/**/*.rs"
+  - "crates/kyzo-core/src/store/**/*.rs"
 ---
 
 # Zone: Store — fact persistence

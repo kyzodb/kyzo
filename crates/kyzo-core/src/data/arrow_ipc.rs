@@ -212,7 +212,7 @@ fn align8(len: usize) -> usize {
 // fixed struct layout. The natural way to hand these to `flatbuffers` is
 // `create_vector::<T>`, but that needs `T: Push`, whose method is `unsafe
 // fn` — forbidden outright by this crate's `#![forbid(unsafe_code)]`
-// (`kyzo-core/src/lib.rs`), which does not carve out an exception for
+// (`crates/kyzo-core/src/lib.rs`), which does not carve out an exception for
 // trait methods that happen to do nothing unsafe in the body. So these
 // two vectors are built by [`push_struct_vector`] instead: every field of
 // every element goes through the crate's own (safe) `i64: Push`, one

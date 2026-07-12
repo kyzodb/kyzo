@@ -9,16 +9,16 @@
 
 #![no_main]
 // `DataValue` is used as a `BTreeSet` element in `gen_value`'s `Set` arm,
-// exactly as `kyzo-core/src/lib.rs` notes for its own crate-wide allow:
+// exactly as `crates/kyzo-core/src/lib.rs` notes for its own crate-wide allow:
 // clippy's interior-mutability check is a false positive here (the
 // `Regex`/cache internals it flags are never mutated through a shared
 // reference), and that crate-level allow does not reach across the crate
 // boundary into this separate fuzz-target binary, so it is repeated here.
 #![allow(clippy::mutable_key_type)]
 
-//! Fuzzes the memcomparable key codec (`kyzo-core/src/data/memcmp.rs`)
+//! Fuzzes the memcomparable key codec (`crates/kyzo-core/src/data/memcmp.rs`)
 //! through its public façade — `encode_tuple_key` / `decode_tuple_from_key`
-//! (`kyzo-core/src/data/tuple.rs`, re-exported at the crate root) — which
+//! (`crates/kyzo-core/src/data/tuple.rs`, re-exported at the crate root) — which
 //! are already `pub` for benches/tooling, so no visibility was widened for
 //! this target.
 //!

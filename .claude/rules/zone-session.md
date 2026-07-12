@@ -1,7 +1,7 @@
 ---
 paths:
-  - "kyzo-core/src/session/**/*.rs"
-  - "kyzo-core/src/lib.rs"
+  - "crates/kyzo-core/src/session/**/*.rs"
+  - "crates/kyzo-core/src/lib.rs"
 ---
 
 # Zone: Session — the one door

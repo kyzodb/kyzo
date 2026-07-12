@@ -18,7 +18,7 @@
 //! registration — plus an explicit no-duplicate-key check.
 
 // `DataValue` (inside `Tuple = Vec<DataValue>`) is used as a `BTreeSet`
-// element throughout this file, exactly as `kyzo-core/src/lib.rs` itself
+// element throughout this file, exactly as `crates/kyzo-core/src/lib.rs` itself
 // notes for its own crate-wide allow: clippy's interior-mutability check
 // is a false positive here (the `Regex`/cache internals it flags are
 // never mutated through a shared reference), and that crate-level allow
