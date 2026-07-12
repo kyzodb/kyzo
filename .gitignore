@@ -19,3 +19,6 @@ __pycache__/
 # This subsumes the vendored codegraph build artifact and the large local model cache within it.
 .mcp.json
 /mcp/
+
+# VS Code extension build artifact (packaged by vsce, shipped via releases, never committed)
+*.vsix

@@ -14,13 +14,15 @@ editor).
 - `language-configuration.json` — comment tokens (`#`, `/* */`), bracket/quote auto-closing.
 - `package.json` — the VS Code extension manifest (language + grammar contribution points).
 
-## Try it
+## Install
 
 ```sh
-cd editors/vscode-kyzoscript
-code --install-extension .   # or: open this folder in VS Code and F5 to launch an Extension
-                              # Development Host
+cd editors/vscode
+npx -y @vscode/vsce package            # produces kyzoscript-<version>.vsix
+code --install-extension kyzoscript-*.vsix
 ```
+
+(Or open this folder in VS Code and F5 to launch an Extension Development Host.)
 
 ## Verifying the grammar
 
@@ -45,8 +47,10 @@ list — enumeration is the thing that goes stale when the grammar grows a new o
 
 ## Not yet covered (named, not hidden)
 
-A formatter (`kyzo fmt` over the parse tree) and an LSP (diagnostics-as-you-type, completion against
-a live store) are the other two pieces story #73 names under "editor tooling." Both are
-substantially larger builds — a formatter needs a pretty-printer over the AST with real
-round-trip-preserves-semantics tests, and an LSP is a standalone long-running server with its own
-protocol surface — than a grammar file, and neither is started here.
+This extension is grammar-only: the language server exists (`crates/kyzo-lsp` — parse diagnostics
+and the canonical formatter over the same grammar) but nothing here launches it yet. The intended
+layering is server-as-the-one-language-authority with this extension as a thin adapter: the missing
+piece is the LSP client glue (`vscode-languageclient` spawning `kyzo-lsp`), after which highlighting
+moves to semantic tokens from the real parser and this TextMate grammar demotes to a bootstrap
+layer. Until that lands, this hand-written grammar is the only highlighting, and re-deriving it
+against `kyzoscript.pest` on drift is the maintenance contract.
