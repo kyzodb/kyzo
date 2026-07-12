@@ -320,24 +320,18 @@ Enforcement machinery exists only as the mechanical rules entail it — every
 guard traces to a rule, and a script no rule entails is unowned machinery.
 
 ```
-justfile                         # the named-commands authority: gate, test, bench, run
 Dockerfile / docker-compose.yml  # the pinned environment: the container IS the limits;
 rust-toolchain.toml / Cargo.lock #   no C compiler, so impurity fails to build
 scripts/
-├── check-unsafe.sh              # entailed by the unsafe law: forbid present, zero allows,
-│                                #   no doc claims a nonexistent exception
-├── check-pure-rust.sh           # entailed by the purity law: no C/C++ in first-party trees
-├── authority-graph.py           # entailed by the authority law: @authority extraction,
-│                                #   drift audit, the ratchet against the committed baseline
-├── check-structure (to exist)   # entailed by the placement law: zone dependency direction
-│                                #   and module-doc coverage, mechanically
-└── smell-scan.sh                # the candidate-finder for the judgment bucket: it finds,
-                                 #   a human/LLM classifies — deliberately not a gate
+└── check-structure (to exist)   # entailed by the placement law: zone dependency direction
+                                 #   and module-doc coverage, mechanically
 authority/                       # the committed ratchet artifacts (map + report)
 ci/                              # the remote mirror of the gate: pure scripts, no agent,
                                  #   depending on neither compliance nor maintainer
-crates/xtask/                           # guards that need Rust to express (workspace-level checks);
-                                 #   same law as scripts/: each traces to a rule or has no seat
+crates/xtask/                           # the named-commands authority AND the guards that need
+                                 #   Rust to express: unsafe, pure-rust, and authority-graph
+                                 #   verbs (each entailed by the same law scripts/ once carried);
+                                 #   `cargo xtask gate` is the one callable surface
 ```
 
 ## Where Tests Live (the test ontology)
