@@ -23,7 +23,7 @@ severity.
 Rules teach. Hooks interrupt. Tests prove. Scripts enforce.
 
 - `CLAUDE.md` — this constitution.
-- `.claude/rules/*.md` — law: `global.md`, path-scoped `zone-*.md` for the target architecture,
+- `.claude/rules/*.md` — law: path-scoped `zone-*.md` for the target architecture,
   and `deprecated-*.md` carrying per-file migration guidance for the legacy tree.
 - `.claude/skills/architecture-map/SKILL.md` — the target-state placement authority.
 - `.claude/settings.json` + `.claude/hooks/*.sh` — inject work context and construction doctrine
