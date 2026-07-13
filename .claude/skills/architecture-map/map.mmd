@@ -1,0 +1,60 @@
+%% KyzoDB architecture map — the target-state zone graph codegraph enforces.
+%% Authored from .claude/rules/zone-*.md (each zone's one-line truth) and
+%% deprecated-*.md (source→target + migration type: absorbed | migrated |
+%% retired | sealed | split). Current placement is DERIVED by codegraph
+%% ingest; this file authors intent only — target zones and migration edges.
+
+graph TD
+    subgraph kyzo["kyzo (codebase)"]
+
+        %% ── current: real zones that already own their truth ──
+        bin["crates/kyzo-bin<br/>status: current<br/>truth: host, native — CLI/REPL/HTTP; a way to reach the engine, never where engine meaning lives"]
+        lsp["crates/kyzo-lsp<br/>status: current<br/>truth: host, LSP — editor tooling over the language, not over the engine"]
+        crashfs["crates/kyzo-crashfs<br/>status: current<br/>truth: the fault injector — makes the filesystem lie on command, decided only by the seed"]
+        arrow["crates/kyzo-arrow-interop<br/>status: current<br/>truth: Arrow interop cross-check — tests proving an external Arrow reader parses kyzo-core's encoder output byte-identically"]
+        xtask["crates/xtask<br/>status: current<br/>truth: the gate program — every invocable action is one typed verb, run through the container"]
+        vendor_fjall["vendor/fjall<br/>status: current<br/>truth: the owned storage fork (fjall) — upstream ruled toward the engine's storage contract"]
+        vendor_lsmtree["vendor/lsm-tree<br/>status: current<br/>truth: the owned storage fork (lsm-tree) — upstream ruled toward the engine's storage contract"]
+        fuzz["fuzz<br/>status: current<br/>truth: adversarial totality harness — fuzz targets proving parse/decode total over every byte sequence"]
+
+        %% ── target: ruled zones not yet realized ──
+        exec["crates/kyzo-core/src/exec<br/>status: target<br/>truth: derived truth — one machine turning proven programs into answers, deterministically"]
+        store["crates/kyzo-core/src/store<br/>status: target<br/>truth: fact persistence — the one substrate: ordered keys, transactions, time in the key, crash safety"]
+        session["crates/kyzo-core/src/session<br/>status: target<br/>truth: the one door — all writes pass one admission path: entry, admission, catalog, observers"]
+        project["crates/kyzo-core/src/project<br/>status: target<br/>truth: projections — rebuildable speed over canonical truth, never truth itself"]
+        react["crates/kyzo-core/src/react<br/>status: target<br/>truth: derived truth kept current — standing queries, incremental maintenance, change feeds"]
+        rules["crates/kyzo-core/src/rules<br/>status: target<br/>truth: algorithms as rules — the invocable library of graph algorithms"]
+        model["crates/kyzo-model<br/>status: target<br/>truth: the shared vocabulary — values, schemas, programs, the parse lift, the wire envelopes"]
+        oracle["crates/kyzo-oracle<br/>status: target<br/>truth: reference semantics — the engine's naive twin, the law inverted"]
+        trials["crates/kyzo-trials<br/>status: target<br/>truth: the campaigns — attacks on public claims, rerunnable by strangers"]
+        wasm["crates/kyzo-wasm<br/>status: target<br/>truth: the runtime envelope — the engine inside foreign hosts, byte-identical to native"]
+
+        %% ── deprecated: the old kyzo-core layout dissolving into the ruled zones ──
+        d_data["crates/kyzo-core/src/data<br/>status: deprecated<br/>truth: values, expressions, and programs — the data forms of the language<br/>reason: two truths in one bag — the vocabulary belongs in model, its evaluation in exec"]
+        d_query["crates/kyzo-core/src/query<br/>status: deprecated<br/>truth: query planning, the VM, and the query-time campaigns<br/>reason: planning and the VM belong in exec; the law/gauntlet campaigns belong in trials"]
+        d_storage["crates/kyzo-core/src/storage<br/>status: deprecated<br/>truth: the storage layer plus its conformance and crash harnesses<br/>reason: the substrate belongs in store; its conformance/crash campaigns belong in trials"]
+        d_runtime["crates/kyzo-core/src/runtime<br/>status: deprecated<br/>truth: the execution runtime<br/>reason: this is exec under an old name — the execution machine belongs in exec"]
+        d_engines["crates/kyzo-core/src/engines<br/>status: deprecated<br/>truth: the search and execution engines plus their hostile batteries<br/>reason: the engines belong in exec; the hostile batteries absorb into their module's tests"]
+        d_parse["crates/kyzo-core/src/parse<br/>status: deprecated<br/>truth: the parser and the parse lift<br/>reason: the parse lift belongs in model, beside the vocabulary it produces"]
+        d_format["crates/kyzo-core/src/format<br/>status: deprecated<br/>truth: value encoding, decoding, and the wire envelopes<br/>reason: encoding and the wire envelopes belong in model"]
+        d_fixed_rule["crates/kyzo-core/src/fixed_rule<br/>status: deprecated<br/>truth: the built-in graph and utility algorithms<br/>reason: the algorithms belong in rules, the invocable library"]
+        d_examples["crates/kyzo-core/examples<br/>status: deprecated<br/>truth: issue-pinned reproducers and profilers<br/>reason: instruments must graduate to a trial or a bench, or die with the issue — none live here permanently"]
+    end
+
+    d_data -->|migrates to| model
+    d_query -->|migrates to| exec
+    d_storage -->|migrates to| store
+    d_runtime -->|migrates to| exec
+    d_engines -->|migrates to| exec
+    d_parse -->|migrates to| model
+    d_format -->|migrates to| model
+    d_fixed_rule -->|migrates to| rules
+    d_examples -->|migrates to| trials
+
+    classDef current fill:#1e4d33,color:#ffffff,stroke:#0f2b1c
+    classDef deprecated fill:#7a1f1f,color:#ffffff,stroke:#3d0f0f
+    classDef target fill:#2f2f7a,color:#ffffff,stroke:#17173d
+
+    class bin,lsp,crashfs,arrow,xtask,vendor_fjall,vendor_lsmtree,fuzz current
+    class exec,store,session,project,react,rules,model,oracle,trials,wasm target
+    class d_data,d_query,d_storage,d_runtime,d_engines,d_parse,d_format,d_fixed_rule,d_examples deprecated
