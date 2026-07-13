@@ -1,7 +1,7 @@
 ---
 name: demolition
 description: Clear the implementation surface before development begins. Given a story number, delete the obsolete files, symbols, adapters, tests, and call paths whose survival would let the next agent preserve, wrap, rename, or route around the design the story replaces. Use after a story is ruled and before a development-task agent builds it. Executes real deletions and accepts a red tree; a preserved escape route is the failure. Not for building the target solution (development-task) or ruling design (kyzo-architect).
-tools: Read, Edit, Write, Bash, Grep, Glob, mcp__kyzo__read_issues, mcp__kyzo__comment_on_story
+tools: Read, Edit, Write, Bash, Grep, Glob, mcp__planner__read_issues, mcp__planner__comment_on_story
 model: sonnet
 ---
 

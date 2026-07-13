@@ -1,6 +1,6 @@
 ---
 name: architecture-map
-description: Build and maintain a project's target-state architecture map as one annotated Mermaid graph — current, deprecated, and target zones, joined by deprecated-to-target edges. Use before placing a new construct, naming a file, deciding which zone owns work, or judging whether code sits in the wrong place; also use to create the map itself, or update it when the target state changes. Not for per-construct coding law (the zone/deprecated rule files, a separate skill) and not for describing what code currently does — that is derived by ingest, never re-authored here.
+description: Build and maintain a project's target-state architecture map as one annotated Mermaid graph — current, deprecated, and target zones, joined by deprecated-to-target edges. Use before placing a new construct, naming a file, deciding which zone owns work, or judging whether code sits in the wrong place; also use to create the map itself, or update it when the target state changes. Not for per-construct coding law (the zone/deprecated rule files, a separate skill) and not for describing what code currently does — that is read off the real tree, never re-authored here.
 ---
 
 # The Architecture Map
@@ -10,11 +10,10 @@ it should be" is answerable by structure — a graph a query can traverse — ne
 anyone has to be trusted to remember or assert correctly. A diagram that looks right but
 can't be checked has already failed at the one thing this skill produces.
 
-This is not a description of the codebase. Codegraph's ingest already computes what a
-zone's real content is, deterministically, from the real file tree — this skill never
-re-authors that. What ingest *cannot* know is intent: where a zone is supposed to end up,
-and where a deprecated zone is migrating to. That is the only thing this skill exists to
-author.
+This is not a description of the codebase. What a zone's real content is can always be
+read off the real file tree — this skill never re-authors that. What the tree *cannot*
+say is intent: where a zone is supposed to end up, and where a deprecated zone is
+migrating to. That is the only thing this skill exists to author.
 
 ## The non-negotiables
 
@@ -22,15 +21,15 @@ author.
    annotations on the *same* nodes and edges — never as three separate diagrams. The
    reason the three views exist at all is the arrows between them; three disconnected
    pictures have no arrows, and no computable distance.
-2. **Current is derived, never re-authored.** Before marking anything, consult what's
-   already ingested (`codegraph_status` / the live graph) for the real zones. A zone whose
-   real content already matches its purpose gets a minimal `current` node — confirming
-   it's accounted for, not describing it again.
+2. **Current is derived, never re-authored.** Before marking anything, consult the
+   actual repository tree for the real zones. A zone whose real content already matches
+   its purpose gets a minimal `current` node — confirming it's accounted for, not
+   describing it again.
 3. **No dangling deprecation.** Every `deprecated` node carries exactly one edge to the
    `target` node it migrates to. "This is going away" with no stated destination is not
    a valid node — it's an unfinished thought.
-4. **Node identity must be real.** A node's id is the exact zone path codegraph's own
-   ingest would derive (a real top-level directory, namespaced by codebase when a project
+4. **Node identity must be real.** A node's id is the exact zone path as it exists in
+   the repository (a real top-level directory, namespaced by codebase when a project
    spans more than one). An invented label that can't be joined back to the real tree
    is not a node in this graph — it's decoration.
 5. **One kind of truth per zone.** Every zone is nameable, in one line, as the kind of
@@ -45,9 +44,9 @@ author.
 
 ```mermaid
 flowchart TD
-    IN["INPUT · a project (one or more codebases)<br/>+ its live ingested zones, if any exist"]
+    IN["INPUT · a project (one or more codebases)<br/>+ its real top-level zones"]
 
-    R["0 · READ the real tree<br/>codegraph_status / the live graph — the actual top-level<br/>zones per codebase, never invented, never assumed"]
+    R["0 · READ the real tree<br/>the actual top-level<br/>zones per codebase, never invented, never assumed"]
 
     Z1["1 · FOR EACH real zone: state its truth in one line<br/>what kind of thing does this zone own?"]
 

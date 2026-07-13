@@ -35,7 +35,7 @@ A story moves through a fixed pipeline, and each agent's authority is enforced b
 
 Delegate one task to a fresh agent, not a whole story, so context never accumulates across tasks. While it runs, supervise: arm a monitor, lurk on the transcript, and read the reliable meter — commits and file scope from git refs, never the working index you would be contending for. Correct early, since one mid-flight correction beats a post-mortem. The failure mode of a well-scoped agent is over-caution and non-shipping, so the one to nudge is the agent that has proven its work but will not commit.
 
-**Where the board code lives** — learn this once. The `manage-board` MCP server is in `mcp/`, gitignored in this repo and versioned in the adjacent **planner-dev** repo, a Claude Code plugin that is board-only. This copy additionally mounts the `codegraph` lens, so `mcp/`'s wiring files (`main.py`, `app/__init__.py`, `app/api/__init__.py`) differ and must not be synced — they would break the board-only plugin. Editing `mcp/` changes the running server only after an MCP reconnect. Persist the work by copying the board source into planner-dev and committing there.
+**Where the board code lives** — learn this once. The **planner** MCP server lives in `mcp/`, gitignored in this repo; its product home is the adjacent **planner-dev** repo, a board-only Claude Code plugin. Board development happens here against the live board, then persists by copying the source into planner-dev and committing there. Editing `mcp/` changes the running server only after an MCP reconnect.
 
 ## Build and verification
 

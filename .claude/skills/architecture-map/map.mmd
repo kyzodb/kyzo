@@ -1,8 +1,8 @@
-%% KyzoDB architecture map — the target-state zone graph codegraph enforces.
+%% KyzoDB architecture map — the target-state zone graph.
 %% Authored from .claude/rules/zone-*.md (each zone's one-line truth) and
 %% deprecated-*.md (source→target + migration type: absorbed | migrated |
-%% retired | sealed | split). Current placement is DERIVED by codegraph
-%% ingest; this file authors intent only — target zones and migration edges.
+%% retired | sealed | split). Current placement is read off the real
+%% tree; this file authors intent only — target zones and migration edges.
 
 graph TD
     subgraph kyzo["kyzo (codebase)"]
