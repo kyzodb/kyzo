@@ -169,8 +169,8 @@ user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
 
 [[publisher.bytes]]
-version = "1.12.0"
-when = "2026-06-18"
+version = "1.12.1"
+when = "2026-07-08"
 user-id = 6741
 user-login = "Darksonn"
 user-name = "Alice Ryhl"
@@ -662,22 +662,22 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.jiff]]
-version = "0.2.31"
-when = "2026-06-29"
+version = "0.2.32"
+when = "2026-07-09"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.jiff-static]]
-version = "0.2.31"
-when = "2026-06-29"
+version = "0.2.32"
+when = "2026-07-09"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.jiff-tzdb]]
-version = "0.1.7"
-when = "2026-07-02"
+version = "0.1.8"
+when = "2026-07-09"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -783,6 +783,13 @@ version = "0.14.0-rc.15"
 when = "2026-06-29"
 trusted-publisher = "github:RustCrypto/elliptic-curves"
 
+[[publisher.parking_lot]]
+version = "0.12.5"
+when = "2025-10-03"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
 [[publisher.paste]]
 version = "1.0.15"
 when = "2024-05-07"
@@ -851,8 +858,8 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.radix_trie]]
-version = "0.2.1"
-when = "2020-10-22"
+version = "0.3.0"
+when = "2025-09-16"
 user-id = 98
 user-login = "michaelsproul"
 user-name = "Michael Sproul"
@@ -891,8 +898,8 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.regex]]
-version = "1.12.4"
-when = "2026-06-09"
+version = "1.13.0"
+when = "2026-07-09"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -957,8 +964,8 @@ user-login = "ctz"
 user-name = "Joe Birr-Pixton"
 
 [[publisher.rustyline]]
-version = "17.0.2"
-when = "2025-10-04"
+version = "18.0.1"
+when = "2026-06-24"
 user-id = 5062
 user-login = "gwenn"
 user-name = "gwenn"

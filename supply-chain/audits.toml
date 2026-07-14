@@ -7,6 +7,42 @@ criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "Manually read the entire crate (single ~150-line lib.rs). Provides BigEndian<T>/LittleEndian<T> byte-order wrapper types via declarative macros. Two unsafe blocks do raw pointer reinterpretation for from_bytes/as_bytes with a debug_assert length check; a possible alignment-UB edge case exists on exotic platforms for multi-byte T, but there is no attacker-controlled code execution, no I/O, no build.rs, no macros beyond macro_rules!. Used internally by radix_trie for trie-key nibbling, not exposed to arbitrary untrusted byte slices in a way that creates an exploitable vulnerability."
 
+[[audits.fuser]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.17.0"
+notes = "Story #321 fuser 0.15.1 -> 0.17.0 migration (clears a RUSTSEC advisory). Reach-scoped audit: kyzo-crashfs sets `default-features = false`, so on Linux `fuser_mount_impl` resolves to the pure-rust path (src/mnt/fuse_pure.rs) and mnt/fuse2*.rs, mnt/fuse3*.rs (libfuse FFI) are not compiled; the experimental.rs module is likewise off (no `experimental` feature). Grepped every reachable module for `unsafe`: only in passthrough.rs (FUSE_DEV_IOC_BACKING_OPEN/CLOSE ioctls via nix's ioctl_write_ptr! macro, narrow SAFETY-commented raw ioctl calls), forget_one.rs (a documented repr(transparent) mem::transmute of a kernel-shaped slice), channel.rs (one ioctl for FUSE_DEV_IOC_CLONE), and mnt/fuse_pure.rs+channel.rs's mount/unmount path (File::from_raw_fd on an fd received via SCM_RIGHTS from the fusermount helper subprocess, and a pre_exec FD_CLOEXEC-clearing closure — both standard, narrowly-scoped FFI patterns for a FUSE library). The kernel-request parsing/dispatch layer (session.rs, request.rs, ll/request.rs, ll/mod.rs, ll/reply.rs, ll/fuse_abi.rs, ll/notify.rs, lib.rs) contains zero unsafe: ll/argument.rs's ArgumentIterator decodes raw /dev/fuse bytes via zerocopy::Ref::from_prefix/from_prefix_with_elems, which bounds-check length before casting and return None on insufficient data (panicking only on an alignment mismatch, a programmer/repr error, never on attacker-controlled length). Build-only pkg-config probing in build.rs is dead code on our config (pure-rust branch returns before any pkg_config:: call on Linux without the libfuse feature)."
+
+[[audits.memoffset]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.9.1"
+notes = "New transitive dependency of fuser 0.17 (via nix 0.30.1), not present in the tree before this story's fuser bump. Manually read the entire crate (build.rs: rustc-version autocfg probes only; src/lib.rs, raw_field.rs, offset_of.rs, span_of.rs: ~700 lines total). Well-known, widely-vendored struct-offset macro crate (Gilad Naaman / Ralf Jung, the latter a leading Rust unsafe-code/Stacked-Borrows researcher); every unsafe raw-pointer macro (`_memoffset__addr_of!`, `_memoffset__let_base_ptr!`, `_memoffset_offset_from_unsafe!`) carries an inline comment naming exactly which UB case it avoids or accepts and why (e.g. MaybeUninit base pointers to dodge dangling-reference UB, `addr_of!` to avoid intermediate references to uninitialized memory). No I/O, no env access, no network, `#![no_std]`."
+
+[[audits.num_enum]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.6"
+notes = "New transitive dependency of fuser 0.17 (typed INodeNo/FileHandle/Errno construction), not present in the tree before this story's fuser bump. Manually read the entire crate (src/lib.rs, 99 lines). Defines FromPrimitive/TryFromPrimitive/UnsafeFromPrimitive traits and a TryFromPrimitiveError type; zero unsafe in this crate itself (the transmute lives in num_enum_derive's generated code, audited separately), zero I/O/env/fs/net access, no build.rs. The only version-to-version change vs the previous minor line is a rustversion-gated std::error::Error impl split (core::error::Error post-1.81, std::error::Error before) — cosmetic, no logic change."
+
+[[audits.num_enum_derive]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.6"
+notes = "New transitive dependency of fuser 0.17 via num_enum, not present in the tree before this story's fuser bump. Manually read the entire crate (src/lib.rs, enum_attributes.rs, parsing.rs, variant_attributes.rs, utils.rs; ~1100 lines excluding tests). A proc-macro crate generating the num_enum derive impls via syn/quote; the one unsafe site is generated code in `derive_into_primitive`'s catch_all branch (`unsafe { *(&rest as *const #name as *const Self) }`, a repr-compatible enum-to-primitive reinterpret cast for non-catch-all variants), the standard technique for this exact derive shape and gated by the enum's own #[repr(Primitive)] the macro already requires. No I/O/env/fs/net access at macro-expansion time beyond parsing the invoking crate's own token stream."
+
+[[audits.pkg-config]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.33"
+notes = "New transitive (build-only) dependency of fuser 0.17's build.rs, not present in the tree before this story's fuser bump; dead code on our actual build (kyzo-crashfs's `default-features = false` takes the pure-rust branch in fuser's build.rs before any pkg_config:: call is reached on Linux). Manually read the entire crate (src/lib.rs, 1217 lines including tests). Build-script-only tool that shells out to the system `pkg-config`/`pkgconf` binary and parses its stdout into `cargo:rustc-link-*` directives; zero unsafe, no network access. Maintained by rust-lang/cargo people (Alex Crichton, Josh Triplett, rust-lang-owner). The 0.3.32 -> 0.3.33 delta (also read in full) is two changes: surfacing pkg-config's own stderr in the probe-failure error message, and a doc-comment typo fix."
+
+[[audits.proc-macro-crate]]
+who = "Kyle Tobin <tobin.kyle@gmail.com>"
+criteria = "safe-to-deploy"
+version = "3.5.0"
+notes = "New transitive dependency of fuser 0.17 via num_enum_derive's `std` feature, not present in the tree before this story's fuser bump. Manually read the entire crate (src/lib.rs, 577 lines including tests). At proc-macro-expansion time it reads the invoking crate's own `Cargo.toml` (via `CARGO_MANIFEST_DIR`) and optionally shells out to `cargo locate-project` to find the workspace root, to resolve what a dependency was renamed to in the manifest; zero unsafe, no network access, no writes. Standard, widely-used build-time crate-name-resolution helper for proc-macros (bkchr, a well-known Substrate/Parity maintainer)."
+
 [[audits.quadrature]]
 who = "Kyle Tobin <tobin.kyle@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1109,6 +1145,13 @@ trusted-publisher = "github:RustCrypto/elliptic-curves"
 start = "2026-04-19"
 end = "2027-07-04"
 notes = "Delegated trust: RustCrypto org GitHub Actions trusted-publishing signature; tarcieri (already trusted above) is the org's founder/lead and these crates are published via the org's CI pipeline under his and newpavlov's maintainership."
+
+[[trusted.parking_lot]]
+criteria = "safe-to-deploy"
+user-id = 2915 # Amanieu d'Antras (Amanieu)
+start = "2020-06-24"
+end = "2027-07-13"
+notes = "Delegated trust: new transitive dependency of fuser 0.17 (story #321 fuser bump), not present in the tree before this story. Amanieu d'Antras is parking_lot's own founding maintainer and a confirmed crates.io owner of record (verified via the crates.io owner_user API), already trusted in this file (see `atomic`, `scopeguard`) via the isrg/mozilla/bytecode-alliance delegation chain; this is a direct extension of that same standing trust to the crate he actually authors, not a fresh identity."
 
 [[trusted.paste]]
 criteria = "safe-to-deploy"

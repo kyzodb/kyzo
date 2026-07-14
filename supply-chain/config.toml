@@ -39,6 +39,76 @@ criteria = "safe-to-deploy"
 version = "0.7.8"
 criteria = "safe-to-deploy"
 
+[[exemptions.ahash]]
+version = "0.8.12"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by arrow-array and arrow-select as part of the Arrow interop boundary. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by kyzo-arrow-interop; this and the arrow-* satellite crates below are the single largest item in the backlog (~150K lines combined per the 2026-07-12 night-run ledger). Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-arith]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-array]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow, arrow-ipc, arrow-ord, and others. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-buffer]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow, arrow-ipc, arrow-ord, and others. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-cast]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-data]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow, arrow-ipc, arrow-ord, and others. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-ipc]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-ord]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow and arrow-cast. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-row]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-schema]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow, arrow-ipc, arrow-ord, and others. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-select]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow, arrow-ipc, arrow-ord, and others. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.arrow-string]]
+version = "59.1.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog). Used by arrow. Part of the Arrow interop boundary; see the `arrow` entry for sizing context. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.atoi]]
+version = "2.0.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by arrow-cast. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.backtrace]]
 version = "0.3.76"
 criteria = "safe-to-deploy"
@@ -79,9 +149,24 @@ criteria = "safe-to-deploy"
 version = "0.4.6"
 criteria = "safe-to-deploy"
 
+[[exemptions.chrono]]
+version = "0.4.45"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by arrow-cast, arrow-arith, and arrow-array (~35K lines per the 2026-07-12 night-run ledger). Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.compare]]
 version = "0.0.6"
 criteria = "safe-to-deploy"
+
+[[exemptions.const-random]]
+version = "0.1.18"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by ahash for hash-seed generation. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.const-random-macro]]
+version = "0.1.16"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by const-random. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.criterion]]
 version = "0.8.2"
@@ -115,6 +200,11 @@ criteria = "safe-to-deploy"
 version = "0.20.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.endian-type]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff): radix_trie's dependency moved from 0.1.2 (fully audited elsewhere in this file) to 0.2.0. The version bump itself is not re-audited here per this story's diff-only scope; deferred to the standing supply-chain audit campaign."
+
 [[exemptions.enum_dispatch]]
 version = "0.3.13"
 criteria = "safe-to-deploy"
@@ -131,9 +221,19 @@ criteria = "safe-to-deploy"
 version = "3.1.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.fluent-uri]]
+version = "0.1.4"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by lsp-types for URI parsing. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.flume]]
 version = "0.12.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by lsm-tree. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.generic-array]]
 version = "0.14.7"
@@ -145,7 +245,8 @@ criteria = "safe-to-deploy"
 
 [[exemptions.half]]
 version = "2.7.1"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Criteria raised from safe-to-run to safe-to-deploy: still the same 2.7.1 already in the tree, but arrow-row/arrow-cast and others now require the stricter criteria. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.hashbrown]]
 version = "0.14.5"
@@ -154,6 +255,11 @@ criteria = "safe-to-deploy"
 [[exemptions.hybrid-array]]
 version = "0.4.13"
 criteria = "safe-to-deploy"
+
+[[exemptions.iana-time-zone]]
+version = "0.1.65"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by chrono. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.indexmap]]
 version = "2.14.0"
@@ -179,9 +285,44 @@ criteria = "safe-to-deploy"
 version = "0.3.103"
 criteria = "safe-to-deploy"
 
+[[exemptions.lexical-core]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by arrow-cast; part of the lexical-* number-parsing family alongside arrow (~150K lines combined per the 2026-07-12 night-run ledger). Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.lexical-parse-float]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by lexical-core. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.lexical-parse-integer]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by lexical-core and lexical-parse-float. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.lexical-util]]
+version = "1.0.7"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by lexical-core and other lexical-* crates. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.lexical-write-float]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by lexical-core. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.lexical-write-integer]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by lexical-core and lexical-write-float. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.libc]]
 version = "0.2.186"
 criteria = "safe-to-deploy"
+
+[[exemptions.libm]]
+version = "0.2.16"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by num-traits. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.lock_api]]
 version = "0.4.14"
@@ -194,6 +335,11 @@ criteria = "safe-to-deploy"
 [[exemptions.lsm-tree]]
 version = "3.1.5"
 criteria = "safe-to-deploy"
+
+[[exemptions.lsp-types]]
+version = "0.97.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by kyzo-lsp (~11K lines per the 2026-07-12 night-run ledger). Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.lz4_flex]]
 version = "0.13.1"
@@ -210,6 +356,11 @@ criteria = "safe-to-deploy"
 [[exemptions.miette-derive]]
 version = "7.6.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.nanoid]]
+version = "0.4.0"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by fjall and lsm-tree. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.ndarray]]
 version = "0.17.2"
@@ -231,25 +382,34 @@ criteria = "safe-to-deploy"
 version = "4.3.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.page_size]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked: already a dependency of fuser 0.15.1 and criterion before this story's fuser 0.17 bump (unchanged version across the bump), so it is backlog, not a diff finding. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.parking_lot_core]]
 version = "0.9.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.pest]]
-version = "2.8.6"
+version = "2.8.7"
 criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Version updated from the previously-exempted 2.8.6 to 2.8.7, now current in the lock. Used by kyzo, pest_meta, and pest_derive. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.pest_derive]]
-version = "2.8.6"
+version = "2.8.7"
 criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Version updated from the previously-exempted 2.8.6 to 2.8.7, now current in the lock. Used by kyzo. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.pest_generator]]
-version = "2.8.6"
+version = "2.8.7"
 criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Version updated from the previously-exempted 2.8.6 to 2.8.7, now current in the lock. Used by pest_derive. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.pest_meta]]
-version = "2.8.6"
+version = "2.8.7"
 criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Version updated from the previously-exempted 2.8.6 to 2.8.7, now current in the lock. Used by pest_generator. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.phf]]
 version = "0.11.3"
@@ -311,6 +471,11 @@ criteria = "safe-to-deploy"
 version = "6.0.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.rand]]
+version = "0.10.2"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by fjall. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.rawpointer]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
@@ -328,8 +493,9 @@ version = "0.1.27"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustc-hash]]
-version = "2.1.2"
+version = "2.1.3"
 criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Version updated from the previously-exempted 2.1.2 to 2.1.3, now current in the lock. Used by kyzo and lsm-tree. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.rusty-fork]]
 version = "0.3.1"
@@ -363,6 +529,16 @@ criteria = "safe-to-deploy"
 version = "0.9.8"
 criteria = "safe-to-deploy"
 
+[[exemptions.strum]]
+version = "0.28.0"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by lsm-tree. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.strum_macros]]
+version = "0.28.0"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by strum. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.supports-color]]
 version = "3.0.2"
 criteria = "safe-to-deploy"
@@ -379,9 +555,34 @@ criteria = "safe-to-deploy"
 version = "0.4.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.test-log]]
+version = "0.2.21"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by fjall and lsm-tree. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.test-log-core]]
+version = "0.2.21"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by test-log-macros. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.test-log-macros]]
+version = "0.2.21"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by test-log. Full audit deferred to the standing supply-chain audit campaign."
+
+[[exemptions.tiny-keccak]]
+version = "2.0.2"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by const-random-macro. Full audit deferred to the standing supply-chain audit campaign."
+
 [[exemptions.tinyvec]]
 version = "1.11.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.tracing-subscriber]]
+version = "0.3.23"
+criteria = "safe-to-run"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Dev/test-only; used by test-log. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.twox-hash]]
 version = "2.1.2"
@@ -392,8 +593,9 @@ version = "1.20.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
-version = "1.23.4"
+version = "1.23.5"
 criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Version updated from the previously-exempted 1.23.4 to 1.23.5, now current in the lock. Used by kyzo. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.varint-rs]]
 version = "2.2.1"
@@ -426,6 +628,11 @@ criteria = "safe-to-deploy"
 [[exemptions.web-sys]]
 version = "0.3.103"
 criteria = "safe-to-run"
+
+[[exemptions.windows-implement]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+notes = "Pre-existing, unaudited-but-tracked (story #321 vendor backlog, not part of this story's fuser-bump diff). Used by windows-core. Full audit deferred to the standing supply-chain audit campaign."
 
 [[exemptions.zerocopy]]
 version = "0.8.52"
