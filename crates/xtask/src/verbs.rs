@@ -10,10 +10,8 @@
 //! The leaf verbs: each one shells out to exactly the command the condemned
 //! justfile recipe of the same name ran, preserving every piece of
 //! justfile knowledge the story requires not be lost (the env-report
-//! fingerprint, the release-profile overflow-checks rationale lives in
-//! Cargo.toml's own `[profile.release-checked]` doc, and the fmt/clippy
-//! package lists below are the justfile's own hand-maintained `-p` lists,
-//! ported unchanged).
+//! fingerprint, and the fmt/clippy package lists below are the justfile's
+//! own hand-maintained `-p` lists, ported unchanged).
 
 use std::process::Command;
 
