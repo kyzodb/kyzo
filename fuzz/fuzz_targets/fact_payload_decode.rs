@@ -23,8 +23,8 @@
 //! field, or a corrupt catalog row, could synthesize a backwards interval
 //! or an out-of-bound relation id by direct field assignment — the latter
 //! `assert!`-panicked the process in `RelationId::new`). Both are now
-//! hand-written `Deserialize` impls that re-validate (`data/value.rs`,
-//! `data/tuple.rs`). `decode_fact_payload` and `RelationHandle::decode` are
+//! hand-written `Deserialize` impls that re-validate (both in
+//! `data/json.rs`). `decode_fact_payload` and `RelationHandle::decode` are
 //! `pub(crate)`, so `crates/kyzo-core/src/fuzz_api.rs` adds three narrow
 //! `fuzz-internals`-gated façades — same posture as the existing
 //! `fuzz_parse_script` target — to reach them without widening the crate's

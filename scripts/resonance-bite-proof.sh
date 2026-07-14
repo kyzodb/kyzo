@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-XTASK_BIN="$ROOT/target/debug/xtask"
+XTASK_BIN="${CARGO_TARGET_DIR:-$ROOT/target}/debug/xtask"
 # Always rebuild (incremental, so this is fast when nothing changed): a
 # stale binary from a previous run would silently run OLD detector logic
 # against a mutation meant to exercise the CURRENT code -- exactly the kind
@@ -71,37 +71,40 @@ bite_derive_bypass() {
   echo "=== bite-proof: check 1 (derive-bypass) — the historical Interval bug ==="
   local copy="$WORK/derive_bypass"
   fresh_copy "$copy"
-  # Reintroduce exactly the fork-base bug: derive Deserialize on Interval
-  # instead of the hand-written impl. This is the literal shape issue #62's
-  # hostile review found — a derived Deserialize builds `start`/`end` by
-  # direct field assignment, bypassing `Interval::new`'s `end > start` law.
-  python3 - "$copy/crates/kyzo-core/src/data/value.rs" <<'PY'
+  # Reintroduce exactly the fork-base bug shape on RelationId in
+  # data/value/row.rs: derive Deserialize on RelationId instead of the
+  # hand-written impl. This is the literal shape issue #62's hostile
+  # review found — a derived Deserialize builds the raw u64 by direct
+  # field assignment, bypassing RelationId::new's under-CAP law.
+  python3 - "$copy/crates/kyzo-core/src/data/value/row.rs" <<'PY'
 import sys, re
 path = sys.argv[1]
 text = open(path).read()
-old = "#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, serde_derive::Serialize)]\npub struct Interval {"
-new = "#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, serde_derive::Serialize, serde_derive::Deserialize)]\npub struct Interval {"
-assert old in text, "Interval derive line not found — has value.rs changed shape?"
+old = "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]\npub struct RelationId(u64);"
+new = "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde_derive::Deserialize)]\npub struct RelationId(u64);"
+assert old in text, "RelationId derive line not found — has row.rs changed shape?"
 text = text.replace(old, new, 1)
 open(path, "w").write(text)
 PY
-  expect_red "$copy" derive_bypass "Interval re-deriving Deserialize alongside its fallible new()"
+  expect_red "$copy" derive_bypass "RelationId re-deriving Deserialize alongside its fallible new()"
 }
 
 bite_panic_lint() {
   echo "=== bite-proof: check 2 (panic-on-hostile-bytes) — the historical RelationId bug ==="
   local copy="$WORK/panic_lint"
   fresh_copy "$copy"
-  # Reintroduce the RelationId shape: an assert! sitting in a real decode
-  # path (raw_decode), instead of the typed refusal it currently is.
-  python3 - "$copy/crates/kyzo-core/src/data/tuple.rs" <<'PY'
+  # Reintroduce the assert! into RelationId::raw_decode in
+  # data/value/row.rs, a declared decode surface in
+  # crates/xtask/decode-surfaces.toml, instead of the typed refusal it
+  # currently is.
+  python3 - "$copy/crates/kyzo-core/src/data/value/row.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-old = "        let u = u64::from_be_bytes(bytes.try_into().expect(\"length checked\"));"
-new = ("        let u = u64::from_be_bytes(bytes.try_into().expect(\"length checked\"));\n"
-       "        assert!(u <= MAX_RELATION_ID, \"corrupt key: relation id out of range\");")
-assert old in text, "raw_decode body line not found — has tuple.rs changed shape?"
+old = "        let id = u64::from_be_bytes(head.try_into().expect(\"8 bytes\"));"
+new = ("        let id = u64::from_be_bytes(head.try_into().expect(\"8 bytes\"));\n"
+       "        assert!(id < RelationId::CAP, \"corrupt key: relation id out of range\");")
+assert old in text, "raw_decode body line not found — has row.rs changed shape?"
 text = text.replace(old, new, 1)
 open(path, "w").write(text)
 PY
@@ -135,13 +138,13 @@ bite_dead_code_ratchet() {
   # silently fixing, per its disjointness boundary — see the report).
   # Prove the ratchet catches a BRAND NEW uncited one instead, added to a
   # function that starts out with no attribute at all.
-  python3 - "$copy/crates/kyzo-core/src/data/tuple.rs" <<'PY'
+  python3 - "$copy/crates/kyzo-core/src/data/value/row.rs" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-old = "    pub(crate) fn raw_encode(&self) -> [u8; 8] {"
-new = "    #[allow(dead_code)]\n    pub(crate) fn raw_encode(&self) -> [u8; 8] {"
-assert old in text, "raw_encode not found — has tuple.rs changed shape?"
+old = "    pub fn raw_encode(self) -> [u8; 8] {"
+new = "    #[allow(dead_code)]\n    pub fn raw_encode(self) -> [u8; 8] {"
+assert old in text, "raw_encode not found — has row.rs changed shape?"
 text = text.replace(old, new, 1)
 open(path, "w").write(text)
 PY

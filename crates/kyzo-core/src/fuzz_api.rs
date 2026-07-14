@@ -88,7 +88,7 @@ pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
     Ok(handle.id.raw())
 }
 
-/// The relation-id space bound (`data/tuple.rs::MAX_RELATION_ID`),
+/// The relation-id space bound (`data/value/row.rs`'s `RelationId::CAP`),
 /// re-exported so the fuzz target can check
 /// [`fuzz_decode_relation_handle_id`]'s result without duplicating the
 /// constant.

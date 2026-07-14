@@ -14,6 +14,7 @@ FROM rust:1.96.1-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
       jq \
+      rsync \
       time \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/*
