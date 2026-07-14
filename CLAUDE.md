@@ -35,6 +35,27 @@ A story moves through a fixed pipeline, and each agent's authority is enforced b
 
 Delegate one task to a fresh agent, not a whole story, so context never accumulates across tasks. While it runs, supervise: arm a monitor, lurk on the transcript, and read the reliable meter — commits and file scope from git refs, never the working index you would be contending for. Correct early, since one mid-flight correction beats a post-mortem. The failure mode of a well-scoped agent is over-caution and non-shipping, so the one to nudge is the agent that has proven its work but will not commit.
 
+Babysitting a delegated agent is a mechanical protocol, not a vibe. Run it every time, in this order.
+
+1. **Arm the tool-call stream the moment you spawn — the agent pays for it, not you.** It emits one short line per tool call off the agent's transcript, so zero-trust oversight costs you a line, not a re-read. Arm this exact command as a persistent `Monitor` (substitute the spawned agent's `<NAME>`), and never watch by polling the transcript yourself:
+   `f=""; while [ -z "$f" ]; do f=$(find /home/kyle/.claude/projects -path '*subagents*' -name 'agent-a<NAME>-*.jsonl' 2>/dev/null | head -1); [ -z "$f" ] && sleep 2; done; tail -n +1 -f "$f" | jq --unbuffered -rc 'select(.message.content)|.message.content[]?|select(.type=="tool_use")|"\(.name): \(.input.file_path // .input.command // .input.pattern // .input.query // "")"' | awk '{print substr($0,1,150); fflush()}'`
+
+2. **The meter is the board and git, never the agent's mouth.** An idle notification, a completion summary, a "PASS", a "done" are testimony — read completion off `read_story_tasks` (the check-off) and scope off `git diff --stat`. An unchecked box is not-done however finished the agent sounds. Never let a peer/teammate message stand in for the box.
+
+3. **Whip on the FIRST tell — `SendMessage`, immediately, with no rehearsal of the agent's reasons** (its reason never changes the cost; the orchestrator who narrates a tell instead of whipping it is itself the leak). The tells to hunt, each a real one from the ledger:
+   - a read or edit of any file outside the task's named allowlist — the sweep / scope drift;
+   - touching what the task forbids — a fuzz target, a `-timeout`/runtime knob, a test's assertions, vet criteria;
+   - reverting, `git checkout`-ing, or swapping out the code it just wrote, or running its own timing/benchmark probes — off-spec self-justification, never the task;
+   - spawning a sub-agent — an un-watched token bomb; forbid it in the prompt, kill it on sight;
+   - no-op spin — `true`, `echo waiting`, `sleep`, `docker wait`, `ps aux`, polling old task files — burning turns to wait;
+   - going idle with the box unchecked;
+   - reaching a board tool through `ToolSearch`;
+   - a fix whose mechanism does not match the mechanism the story's condemned block names — a task-vs-story mismatch is a FAIL; catch it before the judge does.
+
+4. **Escalate to `TaskStop`, do not nurse.** If a tell repeats after one whip, the token meter crosses your ceiling, or it does anything destructive (reverts the fix, mutates outside scope), kill the agent. A runaway is stopped by you, not reasoned with.
+
+5. **Once the gate rules, stop — re-validation is your own fear-read.** When the judge checks the box or the named command passes, the task is proven; re-running tests, re-reading files, tailing output, or "confirming" a green result is the orchestrator's version of the sweep. Your only sanctioned reads are the board check-off and, when a tell fires, ONE targeted transcript grep for the specific evidence. Answer the operator with answers, never tool calls; add no success language and no opinions to a status — report the box and the meter, nothing else.
+
 **Where the board code lives** — learn this once. The **planner** MCP server lives in `mcp/`, gitignored in this repo; its product home is the adjacent **planner-dev** repo, a board-only Claude Code plugin. Board development happens here against the live board, then persists by copying the source into planner-dev and committing there. Editing `mcp/` changes the running server only after an MCP reconnect.
 
 ## Build and verification

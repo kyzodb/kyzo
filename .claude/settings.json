@@ -67,6 +67,6 @@
     ]
   },
   "enabledPlugins": {
-    "kyzo-planner@kyzo": true
+    "kyzo-plan@kyzo": true
   }
 }
