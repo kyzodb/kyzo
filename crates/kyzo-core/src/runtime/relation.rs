@@ -403,19 +403,7 @@ pub(crate) struct RelationHandle {
     pub(crate) name: SmartString<LazyCompact>,
     pub(crate) id: RelationId,
     pub(crate) metadata: StoredRelationMetadata,
-    /// SEAM (parse tier, Phase C): triggers are raw KyzoScript source,
-    /// re-parsed when fired — the original's shape. The ratified end state
-    /// is parsed substances with stored provenance, once the parse tier's
-    /// program types can be embedded here.
-    pub(crate) put_triggers: Vec<String>,
-    pub(crate) rm_triggers: Vec<String>,
-    pub(crate) replace_triggers: Vec<String>,
     pub(crate) access_level: AccessLevel,
-    /// Whether this relation lives in the session's temp store. Handles in
-    /// the persistent catalog always have `false`; the field exists so the
-    /// session tier (which owns the temp store) can construct temp handles
-    /// with the same type. See the module docs' temp-routing seam.
-    pub(crate) is_temp: bool,
     /// Attached indices, by reference, sorted by name (the attach hook —
     /// operator tier — maintains the ordering; names are unique).
     pub(crate) indices: Vec<IndexRef>,
@@ -545,18 +533,13 @@ impl RelationHandle {
     pub(crate) fn new_from_input(
         input: InputRelationHandle,
         id: RelationId,
-        is_temp: bool,
         keyspace_kind: KeyspaceKind,
     ) -> Self {
         RelationHandle {
             name: input.name.name,
             id,
             metadata: input.metadata,
-            put_triggers: vec![],
-            rm_triggers: vec![],
-            replace_triggers: vec![],
             access_level: AccessLevel::default(),
-            is_temp,
             indices: vec![],
             description: Default::default(),
             constraints: vec![],
@@ -596,7 +579,6 @@ impl RelationHandle {
     /// Replace triggers are deliberately not consulted here, matching the
     /// original: the replace path does its own check.
     pub(crate) fn has_triggers(&self) -> bool {
-        !self.put_triggers.is_empty() || !self.rm_triggers.is_empty()
     }
 
     /// The handle's wire form: msgpack with struct maps — the on-disk
@@ -875,8 +857,7 @@ impl RelationHandle {
     // Every method takes the transaction to read; none of them routes.
     // Temp-store routing is the session tier's job (see the module docs):
     // for a temp handle the session passes its temp store's transaction to
-    // these same methods. `is_temp` on the handle is the routing *datum*,
-    // not the router.
+    // these same methods.
 
     /// The inclusive lower bound of this relation's keyspace: the empty
     /// tuple under its prefix.
@@ -1449,9 +1430,6 @@ pub(crate) fn set_relation_triggers(
             original.access_level
         ));
     }
-    original.put_triggers = puts.to_vec();
-    original.rm_triggers = rms.to_vec();
-    original.replace_triggers = replaces.to_vec();
     write_relation_row(tx, &original)
 }
 
@@ -1676,11 +1654,7 @@ mod tests {
             name: SmartString<LazyCompact>,
             id: u64,
             metadata: StoredRelationMetadata,
-            put_triggers: Vec<String>,
-            rm_triggers: Vec<String>,
-            replace_triggers: Vec<String>,
             access_level: AccessLevel,
-            is_temp: bool,
             indices: Vec<IndexRef>,
             description: SmartString<LazyCompact>,
             constraints: Vec<ConstraintRef>,
@@ -1691,11 +1665,7 @@ mod tests {
             name: handle.name.clone(),
             id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
-            put_triggers: handle.put_triggers.clone(),
-            rm_triggers: handle.rm_triggers.clone(),
-            replace_triggers: handle.replace_triggers.clone(),
             access_level: handle.access_level,
-            is_temp: handle.is_temp,
             indices: handle.indices.clone(),
             description: handle.description.clone(),
             constraints: handle.constraints.clone(),

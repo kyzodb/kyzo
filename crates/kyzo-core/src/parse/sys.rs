@@ -153,9 +153,6 @@ pub enum SysOp {
 pub struct FtsIndexConfig {
     pub base_relation: SmartString<LazyCompact>,
     pub index_name: SmartString<LazyCompact>,
-    /// Extractor source text, re-parsed at build time (inherited
-    /// convention; see [`SysOp::SetTriggers`]).
-    pub extractor: String,
     pub tokenizer: TokenizerConfig,
     pub filters: Vec<TokenizerConfig>,
 }
@@ -167,7 +164,6 @@ pub struct FtsIndexConfig {
 pub struct MinHashLshConfig {
     pub base_relation: SmartString<LazyCompact>,
     pub index_name: SmartString<LazyCompact>,
-    pub extractor: String,
     pub tokenizer: TokenizerConfig,
     pub filters: Vec<TokenizerConfig>,
     pub n_gram: usize,
@@ -520,12 +516,10 @@ pub(crate) fn parse_sys(
                             "extractor" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
-                                extractor = ex.to_string();
                             }
                             "extract_filter" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
-                                extract_filter = ex.to_string();
                             }
                             "tokenizer" => {
                                 let mut expr = build_expr(opt_val, param_pool)?;
@@ -578,14 +572,9 @@ pub(crate) fn parse_sys(
                     false_positive_weight /= total_weights;
                     false_negative_weight /= total_weights;
 
-                    if !extract_filter.is_empty() {
-                        extractor = format!("if({extract_filter}, {extractor})");
-                    }
-
                     let config = MinHashLshConfig {
                         base_relation: SmartString::from(rel.as_str()),
                         index_name: SmartString::from(name.as_str()),
-                        extractor,
                         tokenizer,
                         filters,
                         n_gram,
@@ -623,12 +612,10 @@ pub(crate) fn parse_sys(
                             "extractor" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
-                                extractor = ex.to_string();
                             }
                             "extract_filter" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
-                                extract_filter = ex.to_string();
                             }
                             "tokenizer" => {
                                 let mut expr = build_expr(opt_val, param_pool)?;
@@ -648,13 +635,9 @@ pub(crate) fn parse_sys(
                             }
                         }
                     }
-                    if !extract_filter.is_empty() {
-                        extractor = format!("if({extract_filter}, {extractor})");
-                    }
                     let config = FtsIndexConfig {
                         base_relation: SmartString::from(rel.as_str()),
                         index_name: SmartString::from(name.as_str()),
-                        extractor,
                         tokenizer,
                         filters,
                     };

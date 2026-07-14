@@ -136,7 +136,6 @@ impl<T: WriteTx> SessionTx<T> {
         trigger_depth: usize,
         force_collect: &str,
     ) -> Result<()> {
-        let mut replaced_old_triggers = None;
         if op == RelationOp::Replace {
             if trigger_depth > 0 {
                 bail!(ReplaceInTrigger(meta.name.to_string()))
@@ -152,45 +151,16 @@ impl<T: WriteTx> SessionTx<T> {
                         old_handle.access_level
                     ));
                 }
-                if old_handle.has_triggers() {
-                    replaced_old_triggers = Some((
-                        old_handle.put_triggers.clone(),
-                        old_handle.rm_triggers.clone(),
-                    ));
-                }
-                for trigger in &old_handle.replace_triggers {
-                    let program = self.parsed_trigger(trigger, &db.fixed_rules(), cur_vld)?;
-                    db.run_query(
-                        self,
-                        program,
-                        cur_vld,
-                        callback_targets,
-                        callback_collector,
-                        trigger_depth + 1,
-                    )
-                    .map_err(|err| {
-                        if err.source_code().is_some() {
-                            err
-                        } else {
-                            err.with_source_code(trigger.clone())
-                        }
-                    })?;
-                }
                 // In-transaction destruction: catalog row and keyspace go
                 // together; an abort rolls both back (no deferred ranges).
                 self.destroy_relation(&meta.name.name)?;
             }
         }
-        let mut relation_store = if op == RelationOp::Replace || op == RelationOp::Create {
+        let relation_store = if op == RelationOp::Replace || op == RelationOp::Create {
             self.create_relation(meta.clone(), KeyspaceKind::Facts)?
         } else {
             self.get_relation(&meta.name.name)?
         };
-        if let Some((old_put, old_retract)) = replaced_old_triggers {
-            relation_store.put_triggers = old_put;
-            relation_store.rm_triggers = old_retract;
-            self.write_relation_row(&relation_store)?;
-        }
         // Register the touched relation's integrity constraints for the
         // pre-commit denial check (deduped by name across the transaction).
         // `Ensure`/`EnsureNot` only read; every other op mutates. Trigger
@@ -683,40 +653,6 @@ impl<T: WriteTx> SessionTx<T> {
                     .map(|k| Symbol::new(k.name.clone(), SourceSpan::default())),
             );
 
-            if !relation_store.rm_triggers.is_empty() {
-                // Cascade, bounded: firing at the ceiling is a typed
-                // refusal that aborts the transaction whole — never a
-                // silent stop with the mutation kept.
-                if trigger_depth >= MAX_TRIGGER_CASCADE_DEPTH {
-                    bail!(TriggerCascadeTooDeep(
-                        relation_store.name.to_string(),
-                        MAX_TRIGGER_CASCADE_DEPTH
-                    ));
-                }
-                for trigger in &relation_store.rm_triggers {
-                    let mut program = self.parsed_trigger(trigger, &db.fixed_rules(), cur_vld)?;
-
-                    make_const_rule(&mut program, "_new", k_bindings.clone(), &new_tuples)?;
-                    make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
-
-                    db.run_query(
-                        self,
-                        program,
-                        cur_vld,
-                        callback_targets,
-                        callback_collector,
-                        trigger_depth + 1,
-                    )
-                    .map_err(|err| {
-                        if err.source_code().is_some() {
-                            err
-                        } else {
-                            err.with_source_code(format!("{trigger} "))
-                        }
-                    })?;
-                }
-            }
-
             if is_callback_target {
                 let target_collector = callback_collector
                     .entry(relation_store.name.clone())
@@ -894,40 +830,6 @@ impl<T: WriteTx> SessionTx<T> {
                 .iter()
                 .map(|k| Symbol::new(k.name.clone(), SourceSpan::default())),
         );
-
-        if !relation_store.put_triggers.is_empty() {
-            // Cascade, bounded: firing at the ceiling is a typed refusal
-            // that aborts the transaction whole — never a silent stop with
-            // the mutation kept.
-            if trigger_depth >= MAX_TRIGGER_CASCADE_DEPTH {
-                bail!(TriggerCascadeTooDeep(
-                    relation_store.name.to_string(),
-                    MAX_TRIGGER_CASCADE_DEPTH
-                ));
-            }
-            for trigger in &relation_store.put_triggers {
-                let mut program = self.parsed_trigger(trigger, &db.fixed_rules(), cur_vld)?;
-
-                make_const_rule(&mut program, "_new", kv_bindings.clone(), &new_tuples)?;
-                make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
-
-                db.run_query(
-                    self,
-                    program,
-                    cur_vld,
-                    callback_targets,
-                    callback_collector,
-                    trigger_depth + 1,
-                )
-                .map_err(|err| {
-                    if err.source_code().is_some() {
-                        err
-                    } else {
-                        err.with_source_code(format!("{trigger} "))
-                    }
-                })?;
-            }
-        }
 
         if is_callback_target {
             let target_collector = callback_collector

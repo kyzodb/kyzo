@@ -129,9 +129,6 @@ use crate::storage::{ReadTx, WriteTx};
 pub(crate) struct MinHashLshIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
     pub(crate) index_name: SmartString<LazyCompact>,
-    /// Extractor source text, re-parsed and compiled by the lifecycle tier
-    /// (inherited convention).
-    pub(crate) extractor: String,
     pub(crate) n_gram: usize,
     pub(crate) tokenizer: TokenizerConfig,
     pub(crate) filters: Vec<TokenizerConfig>,
