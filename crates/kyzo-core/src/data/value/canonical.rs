@@ -681,23 +681,39 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             Ok((DataValue::List(items), 1 + used))
         }
         Tag::Set => {
-            let (items, used) = decode_sequence(body, depth)?;
-            // The canonical set form is sorted and deduplicated; anything
-            // else is not a lawful encoding.
+            // Single-pass: each item is decoded exactly once, and the
+            // canonical (sorted, deduplicated) form is checked against the
+            // SAME decode's consumed length — never a second full decode of
+            // the item. A prior two-pass shape (decode_sequence, then
+            // re-decode every item to learn its length for the ordering
+            // check) made a nested Set's cost double per level of nesting:
+            // O(2^depth) on adversarial input, the hang the fuzzer found.
+            let mut items = Vec::new();
             let mut prev: Option<&[u8]> = None;
-            let mut cursor = body;
-            for _ in 0..items.len() {
-                let (_, elen) = decode_at(cursor, depth + 1)?;
-                let this = &cursor[..elen];
-                if let Some(p) = prev
-                    && p >= this
-                {
-                    return Err(DecodeError::SetNotCanonical);
+            let mut used = 0usize;
+            loop {
+                match body.get(used) {
+                    None => return Err(DecodeError::Truncated),
+                    Some(&STRUCT_SEQ_END) => {
+                        return Ok((
+                            DataValue::Set(items.into_iter().collect()),
+                            1 + used + 1,
+                        ));
+                    }
+                    Some(_) => {
+                        let (item, ilen) = decode_at(&body[used..], depth + 1)?;
+                        let this = &body[used..used + ilen];
+                        if let Some(p) = prev
+                            && p >= this
+                        {
+                            return Err(DecodeError::SetNotCanonical);
+                        }
+                        prev = Some(this);
+                        items.push(item);
+                        used += ilen;
+                    }
                 }
-                prev = Some(this);
-                cursor = &cursor[elen..];
             }
-            Ok((DataValue::Set(items.into_iter().collect()), 1 + used))
         }
         Tag::Regex => {
             let &flag_byte = body.first().ok_or(DecodeError::Truncated)?;
@@ -1662,5 +1678,48 @@ mod tests {
         let h = fnv1a64(&dup[start..]);
         dup.extend_from_slice(&h.to_be_bytes());
         assert_eq!(decode(&dup), Err(DecodeError::JsonNotCanonical));
+    }
+
+    /// REGRESSION (fuzz timeout, `fuzz_targets/fact_payload_decode.rs`):
+    /// libFuzzer hung ~1775s on one input. `Tag::Set`'s canonicality check
+    /// used to re-decode every item a SECOND time — once via
+    /// `decode_sequence` to build the value, once more (over the exact
+    /// same bytes) to learn the item's encoded length for the
+    /// sorted-order check — so a Set nested inside a Set inside a Set...
+    /// doubled decode cost at every level of nesting: O(2^depth), not
+    /// O(depth). At `NEST_DEPTH` below, the old two-pass shape would not
+    /// finish before the heat death of the universe; this test completing
+    /// at all is the proof the fix holds — no wall-clock bound needed.
+    #[test]
+    fn nested_set_decode_is_linear_not_exponential() {
+        // Safely below MAX_DEPTH (128) so the well-formed control decodes
+        // rather than hitting `TooDeep`; 2^NEST_DEPTH is astronomically
+        // larger than anything the old two-pass decode could finish.
+        const NEST_DEPTH: usize = 100;
+
+        // Build Set(Set(Set(...Num(0)...))), NEST_DEPTH levels deep. Each
+        // level holds exactly one element, so the encoding is lawfully
+        // canonical (a single-element set can never violate sorted order).
+        let mut value = DataValue::Num(Num::int(0));
+        for _ in 0..NEST_DEPTH {
+            let mut s = BTreeSet::new();
+            s.insert(value);
+            value = DataValue::Set(s);
+        }
+        let good = encode_owned(&value);
+
+        // Well-formed control: decodes to the exact value.
+        let decoded = decode(good.as_bytes()).expect("lawful nested set decodes");
+        assert_eq!(decoded, value, "round-trip changed the nested value");
+
+        // Hostile bytes: the SAME encoding with the outermost terminator
+        // dropped. Discovering the truncation requires descending through
+        // every nested level first (each inner level decodes clean) before
+        // the outermost loop finds no closing byte left — exactly the
+        // shape that made the old two-pass decode catastrophic — then
+        // refusing, typed.
+        let mut hostile = good.as_bytes().to_vec();
+        hostile.pop();
+        assert_eq!(decode(&hostile), Err(DecodeError::Truncated));
     }
 }
