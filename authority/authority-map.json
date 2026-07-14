@@ -2,7 +2,7 @@
   "tool": "authority-graph",
   "tool_version": 1,
   "scope": "crates/kyzo-core/src",
-  "files_scanned": 172,
+  "files_scanned": 174,
   "layers": [
     {
       "layer": "value",
@@ -224,7 +224,7 @@
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/engines/lsh.rs",
-      "line": 157,
+      "line": 158,
       "excerpt": "pub(crate) perms: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
