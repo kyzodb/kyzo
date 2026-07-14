@@ -745,7 +745,7 @@ impl<S: Storage> Db<S> {
                     .chain(handle.rm_triggers.iter().map(|s| ("on_rm", s)))
                     .chain(handle.replace_triggers.iter().map(|s| ("on_replace", s)))
                 {
-                    rows.push(vec![DataValue::from(kind), DataValue::from(src.as_str())]);
+                    rows.push(vec![DataValue::from(kind), DataValue::from(src.source())]);
                 }
                 Ok(NamedRows::new(vec!["kind".into(), "source".into()], rows))
             }

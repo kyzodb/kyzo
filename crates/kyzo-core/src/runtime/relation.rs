@@ -104,13 +104,16 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
 
 use miette::{Diagnostic, Result, bail, ensure};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::program::InputRelationHandle;
+use crate::data::program::{InputProgram, InputRelationHandle};
+use crate::fixed_rule::{DEFAULT_FIXED_RULES, FixedRule};
+use crate::parse::parse_script;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -398,11 +401,131 @@ pub(crate) enum KeyspaceKind {
     AlgorithmState,
 }
 
+/// A relation trigger: a KyzoScript program run on mutation, held as the
+/// PARSED substance with its provenance source — never re-parsed at fire
+/// time. The one door is [`Trigger::parse`], which parses at construction,
+/// so a source that would fail its own parse can never become a `Trigger`
+/// and therefore can never be stored on a [`RelationHandle`] — closing the
+/// "a value that would fail its own parse is storable" window.
+///
+/// The parsed `program`'s write validity stays SYMBOLIC (`WriteValidity::Now`
+/// resolves at fire time against the firing session's instant), so the
+/// substance is independent of the `cur_vld` it was parsed under. That
+/// independence is load-bearing: the catalog decode below re-materialises a
+/// stored trigger with the static [`DEFAULT_FIXED_RULES`] and a sentinel
+/// instant, and `set_relation_triggers` refuses any trigger that would break
+/// that reproduction (a session-custom fixed rule, or a constant `@`
+/// coordinate) — so the durable source always decodes to the exact program
+/// the firing session runs.
+#[derive(Clone)]
+pub(crate) struct Trigger {
+    program: InputProgram,
+    source: SmartString<LazyCompact>,
+}
+
+/// The sentinel instant used when re-parsing a stored trigger at catalog
+/// decode. Sound because a stored trigger's program is `cur_vld`-independent
+/// (see [`Trigger`]); its value never reaches the decoded program.
+fn trigger_decode_vld() -> ValidityTs {
+    ValidityTs::from_raw(0)
+}
+
+impl Trigger {
+    /// The one constructor: parse `source` into its single program, proving
+    /// it is a well-formed trigger body. A non-parsing source is refused
+    /// here, so it can never be stored.
+    pub(crate) fn parse(
+        source: &str,
+        fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+        cur_vld: ValidityTs,
+    ) -> Result<Trigger> {
+        let program = parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?
+            .get_single_program()?;
+        Ok(Trigger {
+            program,
+            source: SmartString::from(source),
+        })
+    }
+
+    pub(crate) fn program(&self) -> &InputProgram {
+        &self.program
+    }
+
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+impl PartialEq for Trigger {
+    /// Provenance identity: equal iff the source text is, matching the
+    /// catalog's byte round-trip (the program is derived from the source).
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+    }
+}
+
+impl Debug for Trigger {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Trigger({:?})", self.source)
+    }
+}
+
+/// Serialize a trigger list to the durable catalog form: its provenance
+/// sources. The parsed programs are derived and never written.
+fn serialize_triggers<S: serde::Serializer>(
+    triggers: &[Trigger],
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    let sources: Vec<&str> = triggers.iter().map(Trigger::source).collect();
+    sources.serialize(s)
+}
+
+/// Re-materialise a trigger list from stored sources, lifting each through
+/// [`Trigger::parse`] with the static default registry and the sentinel
+/// instant. A stored source that no longer parses is a typed decode failure
+/// (surfacing as [`RelationDeserError`] up the stack), never a silent bad
+/// handle.
+fn deserialize_triggers<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<Trigger>, D::Error> {
+    use serde::Deserialize;
+    use serde::de::Error as _;
+    let sources: Vec<SmartString<LazyCompact>> = Vec::deserialize(d)?;
+    sources
+        .into_iter()
+        .map(|src| {
+            Trigger::parse(&src, &DEFAULT_FIXED_RULES, trigger_decode_vld())
+                .map_err(D::Error::custom)
+        })
+        .collect()
+}
+
 #[derive(Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct RelationHandle {
     pub(crate) name: SmartString<LazyCompact>,
     pub(crate) id: RelationId,
     pub(crate) metadata: StoredRelationMetadata,
+    /// Triggers run on put/rm/replace, held as parsed [`Trigger`] substances
+    /// (see that type). The catalog stores their sources; decode re-parses.
+    #[serde(
+        serialize_with = "serialize_triggers",
+        deserialize_with = "deserialize_triggers",
+        default
+    )]
+    pub(crate) put_triggers: Vec<Trigger>,
+    #[serde(
+        serialize_with = "serialize_triggers",
+        deserialize_with = "deserialize_triggers",
+        default
+    )]
+    pub(crate) rm_triggers: Vec<Trigger>,
+    #[serde(
+        serialize_with = "serialize_triggers",
+        deserialize_with = "deserialize_triggers",
+        default
+    )]
+    pub(crate) replace_triggers: Vec<Trigger>,
     pub(crate) access_level: AccessLevel,
     /// Attached indices, by reference, sorted by name (the attach hook —
     /// operator tier — maintains the ordering; names are unique).
@@ -539,6 +662,9 @@ impl RelationHandle {
             name: input.name.name,
             id,
             metadata: input.metadata,
+            put_triggers: vec![],
+            rm_triggers: vec![],
+            replace_triggers: vec![],
             access_level: AccessLevel::default(),
             indices: vec![],
             description: Default::default(),
@@ -579,6 +705,7 @@ impl RelationHandle {
     /// Replace triggers are deliberately not consulted here, matching the
     /// original: the replace path does its own check.
     pub(crate) fn has_triggers(&self) -> bool {
+        !self.put_triggers.is_empty() || !self.rm_triggers.is_empty()
     }
 
     /// The handle's wire form: msgpack with struct maps — the on-disk
@@ -1352,7 +1479,7 @@ pub(crate) fn create_relation(
         bail!(RelNameConflictError(input.name.to_string()));
     }
     let id = allocate_relation_id(tx)?;
-    let handle = RelationHandle::new_from_input(input, id, false, keyspace_kind);
+    let handle = RelationHandle::new_from_input(input, id, keyspace_kind);
     tx.put(&row_key, &handle.encode()?)?;
     Ok(handle)
 }
@@ -1410,8 +1537,24 @@ pub(crate) fn set_access_level(
     write_relation_row(tx, &meta)
 }
 
+/// Parse a list of trigger sources into [`Trigger`] substances at the store
+/// boundary. Uses the exact fixed context ([`DEFAULT_FIXED_RULES`] + the
+/// sentinel instant) that catalog decode uses, so a source accepted here is
+/// guaranteed to reproduce the identical program on decode — and a source
+/// that does not parse (malformed, or referencing a session-custom fixed
+/// rule the durable catalog cannot carry) is a typed refusal HERE, never a
+/// stored value that fails its own re-parse.
+fn parse_triggers(sources: &[String]) -> Result<Vec<Trigger>> {
+    sources
+        .iter()
+        .map(|src| Trigger::parse(src, &DEFAULT_FIXED_RULES, trigger_decode_vld()))
+        .collect()
+}
+
 /// Replace a relation's triggers. Requires at least
-/// [`AccessLevel::Protected`].
+/// [`AccessLevel::Protected`]. Each source is lifted through
+/// [`Trigger::parse`] at this boundary, so an unparseable trigger cannot be
+/// persisted.
 pub(crate) fn set_relation_triggers(
     tx: &mut impl WriteTx,
     name: &Symbol,
@@ -1430,6 +1573,9 @@ pub(crate) fn set_relation_triggers(
             original.access_level
         ));
     }
+    original.put_triggers = parse_triggers(puts)?;
+    original.rm_triggers = parse_triggers(rms)?;
+    original.replace_triggers = parse_triggers(replaces)?;
     write_relation_row(tx, &original)
 }
 
@@ -1654,6 +1800,9 @@ mod tests {
             name: SmartString<LazyCompact>,
             id: u64,
             metadata: StoredRelationMetadata,
+            put_triggers: Vec<String>,
+            rm_triggers: Vec<String>,
+            replace_triggers: Vec<String>,
             access_level: AccessLevel,
             indices: Vec<IndexRef>,
             description: SmartString<LazyCompact>,
@@ -1665,6 +1814,13 @@ mod tests {
             name: handle.name.clone(),
             id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
+            put_triggers: handle.put_triggers.iter().map(|t| t.source().to_string()).collect(),
+            rm_triggers: handle.rm_triggers.iter().map(|t| t.source().to_string()).collect(),
+            replace_triggers: handle
+                .replace_triggers
+                .iter()
+                .map(|t| t.source().to_string())
+                .collect(),
             access_level: handle.access_level,
             indices: handle.indices.clone(),
             description: handle.description.clone(),
@@ -1967,7 +2123,6 @@ mod tests {
         let stored = RelationHandle::new_from_input(
             simple_input("s"),
             RelationId::new(1).expect("below cap"),
-            false,
             KeyspaceKind::Facts,
         );
         // Compatible input: same shapes.
@@ -2002,10 +2157,11 @@ mod tests {
                 vec![col("v", ColType::String)],
             ),
             RelationId::new(7).expect("below cap"),
-            false,
             KeyspaceKind::Facts,
         );
-        handle.put_triggers = vec!["?[k, v] := *pin[k, v]".to_string()];
+        handle.put_triggers =
+            vec![Trigger::parse("?[k, v] := *pin[k, v]", &DEFAULT_FIXED_RULES, trigger_decode_vld())
+                .unwrap()];
         handle.access_level = AccessLevel::ReadOnly;
         handle.indices = vec![IndexRef {
             name: SmartString::from("by_v"),

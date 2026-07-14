@@ -17,14 +17,16 @@
  *   The kernel's `del_range` deletes inside the transaction — both
  *   snapshot data and the transaction's own writes — so `:replace` and
  *   `::remove` are atomic with the query and an abort rolls them back.
- * - **Triggers are parsed once per session** ([`SessionTx::parsed_trigger`]):
- *   the stored form is still raw source (the catalog's landed wire format),
- *   but each source string is parsed exactly once per session and the
- *   cached `InputProgram` is cloned per firing. This is sound because a
- *   session has ONE `cur_vld` (parse substitutes the current validity), and
- *   it makes the ratified "parsed substances in the catalog" end state a
- *   wire-format decision rather than a performance one — FLAG(catalog
- *   tier): stored parsed substances with provenance remain the end state.
+ * - **Triggers are parsed typed substances, not source** (`Trigger` in
+ *   `runtime/relation.rs`): the catalog stores each trigger's provenance
+ *   source, but the substance is the already-parsed `InputProgram`, lifted
+ *   ONCE at the store boundary (`set_relation_triggers`) and rebuilt at
+ *   catalog decode from the same fixed context — never re-parsed at fire
+ *   time. Firing clones `trigger.program()` directly. A trigger's program
+ *   is `cur_vld`-free by construction (it parses under a fixed sentinel at
+ *   both store and decode, since decode has no session context), so the
+ *   durable substance reproduces exactly and a source that would fail its
+ *   own parse can never be stored.
  * - **Index maintenance is a typed seam.** Every index kind is maintained
  *   here, resolved BY REFERENCE through the catalog (the landed `IndexRef`
  *   model — no embedded handle copies): plain projection indices and
@@ -136,6 +138,7 @@ impl<T: WriteTx> SessionTx<T> {
         trigger_depth: usize,
         force_collect: &str,
     ) -> Result<()> {
+        let mut replaced_old_triggers = None;
         if op == RelationOp::Replace {
             if trigger_depth > 0 {
                 bail!(ReplaceInTrigger(meta.name.to_string()))
@@ -151,16 +154,51 @@ impl<T: WriteTx> SessionTx<T> {
                         old_handle.access_level
                     ));
                 }
+                // A `:replace` preserves the relation's put/rm triggers
+                // across the swap (they are carried onto the fresh handle
+                // below); the replace triggers fire now, once, against the
+                // pre-swap handle.
+                if old_handle.has_triggers() {
+                    replaced_old_triggers = Some((
+                        old_handle.put_triggers.clone(),
+                        old_handle.rm_triggers.clone(),
+                    ));
+                }
+                for trigger in &old_handle.replace_triggers {
+                    // The trigger substance is already parsed — fire the
+                    // stored program directly, never a re-parse of source.
+                    let program = trigger.program().clone();
+                    db.run_query(
+                        self,
+                        program,
+                        cur_vld,
+                        callback_targets,
+                        callback_collector,
+                        trigger_depth + 1,
+                    )
+                    .map_err(|err| {
+                        if err.source_code().is_some() {
+                            err
+                        } else {
+                            err.with_source_code(trigger.source().to_string())
+                        }
+                    })?;
+                }
                 // In-transaction destruction: catalog row and keyspace go
                 // together; an abort rolls both back (no deferred ranges).
                 self.destroy_relation(&meta.name.name)?;
             }
         }
-        let relation_store = if op == RelationOp::Replace || op == RelationOp::Create {
+        let mut relation_store = if op == RelationOp::Replace || op == RelationOp::Create {
             self.create_relation(meta.clone(), KeyspaceKind::Facts)?
         } else {
             self.get_relation(&meta.name.name)?
         };
+        if let Some((old_put, old_retract)) = replaced_old_triggers {
+            relation_store.put_triggers = old_put;
+            relation_store.rm_triggers = old_retract;
+            self.write_relation_row(&relation_store)?;
+        }
         // Register the touched relation's integrity constraints for the
         // pre-commit denial check (deduped by name across the transaction).
         // `Ensure`/`EnsureNot` only read; every other op mutates. Trigger
@@ -653,6 +691,43 @@ impl<T: WriteTx> SessionTx<T> {
                     .map(|k| Symbol::new(k.name.clone(), SourceSpan::default())),
             );
 
+            if !relation_store.rm_triggers.is_empty() {
+                // Cascade, bounded: firing at the ceiling is a typed
+                // refusal that aborts the transaction whole — never a
+                // silent stop with the mutation kept.
+                if trigger_depth >= MAX_TRIGGER_CASCADE_DEPTH {
+                    bail!(TriggerCascadeTooDeep(
+                        relation_store.name.to_string(),
+                        MAX_TRIGGER_CASCADE_DEPTH
+                    ));
+                }
+                for trigger in &relation_store.rm_triggers {
+                    // The trigger substance is already parsed — clone the
+                    // stored program and inject the mutation's rows. No
+                    // fire-time re-parse of source exists any more.
+                    let mut program = trigger.program().clone();
+
+                    make_const_rule(&mut program, "_new", k_bindings.clone(), &new_tuples)?;
+                    make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
+
+                    db.run_query(
+                        self,
+                        program,
+                        cur_vld,
+                        callback_targets,
+                        callback_collector,
+                        trigger_depth + 1,
+                    )
+                    .map_err(|err| {
+                        if err.source_code().is_some() {
+                            err
+                        } else {
+                            err.with_source_code(format!("{} ", trigger.source()))
+                        }
+                    })?;
+                }
+            }
+
             if is_callback_target {
                 let target_collector = callback_collector
                     .entry(relation_store.name.clone())
@@ -830,6 +905,43 @@ impl<T: WriteTx> SessionTx<T> {
                 .iter()
                 .map(|k| Symbol::new(k.name.clone(), SourceSpan::default())),
         );
+
+        if !relation_store.put_triggers.is_empty() {
+            // Cascade, bounded: firing at the ceiling is a typed refusal
+            // that aborts the transaction whole — never a silent stop with
+            // the mutation kept.
+            if trigger_depth >= MAX_TRIGGER_CASCADE_DEPTH {
+                bail!(TriggerCascadeTooDeep(
+                    relation_store.name.to_string(),
+                    MAX_TRIGGER_CASCADE_DEPTH
+                ));
+            }
+            for trigger in &relation_store.put_triggers {
+                // The trigger substance is already parsed — clone the
+                // stored program and inject the mutation's rows. No
+                // fire-time re-parse of source exists any more.
+                let mut program = trigger.program().clone();
+
+                make_const_rule(&mut program, "_new", kv_bindings.clone(), &new_tuples)?;
+                make_const_rule(&mut program, "_old", kv_bindings.clone(), &old_tuples)?;
+
+                db.run_query(
+                    self,
+                    program,
+                    cur_vld,
+                    callback_targets,
+                    callback_collector,
+                    trigger_depth + 1,
+                )
+                .map_err(|err| {
+                    if err.source_code().is_some() {
+                        err
+                    } else {
+                        err.with_source_code(format!("{} ", trigger.source()))
+                    }
+                })?;
+            }
+        }
 
         if is_callback_target {
             let target_collector = callback_collector
