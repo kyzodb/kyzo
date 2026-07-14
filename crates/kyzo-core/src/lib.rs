@@ -278,6 +278,7 @@ pub(crate) mod parse;
 pub(crate) mod query;
 pub(crate) mod runtime;
 pub(crate) mod storage;
+pub(crate) mod typestate;
 
 // Trial (issue #34): single-node SSI serializability checker. Test-only,
 // touches no engine source — consumes the public `Storage`/`Db` surface

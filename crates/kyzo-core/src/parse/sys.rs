@@ -44,6 +44,9 @@ use crate::engines::text::TokenizerConfig;
 use crate::parse::expr::{build_expr, parse_string};
 use crate::parse::query::parse_query;
 use crate::parse::{ExtractSpan, IntoChildren, Pairs, Rule, unexpected};
+use crate::data::value::proofs::assert_not_impl;
+use crate::typestate::{Set, Unset};
+use std::marker::PhantomData;
 
 // ─────────────────────────────────────────────────────────────────────────
 // SEAM: runtime tier (not yet ported).
@@ -117,10 +120,12 @@ pub enum SysOp {
     RemoveRelation(Vec<Symbol>),
     RenameRelation(Vec<(Symbol, Symbol)>),
     ShowTrigger(Symbol),
-    /// Trigger bodies are stored as their raw source text and re-parsed at
-    /// fire time — a convention inherited from the CozoDB original,
-    /// preserved by this port and queued for the runtime tier's
-    /// "parsed substance with stored provenance" redesign.
+    /// Trigger bodies as their provenance source text (put/rm/replace). The
+    /// parse tier carries the sources; the runtime tier's
+    /// `set_relation_triggers` lifts each ONCE into a parsed `Trigger`
+    /// substance at the store boundary, so a source that fails its own parse
+    /// is refused there and never stored — the substance, not the source, is
+    /// what fires (never re-parsed at fire time).
     SetTriggers(Symbol, Vec<String>, Vec<String>, Vec<String>),
     /// Declare an integrity constraint: a named denial rule. The body is a
     /// pure query stored as raw source (the same inherited convention as
@@ -147,7 +152,17 @@ pub enum SysOp {
     DescribeRelation(Symbol, SmartString<LazyCompact>),
 }
 
+/// A private witness that an index configuration was produced by its staged
+/// builder. Only this module can name it, so `build()` is each config's sole
+/// constructor — no struct literal elsewhere can assemble an incomplete,
+/// unproven configuration. Its presence carries the completeness proof: to
+/// hold one of these configs is to hold a fully-set one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Built;
+
 /// Configuration of an FTS (full-text search) index, as declared.
+/// Constructible ONLY through [`FtsConfigBuilder`] (the private `_built`
+/// witness seals it), so every value carries a proven `extractor`.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtsIndexConfig {
@@ -160,6 +175,92 @@ pub struct FtsIndexConfig {
     pub extractor: Expr,
     pub tokenizer: TokenizerConfig,
     pub filters: Vec<TokenizerConfig>,
+    _built: Built,
+}
+
+/// Staged builder for [`FtsIndexConfig`]. The one required field — the row
+/// `extractor` — is tracked as a typestate marker, so
+/// [`BuildFtsConfig::build`] exists only once it is set. Optional fields
+/// carry their defaults.
+#[must_use = "an FTS config builder yields nothing until `.build()`, which \
+              exists only once the extractor is set"]
+pub struct FtsConfigBuilder<Ex> {
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    extractor: Expr,
+    tokenizer: TokenizerConfig,
+    filters: Vec<TokenizerConfig>,
+    _required: PhantomData<Ex>,
+}
+
+impl FtsConfigBuilder<Unset> {
+    /// Begin an FTS config from the two always-known identity fields. The
+    /// extractor starts `Unset` (its placeholder value is never read in a
+    /// built config); optional fields take their defaults.
+    pub fn new(
+        base_relation: SmartString<LazyCompact>,
+        index_name: SmartString<LazyCompact>,
+    ) -> Self {
+        FtsConfigBuilder {
+            base_relation,
+            index_name,
+            extractor: Expr::Const {
+                val: DataValue::Null,
+                span: SourceSpan(0, 0),
+            },
+            tokenizer: TokenizerConfig {
+                name: Default::default(),
+                args: Default::default(),
+            },
+            filters: vec![],
+            _required: PhantomData,
+        }
+    }
+}
+
+impl<Ex> FtsConfigBuilder<Ex> {
+    // Optional fields: the extractor marker passes through unchanged.
+    pub fn tokenizer(mut self, tokenizer: TokenizerConfig) -> Self {
+        self.tokenizer = tokenizer;
+        self
+    }
+    pub fn filters(mut self, filters: Vec<TokenizerConfig>) -> Self {
+        self.filters = filters;
+        self
+    }
+}
+
+impl FtsConfigBuilder<Unset> {
+    /// Supply the required row extractor, flipping its marker to `Set`.
+    pub fn extractor(self, extractor: Expr) -> FtsConfigBuilder<Set> {
+        FtsConfigBuilder {
+            base_relation: self.base_relation,
+            index_name: self.index_name,
+            extractor,
+            tokenizer: self.tokenizer,
+            filters: self.filters,
+            _required: PhantomData,
+        }
+    }
+}
+
+/// The build door for an FTS configuration: implemented ONLY for the
+/// extractor-set builder, so a config without an extractor cannot be built.
+pub trait BuildFtsConfig {
+    fn build(self) -> FtsIndexConfig;
+}
+
+impl BuildFtsConfig for FtsConfigBuilder<Set> {
+    fn build(self) -> FtsIndexConfig {
+        FtsIndexConfig {
+            base_relation: self.base_relation,
+            index_name: self.index_name,
+            extractor: self.extractor,
+            tokenizer: self.tokenizer,
+            filters: self.filters,
+            _built: Built,
+        }
+    }
 }
 
 /// Configuration of a MinHash-LSH (locality-sensitive hashing) index, as
@@ -179,9 +280,135 @@ pub struct MinHashLshConfig {
     pub false_positive_weight: OrderedFloat<f64>,
     pub false_negative_weight: OrderedFloat<f64>,
     pub target_threshold: OrderedFloat<f64>,
+    _built: Built,
 }
 
-/// Configuration of an HNSW vector index, as declared.
+/// Staged builder for [`MinHashLshConfig`]. The one required field — the row
+/// `extractor` — is a typestate marker, so [`BuildMinHashLshConfig::build`]
+/// exists only once it is set. Optional fields carry their defaults (the same
+/// values the grammar's option defaults use).
+#[must_use = "a MinHash-LSH config builder yields nothing until `.build()`, \
+              which exists only once the extractor is set"]
+pub struct MinHashLshConfigBuilder<Ex> {
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    extractor: Expr,
+    tokenizer: TokenizerConfig,
+    filters: Vec<TokenizerConfig>,
+    n_gram: usize,
+    n_perm: usize,
+    false_positive_weight: OrderedFloat<f64>,
+    false_negative_weight: OrderedFloat<f64>,
+    target_threshold: OrderedFloat<f64>,
+    _required: PhantomData<Ex>,
+}
+
+impl MinHashLshConfigBuilder<Unset> {
+    /// Begin a MinHash-LSH config from the two always-known identity fields.
+    /// The extractor starts `Unset`; optional fields take their defaults.
+    pub fn new(
+        base_relation: SmartString<LazyCompact>,
+        index_name: SmartString<LazyCompact>,
+    ) -> Self {
+        MinHashLshConfigBuilder {
+            base_relation,
+            index_name,
+            extractor: Expr::Const {
+                val: DataValue::Null,
+                span: SourceSpan(0, 0),
+            },
+            tokenizer: TokenizerConfig {
+                name: Default::default(),
+                args: Default::default(),
+            },
+            filters: vec![],
+            n_gram: 1,
+            n_perm: 200,
+            false_positive_weight: OrderedFloat(1.0),
+            false_negative_weight: OrderedFloat(1.0),
+            target_threshold: OrderedFloat(0.9),
+            _required: PhantomData,
+        }
+    }
+}
+
+impl<Ex> MinHashLshConfigBuilder<Ex> {
+    // Optional fields: the extractor marker passes through unchanged.
+    pub fn tokenizer(mut self, tokenizer: TokenizerConfig) -> Self {
+        self.tokenizer = tokenizer;
+        self
+    }
+    pub fn filters(mut self, filters: Vec<TokenizerConfig>) -> Self {
+        self.filters = filters;
+        self
+    }
+    pub fn n_gram(mut self, n_gram: usize) -> Self {
+        self.n_gram = n_gram;
+        self
+    }
+    pub fn n_perm(mut self, n_perm: usize) -> Self {
+        self.n_perm = n_perm;
+        self
+    }
+    pub fn weights(mut self, false_positive: f64, false_negative: f64) -> Self {
+        self.false_positive_weight = OrderedFloat(false_positive);
+        self.false_negative_weight = OrderedFloat(false_negative);
+        self
+    }
+    pub fn target_threshold(mut self, target_threshold: f64) -> Self {
+        self.target_threshold = OrderedFloat(target_threshold);
+        self
+    }
+}
+
+impl MinHashLshConfigBuilder<Unset> {
+    /// Supply the required row extractor, flipping its marker to `Set`.
+    pub fn extractor(self, extractor: Expr) -> MinHashLshConfigBuilder<Set> {
+        MinHashLshConfigBuilder {
+            base_relation: self.base_relation,
+            index_name: self.index_name,
+            extractor,
+            tokenizer: self.tokenizer,
+            filters: self.filters,
+            n_gram: self.n_gram,
+            n_perm: self.n_perm,
+            false_positive_weight: self.false_positive_weight,
+            false_negative_weight: self.false_negative_weight,
+            target_threshold: self.target_threshold,
+            _required: PhantomData,
+        }
+    }
+}
+
+/// The build door for a MinHash-LSH configuration: implemented ONLY for the
+/// extractor-set builder, so a config without an extractor cannot be built.
+pub trait BuildMinHashLshConfig {
+    fn build(self) -> MinHashLshConfig;
+}
+
+impl BuildMinHashLshConfig for MinHashLshConfigBuilder<Set> {
+    fn build(self) -> MinHashLshConfig {
+        MinHashLshConfig {
+            base_relation: self.base_relation,
+            index_name: self.index_name,
+            extractor: self.extractor,
+            tokenizer: self.tokenizer,
+            filters: self.filters,
+            n_gram: self.n_gram,
+            n_perm: self.n_perm,
+            false_positive_weight: self.false_positive_weight,
+            false_negative_weight: self.false_negative_weight,
+            target_threshold: self.target_threshold,
+            _built: Built,
+        }
+    }
+}
+
+/// Configuration of an HNSW vector index, as declared. Constructible ONLY
+/// through [`HnswConfigBuilder`] (the private `_built` witness seals it), so
+/// every `HnswIndexConfig` value is proven complete: `vec_dim`,
+/// `ef_construction`, and `m_neighbours` are always present, never a
+/// sentinel checked after assembly.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HnswIndexConfig {
@@ -196,7 +423,175 @@ pub struct HnswIndexConfig {
     pub index_filter: Option<String>,
     pub extend_candidates: bool,
     pub keep_pruned_connections: bool,
+    _built: Built,
 }
+
+/// Staged builder for [`HnswIndexConfig`]. Its three required numeric
+/// fields — `dim`, `ef`, and `m` — are tracked as typestate markers, so
+/// [`BuildHnswConfig::build`] exists only on the fully-`Set` instantiation:
+/// a config missing any of them is a COMPILE error, not an `Option`/sentinel
+/// validated at run time. Optional fields carry their defaults.
+#[must_use = "an HNSW config builder yields nothing until `.build()`, which \
+              exists only once dim, ef, and m are all set"]
+pub struct HnswConfigBuilder<Dim, Ef, M> {
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    vec_dim: usize,
+    ef_construction: usize,
+    m_neighbours: usize,
+    dtype: VecElementType,
+    vec_fields: Vec<SmartString<LazyCompact>>,
+    distance: HnswDistance,
+    index_filter: Option<String>,
+    extend_candidates: bool,
+    keep_pruned_connections: bool,
+    _required: PhantomData<(Dim, Ef, M)>,
+}
+
+impl HnswConfigBuilder<Unset, Unset, Unset> {
+    /// Begin an HNSW config from the two always-known identity fields. Every
+    /// required numeric field starts `Unset`; every optional field starts at
+    /// its default.
+    pub fn new(
+        base_relation: SmartString<LazyCompact>,
+        index_name: SmartString<LazyCompact>,
+    ) -> Self {
+        HnswConfigBuilder {
+            base_relation,
+            index_name,
+            vec_dim: 0,
+            ef_construction: 0,
+            m_neighbours: 0,
+            dtype: VecElementType::F32,
+            vec_fields: vec![],
+            distance: HnswDistance::L2,
+            index_filter: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+            _required: PhantomData,
+        }
+    }
+}
+
+impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
+    /// Move every data field into a builder carrying different required-field
+    /// markers. Private: its only callers are the required-field setters
+    /// below, each of which writes its field's value BEFORE re-marking it, so
+    /// no marker reaches `Set` without its value supplied.
+    fn remark<D2, E2, M2>(self) -> HnswConfigBuilder<D2, E2, M2> {
+        HnswConfigBuilder {
+            base_relation: self.base_relation,
+            index_name: self.index_name,
+            vec_dim: self.vec_dim,
+            ef_construction: self.ef_construction,
+            m_neighbours: self.m_neighbours,
+            dtype: self.dtype,
+            vec_fields: self.vec_fields,
+            distance: self.distance,
+            index_filter: self.index_filter,
+            extend_candidates: self.extend_candidates,
+            keep_pruned_connections: self.keep_pruned_connections,
+            _required: PhantomData,
+        }
+    }
+
+    // Optional fields: required-field markers pass through unchanged, so they
+    // may be set at any point in the chain, in any order.
+    pub fn dtype(mut self, dtype: VecElementType) -> Self {
+        self.dtype = dtype;
+        self
+    }
+    pub fn distance(mut self, distance: HnswDistance) -> Self {
+        self.distance = distance;
+        self
+    }
+    pub fn fields(mut self, vec_fields: Vec<SmartString<LazyCompact>>) -> Self {
+        self.vec_fields = vec_fields;
+        self
+    }
+    pub fn filter(mut self, index_filter: Option<String>) -> Self {
+        self.index_filter = index_filter;
+        self
+    }
+    pub fn extend_candidates(mut self, extend_candidates: bool) -> Self {
+        self.extend_candidates = extend_candidates;
+        self
+    }
+    pub fn keep_pruned_connections(mut self, keep_pruned_connections: bool) -> Self {
+        self.keep_pruned_connections = keep_pruned_connections;
+        self
+    }
+}
+
+// Each required setter is callable only while its own field is `Unset` (so it
+// cannot be set twice) and flips exactly that field's marker to `Set`.
+impl<Ef, M> HnswConfigBuilder<Unset, Ef, M> {
+    pub fn dim(mut self, vec_dim: usize) -> HnswConfigBuilder<Set, Ef, M> {
+        self.vec_dim = vec_dim;
+        self.remark()
+    }
+}
+impl<Dim, M> HnswConfigBuilder<Dim, Unset, M> {
+    pub fn ef(mut self, ef_construction: usize) -> HnswConfigBuilder<Dim, Set, M> {
+        self.ef_construction = ef_construction;
+        self.remark()
+    }
+}
+impl<Dim, Ef> HnswConfigBuilder<Dim, Ef, Unset> {
+    pub fn m(mut self, m_neighbours: usize) -> HnswConfigBuilder<Dim, Ef, Set> {
+        self.m_neighbours = m_neighbours;
+        self.remark()
+    }
+}
+
+/// The build door for an HNSW configuration: implemented ONLY for the
+/// fully-set builder, so a config missing `dim`, `ef`, or `m` cannot be
+/// built. The produced config is sealed, so this is its sole constructor.
+pub trait BuildHnswConfig {
+    fn build(self) -> HnswIndexConfig;
+}
+
+impl BuildHnswConfig for HnswConfigBuilder<Set, Set, Set> {
+    fn build(self) -> HnswIndexConfig {
+        HnswIndexConfig {
+            base_relation: self.base_relation,
+            index_name: self.index_name,
+            vec_dim: self.vec_dim,
+            dtype: self.dtype,
+            vec_fields: self.vec_fields,
+            distance: self.distance,
+            ef_construction: self.ef_construction,
+            m_neighbours: self.m_neighbours,
+            index_filter: self.index_filter,
+            extend_candidates: self.extend_candidates,
+            keep_pruned_connections: self.keep_pruned_connections,
+            _built: Built,
+        }
+    }
+}
+
+// ── Compile-fail proofs (enforced in EVERY build, like `data::value::proofs`)
+//
+// `build()` — carried by each config's build trait — is ABSENT on every
+// INCOMPLETE builder instantiation: the DoD's "a config missing a required
+// field cannot compile", witnessed mechanically rather than asserted in
+// prose. Each line fails to compile the moment the build trait leaks to an
+// under-set typestate. The positive direction (build present on the fully-set
+// builder) is exercised by the parse paths above and the unit tests below.
+
+// HNSW requires `dim`, `ef`, AND `m`: every instantiation short of all three
+// `Set` lacks the build trait.
+assert_not_impl!(HnswConfigBuilder<Unset, Unset, Unset>: BuildHnswConfig);
+assert_not_impl!(HnswConfigBuilder<Set, Unset, Unset>: BuildHnswConfig);
+assert_not_impl!(HnswConfigBuilder<Unset, Set, Unset>: BuildHnswConfig);
+assert_not_impl!(HnswConfigBuilder<Unset, Unset, Set>: BuildHnswConfig);
+assert_not_impl!(HnswConfigBuilder<Set, Set, Unset>: BuildHnswConfig);
+assert_not_impl!(HnswConfigBuilder<Set, Unset, Set>: BuildHnswConfig);
+assert_not_impl!(HnswConfigBuilder<Unset, Set, Set>: BuildHnswConfig);
+
+// FTS and MinHash-LSH require the row `extractor`.
+assert_not_impl!(FtsConfigBuilder<Unset>: BuildFtsConfig);
+assert_not_impl!(MinHashLshConfigBuilder<Unset>: BuildMinHashLshConfig);
 
 /// The distance metric of an HNSW index.
 #[allow(missing_docs)]
@@ -628,18 +1023,18 @@ pub(crate) fn parse_sys(
 
                     let extractor =
                         combine_extractor(extractor, extract_filter, "MinHash-LSH", name.extract_span())?;
-                    let config = MinHashLshConfig {
-                        base_relation: SmartString::from(rel.as_str()),
-                        index_name: SmartString::from(name.as_str()),
-                        extractor,
-                        tokenizer,
-                        filters,
-                        n_gram,
-                        n_perm,
-                        false_positive_weight: false_positive_weight.into(),
-                        false_negative_weight: false_negative_weight.into(),
-                        target_threshold: target_threshold.into(),
-                    };
+                    let config = MinHashLshConfigBuilder::new(
+                        SmartString::from(rel.as_str()),
+                        SmartString::from(name.as_str()),
+                    )
+                    .tokenizer(tokenizer)
+                    .filters(filters)
+                    .n_gram(n_gram)
+                    .n_perm(n_perm)
+                    .weights(false_positive_weight, false_negative_weight)
+                    .target_threshold(target_threshold)
+                    .extractor(extractor)
+                    .build();
                     SysOp::CreateMinHashLshIndex(config)
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
@@ -696,13 +1091,14 @@ pub(crate) fn parse_sys(
                     }
                     let extractor =
                         combine_extractor(extractor, extract_filter, "FTS", name.extract_span())?;
-                    let config = FtsIndexConfig {
-                        base_relation: SmartString::from(rel.as_str()),
-                        index_name: SmartString::from(name.as_str()),
-                        extractor,
-                        tokenizer,
-                        filters,
-                    };
+                    let config = FtsConfigBuilder::new(
+                        SmartString::from(rel.as_str()),
+                        SmartString::from(name.as_str()),
+                    )
+                    .tokenizer(tokenizer)
+                    .filters(filters)
+                    .extractor(extractor)
+                    .build();
                     SysOp::CreateFtsIndex(config)
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
@@ -717,13 +1113,16 @@ pub(crate) fn parse_sys(
                     let mut inner = inner.children();
                     let rel = inner.expect("the relation's name")?;
                     let name = inner.expect("the index's name")?;
-                    // options
-                    let mut vec_dim = 0;
+                    // options: the three required fields are collected as
+                    // `Option` (a user may omit them — that refusal is
+                    // inherently runtime), then handed to the staged builder,
+                    // which proves at compile time that all three were set.
+                    let mut vec_dim: Option<usize> = None;
                     let mut dtype = VecElementType::F32;
                     let mut vec_fields = vec![];
                     let mut distance = HnswDistance::L2;
-                    let mut ef_construction = 0;
-                    let mut m_neighbours = 0;
+                    let mut ef_construction: Option<usize> = None;
+                    let mut m_neighbours: Option<usize> = None;
                     let mut index_filter = None;
                     let mut extend_candidates = false;
                     let mut keep_pruned_connections = false;
@@ -750,7 +1149,7 @@ pub(crate) fn parse_sys(
                                     v > 0,
                                     IndexOptionError(format!("Invalid vec_dim: {v}"), val_span)
                                 );
-                                vec_dim = v as usize;
+                                vec_dim = Some(v as usize);
                             }
                             "ef_construction" | "ef" => {
                                 let v = build_expr(opt_val, param_pool)?
@@ -769,7 +1168,7 @@ pub(crate) fn parse_sys(
                                         val_span,
                                     )
                                 );
-                                ef_construction = v as usize;
+                                ef_construction = Some(v as usize);
                             }
                             "m_neighbours" | "m" => {
                                 let v = build_expr(opt_val, param_pool)?
@@ -788,7 +1187,7 @@ pub(crate) fn parse_sys(
                                         val_span,
                                     )
                                 );
-                                m_neighbours = v as usize;
+                                m_neighbours = Some(v as usize);
                             }
                             "dtype" => {
                                 dtype = match opt_val.as_str() {
@@ -839,31 +1238,35 @@ pub(crate) fn parse_sys(
                             }
                         }
                     }
-                    if ef_construction == 0 {
+                    // User omission of a required field is the one runtime
+                    // refusal; from here the staged builder proves — at
+                    // compile time — that dim, ef, and m are all supplied
+                    // before `build()` can be reached.
+                    let (Some(vec_dim), Some(ef_construction), Some(m_neighbours)) =
+                        (vec_dim, ef_construction, m_neighbours)
+                    else {
                         bail!(IndexOptionError(
-                            "ef_construction must be set".to_string(),
+                            "an HNSW index requires `dim`, `ef_construction`, and \
+                             `m_neighbours`"
+                                .to_string(),
                             create_span,
                         ));
-                    }
-                    if m_neighbours == 0 {
-                        bail!(IndexOptionError(
-                            "m_neighbours must be set".to_string(),
-                            create_span,
-                        ));
-                    }
-                    SysOp::CreateVectorIndex(HnswIndexConfig {
-                        base_relation: SmartString::from(rel.as_str()),
-                        index_name: SmartString::from(name.as_str()),
-                        vec_dim,
-                        dtype,
-                        vec_fields,
-                        distance,
-                        ef_construction,
-                        m_neighbours,
-                        index_filter,
-                        extend_candidates,
-                        keep_pruned_connections,
-                    })
+                    };
+                    let config = HnswConfigBuilder::new(
+                        SmartString::from(rel.as_str()),
+                        SmartString::from(name.as_str()),
+                    )
+                    .dtype(dtype)
+                    .fields(vec_fields)
+                    .distance(distance)
+                    .filter(index_filter)
+                    .extend_candidates(extend_candidates)
+                    .keep_pruned_connections(keep_pruned_connections)
+                    .dim(vec_dim)
+                    .ef(ef_construction)
+                    .m(m_neighbours)
+                    .build();
+                    SysOp::CreateVectorIndex(config)
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
                 _ => return Err(unexpected("an HNSW index operation", &inner)),
@@ -968,5 +1371,50 @@ fn parse_filters_expr(mut expr: Expr) -> Result<Vec<TokenizerConfig>> {
             Ok(filters)
         }
         _ => Err(IndexOptionError("Filters must be a list of filters".to_string(), span).into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The staged builder yields a fully-set HNSW config; `build()` is
+    /// reachable only because dim, ef, and m are all supplied (the absence
+    /// proofs above witness that any short instantiation cannot reach it).
+    #[test]
+    fn hnsw_staged_builder_yields_a_complete_config() {
+        let cfg = HnswConfigBuilder::new("docs".into(), "by_vec".into())
+            .dtype(VecElementType::F64)
+            .distance(HnswDistance::Cosine)
+            .dim(128)
+            .ef(64)
+            .m(16)
+            .build();
+        assert_eq!(cfg.vec_dim, 128);
+        assert_eq!(cfg.ef_construction, 64);
+        assert_eq!(cfg.m_neighbours, 16);
+        assert_eq!(cfg.dtype, VecElementType::F64);
+        assert_eq!(cfg.distance, HnswDistance::Cosine);
+    }
+
+    /// The FTS and LSH staged builders carry their required extractor through
+    /// to the sealed config, with optional fields defaulted or overridden.
+    #[test]
+    fn fts_and_lsh_staged_builders_carry_the_extractor() {
+        let ex = || Expr::Const {
+            val: DataValue::from(true),
+            span: SourceSpan(0, 0),
+        };
+        let fts = FtsConfigBuilder::new("docs".into(), "by_text".into())
+            .extractor(ex())
+            .build();
+        assert_eq!(fts.extractor, ex());
+
+        let lsh = MinHashLshConfigBuilder::new("docs".into(), "by_lsh".into())
+            .n_gram(3)
+            .extractor(ex())
+            .build();
+        assert_eq!(lsh.extractor, ex());
+        assert_eq!(lsh.n_gram, 3);
     }
 }

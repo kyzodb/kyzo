@@ -45,7 +45,7 @@ pub mod column;
 pub mod exec;
 pub mod number;
 pub mod prefix;
-mod proofs;
+pub(crate) mod proofs;
 pub mod row;
 pub mod string;
 pub mod tag;

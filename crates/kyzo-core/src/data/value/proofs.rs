@@ -56,6 +56,13 @@ macro_rules! assert_not_impl {
     };
 }
 
+// The compile-time absence proof is a general utility (a build-time witness
+// that a type lacks a capability), not value-plane-specific. It is the
+// mechanism the staged-construction idiom uses to prove `build()` is absent
+// on an incomplete typestate — exported crate-wide so those proofs live
+// beside the builders they guard, never re-spelled.
+pub(crate) use assert_not_impl;
+
 // Code is identity ONLY: no order. It cannot be compared, so no read path
 // can sneak an ordering out of a bare handle — order is the observer's
 // through resolved bytes, never the code's.
