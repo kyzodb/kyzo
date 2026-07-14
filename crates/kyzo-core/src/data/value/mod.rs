@@ -500,20 +500,6 @@ impl std::fmt::Display for DataValue {
 /// `prefix` by one more character).
 pub const LARGEST_UTF_CHAR: char = '\u{10FFFF}';
 
-/// The execution tuple in owned form: the engine's row currency at the
-/// logical level (the packed-code form is [`Rows`]; the written form is
-/// [`EncodedKey`]).
-///
-/// @authority Tuple
-/// @layer value
-/// @owns the decoded-DataValue row form; not interchangeable with ExecRows codes or canonical bytes
-/// @constructs typed row decode paths in data/value
-/// @forbids blanket From<Vec<DataValue>> | Deref to Vec<DataValue> at a row-authority site
-/// @converts Tuple -> EncodedKey (encode at the storage boundary) | Tuple -> ExecRows (only via Domain admission)
-/// @gate compile-fail once the newtype lands: Vec<DataValue> rejected where Tuple is required
-/// @status pending #126 — today a type alias; the tuple-vec-alias drift finding stays open until the newtype
-pub type Tuple = Vec<DataValue>;
-
 impl DataValue {
     /// Decode one canonical value from the front of a stored key,
     /// returning the remainder. Total: typed refusal, never trust.

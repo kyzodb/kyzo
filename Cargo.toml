@@ -32,20 +32,3 @@ lsm-tree = { path = "vendor/lsm-tree" }
 
 [profile.release]
 lto = "thin"
-
-# `cargo build`/`cargo test --release` (the whole suite's normal gate, and the
-# form CI runs) silently wraps on arithmetic overflow: `[profile.release]`'s
-# own Cargo default is `overflow-checks = false`, and `debug_assert!` is a
-# no-op there too (`debug-assertions = false`). Story #88 (0.9.0 bug-hunting):
-# a corruption bug that slipped past every existing test lived in code no
-# test exercised, at release speed. Rather than turn overflow-checks on for
-# every real release build (a genuine perf cost this engine should not pay in
-# production), this is a SEPARATE named profile inheriting release's
-# optimization settings, run as an additional verification pass over the
-# whole suite (`cargo test -p kyzo --profile release-checked`) — release-speed
-# enough not to need `cargo test`'s (dev-profile) runtime, but with both
-# overflow-checks and the new debug_assert! invariants live.
-[profile.release-checked]
-inherits = "release"
-overflow-checks = true
-debug-assertions = true

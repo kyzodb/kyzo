@@ -70,8 +70,8 @@ pub const MAX_VALIDITY_TS: ValidityTs = ValidityTs(Reverse(i64::MAX));
 /// as-of seek order by shape (see the module docs).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Validity {
-    pub timestamp: ValidityTs,
-    pub is_assert: Reverse<bool>,
+    timestamp: ValidityTs,
+    is_assert: Reverse<bool>,
 }
 
 /// The maximum slot ENCODING: sorts after every other validity slot
@@ -83,13 +83,6 @@ pub const TERMINAL_VALIDITY: Validity = Validity {
 };
 
 impl Validity {
-    pub const fn new(ts_micros: i64, is_assert: bool) -> Validity {
-        Validity {
-            timestamp: ValidityTs(Reverse(ts_micros)),
-            is_assert: Reverse(is_assert),
-        }
-    }
-
     pub fn ts_micros(self) -> i64 {
         self.timestamp.0.0
     }

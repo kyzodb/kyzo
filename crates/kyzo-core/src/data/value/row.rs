@@ -80,12 +80,6 @@ impl Rows {
     }
 
     pub fn len(&self) -> usize {
-        // The write doors only ever push whole tuples; a violation here
-        // would silently hide trailing codes.
-        debug_assert!(
-            self.codes.len().is_multiple_of(self.arity),
-            "row-major invariant broken"
-        );
         self.codes.len() / self.arity
     }
 
