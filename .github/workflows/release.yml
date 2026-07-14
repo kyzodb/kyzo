@@ -77,6 +77,17 @@ jobs:
             exit 1
           fi
           echo "OK: CI succeeded on $sha. Provenance verified."
+      - name: Version agreement (tag / Cargo.toml / CHANGELOG)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          changelog=$(grep -m1 -oP '^## \[\K[0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md)
+          echo "tag=$tag manifest=$manifest changelog=$changelog"
+          if [ "$tag" != "$manifest" ] || [ "$tag" != "$changelog" ]; then
+            echo "::error::REFUSED — version drift: tag=$tag Cargo.toml=$manifest CHANGELOG=$changelog must all agree (see VERSIONING.md)."
+            exit 1
+          fi
 
   # ---------- Hermetic gate re-run (fresh checkout, mirrors ci.yml's core gates) ----------
 
@@ -149,6 +160,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build kyzo-bin (release, x86_64-unknown-linux-gnu)
         run: cargo build -p kyzo-bin --release --target x86_64-unknown-linux-gnu
+      - name: Version agreement (built binary vs tag)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          got=$(./target/x86_64-unknown-linux-gnu/release/kyzo --version | awk '{print $NF}')
+          if [ "$got" != "$tag" ]; then
+            echo "::error::REFUSED — built binary reports version $got, tag is $tag."
+            exit 1
+          fi
+          echo "OK: binary reports $got, matching tag."
       - name: Package + checksum
         run: |
           set -euo pipefail
