@@ -129,6 +129,10 @@ use crate::storage::{ReadTx, WriteTx};
 pub(crate) struct MinHashLshIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
     pub(crate) index_name: SmartString<LazyCompact>,
+    /// The row-extraction expression as a PARSED typed substance (serde
+    /// round-trips it through the value plane's `Expr` codec, arity re-proven
+    /// on decode); never source text re-parsed at build time.
+    pub(crate) extractor: crate::data::expr::Expr,
     pub(crate) n_gram: usize,
     pub(crate) tokenizer: TokenizerConfig,
     pub(crate) filters: Vec<TokenizerConfig>,
@@ -1025,7 +1029,8 @@ mod tests {
         MinHashLshIndexManifest {
             base_relation: SmartString::from("docs"),
             index_name: SmartString::from("by_text"),
-            extractor: "v".to_string(),
+            extractor: crate::parse::parse_expressions("v", &std::collections::BTreeMap::new())
+                .unwrap(),
             n_gram: 3,
             tokenizer: TokenizerConfig {
                 name: SmartString::from("Simple"),
@@ -1316,5 +1321,5 @@ mod tests {
     /// The pinned wire bytes of the canonical manifest above (msgpack,
     /// struct maps). Regenerate ONLY as part of a deliberate format
     /// migration.
-    const PINNED_MANIFEST_HEX: &str = "8bad626173655f72656c6174696f6ea4646f6373aa696e6465785f6e616d65a762795f74657874a9657874726163746f72a176a66e5f6772616d03a9746f6b656e697a657282a46e616d65a653696d706c65a46172677390a766696c7465727390a86e756d5f7065726d04a76e5f62616e647304ae6e5f726f77735f696e5f62616e6401a97468726573686f6c64cb3fe0000000000000a57065726d73dc001001000000040302010700000008000000";
+    const PINNED_MANIFEST_HEX: &str = "8bad626173655f72656c6174696f6ea4646f6373aa696e6465785f6e616d65a762795f74657874a9657874726163746f7281a742696e64696e6782a376617281a46e616d65a176a97475706c655f706f73c0a66e5f6772616d03a9746f6b656e697a657282a46e616d65a653696d706c65a46172677390a766696c7465727390a86e756d5f7065726d04a76e5f62616e647304ae6e5f726f77735f696e5f62616e6401a97468726573686f6c64cb3fe0000000000000a57065726d73dc001001000000040302010700000008000000";
 }

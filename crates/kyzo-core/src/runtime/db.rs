@@ -93,7 +93,7 @@ use crate::query::sort::sort_and_collect;
 use crate::runtime::callback::{CallbackCollector, EventCallbackRegistry};
 use crate::runtime::current_validity;
 use crate::runtime::relation::{
-    AccessLevel, KeyspaceKind, RelationHandle, create_relation, describe_relation,
+    AccessLevel, KeyspaceKind, RelationHandle, Residency, create_relation, describe_relation,
     destroy_relation, get_relation, list_relations, rename_relation, set_access_level,
     set_relation_triggers, write_relation_row,
 };
@@ -1014,20 +1014,22 @@ impl<T: ReadTx> SessionTx<T> {
     }
 
     /// Read one key from the store the relation lives in.
-    pub(crate) fn get_routed(&self, is_temp: bool, key: &[u8]) -> Result<Option<fjall::Slice>> {
-        if is_temp {
-            self.temp.get(key)
-        } else {
-            self.store.get(key)
+    pub(crate) fn get_routed(
+        &self,
+        residency: Residency,
+        key: &[u8],
+    ) -> Result<Option<fjall::Slice>> {
+        match residency {
+            Residency::Temp => self.temp.get(key),
+            Residency::Stored => self.store.get(key),
         }
     }
 
     /// Existence of one key in the store the relation lives in.
-    pub(crate) fn exists_routed(&self, is_temp: bool, key: &[u8]) -> Result<bool> {
-        if is_temp {
-            self.temp.exists(key)
-        } else {
-            self.store.exists(key)
+    pub(crate) fn exists_routed(&self, residency: Residency, key: &[u8]) -> Result<bool> {
+        match residency {
+            Residency::Temp => self.temp.exists(key),
+            Residency::Stored => self.store.exists(key),
         }
     }
 
@@ -1062,10 +1064,9 @@ impl<T: ReadTx> SessionTx<T> {
         span: SourceSpan,
     ) -> Result<Option<Tuple>> {
         let as_of = AsOf::current(valid);
-        if handle.is_temp {
-            handle.current_row(&self.temp, key_cols, as_of, span)
-        } else {
-            handle.current_row(&self.store, key_cols, as_of, span)
+        match handle.residency() {
+            Residency::Temp => handle.current_row(&self.temp, key_cols, as_of, span),
+            Residency::Stored => handle.current_row(&self.store, key_cols, as_of, span),
         }
     }
 }
@@ -1089,11 +1090,10 @@ impl<T: WriteTx> SessionTx<T> {
     /// comes from the storage's monotone clock, the session temp store's
     /// from its logical clock. One stamp per transaction per store — a
     /// transaction's writes are one instant of recorded history.
-    pub(crate) fn system_stamp_routed(&self, is_temp: bool) -> ValidityTs {
-        if is_temp {
-            self.temp.system_stamp()
-        } else {
-            self.store.system_stamp()
+    pub(crate) fn system_stamp_routed(&self, residency: Residency) -> ValidityTs {
+        match residency {
+            Residency::Temp => self.temp.system_stamp(),
+            Residency::Stored => self.store.system_stamp(),
         }
     }
 
@@ -1141,28 +1141,25 @@ impl<T: WriteTx> SessionTx<T> {
     /// Re-write a relation's catalog row (e.g. to re-attach triggers across a
     /// `:replace`), routed by the handle's `is_temp`.
     pub(crate) fn write_relation_row(&mut self, handle: &RelationHandle) -> Result<()> {
-        if handle.is_temp {
-            write_relation_row(&mut self.temp, handle)
-        } else {
-            write_relation_row(&mut self.store, handle)
+        match handle.residency() {
+            Residency::Temp => write_relation_row(&mut self.temp, handle),
+            Residency::Stored => write_relation_row(&mut self.store, handle),
         }
     }
 
     /// Write one key/value into the store the relation lives in.
-    pub(crate) fn put_routed(&mut self, is_temp: bool, key: &[u8], val: &[u8]) -> Result<()> {
-        if is_temp {
-            self.temp.put(key, val)
-        } else {
-            self.store.put(key, val)
+    pub(crate) fn put_routed(&mut self, residency: Residency, key: &[u8], val: &[u8]) -> Result<()> {
+        match residency {
+            Residency::Temp => self.temp.put(key, val),
+            Residency::Stored => self.store.put(key, val),
         }
     }
 
     /// Delete one key from the store the relation lives in.
-    pub(crate) fn del_routed(&mut self, is_temp: bool, key: &[u8]) -> Result<()> {
-        if is_temp {
-            self.temp.del(key)
-        } else {
-            self.store.del(key)
+    pub(crate) fn del_routed(&mut self, residency: Residency, key: &[u8]) -> Result<()> {
+        match residency {
+            Residency::Temp => self.temp.del(key),
+            Residency::Stored => self.store.del(key),
         }
     }
 

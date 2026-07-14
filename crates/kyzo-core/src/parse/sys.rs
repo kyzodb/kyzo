@@ -149,10 +149,15 @@ pub enum SysOp {
 
 /// Configuration of an FTS (full-text search) index, as declared.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtsIndexConfig {
     pub base_relation: SmartString<LazyCompact>,
     pub index_name: SmartString<LazyCompact>,
+    /// The row-extraction expression as a PARSED, partial-evaluated typed
+    /// substance — never source text re-parsed at build time. When an
+    /// `extract_filter` is given it is folded in here as a typed
+    /// `if(filter, extractor)` conditional, not a textual splice.
+    pub extractor: Expr,
     pub tokenizer: TokenizerConfig,
     pub filters: Vec<TokenizerConfig>,
 }
@@ -160,10 +165,13 @@ pub struct FtsIndexConfig {
 /// Configuration of a MinHash-LSH (locality-sensitive hashing) index, as
 /// declared.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MinHashLshConfig {
     pub base_relation: SmartString<LazyCompact>,
     pub index_name: SmartString<LazyCompact>,
+    /// The row-extraction expression as a parsed typed substance (see
+    /// [`FtsIndexConfig::extractor`]).
+    pub extractor: Expr,
     pub tokenizer: TokenizerConfig,
     pub filters: Vec<TokenizerConfig>,
     pub n_gram: usize,
@@ -218,6 +226,50 @@ struct ProcessIdNotInteger(#[label("this must evaluate to an integer process ID"
 #[error("{0}")]
 #[diagnostic(code(parser::index_option))]
 struct IndexOptionError(String, #[label("invalid index option")] SourceSpan);
+
+/// Fold an optional `extract_filter` predicate into the row `extractor` as a
+/// typed `if(filter, extractor)` conditional — the exact shape the parser
+/// builds for a two-argument `if(cond, then)` (filter true yields the
+/// extractor, else `Null`), but constructed from the already-parsed
+/// sub-expressions rather than spliced together as source text. A missing
+/// extractor is a typed refusal HERE: an index with nothing to extract is a
+/// definition error surfaced at parse, never a value deferred to build-time
+/// compilation.
+fn combine_extractor(
+    extractor: Option<Expr>,
+    extract_filter: Option<Expr>,
+    kind: &str,
+    span: SourceSpan,
+) -> Result<Expr> {
+    let extractor = extractor.ok_or_else(|| {
+        miette::Report::from(IndexOptionError(
+            format!("a {kind} index requires an `extractor` option"),
+            span,
+        ))
+    })?;
+    match extract_filter {
+        None => Ok(extractor),
+        Some(filter) => {
+            let span = extractor.span();
+            Ok(Expr::Cond {
+                clauses: vec![
+                    (filter, extractor),
+                    (
+                        Expr::Const {
+                            val: DataValue::from(true),
+                            span,
+                        },
+                        Expr::Const {
+                            val: DataValue::Null,
+                            span,
+                        },
+                    ),
+                ],
+                span,
+            })
+        }
+    }
+}
 
 pub(crate) fn parse_sys(
     mut src: Pairs<'_>,
@@ -413,8 +465,8 @@ pub(crate) fn parse_sys(
                         name: Default::default(),
                         args: Default::default(),
                     };
-                    let mut extractor = "".to_string();
-                    let mut extract_filter = "".to_string();
+                    let mut extractor: Option<Expr> = None;
+                    let mut extract_filter: Option<Expr> = None;
                     let mut n_gram = 1;
                     let mut n_perm = 200;
                     let mut target_threshold = 0.9;
@@ -516,10 +568,12 @@ pub(crate) fn parse_sys(
                             "extractor" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
+                                extractor = Some(ex);
                             }
                             "extract_filter" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
+                                extract_filter = Some(ex);
                             }
                             "tokenizer" => {
                                 let mut expr = build_expr(opt_val, param_pool)?;
@@ -572,9 +626,12 @@ pub(crate) fn parse_sys(
                     false_positive_weight /= total_weights;
                     false_negative_weight /= total_weights;
 
+                    let extractor =
+                        combine_extractor(extractor, extract_filter, "MinHash-LSH", name.extract_span())?;
                     let config = MinHashLshConfig {
                         base_relation: SmartString::from(rel.as_str()),
                         index_name: SmartString::from(name.as_str()),
+                        extractor,
                         tokenizer,
                         filters,
                         n_gram,
@@ -601,8 +658,8 @@ pub(crate) fn parse_sys(
                         name: Default::default(),
                         args: Default::default(),
                     };
-                    let mut extractor = "".to_string();
-                    let mut extract_filter = "".to_string();
+                    let mut extractor: Option<Expr> = None;
+                    let mut extract_filter: Option<Expr> = None;
                     for opt_pair in inner {
                         let [opt_name, opt_val] = opt_pair
                             .children()
@@ -612,10 +669,12 @@ pub(crate) fn parse_sys(
                             "extractor" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
+                                extractor = Some(ex);
                             }
                             "extract_filter" => {
                                 let mut ex = build_expr(opt_val, param_pool)?;
                                 ex.partial_eval()?;
+                                extract_filter = Some(ex);
                             }
                             "tokenizer" => {
                                 let mut expr = build_expr(opt_val, param_pool)?;
@@ -635,9 +694,12 @@ pub(crate) fn parse_sys(
                             }
                         }
                     }
+                    let extractor =
+                        combine_extractor(extractor, extract_filter, "FTS", name.extract_span())?;
                     let config = FtsIndexConfig {
                         base_relation: SmartString::from(rel.as_str()),
                         index_name: SmartString::from(name.as_str()),
+                        extractor,
                         tokenizer,
                         filters,
                     };

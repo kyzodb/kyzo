@@ -76,6 +76,7 @@ use crate::runtime::callback::{CallbackCollector, CallbackOp};
 use crate::runtime::db::{Db, SessionTx};
 use crate::runtime::relation::{
     AccessLevel, IndexKind, IndexRef, InsufficientAccessLevel, KeyspaceKind, RelationHandle,
+    Residency,
 };
 use crate::storage::{Storage, WriteTx};
 
@@ -329,7 +330,7 @@ impl<T: WriteTx> SessionTx<T> {
         )?;
 
         let need_to_collect = !force_collect.is_empty()
-            || (!relation_store.is_temp
+            || (matches!(relation_store.residency(), Residency::Stored)
                 && (is_callback_target || !relation_store.put_triggers.is_empty()));
         let has_indices = !relation_store.has_no_index();
         let mut new_tuples: Vec<Tuple> = vec![];
@@ -356,7 +357,7 @@ impl<T: WriteTx> SessionTx<T> {
         // row this mutation writes lands in the SAME transaction, so it
         // gets the SAME system stamp regardless of what valid instant it
         // asserts.
-        let stamp = self.system_stamp_routed(relation_store.is_temp);
+        let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
             // The valid coordinate: an unspecified `@` defaults to the
             // transaction's own system stamp — snapshot-monotone, so a
@@ -435,7 +436,7 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
-            self.put_routed(relation_store.is_temp, &key, &val)?;
+            self.put_routed(relation_store.residency(), &key, &val)?;
         }
 
         if need_to_collect && !new_tuples.is_empty() {
@@ -490,7 +491,7 @@ impl<T: WriteTx> SessionTx<T> {
         )?;
 
         let need_to_collect = !force_collect.is_empty()
-            || (!relation_store.is_temp
+            || (matches!(relation_store.residency(), Residency::Stored)
                 && (is_callback_target || !relation_store.put_triggers.is_empty()));
         let has_indices = !relation_store.has_no_index();
         let mut new_tuples: Vec<Tuple> = vec![];
@@ -503,7 +504,7 @@ impl<T: WriteTx> SessionTx<T> {
             headers,
         )?;
 
-        let stamp = self.system_stamp_routed(relation_store.is_temp);
+        let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
             let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
             let mut new_kv: Tuple = key_extractors
@@ -570,7 +571,7 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
 
-            self.put_routed(relation_store.is_temp, &key, &new_val)?;
+            self.put_routed(relation_store.residency(), &key, &new_val)?;
         }
 
         if need_to_collect && !new_tuples.is_empty() {
@@ -625,13 +626,13 @@ impl<T: WriteTx> SessionTx<T> {
         )?;
 
         let need_to_collect = !force_collect.is_empty()
-            || (!relation_store.is_temp
+            || (matches!(relation_store.residency(), Residency::Stored)
                 && (is_callback_target || !relation_store.rm_triggers.is_empty()));
         let has_indices = !relation_store.has_no_index();
         let mut new_tuples: Vec<Tuple> = vec![];
         let mut old_tuples: Vec<Tuple> = vec![];
 
-        let stamp = self.system_stamp_routed(relation_store.is_temp);
+        let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
             let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
             let extracted: Tuple = key_extractors
@@ -670,7 +671,7 @@ impl<T: WriteTx> SessionTx<T> {
                 ClaimPolarity::Retract,
                 span,
             )?;
-            self.put_routed(relation_store.is_temp, &key, &val)?;
+            self.put_routed(relation_store.residency(), &key, &val)?;
         }
 
         // Triggers and callbacks. Note the asymmetry preserved from the
@@ -1099,7 +1100,7 @@ impl<T: WriteTx> SessionTx<T> {
         // segment silently outlives the write (hostile-review finding,
         // demonstrated stale reads on `*t:by_v{..}` after a base `:put`).
         self.touched_relations.insert(idx_handle.id);
-        self.put_routed(idx_handle.is_temp, &key, &val)
+        self.put_routed(idx_handle.residency(), &key, &val)
     }
 
     /// One plain-index mirror row: the base row projected through the
@@ -1389,6 +1390,18 @@ impl<T: WriteTx> SessionTx<T> {
         expr.compile()
     }
 
+    /// Compile an already-parsed row extractor ([`FtsIndexConfig::extractor`]
+    /// / the manifest's stored typed substance) into bytecode. The extractor
+    /// is never re-parsed from source at build time — it arrives typed.
+    fn compile_row_extractor(
+        base: &RelationHandle,
+        extractor: &crate::data::expr::Expr,
+    ) -> Result<Vec<crate::data::expr::Bytecode>> {
+        let mut expr = extractor.clone();
+        expr.fill_binding_indices(&Self::base_column_frame(base))?;
+        expr.compile()
+    }
+
     /// Resolve (and cache) a manifest index's runtime context.
     pub(crate) fn manifest_index_ctx(
         &mut self,
@@ -1421,13 +1434,13 @@ impl<T: WriteTx> SessionTx<T> {
             }
             IndexKind::Fts(manifest) => IndexCtx::Fts {
                 idx,
-                extractor: Self::compile_row_expr(base, &manifest.extractor)?,
+                extractor: Self::compile_row_extractor(base, &manifest.extractor)?,
                 analyzer: Arc::new(manifest.tokenizer.build(&manifest.filters)?),
             },
             IndexKind::Lsh { manifest, inverse } => IndexCtx::Lsh {
                 idx,
                 inv: self.get_relation(&format!("{}:{}", base.name, inverse))?,
-                extractor: Self::compile_row_expr(base, &manifest.extractor)?,
+                extractor: Self::compile_row_extractor(base, &manifest.extractor)?,
                 analyzer: Arc::new(manifest.tokenizer.build(&manifest.filters)?),
                 perms: Arc::new(manifest.get_hash_perms()?),
                 manifest: manifest.clone(),
@@ -1535,7 +1548,7 @@ impl<T: WriteTx> SessionTx<T> {
         index_ref: IndexRef,
         index_metas: Vec<(String, StoredRelationMetadata)>,
     ) -> Result<NamedRows> {
-        if base.is_temp {
+        if matches!(base.residency(), Residency::Temp) {
             bail!(IndexLifecycleError(format!(
                 "temp relation '{}' cannot carry a manifest index",
                 base.name
@@ -1643,7 +1656,7 @@ impl<T: WriteTx> SessionTx<T> {
         } else {
             Some(self.manifest_index_ctx(&base, &index_ref)?)
         };
-        let stamp = self.system_stamp_routed(base.is_temp);
+        let stamp = self.system_stamp_routed(base.residency());
         let upper = (base.id.raw() + 1).to_be_bytes();
         let keys_len = base.metadata.keys.len();
         let as_of = crate::data::value::AsOf::current(crate::data::value::MAX_VALIDITY_TS);
@@ -1849,7 +1862,7 @@ impl<T: WriteTx> SessionTx<T> {
         let base = self.get_relation(&cfg.base_relation)?;
         // Prove the analyzer builds and the extractor compiles now.
         cfg.tokenizer.build(&cfg.filters)?;
-        Self::compile_row_expr(&base, &cfg.extractor)?;
+        Self::compile_row_extractor(&base, &cfg.extractor)?;
         let manifest = crate::engines::text::FtsIndexManifest {
             base_relation: cfg.base_relation.clone(),
             index_name: cfg.index_name.clone(),
@@ -1876,7 +1889,7 @@ impl<T: WriteTx> SessionTx<T> {
         use crate::engines::lsh::{DEFAULT_PERM_SEED, HashPermutations, LshParams, Weights};
         let base = self.get_relation(&cfg.base_relation)?;
         cfg.tokenizer.build(&cfg.filters)?;
-        Self::compile_row_expr(&base, &cfg.extractor)?;
+        Self::compile_row_extractor(&base, &cfg.extractor)?;
         let params = LshParams::find_optimal_params(
             cfg.target_threshold.0,
             cfg.n_perm,
@@ -2055,8 +2068,13 @@ mod bulk_write_tests {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(&hasher_input);
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        // Regenerated for #299 T5: the 800 fact rows and the id-counter row
+        // are byte-identical; only the single catalog row moved, because the
+        // `RelationHandle` wire format lost its redundant `is_temp` field
+        // (residency is now derived from the name). The meaning anchor above
+        // proves the fact key/value encoding is unchanged.
         assert_eq!(
-            hex, "a559042fc0fc06276b06219a4e09239e5582f80eaaa7de1d2553748fd314643f",
+            hex, "6babc59f2f44b9f8a2b21e08295f7c35da2cd25c41fba44252584ccda6f20b3c",
             "store bytes for the seeded bulk workload changed"
         );
     }
@@ -2290,7 +2308,7 @@ mod temporal_index_tests {
         let val = base
             .encode_bitemporal_val_for_store(&row, polarity, span)
             .unwrap();
-        stx.put_routed(false, &key, &val).unwrap();
+        stx.put_routed(Residency::Stored, &key, &val).unwrap();
         match polarity {
             ClaimPolarity::Assert => {
                 let old = reasserts_existing.then_some(row.as_slice());
@@ -2526,7 +2544,7 @@ mod temporal_index_tests {
             let val = base_b
                 .encode_bitemporal_val_for_store(&row, polarity, span)
                 .unwrap();
-            stx_b.put_routed(false, &key, &val).unwrap();
+            stx_b.put_routed(Residency::Stored, &key, &val).unwrap();
         }
         stx_b.create_temporal_index("b", "t").unwrap();
         let idx_b = stx_b.get_relation("b:t").unwrap();

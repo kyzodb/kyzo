@@ -401,6 +401,23 @@ pub(crate) enum KeyspaceKind {
     AlgorithmState,
 }
 
+/// Which store a relation's rows live in — the routing datum every
+/// storage-side operation dispatches on. This is a DERIVED classification,
+/// never a stored field: a relation's residency is a total function of its
+/// name (the `_` prefix marks a session-scratch temp relation), so a handle
+/// whose residency disagrees with its name is unrepresentable — there is no
+/// second authority to disagree. `is_temp: bool` on the catalog row was that
+/// second authority; deleting it and computing residency here makes the name
+/// the one truth.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum Residency {
+    /// A persistent relation in the durable store.
+    Stored,
+    /// A session-scratch temp relation (name `_`-prefixed), routed to the
+    /// session's temp store.
+    Temp,
+}
+
 /// A relation trigger: a KyzoScript program run on mutation, held as the
 /// PARSED substance with its provenance source — never re-parsed at fire
 /// time. The one door is [`Trigger::parse`], which parses at construction,
@@ -699,6 +716,18 @@ impl RelationHandle {
 
     pub(crate) fn has_no_index(&self) -> bool {
         self.indices.is_empty()
+    }
+
+    /// Which store this relation's rows live in, derived from its name (the
+    /// `_` prefix marks a session-scratch temp relation). Residency has one
+    /// authority — the name — so this can never disagree with how
+    /// `get_relation`/`create_relation`/`destroy_relation` route by name.
+    pub(crate) fn residency(&self) -> Residency {
+        if self.name.starts_with('_') {
+            Residency::Temp
+        } else {
+            Residency::Stored
+        }
     }
 
     /// Whether mutation must collect old/new rows for trigger execution.
@@ -2071,7 +2100,6 @@ mod tests {
                 vec![col("c", ColType::Int)],
             ),
             RelationId::new(7).expect("below cap"),
-            false,
             KeyspaceKind::Facts,
         );
         handle.indices = vec![
@@ -2144,6 +2172,65 @@ mod tests {
         assert!(stored.ensure_compatible(&keys_only, false).is_err());
     }
 
+    /// The T2 closure: a malformed trigger source is refused at the store
+    /// boundary and never persisted. `set_relation_triggers` lifts every
+    /// source through `Trigger::parse` BEFORE writing the catalog row, so a
+    /// source that cannot parse is a typed error here — no stored-but-
+    /// unparseable trigger can exist. A valid source, by contrast, persists
+    /// and decodes back to the same provenance, proving the refusal is
+    /// specific to malformed input, not "triggers never store".
+    #[test]
+    fn malformed_trigger_source_is_refused_and_not_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = new_fjall_storage(dir.path()).unwrap();
+
+        let mut tx = db.write_tx().unwrap();
+        create_relation(&mut tx, simple_input("t"), KeyspaceKind::Facts).unwrap();
+        set_access_level(&mut tx, "t", AccessLevel::Protected).unwrap();
+        tx.commit().unwrap();
+
+        // A source that is not a valid single program: refused, and because
+        // the parse happens before any catalog write, nothing lands even
+        // within the (uncommitted) transaction.
+        let mut tx = db.write_tx().unwrap();
+        set_relation_triggers(
+            &mut tx,
+            &Symbol::new("t", SourceSpan(0, 0)),
+            &["this ][ is not valid kyzoscript".to_string()],
+            &[],
+            &[],
+        )
+        .unwrap_err();
+        drop(tx);
+
+        let tx = db.read_tx().unwrap();
+        let handle = get_relation(&tx, "t").unwrap();
+        assert!(
+            handle.put_triggers.is_empty() && !handle.has_triggers(),
+            "the malformed source never became a stored trigger"
+        );
+        drop(tx);
+
+        // A valid source persists and survives the catalog round-trip as the
+        // same provenance — the non-vacuity half of the closure.
+        let mut tx = db.write_tx().unwrap();
+        set_relation_triggers(
+            &mut tx,
+            &Symbol::new("t", SourceSpan(0, 0)),
+            &["?[k, v] := *t[k, v]".to_string()],
+            &[],
+            &[],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let tx = db.read_tx().unwrap();
+        let handle = get_relation(&tx, "t").unwrap();
+        assert_eq!(handle.put_triggers.len(), 1);
+        assert_eq!(handle.put_triggers[0].source(), "?[k, v] := *t[k, v]");
+        assert!(handle.has_triggers());
+    }
+
     /// The handle wire format round-trips, and its bytes are pinned: this
     /// IS an on-disk format now (each catalog row stores exactly these
     /// bytes), so any change to it must arrive together with a migration
@@ -2195,5 +2282,5 @@ mod tests {
     /// deliberate format migration — the version stamp refuses mismatched
     /// stores, so there is exactly one catalog format per FormatVersion
     /// and no cross-version decode path.
-    const PINNED_HANDLE_HEX: &str = "8ca46e616d65a370696ea2696407a86d6574616461746182a46b6579739183a46e616d65a16ba6747970696e6782a7636f6c74797065a3496e74a86e756c6c61626c65c2ab64656661756c745f67656ec0a86e6f6e5f6b6579739183a46e616d65a176a6747970696e6782a7636f6c74797065a6537472696e67a86e756c6c61626c65c2ab64656661756c745f67656ec0ac7075745f747269676765727391b53f5b6b2c20765d203a3d202a70696e5b6b2c20765dab726d5f747269676765727390b07265706c6163655f747269676765727390ac6163636573735f6c6576656ca8526561644f6e6c79a769735f74656d70c2a7696e64696365739182a46e616d65a462795f76a46b696e6481a5506c61696e81a66d6170706572920100ab6465736372697074696f6ea670696e6e6564ab636f6e73747261696e74739182a46e616d65aa6e6f5f656d7074795f76a6736f75726365bb3f5b6b5d203a3d202a70696e5b6b2c20765d2c2076203d3d202727ad6b657973706163655f6b696e64a54661637473";
+    const PINNED_HANDLE_HEX: &str = "8ba46e616d65a370696ea2696407a86d6574616461746182a46b6579739183a46e616d65a16ba6747970696e6782a7636f6c74797065a3496e74a86e756c6c61626c65c2ab64656661756c745f67656ec0a86e6f6e5f6b6579739183a46e616d65a176a6747970696e6782a7636f6c74797065a6537472696e67a86e756c6c61626c65c2ab64656661756c745f67656ec0ac7075745f747269676765727391b53f5b6b2c20765d203a3d202a70696e5b6b2c20765dab726d5f747269676765727390b07265706c6163655f747269676765727390ac6163636573735f6c6576656ca8526561644f6e6c79a7696e64696365739182a46e616d65a462795f76a46b696e6481a5506c61696e81a66d6170706572920100ab6465736372697074696f6ea670696e6e6564ab636f6e73747261696e74739182a46e616d65aa6e6f5f656d7074795f76a6736f75726365bb3f5b6b5d203a3d202a70696e5b6b2c20765d2c2076203d3d202727ad6b657973706163655f6b696e64a54661637473";
 }

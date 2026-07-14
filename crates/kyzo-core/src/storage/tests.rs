@@ -687,7 +687,6 @@ fn facts_handle(id: RelationId, name: &str) -> RelationHandle {
         rm_triggers: vec![],
         replace_triggers: vec![],
         access_level: AccessLevel::default(),
-        is_temp: false,
         indices: vec![],
         description: SmartString::default(),
         constraints: vec![],

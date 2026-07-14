@@ -1166,7 +1166,7 @@ mod tests {
                 let enc_val = base
                     .encode_bitemporal_val_for_store(&full, ClaimPolarity::Assert, sp())
                     .expect("encode assert value");
-                stx.put_routed(base.is_temp, enc_key.as_bytes(), &enc_val)
+                stx.put_routed(base.residency(), enc_key.as_bytes(), &enc_val)
                     .expect("put base row");
                 stx.update_indices(base, Some(&full), None, vts(valid), sys)
                     .expect("maintain indices");
@@ -1178,7 +1178,7 @@ mod tests {
                 let enc_val = base
                     .encode_bitemporal_val_for_store(&key_cols, ClaimPolarity::Retract, sp())
                     .expect("encode retract value");
-                stx.put_routed(base.is_temp, enc_key.as_bytes(), &enc_val)
+                stx.put_routed(base.residency(), enc_key.as_bytes(), &enc_val)
                     .expect("put base row");
                 stx.update_indices(base, None, Some(&key_cols), vts(valid), sys)
                     .expect("maintain indices");

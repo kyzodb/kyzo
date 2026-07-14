@@ -75,7 +75,7 @@ use crate::query::eval::{Budget, FixedRuleEval};
 use crate::query::levels::EpochStore;
 use crate::query::magic::StoredRelationSchemaSource;
 use crate::query::temp_store::RegularTempStore;
-use crate::runtime::relation::{RelationHandle, get_relation};
+use crate::runtime::relation::{RelationHandle, Residency, get_relation};
 use crate::storage::ReadTx;
 use crate::storage::temp::TempTx;
 
@@ -141,11 +141,11 @@ impl<'a, T: ReadTx> SessionView<'a, T> {
     /// Scan every row of a relation through the routed reader, as-of
     /// `as_of` when time travel is requested.
     pub(crate) fn scan_all(&self, handle: &RelationHandle, as_of: Option<AsOf>) -> TupleIter<'a> {
-        match (handle.is_temp, as_of) {
-            (true, None) => handle.scan_all(self.temp),
-            (true, Some(vld)) => handle.skip_scan_all(self.temp, vld),
-            (false, None) => handle.scan_all(self.store),
-            (false, Some(vld)) => handle.skip_scan_all(self.store, vld),
+        match (handle.residency(), as_of) {
+            (Residency::Temp, None) => handle.scan_all(self.temp),
+            (Residency::Temp, Some(vld)) => handle.skip_scan_all(self.temp, vld),
+            (Residency::Stored, None) => handle.scan_all(self.store),
+            (Residency::Stored, Some(vld)) => handle.skip_scan_all(self.store, vld),
         }
     }
 
@@ -156,11 +156,11 @@ impl<'a, T: ReadTx> SessionView<'a, T> {
         prefix: &Tuple,
         as_of: Option<AsOf>,
     ) -> TupleIter<'a> {
-        match (handle.is_temp, as_of) {
-            (true, None) => handle.scan_prefix(self.temp, prefix),
-            (true, Some(vld)) => handle.skip_scan_prefix(self.temp, prefix, vld),
-            (false, None) => handle.scan_prefix(self.store, prefix),
-            (false, Some(vld)) => handle.skip_scan_prefix(self.store, prefix, vld),
+        match (handle.residency(), as_of) {
+            (Residency::Temp, None) => handle.scan_prefix(self.temp, prefix),
+            (Residency::Temp, Some(vld)) => handle.skip_scan_prefix(self.temp, prefix, vld),
+            (Residency::Stored, None) => handle.scan_prefix(self.store, prefix),
+            (Residency::Stored, Some(vld)) => handle.skip_scan_prefix(self.store, prefix, vld),
         }
     }
 }

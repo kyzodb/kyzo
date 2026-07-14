@@ -65,7 +65,11 @@ pub(crate) mod tokenizer;
 pub(crate) struct FtsIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
     pub(crate) index_name: SmartString<LazyCompact>,
-    pub(crate) extractor: String,
+    /// The row-extraction expression as a PARSED typed substance. Serde
+    /// round-trips it through the value plane's `Expr` codec (op arity is
+    /// re-proven on decode), so the catalog never holds an un-parseable
+    /// extractor and there is no build-time re-parse of source text.
+    pub(crate) extractor: crate::data::expr::Expr,
     pub(crate) tokenizer: TokenizerConfig,
     pub(crate) filters: Vec<TokenizerConfig>,
 }
