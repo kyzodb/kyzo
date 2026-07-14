@@ -362,14 +362,32 @@ impl<S: Storage> StandingQuery<S> {
             .unwrap_or_default())
     }
 
-    /// Unregister every underlying per-relation callback. A `StandingQuery`
-    /// dropped without calling this leaks nothing worse than an idle
-    /// channel the registry prunes on its own next disconnect check
-    /// (`runtime/callback.rs`'s "lossy by disconnect" contract) — this
-    /// method just makes the teardown immediate and explicit instead of
-    /// waiting on that.
+    /// Explicitly tear down NOW — unregister every underlying per-relation
+    /// callback — instead of waiting for the [`Drop`] on scope exit that
+    /// guarantees the identical release. A `StandingQuery` is a `Drop` type,
+    /// so the unregistration lives in that impl; this is simply an eager,
+    /// explicit drop. A query dropped without calling this releases exactly
+    /// the same way — RAII makes leaking a live registration by forgetting
+    /// impossible.
     pub fn teardown(self) {
-        for sub in self.subscriptions.into_values() {
+        drop(self);
+    }
+}
+
+/// RAII: a `StandingQuery`'s callback subscriptions are an acquired resource,
+/// released on scope exit. Every underlying per-relation callback is
+/// unregistered when the query is dropped, whether or not
+/// [`teardown`](StandingQuery::teardown) was called — so a forgotten teardown
+/// can no longer leak a live registration (the registry's lossy-by-disconnect
+/// pruning is now the second line of defense, not the first). Making this a
+/// `Drop` impl is what forces the unregistration to live in exactly one place
+/// rather than a consuming method a caller can skip: a `Drop` type cannot
+/// move its fields out, so `teardown` can only delegate here.
+/// `unregister_callback` never panics (law 5), so this is safe during
+/// unwinding.
+impl<S: Storage> Drop for StandingQuery<S> {
+    fn drop(&mut self) {
+        for sub in self.subscriptions.values() {
             self.db.unregister_callback(sub.id);
         }
     }
@@ -700,6 +718,31 @@ mod tests {
             assert!(
                 !db.unregister_callback(id),
                 "id {id} should already be gone"
+            );
+        }
+    }
+
+    /// RAII proof: a `StandingQuery` that goes out of scope WITHOUT calling
+    /// `teardown` still unregisters every callback — the `Drop` impl releases
+    /// the subscriptions on scope exit, so a forgotten teardown cannot leak a
+    /// live registration.
+    #[test]
+    fn drop_on_scope_exit_unregisters_every_subscription() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap();
+        db.run_script(":create p {x: Int =>}", no_params()).unwrap();
+        db.run_script(":create r {x: Int =>}", no_params()).unwrap();
+        let ids: Vec<u32> = {
+            let sq = StandingQuery::register(&db, hard_corner_program()).unwrap();
+            let ids: Vec<u32> = sq.subscriptions.values().map(|s| s.id).collect();
+            assert!(!ids.is_empty());
+            ids
+            // `sq` drops HERE at scope exit — no `teardown()` call.
+        };
+        for id in ids {
+            assert!(
+                !db.unregister_callback(id),
+                "id {id} must already be gone after the StandingQuery dropped on scope exit"
             );
         }
     }
