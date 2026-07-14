@@ -89,6 +89,13 @@ and secret setup). If `CARGO_REGISTRY_TOKEN` is not configured, the job no-ops w
 instead of failing red: publication readiness and the tag/Release pipeline are independent — a
 missing crates.io credential never blocks a GitHub Release.
 
+## Security-classed fixes
+
+A security-classed fix must have its `advisories/` entry landed before the release that ships it is
+cut — see [`advisories/README.md`](advisories/README.md) for the entry format and the
+never-silently-fixed rule. [`SECURITY.md`](SECURITY.md) is the intake channel for reporting a
+vulnerability in the first place.
+
 ## Cadence
 
 One release per sealed story-wave (see VERSIONING.md). Do not batch multiple sealed waves into one

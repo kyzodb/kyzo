@@ -31,6 +31,11 @@ services:
       RUST_BACKTRACE: "1"
       CARGO_TARGET_DIR: /target
       RUST_TEST_THREADS: "4"
+    # SYS_ADMIN solely so the build-script-sandbox gate check can create a network
+    # namespace (unshare --net) around each build-script run; Docker's default seccomp
+    # blocks unprivileged CLONE_NEWUSER here (kill-tested 2026-07-13). Not `privileged`.
+    cap_add:
+      - SYS_ADMIN
     mem_limit: 32g
     cpus: 16
     command: bash

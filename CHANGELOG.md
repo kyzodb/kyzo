@@ -8,7 +8,39 @@ Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [VERSIONING
 
 Nothing yet.
 
-## [0.1.0] — Unreleased
+## [0.8.1] — 2026-07-09
+
+This wave lands two engine-level projects developed after the 0.8.0 tag: vendoring and tuning the
+`fjall`/`lsm-tree` storage backend, and a ground-up rewrite of the in-memory execution value
+representation (the "value plane"). It closes with the start of a full-codebase design census
+against the target architecture.
+
+### Added
+
+- **Vendored storage backend**: `fjall` + `lsm-tree` 3.1.5 brought in as workspace members (routed
+  via `[patch.crates-io]`), with per-keyspace LSM tuning (Monkey bloom-filter sizing, a measured
+  Dostoevsky lazy-leveling step) and a RAM-proportional default cache size.
+- **The value plane**: a new canonical cell format, an arena of epoch-sealed interned codes, and a
+  typed execution-currency layer (admitted rows, code columns) replacing ad hoc per-row cloning on
+  the hot evaluation path.
+- **A type-authority graph and ratchet**: extracts closed-domain typed dispatch across the engine
+  and audits raw-construction call sites and string/blob taxonomies, gating the build on the
+  committed (narrowing-only) ratchet.
+- **A pinned, containerized build/lint/test environment** (Docker + Compose), replacing
+  host-native `ulimit`-based test execution.
+
+### Changed
+
+- Storage's SSI `seek_range` now tracks precise sub-ranges instead of reopening a full range scan
+  per version step.
+- `RelationId` and related storage-key vocabulary made unforgeable across the value plane.
+
+### Fixed
+
+- Defects surfaced by the value-plane rewrite and its accompanying property tests; not itemized
+  individually pre-1.0, per the defect-ledger convention below.
+
+## [0.8.0] — 2026-07-05
 
 The first release: the storage kernel, the query engine, and the product built on it, each proven
 against its own oracle before the next layer stood on it.
@@ -74,5 +106,6 @@ against its own oracle before the next layer stood on it.
 See the defect ledger above; individual fixes are not itemized per-release pre-1.0 — they are
 covered by the regression suite that pins them.
 
-[Unreleased]: https://github.com/kyzodb/kyzo/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/kyzodb/kyzo/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kyzodb/kyzo/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/kyzodb/kyzo/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/kyzodb/kyzo/releases/tag/v0.8.0

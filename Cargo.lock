@@ -2018,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "kyzo"
-version = "0.8.0"
+version = "0.8.2"
 dependencies = [
  "aho-corasick",
  "base64",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "kyzo-bin"
-version = "0.8.0"
+version = "0.8.2"
 dependencies = [
  "async-stream",
  "axum",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "kyzo-lsp"
-version = "0.8.0"
+version = "0.8.2"
 dependencies = [
  "kyzo",
  "lsp-types",

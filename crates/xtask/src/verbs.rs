@@ -131,6 +131,16 @@ pub fn pure_rust() -> Result<(), crate::checks::pure_rust::PureRustError> {
     Ok(())
 }
 
+/// Every build-script (`custom-build`) target in the full dependency graph
+/// runs net-isolated and is snapshot-diffed for stray writes (story #294:
+/// `crates/xtask/src/checks/build_script_sandbox.rs`).
+pub fn build_script_sandbox()
+-> Result<(), crate::checks::build_script_sandbox::BuildScriptSandboxError> {
+    let msg = crate::checks::build_script_sandbox::check()?;
+    println!("{msg}");
+    Ok(())
+}
+
 /// The Type Authority Graph (#139): self-test, then the ratchet + committed
 /// artifact freshness check against the tree — the same combination the
 /// condemned justfile's `authority` recipe ran (story #322: ported from

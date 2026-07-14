@@ -9,6 +9,7 @@
 
 pub mod agreement_registry;
 pub mod authority_graph;
+pub mod build_script_sandbox;
 pub mod copy_detector;
 pub mod dead_code_ratchet;
 pub mod derive_bypass;

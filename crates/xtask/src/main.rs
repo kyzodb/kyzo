@@ -42,6 +42,7 @@ enum XtaskError {
     Resonance(resonance::ResonanceError),
     UnsafeCheck(checks::unsafe_check::UnsafeCheckError),
     PureRust(checks::pure_rust::PureRustError),
+    BuildScriptSandbox(checks::build_script_sandbox::BuildScriptSandboxError),
     Authority(checks::authority_graph::AuthorityError),
 }
 
@@ -54,6 +55,7 @@ impl fmt::Display for XtaskError {
             XtaskError::Resonance(e) => write!(f, "{e}"),
             XtaskError::UnsafeCheck(e) => write!(f, "{e}"),
             XtaskError::PureRust(e) => write!(f, "{e}"),
+            XtaskError::BuildScriptSandbox(e) => write!(f, "{e}"),
             XtaskError::Authority(e) => write!(f, "{e}"),
         }
     }
@@ -86,6 +88,9 @@ enum Verb {
     Unsafe,
     /// No C/C++-toolchain crate in the engine dependency tree.
     PureRust,
+    /// Every build-script target, net-isolated and snapshot-diffed for
+    /// writes outside its own OUT_DIR.
+    BuildScriptSandbox,
     /// The Type Authority Graph: self-test, ratchet, artifact freshness.
     Authority {
         /// Regenerate authority/authority-map.json and
@@ -156,6 +161,9 @@ fn main() -> ExitCode {
         Verb::Clippy => verbs::clippy().map_err(XtaskError::Process),
         Verb::Unsafe => verbs::unsafe_check().map_err(XtaskError::UnsafeCheck),
         Verb::PureRust => verbs::pure_rust().map_err(XtaskError::PureRust),
+        Verb::BuildScriptSandbox => {
+            verbs::build_script_sandbox().map_err(XtaskError::BuildScriptSandbox)
+        }
         Verb::Authority {
             write,
             update_baseline,

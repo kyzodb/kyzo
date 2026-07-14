@@ -16,6 +16,7 @@
 use std::fmt;
 
 use crate::checks::authority_graph::AuthorityError;
+use crate::checks::build_script_sandbox::BuildScriptSandboxError;
 use crate::checks::pure_rust::PureRustError;
 use crate::checks::unsafe_check::UnsafeCheckError;
 use crate::proc::ProcessFailure;
@@ -34,6 +35,7 @@ pub enum GateError {
     Clippy(ProcessFailure),
     Unsafe(UnsafeCheckError),
     PureRust(PureRustError),
+    BuildScriptSandbox(BuildScriptSandboxError),
     Authority(AuthorityError),
     Resonance(ResonanceError),
     Test(ProcessFailure),
@@ -49,6 +51,9 @@ impl fmt::Display for GateError {
             GateError::Clippy(e) => write!(f, "clippy step failed: {e}"),
             GateError::Unsafe(e) => write!(f, "unsafe step failed: {e}"),
             GateError::PureRust(e) => write!(f, "pure-rust step failed: {e}"),
+            GateError::BuildScriptSandbox(e) => {
+                write!(f, "build-script-sandbox step failed: {e}")
+            }
             GateError::Authority(e) => write!(f, "authority step failed: {e}"),
             GateError::Resonance(e) => write!(f, "resonance step failed: {e}"),
             GateError::Test(e) => write!(f, "test step failed: {e}"),
@@ -66,6 +71,7 @@ pub fn run() -> Result<(), GateError> {
     verbs::clippy().map_err(GateError::Clippy)?;
     verbs::unsafe_check().map_err(GateError::Unsafe)?;
     verbs::pure_rust().map_err(GateError::PureRust)?;
+    verbs::build_script_sandbox().map_err(GateError::BuildScriptSandbox)?;
     verbs::authority().map_err(GateError::Authority)?;
     resonance::run(None).map_err(GateError::Resonance)?;
     verbs::test().map_err(GateError::Test)?;

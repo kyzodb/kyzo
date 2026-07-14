@@ -9,7 +9,7 @@
 #
 # The exact toolchain is pinned by rust-toolchain.toml (1.96.1); rustup honors
 # it on the first cargo invocation regardless of the base tag.
-FROM rust:1.96.1-bookworm
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
