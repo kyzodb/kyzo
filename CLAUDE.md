@@ -64,6 +64,8 @@ Everything runs in its declared container: `kyzo-dev` for the verification seal,
 
 The seal is the whole truth: environment report, `cargo check --workspace --all-targets`, formatting, first-party Clippy at `-D warnings`, the unsafe-code and pure-Rust guards, the authority self-test and ratchet, the enforcement-harness mutation test, and the full suite. A green seal proves only what it measures; semantic conformance remains yours.
 
+The seal is also the merge arbiter. Remote CI is an asynchronous witness, never a foreground gate: no merge, story close, epic transition, or next task ever blocks waiting on a CI run — push, arm a background watch if a verdict matters, and keep working. When CI later goes red, that is a new red to classify and fix forward, not a reason to have waited.
+
 On red, classify before you change anything: implementation defect, test defect, or ruling defect. Fix implementation defects. Correct a test only when it fails to express the ruling — never weaken it, shrink its scope, or reshape it around the implementation. Surface ruling defects instead of coding around them. Tests verify the law, they do not author it: goldens are derived independently, and healthy-path tests build values through production APIs, not test-only doors.
 
 ## The laws
