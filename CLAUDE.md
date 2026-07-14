@@ -72,7 +72,7 @@ On red, classify before you change anything: implementation defect, test defect,
 
 Standing invariants. Each states a principle and why it holds — apply the principle, not only its examples.
 
-**Build integrity.** The workspace always passes `cargo check --workspace --all-targets`. Every first-party crate root carries `#![forbid(unsafe_code)]`, no `#[allow(unsafe_code)]` exists, and no doc claims an exception that is not real. When a rule collides with compiling a release, keep the rule and expose the failure: a green build over a backward architecture is a lie, and a shim never substitutes for the ruled design.
+**Build integrity.** The workspace always passes `cargo check --workspace --all-targets` — an invariant of `main`, not of every in-flight commit. An epic/dev branch goes transiently red by design when demolition tears a story's whole condemned surface out before its rebuild lands; cutting it away entire is the point, and shrinking the demolition to keep the branch green is the exact compromise the architecture ceiling forbids. Green is reconciled and enforced at merge by the seal (the merge arbiter), so the pre-commit build gate fires on `main` only. Every first-party crate root carries `#![forbid(unsafe_code)]`, no `#[allow(unsafe_code)]` exists, and no doc claims an exception that is not real. When a rule collides with compiling a release, keep the rule and expose the failure: a green build over a backward architecture is a lie, and a shim never substitutes for the ruled design.
 
 **Pure-Rust substrate.** No C or C++ enters any first-party dependency tree, and the build stays valid in the repository image with no C compiler. There are no storage-backend feature flags — one substrate, one truth.
 

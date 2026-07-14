@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Red-green-commit enforcement: refuse a commit that doesn't build.
-# Cheap gate (build only — the full capped test suite is the committer's job,
-# too slow for a hook). Bypass for a deliberate WIP checkpoint: git commit --no-verify.
+# Red-green-commit is a MAIN-branch invariant, not a dev-branch one.
+# Demolition (kyzo-plan-demolition) deliberately tears a story's whole condemned
+# surface out before its rebuild lands, so an epic/dev branch is transiently red
+# BY DESIGN — cutting it away is the point, and a hook that refused that red
+# would force the demolition to shrink to fit the hook (the compromise this
+# policy exists to forbid). Green-on-main is enforced where it belongs: at merge,
+# by the seal (`docker compose run --rm kyzo-dev cargo xtask gate`), the merge
+# arbiter. So this build gate fires ONLY on main; dev branches commit freely,
+# red included. Cheap gate (build only — the full suite is the seal's job).
 set -euo pipefail
-if git diff --cached --name-only | grep -qE '\.rs$|Cargo\.(toml|lock)$'; then
-  echo "pre-commit: cargo build -p kyzo (red-green-commit: no committing a broken build)"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+if [ "$branch" = "main" ] && git diff --cached --name-only | grep -qE '\.rs$|Cargo\.(toml|lock)$'; then
+  echo "pre-commit (main only): cargo build -p kyzo (red-green-commit: no broken build on main)"
   if ! (ulimit -v 12582912 && timeout 600 cargo build -p kyzo --release >/dev/null 2>&1); then
-    echo "REFUSED: kyzo does not build. Fix the build, or 'git commit --no-verify' for a deliberate WIP checkpoint." >&2
+    echo "REFUSED: kyzo does not build on main. Fix the build, or 'git commit --no-verify' for a deliberate WIP checkpoint." >&2
     exit 1
   fi
 fi
