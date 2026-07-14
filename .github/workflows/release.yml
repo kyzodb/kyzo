@@ -190,6 +190,9 @@ jobs:
     container:
       image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: [pure-rust-gate, unsafe-audit, lint, build-test, double-build-diff]
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -235,6 +238,18 @@ jobs:
           (cd dist && sha256sum "$dir.tar.gz" "kyzo-${tag}.cdx.json" > SHA256SUMS)
           ls -la dist/
           cat dist/SHA256SUMS
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign artifacts (keyless, Rekor-logged)
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *.tar.gz *.cdx.json SHA256SUMS; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+          ls -la *.sig *.pem
       - uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
@@ -242,6 +257,8 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
             dist/*.cdx.json
+            dist/*.sig
+            dist/*.pem
           retention-days: 90
 
   # ---------- Release ----------
@@ -317,7 +334,7 @@ jobs:
           gh release create "$tag" \
             --title "$tag" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/SHA256SUMS dist/*.cdx.json
+            dist/*.tar.gz dist/SHA256SUMS dist/*.cdx.json dist/*.sig dist/*.pem
 
   # ---------- crates.io ----------
 
