@@ -276,6 +276,7 @@ pub(crate) mod fixed_rule;
 #[allow(dead_code)]
 pub(crate) mod parse;
 pub(crate) mod query;
+pub(crate) mod capacity;
 pub(crate) mod runtime;
 pub(crate) mod storage;
 pub(crate) mod typestate;

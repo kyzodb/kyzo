@@ -643,10 +643,10 @@ pub(crate) fn fts_search(
         result.truncate(params.k);
     }
 
-    // Cap the reservation at the real (already-materialized) candidate
-    // count: `params.k` is caller-controlled and unbounded, and reserving
-    // straight from it would let an absurd `k` abort the allocator.
-    let mut ret = Vec::with_capacity(params.k.min(result.len()));
+    // `params.k` is caller-controlled and unbounded; admit it through the one
+    // allocation seam, bounded by the real (already-materialized) candidate
+    // count, so an absurd `k` can never abort the allocator.
+    let mut ret = Vec::with_capacity(crate::capacity::admit(params.k, result.len()));
     for (doc_key, score) in result {
         // Checked BEFORE pushing: `k == 0` (or any k already met) must
         // yield zero more rows, not "one past the limit" — pushing first
