@@ -14,7 +14,7 @@
 #   lint, build-test    -> a hermetic re-run of ci.yml's core gates on a FRESH checkout of the
 #                         tagged commit. This never reuses ci.yml's earlier run or its artifacts —
 #                         the whole point is that the release pipeline trusts nothing it didn't
-#                         just verify itself. (cargo-deny/mpl-headers/gitleaks/coverage/fuzz stay in
+#                         just verify itself. (cargo-deny/mpl-headers/gitleaks/fuzz stay in
 #                         ci.yml; they gate every push and pull request already. What's re-run here
 #                         is the subset a stale-artifact or wrong-commit release would most
 #                         visibly falsify: does it build, does it pass, is it clean, is it pure,
@@ -83,6 +83,8 @@ jobs:
   pure-rust-gate:
     name: Pure-Rust gate (kyzo-core + kyzo-bin)
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
     steps:
       - uses: actions/checkout@v7
@@ -94,6 +96,8 @@ jobs:
   unsafe-audit:
     name: Unsafe-code ratchet (engine only)
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
     steps:
       - uses: actions/checkout@v7
@@ -105,6 +109,8 @@ jobs:
   lint:
     name: fmt + clippy (whole workspace)
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
     steps:
       - uses: actions/checkout@v7
@@ -117,6 +123,8 @@ jobs:
   build-test:
     name: Build + test (whole workspace)
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
     steps:
       - uses: actions/checkout@v7
@@ -131,6 +139,8 @@ jobs:
   build-artifacts:
     name: Build kyzo-bin release artifacts
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: [pure-rust-gate, unsafe-audit, lint, build-test]
     steps:
       - uses: actions/checkout@v7
@@ -206,7 +216,7 @@ jobs:
             echo "| build --workspace --release | success |"
             echo "| test --workspace --release | success |"
             echo
-            echo "(This job only runs if every gate above passed — a failing gate blocks \`build-artifacts\` and this job never starts. See ci.yml for the full gate set — cargo-deny, MPL headers, secret scan, supply-chain, coverage, memcmp tripwire, fuzz smoke — enforced on every push and pull request already.)"
+            echo "(This job only runs if every gate above passed — a failing gate blocks \`build-artifacts\` and this job never starts. See ci.yml for the full gate set — cargo-deny, MPL headers, secret scan, supply-chain, memcmp tripwire, fuzz smoke — enforced on every push and pull request already.)"
             echo
             echo "## FormatVersion"
             echo
@@ -238,6 +248,8 @@ jobs:
   publish-crates:
     name: Publish to crates.io (manual approval)
     runs-on: ubuntu-latest
+    container:
+      image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: publish-release
     environment: crates-io
     steps:
