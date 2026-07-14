@@ -70,8 +70,8 @@ impl std::error::Error for ResonanceError {}
 
 /// Run the resonance gate. `only`, if given, runs a single named check
 /// (`derive_bypass`, `panic_lint`, `copy_detector`, `dead_code_ratchet`,
-/// `agreement_registry`, `allocation_admission`) — what the bite-proof
-/// harness uses.
+/// `agreement_registry`, `allocation_admission`, `boundary_closure`) — what
+/// the bite-proof harness uses.
 pub fn run(only: Option<&str>) -> Result<(), ResonanceError> {
     let root = fsutil::repo_root().map_err(ResonanceError::RepoRoot)?;
     let files = fsutil::walk_engine_sources(&root).map_err(ResonanceError::SourceScan)?;
@@ -118,6 +118,9 @@ pub fn run(only: Option<&str>) -> Result<(), ResonanceError> {
     }
     if want("allocation_admission") && !run_allocation_admission(&files) {
         failing_checks.push("allocation_admission");
+    }
+    if want("boundary_closure") && !run_boundary_closure(&files) {
+        failing_checks.push("boundary_closure");
     }
 
     if failing_checks.is_empty() {
@@ -233,6 +236,21 @@ fn run_allocation_admission(files: &[fsutil::SourceFile]) -> bool {
     let ok = violations.is_empty();
     println!(
         "check: allocation-admission {} ({} inline-cap site(s))",
+        if ok { "PASS" } else { "FAIL" },
+        violations.len()
+    );
+    ok
+}
+
+fn run_boundary_closure(files: &[fsutil::SourceFile]) -> bool {
+    println!("== check: boundary-closure ratchet ==");
+    let violations = checks::boundary_closure::check(files);
+    for v in &violations {
+        println!("FAIL {}:{} [{}]: {}", v.file, v.line, v.shape, v.detail);
+    }
+    let ok = violations.is_empty();
+    println!(
+        "check: boundary-closure {} ({} condemned-shape site(s))",
         if ok { "PASS" } else { "FAIL" },
         violations.len()
     );
