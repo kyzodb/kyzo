@@ -238,12 +238,39 @@ jobs:
           (cd dist && sha256sum "$dir.tar.gz" "kyzo-${tag}.cdx.json" > SHA256SUMS)
           ls -la dist/
           cat dist/SHA256SUMS
+      - name: Provenance manifest (commit + environment + command)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="dryrun-${GITHUB_SHA::12}"
+          fi
+          toolchain="$(grep -m1 '^channel' rust-toolchain.toml | sed 's/.*"\(.*\)"/\1/')"
+          # Must match this job's own container: line — single source is this file; greppable.
+          container_image="rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663"
+          artifacts=""
+          while read -r hash name; do
+            artifacts="${artifacts}{\"name\":\"${name}\",\"sha256\":\"${hash}\"},"
+          done < dist/SHA256SUMS
+          artifacts="[${artifacts%,}]"
+          cat > "dist/kyzo-${tag}.provenance.json" <<EOF
+          {
+            "tag": "${tag}",
+            "commit": "${GITHUB_SHA}",
+            "build_environment": {
+              "container_image": "${container_image}",
+              "toolchain": "${toolchain}"
+            },
+            "build_command": "cargo build -p kyzo-bin --release --target x86_64-unknown-linux-gnu",
+            "artifacts": ${artifacts}
+          }
+          EOF
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign artifacts (keyless, Rekor-logged)
         run: |
           set -euo pipefail
           cd dist
-          for f in *.tar.gz *.cdx.json SHA256SUMS; do
+          for f in *.tar.gz *.cdx.json *.provenance.json SHA256SUMS; do
             cosign sign-blob --yes \
               --output-signature "${f}.sig" \
               --output-certificate "${f}.pem" \
@@ -257,6 +284,7 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
             dist/*.cdx.json
+            dist/*.provenance.json
             dist/*.sig
             dist/*.pem
           retention-days: 90
@@ -334,7 +362,7 @@ jobs:
           gh release create "$tag" \
             --title "$tag" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/SHA256SUMS dist/*.cdx.json dist/*.sig dist/*.pem
+            dist/*.tar.gz dist/SHA256SUMS dist/*.cdx.json dist/*.provenance.json dist/*.sig dist/*.pem
 
   # ---------- crates.io ----------
 
