@@ -695,10 +695,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 match body.get(used) {
                     None => return Err(DecodeError::Truncated),
                     Some(&STRUCT_SEQ_END) => {
-                        return Ok((
-                            DataValue::Set(items.into_iter().collect()),
-                            1 + used + 1,
-                        ));
+                        return Ok((DataValue::Set(items.into_iter().collect()), 1 + used + 1));
                     }
                     Some(_) => {
                         let (item, ilen) = decode_at(&body[used..], depth + 1)?;

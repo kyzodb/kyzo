@@ -1,0 +1,5 @@
+# `cargo xtask <verb>` — the gate program (crates/xtask, story #322).
+# The alias builds and runs the workspace's own xtask binary; no floating
+# toolchain, no external cargo-xtask install.
+[alias]
+xtask = "run -p xtask --"

@@ -28,26 +28,26 @@
 [[panic_lint]]
 file = "crates/kyzo-core/src/data/value/canonical.rs"
 function = "decode_at"
-line = 725
-citation = "u32::from_be_bytes(count_bytes.try_into().expect(\"4 bytes\")) at canonical.rs:725, Tag::Vector arm: `count_bytes` comes from `body.get(..4)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 4 bytes when the `try_into::<[u8;4]>()` runs -- the length-checked-just-above pattern the story's memcmp.rs precedent named. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
-
-[[panic_lint]]
-file = "crates/kyzo-core/src/data/value/canonical.rs"
-function = "decode_at"
 line = 738
-citation = "n.as_float().expect(\"validated float component\") at canonical.rs:738, Tag::Vector arm: the loop three lines above already calls `n.as_float().is_none()` and returns `Err(DecodeError::VectorComponentNotFloat)` on every `n` for which `as_float` would fail, before `n` is pushed into `components` -- by the time this second `.map(|n| n.as_float().expect(...))` runs over the same `components`, every element has already been proven `as_float`-some. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
+citation = "u32::from_be_bytes(count_bytes.try_into().expect(\"4 bytes\")) at canonical.rs:738, Tag::Vector arm: `count_bytes` comes from `body.get(..4)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 4 bytes when the `try_into::<[u8;4]>()` runs -- the length-checked-just-above pattern the story's memcmp.rs precedent named. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
 
 [[panic_lint]]
 file = "crates/kyzo-core/src/data/value/canonical.rs"
 function = "decode_at"
-line = 744
-citation = "ts_bytes.try_into().expect(\"8 bytes\") at canonical.rs:744, Tag::Validity arm: `ts_bytes` comes from `body.get(..8)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the same length-checked-just-above pattern as the Vector arm's count decode. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
+line = 751
+citation = "n.as_float().expect(\"validated float component\") at canonical.rs:751, Tag::Vector arm: the loop three lines above already calls `n.as_float().is_none()` and returns `Err(DecodeError::VectorComponentNotFloat)` on every `n` for which `as_float` would fail, before `n` is pushed into `components` -- by the time this second `.map(|n| n.as_float().expect(...))` runs over the same `components`, every element has already been proven `as_float`-some. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
+
+[[panic_lint]]
+file = "crates/kyzo-core/src/data/value/canonical.rs"
+function = "decode_at"
+line = 757
+citation = "ts_bytes.try_into().expect(\"8 bytes\") at canonical.rs:757, Tag::Validity arm: `ts_bytes` comes from `body.get(..8)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the same length-checked-just-above pattern as the Vector arm's count decode. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
 
 [[panic_lint]]
 file = "crates/kyzo-core/src/data/value/canonical.rs"
 function = "decode_interval_end"
-line = 796
-citation = "ts_bytes.try_into().expect(\"8 bytes\") at canonical.rs:796: `ts_bytes` comes from `body.get(1..9)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the same length-checked-just-above pattern as `decode_at`'s Vector and Validity arms. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
+line = 809
+citation = "ts_bytes.try_into().expect(\"8 bytes\") at canonical.rs:809: `ts_bytes` comes from `body.get(1..9)` immediately above (refused via typed `Err(DecodeError::Truncated)` on `None`), so it is exactly 8 bytes when the `try_into::<[u8;8]>()` runs -- the same length-checked-just-above pattern as `decode_at`'s Vector and Validity arms. Waived by exact line: any OTHER panic-shaped construct added later in this same function is a fresh violation, not covered by this waiver."
 
 [[panic_lint]]
 file = "crates/kyzo-core/src/data/value/mod.rs"
