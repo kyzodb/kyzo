@@ -112,8 +112,6 @@ use thiserror::Error;
 
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{InputProgram, InputRelationHandle};
-use crate::fixed_rule::{DEFAULT_FIXED_RULES, FixedRule};
-use crate::parse::parse_script;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -122,6 +120,8 @@ use crate::data::value::{
     TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
     scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
+use crate::fixed_rule::{DEFAULT_FIXED_RULES, FixedRule};
+use crate::parse::parse_script;
 use crate::storage::{ReadTx, WriteTx};
 
 // ---------------------------------------------------------------------------
@@ -456,8 +456,8 @@ impl Trigger {
         fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
         cur_vld: ValidityTs,
     ) -> Result<Trigger> {
-        let program = parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?
-            .get_single_program()?;
+        let program =
+            parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
         Ok(Trigger {
             program,
             source: SmartString::from(source),
@@ -1843,8 +1843,16 @@ mod tests {
             name: handle.name.clone(),
             id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
-            put_triggers: handle.put_triggers.iter().map(|t| t.source().to_string()).collect(),
-            rm_triggers: handle.rm_triggers.iter().map(|t| t.source().to_string()).collect(),
+            put_triggers: handle
+                .put_triggers
+                .iter()
+                .map(|t| t.source().to_string())
+                .collect(),
+            rm_triggers: handle
+                .rm_triggers
+                .iter()
+                .map(|t| t.source().to_string())
+                .collect(),
             replace_triggers: handle
                 .replace_triggers
                 .iter()
@@ -2246,9 +2254,14 @@ mod tests {
             RelationId::new(7).expect("below cap"),
             KeyspaceKind::Facts,
         );
-        handle.put_triggers =
-            vec![Trigger::parse("?[k, v] := *pin[k, v]", &DEFAULT_FIXED_RULES, trigger_decode_vld())
-                .unwrap()];
+        handle.put_triggers = vec![
+            Trigger::parse(
+                "?[k, v] := *pin[k, v]",
+                &DEFAULT_FIXED_RULES,
+                trigger_decode_vld(),
+            )
+            .unwrap(),
+        ];
         handle.access_level = AccessLevel::ReadOnly;
         handle.indices = vec![IndexRef {
             name: SmartString::from("by_v"),

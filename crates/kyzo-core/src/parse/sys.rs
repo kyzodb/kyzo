@@ -39,12 +39,12 @@ use crate::data::program::{FixedRule, InputProgram};
 use crate::data::relation::VecElementType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
+use crate::data::value::proofs::assert_not_impl;
 use crate::data::value::{DataValue, ValidityTs};
 use crate::engines::text::TokenizerConfig;
 use crate::parse::expr::{build_expr, parse_string};
 use crate::parse::query::parse_query;
 use crate::parse::{ExtractSpan, IntoChildren, Pairs, Rule, unexpected};
-use crate::data::value::proofs::assert_not_impl;
 use crate::typestate::{Set, Unset};
 use std::marker::PhantomData;
 
@@ -1021,8 +1021,12 @@ pub(crate) fn parse_sys(
                     false_positive_weight /= total_weights;
                     false_negative_weight /= total_weights;
 
-                    let extractor =
-                        combine_extractor(extractor, extract_filter, "MinHash-LSH", name.extract_span())?;
+                    let extractor = combine_extractor(
+                        extractor,
+                        extract_filter,
+                        "MinHash-LSH",
+                        name.extract_span(),
+                    )?;
                     let config = MinHashLshConfigBuilder::new(
                         SmartString::from(rel.as_str()),
                         SmartString::from(name.as_str()),

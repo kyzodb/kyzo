@@ -1148,7 +1148,12 @@ impl<T: WriteTx> SessionTx<T> {
     }
 
     /// Write one key/value into the store the relation lives in.
-    pub(crate) fn put_routed(&mut self, residency: Residency, key: &[u8], val: &[u8]) -> Result<()> {
+    pub(crate) fn put_routed(
+        &mut self,
+        residency: Residency,
+        key: &[u8],
+        val: &[u8],
+    ) -> Result<()> {
         match residency {
             Residency::Temp => self.temp.put(key, val),
             Residency::Stored => self.store.put(key, val),

@@ -273,10 +273,10 @@ pub(crate) mod fixed_rule;
 // `Script::Imperative` genus is a typed refusal, never executed (see
 // `runtime/db.rs`'s own note), so that genus's AST fields stay dead in a
 // release build; the in-file tests exercise them regardless.
+pub(crate) mod capacity;
 #[allow(dead_code)]
 pub(crate) mod parse;
 pub(crate) mod query;
-pub(crate) mod capacity;
 pub(crate) mod runtime;
 pub(crate) mod storage;
 pub(crate) mod typestate;
