@@ -7,10 +7,11 @@
 <p align="center"><em>One deterministic substrate for facts, graphs, vectors, text, and all of time,<br>where every answer can be replayed, explained, or refused, exactly.</em></p>
 
 <p align="center">
+  <a href="https://github.com/kyzodb/kyzo/actions/workflows/ci.yml"><img src="https://github.com/kyzodb/kyzo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/kyzodb/kyzo/actions/workflows/fuzz-nightly.yml"><img src="https://github.com/kyzodb/kyzo/actions/workflows/fuzz-nightly.yml/badge.svg?branch=main" alt="Fuzz (nightly deep run)"></a>
+  <a href="https://github.com/kyzodb/kyzo/actions/workflows/codeql.yml"><img src="https://github.com/kyzodb/kyzo/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL"></a>
+  <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96.1%20pinned-2F7E52" alt="Rust 1.96.1, pinned"></a>
   <a href="LICENSE-MPL"><img src="https://img.shields.io/badge/license-MPL--2.0-2F7E52" alt="License: MPL-2.0"></a>
-  <a href="https://github.com/kyzodb/kyzo/issues"><img src="https://img.shields.io/badge/board-stories-1E4D33" alt="Board"></a>
-  <a href="#using-kyzodb"><img src="https://img.shields.io/badge/embeds%20in-2%20lines-1E4D33" alt="Two-line embed"></a>
-  <a href="#pure-rust-is-operational-not-aesthetic"><img src="https://img.shields.io/badge/C%2FC%2B%2B%20in%20engine-zero-2F7E52" alt="Zero C/C++"></a>
 </p>
 
 > [!NOTE]
