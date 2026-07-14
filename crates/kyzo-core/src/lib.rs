@@ -250,6 +250,7 @@
 // references.
 #![allow(clippy::mutable_key_type)]
 
+pub(crate) mod capacity;
 pub(crate) mod data;
 pub(crate) mod engines;
 // The formatter's consumer (kyzo-lsp's format-on-save/format-document
@@ -273,7 +274,6 @@ pub(crate) mod fixed_rule;
 // `Script::Imperative` genus is a typed refusal, never executed (see
 // `runtime/db.rs`'s own note), so that genus's AST fields stay dead in a
 // release build; the in-file tests exercise them regardless.
-pub(crate) mod capacity;
 #[allow(dead_code)]
 pub(crate) mod parse;
 pub(crate) mod query;
