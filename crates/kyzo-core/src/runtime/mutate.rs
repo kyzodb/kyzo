@@ -1826,6 +1826,16 @@ impl<T: WriteTx> SessionTx<T> {
             // Prove the filter now; the ctx re-compiles it per session.
             Self::compile_row_expr(&base, src)?;
         }
+        // `m_max0` reaches the STORED HNSW manifest; `m_neighbours` is a
+        // user-declared count with no upper bound, so this doubling is a
+        // checked multiply — an overflow is a typed refusal, never a wrapped
+        // graph parameter baked into the index.
+        let m_max0 = cfg.m_neighbours.checked_mul(2).ok_or_else(|| {
+            IndexLifecycleError(format!(
+                "HNSW m_neighbours overflow: {} * 2 exceeds usize",
+                cfg.m_neighbours
+            ))
+        })?;
         let manifest = crate::engines::hnsw::HnswIndexManifest {
             base_relation: cfg.base_relation.clone(),
             index_name: cfg.index_name.clone(),
@@ -1839,7 +1849,7 @@ impl<T: WriteTx> SessionTx<T> {
             // layer-0 keeps twice the neighbours; the level multiplier is
             // 1/ln(m) so expected layer occupancy decays geometrically.
             m_max: cfg.m_neighbours,
-            m_max0: cfg.m_neighbours * 2,
+            m_max0,
             level_multiplier: 1.0 / (cfg.m_neighbours as f64).ln(),
             index_filter: cfg.index_filter.clone(),
             extend_candidates: cfg.extend_candidates,
@@ -1897,8 +1907,16 @@ impl<T: WriteTx> SessionTx<T> {
         );
         // The signature holds exactly b*r hashes (the engine's band-chunk
         // contract); the requested n_perm is the optimizer's search budget,
-        // not the drawn count.
-        let n_drawn = params.b * params.r;
+        // not the drawn count. This product reaches both a STORED count
+        // (`num_perm`) and the permutation allocation below, so it is a
+        // checked multiply, not a wrapping one: an overflow is a typed refusal
+        // here, never a silently-wrapped count that mis-sizes the index.
+        let n_drawn = params.b.checked_mul(params.r).ok_or_else(|| {
+            IndexLifecycleError(format!(
+                "LSH parameters overflow: {} bands * {} rows-per-band exceeds usize",
+                params.b, params.r
+            ))
+        })?;
         let perms = HashPermutations::new(n_drawn, DEFAULT_PERM_SEED);
         let inverse: SmartString<LazyCompact> = format!("{}:inv", cfg.index_name).into();
         let manifest = crate::engines::lsh::MinHashLshIndexManifest {
