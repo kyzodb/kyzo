@@ -70,7 +70,8 @@ pub enum BuildScriptSandboxError {
     MetadataParse {
         reason: String,
     },
-    /// The one whole-workspace `cargo clean` failed.
+    /// Resetting the check-owned target directory failed (Amendment 3:
+    /// this replaced `cargo clean` outright).
     Clean {
         output: String,
     },
@@ -121,7 +122,7 @@ impl fmt::Display for BuildScriptSandboxError {
             ),
             BuildScriptSandboxError::Clean { output } => write!(
                 f,
-                "build-script sandbox gate: `cargo clean` failed:\n{output}"
+                "build-script sandbox gate: resetting the check-owned target directory failed:\n{output}"
             ),
             BuildScriptSandboxError::Snapshot { reason } => write!(
                 f,
