@@ -96,7 +96,7 @@ jobs:
   pure-rust-gate:
     name: Pure-Rust gate (kyzo-core + kyzo-bin)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.verify-provenance.result == 'success') }}
     container:
       image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
@@ -110,7 +110,7 @@ jobs:
   unsafe-audit:
     name: Unsafe-code ratchet (engine only)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.verify-provenance.result == 'success') }}
     container:
       image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
@@ -124,7 +124,7 @@ jobs:
   lint:
     name: fmt + clippy (whole workspace)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.verify-provenance.result == 'success') }}
     container:
       image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
@@ -139,7 +139,7 @@ jobs:
   build-test:
     name: Build + test (whole workspace)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.verify-provenance.result == 'success') }}
     container:
       image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: verify-provenance
@@ -187,7 +187,6 @@ jobs:
   build-artifacts:
     name: Build kyzo-bin release artifacts
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     container:
       image: rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
     needs: [pure-rust-gate, unsafe-audit, lint, build-test, double-build-diff]
@@ -199,6 +198,7 @@ jobs:
       - name: Build kyzo-bin (release, x86_64-unknown-linux-gnu)
         run: cargo build -p kyzo-bin --release --target x86_64-unknown-linux-gnu
       - name: Version agreement (built binary vs tag)
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
@@ -208,16 +208,31 @@ jobs:
             exit 1
           fi
           echo "OK: binary reports $got, matching tag."
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="dryrun-${GITHUB_SHA::12}"
+          fi
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo cyclonedx --manifest-path crates/kyzo-bin/Cargo.toml --format json
+          mkdir -p dist
+          mv crates/kyzo-bin/kyzo-bin.cdx.json "dist/kyzo-${tag}.cdx.json"
+          find . -name '*.cdx.json' -not -path './dist/*' -delete
       - name: Package + checksum
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="dryrun-${GITHUB_SHA::12}"
+          fi
           dir="kyzo-${tag}-x86_64-unknown-linux-gnu"
           mkdir -p "dist/$dir"
           cp target/x86_64-unknown-linux-gnu/release/kyzo "dist/$dir/"
           cp README.md LICENSE-MPL FORK.md "dist/$dir/"
           (cd dist && tar czf "$dir.tar.gz" "$dir")
-          (cd dist && sha256sum "$dir.tar.gz" > SHA256SUMS)
+          (cd dist && sha256sum "$dir.tar.gz" "kyzo-${tag}.cdx.json" > SHA256SUMS)
           ls -la dist/
           cat dist/SHA256SUMS
       - uses: actions/upload-artifact@v7
@@ -226,6 +241,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/*.cdx.json
           retention-days: 90
 
   # ---------- Release ----------
@@ -301,7 +317,7 @@ jobs:
           gh release create "$tag" \
             --title "$tag" \
             --notes-file notes.md \
-            dist/*.tar.gz dist/SHA256SUMS
+            dist/*.tar.gz dist/SHA256SUMS dist/*.cdx.json
 
   # ---------- crates.io ----------
 
