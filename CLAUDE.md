@@ -29,7 +29,7 @@ Work runs one epic at a time on one branch. `start_epic` opens that branch behin
 A story moves through a fixed pipeline, and each agent's authority is enforced by the tools it is given rather than by instruction alone:
 
 - **kyzo-architect** rules the design — read-only; it investigates and decides, never edits.
-- **demolition** clears the condemned surface before construction so the next agent cannot preserve, wrap, or route around the old design. A red tree is acceptable; a surviving escape route is not.
+- **demolition** opens every story: when a story starts, spawn it on the story's Condemned block before any development-task runs, so it clears the condemned surface and the next agent cannot preserve, wrap, or route around the old design. A red tree is acceptable; a surviving escape route is not. Skipping demolition is allowed only when the story's Condemned block names nothing currently in the tree — state that finding, don't assume it.
 - **development-task** executes exactly one task and holds no board tools, so its only route to "done" is submitting the `task-completion-request` form to the judge.
 - **task-completion-judge** is the sole holder of the check-off tool. It rules on the form's evidence, checks the box on PASS, and returns the refusal on FAIL. The executor literally cannot mark its own work complete — that is the design.
 
