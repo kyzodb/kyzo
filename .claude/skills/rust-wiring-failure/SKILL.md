@@ -71,4 +71,4 @@ A bespoke response shape built for one consumer, alongside the engine's one seal
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If wiring seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut here — not to bypass the envelope boundary, not to reach into engine memory from a host crate directly. If wiring seems to need `unsafe` to exist, the construct is wrong, not the ban.

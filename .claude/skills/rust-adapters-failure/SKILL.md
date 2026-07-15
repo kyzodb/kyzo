@@ -82,4 +82,4 @@ let quantity = Quantity::try_from(raw_field).unwrap_or(Quantity::ZERO); // masks
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If a boundary crossing seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut here — not to transmute untrusted bytes directly into a typed value, not to skip bounds checks in a decoder for speed. If a boundary crossing seems to need `unsafe` to exist, the construct is wrong, not the ban.

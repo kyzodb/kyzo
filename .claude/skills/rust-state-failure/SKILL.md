@@ -74,4 +74,4 @@ struct WriteTransaction { finished: bool }
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If a state construct seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct in this group — not to bypass a species-pair's compile-time read/write split, not to forge an interned code, not to skip a `Drop` release. If a state construct seems to need `unsafe` to exist, the construct is wrong, not the ban.

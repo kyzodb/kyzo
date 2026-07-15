@@ -83,4 +83,4 @@ pub fn catalog(&mut self) -> &Catalog {
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If a verb seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct in this group — not to skip a `Result` return on a fallible operation, not to bypass a consuming verb's ownership guarantee via a raw pointer. If a verb seems to need `unsafe` to exist, the construct is wrong, not the ban.

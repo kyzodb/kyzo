@@ -93,4 +93,4 @@ An `Ord` impl and a `to_bytes`/encode impl written independently, with no proper
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If an encoding or comparison seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut here — not to transmute bytes into a type without going through its checked decode, not to bypass an `Ord` impl with raw byte comparison assumed equivalent. If an encoding or comparison seems to need `unsafe` to exist, the construct is wrong, not the ban.
