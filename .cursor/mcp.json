@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "board": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "/home/kyle/src/plan",
+        "python",
+        "/home/kyle/src/plan/app/main.py"
+      ],
+      "env": {
+        "PLAN_REPO": "/home/kyle/src/kyzo"
+      }
+    }
+  }
+}
