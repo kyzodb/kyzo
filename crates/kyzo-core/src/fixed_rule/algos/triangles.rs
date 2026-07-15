@@ -29,7 +29,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
@@ -47,12 +47,12 @@ impl FixedRule for ClusteringCoefficients {
         let (graph, indices, _) = edges.as_directed_graph(true)?;
         let coefficients = clustering_coefficients(&graph, cancel)?;
         for (idx, (cc, n_triangles, degree)) in coefficients.into_iter().enumerate() {
-            out.put(vec![
+            out.put(Tuple::from_vec(vec![
                 indices[idx].clone(),
                 DataValue::from(cc),
                 DataValue::from(n_triangles as i64),
                 DataValue::from(degree as i64),
-            ])?;
+            ]))?;
         }
 
         Ok(())

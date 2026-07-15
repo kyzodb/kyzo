@@ -16,8 +16,6 @@
 //! kernel ([`check_key_for_bitemporal`]) and the value-side polarity
 //! ([`ClaimPolarity`]).
 
-use std::cmp::Reverse;
-
 use miette::{Result, bail};
 
 use crate::data::value::{
@@ -106,7 +104,7 @@ pub fn check_key_for_bitemporal(
     if !rest.is_empty() {
         bail!("bitemporal scan over a key with trailing bytes after its system-time slot");
     }
-    if !valid.is_assert.0 || !sys.is_assert.0 {
+    if !valid.is_assert() || !sys.is_assert() {
         bail!(
             "bitemporal scan over a key with a retract flag in a time slot \
              (polarity lives in the value; stored slot flags are pinned)"
@@ -131,7 +129,7 @@ pub fn check_key_for_bitemporal(
         nxt
     };
 
-    if valid.timestamp < as_of.valid {
+    if valid.timestamp() < as_of.valid {
         // Instant newer than the valid coordinate (`Reverse` order:
         // smaller means later). Seek to the newest instant at or before
         // `valid_at`, landing directly at the newest system version at or
@@ -139,27 +137,18 @@ pub fn check_key_for_bitemporal(
         return Ok((
             None,
             splice_both(
-                Validity {
-                    timestamp: as_of.valid,
-                    is_assert: Reverse(true),
-                },
-                Validity {
-                    timestamp: as_of.sys,
-                    is_assert: Reverse(true),
-                },
+                Validity::new(as_of.valid, true),
+                Validity::new(as_of.sys, true),
             ),
         ));
     }
-    if sys.timestamp < as_of.sys {
+    if sys.timestamp() < as_of.sys {
         // Right instant, but this system version postdates the system
         // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
         return Ok((
             None,
-            splice_sys(Validity {
-                timestamp: as_of.sys,
-                is_assert: Reverse(true),
-            }),
+            splice_sys(Validity::new(as_of.sys, true)),
         ));
     }
     // This row IS the instant's governing version at sys_at. Its polarity
@@ -212,13 +201,13 @@ pub(crate) fn system_stamp_of_key(key: &[u8]) -> Result<ValidityTs> {
     if !rest.is_empty() {
         bail!("bitemporal key with trailing bytes after its system-time slot");
     }
-    if !sys.is_assert.0 {
+    if !sys.is_assert() {
         bail!(
             "bitemporal key with a retract flag in its system-time slot \
              (polarity lives in the value; stored slot flags are pinned)"
         );
     }
-    Ok(sys.timestamp)
+    Ok(sys.timestamp())
 }
 
 pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()> {
@@ -253,10 +242,7 @@ mod tests {
 
     fn slot(t: i64) -> Validity {
         // Stored slot flags are pinned to assert; polarity lives in the value.
-        Validity {
-            timestamp: vts(t),
-            is_assert: Reverse(true),
-        }
+        Validity::new(vts(t), true)
     }
 
     fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
@@ -475,10 +461,7 @@ mod tests {
         );
         let flagged = [
             DataValue::from(1i64),
-            DataValue::Validity(Validity {
-                timestamp: vts(10),
-                is_assert: Reverse(false),
-            }),
+            DataValue::Validity(Validity::new(vts(10), false)),
             DataValue::Validity(slot(5)),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))

@@ -26,7 +26,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
@@ -71,11 +71,11 @@ impl FixedRule for MinimumSpanningTreePrim {
         };
         let msp = prim(&graph, starting, cancel)?;
         for (src, dst, cost) in msp {
-            out.put(vec![
+            out.put(Tuple::from_vec(vec![
                 indices[src as usize].clone(),
                 indices[dst as usize].clone(),
                 DataValue::from(cost as f64),
-            ])?;
+            ]))?;
         }
         Ok(())
     }

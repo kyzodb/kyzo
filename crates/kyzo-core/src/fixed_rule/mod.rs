@@ -313,7 +313,7 @@ impl<'a> FixedRuleInputRelation<'a> {
                         name.as_plain_symbol().span,
                     )
                 })?;
-                let t: Tuple = vec![prefix.clone()];
+                let t: Tuple = Tuple::from_vec(vec![prefix.clone()]);
                 Box::new(store.prefix_iter(&t).map(|t| Ok(t.into_tuple())))
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {

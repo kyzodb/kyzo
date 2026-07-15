@@ -22,7 +22,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct DegreeCentrality;
@@ -73,7 +73,7 @@ impl FixedRule for DegreeCentrality {
                 DataValue::from(out_d as i64),
                 DataValue::from(in_d as i64),
             ];
-            out.put(tuple)?;
+            out.put(Tuple::from_vec(tuple))?;
         }
         Ok(())
     }

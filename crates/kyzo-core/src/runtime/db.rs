@@ -643,7 +643,7 @@ impl<S: Storage> Db<S> {
                 } else {
                     Ok(NamedRows::new(
                         vec!["status".to_string()],
-                        vec![vec![DataValue::from("OK")]],
+                        vec![Tuple::from_vec(vec![DataValue::from("OK")])],
                     ))
                 }
             }
@@ -697,11 +697,11 @@ impl<S: Storage> Db<S> {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
                 let mut rows = vec![];
                 for handle in list_relations(&tx.store)? {
-                    rows.push(vec![
+                    rows.push(Tuple::from_vec(vec![
                         DataValue::from(handle.name.as_str()),
                         DataValue::from(handle.arity() as i64),
                         DataValue::from(format!("{:?}", handle.access_level)),
-                    ]);
+                    ]));
                 }
                 Ok(NamedRows::new(
                     vec!["name".into(), "arity".into(), "access_level".into()],
@@ -719,10 +719,10 @@ impl<S: Storage> Db<S> {
                     .map(|c| (c, true))
                     .chain(handle.metadata.non_keys.iter().map(|c| (c, false)))
                 {
-                    rows.push(vec![
+                    rows.push(Tuple::from_vec(vec![
                         DataValue::from(col.0.name.as_str()),
                         DataValue::from(col.1),
-                    ]);
+                    ]));
                 }
                 Ok(NamedRows::new(vec!["column".into(), "is_key".into()], rows))
             }
@@ -730,7 +730,7 @@ impl<S: Storage> Db<S> {
                 let rows = self
                     .fixed_rules()
                     .keys()
-                    .map(|k| vec![DataValue::from(k.as_str())])
+                    .map(|k| Tuple::from_vec(vec![DataValue::from(k.as_str())]))
                     .collect();
                 Ok(NamedRows::new(vec!["name".into()], rows))
             }
@@ -745,7 +745,10 @@ impl<S: Storage> Db<S> {
                     .chain(handle.rm_triggers.iter().map(|s| ("on_rm", s)))
                     .chain(handle.replace_triggers.iter().map(|s| ("on_replace", s)))
                 {
-                    rows.push(vec![DataValue::from(kind), DataValue::from(src.source())]);
+                    rows.push(Tuple::from_vec(vec![
+                        DataValue::from(kind),
+                        DataValue::from(src.source()),
+                    ]));
                 }
                 Ok(NamedRows::new(vec!["kind".into(), "source".into()], rows))
             }
@@ -914,7 +917,7 @@ fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> NamedRows {
 pub(crate) fn status_ok() -> NamedRows {
     NamedRows::new(
         vec!["status".to_string()],
-        vec![vec![DataValue::from("OK")]],
+        vec![Tuple::from_vec(vec![DataValue::from("OK")])],
     )
 }
 

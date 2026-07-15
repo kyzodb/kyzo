@@ -55,7 +55,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
@@ -155,7 +155,7 @@ impl FixedRule for MaximalCliques {
 
         for (clique_id, members) in keyed.into_iter().enumerate() {
             for member in members {
-                out.put(vec![DataValue::from(clique_id as i64), member])?;
+                out.put(Tuple::from_vec(vec![DataValue::from(clique_id as i64), member]))?;
             }
         }
         Ok(())

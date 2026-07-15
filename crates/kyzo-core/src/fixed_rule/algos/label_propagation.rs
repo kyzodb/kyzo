@@ -35,7 +35,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::rng::SeededRng;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
@@ -59,7 +59,7 @@ impl FixedRule for LabelPropagation {
         let labels = label_propagation(&graph, max_iter, seed, cancel)?;
         for (idx, label) in labels.into_iter().enumerate() {
             let node = indices[idx].clone();
-            out.put(vec![DataValue::from(label as i64), node])?;
+            out.put(Tuple::from_vec(vec![DataValue::from(label as i64), node]))?;
         }
         Ok(())
     }

@@ -573,26 +573,26 @@ impl HnswRow {
         match self {
             HnswRow::Node {
                 degree, vec_hash, ..
-            } => vec![
+            } => Tuple::from_vec(vec![
                 DataValue::from(*degree as i64),
                 DataValue::Bytes(vec_hash.clone()),
                 DataValue::from(false),
-            ],
+            ]),
             HnswRow::Edge {
                 dist, ignore_link, ..
-            } => vec![
+            } => Tuple::from_vec(vec![
                 DataValue::from(*dist),
                 DataValue::Null,
                 DataValue::from(*ignore_link),
-            ],
+            ]),
             HnswRow::Canary {
                 bottom_layer,
                 entry_key,
-            } => vec![
+            } => Tuple::from_vec(vec![
                 DataValue::from(*bottom_layer),
                 DataValue::Bytes(entry_key.clone()),
                 DataValue::from(false),
-            ],
+            ]),
         }
     }
 
@@ -603,8 +603,9 @@ impl HnswRow {
         idx: &RelationHandle,
         base_key_len: usize,
     ) -> Result<()> {
-        let key = idx.encode_key_for_store(&self.key_tuple(base_key_len), SourceSpan::default())?;
-        let val = idx.encode_val_only_for_store(&self.val_tuple(), SourceSpan::default())?;
+        let key =
+            idx.encode_key_for_store(self.key_tuple(base_key_len).as_slice(), SourceSpan::default())?;
+        let val = idx.encode_val_only_for_store(self.val_tuple().as_slice(), SourceSpan::default())?;
         tx.put(&key, &val)
     }
 
@@ -677,7 +678,7 @@ impl HnswRow {
                 )),
             };
             Ok(VectorId {
-                tuple_key: tuple[start..start + kl].to_vec(),
+                tuple_key: Tuple::from_vec(tuple[start..start + kl].to_vec()),
                 field: field as usize,
                 sub,
             })
@@ -865,17 +866,17 @@ impl<'m> VectorCache<'m> {
         if self.cache.contains_key(id) {
             return Ok(());
         }
-        let Some(tuple) = base.get(tx, &id.tuple_key)? else {
+        let Some(tuple) = base.get(tx, id.tuple_key.as_slice())? else {
             bail!(IndexRowCorrupt::new(
                 &base.name,
-                &id.tuple_key,
+                id.tuple_key.as_slice(),
                 "HNSW index references a base row that does not exist",
             ));
         };
         let mut field = tuple.get(id.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &base.name,
-                &tuple,
+                tuple.as_slice(),
                 format!(
                     "HNSW index references field {} beyond the row's arity",
                     id.field
@@ -888,14 +889,14 @@ impl<'m> VectorCache<'m> {
                     field = l.get(sub).ok_or_else(|| {
                         miette!(IndexRowCorrupt::new(
                             &base.name,
-                            &tuple,
+                            tuple.as_slice(),
                             format!("HNSW index references list element {sub} beyond the list"),
                         ))
                     })?;
                 }
                 _ => bail!(IndexRowCorrupt::new(
                     &base.name,
-                    &tuple,
+                    tuple.as_slice(),
                     "HNSW index expects a list of vectors at this field",
                 )),
             }
@@ -908,7 +909,7 @@ impl<'m> VectorCache<'m> {
             }
             _ => bail!(IndexRowCorrupt::new(
                 &base.name,
-                &tuple,
+                tuple.as_slice(),
                 "HNSW index expects a vector at this field",
             )),
         }
@@ -971,12 +972,12 @@ fn entry_point(
         None => Ok(None),
         Some(row) => {
             let row = row?;
-            match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name)? {
+            match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
                 HnswRow::Node { layer, at, .. } => Ok(Some((layer, at))),
                 HnswRow::Edge { layer, fr, .. } => Ok(Some((layer, fr))),
                 HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                     &idx.name,
-                    &row,
+                    row.as_slice(),
                     "canary row found below the canary layer",
                 )),
             }
@@ -1009,7 +1010,7 @@ fn neighbours(
         #[cfg(test)]
         probe::NEIGHBOURS_ROWS_SCANNED.with(|c| c.set(c.get() + 1));
         let row = row?;
-        match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name)? {
+        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             // The vector's own presence row under the same prefix.
             HnswRow::Node { .. } => continue,
             HnswRow::Edge {
@@ -1024,7 +1025,7 @@ fn neighbours(
             }
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
-                &row,
+                row.as_slice(),
                 "canary row inside a neighbour prefix",
             )),
         }
@@ -1222,7 +1223,7 @@ fn put_fresh_at_levels(
     // artifact of construction order; recording the real key is
     // deliberate.)
     let entry_key = idx
-        .encode_key_for_store(&node_key(bottom_layer, at), SourceSpan::default())?
+        .encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?
         .as_bytes()
         .to_vec();
     HnswRow::Canary {
@@ -1251,13 +1252,13 @@ fn read_node_row(
     layer: i64,
     at: &VectorId,
 ) -> Result<Option<HnswRow>> {
-    match idx.get(tx, &node_key(layer, at))? {
+    match idx.get(tx, node_key(layer, at).as_slice())? {
         None => Ok(None),
-        Some(row) => match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name)? {
+        Some(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             node @ HnswRow::Node { .. } => Ok(Some(node)),
             _ => bail!(IndexRowCorrupt::new(
                 &idx.name,
-                &row,
+                row.as_slice(),
                 "node key decoded to a non-node row",
             )),
         },
@@ -1283,7 +1284,7 @@ fn neighbours_tagged(
     let mut ret = vec![];
     for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
         let row = row?;
-        match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name)? {
+        match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             // The vector's own presence row under the same prefix.
             HnswRow::Node { .. } => continue,
             HnswRow::Edge {
@@ -1294,7 +1295,7 @@ fn neighbours_tagged(
             } => ret.push((*to, dist, ignore_link)),
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
-                &row,
+                row.as_slice(),
                 "canary row inside a neighbour prefix",
             )),
         }
@@ -1424,7 +1425,7 @@ fn shrink_neighbour<T: WriteTx>(
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old);
             if was_tombstoned.get(&old).copied().unwrap_or(false) {
-                let old_key = idx.encode_key_for_store(&old_key_tuple, SourceSpan::default())?;
+                let old_key = idx.encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
                 tx.del(&old_key)?;
             } else {
                 HnswRow::Edge {
@@ -1557,7 +1558,7 @@ fn put_vector<T: WriteTx>(
             else {
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
-                    &node_key(layer, neighbour),
+                    node_key(layer, neighbour).as_slice(),
                     "edge target has no node row at its layer",
                 ));
             };
@@ -1593,7 +1594,7 @@ fn remove_vec<T: WriteTx>(
     for neg_layer in 0i64.. {
         let layer = -neg_layer;
         let self_key_tuple = node_key(layer, at);
-        let self_key = idx.encode_key_for_store(&self_key_tuple, SourceSpan::default())?;
+        let self_key = idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::default())?;
         if tx.exists(&self_key)? {
             tx.del(&self_key)?;
         } else {
@@ -1607,10 +1608,10 @@ fn remove_vec<T: WriteTx>(
             // consequence of the algorithm's probabilistic nature; graph
             // healing is a recorded ceiling item.
             let out_key =
-                idx.encode_key_for_store(&edge_key(layer, at, &neighbour), SourceSpan::default())?;
+                idx.encode_key_for_store(edge_key(layer, at, &neighbour).as_slice(), SourceSpan::default())?;
             tx.del(&out_key)?;
             let in_key =
-                idx.encode_key_for_store(&edge_key(layer, &neighbour, at), SourceSpan::default())?;
+                idx.encode_key_for_store(edge_key(layer, &neighbour, at).as_slice(), SourceSpan::default())?;
             tx.del(&in_key)?;
 
             let Some(HnswRow::Node {
@@ -1619,7 +1620,7 @@ fn remove_vec<T: WriteTx>(
             else {
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
-                    &node_key(layer, &neighbour),
+                    node_key(layer, &neighbour).as_slice(),
                     "neighbour of a removed vector has no node row",
                 ));
             };
@@ -1640,19 +1641,20 @@ fn remove_vec<T: WriteTx>(
     if encountered_singletons {
         // The entry point may have been removed: re-elect from what
         // remains, or retire the canary with the last vector.
-        let canary = idx.encode_key_for_store(&canary_key(base_key_len), SourceSpan::default())?;
+        let canary = idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::default())?;
         match entry_point(tx, base, idx)? {
             Some((bottom_layer, ep_id)) => {
                 let entry_key = idx
-                    .encode_key_for_store(&node_key(bottom_layer, &ep_id), SourceSpan::default())?
+                    .encode_key_for_store(node_key(bottom_layer, &ep_id).as_slice(), SourceSpan::default())?
                     .as_bytes()
                     .to_vec();
                 let val = idx.encode_val_only_for_store(
-                    &HnswRow::Canary {
+                    HnswRow::Canary {
                         bottom_layer,
                         entry_key,
                     }
-                    .val_tuple(),
+                    .val_tuple()
+                    .as_slice(),
                     SourceSpan::default(),
                 )?;
                 tx.put(&canary, &val)?;
@@ -1720,7 +1722,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             DataValue::Vector(v) => extracted.push((
                 IndexVec::admit(v, manifest)?,
                 VectorId {
-                    tuple_key: tuple[..key_len].to_vec(),
+                    tuple_key: Tuple::from_vec(tuple[..key_len].to_vec()),
                     field: *field,
                     sub: None,
                 },
@@ -1731,7 +1733,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
                         extracted.push((
                             IndexVec::admit(v, manifest)?,
                             VectorId {
-                                tuple_key: tuple[..key_len].to_vec(),
+                                tuple_key: Tuple::from_vec(tuple[..key_len].to_vec()),
                                 field: *field,
                                 sub: Some(sub),
                             },
@@ -1782,7 +1784,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     let rows: Vec<Tuple> = crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix))
         .collect::<Result<Vec<_>>>()?;
     for row in rows {
-        match HnswRow::decode(&row, key_len, &idx.name)? {
+        match HnswRow::decode(row.as_slice(), key_len, &idx.name)? {
             HnswRow::Node { at, .. } => {
                 candidates.insert(at);
             }
@@ -1791,7 +1793,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
             }
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
-                &row,
+                row.as_slice(),
                 "canary row inside a vector's layer-0 prefix",
             )),
         }
@@ -1926,10 +1928,10 @@ pub(crate) fn hnsw_knn(
         {
             continue;
         }
-        let mut cand_tuple = base.get(tx, &cand.tuple_key)?.ok_or_else(|| {
+        let mut cand_tuple = base.get(tx, cand.tuple_key.as_slice())?.ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
-                &cand.tuple_key,
+                cand.tuple_key.as_slice(),
                 "HNSW index references a base row that does not exist",
             ))
         })?;
@@ -1947,7 +1949,7 @@ pub(crate) fn hnsw_knn(
                     .ok_or_else(|| {
                         miette!(IndexRowCorrupt::new(
                             &idx.name,
-                            &cand_tuple,
+                            cand_tuple.as_slice(),
                             "indexed field beyond the base relation's arity",
                         ))
                     })?
@@ -1969,7 +1971,7 @@ pub(crate) fn hnsw_knn(
             let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
                 miette!(IndexRowCorrupt::new(
                     &idx.name,
-                    &cand_tuple,
+                    cand_tuple.as_slice(),
                     "indexed field beyond the base row's arity",
                 ))
             })?;
@@ -1981,14 +1983,14 @@ pub(crate) fn hnsw_knn(
                         .ok_or_else(|| {
                             miette!(IndexRowCorrupt::new(
                                 &idx.name,
-                                &cand_tuple,
+                                cand_tuple.as_slice(),
                                 "indexed list element beyond the stored list",
                             ))
                         })?
                         .clone(),
                     _ => bail!(IndexRowCorrupt::new(
                         &idx.name,
-                        &cand_tuple,
+                        cand_tuple.as_slice(),
                         "indexed field is not a list of vectors",
                     )),
                 },
@@ -2084,7 +2086,7 @@ impl PartialOrd for Ranked {
 /// the `VectorId`.
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<Vec<u8>> {
     Ok(idx
-        .encode_key_for_store(&node_key(0, id), SourceSpan::default())?
+        .encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?
         .as_bytes()
         .to_vec())
 }
@@ -2123,10 +2125,10 @@ fn build_cand_tuple(
     distance: f64,
 ) -> Result<Tuple> {
     let key_len = base.metadata.keys.len();
-    let mut cand_tuple = base.get(tx, &cand.tuple_key)?.ok_or_else(|| {
+    let mut cand_tuple = base.get(tx, cand.tuple_key.as_slice())?.ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             &idx.name,
-            &cand.tuple_key,
+            cand.tuple_key.as_slice(),
             "HNSW index references a base row that does not exist",
         ))
     })?;
@@ -2140,7 +2142,7 @@ fn build_cand_tuple(
                 .ok_or_else(|| {
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
-                        &cand_tuple,
+                        cand_tuple.as_slice(),
                         "indexed field beyond the base relation's arity",
                     ))
                 })?
@@ -2162,7 +2164,7 @@ fn build_cand_tuple(
         let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
-                &cand_tuple,
+                cand_tuple.as_slice(),
                 "indexed field beyond the base row's arity",
             ))
         })?;
@@ -2174,14 +2176,14 @@ fn build_cand_tuple(
                     .ok_or_else(|| {
                         miette!(IndexRowCorrupt::new(
                             &idx.name,
-                            &cand_tuple,
+                            cand_tuple.as_slice(),
                             "indexed list element beyond the stored list",
                         ))
                     })?
                     .clone(),
                 _ => bail!(IndexRowCorrupt::new(
                     &idx.name,
-                    &cand_tuple,
+                    cand_tuple.as_slice(),
                     "indexed field is not a list of vectors",
                 )),
             },
@@ -2237,7 +2239,7 @@ fn layer0_nodes<'a>(
     )
     .filter_map(move |row| match row {
         Err(e) => Some(Err(e)),
-        Ok(row) => match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name) {
+        Ok(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name) {
             Err(e) => Some(Err(e)),
             Ok(HnswRow::Node { at, .. }) => Some(Ok(at)),
             Ok(_) => None,

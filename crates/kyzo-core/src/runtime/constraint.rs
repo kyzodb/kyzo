@@ -472,11 +472,11 @@ impl<S: Storage> Db<S> {
         let mut rows = vec![];
         for handle in list_relations(&tx.store)? {
             for c in &handle.constraints {
-                rows.push(vec![
+                rows.push(Tuple::from_vec(vec![
                     DataValue::from(c.name.as_str()),
                     DataValue::from(handle.name.as_str()),
                     DataValue::from(c.source.as_str()),
-                ]);
+                ]));
             }
         }
         Ok(NamedRows::new(

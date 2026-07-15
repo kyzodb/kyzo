@@ -38,7 +38,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
@@ -70,7 +70,7 @@ impl FixedRule for StronglyConnectedComponent {
                 // it, and `indices` has an entry per graph node.
                 let val = indices.get(*idx as usize).unwrap();
                 let tuple = vec![val.clone(), DataValue::from(grp_id as i64)];
-                out.put(tuple)?;
+                out.put(Tuple::from_vec(tuple))?;
             }
         }
 
@@ -90,7 +90,7 @@ impl FixedRule for StronglyConnectedComponent {
                 if !inv_indices.contains_key(&node) {
                     inv_indices.insert(node.clone(), u32::MAX);
                     let tuple = vec![node, DataValue::from(counter)];
-                    out.put(tuple)?;
+                    out.put(Tuple::from_vec(tuple))?;
                     counter += 1;
                 }
             }

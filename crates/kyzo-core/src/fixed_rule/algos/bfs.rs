@@ -24,7 +24,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::{Expr, eval_bytecode_pred};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{
     CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
@@ -125,7 +125,7 @@ impl FixedRule for Bfs {
             route.push(starting.clone());
             route.reverse();
             let tuple = vec![starting, ending, DataValue::List(route)];
-            out.put(tuple)?;
+            out.put(Tuple::from_vec(tuple))?;
         }
         Ok(())
     }

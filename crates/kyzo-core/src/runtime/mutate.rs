@@ -367,14 +367,18 @@ impl<T: WriteTx> SessionTx<T> {
             // `@`-carrying mutation instead asserts the row at the
             // instant its own clause names, per row if the clause names
             // one of this row's own columns.
-            let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
+            let valid = write_vld.resolve(tuple.as_slice(), stamp, cur_vld)?;
             let extracted: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
 
-            let key =
-                relation_store.encode_bitemporal_key_for_store(&extracted, valid, stamp, span)?;
+            let key = relation_store.encode_bitemporal_key_for_store(
+                extracted.as_slice(),
+                valid,
+                stamp,
+                span,
+            )?;
 
             // The probe below is load-bearing under SSI and UNCONDITIONAL:
             // bitemporal version keys are distinct per transaction stamp,
@@ -386,7 +390,8 @@ impl<T: WriteTx> SessionTx<T> {
             // and triggers — resolved AT THIS WRITE'S OWN `valid`, not
             // "ever": what this write supersedes is whatever governed the
             // instant it targets, never an unrelated later instant.
-            let current = self.current_row_routed(relation_store, &extracted, valid, span)?;
+            let current =
+                self.current_row_routed(relation_store, extracted.as_slice(), valid, span)?;
 
             if is_insert && current.is_some() {
                 bail!(TransactAssertionFailure {
@@ -397,7 +402,7 @@ impl<T: WriteTx> SessionTx<T> {
             }
 
             let val = relation_store.encode_bitemporal_val_for_store(
-                &extracted,
+                extracted.as_slice(),
                 ClaimPolarity::Assert,
                 span,
             )?;
@@ -408,8 +413,8 @@ impl<T: WriteTx> SessionTx<T> {
                         if has_indices && extracted != tup {
                             self.update_indices(
                                 relation_store,
-                                Some(&extracted),
-                                Some(&tup),
+                                Some(extracted.as_slice()),
+                                Some(tup.as_slice()),
                                 valid,
                                 stamp,
                             )?;
@@ -422,7 +427,7 @@ impl<T: WriteTx> SessionTx<T> {
                         if has_indices {
                             self.update_indices(
                                 relation_store,
-                                Some(&extracted),
+                                Some(extracted.as_slice()),
                                 None,
                                 valid,
                                 stamp,
@@ -506,21 +511,25 @@ impl<T: WriteTx> SessionTx<T> {
 
         let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
-            let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
+            let valid = write_vld.resolve(tuple.as_slice(), stamp, cur_vld)?;
             let mut new_kv: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
 
-            let key =
-                relation_store.encode_bitemporal_key_for_store(&new_kv, valid, stamp, span)?;
+            let key = relation_store.encode_bitemporal_key_for_store(
+                new_kv.as_slice(),
+                valid,
+                stamp,
+                span,
+            )?;
             // The row being updated must already exist AT THIS WRITE'S
             // OWN `valid`: a bitemporal point read of the fact, resolved
             // at that instant, yielding its logical row — the value an
             // unspecified (non-key) column carries forward is whatever
             // held at THAT instant, never a later write's belief.
             let old_kv: Tuple =
-                match self.current_row_routed(relation_store, &new_kv, valid, span)? {
+                match self.current_row_routed(relation_store, new_kv.as_slice(), valid, span)? {
                     None => {
                         bail!(TransactAssertionFailure {
                             relation: relation_store.name.to_string(),
@@ -530,7 +539,9 @@ impl<T: WriteTx> SessionTx<T> {
                     }
                     Some(row) => row,
                 };
-            let original_val: Tuple = old_kv[relation_store.metadata.keys.len()..].to_vec();
+            let original_val: Tuple = Tuple::from_vec(
+                old_kv.as_slice()[relation_store.metadata.keys.len()..].to_vec(),
+            );
             new_kv.reserve_exact(relation_store.arity());
             for (i, extractor) in val_extractors.iter().enumerate() {
                 match extractor {
@@ -550,7 +561,7 @@ impl<T: WriteTx> SessionTx<T> {
                 }
             }
             let new_val = relation_store.encode_bitemporal_val_for_store(
-                &new_kv,
+                new_kv.as_slice(),
                 ClaimPolarity::Assert,
                 span,
             )?;
@@ -559,8 +570,8 @@ impl<T: WriteTx> SessionTx<T> {
                 if has_indices {
                     self.update_indices(
                         relation_store,
-                        Some(&new_kv),
-                        Some(&old_kv),
+                        Some(new_kv.as_slice()),
+                        Some(old_kv.as_slice()),
                         valid,
                         stamp,
                     )?;
@@ -634,16 +645,21 @@ impl<T: WriteTx> SessionTx<T> {
 
         let stamp = self.system_stamp_routed(relation_store.residency());
         for tuple in res_iter {
-            let valid = write_vld.resolve(&tuple, stamp, cur_vld)?;
+            let valid = write_vld.resolve(tuple.as_slice(), stamp, cur_vld)?;
             let extracted: Tuple = key_extractors
                 .iter()
                 .map(|ex| ex.extract_data(&tuple, cur_vld))
                 .try_collect()?;
-            let key =
-                relation_store.encode_bitemporal_key_for_store(&extracted, valid, stamp, span)?;
+            let key = relation_store.encode_bitemporal_key_for_store(
+                extracted.as_slice(),
+                valid,
+                stamp,
+                span,
+            )?;
             // Resolved AT THIS RETRACTION'S OWN `valid`: what it retracts
             // is whatever governed the instant it targets.
-            let current = self.current_row_routed(relation_store, &extracted, valid, span)?;
+            let current =
+                self.current_row_routed(relation_store, extracted.as_slice(), valid, span)?;
             if check_exists && current.is_none() {
                 bail!(TransactAssertionFailure {
                     relation: relation_store.name.to_string(),
@@ -654,7 +670,7 @@ impl<T: WriteTx> SessionTx<T> {
             if need_to_collect || has_indices {
                 if let Some(tup) = current {
                     if has_indices {
-                        self.update_indices(relation_store, None, Some(&tup), valid, stamp)?;
+                        self.update_indices(relation_store, None, Some(tup.as_slice()), valid, stamp)?;
                     }
                     if need_to_collect {
                         old_tuples.push(tup);
@@ -667,7 +683,7 @@ impl<T: WriteTx> SessionTx<T> {
             // Retraction is revision, not erasure: a Retract row at the
             // coordinate, never a physical delete.
             let val = relation_store.encode_bitemporal_val_for_store(
-                &extracted,
+                extracted.as_slice(),
                 ClaimPolarity::Retract,
                 span,
             )?;
@@ -793,7 +809,7 @@ impl<T: WriteTx> SessionTx<T> {
 
             match self.current_row_routed(
                 relation_store,
-                &extracted,
+                extracted.as_slice(),
                 crate::data::value::MAX_VALIDITY_TS,
                 span,
             )? {
@@ -860,7 +876,7 @@ impl<T: WriteTx> SessionTx<T> {
             if self
                 .current_row_routed(
                     relation_store,
-                    &extracted,
+                    extracted.as_slice(),
                     crate::data::value::MAX_VALIDITY_TS,
                     span,
                 )?
@@ -1117,7 +1133,7 @@ impl<T: WriteTx> SessionTx<T> {
         stamp: ValidityTs,
     ) -> Result<()> {
         let idx_tup: Tuple = project_mapper(mapper, row, base)?;
-        self.index_write_row(idx_handle, &idx_tup, polarity, valid, stamp)
+        self.index_write_row(idx_handle, idx_tup.as_slice(), polarity, valid, stamp)
     }
 
     /// One posting row: the write's own valid instant as a leading data
@@ -1134,7 +1150,7 @@ impl<T: WriteTx> SessionTx<T> {
         stamp: ValidityTs,
     ) -> Result<()> {
         let idx_tup = temporal_posting_tuple(base, row, valid)?;
-        self.index_write_row(idx_handle, &idx_tup, polarity, valid, stamp)
+        self.index_write_row(idx_handle, idx_tup.as_slice(), polarity, valid, stamp)
     }
 }
 
@@ -1620,7 +1636,7 @@ impl<T: WriteTx> SessionTx<T> {
                     // whole), and its polarity from the value.
                     let tuple = crate::data::value::decode_tuple_from_key(k, keys_len + 2)?;
                     let polarity = crate::data::bitemporal::claim_polarity_of_value(v)?;
-                    let key_cols = &tuple[..keys_len];
+                    let key_cols = &tuple.as_slice()[..keys_len];
                     let DataValue::Validity(valid_slot) = &tuple[keys_len] else {
                         bail!(
                             "corrupt bitemporal key: missing valid-time slot during \
@@ -1638,8 +1654,8 @@ impl<T: WriteTx> SessionTx<T> {
                         &idx_handle,
                         key_cols,
                         polarity,
-                        valid_slot.timestamp,
-                        sys_slot.timestamp,
+                        valid_slot.timestamp(),
+                        sys_slot.timestamp(),
                     )?;
                 }
             }
@@ -1682,14 +1698,14 @@ impl<T: WriteTx> SessionTx<T> {
             // encodes above every slot byte, so this bound clears its
             // group.
             let mut succ = base
-                .encode_partial_key_for_store(&last[0..keys_len])
+                .encode_partial_key_for_store(&last.as_slice()[0..keys_len])
                 .as_bytes()
                 .to_vec();
             succ.push(0xFF);
             lower = succ;
             for row in &batch {
                 match &ctx {
-                    Some(ctx) => self.apply_manifest_index(&base, ctx, Some(row), None)?,
+                    Some(ctx) => self.apply_manifest_index(&base, ctx, Some(row.as_slice()), None)?,
                     None => {
                         let IndexKind::Plain { mapper } = &index_ref.kind else {
                             unreachable!("ctx is None only for plain indexes")
@@ -1704,7 +1720,7 @@ impl<T: WriteTx> SessionTx<T> {
                             &base,
                             &idx_handle,
                             mapper,
-                            row,
+                            row.as_slice(),
                             ClaimPolarity::Assert,
                             stamp,
                             stamp,

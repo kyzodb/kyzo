@@ -30,7 +30,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::algos::shortest_path_dijkstra::dijkstra_keep_ties;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
@@ -90,7 +90,7 @@ impl FixedRule for BetweennessCentrality {
 
         for (i, s) in centrality.into_iter().enumerate() {
             let node = indices[i].clone();
-            out.put(vec![node, (s as f64).into()])?;
+            out.put(Tuple::from_vec(vec![node, (s as f64).into()]))?;
         }
 
         Ok(())
@@ -137,10 +137,10 @@ impl FixedRule for ClosenessCentrality {
             Ok(nc * nc / total_dist / (n - 1) as f32)
         })?;
         for (idx, centrality) in res.into_iter().enumerate() {
-            out.put(vec![
+            out.put(Tuple::from_vec(vec![
                 indices[idx].clone(),
                 DataValue::from(centrality as f64),
-            ])?;
+            ]))?;
             cancel.check()?;
         }
         Ok(())

@@ -40,7 +40,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::{Expr, eval_bytecode};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::rng::SeededRng;
 use crate::fixed_rule::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
@@ -166,11 +166,11 @@ impl FixedRule for RandomWalk {
                     })??;
                     cancel.check()?;
                 }
-                out.put(vec![
+                out.put(Tuple::from_vec(vec![
                     DataValue::from(counter),
                     start_node_key.clone(),
                     DataValue::List(path),
-                ])?;
+                ]))?;
             }
         }
         Ok(())

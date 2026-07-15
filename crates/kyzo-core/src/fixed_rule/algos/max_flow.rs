@@ -61,7 +61,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
     CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload,
@@ -128,11 +128,11 @@ impl FixedRule for MaxFlow {
         net.max_flow(source, sink, &cancel)?;
 
         for (from, to, flow) in net.min_cut_edges(source) {
-            out.put(vec![
+            out.put(Tuple::from_vec(vec![
                 indices[from as usize].clone(),
                 indices[to as usize].clone(),
                 DataValue::from(flow),
-            ])?;
+            ]))?;
         }
         Ok(())
     }

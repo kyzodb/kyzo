@@ -61,12 +61,12 @@ impl FixedRule for ShortestPathAStar {
                 let (cost, path) = astar(&start, &goal, edges, nodes, &heuristic, cancel.clone())?;
                 // Structural: `ensure_min_len(1)` on `starting`/`goals`
                 // proved every tuple has a first column.
-                out.put(vec![
+                out.put(Tuple::from_vec(vec![
                     start[0].clone(),
                     goal[0].clone(),
                     DataValue::from(cost),
                     DataValue::List(path),
-                ])?;
+                ]))?;
             }
         }
 

@@ -36,7 +36,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 // A test-only observable: how many nodes the inner BFS loop has dequeued.
@@ -149,13 +149,13 @@ impl FixedRule for ShortestPathBFS {
                         ending_node.clone(),
                         DataValue::List(route),
                     ];
-                    out.put(tuple)?;
+                    out.put(Tuple::from_vec(tuple))?;
                 } else {
-                    out.put(vec![
+                    out.put(Tuple::from_vec(vec![
                         starting_node.clone(),
                         ending_node.clone(),
                         DataValue::Null,
-                    ])?
+                    ]))?
                 }
             }
             cancel.check()?;

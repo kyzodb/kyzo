@@ -24,7 +24,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
@@ -48,7 +48,7 @@ impl FixedRule for TopSort {
             // and `indices` has an entry per node.
             let val = indices.get(*val_id as usize).unwrap();
             let tuple = vec![DataValue::from(idx as i64), val.clone()];
-            out.put(tuple)?;
+            out.put(Tuple::from_vec(tuple))?;
         }
 
         Ok(())

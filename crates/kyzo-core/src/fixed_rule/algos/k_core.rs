@@ -42,7 +42,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
@@ -89,7 +89,7 @@ impl FixedRule for KCoreDecomposition {
         }
         let core = core_numbers(&graph, &cancel)?;
         for (i, c) in core.into_iter().enumerate() {
-            out.put(vec![indices[i].clone(), DataValue::from(c as i64)])?;
+            out.put(Tuple::from_vec(vec![indices[i].clone(), DataValue::from(c as i64)]))?;
         }
         Ok(())
     }

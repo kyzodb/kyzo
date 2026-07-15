@@ -52,7 +52,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
@@ -81,7 +81,10 @@ impl FixedRule for PageRank {
         let ranks = page_rank(&graph, theta, epsilon as f64, iterations, cancel)?;
 
         for (idx, score) in ranks.iter().enumerate() {
-            out.put(vec![indices[idx].clone(), DataValue::from(*score as f64)])?;
+            out.put(Tuple::from_vec(vec![
+                indices[idx].clone(),
+                DataValue::from(*score as f64),
+            ]))?;
         }
         Ok(())
     }
