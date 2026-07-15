@@ -60,7 +60,7 @@ fn every_data_type_round_trips_through_a_stored_relation() {
         .collect();
     assert_eq!(list, vec![1, 2, 3], "List");
 
-    let expected_uuid = DataValue::Uuid(UuidWrapper(
+    let expected_uuid = DataValue::Uuid(UuidWrapper::new(
         uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
     ));
     assert_eq!(row[6], expected_uuid, "Uuid");

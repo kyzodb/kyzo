@@ -269,7 +269,7 @@ impl From<&DataValue> for JsonValue {
             DataValue::List(l) => JsonValue::Array(l.iter().map(JsonValue::from).collect()),
             DataValue::Set(s) => JsonValue::Array(s.iter().map(JsonValue::from).collect()),
             DataValue::Regex(r) => json!(r.pattern()),
-            DataValue::Uuid(u) => json!(u.0.to_string()),
+            DataValue::Uuid(u) => json!(u.as_uuid().to_string()),
             DataValue::Vector(v) => json!(v.as_slice()),
             DataValue::Validity(v) => json!([v.ts_micros(), v.is_assert()]),
             DataValue::Interval(iv) => match iv.ends() {
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn uuid_and_validity_render_without_panicking() {
-        let dv = DataValue::Uuid(UuidWrapper(uuid::Uuid::nil()));
+        let dv = DataValue::Uuid(UuidWrapper::new(uuid::Uuid::nil()));
         assert_eq!(JsonValue::from(&dv), json!(uuid::Uuid::nil().to_string()));
 
         let v = Validity::new(ValidityTs::from_raw(5), true);

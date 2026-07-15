@@ -120,9 +120,24 @@ impl std::hash::Hash for Vector {
 }
 
 /// The engine-facing UUID value (16 bytes; identity and order are the
-/// bytes, per the uuid face's law).
+/// bytes, per the uuid face's law). Field is private — construction and
+/// reads go through the accessors so the wrapper stays the only door.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct UuidWrapper(pub uuid::Uuid);
+pub struct UuidWrapper(uuid::Uuid);
+
+impl UuidWrapper {
+    pub fn new(uuid: uuid::Uuid) -> UuidWrapper {
+        UuidWrapper(uuid)
+    }
+
+    pub fn get(self) -> uuid::Uuid {
+        self.0
+    }
+
+    pub fn as_uuid(&self) -> &uuid::Uuid {
+        &self.0
+    }
+}
 
 /// The logical owned value: the engine's currency across parsing,
 /// expression evaluation, and materialization. See the module docs for
@@ -167,7 +182,7 @@ impl DataValue {
     }
 
     pub fn uuid(u: uuid::Uuid) -> DataValue {
-        DataValue::Uuid(UuidWrapper(u))
+        DataValue::Uuid(UuidWrapper::new(u))
     }
 
     /// The integer, for `Num` values holding the int representation.
@@ -449,7 +464,7 @@ impl std::fmt::Display for DataValue {
                 }
                 write!(f, "'")
             }
-            DataValue::Uuid(u) => write!(f, "uuid(\"{}\")", u.0),
+            DataValue::Uuid(u) => write!(f, "uuid(\"{}\")", u.get()),
             DataValue::Regex(r) => write!(
                 f,
                 "regex({:?}, flags={:#04x})",

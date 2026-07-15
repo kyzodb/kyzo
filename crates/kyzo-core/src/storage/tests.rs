@@ -83,8 +83,8 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Bytes(vec![0]),
         DataValue::Bytes(vec![0, 1]),
         DataValue::Bytes(vec![255]),
-        DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(0))),
-        DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(
+        DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(0))),
+        DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
         DataValue::Regex(
@@ -226,7 +226,9 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
             &serde_json::Value::String(s)
         ))),
         proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
-        any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
+        any::<u128>().prop_map(|u| {
+            DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(u)))
+        }),
         proptest::collection::vec(any::<f64>(), 0..6)
             .prop_map(|v| DataValue::Vector(Vector::new(v))),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| {

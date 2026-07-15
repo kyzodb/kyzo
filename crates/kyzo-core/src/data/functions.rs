@@ -54,7 +54,7 @@ use crate::data::expr::Op;
 use crate::data::json::{json_from_serde, serde_from_json};
 use crate::data::relation::VecElementType;
 use crate::data::value::{
-    Bound, DataValue, Interval, Json, Num, NumRepr, RegexFlags, RegexSource, UuidWrapper, Validity,
+    Bound, DataValue, Interval, Json, Num, NumRepr, RegexFlags, RegexSource, Validity,
     ValidityTs, Vector,
 };
 use serde_json::Value as JsonValue;
@@ -269,7 +269,7 @@ pub(crate) fn to_json(d: &DataValue) -> JsonValue {
             json!(b)
         }
         DataValue::Uuid(u) => {
-            json!(u.0.as_bytes())
+            json!(u.as_uuid().as_bytes())
         }
         DataValue::Regex(r) => {
             json!(r.pattern())
@@ -2055,7 +2055,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(n) => !n.eq_numeric(Num::int(0)),
         DataValue::Str(s) => !s.is_empty(),
         DataValue::Bytes(b) => !b.is_empty(),
-        DataValue::Uuid(u) => !u.0.is_nil(),
+        DataValue::Uuid(u) => !u.as_uuid().is_nil(),
         DataValue::Regex(r) => !r.pattern().is_empty(),
         DataValue::List(l) => !l.is_empty(),
         DataValue::Set(s) => !s.is_empty(),
@@ -2081,7 +2081,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Num(n) => !n.eq_numeric(Num::int(0)) as i64,
         DataValue::Str(s) => i64::from(!s.is_empty()),
         DataValue::Bytes(b) => i64::from(!b.is_empty()),
-        DataValue::Uuid(u) => i64::from(!u.0.is_nil()),
+        DataValue::Uuid(u) => i64::from(!u.as_uuid().is_nil()),
         DataValue::Regex(r) => i64::from(!r.pattern().is_empty()),
         DataValue::List(l) => i64::from(!l.is_empty()),
         DataValue::Set(s) => i64::from(!s.is_empty()),
@@ -2745,7 +2745,7 @@ pub(crate) fn op_rand_uuid_v4(_args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_UUID_TIMESTAMP, 1, false, true);
 pub(crate) fn op_uuid_timestamp(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Uuid(UuidWrapper(id)) => match id.get_timestamp() {
+        DataValue::Uuid(u) => match u.as_uuid().get_timestamp() {
             None => DataValue::Null,
             Some(t) => {
                 let (s, subs) = t.to_unix();

@@ -330,7 +330,7 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
         }
         DataValue::Uuid(u) => {
             out.push(Tag::Uuid.byte());
-            out.extend_from_slice(u.0.as_bytes());
+            out.extend_from_slice(u.as_uuid().as_bytes());
         }
         DataValue::Regex(r) => {
             out.push(Tag::Regex.byte());
@@ -674,7 +674,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             }
             let mut u = [0u8; 16];
             u.copy_from_slice(&body[..16]);
-            Ok((DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(u))), 17))
+            Ok((DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u))), 17))
         }
         Tag::List => {
             let (items, used) = decode_sequence(body, depth)?;
@@ -1143,7 +1143,7 @@ mod tests {
             DataValue::Bytes(vec![0x00, 0x00]),
             DataValue::Bytes(vec![0x00, 0xFF]),
             DataValue::Bytes(vec![0xFF]),
-            DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(U1))),
+            DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
             DataValue::List(vec![]),
         ];
         out.extend(nums.iter().map(|&n| DataValue::Num(n)));
@@ -1390,7 +1390,7 @@ mod tests {
             5 => {
                 let mut u = [0u8; 16];
                 u[0] = rng.next() as u8;
-                DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(u)))
+                DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u)))
             }
             6 => {
                 let len = rng.below(4);

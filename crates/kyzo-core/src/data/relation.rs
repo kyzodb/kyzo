@@ -453,7 +453,7 @@ impl NullableColType {
                         json!(b)
                     }
                     DataValue::Uuid(u) => {
-                        json!(u.0.as_bytes())
+                        json!(u.as_uuid().as_bytes())
                     }
                     DataValue::Regex(r) => {
                         json!(r.pattern())

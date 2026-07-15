@@ -977,7 +977,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Uuid(u) => {
             out.push_str("to_uuid(");
-            write_str_literal(&u.0.to_string(), out);
+            write_str_literal(&u.as_uuid().to_string(), out);
             out.push(')');
         }
         DataValue::Regex(rx) => {
