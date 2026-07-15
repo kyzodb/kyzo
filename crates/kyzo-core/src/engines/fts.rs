@@ -385,7 +385,10 @@ fn literal_postings(
             &[ScanBound::Value(DataValue::Str(upper.to_string()))],
         )
     } else {
-        idx.scan_prefix(tx, &Tuple::from_vec(vec![DataValue::Str(value.to_string())]))
+        idx.scan_prefix(
+            tx,
+            &Tuple::from_vec(vec![DataValue::Str(value.to_string())]),
+        )
     };
     let scan = crate::engines::index_rows(&idx.name, scan);
 

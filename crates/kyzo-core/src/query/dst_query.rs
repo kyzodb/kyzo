@@ -398,7 +398,16 @@ fn aggr_expected() -> BTreeSet<Tuple> {
 // ── stratified negation: pairs of nodes with no path between them ────────
 
 fn neg_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(db, "node", 1, &[Tuple::from_vec(vec![v(1)]), Tuple::from_vec(vec![v(2)]), Tuple::from_vec(vec![v(3)])])?;
+    stored_relation(
+        db,
+        "node",
+        1,
+        &[
+            Tuple::from_vec(vec![v(1)]),
+            Tuple::from_vec(vec![v(2)]),
+            Tuple::from_vec(vec![v(3)]),
+        ],
+    )?;
     // 1->2 only: 3 is isolated, and nothing reaches 1.
     stored_relation(db, "edge", 2, &[Tuple::from_vec(vec![v(1), v(2)])])
 }
@@ -482,8 +491,24 @@ const SINGLE_HEAD_FIXTURES: &[Fixture] = &[
 // ── a multi-head stratum, for the parallelism / determinism probe ────────
 
 fn multihead_populate(db: &SimStorage) -> Result<()> {
-    stored_relation(db, "ea", 2, &[Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(2), v(3)])])?;
-    stored_relation(db, "eb", 2, &[Tuple::from_vec(vec![v(10), v(20)]), Tuple::from_vec(vec![v(20), v(30)])])
+    stored_relation(
+        db,
+        "ea",
+        2,
+        &[
+            Tuple::from_vec(vec![v(1), v(2)]),
+            Tuple::from_vec(vec![v(2), v(3)]),
+        ],
+    )?;
+    stored_relation(
+        db,
+        "eb",
+        2,
+        &[
+            Tuple::from_vec(vec![v(10), v(20)]),
+            Tuple::from_vec(vec![v(20), v(30)]),
+        ],
+    )
 }
 fn multihead_program() -> StratifiedMagicProgram {
     // pa and pb are independent recursive closures in ONE stratum: eval's
@@ -1094,7 +1119,8 @@ fn time_travel_under_faults_answers_or_errors() {
 fn rows_str(data: &[(i64, &str)]) -> BTreeSet<Tuple> {
     data.iter()
         .map(|(id, s)| vec![v(*id), DataValue::Str((*s).to_string())])
-        .map(Tuple::from_vec).collect()
+        .map(Tuple::from_vec)
+        .collect()
 }
 
 // ═════════════════════════════════════════════════════════════════════════

@@ -713,15 +713,20 @@ fn generate(seed: u64) -> Generated {
     let n_edges = rng.below((n * 3) as u64) as i64 + 1;
     let edges: BTreeSet<Tuple> = (0..n_edges)
         .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))])
-        .map(Tuple::from_vec).collect();
+        .map(Tuple::from_vec)
+        .collect();
     facts.insert("edge", edges);
-    facts.insert("node", (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
+    facts.insert(
+        "node",
+        (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect(),
+    );
 
     // Meet seeds, typed to the chosen lattice.
     let n_seeds = rng.below(n as u64) as i64 + 1;
     let seeds: BTreeSet<Tuple> = (0..n_seeds)
         .map(|_| vec![v(rng.range(0, n)), meet_value(&mut rng, p.meet_op)])
-        .map(Tuple::from_vec).collect();
+        .map(Tuple::from_vec)
+        .collect();
     facts.insert("seed", seeds);
 
     // The bulk relation: hundreds-to-thousands of rows over many keys.
@@ -729,7 +734,8 @@ fn generate(seed: u64) -> Generated {
     let n_keys = rng.range(20, 100);
     let items: BTreeSet<Tuple> = (0..n_items)
         .map(|_| vec![v(rng.range(0, n_keys)), v(rng.range(0, 50))])
-        .map(Tuple::from_vec).collect();
+        .map(Tuple::from_vec)
+        .collect();
     facts.insert("item", items);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -813,7 +819,8 @@ fn generate(seed: u64) -> Generated {
                     v(rng.range(-10, 10)),
                 ]
             })
-            .map(Tuple::from_vec).collect();
+            .map(Tuple::from_vec)
+            .collect();
         facts.insert("seed3", seed3);
         let (lo, k, hi, s, t) = (
             Term::Var("Lo"),
@@ -1393,14 +1400,16 @@ fn provenance_fixture() -> (Program, Rel) {
         [(1, 2), (2, 3), (3, 4), (2, 5)]
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
-            .map(Tuple::from_vec).collect(),
+            .map(Tuple::from_vec)
+            .collect(),
     );
     facts.insert(
         "tag",
         [(4, 100), (5, 200)]
             .iter()
             .map(|(a, b)| vec![v(*a), v(*b)])
-            .map(Tuple::from_vec).collect(),
+            .map(Tuple::from_vec)
+            .collect(),
     );
     let rules = vec![
         // path: transitive closure of edge (linear recursion).
@@ -1784,7 +1793,12 @@ fn gen_temporal_history(rng: &mut Rng, key: &Tuple, p: &TemporalGenParams) -> Ve
 
 fn push_temporal_event(history: &mut Vec<Event>, rng: &mut Rng, key: &Tuple, valid: i64, sys: i64) {
     let event = match rng.one_of(&TEMPORAL_POLARITIES) {
-        ClaimPolarity::Assert => Event::assert(key.clone(), Tuple::from_vec(vec![v(rng.range(0, 5))]), valid, sys),
+        ClaimPolarity::Assert => Event::assert(
+            key.clone(),
+            Tuple::from_vec(vec![v(rng.range(0, 5))]),
+            valid,
+            sys,
+        ),
         ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
         ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
     };
@@ -2157,7 +2171,11 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
         let params = gen_temporal_params(&mut rng);
         let mut history = Vec::new();
         for i in 0..params.keys_per_relation {
-            history.extend(gen_temporal_history(&mut rng, &Tuple::from_vec(vec![v(i)]), &params));
+            history.extend(gen_temporal_history(
+                &mut rng,
+                &Tuple::from_vec(vec![v(i)]),
+                &params,
+            ));
         }
 
         // Two distinct query coordinates near real generated events — the
@@ -2201,7 +2219,11 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
         for row1 in &snap1 {
             for row2 in &snap2 {
                 if row1[0] == row2[0] {
-                    expected.insert(Tuple::from_vec(vec![row1[0].clone(), row1[1].clone(), row2[1].clone()]));
+                    expected.insert(Tuple::from_vec(vec![
+                        row1[0].clone(),
+                        row1[1].clone(),
+                        row2[1].clone(),
+                    ]));
                 }
             }
         }
@@ -2262,7 +2284,12 @@ fn gen_temporal_history_no_erase(rng: &mut Rng, key: &Tuple, p: &TemporalGenPara
         let valid = rng.range(-p.coord_span, p.coord_span);
         let sys = rng.range(-p.coord_span, p.coord_span);
         let event = if rng.chance(1, 2) {
-            Event::assert(key.clone(), Tuple::from_vec(vec![v(rng.range(0, 5))]), valid, sys)
+            Event::assert(
+                key.clone(),
+                Tuple::from_vec(vec![v(rng.range(0, 5))]),
+                valid,
+                sys,
+            )
         } else {
             Event::retract(key.clone(), valid, sys)
         };
@@ -2271,8 +2298,13 @@ fn gen_temporal_history_no_erase(rng: &mut Rng, key: &Tuple, p: &TemporalGenPara
         if rng.chance(2, 5) {
             let correction_sys = sys + rng.range(1, 5);
             history.push(
-                Event::assert(key.clone(), Tuple::from_vec(vec![v(rng.range(0, 5))]), valid, correction_sys)
-                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                Event::assert(
+                    key.clone(),
+                    Tuple::from_vec(vec![v(rng.range(0, 5))]),
+                    valid,
+                    correction_sys,
+                )
+                .expect("coord_span keeps every draw far below the reserved terminal tick"),
             );
         }
     }
@@ -2637,7 +2669,9 @@ fn gen_temporal_existential_history(
         let valid = rng.range(-p.coord_span, p.coord_span);
         let sys = rng.range(-p.coord_span, p.coord_span);
         let event = match rng.one_of(&TEMPORAL_POLARITIES) {
-            ClaimPolarity::Assert => Event::assert(key.clone(), Tuple::from_vec(vec![]), valid, sys),
+            ClaimPolarity::Assert => {
+                Event::assert(key.clone(), Tuple::from_vec(vec![]), valid, sys)
+            }
             ClaimPolarity::Retract => Event::retract(key.clone(), valid, sys),
             ClaimPolarity::Erase => Event::erase(key.clone(), valid, sys),
         };
@@ -2706,8 +2740,13 @@ fn gen_reachability_fixture(rng: &mut Rng) -> ReachabilityFixture {
                 let valid = rng.range(-params.coord_span, params.coord_span);
                 let sys = rng.range(-params.coord_span, params.coord_span);
                 seed_history.push(
-                    Event::assert(key.clone(), Tuple::from_vec(vec![meet_value(rng, meet_op)]), valid, sys)
-                        .expect("coord_span keeps every draw far below the reserved terminal tick"),
+                    Event::assert(
+                        key.clone(),
+                        Tuple::from_vec(vec![meet_value(rng, meet_op)]),
+                        valid,
+                        sys,
+                    )
+                    .expect("coord_span keeps every draw far below the reserved terminal tick"),
                 );
             }
         }
@@ -2742,7 +2781,14 @@ fn reachability_program(rng: &mut Rng, fx: &ReachabilityFixture) -> Program {
     histories.insert("hedge", fx.edge_history.clone());
     histories.insert("hseed", fx.seed_history.clone());
     let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-    facts.insert("node", fx.nodes.iter().map(|&n| vec![v(n)]).map(Tuple::from_vec).collect());
+    facts.insert(
+        "node",
+        fx.nodes
+            .iter()
+            .map(|&n| vec![v(n)])
+            .map(Tuple::from_vec)
+            .collect(),
+    );
 
     let mut rules = vec![
         // path(X,Y) :- hedge(X,Y) @c_edge.
@@ -2854,7 +2900,11 @@ fn expected_degree(edges: &BTreeSet<Tuple>) -> BTreeSet<Tuple> {
     for e in edges {
         *counts.entry(e[0].clone()).or_insert(0) += 1;
     }
-    counts.into_iter().map(|(k, c)| vec![k, v(c)]).map(Tuple::from_vec).collect()
+    counts
+        .into_iter()
+        .map(|(k, c)| vec![k, v(c)])
+        .map(Tuple::from_vec)
+        .collect()
 }
 
 /// The reference for `m`: seed values propagated along `edges` to a
@@ -2905,7 +2955,10 @@ fn expected_meet(
             break;
         }
     }
-    acc.into_iter().map(|(k, val)| vec![k, val]).map(Tuple::from_vec).collect()
+    acc.into_iter()
+        .map(|(k, val)| vec![k, val])
+        .map(Tuple::from_vec)
+        .collect()
 }
 
 #[test]

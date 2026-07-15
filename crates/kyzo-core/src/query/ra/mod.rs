@@ -1004,7 +1004,10 @@ mod tests {
                 match batches.next()? {
                     Err(e) => return Some(Err(e)),
                     Ok(b) => {
-                        current = (0..b.len()).map(|i| b.row(i).to_vec()).map(Tuple::from_vec).collect();
+                        current = (0..b.len())
+                            .map(|i| b.row(i).to_vec())
+                            .map(Tuple::from_vec)
+                            .collect();
                         idx = 0;
                     }
                 }
@@ -1243,7 +1246,8 @@ mod tests {
         let mut expected: Vec<Tuple> = (0..2000i64)
             .map(|i| vec![v(7), v(i), v(7)])
             .chain((5000..5003i64).map(|i| vec![v(8), v(i), v(8)]))
-            .map(Tuple::from_vec).collect();
+            .map(Tuple::from_vec)
+            .collect();
         expected.sort();
         assert_eq!(got, expected, "materialized batch join vs analytic oracle");
     }
@@ -1590,7 +1594,10 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        let expected: Vec<Tuple> = (1..=5i64).map(|k| vec![v(k), v(k + 1000)]).map(Tuple::from_vec).collect();
+        let expected: Vec<Tuple> = (1..=5i64)
+            .map(|k| vec![v(k), v(k + 1000)])
+            .map(Tuple::from_vec)
+            .collect();
         assert_eq!(got, expected, "eliminate_indices: wrong surviving columns");
     }
 
@@ -1890,7 +1897,8 @@ mod tests {
         const N_PROBES: usize = 200_000;
         let probe_rows: Vec<Tuple> = (0..N_PROBES)
             .map(|i| vec![v((i as i64) % N_NODES)])
-            .map(Tuple::from_vec).collect();
+            .map(Tuple::from_vec)
+            .collect();
         let left_of = |rows: Vec<Tuple>| -> BatchIter<'static> {
             let chunks: Vec<Batch> = rows
                 .chunks(BATCH_ROWS)

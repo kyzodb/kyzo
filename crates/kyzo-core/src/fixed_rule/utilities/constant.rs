@@ -76,13 +76,13 @@ impl FixedRule for Constant {
             // is drift, reported as the wrong-option error.
             let tuple = Tuple::from_vec(
                 row.get_slice()
-                .ok_or_else(|| WrongFixedRuleOptionError {
-                    name: "data".to_string(),
-                    span: payload.span(),
-                    rule_name: "Constant".to_string(),
-                    help: "a list of lists is required".to_string(),
-                })?
-                .to_vec(),
+                    .ok_or_else(|| WrongFixedRuleOptionError {
+                        name: "data".to_string(),
+                        span: payload.span(),
+                        rule_name: "Constant".to_string(),
+                        help: "a list of lists is required".to_string(),
+                    })?
+                    .to_vec(),
             );
             out.put(tuple)?
         }

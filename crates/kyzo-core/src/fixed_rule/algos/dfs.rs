@@ -177,7 +177,12 @@ mod tests {
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![Tuple::from_vec(vec![s("a")]), Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("c")]), Tuple::from_vec(vec![s("d")])],
+                    vec![
+                        Tuple::from_vec(vec![s("a")]),
+                        Tuple::from_vec(vec![s("b")]),
+                        Tuple::from_vec(vec![s("c")]),
+                        Tuple::from_vec(vec![s("d")]),
+                    ],
                 ),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],

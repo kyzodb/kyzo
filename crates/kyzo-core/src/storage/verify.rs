@@ -193,14 +193,12 @@ pub fn verify_storage<S: Storage>(db: &S) -> Result<VerifyReport> {
                             "dangling data: no catalog entry for relation id {}",
                             rel.raw()
                         )),
-                        Some(RelKind::Catalog) => {
-                            verify_catalog_entry(
-                                tup.as_slice(),
-                                &v,
-                                &mut taxonomy,
-                                &mut index_backings,
-                            )
-                        }
+                        Some(RelKind::Catalog) => verify_catalog_entry(
+                            tup.as_slice(),
+                            &v,
+                            &mut taxonomy,
+                            &mut index_backings,
+                        ),
                         Some(RelKind::BitemporalData) => claim_polarity_of_value(&v)
                             .and_then(|_| extend_tuple_from_bitemporal_v(&mut tup, &v))
                             .err()

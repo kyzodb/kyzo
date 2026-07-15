@@ -215,8 +215,13 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
             // throughout this file: never the reserved terminal tick.
             if ev.is_assert {
                 let val = ev.val.clone().expect("assert carries a value");
-                laws::Event::assert(key, Tuple::from_vec(vec![DataValue::from(val)]), ev.ts, i as i64)
-                    .expect("event timestamps in this file are never the reserved terminal tick")
+                laws::Event::assert(
+                    key,
+                    Tuple::from_vec(vec![DataValue::from(val)]),
+                    ev.ts,
+                    i as i64,
+                )
+                .expect("event timestamps in this file are never the reserved terminal tick")
             } else {
                 laws::Event::retract(key, ev.ts, i as i64)
                     .expect("event timestamps in this file are never the reserved terminal tick")

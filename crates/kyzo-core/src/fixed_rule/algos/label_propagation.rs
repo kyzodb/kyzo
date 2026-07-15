@@ -256,13 +256,13 @@ mod tests {
         let one = DataValue::from(1i64);
         let four = DataValue::from(4i64);
         let want: Vec<Tuple> = vec![
-Tuple::from_vec(vec![one.clone(), s("a")]),
-Tuple::from_vec(vec![one.clone(), s("b")]),
-Tuple::from_vec(vec![one, s("c")]),
-Tuple::from_vec(vec![four.clone(), s("x")]),
-Tuple::from_vec(vec![four.clone(), s("y")]),
-Tuple::from_vec(vec![four, s("z")])
-];
+            Tuple::from_vec(vec![one.clone(), s("a")]),
+            Tuple::from_vec(vec![one.clone(), s("b")]),
+            Tuple::from_vec(vec![one, s("c")]),
+            Tuple::from_vec(vec![four.clone(), s("x")]),
+            Tuple::from_vec(vec![four.clone(), s("y")]),
+            Tuple::from_vec(vec![four, s("z")]),
+        ];
         assert_eq!(got, want);
     }
 }

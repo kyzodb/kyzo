@@ -263,9 +263,7 @@ mod tests {
     /// A bitemporal key: `[int x, valid(ts), sys(ts)]` under `REL`, slot
     /// flags pinned to assert (the row's polarity lives in the value).
     fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
-        let slot = |ts: i64| {
-            DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), true))
-        };
+        let slot = |ts: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), true));
         vec![DataValue::from(x), slot(valid_ts), slot(sys_ts)]
             .encode_as_key(REL)
             .to_vec()

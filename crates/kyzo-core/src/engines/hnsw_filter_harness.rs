@@ -866,7 +866,10 @@ fn engine_ordering_is_total_under_ties() {
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
-            Tuple::from_vec(vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))])
+            Tuple::from_vec(vec![
+                DataValue::from(i),
+                DataValue::Vector(Vector::new(comps)),
+            ])
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
@@ -1399,7 +1402,10 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
-            Tuple::from_vec(vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))])
+            Tuple::from_vec(vec![
+                DataValue::from(i),
+                DataValue::Vector(Vector::new(comps)),
+            ])
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();

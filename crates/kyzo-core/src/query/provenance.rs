@@ -585,7 +585,8 @@ fn gen_positive(seed: u64, small: bool) -> Program {
     let n_edges = rng.below((n * 2) as u64) as i64 + 1;
     let edges: BTreeSet<Tuple> = (0..n_edges)
         .map(|_| vec![v(rng.range(0, n)), v(rng.range(0, n))])
-        .map(Tuple::from_vec).collect();
+        .map(Tuple::from_vec)
+        .collect();
     facts.insert("edge", edges);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -1142,7 +1143,8 @@ fn certificate_model() -> Program {
     let edges: BTreeSet<Tuple> = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]
         .iter()
         .map(|(a, b)| vec![v(*a), v(*b)])
-        .map(Tuple::from_vec).collect();
+        .map(Tuple::from_vec)
+        .collect();
     Program::untimed(
         vec![
             Rule::plain(
@@ -1372,14 +1374,16 @@ fn aggregation_boundary_collapses_to_ground_facts() {
                 [(0, 1), (1, 2), (2, 0)]
                     .iter()
                     .map(|(a, b)| vec![v(*a), v(*b)])
-                    .map(Tuple::from_vec).collect(),
+                    .map(Tuple::from_vec)
+                    .collect(),
             ),
             (
                 "seed",
                 [(0, 5), (1, 9), (2, 3)]
                     .iter()
                     .map(|(a, b)| vec![v(*a), v(*b)])
-                    .map(Tuple::from_vec).collect(),
+                    .map(Tuple::from_vec)
+                    .collect(),
             ),
         ]),
     );

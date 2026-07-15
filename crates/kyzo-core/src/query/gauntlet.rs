@@ -357,9 +357,16 @@ pub(crate) fn gen_program(rng: &mut Rng) -> (Program, Vec<(Rel, usize)>) {
                 DataValue::from(rng.range(0, n)),
             ]
         })
-        .map(Tuple::from_vec).collect();
+        .map(Tuple::from_vec)
+        .collect();
     facts.insert("edge", edges);
-    facts.insert("node", (0..n).map(|i| vec![DataValue::from(i)]).map(Tuple::from_vec).collect());
+    facts.insert(
+        "node",
+        (0..n)
+            .map(|i| vec![DataValue::from(i)])
+            .map(Tuple::from_vec)
+            .collect(),
+    );
 
     let (a, b, c) = (Term::Var("a"), Term::Var("b"), Term::Var("c"));
     let mut rules = vec![Rule::plain(

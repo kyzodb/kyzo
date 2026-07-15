@@ -630,7 +630,10 @@ mod tests {
         let inputs = vec![
             TestInput::new(vec!["fr", "to", "cap"], edges),
             TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("v0")])]),
-            TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s(&format!("v{}", n - 1))])]),
+            TestInput::new(
+                vec!["snk"],
+                vec![Tuple::from_vec(vec![s(&format!("v{}", n - 1))])],
+            ),
         ];
         let prepared = prepare_fixed_rule(&MaxFlow, inputs, BTreeMap::new()).unwrap();
 

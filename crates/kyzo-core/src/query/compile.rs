@@ -1297,7 +1297,11 @@ mod tests {
             &db,
             "data",
             2,
-            &[Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(1), v(3)]), Tuple::from_vec(vec![v(2), v(3)])],
+            &[
+                Tuple::from_vec(vec![v(1), v(2)]),
+                Tuple::from_vec(vec![v(1), v(3)]),
+                Tuple::from_vec(vec![v(2), v(3)]),
+            ],
         );
         let (x, a) = (sym("x"), sym("a"));
         let prog = program_of(vec![vec![(
@@ -1450,7 +1454,11 @@ mod tests {
             &db,
             "edge",
             2,
-            &[Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(2), v(3)]), Tuple::from_vec(vec![v(3), v(1)])],
+            &[
+                Tuple::from_vec(vec![v(1), v(2)]),
+                Tuple::from_vec(vec![v(2), v(3)]),
+                Tuple::from_vec(vec![v(3), v(1)]),
+            ],
         );
         let (x, y, z) = (sym("x"), sym("y"), sym("z"));
 
@@ -1515,8 +1523,24 @@ mod tests {
     fn join_strategy_point_lookup() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        stored_relation(&db, "edge", 2, &[Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(2), v(3)])]);
-        stored_relation(&db, "cand", 2, &[Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(1), v(3)])]);
+        stored_relation(
+            &db,
+            "edge",
+            2,
+            &[
+                Tuple::from_vec(vec![v(1), v(2)]),
+                Tuple::from_vec(vec![v(2), v(3)]),
+            ],
+        );
+        stored_relation(
+            &db,
+            "cand",
+            2,
+            &[
+                Tuple::from_vec(vec![v(1), v(2)]),
+                Tuple::from_vec(vec![v(1), v(3)]),
+            ],
+        );
         let (x, y) = (sym("x"), sym("y"));
         // ?[x, y] := *cand[x, y], *edge[x, y] — edge joined on both keys.
         let prog = program_of(vec![vec![(
@@ -1539,7 +1563,15 @@ mod tests {
     fn neg_join_strategies() {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        stored_relation(&db, "edge", 2, &[Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(2), v(3)])]);
+        stored_relation(
+            &db,
+            "edge",
+            2,
+            &[
+                Tuple::from_vec(vec![v(1), v(2)]),
+                Tuple::from_vec(vec![v(2), v(3)]),
+            ],
+        );
         stored_relation(&db, "blocked", 2, &[Tuple::from_vec(vec![v(1), v(2)])]);
         stored_relation(&db, "sink", 2, &[Tuple::from_vec(vec![v(9), v(3)])]);
         let (x, y) = (sym("x"), sym("y"));
@@ -1911,7 +1943,11 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
         facts.insert(
             "edge",
-            edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
+            edges
+                .iter()
+                .map(|(a, b)| vec![v(*a), v(*b)])
+                .map(Tuple::from_vec)
+                .collect(),
         );
         facts
     }
@@ -2076,7 +2112,8 @@ mod tests {
             [(1, 5), (2, 7), (3, 9)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .map(Tuple::from_vec).collect(),
+                .map(Tuple::from_vec)
+                .collect(),
         );
         assert_ra_matches_oracle(&Program {
             rules: vec![
@@ -2110,7 +2147,13 @@ mod tests {
     fn differential_meet_aggregation_in_recursion() {
         let named = |name: &str| Some((parse_aggr(name).expect("aggr exists"), vec![]));
         let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
-        facts.insert("seed", [vec![v(1), v(0)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert(
+            "seed",
+            [vec![v(1), v(0)]]
+                .into_iter()
+                .map(Tuple::from_vec)
+                .collect(),
+        );
         assert_ra_matches_oracle(&Program {
             rules: vec![
                 Rule::aggregated(
@@ -2308,7 +2351,11 @@ mod tests {
             &db,
             "es2",
             2,
-            &[Tuple::from_vec(vec![v(1), v(10)]), Tuple::from_vec(vec![v(2), v(20)]), Tuple::from_vec(vec![v(3), v(20)])],
+            &[
+                Tuple::from_vec(vec![v(1), v(10)]),
+                Tuple::from_vec(vec![v(2), v(20)]),
+                Tuple::from_vec(vec![v(3), v(20)]),
+            ],
         );
         stored_relation(&db, "es", 2, &[Tuple::from_vec(vec![v(7), v(20)])]);
         let (x, y, w) = (sym("x"), sym("y"), sym("w"));
@@ -2362,7 +2409,13 @@ mod tests {
     #[test]
     fn differential_recursive_right_self_join() {
         let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert("base", [vec![v(5), v(2)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert(
+            "base",
+            [vec![v(5), v(2)]]
+                .into_iter()
+                .map(Tuple::from_vec)
+                .collect(),
+        );
         assert_ra_matches_oracle(&Program {
             rules: vec![
                 Rule::plain(
@@ -2609,7 +2662,10 @@ mod tests {
         for multi in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let db = new_fjall_storage(dir.path()).unwrap();
-            let rows: Vec<Tuple> = (0..2049i64).map(|i| vec![v(i), v(i * 3)]).map(Tuple::from_vec).collect();
+            let rows: Vec<Tuple> = (0..2049i64)
+                .map(|i| vec![v(i), v(i * 3)])
+                .map(Tuple::from_vec)
+                .collect();
             stored_relation(&db, "w", 2, &rows);
             let rows_out = compile_and_run_mode_budget(&db, unify_prog(multi), boundary_budget());
             assert_eq!(rows_out.len(), if multi { 2049 * 2 - 1 } else { 2049 });
@@ -2618,7 +2674,10 @@ mod tests {
         // past the first batch boundary errors IDENTICALLY in both modes.
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let mut rows: Vec<Tuple> = (0..1500i64).map(|i| vec![v(i), v(i)]).map(Tuple::from_vec).collect();
+        let mut rows: Vec<Tuple> = (0..1500i64)
+            .map(|i| vec![v(i), v(i)])
+            .map(Tuple::from_vec)
+            .collect();
         rows[1300][1] = DataValue::from("poison");
         stored_relation(&db, "w", 2, &rows);
         let run = || -> String {
@@ -2695,7 +2754,10 @@ mod tests {
     fn assert_scan_filter_equiv(n: usize, threshold: i64) {
         let dir = tempfile::tempdir().unwrap();
         let db = new_fjall_storage(dir.path()).unwrap();
-        let rows: Vec<Tuple> = (0..n as i64).map(|i| vec![v(i), v(i)]).map(Tuple::from_vec).collect();
+        let rows: Vec<Tuple> = (0..n as i64)
+            .map(|i| vec![v(i), v(i)])
+            .map(Tuple::from_vec)
+            .collect();
         stored_relation(&db, "w", 2, &rows);
 
         let batch_rows =
@@ -2703,7 +2765,8 @@ mod tests {
         let expected: BTreeSet<Tuple> = (0..n as i64)
             .filter(|&i| i > threshold)
             .map(|i| vec![v(i), v(i)])
-            .map(Tuple::from_vec).collect();
+            .map(Tuple::from_vec)
+            .collect();
 
         assert_eq!(
             batch_rows, expected,
@@ -2743,7 +2806,10 @@ mod tests {
         for &n in &[1usize, 44, 45, 46, 64, 90] {
             let dir = tempfile::tempdir().unwrap();
             let db = new_fjall_storage(dir.path()).unwrap();
-            let edges: Vec<Tuple> = (0..n as i64).map(|i| vec![v(i), v(i + 1)]).map(Tuple::from_vec).collect();
+            let edges: Vec<Tuple> = (0..n as i64)
+                .map(|i| vec![v(i), v(i + 1)])
+                .map(Tuple::from_vec)
+                .collect();
             stored_relation(&db, "edge", 2, &edges);
             let (x, y, z) = (sym("x"), sym("y"), sym("z"));
             let prog = || {
@@ -2828,7 +2894,11 @@ mod tests {
                     let mut f: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
                     f.insert(
                         "edge",
-                        edge_set.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
+                        edge_set
+                            .iter()
+                            .map(|(a, b)| vec![v(*a), v(*b)])
+                            .map(Tuple::from_vec)
+                            .collect(),
                     );
                     f
                 },
@@ -2855,7 +2925,10 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let db = new_fjall_storage(dir.path()).unwrap();
-            let rows: Vec<Tuple> = (0..n as i64).map(|i| vec![v(i), v(i)]).map(Tuple::from_vec).collect();
+            let rows: Vec<Tuple> = (0..n as i64)
+                .map(|i| vec![v(i), v(i)])
+                .map(Tuple::from_vec)
+                .collect();
             stored_relation(&db, "w", 2, &rows);
 
             let rtx = db.read_tx().expect("read tx");

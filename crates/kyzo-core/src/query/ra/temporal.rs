@@ -638,10 +638,16 @@ impl DeltaRA {
         let mut from_patch: BTreeSet<SignedFact> = BTreeSet::new();
         let mut to_patch: BTreeSet<SignedFact> = BTreeSet::new();
         for key in &candidates {
-            if let Some(f) = self.storage.current_row(tx, key.as_slice(), self.from, self.span)? {
+            if let Some(f) = self
+                .storage
+                .current_row(tx, key.as_slice(), self.from, self.span)?
+            {
                 from_patch.insert(SignedFact::Minus(f));
             }
-            if let Some(t) = self.storage.current_row(tx, key.as_slice(), self.to, self.span)? {
+            if let Some(t) = self
+                .storage
+                .current_row(tx, key.as_slice(), self.to, self.span)?
+            {
                 to_patch.insert(SignedFact::Plus(t));
             }
         }
@@ -695,7 +701,9 @@ fn candidate_keys_from_posting(
                 1 + base_key_len + 2
             );
         }
-        keys.insert(Tuple::from_vec(full.as_slice()[1..1 + base_key_len].to_vec()));
+        keys.insert(Tuple::from_vec(
+            full.as_slice()[1..1 + base_key_len].to_vec(),
+        ));
     }
     Ok(keys)
 }

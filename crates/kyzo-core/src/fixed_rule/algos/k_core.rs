@@ -89,7 +89,10 @@ impl FixedRule for KCoreDecomposition {
         }
         let core = core_numbers(&graph, &cancel)?;
         for (i, c) in core.into_iter().enumerate() {
-            out.put(Tuple::from_vec(vec![indices[i].clone(), DataValue::from(c as i64)]))?;
+            out.put(Tuple::from_vec(vec![
+                indices[i].clone(),
+                DataValue::from(c as i64),
+            ]))?;
         }
         Ok(())
     }

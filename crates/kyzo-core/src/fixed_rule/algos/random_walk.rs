@@ -222,9 +222,15 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to"],
-                    vec![Tuple::from_vec(vec![s("a"), s("b")]), Tuple::from_vec(vec![s("b"), s("a")])],
+                    vec![
+                        Tuple::from_vec(vec![s("a"), s("b")]),
+                        Tuple::from_vec(vec![s("b"), s("a")]),
+                    ],
                 ),
-                TestInput::new(vec!["id"], vec![Tuple::from_vec(vec![s("a")]), Tuple::from_vec(vec![s("b")])]),
+                TestInput::new(
+                    vec!["id"],
+                    vec![Tuple::from_vec(vec![s("a")]), Tuple::from_vec(vec![s("b")])],
+                ),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             options,
@@ -250,9 +256,15 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to"],
-                    vec![Tuple::from_vec(vec![s("a"), s("b")]), Tuple::from_vec(vec![s("b"), s("a")])],
+                    vec![
+                        Tuple::from_vec(vec![s("a"), s("b")]),
+                        Tuple::from_vec(vec![s("b"), s("a")]),
+                    ],
                 ),
-                TestInput::new(vec!["id"], vec![Tuple::from_vec(vec![s("a")]), Tuple::from_vec(vec![s("b")])]),
+                TestInput::new(
+                    vec!["id"],
+                    vec![Tuple::from_vec(vec![s("a")]), Tuple::from_vec(vec![s("b")])],
+                ),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             options,
@@ -340,11 +352,21 @@ mod tests {
             // A ring plus a chord from each node, so every node branches.
             let mut edges: Vec<Tuple> = vec![];
             for i in 0..n {
-                edges.push(Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]));
-                edges.push(Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))]));
+                edges.push(Tuple::from_vec(vec![
+                    s(&format!("v{i}")),
+                    s(&format!("v{}", (i + 1) % n)),
+                ]));
+                edges.push(Tuple::from_vec(vec![
+                    s(&format!("v{i}")),
+                    s(&format!("v{}", (i + 3) % n)),
+                ]));
             }
-            let nodes: Vec<Tuple> = (0..n).map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))])).collect();
-            let starts: Vec<Tuple> = (0..n).map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))])).collect();
+            let nodes: Vec<Tuple> = (0..n)
+                .map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))]))
+                .collect();
+            let starts: Vec<Tuple> = (0..n)
+                .map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))]))
+                .collect();
             vec![
                 TestInput::new(vec!["fr", "to"], edges),
                 TestInput::new(vec!["id"], nodes),
@@ -389,10 +411,18 @@ mod tests {
             let n = 8usize;
             let mut edges: Vec<Tuple> = vec![];
             for i in 0..n {
-                edges.push(Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]));
-                edges.push(Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 3) % n))]));
+                edges.push(Tuple::from_vec(vec![
+                    s(&format!("v{i}")),
+                    s(&format!("v{}", (i + 1) % n)),
+                ]));
+                edges.push(Tuple::from_vec(vec![
+                    s(&format!("v{i}")),
+                    s(&format!("v{}", (i + 3) % n)),
+                ]));
             }
-            let nodes: Vec<Tuple> = (0..n).map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))])).collect();
+            let nodes: Vec<Tuple> = (0..n)
+                .map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))]))
+                .collect();
             vec![
                 TestInput::new(vec!["fr", "to"], edges),
                 TestInput::new(vec!["id"], nodes),
@@ -440,10 +470,18 @@ mod tests {
         let n = 6usize;
         let mut edges: Vec<Tuple> = vec![];
         for i in 0..n {
-            edges.push(Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 1) % n))]));
-            edges.push(Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", (i + 2) % n))]));
+            edges.push(Tuple::from_vec(vec![
+                s(&format!("v{i}")),
+                s(&format!("v{}", (i + 1) % n)),
+            ]));
+            edges.push(Tuple::from_vec(vec![
+                s(&format!("v{i}")),
+                s(&format!("v{}", (i + 2) % n)),
+            ]));
         }
-        let nodes: Vec<Tuple> = (0..n).map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))])).collect();
+        let nodes: Vec<Tuple> = (0..n)
+            .map(|i| Tuple::from_vec(vec![s(&format!("v{i}"))]))
+            .collect();
         let inputs = vec![
             TestInput::new(vec!["fr", "to"], edges),
             TestInput::new(vec!["id"], nodes),

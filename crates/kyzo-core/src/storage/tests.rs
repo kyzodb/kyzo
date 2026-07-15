@@ -497,9 +497,7 @@ fn del_range_kills_own_writes_too() {
 /// A bitemporal key: `[name, valid(ts), sys(sys_ts)]`, slot flags pinned
 /// (the row's polarity lives in the value — see [`pol_val`]).
 fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
-    let slot = |t: i64| {
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true))
-    };
+    let slot = |t: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true));
     let tuple: Tuple = Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
     tuple.encode_as_key(rel)
 }
@@ -690,9 +688,7 @@ fn stamped_row(
     valid_ts: i64,
     sys: ValidityTs,
 ) -> (EncodedKey, Vec<u8>) {
-    let slot = |ts: ValidityTs| {
-        DataValue::Validity(Validity::new(ts, true))
-    };
+    let slot = |ts: ValidityTs| DataValue::Validity(Validity::new(ts, true));
     let tuple: Tuple = Tuple::from_vec(vec![
         DataValue::Str(name.into()),
         slot(ValidityTs::from_raw(valid_ts)),

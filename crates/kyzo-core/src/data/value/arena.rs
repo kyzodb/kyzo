@@ -206,7 +206,11 @@ impl Heap {
         let chunk = self.chunk_id();
         let off = ByteOff::from_usize(self.live.len());
         self.live.extend_from_slice(value);
-        Span { chunk, off, len: vlen }
+        Span {
+            chunk,
+            off,
+            len: vlen,
+        }
     }
 
     /// Freeze the live chunk (if non-empty) into the shared set. Its chunk
@@ -319,7 +323,12 @@ impl Entry {
     /// tie.
     #[inline]
     fn cmp_entry<S: Store>(&self, other: &Entry, store: &S) -> Ordering {
-        match cmp_prefixed(self.prefix, self.span.len.raw(), other.prefix, other.span.len.raw()) {
+        match cmp_prefixed(
+            self.prefix,
+            self.span.len.raw(),
+            other.prefix,
+            other.span.len.raw(),
+        ) {
             PrefixCmp::Decided(o) => o,
             PrefixCmp::NeedPayload => store
                 .tie_payload(self.span)

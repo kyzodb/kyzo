@@ -24,6 +24,7 @@
 //! witness), and `Clone`/`Copy` (duplicate a one-per-admission or
 //! one-per-mint token).
 
+use super::DataValue;
 use super::Tuple;
 use super::arena::BulkSpendAuthority;
 use super::canonical::CanonicalBytes;
@@ -31,7 +32,6 @@ use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
 use super::row::RelationId;
 use super::string::MintedStr;
-use super::DataValue;
 
 /// Assert that `$t` does NOT implement all of `$($tr)+`. Compiles iff the
 /// type lacks the trait: two blanket impls stay unambiguous only while the

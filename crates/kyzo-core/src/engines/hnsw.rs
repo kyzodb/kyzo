@@ -603,9 +603,12 @@ impl HnswRow {
         idx: &RelationHandle,
         base_key_len: usize,
     ) -> Result<()> {
-        let key =
-            idx.encode_key_for_store(self.key_tuple(base_key_len).as_slice(), SourceSpan::default())?;
-        let val = idx.encode_val_only_for_store(self.val_tuple().as_slice(), SourceSpan::default())?;
+        let key = idx.encode_key_for_store(
+            self.key_tuple(base_key_len).as_slice(),
+            SourceSpan::default(),
+        )?;
+        let val =
+            idx.encode_val_only_for_store(self.val_tuple().as_slice(), SourceSpan::default())?;
         tx.put(&key, &val)
     }
 
@@ -1425,7 +1428,8 @@ fn shrink_neighbour<T: WriteTx>(
         if !new_candidate_set.contains(&old) {
             let old_key_tuple = edge_key(layer, target, &old);
             if was_tombstoned.get(&old).copied().unwrap_or(false) {
-                let old_key = idx.encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
+                let old_key =
+                    idx.encode_key_for_store(old_key_tuple.as_slice(), SourceSpan::default())?;
                 tx.del(&old_key)?;
             } else {
                 HnswRow::Edge {
@@ -1594,7 +1598,8 @@ fn remove_vec<T: WriteTx>(
     for neg_layer in 0i64.. {
         let layer = -neg_layer;
         let self_key_tuple = node_key(layer, at);
-        let self_key = idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::default())?;
+        let self_key =
+            idx.encode_key_for_store(self_key_tuple.as_slice(), SourceSpan::default())?;
         if tx.exists(&self_key)? {
             tx.del(&self_key)?;
         } else {
@@ -1607,11 +1612,15 @@ fn remove_vec<T: WriteTx>(
             // disconnect the graph with some probability — accepted as a
             // consequence of the algorithm's probabilistic nature; graph
             // healing is a recorded ceiling item.
-            let out_key =
-                idx.encode_key_for_store(edge_key(layer, at, &neighbour).as_slice(), SourceSpan::default())?;
+            let out_key = idx.encode_key_for_store(
+                edge_key(layer, at, &neighbour).as_slice(),
+                SourceSpan::default(),
+            )?;
             tx.del(&out_key)?;
-            let in_key =
-                idx.encode_key_for_store(edge_key(layer, &neighbour, at).as_slice(), SourceSpan::default())?;
+            let in_key = idx.encode_key_for_store(
+                edge_key(layer, &neighbour, at).as_slice(),
+                SourceSpan::default(),
+            )?;
             tx.del(&in_key)?;
 
             let Some(HnswRow::Node {
@@ -1641,11 +1650,15 @@ fn remove_vec<T: WriteTx>(
     if encountered_singletons {
         // The entry point may have been removed: re-elect from what
         // remains, or retire the canary with the last vector.
-        let canary = idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::default())?;
+        let canary =
+            idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::default())?;
         match entry_point(tx, base, idx)? {
             Some((bottom_layer, ep_id)) => {
                 let entry_key = idx
-                    .encode_key_for_store(node_key(bottom_layer, &ep_id).as_slice(), SourceSpan::default())?
+                    .encode_key_for_store(
+                        node_key(bottom_layer, &ep_id).as_slice(),
+                        SourceSpan::default(),
+                    )?
                     .as_bytes()
                     .to_vec();
                 let val = idx.encode_val_only_for_store(
@@ -3009,7 +3022,9 @@ mod tests {
                     SourceSpan(0, 0),
                 )
                 .unwrap();
-                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+                assert!(
+                    hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap()
+                );
             }
 
             // Every row in the index relation, decoded — a full unfiltered
@@ -3021,7 +3036,8 @@ mod tests {
             let mut total_ignored_edges = 0u64;
             for row in idx.scan_prefix(&tx, &Tuple::default()) {
                 let row = row.unwrap();
-                match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name).unwrap() {
+                match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name).unwrap()
+                {
                     HnswRow::Node { layer, .. } => {
                         *layer_node_counts.entry(layer).or_insert(0) += 1;
                     }
@@ -3474,7 +3490,8 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         let zero = row(9, 0.0, 0.0);
         let mut stack = vec![];
-        let err = hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, zero.as_slice()).unwrap_err();
+        let err =
+            hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, zero.as_slice()).unwrap_err();
         assert!(
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
@@ -3526,20 +3543,49 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, zrow.as_slice()).unwrap());
+        assert!(
+            hnsw_put(
+                &mut tx,
+                &m2,
+                &base2,
+                &idx2,
+                None,
+                &mut stack,
+                zrow.as_slice()
+            )
+            .unwrap()
+        );
         tx.commit().unwrap();
 
         // Non-finite components are refused under every metric.
         let mut tx = db.write_tx().unwrap();
         let nan_row = row(2, f64::NAN, 0.0);
-        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, nan_row.as_slice()).unwrap_err();
+        let err = hnsw_put(
+            &mut tx,
+            &m2,
+            &base2,
+            &idx2,
+            None,
+            &mut stack,
+            nan_row.as_slice(),
+        )
+        .unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
             DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
         ];
-        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, bad_dim.as_slice()).unwrap_err();
+        let err = hnsw_put(
+            &mut tx,
+            &m2,
+            &base2,
+            &idx2,
+            None,
+            &mut stack,
+            bad_dim.as_slice(),
+        )
+        .unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
     }
 
@@ -3611,7 +3657,18 @@ mod tests {
         let mut stack = vec![];
         // Unchanged put.
         let mut tx = db.write_tx().unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, rows[0].as_slice()).unwrap());
+        assert!(
+            hnsw_put(
+                &mut tx,
+                &m,
+                &base,
+                &idx,
+                None,
+                &mut stack,
+                rows[0].as_slice()
+            )
+            .unwrap()
+        );
         tx.commit().unwrap();
 
         // Changed vector: base row rewritten, index follows.
@@ -3828,7 +3885,10 @@ mod tests {
             "the HNSW manifest wire format changed; this is an on-disk \
              format migration, not a refactor"
         );
-        assert!(rmp_serde::from_slice::<HnswIndexManifest>(&bytes.as_slice()[..bytes.len() / 2]).is_err());
+        assert!(
+            rmp_serde::from_slice::<HnswIndexManifest>(&bytes.as_slice()[..bytes.len() / 2])
+                .is_err()
+        );
     }
 
     /// The pinned wire bytes of the canonical manifest above (msgpack,

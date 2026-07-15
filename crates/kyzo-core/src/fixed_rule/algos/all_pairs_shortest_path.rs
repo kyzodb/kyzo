@@ -275,7 +275,10 @@ mod tests {
         // The undirected path a—b—c, unit weights.
         TestInput::new(
             vec!["fr", "to"],
-            vec![Tuple::from_vec(vec![s("a"), s("b")]), Tuple::from_vec(vec![s("b"), s("c")])],
+            vec![
+                Tuple::from_vec(vec![s("a"), s("b")]),
+                Tuple::from_vec(vec![s("b"), s("c")]),
+            ],
         )
     }
 

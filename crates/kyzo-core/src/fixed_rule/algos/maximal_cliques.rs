@@ -155,7 +155,10 @@ impl FixedRule for MaximalCliques {
 
         for (clique_id, members) in keyed.into_iter().enumerate() {
             for member in members {
-                out.put(Tuple::from_vec(vec![DataValue::from(clique_id as i64), member]))?;
+                out.put(Tuple::from_vec(vec![
+                    DataValue::from(clique_id as i64),
+                    member,
+                ]))?;
             }
         }
         Ok(())

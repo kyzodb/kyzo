@@ -539,9 +539,8 @@ impl<T: WriteTx> SessionTx<T> {
                     }
                     Some(row) => row,
                 };
-            let original_val: Tuple = Tuple::from_vec(
-                old_kv.as_slice()[relation_store.metadata.keys.len()..].to_vec(),
-            );
+            let original_val: Tuple =
+                Tuple::from_vec(old_kv.as_slice()[relation_store.metadata.keys.len()..].to_vec());
             new_kv.reserve_exact(relation_store.arity());
             for (i, extractor) in val_extractors.iter().enumerate() {
                 match extractor {
@@ -670,7 +669,13 @@ impl<T: WriteTx> SessionTx<T> {
             if need_to_collect || has_indices {
                 if let Some(tup) = current {
                     if has_indices {
-                        self.update_indices(relation_store, None, Some(tup.as_slice()), valid, stamp)?;
+                        self.update_indices(
+                            relation_store,
+                            None,
+                            Some(tup.as_slice()),
+                            valid,
+                            stamp,
+                        )?;
                     }
                     if need_to_collect {
                         old_tuples.push(tup);
@@ -1705,7 +1710,9 @@ impl<T: WriteTx> SessionTx<T> {
             lower = succ;
             for row in &batch {
                 match &ctx {
-                    Some(ctx) => self.apply_manifest_index(&base, ctx, Some(row.as_slice()), None)?,
+                    Some(ctx) => {
+                        self.apply_manifest_index(&base, ctx, Some(row.as_slice()), None)?
+                    }
                     None => {
                         let IndexKind::Plain { mapper } = &index_ref.kind else {
                             unreachable!("ctx is None only for plain indexes")
@@ -2183,7 +2190,10 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, v] := *wi{k, v}", no_params())
             .expect("read back");
-        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(1), DataValue::from(10)])];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
+            DataValue::from(1),
+            DataValue::from(10),
+        ])];
         assert_eq!(
             out.rows, want,
             "the refused insert must not overwrite the existing row"

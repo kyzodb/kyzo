@@ -628,7 +628,10 @@ fn same_instant_newest_write_governs() {
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     let got = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
-    assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(1), s("present")])]));
+    assert_eq!(
+        got,
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("present")])])
+    );
     assert_eq!(got, naive_asof(&hist, 10));
 }
 
@@ -666,7 +669,10 @@ fn same_instant_identical_key_last_write_wins() {
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     let got = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
-    assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(1), s("second")])]));
+    assert_eq!(
+        got,
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("second")])])
+    );
     assert_eq!(got, naive_asof(&hist, 10));
 }
 
@@ -832,7 +838,11 @@ fn join_two_relations_at_same_instant() {
         for ar in &a_rows {
             for br in &b_rows {
                 if ar[0] == br[0] {
-                    expected.insert(Tuple::from_vec(vec![ar[0].clone(), ar[1].clone(), br[1].clone()]));
+                    expected.insert(Tuple::from_vec(vec![
+                        ar[0].clone(),
+                        ar[1].clone(),
+                        br[1].clone(),
+                    ]));
                 }
             }
         }
@@ -1007,15 +1017,18 @@ fn bounded_asof_scan_over_post_prefix_key_range() {
     assert_eq!(
         compile_and_run(&db, bounded_program(10)),
         BTreeSet::from([
-Tuple::from_vec(vec![v(1), v(25), s("b")]),
-Tuple::from_vec(vec![v(1), v(35), s("c")]),
-Tuple::from_vec(vec![v(2), v(30), s("e")])
-])
+            Tuple::from_vec(vec![v(1), v(25), s("b")]),
+            Tuple::from_vec(vec![v(1), v(35), s("c")]),
+            Tuple::from_vec(vec![v(2), v(30), s("e")])
+        ])
     );
     // After the retraction at t=50, (1,25) drops out.
     assert_eq!(
         compile_and_run(&db, bounded_program(55)),
-        BTreeSet::from([Tuple::from_vec(vec![v(1), v(35), s("c")]), Tuple::from_vec(vec![v(2), v(30), s("e")])])
+        BTreeSet::from([
+            Tuple::from_vec(vec![v(1), v(35), s("c")]),
+            Tuple::from_vec(vec![v(2), v(30), s("e")])
+        ])
     );
     // Full differential across every interesting instant.
     for at_i in interesting_instants(&hist) {
@@ -1048,11 +1061,17 @@ fn retraction_is_revision_not_erasure() {
     let read = |at: i64| compile_and_run(&db, select_asof(1, &["val"], Some(at)));
 
     // Before retraction: the original fact is still addressable.
-    assert_eq!(read(30), BTreeSet::from([Tuple::from_vec(vec![v(1), s("born")])]));
+    assert_eq!(
+        read(30),
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("born")])])
+    );
     // Between retraction and re-assertion: absent.
     assert!(read(70).is_empty());
     // After re-assertion: the new fact.
-    assert_eq!(read(100), BTreeSet::from([Tuple::from_vec(vec![v(1), s("reborn")])]));
+    assert_eq!(
+        read(100),
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("reborn")])])
+    );
     // The retracted instant is INCLUSIVE of the retraction → absent at t=50.
     assert!(read(50).is_empty());
     // Every instant agrees with the oracle.
@@ -1089,7 +1108,10 @@ fn plain_scan_reads_current_state_not_versions() {
     )]]);
     let got = compile_and_run(&db, prog);
     // Key 1 is retracted, key 2 asserted, key 3's newest value governs.
-    let expected: BTreeSet<Tuple> = BTreeSet::from([Tuple::from_vec(vec![v(2), s("b")]), Tuple::from_vec(vec![v(3), s("new")])]);
+    let expected: BTreeSet<Tuple> = BTreeSet::from([
+        Tuple::from_vec(vec![v(2), s("b")]),
+        Tuple::from_vec(vec![v(3), s("new")]),
+    ]);
     assert_eq!(got, expected, "a plain scan is a current-state read");
 }
 
@@ -1510,7 +1532,11 @@ fn naive_transitive_closure(edges: &BTreeSet<(i64, i64)>) -> BTreeSet<Tuple> {
             break;
         }
     }
-    reach.into_iter().map(|(a, b)| vec![v(a), v(b)]).map(Tuple::from_vec).collect()
+    reach
+        .into_iter()
+        .map(|(a, b)| vec![v(a), v(b)])
+        .map(Tuple::from_vec)
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2420,7 +2446,8 @@ fn negation_over_spans_matches_the_independent_complement_generatively() {
                 .iter()
                 .map(|&(k, val)| vec![v(k), v(val)])
                 .filter(|row| !present_pairs.contains(&(k0_of(row), val_of(row))))
-                .map(Tuple::from_vec).collect();
+                .map(Tuple::from_vec)
+                .collect();
             assert_eq!(
                 got, want,
                 "seed {seed} fixed_sys={fixed_sys:?}: versions={versions:?}"
@@ -2504,7 +2531,8 @@ fn negation_over_delta_matches_the_independent_complement_generatively() {
                 .iter()
                 .map(|&(k, val)| vec![v(k), v(val)])
                 .filter(|row| !present_pairs.contains(&(k0_of(row), val_of(row))))
-                .map(Tuple::from_vec).collect();
+                .map(Tuple::from_vec)
+                .collect();
             assert_eq!(
                 got, want,
                 "seed {seed} valid axis {valid_at}->{valid_to}: versions={versions:?}"

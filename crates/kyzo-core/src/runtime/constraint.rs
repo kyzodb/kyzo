@@ -540,7 +540,10 @@ mod tests {
             .expect("typed ConstraintViolation");
         assert_eq!(viol.name, "nonneg");
         assert_eq!(viol.total, 1);
-        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(3), DataValue::from(-4)])];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
+            DataValue::from(3),
+            DataValue::from(-4),
+        ])];
         assert_eq!(
             viol.witnesses, want,
             "the witness is exactly the violating row, post-write"
@@ -626,7 +629,10 @@ mod tests {
             .downcast_ref::<ConstraintRejectedOnCreation>()
             .expect("typed creation rejection");
         assert_eq!(rej.total, 1);
-        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(1), DataValue::from(-9)])];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
+            DataValue::from(1),
+            DataValue::from(-9),
+        ])];
         assert_eq!(rej.witnesses, want);
 
         // Nothing was attached by the refused creation.

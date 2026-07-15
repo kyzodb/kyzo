@@ -131,7 +131,9 @@ impl FixedRule for ReorderSort {
                 continue;
             }
             let mut out_t: Tuple =
-                Tuple::from_vec(vec![DataValue::from(if break_ties { count } else { rank } as i64)]);
+                Tuple::from_vec(vec![DataValue::from(
+                    if break_ties { count } else { rank } as i64
+                )]);
             out_t.extend(val[0..val.len() - 1].iter().cloned());
             out.put(out_t)?;
             cancel.check()?;

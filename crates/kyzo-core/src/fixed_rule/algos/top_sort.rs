@@ -166,11 +166,11 @@ mod tests {
         .unwrap();
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
-Tuple::from_vec(vec![i(0), s("a")]),
-Tuple::from_vec(vec![i(1), s("c")]),
-Tuple::from_vec(vec![i(2), s("b")]),
-Tuple::from_vec(vec![i(3), s("d")])
-];
+            Tuple::from_vec(vec![i(0), s("a")]),
+            Tuple::from_vec(vec![i(1), s("c")]),
+            Tuple::from_vec(vec![i(2), s("b")]),
+            Tuple::from_vec(vec![i(3), s("d")]),
+        ];
         assert_eq!(got, want);
     }
 }

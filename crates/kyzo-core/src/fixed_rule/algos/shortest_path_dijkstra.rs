@@ -445,7 +445,9 @@ mod tests {
             }
         }
         edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
-        let starts: Vec<Tuple> = (0..n).map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))])).collect();
+        let starts: Vec<Tuple> = (0..n)
+            .map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))]))
+            .collect();
         let ends: Vec<Tuple> = (0..n)
             .step_by(7)
             .map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))]))
@@ -588,7 +590,10 @@ mod tests {
             vec![
                 tie_graph(),
                 TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
-                TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("d")])]),
+                TestInput::new(
+                    vec!["end"],
+                    vec![Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("d")])],
+                ),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),

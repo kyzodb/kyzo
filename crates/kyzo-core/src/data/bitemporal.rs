@@ -146,10 +146,7 @@ pub fn check_key_for_bitemporal(
         // Right instant, but this system version postdates the system
         // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
-        return Ok((
-            None,
-            splice_sys(Validity::new(as_of.sys, true)),
-        ));
+        return Ok((None, splice_sys(Validity::new(as_of.sys, true))));
     }
     // This row IS the instant's governing version at sys_at. Its polarity
     // decides. TERMINAL_VALIDITY is the maximum slot encoding, so the

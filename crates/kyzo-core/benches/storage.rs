@@ -36,9 +36,7 @@ fn key(i: u64) -> EncodedKey {
 }
 
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> EncodedKey {
-    let slot = |t: i64| {
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true))
-    };
+    let slot = |t: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true));
     [DataValue::from(name), slot(valid_ts), slot(sys_ts)]
         .encode_as_key(RelationId::new(9).expect("below cap"))
 }

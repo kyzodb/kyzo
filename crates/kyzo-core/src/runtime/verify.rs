@@ -727,7 +727,10 @@ mod tests {
                 facts
                     .get_mut("edge")
                     .expect("edge was scanned")
-                    .remove(&Tuple::from_vec(vec![DataValue::from(3), DataValue::from(4)]));
+                    .remove(&Tuple::from_vec(vec![
+                        DataValue::from(3),
+                        DataValue::from(4),
+                    ]));
             })
             .expect("verify_program runs");
         match outcome {

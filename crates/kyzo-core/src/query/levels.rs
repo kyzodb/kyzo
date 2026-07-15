@@ -405,7 +405,11 @@ impl EpochStore {
                     if let Some(vals) = folded {
                         let row = spec.layout.interleave(&group, vals.as_slice());
                         if S::RECORDING {
-                            sink.admit(TupleInIter::new(row.as_slice(), empty_tuple_ref().as_slice(), false));
+                            sink.admit(TupleInIter::new(
+                                row.as_slice(),
+                                empty_tuple_ref().as_slice(),
+                                false,
+                            ));
                         }
                         if !spec.layout.is_suffix() {
                             level.by_row.push(row);
@@ -812,7 +816,11 @@ fn meet_ranged<'s>(
                 if owned_by_newer {
                     None
                 } else {
-                    Some(TupleInIter::new(row.as_slice(), empty_tuple_ref().as_slice(), false))
+                    Some(TupleInIter::new(
+                        row.as_slice(),
+                        empty_tuple_ref().as_slice(),
+                        false,
+                    ))
                 }
             })
         });

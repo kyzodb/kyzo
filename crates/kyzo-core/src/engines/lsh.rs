@@ -693,7 +693,11 @@ pub(crate) fn lsh_search(
             cancel.check()?;
             let ks = ks?;
             if ks.is_empty() {
-                bail!(IndexRowCorrupt::new(&idx.name, ks.as_slice(), "empty LSH posting"));
+                bail!(IndexRowCorrupt::new(
+                    &idx.name,
+                    ks.as_slice(),
+                    "empty LSH posting"
+                ));
             }
             found_tuples.insert(Tuple::from_vec(ks.as_slice()[1..].to_vec()));
         }

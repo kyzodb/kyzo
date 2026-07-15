@@ -1783,7 +1783,10 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         assert!(a.exists(&rtx, &row.as_slice()[..1]).unwrap());
-        assert_eq!(a.get(&rtx, &row.as_slice()[..1]).unwrap(), Some(row.clone()));
+        assert_eq!(
+            a.get(&rtx, &row.as_slice()[..1]).unwrap(),
+            Some(row.clone())
+        );
         assert_eq!(
             a.get_val_only(&rtx, &row.as_slice()[..1]).unwrap(),
             Some(Tuple::from_vec(vec![DataValue::from("one")]))
