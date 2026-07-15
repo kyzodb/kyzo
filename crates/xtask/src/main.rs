@@ -113,6 +113,10 @@ enum Verb {
     Test,
     /// The bench-internals/fuzz-internals feature configuration's tests.
     TestFeatures,
+    /// The whole test suite under the `release-checked` profile (overflow-checks live).
+    TestReleaseChecked,
+    /// The bench-internals/fuzz-internals feature tests under the `release-checked` profile.
+    TestFeaturesReleaseChecked,
     /// Run the freshly-built binary in the container.
     Run {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -175,6 +179,10 @@ fn main() -> ExitCode {
         Verb::Resonance { only } => resonance::run(only.as_deref()).map_err(XtaskError::Resonance),
         Verb::Test => verbs::test().map_err(XtaskError::Process),
         Verb::TestFeatures => verbs::test_features().map_err(XtaskError::Process),
+        Verb::TestReleaseChecked => verbs::test_release_checked().map_err(XtaskError::Process),
+        Verb::TestFeaturesReleaseChecked => {
+            verbs::test_features_release_checked().map_err(XtaskError::Process)
+        }
         Verb::Run { args } => verbs::run_bin(&args).map_err(XtaskError::Process),
         Verb::Bench { graphs } => verbs::bench(&graphs).map_err(XtaskError::Process),
         Verb::MplHeaders => verbs::mpl_headers().map_err(XtaskError::Process),

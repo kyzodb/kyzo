@@ -229,13 +229,11 @@ mod tests {
 
     #[test]
     fn flags_stored_source_trigger_fields() {
-        let f = src(
-            "struct RelationHandle {\n\
+        let f = src("struct RelationHandle {\n\
                  put_triggers: Vec<String>,\n\
                  rm_triggers: Vec<smartstring::SmartString<smartstring::LazyCompact>>,\n\
                  replace_triggers: Vec<String>,\n\
-             }",
-        );
+             }");
         let violations = check(&[f]);
         assert_eq!(
             violations.len(),
@@ -251,13 +249,11 @@ mod tests {
 
     #[test]
     fn typed_trigger_field_passes() {
-        let f = src(
-            "struct RelationHandle {\n\
+        let f = src("struct RelationHandle {\n\
                  put_triggers: Vec<Trigger>,\n\
                  rm_triggers: Vec<Trigger>,\n\
                  replace_triggers: Vec<Trigger>,\n\
-             }",
-        );
+             }");
         assert!(
             check(&[f]).is_empty(),
             "triggers typed as the parsed `Trigger` substance are lawful"
@@ -278,15 +274,13 @@ mod tests {
 
     #[test]
     fn flags_extractor_to_string_capture_in_assignment_and_struct_literal() {
-        let f = src(
-            "fn a(ex: Expr) {\n\
+        let f = src("fn a(ex: Expr) {\n\
                  let mut extractor;\n\
                  extractor = ex.to_string();\n\
              }\n\
              fn b(ex: Expr) -> FtsIndexConfig {\n\
                  FtsIndexConfig { extractor: ex.to_string(), extract_filter: ex.to_string() }\n\
-             }",
-        );
+             }");
         let violations = check(&[f]);
         assert_eq!(
             violations.len(),
@@ -316,10 +310,8 @@ mod tests {
 
     #[test]
     fn unrelated_format_and_to_string_calls_pass() {
-        let f = src(
-            "fn a(x: i32, y: i32) -> String { format!(\"{x}:{y}\") }\n\
-             fn b(n: i32) -> String { n.to_string() }",
-        );
+        let f = src("fn a(x: i32, y: i32) -> String { format!(\"{x}:{y}\") }\n\
+             fn b(n: i32) -> String { n.to_string() }");
         assert!(
             check(&[f]).is_empty(),
             "an ordinary format! or to_string() unrelated to the extractor/trigger shapes \
@@ -329,16 +321,14 @@ mod tests {
 
     #[test]
     fn test_scope_is_exempt() {
-        let f = src(
-            "#[cfg(test)]\n\
+        let f = src("#[cfg(test)]\n\
              mod tests {\n\
                  struct ShadowHandle {\n\
                      put_triggers: Vec<String>,\n\
                      rm_triggers: Vec<String>,\n\
                      replace_triggers: Vec<String>,\n\
                  }\n\
-             }",
-        );
+             }");
         assert!(
             check(&[f]).is_empty(),
             "the deliberate corruption fixture reconstructing the condemned trigger shape \

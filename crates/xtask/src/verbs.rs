@@ -204,6 +204,46 @@ pub fn test_features() -> Result<(), ProcessFailure> {
     run_step("test-features", cmd)
 }
 
+/// The whole first-party test suite repeated under the `release-checked`
+/// profile (overflow-checks + debug-assertions live, release-speed
+/// optimization) — the gate's mechanical proof that no raw stored-byte
+/// arithmetic slipped past the T2 quantity types. The blanket
+/// `overflow-checks` toggle in `[profile.release]` is the fuzzing safety
+/// net only; this step is the correctness mechanism.
+pub fn test_release_checked() -> Result<(), ProcessFailure> {
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "test",
+        "--workspace",
+        "--exclude",
+        "fjall",
+        "--exclude",
+        "lsm-tree",
+        "--exclude",
+        "xtask",
+        "--profile",
+        "release-checked",
+    ]);
+    run_step("test-release-checked", cmd)
+}
+
+/// The bench-internals/fuzz-internals feature configuration's lib tests,
+/// under the `release-checked` profile.
+pub fn test_features_release_checked() -> Result<(), ProcessFailure> {
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "test",
+        "-p",
+        CORE_PACKAGE,
+        "--profile",
+        "release-checked",
+        "--features",
+        "bench-internals,fuzz-internals",
+        "--lib",
+    ]);
+    run_step("test-features-release-checked", cmd)
+}
+
 /// Run the freshly-built binary IN the container: `cargo xtask run -- <args>`.
 pub fn run_bin(args: &[String]) -> Result<(), ProcessFailure> {
     let mut cmd = Command::new("cargo");

@@ -40,6 +40,8 @@ pub enum GateError {
     Resonance(ResonanceError),
     Test(ProcessFailure),
     TestFeatures(ProcessFailure),
+    TestReleaseChecked(ProcessFailure),
+    TestFeaturesReleaseChecked(ProcessFailure),
 }
 
 impl fmt::Display for GateError {
@@ -58,6 +60,12 @@ impl fmt::Display for GateError {
             GateError::Resonance(e) => write!(f, "resonance step failed: {e}"),
             GateError::Test(e) => write!(f, "test step failed: {e}"),
             GateError::TestFeatures(e) => write!(f, "test-features step failed: {e}"),
+            GateError::TestReleaseChecked(e) => {
+                write!(f, "test-release-checked step failed: {e}")
+            }
+            GateError::TestFeaturesReleaseChecked(e) => {
+                write!(f, "test-features-release-checked step failed: {e}")
+            }
         }
     }
 }
@@ -76,6 +84,8 @@ pub fn run() -> Result<(), GateError> {
     resonance::run(None).map_err(GateError::Resonance)?;
     verbs::test().map_err(GateError::Test)?;
     verbs::test_features().map_err(GateError::TestFeatures)?;
+    verbs::test_release_checked().map_err(GateError::TestReleaseChecked)?;
+    verbs::test_features_release_checked().map_err(GateError::TestFeaturesReleaseChecked)?;
 
     println!("=== GATE PASSED ===");
     Ok(())

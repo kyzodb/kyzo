@@ -309,17 +309,35 @@ jobs:
       # just green today, it demonstrably still bites.
       - run: scripts/resonance-bite-proof.sh
 
+  release-checked-test:
+    name: Release-checked test (overflow-checks + debug-assertions live, story #300 T3)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_workspace == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The whole first-party test suite run again under the `release-checked`
+      # profile: release-speed optimization, overflow-checks and
+      # debug-assertions live. This is the mechanical proof that no raw
+      # stored-byte arithmetic slipped past the T2 quantity types. The blanket
+      # `overflow-checks` toggle in `[profile.release]` is the fuzzing safety
+      # net only; this step is the correctness mechanism.
+      - run: cargo test --workspace --exclude fjall --exclude lsm-tree --exclude xtask --profile release-checked
+      - run: cargo test -p kyzo --profile release-checked --features bench-internals,fuzz-internals --lib
+
   # ---------- No silent skips ----------
 
   gate-summary:
     name: Gate summary (no silent skips)
     runs-on: ubuntu-latest
-    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate]
+    needs: [detect, pure-rust-gate, cargo-deny, mpl-headers, lint, build-test, gitleaks, unsafe-audit, supply-chain, memcmp-invariant, fuzz-smoke, determinism-campaign-x86_64, determinism-campaign-aarch64, resonance-gate, release-checked-test]
     if: always()
     steps:
       - name: Print every gate's outcome; fail if any gate failed
         run: |
-          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }}"
+          summary="detect:${{ needs.detect.result }} pure-rust:${{ needs.pure-rust-gate.result }} cargo-deny:${{ needs.cargo-deny.result }} mpl-headers:${{ needs.mpl-headers.result }} lint:${{ needs.lint.result }} build-test:${{ needs.build-test.result }} gitleaks:${{ needs.gitleaks.result }} unsafe-audit:${{ needs.unsafe-audit.result }} supply-chain:${{ needs.supply-chain.result }} memcmp-invariant:${{ needs.memcmp-invariant.result }} fuzz-smoke:${{ needs.fuzz-smoke.result }} determinism-x86_64:${{ needs.determinism-campaign-x86_64.result }} determinism-aarch64:${{ needs.determinism-campaign-aarch64.result }} resonance-gate:${{ needs.resonance-gate.result }} release-checked-test:${{ needs.release-checked-test.result }}"
           echo "$summary" | tr ' ' '\n'
           echo "'skipped' = activation-gated on repo state, displayed here on purpose. Never hidden."
           case "$summary" in

@@ -32,3 +32,17 @@ lsm-tree = { path = "vendor/lsm-tree" }
 
 [profile.release]
 lto = "thin"
+
+# `cargo build`/`cargo test --release` silently wraps on arithmetic overflow:
+# `[profile.release]`'s own Cargo default is `overflow-checks = false`. Rather
+# than pay the overflow-check cost on every real release build, this profile
+# runs the whole test suite again at release speed with both overflow-checks
+# and debug-assertions live — the mechanical proof that no raw stored-byte
+# arithmetic slipped past the T2 quantity types. The blanket `overflow-checks`
+# toggle lives here as a fuzzing safety net only; it is not the correctness
+# mechanism. The correctness mechanism is the gate step that runs under this
+# profile on every `cargo xtask gate` invocation and in CI.
+[profile.release-checked]
+inherits = "release"
+overflow-checks = true
+debug-assertions = true
