@@ -1,11 +1,11 @@
 ---
 name: rust-verbs-success
-description: Build the three behavior constructs — derivation, transition, consuming verb — the only legal method shapes in kyzo engine code. Fires before writing a free function that computes from a struct's fields, a &mut self method that mutates a field in place instead of reassigning it, a method returning Option or panicking on a reachable input instead of Result, a self-by-value method with no reason ownership is taken, a sealed/committed bool flag, or a match/if-let ladder duplicated at more than one call site.
+description: Build the four behavior constructs — derivation, transition, consuming verb, total refusal — the only legal method shapes in kyzo engine code. Fires before writing a free function that computes from a struct's fields, a &mut self method that mutates a field in place instead of reassigning it, a method returning Option or panicking/unwrapping on a reachable input instead of Result with a named reason and span, a self-by-value method with no reason ownership is taken, or a sealed/committed bool flag.
 ---
 
 # Verbs
 
-The behavior constructs: what a kyzo type *does*, as opposed to what it *is* (`rust-values-success`). A derivation computes a fact from a value's own already-proven fields. A transition re-points a live handle's field to a newer proven value (`rust-state-success` owns where transitions are allowed to live). A consuming verb takes `self` by value because the type itself is spent by the operation — a shape Rust's ownership model gives that has no equivalent in a garbage-collected construct catalogue.
+The behavior constructs: what a kyzo type *does*, as opposed to what it *is* (`rust-values-success`). A derivation computes a fact from a value's own already-proven fields. A transition re-points a live handle's field to a newer proven value (`rust-state-success` owns where transitions are allowed to live). A consuming verb takes `self` by value because the type itself is spent by the operation — a shape Rust's ownership model gives that has no equivalent in a garbage-collected construct catalogue. Total refusal is how every fallible domain operation answers: a typed `Result` with a named reason and span, never a panic on a reachable input. Sum-type `match` ownership (one legal match on the type's own `impl`) lives in `rust-values-success`, not here.
 
 ## Derivation
 
@@ -67,15 +67,15 @@ A `&mut self` method on a live handle (`rust-state-success`) that re-points one 
 ### Required Form
 
 ```rust
-impl PositionHandle {
-    pub fn book(&mut self, report: VenueFill) {
-        self.latest = PositionState::Open(OpenPosition::new(self.latest.clone(), report));
-        self.bus.publish(&self.latest);
+impl Session {
+    pub fn apply(&mut self, mutation: AdmittedMutation) -> Result<(), SessionError> {
+        self.catalog = self.catalog.integrate(mutation)?;
+        Ok(())
     }
 }
 ```
 
-The body constructs the new state in one expression and re-points `self.latest` to it; it does not reach into `self.latest`'s existing fields and mutate them piecemeal.
+The body constructs the new state in one expression and re-points `self.catalog` to it; it does not reach into `self.catalog`'s existing fields and mutate them piecemeal.
 
 ### Sorting Rules
 
@@ -83,7 +83,7 @@ A fact implied by already-proven fields, with no state change, is a derivation, 
 
 ### Replaced Forms
 
-A method that mutates a nested field of the current state in place (`self.latest.exposure += ...`) restates a construction as an in-place edit, leaving a half-updated value visible to anything holding a reference mid-call. A fetch-and-return method dressed as a transition (`fn latest(&mut self) -> &Position`) is a repository surface given a transition's name.
+A method that mutates a nested field of the current state in place (`self.catalog.generation += 1`) restates a construction as an in-place edit, leaving a half-updated value visible to anything holding a reference mid-call. A fetch-and-return method dressed as a transition (`fn catalog(&mut self) -> &Catalog`) is a repository surface given a transition's name.
 
 ### Construct-Specific Doctrine
 
@@ -163,3 +163,52 @@ A conflict, a refusal, or a corruption on a consuming verb is a typed `Result`, 
 ### Halt Rule
 
 Halt when a lifecycle boundary is being enforced by a runtime flag instead of a type change, or when the next-phase type doesn't yet exist. Report the type and the phase: the sealed/committed/consumed form is missing from the table.
+
+## Total Refusal
+
+### Definition
+
+Every fallible domain operation — a smart constructor, a transition that can conflict, a consuming verb that can refuse, a decode already owned by `rust-adapters-success` — returns `Result<T, E>` where `E` is a typed refusal naming its reason and, where a source location exists, its span. A domain-reachable input never ends in `panic!` / `.unwrap()` / `.expect()`.
+
+### Required Form
+
+```rust
+pub enum AdmitError {
+    Constraint { constraint: ConstraintId, rows: Vec<RowId> },
+    Decode { reason: DecodeReason, span: Span },
+}
+
+impl Session {
+    pub fn admit(&mut self, raw: RawMutation) -> Result<AdmittedMutation, AdmitError> {
+        let mutation = AdmittedMutation::try_from(raw)?; // typed refusal propagates; no unwrap
+        self.catalog = self.catalog.integrate(mutation.clone())?;
+        Ok(mutation)
+    }
+}
+```
+
+Boundary decode owns totality over bytes (`rust-adapters-success`); this construct owns the method-shape law for every fallible verb and constructor the engine exposes: the error type is structured, matchable, and carries reason + span — never a bare `String` or `anyhow::Error` at a domain boundary.
+
+### Sorting Rules
+
+An operation that cannot fail on any domain-reachable input is not this construct — return the value directly (a derivation, an infallible ctor over already-proven inputs). An operation that fails only when the programmer violated an API contract (a drop-bomb on an unfinished transaction) is `rust-state-success`'s Drop-Bound Resource, not a total refusal to the caller.
+
+### Replaced Forms
+
+`.unwrap()` / `.expect()` / `panic!` on a `Result` from foreign or caller-supplied input turns a typed refusal into a crash. Returning `Option` for a failure that has a reason discards the reason. A `bool` "ok" flag next to an out-parameter is a refusal with no type.
+
+### Allowed Patterns
+
+- `-> Result<T, E>` where `E` is a domain enum with named reasons (and `span` where structural)
+- `?` propagation of typed refusals through transitions and consuming verbs
+- infallible returns only when every input path is already branded-proven
+
+### Forbidden
+
+- `.unwrap()` / `.expect()` / `panic!` on a domain-reachable failure path
+- `Option<T>` or `bool` standing in for a refusal that has a reason
+- `Result<T, String>` / `Result<T, anyhow::Error>` at an engine or host boundary
+
+### Halt Rule
+
+Halt when a fallible operation has no typed error enum, or when a call site can only surface failure by panicking. Report the operation and the missing reason: the refusal type is not yet modeled, and the table is not finished.

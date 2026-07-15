@@ -1,11 +1,11 @@
 ---
 name: rust-adapters-failure
-description: Fires when a kyzo boundary crossing is about to be hand-rolled instead of built as the matching construct in rust-adapters-success — unwrap/expect/panic! on external input, a hand-indexed byte parser with no bounds check, a second serialization path for a value that already has one, a reply-inspection function choosing a variant before ordered construction, or an untyped/unnamed refusal with no reason or span.
+description: Fires when a kyzo boundary crossing is about to be hand-rolled instead of built as the matching construct in rust-adapters-success — unwrap/expect/panic! on external input, a hand-indexed byte parser with no bounds check or fuzz target, an unowned grammar rule, a second serialization path for a value that already has one, a reply-inspection function choosing a variant before ordered construction, or an untyped/unnamed refusal with no reason or span.
 ---
 
 # Adapters — failure patterns
 
-Ways a boundary crossing gets hand-rolled instead of built as a boundary decode, wire envelope, or ordered `TryFrom` lift (`rust-adapters-success`).
+Ways a boundary crossing gets hand-rolled instead of built as a boundary decode, owned parse rule, wire envelope, or ordered `TryFrom` lift (`rust-adapters-success`).
 
 ## Panic on untrusted input
 
@@ -63,6 +63,15 @@ A grammar rule with no corresponding success type and no corresponding typed ref
 // names what happens if it's malformed: give it an owner or an explicit typed refusal
 ```
 
+## Decoder shipped without a fuzz target
+
+Adversarial totality is proven by fuzzing, never by review. A decoder (or parse lift over untrusted bytes) with no fuzz target is a totality claim, not a fact.
+
+```rust
+// decode() is total "by inspection" — no fuzz/ target exercises arbitrary bytes against it:
+// add a fuzz harness; zone-model requires proof, not assertion
+```
+
 ## Sentinel default on parse failure
 
 A `.unwrap_or_default()`/`.unwrap_or(fallback)` on a fallible foreign parse manufactures a value nothing in the domain actually proved, silently masking a refusal as success.
@@ -73,4 +82,4 @@ let quantity = Quantity::try_from(raw_field).unwrap_or(Quantity::ZERO); // masks
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide. `unsafe` is never a legal shortcut here — not to transmute untrusted bytes directly into a typed value, not to skip bounds checks in a decoder for speed. If a boundary crossing seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If a boundary crossing seems to need `unsafe` to exist, the construct is wrong, not the ban.

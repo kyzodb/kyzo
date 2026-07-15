@@ -16,16 +16,16 @@ One live handle per seated truth (a transaction, a live storage session, a subsc
 ### Required Form
 
 ```rust
-pub struct PositionHandle {
-    bus: BusClient,
-    ledger: LedgerClient,
-    latest: PositionState,
+pub struct Session {
+    store: StoreHandle,
+    catalog: Catalog,
+    observers: ObserverSet,
 }
 
-impl PositionHandle {
-    pub fn book(&mut self, report: VenueFill) {
-        self.latest = PositionState::Open(OpenPosition::new(self.latest.clone(), report));
-        self.bus.publish(&self.latest);
+impl Session {
+    pub fn apply(&mut self, mutation: AdmittedMutation) -> Result<(), SessionError> {
+        self.catalog = self.catalog.integrate(mutation)?;
+        Ok(())
     }
 }
 ```
@@ -40,13 +40,13 @@ A "manager" or "engine" struct name given to what is actually domain logic with 
 
 ### Construct-Specific Doctrine
 
-Interior mutability (`RefCell`, `Mutex`, `RwLock`) is legal on the fields of a capability handle where concurrent access genuinely requires it — it is not legal as a substitute for `&mut self` reassignment on a type that has exactly one owner and no concurrent access pattern to justify it.
+Interior mutability (`RefCell`, `Mutex`, `RwLock`) is legal only where genuine shared/concurrent access is a real requirement **and** the owning zone's determinism law permits it. It is never a substitute for `&mut self` reassignment on a single-owner type, and never a habit on `zone-exec` / `zone-store` paths where nondeterministic lock ordering or shared mutation would affect committed or evaluated state. Prefer ownership and reassignment; escalate to interior mutability only with a stated concurrency need that does not violate zone law.
 
 ### Allowed Patterns
 
 - one struct per seated truth, concrete clients as fields, state fields as declared types from `rust-values-success`
 - state evolution by reassigning a field to a newly constructed value
-- `RefCell`/`Mutex`/`RwLock` where genuine shared/concurrent access to the handle is the actual requirement
+- `RefCell`/`Mutex`/`RwLock` only with a stated shared-access requirement that zone determinism still permits
 
 ### Forbidden
 
@@ -54,6 +54,7 @@ Interior mutability (`RefCell`, `Mutex`, `RwLock`) is legal on the fields of a c
 - a "manager"/"engine"/"service"-named struct that is domain logic with no proof obligation
 - a module-level `static` holding a live client
 - `RefCell`/`Mutex` added to a single-owner, non-concurrent struct as a workaround for the borrow checker instead of `&mut self`
+- interior mutability on deterministic eval/store paths where lock order or shared mutation can affect answers or committed state
 
 ### Halt Rule
 

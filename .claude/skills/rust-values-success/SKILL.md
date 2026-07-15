@@ -31,6 +31,12 @@ impl Price {
         }
     }
 
+    /// Only at sites that already hold the proof (post-decode, or a
+    /// derivation whose inputs already constrain the result).
+    pub(crate) fn new_unchecked(value: Decimal) -> Self {
+        Self(value)
+    }
+
     pub fn get(&self) -> Decimal {
         self.0
     }
@@ -42,7 +48,7 @@ pub enum Side {
 }
 ```
 
-`Price`'s field is private; the crate has exactly one way to produce a `Price`, and that way cannot be bypassed by writing the tuple-struct literal directly, because the tuple struct's field isn't public. A closed vocabulary wraps a plain `enum`, never a `String` or a bag of `&'static str` constants.
+`Price`'s field is private; the crate has exactly one public way to produce a `Price`, and that way cannot be bypassed by writing the tuple-struct literal directly, because the tuple struct's field isn't public. `new_unchecked` is `pub(crate)` for sites that already hold the proof — never a public escape hatch. A closed vocabulary wraps a plain `enum`, never a `String` or a bag of `&'static str` constants.
 
 ### Sorting Rules
 
@@ -96,8 +102,9 @@ impl Spread {
     }
 
     pub fn best_ask(&self) -> Price {
-        Price::new(self.best_bid.get() + self.width.get())
-            .expect("bid + non-negative width stays positive")
+        // bid is positive and width is non-negative by construction —
+        // the sum stays inside Price's invariant; no Result to unwrap.
+        Price::new_unchecked(self.best_bid.get() + self.width.get())
     }
 }
 ```
@@ -149,24 +156,30 @@ pub struct Fill {
     filled_quantity: Quantity,
 }
 
-pub enum PositionState {
-    Open(OpenPosition),
-    Flat,
+impl Fill {
+    pub fn exposure(&self) -> Exposure {
+        Exposure::from_product(self.fill_price, self.filled_quantity)
+    }
 }
 
 pub struct OpenPosition {
-    prior: Box<PositionState>,
     fill: Fill,
+    prior_exposure: Exposure,
 }
 
 impl OpenPosition {
     pub fn exposure(&self) -> Exposure {
-        Exposure::new(self.prior.exposure().get() + self.fill.exposure().get())
+        Exposure::saturating_add(self.prior_exposure, self.fill.exposure())
     }
+}
+
+pub enum AccountPosition {
+    Open(OpenPosition),
+    Flat, // absence of a position is its own variant — no Option<OpenPosition>
 }
 ```
 
-Every field is a declared type: never a bare primitive, never `Option<T>` standing for absence with no named meaning, never a value a derivation could compute. A struct whose discriminant is pinned by an enclosing enum's variant is a sum-type variant (Sum Type, below), not a standalone concept.
+Every field is a declared type: never a bare primitive, never `Option<T>` standing for absence with no named meaning, never a value a derivation could compute. A struct whose discriminant is pinned by an enclosing enum's variant is a sum-type variant (Sum Type, below), not a standalone concept. `Exposure::from_product` / `saturating_add` are infallible constructions over already-proven scalars — not `Result`-returning smart constructors papered over with `.unwrap()`.
 
 ### Sorting Rules
 
@@ -182,14 +195,7 @@ A struct with public fields and no constructor carries the shape with no proof i
 
 **Absence.** "May be missing" is never a field. Absence that means something is a sum-type variant named for what absence means, or a separate struct when absence changes the state's shape entirely. When lifting from foreign data, an omitted field resolves to a default that states what omission means, or a variant when omission means a different fact; a bare `None` never crosses into the domain unnamed.
 
-```rust
-pub enum AccountPosition {
-    Open(OpenPosition),
-    Flat, // the account with no position: carries no position fields at all
-}
-```
-
-`Flat` is the account with no position, not `Option<OpenPosition>`: absence changed the state's shape, so absence is its own variant.
+`Flat` is the account with no position, not `Option<OpenPosition>`: absence changed the state's shape, so absence is its own variant (see `AccountPosition` above).
 
 ### Allowed Patterns
 
@@ -226,10 +232,12 @@ pub struct Fills {
 }
 
 impl Fills {
-    pub fn new(rows: Vec<Fill>) -> Result<Self, FillsError> {
+    pub fn new(mut rows: Vec<Fill>) -> Result<Self, FillsError> {
         if rows.is_empty() {
             return Err(FillsError::Empty);
         }
+        rows.sort_by(|a, b| a.order_id.cmp(&b.order_id));
+        rows.dedup_by(|a, b| a.order_id == b.order_id);
         Ok(Self { rows })
     }
 
@@ -241,9 +249,15 @@ impl Fills {
 pub struct PriceBook {
     prices: BTreeMap<ProductId, Price>, // key order IS the semantic order
 }
+
+impl PriceBook {
+    pub fn price_of(&self, product: &ProductId) -> Option<&Price> {
+        self.prices.get(product)
+    }
+}
 ```
 
-The collection constructs whole, from one produced `Vec`/`BTreeMap`, never built by looping `push`/`insert` calls against a field already exposed as `pub`.
+The collection constructs whole, from one produced `Vec`/`BTreeMap`, never built by looping `push`/`insert` calls against a field already exposed as `pub`. When the collection's meaning includes order or uniqueness, the constructor proves sort and dedup — not merely non-empty.
 
 ### Sorting Rules
 
@@ -270,7 +284,7 @@ pub enum PriceAnswer {
 
 impl PriceQuery<'_> {
     pub fn answer(&self) -> PriceAnswer {
-        match self.book.prices.get(&self.product) {
+        match self.book.price_of(&self.product) {
             Some(price) => PriceAnswer::Found(*price),
             None => PriceAnswer::Missing(self.product),
         }
@@ -282,7 +296,9 @@ impl PriceQuery<'_> {
 
 - a private `Vec<T>`/`BTreeMap<K, V>`/`BTreeSet<T>` field on a value object or concept struct, `T`/`K`/`V` declared types
 - `struct Xs { rows: Vec<T> }` (or `BTreeMap`/`BTreeSet`) with a fallible constructor when the sequence carries its own bound
-- a keyed collection (`BTreeMap`) paired with a query struct returning a found-or-missing sum type
+- sort and/or dedup performed inside that constructor when order or uniqueness is part of the collection's meaning
+- a keyed collection (`BTreeMap`) exposing lookup only through an accessor or query struct, never by reaching into the private map from outside
+- a keyed collection paired with a query struct returning a found-or-missing sum type
 - derivation methods on the named collection returning declared types
 - the collection constructed whole from one iterator chain or one produced container
 

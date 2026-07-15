@@ -30,6 +30,25 @@ pub struct Quote {
 }
 ```
 
+## Signed bytes without an order-preserving transform
+
+Raw `i64::to_be_bytes` (and friends) do **not** yield byte order equal to numeric order: two's-complement negatives sort after positives when compared as unsigned bytes. That is a silent one-law defect.
+
+```rust
+fn to_bytes(price: i64) -> [u8; 8] {
+    price.to_be_bytes() // -1 sorts after 0 as bytes: use unsigned ticks, or bias i64→u64 before encoding
+}
+```
+
+## Hash inconsistent with Eq
+
+A `Hash` impl (derived or hand-written) that can disagree with `Eq` makes equal values diverge in hash maps and silently corrupts any structure that depends on the pair.
+
+```rust
+// Eq compares scaled ticks; Hash hashes a display string — equal Prices can hash differently.
+// Prove hash(a) == hash(b) whenever a == b, or do not implement Hash at all on BTree-keyed domain values.
+```
+
 ## Second discriminant beside `Tag`
 
 A locally invented enum, string tag, or magic number used to distinguish or order value kinds anywhere `Tag` also applies is a second order authority the moment it's compared against anything `Tag`-tagged.
@@ -74,4 +93,4 @@ An `Ord` impl and a `to_bytes`/encode impl written independently, with no proper
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide. `unsafe` is never a legal shortcut here — not to transmute bytes into a type without going through its checked decode, not to bypass an `Ord` impl with raw byte comparison assumed equivalent. If an encoding or comparison seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If an encoding or comparison seems to need `unsafe` to exist, the construct is wrong, not the ban.

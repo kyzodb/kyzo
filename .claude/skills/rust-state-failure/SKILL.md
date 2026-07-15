@@ -12,17 +12,17 @@ Ways mutable state or a live handle lands wrong instead of built as a capability
 A second mutable struct holding overlapping state for what is really one context is two competing sources of truth for the same live fact.
 
 ```rust
-struct PositionHandle { latest: PositionState, .. }
-struct PositionCache { last_known: PositionState, .. } // a second convergence point for the same truth: one handle, or the contexts are genuinely different — name which
+struct Session { catalog: Catalog, .. }
+struct CatalogCache { last_known: Catalog, .. } // a second convergence point for the same truth: one handle, or the contexts are genuinely different — name which
 ```
 
 ## `RefCell`/`Mutex` as a borrow-checker workaround
 
-Wrapping a field in `RefCell`/`Mutex` on a single-owner, non-concurrent type sidesteps the borrow checker instead of using `&mut self` reassignment, and hides a mutation the compiler could otherwise have checked.
+Wrapping a field in `RefCell`/`Mutex` on a single-owner, non-concurrent type sidesteps the borrow checker instead of using `&mut self` reassignment, and hides a mutation the compiler could otherwise have checked. The same smell applies when interior mutability is dropped onto a deterministic exec/store path without a stated concurrency need the zone law permits.
 
 ```rust
-struct Handle {
-    latest: RefCell<PositionState>, // no concurrent access here — nothing justifies this: &mut self and reassignment
+struct Session {
+    catalog: RefCell<Catalog>, // no concurrent access here — nothing justifies this: &mut self and reassignment
 }
 ```
 
@@ -74,4 +74,4 @@ struct WriteTransaction { finished: bool }
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide. `unsafe` is never a legal shortcut for any construct in this group — not to bypass a species-pair's compile-time read/write split, not to forge an interned code, not to skip a `Drop` release. If a state construct seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If a state construct seems to need `unsafe` to exist, the construct is wrong, not the ban.

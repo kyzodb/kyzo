@@ -1,6 +1,6 @@
 ---
 name: rust-adapters-success
-description: Build the three boundary-crossing constructs — boundary decode, wire envelope, ordered TryFrom lift — the only shapes for data crossing into or out of the kyzo engine. Fires before touching bytes from disk, a network request, a foreign file format, or an FFI/WASM boundary; before writing a parser or grammar rule; or before writing unwrap/expect on external input, a hand-rolled byte-indexing parser, or an untyped String error at a boundary.
+description: Build the four boundary-crossing constructs — boundary decode, owned parse rule, wire envelope, ordered TryFrom lift — the only shapes for data crossing into or out of the kyzo engine. Fires before touching bytes from disk, a network request, a foreign file format, or an FFI/WASM boundary; before writing a parser or grammar rule with no typed owner; or before writing unwrap/expect on external input, a hand-rolled byte-indexing parser, or an untyped String error at a boundary.
 ---
 
 # Adapters
@@ -17,13 +17,32 @@ A decode function or `TryFrom`/`TryInto` impl that is TOTAL over every byte sequ
 
 ```rust
 pub fn decode(bytes: &[u8]) -> Result<Value, DecodeError> {
-    if bytes.is_empty() {
-        return Err(DecodeError::Truncated { at: 0 });
+    let mut cursor = Cursor::new(bytes);
+    let tag_byte = cursor
+        .read_u8()
+        .map_err(|_| DecodeError::Truncated { at: cursor.position() })?;
+    let tag = Tag::try_from(tag_byte).map_err(|_| DecodeError::UnknownTag {
+        at: cursor.position().saturating_sub(1),
+        byte: tag_byte,
+    })?;
+    decode_payload(tag, &mut cursor, Depth::start())
+}
+
+fn decode_payload(tag: Tag, cursor: &mut Cursor<'_>, depth: Depth) -> Result<Value, DecodeError> {
+    depth.check()?; // typed depth bound before any recursive descent
+    match tag {
+        Tag::Int => Ok(Value::Int(cursor.read_i64_be()?)),
+        Tag::Str => {
+            let len = cursor.read_checked_len()?; // validated against remaining input before allocate
+            let bytes = cursor.read_exact(len)?;
+            Ok(Value::Str(Str::try_from(bytes)?))
+        }
+        Tag::Bytes => {
+            let len = cursor.read_checked_len()?;
+            Ok(Value::Bytes(cursor.read_exact(len)?.to_vec()))
+        }
+        // nestable tags use depth.deeper() before recurse; every Tag member owned
     }
-    let tag = Tag::try_from(bytes[0])
-        .map_err(|_| DecodeError::UnknownTag { at: 0, byte: bytes[0] })?;
-    // every subsequent read is bounds-checked and every failure named
-    todo_decode_payload(tag, &bytes[1..])
 }
 ```
 
@@ -41,15 +60,12 @@ A hand-rolled byte-indexing loop (`bytes[i]`, `bytes[i+1]`, ad hoc) scattered ac
 
 Adversarial totality — every byte sequence decodes to either `Ok` or a named `Err`, never a panic, never an infinite loop, never a catastrophic-backtracking blowup — is proven by fuzzing, never asserted by review (`zone-model`). A decoder with no fuzz target is a decoder whose totality is a claim, not a fact.
 
-Every grammar rule has an owner or an explicitly owned typed refusal (`zone-model`): a parser combinator or `pest` rule with no corresponding variant in the error type is advertising a case nothing handles.
-
 ### Allowed Patterns
 
 - `fn decode(&[u8]) -> Result<T, TypedError>` total over all inputs, bounds-checked, every failure named with reason (and span, where structural)
-- a typed, checked recursion depth bound on any self-referential grammar
+- a typed, checked recursion depth bound on any self-referential decode
 - a length-prefixed field validated against remaining input length before any allocation sized by it
 - a fuzz target exercising the decoder against arbitrary bytes
-- every grammar rule paired with an owning success case or an explicitly owned refusal variant
 
 ### Forbidden
 
@@ -57,11 +73,67 @@ Every grammar rule has an owner or an explicitly owned typed refusal (`zone-mode
 - recursive descent with no depth bound
 - an allocation sized directly by an input-declared length with no validation against remaining input size first
 - a decoder shipped with no fuzz target
-- a grammar rule that resolves to no typed case, success or refusal
 
 ### Halt Rule
 
-Halt when a byte sequence cannot be classified as `Ok` or a named typed refusal, when a recursive rule has no depth bound, or when a grammar rule owns nothing. Report the shape and the byte sequence: the decoder is not yet total, and the table is not finished.
+Halt when a byte sequence cannot be classified as `Ok` or a named typed refusal, or when a recursive rule has no depth bound. Report the shape and the byte sequence: the decoder is not yet total, and the table is not finished.
+
+## Owned Parse Rule
+
+### Definition
+
+Every grammar rule (pest production, combinator, token class) has exactly one owner: either a domain success type constructed from a successful parse, or an explicitly owned typed refusal variant. The grammar advertises nothing unowned (`zone-model`).
+
+### Required Form
+
+```rust
+// grammar: value = { int / list / error_token }
+// each alternative maps to a typed case:
+
+pub enum ParseRefusal {
+    BadInt { span: Span },
+    BadList { span: Span },
+    UnexpectedToken { span: Span, found: TokenKind },
+}
+
+pub fn lift_value(pair: Pair<'_, Rule>) -> Result<Value, ParseRefusal> {
+    match pair.as_rule() {
+        Rule::int => Ok(Value::Int(parse_int(pair)?)),
+        Rule::list => Ok(Value::List(parse_list(pair)?)),
+        Rule::error_token => Err(ParseRefusal::UnexpectedToken {
+            span: span_of(&pair),
+            found: TokenKind::from(pair),
+        }),
+        // no silent fallthrough: every Rule variant is owned above or is a hard error here
+        other => Err(ParseRefusal::UnexpectedToken {
+            span: span_of(&pair),
+            found: TokenKind::Unknown(other),
+        }),
+    }
+}
+```
+
+### Sorting Rules
+
+Byte-level adversarial decode without a grammar is Boundary Decode. A grammar rule whose only job is structure for another rule still needs an owner (the parent lift) or an explicit refusal if it can fail independently.
+
+### Replaced Forms
+
+A pest/`Rule` arm that parses successfully but has no AST/domain type and no refusal variant is advertising a case nothing handles. A wildcard `_` that drops the rule identity is an unowned path.
+
+### Allowed Patterns
+
+- every grammar rule paired with an owning success type or an explicit typed refusal variant (reason + span)
+- parse lifts that match exhaustively on `Rule` (or equivalent) with no silent discard
+
+### Forbidden
+
+- a grammar rule that resolves to no typed success case and no typed refusal
+- a parse lift that ignores a successfully matched rule
+
+### Halt Rule
+
+Halt when a grammar rule owns nothing. Report the rule: give it a success type or an explicit typed refusal, and the table is not finished.
 
 ## Wire Envelope
 

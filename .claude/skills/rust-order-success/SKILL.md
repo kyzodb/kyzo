@@ -18,7 +18,9 @@ Every value kind defines its equality and its ordering as a stated domain law BE
 ```rust
 /// Prices order by numeric value; two prices are equal iff their
 /// scaled integer representations are equal. (state the law first)
-pub struct Price(i64); // fixed-point, not f64 — floats have no total order
+pub struct Price(u64); // fixed-point ticks — unsigned, so big-endian bytes == numeric order.
+                       // Never i64 + to_be_bytes(): two's-complement negatives sort *after*
+                       // positives as unsigned bytes, silently breaking the one law.
 
 impl Ord for Price {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -28,12 +30,12 @@ impl Ord for Price {
 
 impl Price {
     pub fn to_bytes(self) -> [u8; 8] {
-        self.0.to_be_bytes() // big-endian signed int: byte order == numeric order
+        self.0.to_be_bytes() // unsigned big-endian: byte order == numeric order
     }
 }
 ```
 
-The doctrine comment stating the law is the artifact a reviewer checks the `Ord` impl and the `to_bytes` impl against. A property test proves both independently satisfy it: `x.cmp(&y) == x.to_bytes().cmp(&y.to_bytes())` for all `x, y`.
+The doctrine comment stating the law is the artifact a reviewer checks the `Ord` impl and the `to_bytes` impl against. A property test proves both independently satisfy it: `x.cmp(&y) == x.to_bytes().cmp(&y.to_bytes())` for all `x, y`. Signed integers need an explicit order-preserving transform before encoding (e.g. bias by mapping `i64` into `u64` so numeric order matches unsigned byte order) — raw `i64::to_be_bytes` is never that transform.
 
 ### Sorting Rules
 
@@ -47,20 +49,26 @@ A type with no domain ordering (a value object with no natural rank, an opaque h
 
 A byte format, once released, cannot change without a `FormatVersion` decision plus round-trip and ordering tests (`zone-model`, `zone-store`). "Just add a field" to an already-shipped encoding is exactly the change this doctrine gates — it is never a small, local edit.
 
+Where a type also implements `Hash`, the hash must agree with equality: if `a == b` then `hash(a) == hash(b)`. Prefer not implementing `Hash` on ordered domain values that live only in `BTreeMap`/`BTreeSet` keyspaces — `Hash` is not required for the one law, and a derived `Hash` that drifts from `Eq` is a silent correctness bug. Never use `Hash` as a substitute for proving byte order.
+
 ### Allowed Patterns
 
 - a one-line doctrine comment stating the domain order law, directly above the type, before any `Ord` or encoding code
 - a hand-written `Ord`/`PartialOrd` that implements exactly the stated law
 - `#[derive(Ord, PartialOrd)]` only when field declaration order already IS the stated law, stated as such
-- fixed-point/integer representations for anything compared numerically; no `f32`/`f64` in an ordered encoding
+- fixed-point/unsigned integer representations for anything compared numerically; no `f32`/`f64` in an ordered encoding
+- signed values encoded only after an explicit order-preserving bijection into an unsigned byte form
 - a property test asserting `Ord::cmp` and byte-comparison of the encoding agree for arbitrary values
+- `Hash` only when needed, and only when proven consistent with `Eq`
 
 ### Forbidden
 
 - an `Ord`/`PartialOrd` impl (derived or hand-written) with no adjacent stated order law
 - `f32`/`f64` as a field type anywhere in a value ever compared or stored in an ordered structure
+- raw `i64`/`i32::to_be_bytes` (or equivalent) used as a canonical encoding without an order-preserving transform
 - changing a released encoding's byte layout without a `FormatVersion` bump and round-trip + ordering tests
 - an encoding whose byte order was never checked against the type's `Ord` impl by a property test
+- a `Hash` impl inconsistent with `Eq`, or `Hash` used as if it proved semantic order
 
 ### Halt Rule
 

@@ -20,14 +20,15 @@ fn connect() -> Client {
 
 ## Orchestrator entrypoint
 
-A runner/pipeline/step-list function in `main` calling engine operations in a hand-kept sequence duplicates an order the construction graph, or the store's transaction/consuming-verb chain, already determines.
+A runner/pipeline/step-list function in `main` calling domain operations in a hand-kept sequence duplicates an order the construction graph, or the store's transaction/consuming-verb chain, already determines. Wiring `main` to construct config, open storage, build the engine, and `serve` is composition-root success — the failure is domain step-lists beside that wiring.
 
 ```rust
 fn main() {
     let engine = build_engine();
-    ingest(&engine);      // hand-sequenced steps standing in for a
-    reconcile(&engine);   // construction dependency graph that should
-    serve(&engine);       // determine this order structurally
+    ingest(&engine);      // domain work sequenced by hand in the entrypoint —
+    reconcile(&engine);   // not composition-root wiring. Name the terminal
+                          // operation the graph already orders; don't step-list it here.
+    // serve(engine) alone after wiring is fine — see rust-wiring-success
 }
 ```
 
@@ -70,4 +71,4 @@ A bespoke response shape built for one consumer, alongside the engine's one seal
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide. `unsafe` is never a legal shortcut here — not to bypass the envelope boundary, not to reach into engine memory from a host crate directly. If wiring seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If wiring seems to need `unsafe` to exist, the construct is wrong, not the ban.

@@ -114,4 +114,4 @@ pub struct SignalSnapshot {
 
 ## Standing ban: `unsafe`
 
-`#![forbid(unsafe_code)]` applies repo-wide. `unsafe` is never a legal shortcut for any construct in this group — not to bypass a private-field constructor, not to skip a fallible validation, not to alias a `Vec`'s backing storage. If a value construct seems to need `unsafe` to exist, the construct is wrong, not the ban.
+`#![forbid(unsafe_code)]` applies repo-wide across every `rust-*` group. `unsafe` is never a legal shortcut for any construct here. If a value construct seems to need `unsafe` to exist, the construct is wrong, not the ban.
