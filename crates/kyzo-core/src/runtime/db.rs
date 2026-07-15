@@ -2387,7 +2387,7 @@ mod tests {
                 edges
                     .iter()
                     .map(|(a, b)| {
-                        Tuple::from(vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
+                        Tuple::from_vec(vec![DataValue::from(*a as i64), DataValue::from(*b as i64)])
                     })
                     .collect(),
             )]

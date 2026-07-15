@@ -700,7 +700,7 @@ fn historical_correction_via_put_stays_consistent_with_its_index() {
         .expect("base as-of read");
     assert_eq!(
         base.rows,
-        vec![crate::data::value::Tuple::from(vec![
+        vec![crate::data::value::Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from("A"),
         ])],
@@ -769,7 +769,7 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
         .rows;
     assert_eq!(
         historical,
-        vec![crate::data::value::Tuple::from(vec![
+        vec![crate::data::value::Tuple::from_vec(vec![
             DataValue::from("X_old_corrected"),
             DataValue::from("Y_old")
         ])],
@@ -783,7 +783,7 @@ fn historical_update_carries_forward_the_targeted_instants_own_value() {
         .rows;
     assert_eq!(
         current,
-        vec![crate::data::value::Tuple::from(vec![
+        vec![crate::data::value::Tuple::from_vec(vec![
             DataValue::from("X_new"),
             DataValue::from("Y_new")
         ])],

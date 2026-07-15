@@ -2703,7 +2703,7 @@ mod tests {
             let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
             let fixpoint = name == "or";
             assert!(
-                real.contains(&Tuple::from(vec![v(3), DataValue::from(fixpoint)])),
+                real.contains(&Tuple::from_vec(vec![v(3), DataValue::from(fixpoint)])),
                 "{name}: node 3 must reach the fixpoint value"
             );
         }
@@ -2757,7 +2757,7 @@ mod tests {
             let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
             let fixpoint = name == "or";
             assert!(
-                real.contains(&Tuple::from(vec![DataValue::from(fixpoint), v(3)])),
+                real.contains(&Tuple::from_vec(vec![DataValue::from(fixpoint), v(3)])),
                 "{name}: node 3 must reach the fixpoint value at a non-suffix position"
             );
         }
@@ -3079,7 +3079,7 @@ mod tests {
         let real = real_eval(&model, "m", 2, &BTreeMap::new(), &generous_budget()).unwrap();
         for node in 1..=3 {
             assert!(
-                real.contains(&Tuple::from(vec![v(node), v(5)])),
+                real.contains(&Tuple::from_vec(vec![v(node), v(5)])),
                 "node {node} must reach the cycle minimum 5, got {real:?}"
             );
         }
@@ -4485,15 +4485,15 @@ mod tests {
         // The closure of 1→2→3 is {(1,2),(2,3),(1,3)}: each admitted once.
         assert_eq!(path_witnesses.len(), 3);
         // Epoch 0 admits the base tuples in canonical order.
-        assert_eq!(path_witnesses[0].tuple, Tuple::from(vec![v(1), v(2)]));
-        assert_eq!(path_witnesses[1].tuple, Tuple::from(vec![v(2), v(3)]));
+        assert_eq!(path_witnesses[0].tuple, Tuple::from_vec(vec![v(1), v(2)]));
+        assert_eq!(path_witnesses[1].tuple, Tuple::from_vec(vec![v(2), v(3)]));
         // Base tuples: rule 0, premise = the edge row.
         assert_eq!(
             path_witnesses[0].derivation,
             Some((0, vec![vec![v(1), v(2)]]))
         );
         // The recursive tuple: rule 1, premises = edge(1,2) then path(2,3).
-        assert_eq!(path_witnesses[2].tuple, Tuple::from(vec![v(1), v(3)]));
+        assert_eq!(path_witnesses[2].tuple, Tuple::from_vec(vec![v(1), v(3)]));
         assert_eq!(
             path_witnesses[2].derivation,
             Some((1, vec![vec![v(1), v(2)], vec![v(2), v(3)]]))
@@ -4533,7 +4533,7 @@ mod tests {
         assert_eq!(identity.len(), 1);
         assert_eq!(
             identity[0].tuple,
-            Tuple::from(vec![DataValue::Null, DataValue::from(false)])
+            Tuple::from_vec(vec![DataValue::Null, DataValue::from(false)])
         );
         assert_eq!(
             identity[0].derivation, None,
@@ -4840,7 +4840,7 @@ mod tests {
         }
         // Group 1 folded to min 3; its witness is the FIRST derivation seen
         // for the group, whose premise row comes from obs.
-        assert_eq!(ws[0].tuple, Tuple::from(vec![v(3), v(1)]));
+        assert_eq!(ws[0].tuple, Tuple::from_vec(vec![v(3), v(1)]));
         let (_, premises) = ws[0].derivation.as_ref().unwrap();
         assert_eq!(premises.len(), 1);
         assert!(

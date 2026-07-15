@@ -1199,10 +1199,10 @@ mod tests {
         ];
         let key = layout.project_key(&row);
         let vals = layout.project_vals(&row);
-        assert_eq!(key, Tuple::from(vec![DataValue::from("g")]));
+        assert_eq!(key, Tuple::from_vec(vec![DataValue::from("g")]));
         assert_eq!(
             vals,
-            Tuple::from(vec![DataValue::from(2i64), DataValue::from(9i64)])
+            Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)])
         );
         assert_eq!(
             layout.interleave(&encode_tuple_bare(&key), &vals),

@@ -1098,7 +1098,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(got, vec![Tuple::from(vec![v(2), v(2)])]);
+        assert_eq!(got, vec![Tuple::from_vec(vec![v(2), v(2)])]);
 
         let fixed = InlineFixedRA {
             bindings: vec![sym("y"), sym("z")],
@@ -1115,8 +1115,8 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                Tuple::from(vec![v(1), v(1), v(10)]),
-                Tuple::from(vec![v(1), v(1), v(11)])
+                Tuple::from_vec(vec![v(1), v(1), v(10)]),
+                Tuple::from_vec(vec![v(1), v(1), v(11)])
             ]
         );
     }
@@ -1164,7 +1164,7 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         // The independently known answer: y=2 joins x=2 exactly once.
-        assert_eq!(got, vec![Tuple::from(vec![v(2), v(2)])]);
+        assert_eq!(got, vec![Tuple::from_vec(vec![v(2), v(2)])]);
     }
 
     /// The general (non-prefix) join's batch executor, judged by an
@@ -1274,9 +1274,9 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                Tuple::from(vec![v(1)]),
-                Tuple::from(vec![v(2)]),
-                Tuple::from(vec![v(3)])
+                Tuple::from_vec(vec![v(1)]),
+                Tuple::from_vec(vec![v(2)]),
+                Tuple::from_vec(vec![v(3)])
             ]
         );
 
@@ -1666,7 +1666,7 @@ mod tests {
         assert_eq!(it, ba, "delta-threaded batched join diverged from iterator");
         assert_eq!(
             it,
-            vec![Tuple::from(vec![v(2), v(2), DataValue::from("c")])],
+            vec![Tuple::from_vec(vec![v(2), v(2), DataValue::from("c")])],
             "delta threading must narrow the join to the fresh row only"
         );
     }

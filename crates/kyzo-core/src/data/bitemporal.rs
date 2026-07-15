@@ -526,7 +526,7 @@ mod tests {
         extend_tuple_from_bitemporal_v(&mut tup, &val).unwrap();
         assert_eq!(
             tup,
-            Tuple::from(vec![
+            Tuple::from_vec(vec![
                 DataValue::from(1i64),
                 DataValue::from(42i64),
                 DataValue::from(7i64)

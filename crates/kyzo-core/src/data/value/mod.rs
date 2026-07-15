@@ -577,6 +577,16 @@ impl Tuple {
         self.0.get_mut(i)
     }
 
+    /// The first cell, if any — explicit door parallel to [`slice::first`].
+    pub fn first(&self) -> Option<&DataValue> {
+        self.0.first()
+    }
+
+    /// The last cell, if any — explicit door parallel to [`slice::last`].
+    pub fn last(&self) -> Option<&DataValue> {
+        self.0.last()
+    }
+
     /// Clone the row's values out to a bare vector (borrowing; the row
     /// stays intact). Contrast [`Tuple::into_vec`], which consumes.
     pub fn to_vec(&self) -> Vec<DataValue> {

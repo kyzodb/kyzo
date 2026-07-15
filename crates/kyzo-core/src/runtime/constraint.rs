@@ -796,7 +796,7 @@ mod tests {
         // Sorted ⇒ the cap keeps the smallest keys 1..=8.
         assert_eq!(
             baseline.2.first().unwrap(),
-            &Tuple::from(vec![DataValue::from(1), DataValue::from(-1)])
+            &Tuple::from_vec(vec![DataValue::from(1), DataValue::from(-1)])
         );
 
         for threads in [2, 4] {
