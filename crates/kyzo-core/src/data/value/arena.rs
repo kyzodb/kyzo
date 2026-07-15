@@ -106,6 +106,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
 
+use super::bytes_qty::{ByteLen, ByteOff, ChunkId};
 use super::code::{Code, StampedCode};
 use super::prefix::{PrefixCmp, cmp_prefixed, prefix4};
 
@@ -148,14 +149,27 @@ pub(super) struct Heap {
 /// **The zero-span law**: a zero-length span owns no bytes, and its chunk
 /// id is MEANINGLESS — it may address a chunk that was never materialized
 /// (empty values append nothing). Every consumer must branch on
-/// `len == 0` before interpreting `chunk`/`off`; serialization, equality,
-/// or debug tooling that reads those fields of an empty span is wrong by
-/// definition.
+/// `len == ByteLen::ZERO` before interpreting `chunk`/`off`; serialization,
+/// equality, or debug tooling that reads those fields of an empty span is
+/// wrong by definition.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Span {
-    chunk: u32,
-    off: u32,
-    len: u32,
+    chunk: ChunkId,
+    off: ByteOff,
+    len: ByteLen,
+}
+
+impl Span {
+    /// The exclusive end offset within the chunk (`off + len`). Both
+    /// quantities are u32-bounded, so their sum fits in usize on any
+    /// 64-bit target.
+    #[inline]
+    fn end_off(self) -> usize {
+        self.off
+            .checked_add(self.len)
+            .expect("span end overflows u32: span layout is broken")
+            .as_usize()
+    }
 }
 
 impl Heap {
@@ -174,10 +188,7 @@ impl Heap {
     /// Panics if a single value exceeds `u32::MAX` bytes or the chunk id
     /// space is exhausted.
     pub fn push(&mut self, value: &[u8]) -> Span {
-        assert!(
-            value.len() <= u32::MAX as usize,
-            "value exceeds u32 span space"
-        );
+        let vlen = ByteLen::from_usize(value.len());
         if value.len() >= CHUNK_SIZE {
             // Oversize value: a chunk of its own.
             self.freeze_live();
@@ -185,21 +196,17 @@ impl Heap {
             self.frozen.push(Arc::from(value));
             return Span {
                 chunk,
-                off: 0,
-                len: value.len() as u32,
+                off: ByteOff::ZERO,
+                len: vlen,
             };
         }
         if self.live.len() + value.len() > CHUNK_SIZE {
             self.freeze_live();
         }
         let chunk = self.chunk_id();
-        let off = self.live.len() as u32;
+        let off = ByteOff::from_usize(self.live.len());
         self.live.extend_from_slice(value);
-        Span {
-            chunk,
-            off,
-            len: value.len() as u32,
-        }
+        Span { chunk, off, len: vlen }
     }
 
     /// Freeze the live chunk (if non-empty) into the shared set. Its chunk
@@ -211,10 +218,8 @@ impl Heap {
         }
     }
 
-    fn chunk_id(&self) -> u32 {
-        let id = self.frozen.len();
-        assert!(id < u32::MAX as usize, "heap chunk id space exhausted");
-        id as u32
+    fn chunk_id(&self) -> ChunkId {
+        ChunkId::from_usize(self.frozen.len())
     }
 
     pub fn get(&self, span: Span) -> &[u8] {
@@ -231,20 +236,21 @@ impl Store for Heap {
     fn payload(&self, span: Span) -> &[u8] {
         // A zero-length span owns no bytes and may address a chunk that
         // was never materialized (empty values append nothing).
-        if span.len == 0 {
+        if span.len == ByteLen::ZERO {
             return &[];
         }
-        let (off, len) = (span.off as usize, span.len as usize);
-        let c = span.chunk as usize;
+        let off = span.off.as_usize();
+        let end = span.end_off();
+        let c = span.chunk.as_usize();
         if c < self.frozen.len() {
-            &self.frozen[c][off..off + len]
+            &self.frozen[c][off..end]
         } else {
             debug_assert_eq!(
                 c,
                 self.frozen.len(),
                 "span addresses a chunk that never existed"
             );
-            &self.live[off..off + len]
+            &self.live[off..end]
         }
     }
 
@@ -270,11 +276,12 @@ struct FrozenStore {
 impl Store for FrozenStore {
     fn payload(&self, span: Span) -> &[u8] {
         // Zero-length spans own no bytes (see `Heap::payload`).
-        if span.len == 0 {
+        if span.len == ByteLen::ZERO {
             return &[];
         }
-        let (off, len) = (span.off as usize, span.len as usize);
-        &self.chunks[span.chunk as usize][off..off + len]
+        let off = span.off.as_usize();
+        let end = span.end_off();
+        &self.chunks[span.chunk.as_usize()][off..end]
     }
 
     fn deref_counter(&self) -> &AtomicU64 {
@@ -302,7 +309,7 @@ impl Entry {
     /// Prefix-first compare against a needle; payload deref only on tie.
     #[inline]
     fn cmp_needle<S: Store>(&self, np: [u8; 4], needle: &[u8], store: &S) -> Ordering {
-        match cmp_prefixed(self.prefix, self.span.len, np, needle.len() as u32) {
+        match cmp_prefixed(self.prefix, self.span.len.raw(), np, needle.len() as u32) {
             PrefixCmp::Decided(o) => o,
             PrefixCmp::NeedPayload => store.tie_payload(self.span).cmp(needle),
         }
@@ -312,7 +319,7 @@ impl Entry {
     /// tie.
     #[inline]
     fn cmp_entry<S: Store>(&self, other: &Entry, store: &S) -> Ordering {
-        match cmp_prefixed(self.prefix, self.span.len, other.prefix, other.span.len) {
+        match cmp_prefixed(self.prefix, self.span.len.raw(), other.prefix, other.span.len.raw()) {
             PrefixCmp::Decided(o) => o,
             PrefixCmp::NeedPayload => store
                 .tie_payload(self.span)
