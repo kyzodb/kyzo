@@ -949,7 +949,7 @@ impl AdmissionSink for WitnessBinder<'_> {
             // fold, so a non-suffix layout binds exactly as a suffix one.
             Some(positions) => self
                 .pending
-                .get(&project_positions(&full, positions))
+                .get(&project_positions(full.as_slice(), positions))
                 .cloned(),
         };
         self.table.entries.push(Witness {
@@ -1440,7 +1440,10 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         premise_nodes.push((src.clone(), row));
                     }
                     graph.derivations.push(Derivation {
-                        head: (PremiseSource::Rule(name.clone()), head.into_owned()),
+                        head: (
+                            PremiseSource::Rule(name.clone()),
+                            Tuple::from_vec(head.into_owned()),
+                        ),
                         label: rule_n,
                         weight,
                         premises: premise_nodes,
@@ -1487,7 +1490,7 @@ fn initial_plain_eval<R: RuleBody>(
                 // Dedup on the slice; ownership is materialized only for
                 // rows that are genuinely new (the slice-consuming seam).
                 if !out.exists(&item) {
-                    let item: Tuple = item.into_owned();
+                    let item = Tuple::from_vec(item.into_owned());
                     if recording {
                         note_pending(&mut pending, item.clone(), rule_n, &premises);
                     }
@@ -1506,7 +1509,7 @@ fn initial_plain_eval<R: RuleBody>(
                 // (`or_insert_with`), so skipping re-derivations changes no
                 // witness. A re-inserted key would only rewrite `false` over
                 // `false` — nothing observable.
-                let item: Tuple = item.into_owned();
+                let item = Tuple::from_vec(item.into_owned());
                 if recording {
                     note_pending(&mut pending, item.clone(), rule_n, &premises);
                 }
@@ -1561,7 +1564,7 @@ fn incremental_plain_eval<R: RuleBody>(
                     // Deviations D1/D2: dedup within the epoch before counting,
                     // and record skip flags only here, on the entry rule.
                     if !out.exists(&item) {
-                        let item: Tuple = item.into_owned();
+                        let item = Tuple::from_vec(item.into_owned());
                         if recording {
                             note_pending(&mut pending, item.clone(), rule_n, &premises);
                         }
@@ -1579,7 +1582,7 @@ fn incremental_plain_eval<R: RuleBody>(
                     // Same dedup-before-mint as the initial epoch: first-writer
                     // `note_pending` and a `false`-over-`false` re-insert make
                     // skipping intra-epoch re-derivations unobservable.
-                    let item: Tuple = item.into_owned();
+                    let item = Tuple::from_vec(item.into_owned());
                     if recording {
                         note_pending(&mut pending, item.clone(), rule_n, &premises);
                     }
@@ -1655,7 +1658,7 @@ fn initial_meet_eval<R: RuleBody>(
             })
             .collect::<Result<_>>()?;
         // No pending entry: the identity row's witness is `None` by design.
-        out.meet_put(&identity)?;
+        out.meet_put(identity.as_slice())?;
     }
     Ok((false, out.wrap(), pending))
 }
@@ -1786,7 +1789,7 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     }
 
     for (key, ops) in aggr_work {
-        let mut row: Tuple = vec![DataValue::Null; signature.len()];
+        let mut row = Tuple::from_vec(vec![DataValue::Null; signature.len()]);
         for (slot, i) in key_indices.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
@@ -1795,7 +1798,7 @@ fn initial_normal_aggr_eval<R: RuleBody>(
         }
         ticker.tick(out.len())?;
         if should_check_limit {
-            if !out.exists(&row) {
+            if !out.exists(row.as_slice()) {
                 if limiter.should_skip_next() {
                     out.put_with_skip(row);
                 } else {

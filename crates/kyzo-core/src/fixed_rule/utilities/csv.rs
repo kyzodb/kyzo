@@ -80,7 +80,7 @@ impl FixedRule for CsvReader {
             },
             nullable: false,
         };
-        let types_opts = typing.coerce(types_opts, TERMINAL_VALIDITY.timestamp)?;
+        let types_opts = typing.coerce(types_opts, TERMINAL_VALIDITY.timestamp())?;
         let mut types = vec![];
         // Structural: `coerce` to `[String]` above proved the outer list
         // and the element strings.

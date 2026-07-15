@@ -206,7 +206,7 @@ impl SearchBatches<'_> {
                     let hit = &self.hits[self.hit_idx];
                     out.push_with(|buf| {
                         buf.extend_from_slice(row);
-                        buf.extend_from_slice(hit);
+                        buf.extend_from_slice(hit.as_slice());
                         Ok(())
                     })?;
                     self.hit_idx += 1;

@@ -78,7 +78,7 @@ impl FixedRule for Dfs {
                 }
 
                 let cand_tuple = if skip_query_nodes {
-                    vec![candidate.clone()]
+                    Tuple::from_vec(vec![candidate.clone()])
                 } else {
                     nodes
                         .prefix_iter(&candidate)?

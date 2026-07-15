@@ -24,12 +24,14 @@
 //! witness), and `Clone`/`Copy` (duplicate a one-per-admission or
 //! one-per-mint token).
 
+use super::Tuple;
 use super::arena::BulkSpendAuthority;
 use super::canonical::CanonicalBytes;
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
 use super::row::RelationId;
 use super::string::MintedStr;
+use super::DataValue;
 
 /// Assert that `$t` does NOT implement all of `$($tr)+`. Compiles iff the
 /// type lacks the trait: two blanket impls stay unambiguous only while the
@@ -115,6 +117,13 @@ assert_not_impl!(CanonicalBytes: Default);
 // outside this crate either.
 assert_not_impl!(RelationId: From<u64>);
 assert_not_impl!(RelationId: Default);
+
+// The decoded row is unforgeable: no blanket conversion from a bare value
+// vector, no Deref into one. The only door is `Tuple::from_vec` (explicit).
+// #300 T5 — if either impl ever appears, row authority dissolves.
+assert_not_impl!(Tuple: From<Vec<DataValue>>);
+assert_not_impl!(Tuple: std::ops::Deref);
+assert_not_impl!(Tuple: std::ops::DerefMut);
 
 #[cfg(test)]
 mod tests {

@@ -28,7 +28,6 @@
 //! [`StoredRelationMetadata`] is a stored relation's whole schema — its key
 //! columns and its dependent columns, each a named, typed [`ColumnDef`].
 
-use std::cmp::Reverse;
 use std::fmt::{Display, Formatter};
 
 use base64::Engine;
@@ -383,14 +382,8 @@ impl NullableColType {
                 match data {
                     vld @ DataValue::Validity(_) => vld,
                     DataValue::Str(s) => match &s as &str {
-                        "ASSERT" => DataValue::Validity(Validity {
-                            timestamp: cur_vld,
-                            is_assert: Reverse(true),
-                        }),
-                        "RETRACT" => DataValue::Validity(Validity {
-                            timestamp: cur_vld,
-                            is_assert: Reverse(false),
-                        }),
+                        "ASSERT" => DataValue::Validity(Validity::new(cur_vld, true)),
+                        "RETRACT" => DataValue::Validity(Validity::new(cur_vld, false)),
                         s => {
                             let (is_assert, ts_str) = match s.strip_prefix('~') {
                                 None => (true, s),
@@ -412,10 +405,10 @@ impl NullableColType {
                                 bail!(InvalidValidity(DataValue::Str(s.into())))
                             }
 
-                            DataValue::Validity(Validity {
-                                timestamp: ValidityTs::from_raw(microseconds),
-                                is_assert: Reverse(is_assert),
-                            })
+                            DataValue::Validity(Validity::new(
+                                ValidityTs::from_raw(microseconds),
+                                is_assert,
+                            ))
                         }
                     },
                     DataValue::List(l) => {
@@ -426,10 +419,10 @@ impl NullableColType {
                                 if ts == i64::MAX || ts == i64::MIN {
                                     bail!(InvalidValidity(DataValue::List(l)))
                                 }
-                                return Ok(DataValue::Validity(Validity {
-                                    timestamp: ValidityTs::from_raw(ts),
-                                    is_assert: Reverse(is_assert),
-                                }));
+                                return Ok(DataValue::Validity(Validity::new(
+                                    ValidityTs::from_raw(ts),
+                                    is_assert,
+                                )));
                             }
                         }
                         bail!(InvalidValidity(DataValue::List(l)))
@@ -488,7 +481,7 @@ impl NullableColType {
                     }
                     DataValue::Json(j) => serde_from_json(&j),
                     DataValue::Validity(vld) => {
-                        json!([vld.timestamp.raw(), vld.is_assert.0])
+                        json!([vld.ts_micros(), vld.is_assert()])
                     }
                     DataValue::Interval(iv) => {
                         json!([iv.start(), iv.end()])

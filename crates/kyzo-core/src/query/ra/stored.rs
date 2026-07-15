@@ -21,6 +21,7 @@ use crate::data::expr::{Bytecode, Expr, compute_bounds};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{AsOf, DataValue, ScanBound};
+use crate::Tuple;
 use crate::engines::segments::{Segment, SegmentEngine, Segments};
 use crate::query::batch_ops::refine_batch;
 use crate::query::batch_ops::{
@@ -223,7 +224,9 @@ impl StoredRA {
                                 }
                             }
                             if matches {
-                                return Ok(Box::new(iter::once(Ok(found.to_vec()))));
+                                return Ok(Box::new(iter::once(Ok(Tuple::from_vec(
+                                    found.to_vec(),
+                                )))));
                             }
                         }
                         Ok(Box::new(iter::empty()))
@@ -297,7 +300,9 @@ impl StoredRA {
                                     .collect();
                                 let s = s.clone();
                                 let range = s.prefix_range(&prefix);
-                                Box::new(range.map(move |i| Ok(s.row(i).to_vec())))
+                                Box::new(range.map(move |i| {
+                                    Ok(Tuple::from_vec(s.row(i).to_vec()))
+                                }))
                             }
                             None => self.storage.scan_prefix_projected(
                                 tx,

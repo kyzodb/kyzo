@@ -84,7 +84,7 @@ impl FixedRule for Bfs {
                     backtrace.insert(to_node.clone(), candidate.clone());
 
                     let cand_tuple = if skip_query_nodes {
-                        vec![to_node.clone()]
+                        Tuple::from_vec(vec![to_node.clone()])
                     } else {
                         nodes
                             .prefix_iter(to_node)?

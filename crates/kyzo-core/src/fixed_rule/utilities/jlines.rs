@@ -119,7 +119,7 @@ impl FixedRule for JsonReader {
         let mut process_row = |row: &BTreeMap<String, JsonValue>| -> Result<()> {
             let mut ret: Tuple = if prepend_index {
                 counter += 1;
-                vec![DataValue::from(counter)]
+                Tuple::from_vec(vec![DataValue::from(counter)])
             } else {
                 Tuple::new()
             };

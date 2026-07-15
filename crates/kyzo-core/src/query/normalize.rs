@@ -194,7 +194,11 @@ impl<T: ReadTx> StoredInputSource for SessionView<'_, T> {
         as_of: Option<AsOf>,
     ) -> Result<TupleIter<'b>> {
         let handle = self.handle(&name.name)?;
-        Ok(self.scan_prefix(&handle, &vec![prefix.clone()], as_of))
+        Ok(self.scan_prefix(
+            &handle,
+            &Tuple::from_vec(vec![prefix.clone()]),
+            as_of,
+        ))
     }
 }
 

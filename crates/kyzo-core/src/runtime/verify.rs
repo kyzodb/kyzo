@@ -149,11 +149,11 @@ impl VerifyOutcome {
         };
         crate::fixed_rule::NamedRows::new(
             headers,
-            vec![vec![
+            vec![Tuple::from_vec(vec![
                 crate::data::value::DataValue::from(status),
                 crate::data::value::DataValue::from(summary),
                 crate::data::value::DataValue::from(detail),
-            ]],
+            ])],
         )
     }
 }

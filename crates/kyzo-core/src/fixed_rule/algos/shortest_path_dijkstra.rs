@@ -127,7 +127,7 @@ impl FixedRule for ShortestPathDijkstra {
             Ok(res
                 .into_iter()
                 .map(|(target, cost, path)| {
-                    vec![
+                    Tuple::from_vec(vec![
                         indices[start as usize].clone(),
                         indices[target as usize].clone(),
                         DataValue::from(cost as f64),
@@ -136,7 +136,7 @@ impl FixedRule for ShortestPathDijkstra {
                                 .map(|u| indices[u as usize].clone())
                                 .collect_vec(),
                         ),
-                    ]
+                    ])
                 })
                 .collect())
         })?;

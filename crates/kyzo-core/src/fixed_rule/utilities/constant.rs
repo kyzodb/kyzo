@@ -33,7 +33,7 @@ use crate::data::expr::Expr;
 use crate::data::program::WrongFixedRuleOptionError;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
+use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
 
 pub(crate) struct Constant;
@@ -74,15 +74,16 @@ impl FixedRule for Constant {
         for row in data {
             // `init_options` proved every row is a list; a non-list here
             // is drift, reported as the wrong-option error.
-            let tuple = row
-                .get_slice()
+            let tuple = Tuple::from_vec(
+                row.get_slice()
                 .ok_or_else(|| WrongFixedRuleOptionError {
                     name: "data".to_string(),
                     span: payload.span(),
                     rule_name: "Constant".to_string(),
                     help: "a list of lists is required".to_string(),
                 })?
-                .into();
+                .to_vec(),
+            );
             out.put(tuple)?
         }
         Ok(())

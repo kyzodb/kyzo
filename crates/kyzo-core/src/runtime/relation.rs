@@ -1152,7 +1152,7 @@ impl RelationHandle {
                     AsOf::current(MAX_VALIDITY_TS),
                     SourceSpan::default(),
                 )?
-                .map(|row| Tuple::from(row[self.metadata.keys.len()..].to_vec()))),
+                .map(|row| Tuple::from_vec(row.as_slice()[self.metadata.keys.len()..].to_vec()))),
             KeyspaceKind::AlgorithmState => {
                 let key_data = key.encode_as_key(self.id);
                 match tx.get(&key_data)? {
@@ -1194,7 +1194,7 @@ impl RelationHandle {
         prefix: &Tuple,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let cols: Vec<usize> = (0..prefix.len().min(self.metadata.keys.len())).collect();
-        self.scan_prefix_projected(tx, prefix, &cols)
+        self.scan_prefix_projected(tx, prefix.as_slice(), &cols)
     }
 
     /// [`scan_prefix`](Self::scan_prefix) reading its prefix THROUGH a
@@ -1229,7 +1229,7 @@ impl RelationHandle {
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
         let cols: Vec<usize> = (0..prefix.len().min(self.metadata.keys.len())).collect();
-        self.skip_scan_prefix_projected(tx, prefix, &cols, as_of)
+        self.skip_scan_prefix_projected(tx, prefix.as_slice(), &cols, as_of)
     }
 
     /// [`skip_scan_prefix`](Self::skip_scan_prefix) through a column
@@ -1367,8 +1367,8 @@ impl RelationHandle {
         upper: &[ScanBound],
         as_of: AsOf,
     ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
-        let lower_encoded = scan_key_lower(self.id, prefix, lower);
-        let upper_encoded = scan_key_upper(self.id, prefix, upper);
+        let lower_encoded = scan_key_lower(self.id, prefix.as_slice(), lower);
+        let upper_encoded = scan_key_upper(self.id, prefix.as_slice(), upper);
         let keys_len = self.metadata.keys.len();
         Box::new(
             tx.range_skip_scan_tuple(&lower_encoded, &upper_encoded, as_of)

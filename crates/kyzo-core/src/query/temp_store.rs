@@ -216,11 +216,11 @@ impl RegularTempStore {
     /// Add a tuple to the store.
     pub fn put(&mut self, tuple: Tuple) {
         self.inner
-            .insert(encode_tuple_bare(&tuple).into_boxed_slice(), false);
+            .insert(encode_tuple_bare(tuple.as_slice()).into_boxed_slice(), false);
     }
     pub(crate) fn put_with_skip(&mut self, tuple: Tuple) {
         self.inner
-            .insert(encode_tuple_bare(&tuple).into_boxed_slice(), true);
+            .insert(encode_tuple_bare(tuple.as_slice()).into_boxed_slice(), true);
     }
 }
 
@@ -314,7 +314,7 @@ impl MeetLayout {
         if self.is_suffix() {
             encode_tuple_bare(&row[..self.key_positions.len()])
         } else {
-            encode_tuple_bare(&self.project_key(row))
+            encode_tuple_bare(self.project_key(row).as_slice())
         }
     }
 
@@ -326,7 +326,7 @@ impl MeetLayout {
     /// placeholder survives.
     pub(crate) fn interleave(&self, key: &[u8], vals: &[DataValue]) -> Tuple {
         let key = decode_tuple_bare(key).expect("this store's own bytes decode");
-        let mut row: Tuple = vec![DataValue::Null; self.arity];
+        let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
         for (slot, i) in self.key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
@@ -462,7 +462,7 @@ impl MeetAggrStore {
         // Admissibility BEFORE this fold: a group absent from the out-store
         // contributes nothing to the barrier yet, so it is not admissible.
         let was_admissible = match self.by_group.get(group_key.as_slice()) {
-            Some(vals) => total.would_admit(&group_key, vals)?,
+            Some(vals) => total.would_admit(&group_key, vals.as_slice())?,
             None => false,
         };
         self.meet_put(tuple)?;
@@ -471,7 +471,7 @@ impl MeetAggrStore {
             .by_group
             .get(group_key.as_slice())
             .expect("meet_put inserts or updates the group");
-        let now_admissible = total.would_admit(&group_key, now_vals)?;
+        let now_admissible = total.would_admit(&group_key, now_vals.as_slice())?;
         Ok(now_admissible && !was_admissible)
     }
     /// Build a meet store from a rule head's aggregation spec: one entry
@@ -535,8 +535,8 @@ impl MeetAggrStore {
                 }
                 if changed && materialize {
                     let old_vals = old_vals.expect("materialize implies a snapshot");
-                    let old_row = self.layout.interleave(&key, &old_vals);
-                    let new_row = self.layout.interleave(&key, vals);
+                    let old_row = self.layout.interleave(&key, old_vals.as_slice());
+                    let new_row = self.layout.interleave(&key, vals.as_slice());
                     self.by_row.remove(&old_row);
                     self.by_row.insert(new_row);
                 }
@@ -545,7 +545,7 @@ impl MeetAggrStore {
             None => {
                 let vals = self.layout.project_vals(tuple);
                 if materialize {
-                    self.by_row.insert(self.layout.interleave(&key, &vals));
+                    self.by_row.insert(self.layout.interleave(&key, vals.as_slice()));
                 }
                 self.by_group.insert(key.into_boxed_slice(), vals);
                 Ok(true)

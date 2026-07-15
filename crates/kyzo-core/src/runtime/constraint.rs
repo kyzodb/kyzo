@@ -419,7 +419,7 @@ impl<S: Storage> Db<S> {
             tx.store.commit()?;
             Ok(NamedRows::new(
                 vec!["status".to_string()],
-                vec![vec![DataValue::from("OK")]],
+                vec![Tuple::from_vec(vec![DataValue::from("OK")])],
             ))
         })
     }
@@ -459,7 +459,7 @@ impl<S: Storage> Db<S> {
             tx.store.commit()?;
             Ok(NamedRows::new(
                 vec!["status".to_string()],
-                vec![vec![DataValue::from("OK")]],
+                vec![Tuple::from_vec(vec![DataValue::from("OK")])],
             ))
         })
     }

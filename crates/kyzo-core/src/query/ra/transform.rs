@@ -221,7 +221,8 @@ impl UnificationRA {
                 let batch = batch?;
                 let rows: Vec<&[DataValue]> = batch.iter_rows().collect();
                 let width = rows.first().map_or(0, |r| r.len());
-                let owned_rows: Vec<Tuple> = rows.iter().map(|r| r.to_vec()).collect();
+                let owned_rows: Vec<Tuple> =
+                    rows.iter().map(|r| Tuple::from_vec(r.to_vec())).collect();
                 let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width);
                 let values = crate::query::vm::eval_expr_batched(
                     &ra.expr,
@@ -230,7 +231,7 @@ impl UnificationRA {
                 )?;
                 let mut out = Batch::new();
                 let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {
-                    let mut ret: Tuple = row.to_vec();
+                    let mut ret: Tuple = Tuple::from_vec(row.to_vec());
                     ret.push(v);
                     out.push(eliminate_from_tuple(ret, &eliminate_indices));
                     Ok(())

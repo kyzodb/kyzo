@@ -573,6 +573,10 @@ impl Tuple {
         self.0.get(i)
     }
 
+    pub fn get_mut(&mut self, i: usize) -> Option<&mut DataValue> {
+        self.0.get_mut(i)
+    }
+
     /// Clone the row's values out to a bare vector (borrowing; the row
     /// stays intact). Contrast [`Tuple::into_vec`], which consumes.
     pub fn to_vec(&self) -> Vec<DataValue> {
@@ -608,6 +612,12 @@ impl std::ops::Index<usize> for Tuple {
 
     fn index(&self, i: usize) -> &DataValue {
         &self.0[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Tuple {
+    fn index_mut(&mut self, i: usize) -> &mut DataValue {
+        &mut self.0[i]
     }
 }
 

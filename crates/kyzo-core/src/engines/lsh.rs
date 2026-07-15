@@ -693,17 +693,17 @@ pub(crate) fn lsh_search(
             cancel.check()?;
             let ks = ks?;
             if ks.is_empty() {
-                bail!(IndexRowCorrupt::new(&idx.name, &ks, "empty LSH posting"));
+                bail!(IndexRowCorrupt::new(&idx.name, ks.as_slice(), "empty LSH posting"));
             }
-            found_tuples.insert(ks[1..].to_vec());
+            found_tuples.insert(Tuple::from_vec(ks.as_slice()[1..].to_vec()));
         }
     }
     let mut ret = vec![];
     for key in found_tuples {
-        let orig_tuple = base.get(tx, &key)?.ok_or_else(|| {
+        let orig_tuple = base.get(tx, key.as_slice())?.ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
-                &key,
+                key.as_slice(),
                 "LSH index references a base row that does not exist",
             ))
         })?;

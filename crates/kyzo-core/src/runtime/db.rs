@@ -812,7 +812,7 @@ impl<S: Storage> Db<S> {
                 };
                 Ok(NamedRows::new(
                     vec!["root".into()],
-                    vec![vec![DataValue::from(root.to_hex())]],
+                    vec![Tuple::from_vec(vec![DataValue::from(root.to_hex())])],
                 ))
             }
 
@@ -840,7 +840,10 @@ impl<S: Storage> Db<S> {
                             crate::runtime::relation::IndexKind::Fts(..) => "fts",
                             crate::runtime::relation::IndexKind::Lsh { .. } => "lsh",
                         };
-                        vec![DataValue::from(r.name.as_str()), DataValue::from(kind)]
+                        Tuple::from_vec(vec![
+                            DataValue::from(r.name.as_str()),
+                            DataValue::from(kind),
+                        ])
                     })
                     .collect();
                 Ok(NamedRows::new(vec!["name".into(), "kind".into()], rows))

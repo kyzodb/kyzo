@@ -238,7 +238,7 @@ impl MeetSpec {
         match levels.iter().rev().find_map(|l| l.find(group_key)) {
             None => Ok(true),
             Some((_, target)) => {
-                let mut probe = target.clone();
+                let mut probe: Vec<DataValue> = target.to_vec();
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
                     changed |= op.update(&mut probe[i], &incoming_vals[i])?;
@@ -403,9 +403,9 @@ impl EpochStore {
                         }
                     };
                     if let Some(vals) = folded {
-                        let row = spec.layout.interleave(&group, &vals);
+                        let row = spec.layout.interleave(&group, vals.as_slice());
                         if S::RECORDING {
-                            sink.admit(TupleInIter::new(&row, empty_tuple_ref(), false));
+                            sink.admit(TupleInIter::new(row.as_slice(), empty_tuple_ref().as_slice(), false));
                         }
                         if !spec.layout.is_suffix() {
                             level.by_row.push(row);
@@ -473,7 +473,7 @@ impl EpochStore {
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         // The 0xFF tail (which no canonical encoding begins) bounds every
         // extension of `prefix`, inclusively.
-        let lower = encode_tuple_bare(prefix);
+        let lower = encode_tuple_bare(prefix.as_slice());
         let mut upper = lower.clone();
         upper.push(0xFF);
         self.ranged(lower, upper, true, false)
@@ -482,7 +482,7 @@ impl EpochStore {
         &'s self,
         prefix: &Tuple,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        let lower = encode_tuple_bare(prefix);
+        let lower = encode_tuple_bare(prefix.as_slice());
         let mut upper = lower.clone();
         upper.push(0xFF);
         self.ranged(lower, upper, true, true)
@@ -519,7 +519,7 @@ impl EpochStore {
             }
             LevelKind::Meet { spec, levels } => {
                 let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
-                let lower = encode_tuple_bare(&prefix);
+                let lower = encode_tuple_bare(prefix.as_slice());
                 let mut upper = lower.clone();
                 upper.push(0xFF);
                 let picked: &[MeetLevel] = if delta_only {
@@ -731,7 +731,7 @@ fn compact_meet(spec: &MeetSpec, levels: &mut Vec<MeetLevel>) {
             merged.by_row = merged
                 .groups
                 .iter()
-                .map(|(k, v)| spec.layout.interleave(k, v))
+                .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
                 .collect();
             merged.by_row.sort();
         }
@@ -798,7 +798,7 @@ fn meet_ranged<'s>(
                     }
                 }
                 let (k, v) = winner.expect("winner drained");
-                Some(TupleInIter::new_meet_suffix(k, v, false))
+                Some(TupleInIter::new_meet_suffix(k, v.as_slice(), false))
             })
             .filter(move |row| within(*row)),
         )
@@ -807,12 +807,12 @@ fn meet_ranged<'s>(
         // only if no newer level owns its group.
         let iters = picked.iter().enumerate().map(move |(idx, l)| {
             l.by_row.iter().filter_map(move |row| {
-                let group = spec.layout.borrow_key(row);
+                let group = spec.layout.borrow_key(row.as_slice());
                 let owned_by_newer = all.iter().skip(idx + 1).any(|nl| nl.find(&group).is_some());
                 if owned_by_newer {
                     None
                 } else {
-                    Some(TupleInIter::new(row, empty_tuple_ref(), false))
+                    Some(TupleInIter::new(row.as_slice(), empty_tuple_ref().as_slice(), false))
                 }
             })
         });

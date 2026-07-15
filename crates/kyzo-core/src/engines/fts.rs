@@ -282,16 +282,19 @@ pub(crate) fn fts_put<T: WriteTx>(
         count += 1;
     }
 
-    let mut key = posting_key_scaffold(base_key_len, tuple);
+    let scaffold = posting_key_scaffold(base_key_len, tuple);
+    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
     for (term, (from, to, position)) in collector {
-        key[0] = DataValue::Str(term.to_string());
+        let mut key = Tuple::with_capacity(1 + base_key_len);
+        key.push(DataValue::Str(term.to_string()));
+        key.extend(tail.iter().cloned());
         let val = vec![
             DataValue::List(from),
             DataValue::List(to),
             DataValue::List(position),
             DataValue::from(count),
         ];
-        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
         tx.put(&key_bytes, &val_bytes)?;
     }
@@ -330,10 +333,13 @@ pub(crate) fn fts_del<T: WriteTx>(
     while let Some(token) = token_stream.next() {
         terms.insert(SmartString::<LazyCompact>::from(&token.text));
     }
-    let mut key = posting_key_scaffold(base_key_len, tuple);
+    let scaffold = posting_key_scaffold(base_key_len, tuple);
+    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
     for term in terms {
-        key[0] = DataValue::Str(term.to_string());
-        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+        let mut key = Tuple::with_capacity(1 + base_key_len);
+        key.push(DataValue::Str(term.to_string()));
+        key.extend(tail.iter().cloned());
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
     Ok(())
@@ -379,7 +385,7 @@ fn literal_postings(
             &[ScanBound::Value(DataValue::Str(upper.to_string()))],
         )
     } else {
-        idx.scan_prefix(tx, &vec![DataValue::Str(value.to_string())])
+        idx.scan_prefix(tx, &Tuple::from_vec(vec![DataValue::Str(value.to_string())]))
     };
     let scan = crate::engines::index_rows(&idx.name, scan);
 
@@ -393,7 +399,7 @@ fn literal_postings(
         if row.len() != expected_len {
             bail!(IndexRowCorrupt::new(
                 &idx.name,
-                &row,
+                row.as_slice(),
                 format!(
                     "FTS posting has {} columns, expected {expected_len}",
                     row.len()
@@ -403,7 +409,7 @@ fn literal_postings(
         let positions = row[position_col].get_slice().ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
-                &row,
+                row.as_slice(),
                 "FTS posting position column is not a list",
             ))
         })?;
@@ -413,14 +419,14 @@ fn literal_postings(
                 p.get_int().map(|i| i as u32).ok_or_else(|| {
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
-                        &row,
+                        row.as_slice(),
                         "FTS posting position is not an integer",
                     ))
                 })
             })
             .collect::<Result<Vec<u32>>>()?;
         out.push(LiteralPostings {
-            doc_key: row[1..=base_key_len].to_vec(),
+            doc_key: Tuple::from_vec(row.as_slice()[1..=base_key_len].to_vec()),
             positions,
         });
     }
@@ -658,10 +664,10 @@ pub(crate) fn fts_search(
             break;
         }
         cancel.check()?;
-        let mut cand = base.get(tx, &doc_key)?.ok_or_else(|| {
+        let mut cand = base.get(tx, doc_key.as_slice())?.ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
-                &doc_key,
+                doc_key.as_slice(),
                 "FTS index references a base row that does not exist",
             ))
         })?;

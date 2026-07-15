@@ -361,7 +361,7 @@ fn contribute_candidates_subset(
                 let tuple = match fact {
                     SignedFact::Plus(t) | SignedFact::Minus(t) => t,
                 };
-                if let Some(b) = unify(&lit.args, tuple, bound) {
+                if let Some(b) = unify(&lit.args, tuple.as_slice(), bound) {
                     next.push(b);
                 }
             }
@@ -395,7 +395,7 @@ fn contribute_candidates_subset(
                 }
             } else {
                 for tuple in &rows {
-                    if let Some(b) = unify(&lit.args, tuple, bound) {
+                    if let Some(b) = unify(&lit.args, tuple.as_slice(), bound) {
                         next.push(b);
                     }
                 }
@@ -419,7 +419,7 @@ fn contribute_candidates_subset(
 /// full relation re-derivation.
 fn head_is_derivable(rules: &[&Rule], state: &MaintainedState, target: &Tuple) -> bool {
     rules.iter().any(|rule| {
-        let Some(seed) = unify(&rule.head_args, target, &Bindings::new()) else {
+        let Some(seed) = unify(&rule.head_args, target.as_slice(), &Bindings::new()) else {
             return false;
         };
         !body_bindings_from(rule, state, seed).is_empty()
@@ -446,7 +446,7 @@ fn body_bindings_from(rule: &Rule, state: &MaintainedState, initial: Bindings) -
                 }
             } else {
                 for tuple in &rows {
-                    if let Some(b) = unify(&lit.args, tuple, bound) {
+                    if let Some(b) = unify(&lit.args, tuple.as_slice(), bound) {
                         next.push(b);
                     }
                 }
@@ -689,7 +689,7 @@ fn eval_one_group(
     }
     match ops {
         None if key_positions.is_empty() => {
-            let mut row: Tuple = vec![DataValue::Null; signature_len];
+            let mut row: Tuple = Tuple::from_vec(vec![DataValue::Null; signature_len]);
             for (op, (i, _, _)) in fresh_ops()?.iter().zip(val_positions) {
                 row[*i] = op.get()?;
             }
@@ -697,7 +697,7 @@ fn eval_one_group(
         }
         None => Ok(None),
         Some(ops) => {
-            let mut row: Tuple = vec![DataValue::Null; signature_len];
+            let mut row: Tuple = Tuple::from_vec(vec![DataValue::Null; signature_len]);
             for (slot, &i) in key_positions.iter().enumerate() {
                 row[i] = group_key[slot].clone();
             }

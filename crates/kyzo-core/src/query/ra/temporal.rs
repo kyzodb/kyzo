@@ -321,7 +321,7 @@ pub(crate) fn decode_raw_version(
     let DataValue::Validity(valid_slot) = valid_dv else {
         bail!("corrupt temporal key: valid-time slot is not a Validity encoding");
     };
-    if !valid_slot.is_assert.0 || !sys_slot.is_assert.0 {
+    if !valid_slot.is_assert() || !sys_slot.is_assert() {
         bail!(
             "corrupt temporal key: a retract flag in a stored time slot \
              (polarity lives in the value; stored slot flags are pinned)"
@@ -341,8 +341,8 @@ pub(crate) fn decode_raw_version(
         key[..prefix_len].to_vec(),
         full,
         RawVersion {
-            valid: valid_slot.timestamp.raw(),
-            sys: sys_slot.timestamp.raw(),
+            valid: valid_slot.timestamp().raw(),
+            sys: sys_slot.timestamp().raw(),
             polarity,
             payload,
         },
@@ -378,7 +378,7 @@ fn resolve_at(
         match governing.map(|e| e.polarity) {
             Some(ClaimPolarity::Assert) => {
                 let e = governing.expect("just matched Some");
-                let mut tuple: Tuple = key.to_vec();
+                let mut tuple: Tuple = Tuple::from_vec(key.to_vec());
                 tuple.extend(e.payload.iter().cloned());
                 return Some(tuple);
             }
@@ -534,7 +534,7 @@ impl<'a> Iterator for SpansScanBatches<'a> {
                     return Some(Err(e));
                 }
             };
-            let rows = match derive_group(&group, &key, self.sys_fixed) {
+            let rows = match derive_group(&group, key.as_slice(), self.sys_fixed) {
                 Ok(rows) => rows,
                 Err(e) => {
                     self.done = true;
@@ -638,10 +638,10 @@ impl DeltaRA {
         let mut from_patch: BTreeSet<SignedFact> = BTreeSet::new();
         let mut to_patch: BTreeSet<SignedFact> = BTreeSet::new();
         for key in &candidates {
-            if let Some(f) = self.storage.current_row(tx, key, self.from, self.span)? {
+            if let Some(f) = self.storage.current_row(tx, key.as_slice(), self.from, self.span)? {
                 from_patch.insert(SignedFact::Minus(f));
             }
-            if let Some(t) = self.storage.current_row(tx, key, self.to, self.span)? {
+            if let Some(t) = self.storage.current_row(tx, key.as_slice(), self.to, self.span)? {
                 to_patch.insert(SignedFact::Plus(t));
             }
         }
@@ -695,7 +695,7 @@ fn candidate_keys_from_posting(
                 1 + base_key_len + 2
             );
         }
-        keys.insert(full[1..1 + base_key_len].to_vec());
+        keys.insert(Tuple::from_vec(full.as_slice()[1..1 + base_key_len].to_vec()));
     }
     Ok(keys)
 }

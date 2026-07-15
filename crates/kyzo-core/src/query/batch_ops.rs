@@ -168,7 +168,10 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
     if batch.is_empty() {
         return Ok(batch);
     }
-    let rows: Vec<Tuple> = batch.iter_rows().map(|r| r.to_vec()).collect();
+    let rows: Vec<Tuple> = batch
+        .iter_rows()
+        .map(|r| Tuple::from_vec(r.to_vec()))
+        .collect();
     let width = rows[0].len();
     let n_rows = rows.len();
     let columns = crate::query::batch::ColumnBatch::from_rows(rows, width);

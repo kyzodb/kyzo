@@ -126,7 +126,7 @@ fn no_duplicate_key_prefix(rows: &BTreeSet<Tuple>, key_arity: usize) -> bool {
         if let Some(p) = prev
             && p.len() >= key_arity
             && row.len() >= key_arity
-            && p[..key_arity] == row[..key_arity]
+            && p.as_slice()[..key_arity] == row.as_slice()[..key_arity]
         {
             return false;
         }

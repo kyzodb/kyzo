@@ -252,11 +252,14 @@ pub(crate) fn sparse_put<T: WriteTx>(
         ));
     }
     let vector = admit_sparse(vector)?;
-    let mut key = posting_key_scaffold(base_key_len, tuple);
+    let scaffold = posting_key_scaffold(base_key_len, tuple);
+    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
     for (dim, weight) in vector {
-        key[0] = DataValue::from(dim as i64);
+        let mut key = Tuple::with_capacity(1 + base_key_len);
+        key.push(DataValue::from(dim as i64));
+        key.extend(tail.iter().cloned());
         let val = [DataValue::from(weight as f64)];
-        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
         tx.put(&key_bytes, &val_bytes)?;
     }
@@ -286,10 +289,13 @@ pub(crate) fn sparse_del<T: WriteTx>(
         ));
     }
     let vector = admit_sparse(vector)?;
-    let mut key = posting_key_scaffold(base_key_len, tuple);
+    let scaffold = posting_key_scaffold(base_key_len, tuple);
+    let tail: Vec<DataValue> = scaffold.as_slice()[1..].to_vec();
     for (dim, _weight) in vector {
-        key[0] = DataValue::from(dim as i64);
-        let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+        let mut key = Tuple::with_capacity(1 + base_key_len);
+        key.push(DataValue::from(dim as i64));
+        key.extend(tail.iter().cloned());
+        let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
         tx.del(&key_bytes)?;
     }
     Ok(())
@@ -342,7 +348,7 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
             "sparse posting weight is not a finite non-negative float",
         ));
     }
-    Ok((row[1..=base_key_len].to_vec(), weight))
+    Ok((Tuple::from_vec(row[1..=base_key_len].to_vec()), weight))
 }
 
 /// The parameters of one sparse search; the RA operator tier constructs this
@@ -395,10 +401,10 @@ pub(crate) fn sparse_search(
     // term to a given document).
     let mut scores: FxHashMap<Tuple, f32> = FxHashMap::default();
     for (dim, q_weight) in query {
-        let prefix = vec![DataValue::from(dim as i64)];
+        let prefix = Tuple::from_vec(vec![DataValue::from(dim as i64)]);
         for row in crate::engines::index_rows(&idx.name, idx.scan_prefix(tx, &prefix)) {
             let row = row?;
-            let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, &row)?;
+            let (doc_key, d_weight) = decode_posting(&idx.name, base_key_len, row.as_slice())?;
             *scores.entry(doc_key).or_insert(0.0f32) += q_weight * d_weight;
         }
     }
@@ -435,10 +441,10 @@ pub(crate) fn sparse_search(
         if ret.len() >= params.k {
             break;
         }
-        let mut cand = base.get(tx, &doc_key)?.ok_or_else(|| {
+        let mut cand = base.get(tx, doc_key.as_slice())?.ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
-                &doc_key,
+                doc_key.as_slice(),
                 "sparse index references a base row that does not exist",
             ))
         })?;

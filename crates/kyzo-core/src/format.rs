@@ -1007,9 +1007,9 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Validity(v) => {
             out.push_str("validity(");
-            out.push_str(&v.timestamp.raw().to_string());
+            out.push_str(&v.ts_micros().to_string());
             out.push_str(", ");
-            out.push_str(if v.is_assert.0 { "true" } else { "false" });
+            out.push_str(if v.is_assert() { "true" } else { "false" });
             out.push(')');
         }
         DataValue::Interval(iv) => {

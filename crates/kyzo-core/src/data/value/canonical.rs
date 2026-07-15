@@ -70,7 +70,7 @@ use super::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
 use super::wide::interval::{Hi, Interval, Lo};
 use super::wide::json::{Json, JsonNum, JsonObj, fnv1a64};
 use super::wide::regex::{RegexFlags, RegexSource};
-use super::wide::validity::Validity;
+use super::wide::validity::{Validity, ValidityTs};
 use super::{DataValue, UuidWrapper, Vector};
 
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
@@ -765,7 +765,10 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 Some(_) => return Err(DecodeError::BadPolarity),
                 None => return Err(DecodeError::Truncated),
             };
-            Ok((DataValue::Validity(Validity::new(ts, is_assert)), 10))
+            Ok((
+                DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), is_assert)),
+                10,
+            ))
         }
         Tag::Interval => match body.first() {
             Some(0x01) => Ok((DataValue::Interval(Interval::EMPTY), 2)),

@@ -34,7 +34,6 @@
 //! evaluate per row at runtime.
 
 use std::borrow::Cow;
-use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::ops::{Div, Rem};
 use std::str::FromStr;
@@ -2061,7 +2060,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::List(l) => !l.is_empty(),
         DataValue::Set(s) => !s.is_empty(),
         DataValue::Vector(_) => true,
-        DataValue::Validity(vld) => vld.is_assert.0,
+        DataValue::Validity(vld) => vld.is_assert(),
         DataValue::Interval(_) => true,
         DataValue::Json(json) => match json {
             Json::Null => false,
@@ -2087,7 +2086,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::List(l) => i64::from(!l.is_empty()),
         DataValue::Set(s) => i64::from(!s.is_empty()),
         DataValue::Vector(_) => 1,
-        DataValue::Validity(vld) => i64::from(vld.is_assert.0),
+        DataValue::Validity(vld) => i64::from(vld.is_assert()),
         DataValue::Interval(_) => 1,
         DataValue::Json(json) => match json {
             Json::Null => 0,
@@ -2118,7 +2117,7 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("The string cannot be interpreted as int"))?
                 .into()
         }
-        DataValue::Validity(vld) => DataValue::Num(Num::int(vld.timestamp.raw())),
+        DataValue::Validity(vld) => DataValue::Num(Num::int(vld.ts_micros())),
         v => bail!("'to_int' does not recognize {:?}", v),
     })
 }
@@ -2611,7 +2610,7 @@ fn format_rfc3339(ts: jiff::Timestamp, off: Offset) -> String {
 define_op!(OP_FORMAT_TIMESTAMP, 1, true, true);
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     let millis = match &args[0] {
-        DataValue::Validity(vld) => vld.timestamp.raw() / 1000,
+        DataValue::Validity(vld) => vld.ts_micros() / 1000,
         v => {
             let f = v
                 .get_float()
@@ -2770,10 +2769,10 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
             .get_bool()
             .ok_or_else(|| miette!("'validity' expects a boolean as second argument"))?
     };
-    Ok(DataValue::Validity(Validity {
-        timestamp: ValidityTs::from_raw(ts),
-        is_assert: Reverse(is_assert),
-    }))
+    Ok(DataValue::Validity(Validity::new(
+        ValidityTs::from_raw(ts),
+        is_assert,
+    )))
 }
 
 /// Extracts both arguments as `Interval`s for a two-interval predicate op, or

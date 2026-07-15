@@ -420,7 +420,7 @@ pub(crate) fn spatial_put<T: WriteTx>(
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
     let val = vec![DataValue::from(point.lat), DataValue::from(point.lon)];
-    let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+    let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
     let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
     tx.put(&key_bytes, &val_bytes)
 }
@@ -445,7 +445,7 @@ pub(crate) fn spatial_del<T: WriteTx>(
     }
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
-    let key_bytes = idx.encode_key_for_store(&key, SourceSpan::default())?;
+    let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
     tx.del(&key_bytes)
 }
 
@@ -636,7 +636,7 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         ))
     })?;
     Ok(Posting {
-        src_key: row[1..=base_key_len].to_vec(),
+        src_key: Tuple::from_vec(row[1..=base_key_len].to_vec()),
         lat,
         lon,
     })
@@ -685,7 +685,7 @@ fn scan_box(
             crate::engines::index_rows(&idx.name, idx.scan_bounded_prefix(tx, &[], &lower, &upper))
         {
             let row = row?;
-            let posting = decode_posting(&row, base_key_len, &idx.name)?;
+            let posting = decode_posting(row.as_slice(), base_key_len, &idx.name)?;
             // The curve over-approximates; the exact predicate filters.
             if bbox.contains(posting.lat, posting.lon) {
                 out.push(posting);
@@ -705,7 +705,7 @@ pub(crate) fn spatial_range_query(
 ) -> Result<Vec<Tuple>> {
     scan_box(tx, base, idx, bbox)?
         .into_iter()
-        .map(|p| fetch_base(tx, base, idx, &p.src_key))
+        .map(|p| fetch_base(tx, base, idx, p.src_key.as_slice()))
         .collect()
 }
 
@@ -886,7 +886,7 @@ pub(crate) fn spatial_knn(
     scored
         .into_iter()
         .map(|c| {
-            let mut row = fetch_base(tx, base, idx, &c.src_key)?;
+            let mut row = fetch_base(tx, base, idx, c.src_key.as_slice())?;
             if params.bind_distance {
                 row.push(DataValue::from(c.dist.0));
             }

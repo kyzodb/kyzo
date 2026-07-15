@@ -267,7 +267,7 @@ pub(crate) fn compile_dictionary(
         if row.len() != 2 {
             bail!(IndexRowCorrupt::new(
                 &dict.name,
-                &row,
+                row.as_slice(),
                 format!(
                     "gazetteer dictionary row has {} columns, expected 2 \
                      ([entity, surfaces])",
@@ -279,7 +279,7 @@ pub(crate) fn compile_dictionary(
         let surfaces = row[1].get_slice().ok_or_else(|| {
             IndexRowCorrupt::new(
                 &dict.name,
-                &row,
+                row.as_slice(),
                 "gazetteer dictionary surfaces column is not a list",
             )
         })?;
@@ -287,7 +287,7 @@ pub(crate) fn compile_dictionary(
             let s = s.get_str().ok_or_else(|| {
                 IndexRowCorrupt::new(
                     &dict.name,
-                    &row,
+                    row.as_slice(),
                     "gazetteer dictionary surface form is not a string",
                 )
             })?;
