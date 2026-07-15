@@ -2741,10 +2741,10 @@ mod tests {
                     ),
                 ],
                 facts: [
-                    ("seedp", [vec![v(1), v(2)]].into_iter().collect()),
-                    ("linkp", [vec![v(2), v(3)]].into_iter().collect()),
-                    ("seedr", [vec![v(3), v(4)]].into_iter().collect()),
-                    ("linkr", [vec![v(4), v(1)]].into_iter().collect()),
+                    ("seedp", [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect()),
+                    ("linkp", [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect()),
+                    ("seedr", [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect()),
+                    ("linkr", [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -2836,13 +2836,17 @@ mod tests {
                 facts: [
                     (
                         "addr_of",
-                        [vec![v(1), v(2)], vec![v(2), v(3)]].into_iter().collect(),
+                        [Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(2), v(3)])]
+                            .into_iter()
+                            .collect(),
                     ),
                     (
                         "assign",
-                        [vec![v(2), v(3)], vec![v(3), v(4)]].into_iter().collect(),
+                        [Tuple::from_vec(vec![v(2), v(3)]), Tuple::from_vec(vec![v(3), v(4)])]
+                            .into_iter()
+                            .collect(),
                     ),
-                    ("blocked", [vec![v(1), v(2)]].into_iter().collect()),
+                    ("blocked", [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -2918,11 +2922,14 @@ mod tests {
                 facts: [
                     (
                         "baseq",
-                        [vec![v(1), v(2), v(2)], vec![v(1), v(3), v(4)]]
-                            .into_iter()
-                            .collect(),
+                        [
+                            Tuple::from_vec(vec![v(1), v(2), v(2)]),
+                            Tuple::from_vec(vec![v(1), v(3), v(4)]),
+                        ]
+                        .into_iter()
+                        .collect(),
                     ),
-                    ("seedv", [vec![v(1)]].into_iter().collect()),
+                    ("seedv", [Tuple::from_vec(vec![v(1)])].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),
@@ -3025,12 +3032,12 @@ mod tests {
                     ),
                 ],
                 facts: [
-                    ("addr_of", [vec![v(1), v(2)]].into_iter().collect()),
-                    ("assign", [vec![v(2), v(3)]].into_iter().collect()),
-                    ("load", [vec![v(3), v(4)]].into_iter().collect()),
-                    ("store", [vec![v(4), v(1)]].into_iter().collect()),
-                    ("baseh", [vec![v(4), v(5)]].into_iter().collect()),
-                    ("linkh", [vec![v(5), v(6)]].into_iter().collect()),
+                    ("addr_of", [Tuple::from_vec(vec![v(1), v(2)])].into_iter().collect()),
+                    ("assign", [Tuple::from_vec(vec![v(2), v(3)])].into_iter().collect()),
+                    ("load", [Tuple::from_vec(vec![v(3), v(4)])].into_iter().collect()),
+                    ("store", [Tuple::from_vec(vec![v(4), v(1)])].into_iter().collect()),
+                    ("baseh", [Tuple::from_vec(vec![v(4), v(5)])].into_iter().collect()),
+                    ("linkh", [Tuple::from_vec(vec![v(5), v(6)])].into_iter().collect()),
                 ]
                 .into_iter()
                 .collect(),

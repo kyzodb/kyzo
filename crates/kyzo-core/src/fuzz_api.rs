@@ -66,7 +66,7 @@ pub fn fuzz_parse_script(src: &str) -> Result<()> {
 /// `encode_key_with_suffix` itself is crate-internal.
 pub fn fuzz_encode_tuple_key(rel: u64, tuple: &Tuple) -> Option<EncodedKey> {
     let rel = RelationId::new(rel)?;
-    Some(encode_key_with_suffix(rel, tuple, &[]))
+    Some(encode_key_with_suffix(rel, tuple.as_slice(), &[]))
 }
 
 /// Decode arbitrary bytes as a v3 fact payload (`decode_fact_payload`),
