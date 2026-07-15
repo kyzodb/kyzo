@@ -13,7 +13,7 @@ use std::fmt::{Debug, Formatter};
 use itertools::{Either, Itertools};
 use miette::{Result, bail};
 
-use crate::data::aggr::{Aggregation, MeetAccum, MeetAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::value::DataValue;
 use crate::data::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
@@ -209,7 +209,7 @@ impl MeetLevel {
 /// meet operations, shared by every level and every probe.
 pub(crate) struct MeetSpec {
     pub(crate) layout: MeetLayout,
-    meets: Vec<(Aggregation, Box<dyn MeetAggrObj>)>,
+    meets: Vec<(Aggregation, MeetAggr)>,
 }
 
 impl Debug for MeetSpec {

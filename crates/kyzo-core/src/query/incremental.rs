@@ -72,7 +72,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Error, Result};
 
-use crate::data::aggr::{Aggregation, NormalAggrObj};
+use crate::data::aggr::{Aggregation, NormalAggr};
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
@@ -653,13 +653,13 @@ fn eval_one_group(
     signature_len: usize,
     group_key: &Tuple,
 ) -> Result<Option<Tuple>> {
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>> {
         val_positions
             .iter()
             .map(|(_, aggr, args)| aggr.normal_op(args))
             .collect()
     };
-    let mut ops: Option<Vec<Box<dyn NormalAggrObj>>> = None;
+    let mut ops: Option<Vec<NormalAggr>> = None;
     for rule in rules {
         let mut seed = Bindings::new();
         let mut consistent = true;

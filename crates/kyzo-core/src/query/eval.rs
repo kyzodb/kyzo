@@ -63,7 +63,7 @@
  *      classification is a typed [`EvalInvariantError`].
  *   9. eval.rs:430  `normal_op.as_mut().unwrap().set(..)` — gone: the
  *      landed aggregation API mints live ops per group
- *      (`Aggregation::normal_op(args) -> Result<Box<dyn NormalAggrObj>>`),
+ *      (`Aggregation::normal_op(args) -> Result<NormalAggr>`),
  *      there is no `Option` field to unwrap.
  *  10. eval.rs:439  the vacant-entry twin of 9 — gone the same way.
  *  11. eval.rs:467-470  `a.as_ref().unwrap()` + `normal_op.unwrap()` for
@@ -186,7 +186,7 @@ use miette::{Diagnostic, Result};
 use rayon::prelude::*;
 use thiserror::Error;
 
-use crate::data::aggr::{Aggregation, NormalAggrObj};
+use crate::data::aggr::{Aggregation, NormalAggr};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::value::DataValue;
@@ -598,11 +598,22 @@ pub(crate) enum PremiseSource {
     Fact(String),
 }
 
+/// Private supertrait seal for [`RuleBody`]: only types this crate admits
+/// (via an explicit `impl seal::Sealed`) can implement the eval seam.
+/// Crate visibility alone is not the seal — when the crate splits, an open
+/// `pub(crate)` trait would reopen.
+pub(crate) mod seal {
+    pub trait Sealed {}
+}
+
 /// One rule body, as eval consumes it: a generator of satisfying head
 /// tuples against the current stores. This is the seam where the compile
 /// tier's relational-algebra plans plug in (bindings in, tuples out,
 /// `delta_from` threaded to the stored-rule scans); the differential tests
 /// implement it over the oracle's rule model.
+///
+/// Sealed: [`seal::Sealed`] is a private supertrait — no type outside the
+/// admitted set can implement this seam.
 ///
 /// Contract:
 /// - `delta_from: Some(k)` means every occurrence of store `k` in the body
@@ -627,7 +638,7 @@ pub(crate) enum PremiseSource {
 ///   the body alone (the landed stores iterate in canonical order; stored
 ///   relations scan in key order). The limiter's early-stop point depends
 ///   on it.
-pub(crate) trait RuleBody: Send + Sync {
+pub(crate) trait RuleBody: Send + Sync + seal::Sealed {
     /// `delta_from: Some(occ)` means the ONE body-atom occurrence `occ`
     /// reads that store's delta instead of its total; every other
     /// occurrence — including another occurrence of the SAME store name —
@@ -1744,14 +1755,14 @@ fn initial_normal_aggr_eval<R: RuleBody>(
                 .map(|(aggregation, args)| (i, aggregation, args.as_slice()))
         })
         .collect();
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>> {
         val_specs
             .iter()
             .map(|(_, aggregation, args)| aggregation.normal_op(args))
             .collect()
     };
 
-    let mut aggr_work: BTreeMap<Tuple, Vec<Box<dyn NormalAggrObj>>> = BTreeMap::new();
+    let mut aggr_work: BTreeMap<Tuple, Vec<NormalAggr>> = BTreeMap::new();
     let mut ticker = budget.ticker(baseline, rule_symb);
     for body in &rule_set.bodies {
         body.for_each_derivation(stores, None, false, &mut |item, _premises| {
@@ -2086,6 +2097,9 @@ mod tests {
             Ok(ControlFlow::Continue(()))
         }
     }
+
+    impl crate::query::eval::seal::Sealed for ModelBody {}
+
 
     impl RuleBody for ModelBody {
         fn for_each_derivation(
@@ -3617,6 +3631,8 @@ mod tests {
             }
         }
     }
+    impl crate::query::eval::seal::Sealed for CrossProduct {}
+
     impl RuleBody for CrossProduct {
         fn for_each_derivation(
             &self,
@@ -3964,6 +3980,8 @@ mod tests {
             }
         }
     }
+    impl crate::query::eval::seal::Sealed for DistinctThenDup {}
+
     impl RuleBody for DistinctThenDup {
         fn for_each_derivation(
             &self,
@@ -4273,6 +4291,8 @@ mod tests {
             kill: Arc<AtomicBool>,
             emitted: Arc<AtomicUsize>,
         }
+        impl crate::query::eval::seal::Sealed for FloodBody {}
+
         impl RuleBody for FloodBody {
             fn for_each_derivation(
                 &self,
@@ -5015,6 +5035,8 @@ mod tests {
         struct GhostBody {
             contained: BTreeMap<AtomOccurrence, MagicSymbol>,
         }
+        impl crate::query::eval::seal::Sealed for GhostBody {}
+
         impl RuleBody for GhostBody {
             fn for_each_derivation(
                 &self,

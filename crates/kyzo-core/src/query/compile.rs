@@ -958,6 +958,8 @@ pub(crate) struct CompiledRuleBody<'a, T> {
     segments: Segments<'a>,
 }
 
+impl<T: ReadTx> crate::query::eval::seal::Sealed for CompiledRuleBody<'_, T> {}
+
 impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
     fn for_each_derivation(
         &self,

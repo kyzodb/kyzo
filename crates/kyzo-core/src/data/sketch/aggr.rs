@@ -30,7 +30,7 @@
 
 use miette::{Result, bail, ensure, miette};
 
-use crate::data::aggr::{AggrKind, Aggregation, MeetAccum, MeetAggrObj, NormalAggrObj};
+use crate::data::aggr::{AggrKind, Aggregation, MeetAccum, MeetAggr, MeetAggrObj, NormalAggr, NormalAggrObj};
 use crate::data::sketch::count_min::CountMinSketch;
 use crate::data::sketch::hll::HyperLogLog;
 use crate::data::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
@@ -41,7 +41,7 @@ use crate::data::value::DataValue;
 /// `hll(x)`: fold raw elements, return the estimated distinct count as an
 /// `Int`. Normal, not meet: its output is a scalar, and two counts cannot be
 /// meet-combined — exactly the `count_unique` story.
-struct AggrHll {
+pub(crate) struct AggrHll {
     hll: HyperLogLog,
 }
 
@@ -52,6 +52,8 @@ impl Default for AggrHll {
         }
     }
 }
+
+impl crate::data::aggr::seal::Sealed for AggrHll {}
 
 impl NormalAggrObj for AggrHll {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -65,7 +67,7 @@ impl NormalAggrObj for AggrHll {
 
 /// `hll_sketch(x)`: fold raw elements, return the sketch itself as `Bytes` —
 /// the builder whose output is fed to `hll_union`.
-struct AggrHllSketch {
+pub(crate) struct AggrHllSketch {
     hll: HyperLogLog,
 }
 
@@ -76,6 +78,8 @@ impl Default for AggrHllSketch {
         }
     }
 }
+
+impl crate::data::aggr::seal::Sealed for AggrHllSketch {}
 
 impl NormalAggrObj for AggrHllSketch {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -100,7 +104,9 @@ fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
 /// `hll_union` as a meet: fold sketch `Bytes` by register-wise maximum. This
 /// is the bounded join-semilattice — idempotent, commutative, associative,
 /// identity = the empty sketch — so it composes inside recursion.
-struct MeetAggrHllUnion;
+pub(crate) struct MeetAggrHllUnion;
+
+impl crate::data::aggr::seal::Sealed for MeetAggrHllUnion {}
 
 impl MeetAggrObj for MeetAggrHllUnion {
     fn init_val(&self) -> MeetAccum {
@@ -130,9 +136,11 @@ impl MeetAggrObj for MeetAggrHllUnion {
 /// The normal form of `hll_union`, for use outside recursion: merge the
 /// sketch `Bytes` rows into one. The first row fixes the precision.
 #[derive(Default)]
-struct AggrHllUnion {
+pub(crate) struct AggrHllUnion {
     acc: Option<HyperLogLog>,
 }
+
+impl crate::data::aggr::seal::Sealed for AggrHllUnion {}
 
 impl NormalAggrObj for AggrHllUnion {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -158,7 +166,7 @@ impl NormalAggrObj for AggrHllUnion {
 /// `count_min(x)`: fold raw elements into a frequency table, returned as
 /// `Bytes`. Normal only: the merge (element-wise add) is a monoid but not
 /// idempotent, so it must never be a meet.
-struct AggrCountMin {
+pub(crate) struct AggrCountMin {
     cms: CountMinSketch,
 }
 
@@ -169,6 +177,8 @@ impl Default for AggrCountMin {
         }
     }
 }
+
+impl crate::data::aggr::seal::Sealed for AggrCountMin {}
 
 impl NormalAggrObj for AggrCountMin {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -187,9 +197,11 @@ impl NormalAggrObj for AggrCountMin {
 /// returning the digest as `Bytes`. Normal only: t-digest merge is not
 /// associative-exact.
 #[derive(Default)]
-struct AggrTDigest {
+pub(crate) struct AggrTDigest {
     buf: Vec<DataValue>,
 }
+
+impl crate::data::aggr::seal::Sealed for AggrTDigest {}
 
 impl NormalAggrObj for AggrTDigest {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -205,12 +217,12 @@ impl NormalAggrObj for AggrTDigest {
 /// value at quantile `q ∈ [0, 1]` (the level is a compile-time argument, as
 /// `collect`'s limit is). Buffer-and-sort, so the answer is a pure function
 /// of the input multiset.
-struct AggrQuantile {
+pub(crate) struct AggrQuantile {
     buf: Vec<DataValue>,
     q: f64,
 }
 
-fn quantile_factory(args: &[DataValue]) -> Result<Box<dyn NormalAggrObj>> {
+fn quantile_factory(args: &[DataValue]) -> Result<NormalAggr> {
     let q = args
         .first()
         .ok_or_else(|| miette!("'quantile' requires a quantile level argument in [0, 1]"))?
@@ -220,8 +232,10 @@ fn quantile_factory(args: &[DataValue]) -> Result<Box<dyn NormalAggrObj>> {
         (0.0..=1.0).contains(&q),
         "the quantile level for 'quantile' must be in [0, 1], got {q}"
     );
-    Ok(Box::new(AggrQuantile { buf: vec![], q }))
+    Ok(NormalAggr::Quantile(AggrQuantile { buf: vec![], q }))
 }
+
+impl crate::data::aggr::seal::Sealed for AggrQuantile {}
 
 impl NormalAggrObj for AggrQuantile {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -239,36 +253,36 @@ impl NormalAggrObj for AggrQuantile {
 const AGGR_HLL: Aggregation = Aggregation {
     name: "hll",
     kind: AggrKind::Normal {
-        normal: |_| Ok(Box::new(AggrHll::default())),
+        normal: |_| Ok(NormalAggr::Hll(AggrHll::default())),
     },
 };
 
 const AGGR_HLL_SKETCH: Aggregation = Aggregation {
     name: "hll_sketch",
     kind: AggrKind::Normal {
-        normal: |_| Ok(Box::new(AggrHllSketch::default())),
+        normal: |_| Ok(NormalAggr::HllSketch(AggrHllSketch::default())),
     },
 };
 
 const AGGR_HLL_UNION: Aggregation = Aggregation {
     name: "hll_union",
     kind: AggrKind::Meet {
-        meet: || Box::new(MeetAggrHllUnion),
-        normal: |_| Ok(Box::new(AggrHllUnion::default())),
+        meet: || MeetAggr::HllUnion(MeetAggrHllUnion),
+        normal: |_| Ok(NormalAggr::HllUnion(AggrHllUnion::default())),
     },
 };
 
 const AGGR_COUNT_MIN: Aggregation = Aggregation {
     name: "count_min",
     kind: AggrKind::Normal {
-        normal: |_| Ok(Box::new(AggrCountMin::default())),
+        normal: |_| Ok(NormalAggr::CountMin(AggrCountMin::default())),
     },
 };
 
 const AGGR_TDIGEST: Aggregation = Aggregation {
     name: "tdigest",
     kind: AggrKind::Normal {
-        normal: |_| Ok(Box::new(AggrTDigest::default())),
+        normal: |_| Ok(NormalAggr::TDigest(AggrTDigest::default())),
     },
 };
 
@@ -302,7 +316,7 @@ mod tests {
         DataValue::from(i)
     }
 
-    fn run_normal(mut op: Box<dyn NormalAggrObj>, vals: &[DataValue]) -> DataValue {
+    fn run_normal(mut op: NormalAggr, vals: &[DataValue]) -> DataValue {
         for v in vals {
             op.set(v).unwrap();
         }

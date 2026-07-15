@@ -103,7 +103,7 @@ use std::fmt::{Debug, Formatter};
 use itertools::Itertools;
 use miette::{Result, ensure, miette};
 
-use crate::data::aggr::{Aggregation, MeetAccum, MeetAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::value::DataValue;
 use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
 
@@ -385,7 +385,7 @@ pub(crate) struct MeetAggrStore {
     /// The meet operations, one per aggregated head position, in head
     /// order, resolved at construction. (The original stored `Option`s and
     /// unwrapped per row.)
-    pub(crate) meets: Vec<(Aggregation, Box<dyn MeetAggrObj>)>,
+    pub(crate) meets: Vec<(Aggregation, MeetAggr)>,
     pub(crate) layout: MeetLayout,
 }
 

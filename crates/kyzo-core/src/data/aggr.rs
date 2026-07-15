@@ -40,7 +40,7 @@
 //! type: a `Meet` can only be declared with a meet form (plus the normal
 //! form it also supports outside recursion), a `Normal` only with a normal
 //! form, and a name is dispatched exactly once, in [`parse_aggr`]. Upstream
-//! carried the same information as a `bool` plus two `Option<Box<dyn ...>>`
+//! carried the same information as a `bool` plus two `Option` trait-object
 //! fields filled in later by string dispatch — a shape in which kind and
 //! implementation could disagree, and in which `Clone` silently dropped the
 //! ops. That state is unrepresentable here.
@@ -53,9 +53,16 @@ use rand::prelude::*;
 
 use crate::data::value::{DataValue, Num, NumRepr};
 
+/// Private supertrait seal for aggregation op traits — crate visibility
+/// alone is not the seal.
+pub(crate) mod seal {
+    pub trait Sealed {}
+}
+
 /// An ordinary fold over rows: `set` feeds one row's value, `get` produces
 /// the final answer. Runs only after the fixpoint, seeing each row once.
-pub(crate) trait NormalAggrObj: Send + Sync {
+/// Sealed: only admitted structs in this module / sketch wrappers implement it.
+pub(crate) trait NormalAggrObj: Send + Sync + seal::Sealed {
     fn set(&mut self, value: &DataValue) -> Result<()>;
     fn get(&self) -> Result<DataValue>;
 }
@@ -95,18 +102,180 @@ impl MeetAccum {
 /// flag gates delta propagation in recursive evaluation, so it is not
 /// cosmetic: a false "unchanged" reaches a premature fixpoint (missing
 /// answers), a false "changed" merely re-propagates.
-pub(crate) trait MeetAggrObj: Send + Sync {
+pub(crate) trait MeetAggrObj: Send + Sync + seal::Sealed {
     fn init_val(&self) -> MeetAccum;
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool>;
+}
+
+/// Sealed exhaustively-matched normal aggregation: the dispatch surface.
+/// Kind and implementation cannot drift — every name maps to one variant.
+pub(crate) enum NormalAggr {
+    And(AggrAnd),
+    Or(AggrOr),
+    Unique(AggrUnique),
+    GroupCount(AggrGroupCount),
+    CountUnique(AggrCountUnique),
+    Union(AggrUnion),
+    Intersection(AggrIntersection),
+    Collect(AggrCollect),
+    ChoiceRand(AggrChoiceRand),
+    Count(AggrCount),
+    Variance(AggrVariance),
+    StdDev(AggrStdDev),
+    Mean(AggrMean),
+    Sum(AggrSum),
+    Product(AggrProduct),
+    Min(AggrMin),
+    Max(AggrMax),
+    LatestBy(AggrLatestBy),
+    SmallestBy(AggrSmallestBy),
+    MinCost(AggrMinCost),
+    Shortest(AggrShortest),
+    Choice(AggrChoice),
+    BitAnd(AggrBitAnd),
+    BitOr(AggrBitOr),
+    BitXor(AggrBitXor),
+    Hll(crate::data::sketch::aggr::AggrHll),
+    HllSketch(crate::data::sketch::aggr::AggrHllSketch),
+    HllUnion(crate::data::sketch::aggr::AggrHllUnion),
+    CountMin(crate::data::sketch::aggr::AggrCountMin),
+    TDigest(crate::data::sketch::aggr::AggrTDigest),
+    Quantile(crate::data::sketch::aggr::AggrQuantile),
+}
+
+impl NormalAggr {
+    pub(crate) fn set(&mut self, value: &DataValue) -> Result<()> {
+        match self {
+            Self::And(a) => a.set(value),
+            Self::Or(a) => a.set(value),
+            Self::Unique(a) => a.set(value),
+            Self::GroupCount(a) => a.set(value),
+            Self::CountUnique(a) => a.set(value),
+            Self::Union(a) => a.set(value),
+            Self::Intersection(a) => a.set(value),
+            Self::Collect(a) => a.set(value),
+            Self::ChoiceRand(a) => a.set(value),
+            Self::Count(a) => a.set(value),
+            Self::Variance(a) => a.set(value),
+            Self::StdDev(a) => a.set(value),
+            Self::Mean(a) => a.set(value),
+            Self::Sum(a) => a.set(value),
+            Self::Product(a) => a.set(value),
+            Self::Min(a) => a.set(value),
+            Self::Max(a) => a.set(value),
+            Self::LatestBy(a) => a.set(value),
+            Self::SmallestBy(a) => a.set(value),
+            Self::MinCost(a) => a.set(value),
+            Self::Shortest(a) => a.set(value),
+            Self::Choice(a) => a.set(value),
+            Self::BitAnd(a) => a.set(value),
+            Self::BitOr(a) => a.set(value),
+            Self::BitXor(a) => a.set(value),
+            Self::Hll(a) => a.set(value),
+            Self::HllSketch(a) => a.set(value),
+            Self::HllUnion(a) => a.set(value),
+            Self::CountMin(a) => a.set(value),
+            Self::TDigest(a) => a.set(value),
+            Self::Quantile(a) => a.set(value),
+        }
+    }
+
+    pub(crate) fn get(&self) -> Result<DataValue> {
+        match self {
+            Self::And(a) => a.get(),
+            Self::Or(a) => a.get(),
+            Self::Unique(a) => a.get(),
+            Self::GroupCount(a) => a.get(),
+            Self::CountUnique(a) => a.get(),
+            Self::Union(a) => a.get(),
+            Self::Intersection(a) => a.get(),
+            Self::Collect(a) => a.get(),
+            Self::ChoiceRand(a) => a.get(),
+            Self::Count(a) => a.get(),
+            Self::Variance(a) => a.get(),
+            Self::StdDev(a) => a.get(),
+            Self::Mean(a) => a.get(),
+            Self::Sum(a) => a.get(),
+            Self::Product(a) => a.get(),
+            Self::Min(a) => a.get(),
+            Self::Max(a) => a.get(),
+            Self::LatestBy(a) => a.get(),
+            Self::SmallestBy(a) => a.get(),
+            Self::MinCost(a) => a.get(),
+            Self::Shortest(a) => a.get(),
+            Self::Choice(a) => a.get(),
+            Self::BitAnd(a) => a.get(),
+            Self::BitOr(a) => a.get(),
+            Self::BitXor(a) => a.get(),
+            Self::Hll(a) => a.get(),
+            Self::HllSketch(a) => a.get(),
+            Self::HllUnion(a) => a.get(),
+            Self::CountMin(a) => a.get(),
+            Self::TDigest(a) => a.get(),
+            Self::Quantile(a) => a.get(),
+        }
+    }
+}
+
+/// Sealed exhaustively-matched meet aggregation: the dispatch surface.
+pub(crate) enum MeetAggr {
+    And(MeetAggrAnd),
+    Or(MeetAggrOr),
+    Union(MeetAggrUnion),
+    Intersection(MeetAggrIntersection),
+    Min(MeetAggrMin),
+    Max(MeetAggrMax),
+    MinCost(MeetAggrMinCost),
+    Shortest(MeetAggrShortest),
+    Choice(MeetAggrChoice),
+    BitAnd(MeetAggrBitAnd),
+    BitOr(MeetAggrBitOr),
+    HllUnion(crate::data::sketch::aggr::MeetAggrHllUnion),
+}
+
+impl MeetAggr {
+    pub(crate) fn init_val(&self) -> MeetAccum {
+        match self {
+            Self::And(a) => a.init_val(),
+            Self::Or(a) => a.init_val(),
+            Self::Union(a) => a.init_val(),
+            Self::Intersection(a) => a.init_val(),
+            Self::Min(a) => a.init_val(),
+            Self::Max(a) => a.init_val(),
+            Self::MinCost(a) => a.init_val(),
+            Self::Shortest(a) => a.init_val(),
+            Self::Choice(a) => a.init_val(),
+            Self::BitAnd(a) => a.init_val(),
+            Self::BitOr(a) => a.init_val(),
+            Self::HllUnion(a) => a.init_val(),
+        }
+    }
+
+    pub(crate) fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        match self {
+            Self::And(a) => a.update(left, right),
+            Self::Or(a) => a.update(left, right),
+            Self::Union(a) => a.update(left, right),
+            Self::Intersection(a) => a.update(left, right),
+            Self::Min(a) => a.update(left, right),
+            Self::Max(a) => a.update(left, right),
+            Self::MinCost(a) => a.update(left, right),
+            Self::Shortest(a) => a.update(left, right),
+            Self::Choice(a) => a.update(left, right),
+            Self::BitAnd(a) => a.update(left, right),
+            Self::BitOr(a) => a.update(left, right),
+            Self::HllUnion(a) => a.update(left, right),
+        }
+    }
 }
 
 /// Builds a fresh normal fold. `args` are the aggregation's compile-time
 /// arguments (only `collect` takes one today); validation happens at
 /// construction, not per row.
-pub(crate) type NormalAggrFactory = fn(&[DataValue]) -> Result<Box<dyn NormalAggrObj>>;
+pub(crate) type NormalAggrFactory = fn(&[DataValue]) -> Result<NormalAggr>;
 
 /// Builds the meet form of a meet aggregation. Meets take no arguments.
-pub(crate) type MeetAggrFactory = fn() -> Box<dyn MeetAggrObj>;
+pub(crate) type MeetAggrFactory = fn() -> MeetAggr;
 
 /// What an aggregation *is*. A `Meet` can only be declared with a meet
 /// factory (plus the normal form every aggregation has); a `Normal` has no
@@ -141,7 +310,7 @@ impl Aggregation {
     }
 
     /// The meet form, if this is a meet aggregation.
-    pub(crate) fn meet_op(&self) -> Option<Box<dyn MeetAggrObj>> {
+    pub(crate) fn meet_op(&self) -> Option<MeetAggr> {
         match self.kind {
             AggrKind::Meet { meet, .. } => Some(meet()),
             AggrKind::Normal { .. } => None,
@@ -149,7 +318,7 @@ impl Aggregation {
     }
 
     /// A fresh normal fold (every aggregation, meet included, has one).
-    pub(crate) fn normal_op(&self, args: &[DataValue]) -> Result<Box<dyn NormalAggrObj>> {
+    pub(crate) fn normal_op(&self, args: &[DataValue]) -> Result<NormalAggr> {
         match self.kind {
             AggrKind::Meet { normal, .. } | AggrKind::Normal { normal } => normal(args),
         }
@@ -173,12 +342,12 @@ impl Debug for Aggregation {
 /// and its normal form together, so the kind can never drift from the
 /// implementations.
 macro_rules! meet_aggr {
-    ($aggr:ident, $name:literal, $meet:expr, $normal:ty) => {
+    ($aggr:ident, $name:literal, $meet_var:ident, $meet:expr, $norm_var:ident, $normal:ty) => {
         const $aggr: Aggregation = Aggregation {
             name: $name,
             kind: AggrKind::Meet {
-                meet: || Box::new($meet),
-                normal: |_| Ok(Box::new(<$normal>::default())),
+                meet: || MeetAggr::$meet_var($meet),
+                normal: |_| Ok(NormalAggr::$norm_var(<$normal>::default())),
             },
         };
     };
@@ -186,17 +355,17 @@ macro_rules! meet_aggr {
 
 /// Declares a normal-only aggregation.
 macro_rules! normal_aggr {
-    ($aggr:ident, $name:literal, $normal:ty) => {
+    ($aggr:ident, $name:literal, $norm_var:ident, $normal:ty) => {
         const $aggr: Aggregation = Aggregation {
             name: $name,
             kind: AggrKind::Normal {
-                normal: |_| Ok(Box::new(<$normal>::default())),
+                normal: |_| Ok(NormalAggr::$norm_var(<$normal>::default())),
             },
         };
     };
 }
 
-meet_aggr!(AGGR_AND, "and", MeetAggrAnd, AggrAnd);
+meet_aggr!(AGGR_AND, "and", And, MeetAggrAnd, And, AggrAnd);
 
 /// Conjunction as a fold: `true` until any row is `false`.
 pub(crate) struct AggrAnd {
@@ -208,6 +377,8 @@ impl Default for AggrAnd {
         Self { accum: true }
     }
 }
+
+impl seal::Sealed for AggrAnd {}
 
 impl NormalAggrObj for AggrAnd {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -225,6 +396,8 @@ impl NormalAggrObj for AggrAnd {
 
 /// Conjunction as a meet: the two-point lattice `true > false` under `&`.
 pub(crate) struct MeetAggrAnd;
+
+impl seal::Sealed for MeetAggrAnd {}
 
 impl MeetAggrObj for MeetAggrAnd {
     fn init_val(&self) -> MeetAccum {
@@ -256,13 +429,15 @@ impl MeetAggrObj for MeetAggrAnd {
     }
 }
 
-meet_aggr!(AGGR_OR, "or", MeetAggrOr, AggrOr);
+meet_aggr!(AGGR_OR, "or", Or, MeetAggrOr, Or, AggrOr);
 
 /// Disjunction as a fold: `false` until any row is `true`.
 #[derive(Default)]
 pub(crate) struct AggrOr {
     accum: bool,
 }
+
+impl seal::Sealed for AggrOr {}
 
 impl NormalAggrObj for AggrOr {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -280,6 +455,8 @@ impl NormalAggrObj for AggrOr {
 
 /// Disjunction as a meet: the two-point lattice `false < true` under `|`.
 pub(crate) struct MeetAggrOr;
+
+impl seal::Sealed for MeetAggrOr {}
 
 impl MeetAggrObj for MeetAggrOr {
     fn init_val(&self) -> MeetAccum {
@@ -306,13 +483,15 @@ impl MeetAggrObj for MeetAggrOr {
     }
 }
 
-normal_aggr!(AGGR_UNIQUE, "unique", AggrUnique);
+normal_aggr!(AGGR_UNIQUE, "unique", Unique, AggrUnique);
 
 /// The distinct values seen, as a sorted list.
 #[derive(Default)]
 pub(crate) struct AggrUnique {
     accum: BTreeSet<DataValue>,
 }
+
+impl seal::Sealed for AggrUnique {}
 
 impl NormalAggrObj for AggrUnique {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -325,13 +504,15 @@ impl NormalAggrObj for AggrUnique {
     }
 }
 
-normal_aggr!(AGGR_GROUP_COUNT, "group_count", AggrGroupCount);
+normal_aggr!(AGGR_GROUP_COUNT, "group_count", GroupCount, AggrGroupCount);
 
 /// Each distinct value with its multiplicity, as a sorted list of pairs.
 #[derive(Default)]
 pub(crate) struct AggrGroupCount {
     accum: BTreeMap<DataValue, i64>,
 }
+
+impl seal::Sealed for AggrGroupCount {}
 
 impl NormalAggrObj for AggrGroupCount {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -350,7 +531,7 @@ impl NormalAggrObj for AggrGroupCount {
     }
 }
 
-normal_aggr!(AGGR_COUNT_UNIQUE, "count_unique", AggrCountUnique);
+normal_aggr!(AGGR_COUNT_UNIQUE, "count_unique", CountUnique, AggrCountUnique);
 
 /// How many distinct values were seen.
 #[derive(Default)]
@@ -358,6 +539,8 @@ pub(crate) struct AggrCountUnique {
     count: i64,
     accum: BTreeSet<DataValue>,
 }
+
+impl seal::Sealed for AggrCountUnique {}
 
 impl NormalAggrObj for AggrCountUnique {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -373,13 +556,15 @@ impl NormalAggrObj for AggrCountUnique {
     }
 }
 
-meet_aggr!(AGGR_UNION, "union", MeetAggrUnion, AggrUnion);
+meet_aggr!(AGGR_UNION, "union", Union, MeetAggrUnion, Union, AggrUnion);
 
 /// Set union of list-valued rows, as a fold.
 #[derive(Default)]
 pub(crate) struct AggrUnion {
     accum: BTreeSet<DataValue>,
 }
+
+impl seal::Sealed for AggrUnion {}
 
 impl NormalAggrObj for AggrUnion {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -399,6 +584,8 @@ impl NormalAggrObj for AggrUnion {
 /// accumulator is kept as a `Set`; a `List` seed is canonicalized on first
 /// contact.
 pub(crate) struct MeetAggrUnion;
+
+impl seal::Sealed for MeetAggrUnion {}
 
 impl MeetAggrObj for MeetAggrUnion {
     fn init_val(&self) -> MeetAccum {
@@ -443,7 +630,9 @@ impl MeetAggrObj for MeetAggrUnion {
 meet_aggr!(
     AGGR_INTERSECTION,
     "intersection",
+    Intersection,
     MeetAggrIntersection,
+    Intersection,
     AggrIntersection
 );
 
@@ -454,6 +643,8 @@ meet_aggr!(
 pub(crate) struct AggrIntersection {
     accum: Option<BTreeSet<DataValue>>,
 }
+
+impl seal::Sealed for AggrIntersection {}
 
 impl NormalAggrObj for AggrIntersection {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -485,6 +676,8 @@ impl NormalAggrObj for AggrIntersection {
 /// Set intersection as a meet. The identity is the missing top element
 /// ("everything") — [`MeetAccum::Empty`], never [`DataValue::Null`].
 pub(crate) struct MeetAggrIntersection;
+
+impl seal::Sealed for MeetAggrIntersection {}
 
 impl MeetAggrObj for MeetAggrIntersection {
     fn init_val(&self) -> MeetAccum {
@@ -534,9 +727,9 @@ impl MeetAggrObj for MeetAggrIntersection {
 }
 
 /// `collect` takes an optional positive limit as its compile-time argument.
-fn collect_factory(args: &[DataValue]) -> Result<Box<dyn NormalAggrObj>> {
+fn collect_factory(args: &[DataValue]) -> Result<NormalAggr> {
     Ok(match args.first() {
-        None => Box::new(AggrCollect::default()),
+        None => NormalAggr::Collect(AggrCollect::default()),
         Some(arg) => {
             let limit = arg.get_int().ok_or_else(|| {
                 miette!(
@@ -549,7 +742,7 @@ fn collect_factory(args: &[DataValue]) -> Result<Box<dyn NormalAggrObj>> {
                 "argument to 'collect' must be positive, got {}",
                 limit
             );
-            Box::new(AggrCollect::new(limit as usize))
+            NormalAggr::Collect(AggrCollect::new(limit as usize))
         }
     })
 }
@@ -577,6 +770,8 @@ impl AggrCollect {
     }
 }
 
+impl seal::Sealed for AggrCollect {}
+
 impl NormalAggrObj for AggrCollect {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         if let Some(limit) = self.limit
@@ -593,7 +788,7 @@ impl NormalAggrObj for AggrCollect {
     }
 }
 
-normal_aggr!(AGGR_CHOICE_RAND, "choice_rand", AggrChoiceRand);
+normal_aggr!(AGGR_CHOICE_RAND, "choice_rand", ChoiceRand, AggrChoiceRand);
 
 /// A uniformly random row, by reservoir sampling with a reservoir of one:
 /// the n-th row replaces the choice with probability 1/n.
@@ -611,6 +806,8 @@ impl Default for AggrChoiceRand {
     }
 }
 
+impl seal::Sealed for AggrChoiceRand {}
+
 impl NormalAggrObj for AggrChoiceRand {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         self.count += 1;
@@ -627,13 +824,15 @@ impl NormalAggrObj for AggrChoiceRand {
     }
 }
 
-normal_aggr!(AGGR_COUNT, "count", AggrCount);
+normal_aggr!(AGGR_COUNT, "count", Count, AggrCount);
 
 /// How many rows there were.
 #[derive(Default)]
 pub(crate) struct AggrCount {
     count: i64,
 }
+
+impl seal::Sealed for AggrCount {}
 
 impl NormalAggrObj for AggrCount {
     fn set(&mut self, _value: &DataValue) -> Result<()> {
@@ -646,7 +845,7 @@ impl NormalAggrObj for AggrCount {
     }
 }
 
-normal_aggr!(AGGR_VARIANCE, "variance", AggrVariance);
+normal_aggr!(AGGR_VARIANCE, "variance", Variance, AggrVariance);
 
 /// Sample variance from running sums: n, Σx, Σx², finalized as
 /// (Σx² − (Σx)²/n) / (n − 1).
@@ -656,6 +855,8 @@ pub(crate) struct AggrVariance {
     sum: f64,
     sum_sq: f64,
 }
+
+impl seal::Sealed for AggrVariance {}
 
 impl NormalAggrObj for AggrVariance {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -679,7 +880,7 @@ impl NormalAggrObj for AggrVariance {
     }
 }
 
-normal_aggr!(AGGR_STD_DEV, "std_dev", AggrStdDev);
+normal_aggr!(AGGR_STD_DEV, "std_dev", StdDev, AggrStdDev);
 
 /// Sample standard deviation: the square root of [`AggrVariance`]'s result.
 #[derive(Default)]
@@ -688,6 +889,8 @@ pub(crate) struct AggrStdDev {
     sum: f64,
     sum_sq: f64,
 }
+
+impl seal::Sealed for AggrStdDev {}
 
 impl NormalAggrObj for AggrStdDev {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -710,7 +913,7 @@ impl NormalAggrObj for AggrStdDev {
     }
 }
 
-normal_aggr!(AGGR_MEAN, "mean", AggrMean);
+normal_aggr!(AGGR_MEAN, "mean", Mean, AggrMean);
 
 /// The arithmetic mean, accumulated in floating point.
 #[derive(Default)]
@@ -718,6 +921,8 @@ pub(crate) struct AggrMean {
     count: i64,
     sum: f64,
 }
+
+impl seal::Sealed for AggrMean {}
 
 impl NormalAggrObj for AggrMean {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -736,7 +941,7 @@ impl NormalAggrObj for AggrMean {
     }
 }
 
-normal_aggr!(AGGR_SUM, "sum", AggrSum);
+normal_aggr!(AGGR_SUM, "sum", Sum, AggrSum);
 
 /// Exact-while-possible numeric accumulator for `sum` and `product`:
 /// integer inputs fold in `i128`; the first float input — or an `i128`
@@ -798,6 +1003,8 @@ impl Default for AggrSum {
     }
 }
 
+impl seal::Sealed for AggrSum {}
+
 impl NormalAggrObj for AggrSum {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
@@ -812,7 +1019,7 @@ impl NormalAggrObj for AggrSum {
     }
 }
 
-normal_aggr!(AGGR_PRODUCT, "product", AggrProduct);
+normal_aggr!(AGGR_PRODUCT, "product", Product, AggrProduct);
 
 /// The product, accumulated exactly via [`NumAccum`]: all-integer input
 /// multiplies to an exact `Int` (promoted to `Float` on the first float or
@@ -828,6 +1035,8 @@ impl Default for AggrProduct {
         }
     }
 }
+
+impl seal::Sealed for AggrProduct {}
 
 impl NormalAggrObj for AggrProduct {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -845,7 +1054,7 @@ impl NormalAggrObj for AggrProduct {
     }
 }
 
-meet_aggr!(AGGR_MIN, "min", MeetAggrMin, AggrMin);
+meet_aggr!(AGGR_MIN, "min", Min, MeetAggrMin, Min, AggrMin);
 
 /// The numerical minimum, ignoring nulls; `Null` when no row had a number.
 pub(crate) struct AggrMin {
@@ -859,6 +1068,8 @@ impl Default for AggrMin {
         }
     }
 }
+
+impl seal::Sealed for AggrMin {}
 
 impl NormalAggrObj for AggrMin {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -891,6 +1102,8 @@ impl NormalAggrObj for AggrMin {
 /// with [`MeetAccum::Empty`] as the identity (Null inputs are skipped, as
 /// in the normal form — they are not the empty sentinel).
 pub(crate) struct MeetAggrMin;
+
+impl seal::Sealed for MeetAggrMin {}
 
 impl MeetAggrObj for MeetAggrMin {
     fn init_val(&self) -> MeetAccum {
@@ -927,7 +1140,7 @@ impl MeetAggrObj for MeetAggrMin {
     }
 }
 
-meet_aggr!(AGGR_MAX, "max", MeetAggrMax, AggrMax);
+meet_aggr!(AGGR_MAX, "max", Max, MeetAggrMax, Max, AggrMax);
 
 /// The numerical maximum, ignoring nulls; `Null` when no row had a number.
 pub(crate) struct AggrMax {
@@ -941,6 +1154,8 @@ impl Default for AggrMax {
         }
     }
 }
+
+impl seal::Sealed for AggrMax {}
 
 impl NormalAggrObj for AggrMax {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -971,6 +1186,8 @@ impl NormalAggrObj for AggrMax {
 /// with [`MeetAccum::Empty`] as the identity (Null inputs are skipped, as
 /// in the normal form — they are not the empty sentinel).
 pub(crate) struct MeetAggrMax;
+
+impl seal::Sealed for MeetAggrMax {}
 
 impl MeetAggrObj for MeetAggrMax {
     fn init_val(&self) -> MeetAccum {
@@ -1005,7 +1222,7 @@ impl MeetAggrObj for MeetAggrMax {
     }
 }
 
-normal_aggr!(AGGR_LATEST_BY, "latest_by", AggrLatestBy);
+normal_aggr!(AGGR_LATEST_BY, "latest_by", LatestBy, AggrLatestBy);
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts greatest.
 pub(crate) struct AggrLatestBy {
@@ -1021,6 +1238,8 @@ impl Default for AggrLatestBy {
         }
     }
 }
+
+impl seal::Sealed for AggrLatestBy {}
 
 impl NormalAggrObj for AggrLatestBy {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1044,7 +1263,7 @@ impl NormalAggrObj for AggrLatestBy {
     }
 }
 
-normal_aggr!(AGGR_SMALLEST_BY, "smallest_by", AggrSmallestBy);
+normal_aggr!(AGGR_SMALLEST_BY, "smallest_by", SmallestBy, AggrSmallestBy);
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts least.
 pub(crate) struct AggrSmallestBy {
@@ -1060,6 +1279,8 @@ impl Default for AggrSmallestBy {
         }
     }
 }
+
+impl seal::Sealed for AggrSmallestBy {}
 
 impl NormalAggrObj for AggrSmallestBy {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1083,7 +1304,7 @@ impl NormalAggrObj for AggrSmallestBy {
     }
 }
 
-meet_aggr!(AGGR_MIN_COST, "min_cost", MeetAggrMinCost, AggrMinCost);
+meet_aggr!(AGGR_MIN_COST, "min_cost", MinCost, MeetAggrMinCost, MinCost, AggrMinCost);
 
 /// Of `[payload, cost]` pairs, the pair with the numerically least cost.
 pub(crate) struct AggrMinCost {
@@ -1099,6 +1320,8 @@ impl Default for AggrMinCost {
         }
     }
 }
+
+impl seal::Sealed for AggrMinCost {}
 
 impl NormalAggrObj for AggrMinCost {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1131,6 +1354,8 @@ impl NormalAggrObj for AggrMinCost {
 /// Least-cost pair as a meet; ties keep the incumbent (a deliberate,
 /// order-dependent tie-break, like `choice`).
 pub(crate) struct MeetAggrMinCost;
+
+impl seal::Sealed for MeetAggrMinCost {}
 
 impl MeetAggrObj for MeetAggrMinCost {
     fn init_val(&self) -> MeetAccum {
@@ -1183,7 +1408,7 @@ impl MeetAggrObj for MeetAggrMinCost {
     }
 }
 
-meet_aggr!(AGGR_SHORTEST, "shortest", MeetAggrShortest, AggrShortest);
+meet_aggr!(AGGR_SHORTEST, "shortest", Shortest, MeetAggrShortest, Shortest, AggrShortest);
 
 /// The shortest list-valued row (a path, typically); ties keep the
 /// incumbent.
@@ -1191,6 +1416,8 @@ meet_aggr!(AGGR_SHORTEST, "shortest", MeetAggrShortest, AggrShortest);
 pub(crate) struct AggrShortest {
     found: Option<Vec<DataValue>>,
 }
+
+impl seal::Sealed for AggrShortest {}
 
 impl NormalAggrObj for AggrShortest {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1221,6 +1448,8 @@ impl NormalAggrObj for AggrShortest {
 /// Shortest list as a meet, with [`MeetAccum::Empty`] as the identity.
 pub(crate) struct MeetAggrShortest;
 
+impl seal::Sealed for MeetAggrShortest {}
+
 impl MeetAggrObj for MeetAggrShortest {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Empty
@@ -1249,7 +1478,7 @@ impl MeetAggrObj for MeetAggrShortest {
     }
 }
 
-meet_aggr!(AGGR_CHOICE, "choice", MeetAggrChoice, AggrChoice);
+meet_aggr!(AGGR_CHOICE, "choice", Choice, MeetAggrChoice, Choice, AggrChoice);
 
 /// An arbitrary non-null row: the first one seen wins.
 pub(crate) struct AggrChoice {
@@ -1263,6 +1492,8 @@ impl Default for AggrChoice {
         }
     }
 }
+
+impl seal::Sealed for AggrChoice {}
 
 impl NormalAggrObj for AggrChoice {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1282,6 +1513,8 @@ impl NormalAggrObj for AggrChoice {
 /// is ordinary data (adopted from Empty); only [`MeetAccum::Empty`] is vacant.
 pub(crate) struct MeetAggrChoice;
 
+impl seal::Sealed for MeetAggrChoice {}
+
 impl MeetAggrObj for MeetAggrChoice {
     fn init_val(&self) -> MeetAccum {
         MeetAccum::Empty
@@ -1300,13 +1533,15 @@ impl MeetAggrObj for MeetAggrChoice {
     }
 }
 
-meet_aggr!(AGGR_BIT_AND, "bit_and", MeetAggrBitAnd, AggrBitAnd);
+meet_aggr!(AGGR_BIT_AND, "bit_and", BitAnd, MeetAggrBitAnd, BitAnd, AggrBitAnd);
 
 /// Bytewise AND of equal-length byte strings, as a fold.
 #[derive(Default)]
 pub(crate) struct AggrBitAnd {
     res: Vec<u8>,
 }
+
+impl seal::Sealed for AggrBitAnd {}
 
 impl NormalAggrObj for AggrBitAnd {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1341,6 +1576,8 @@ impl NormalAggrObj for AggrBitAnd {
 /// operands differed, even when the fold left the accumulator unchanged
 /// (e.g. `0x00 & 0x0f`).
 pub(crate) struct MeetAggrBitAnd;
+
+impl seal::Sealed for MeetAggrBitAnd {}
 
 impl MeetAggrObj for MeetAggrBitAnd {
     fn init_val(&self) -> MeetAccum {
@@ -1383,13 +1620,15 @@ impl MeetAggrObj for MeetAggrBitAnd {
     }
 }
 
-meet_aggr!(AGGR_BIT_OR, "bit_or", MeetAggrBitOr, AggrBitOr);
+meet_aggr!(AGGR_BIT_OR, "bit_or", BitOr, MeetAggrBitOr, BitOr, AggrBitOr);
 
 /// Bytewise OR of equal-length byte strings, as a fold.
 #[derive(Default)]
 pub(crate) struct AggrBitOr {
     res: Vec<u8>,
 }
+
+impl seal::Sealed for AggrBitOr {}
 
 impl NormalAggrObj for AggrBitOr {
     fn set(&mut self, value: &DataValue) -> Result<()> {
@@ -1422,6 +1661,8 @@ impl NormalAggrObj for AggrBitOr {
 /// Bytewise OR as a meet; the empty byte string is the identity seed.
 /// The changed flag is exact, as in [`MeetAggrBitAnd`].
 pub(crate) struct MeetAggrBitOr;
+
+impl seal::Sealed for MeetAggrBitOr {}
 
 impl MeetAggrObj for MeetAggrBitOr {
     fn init_val(&self) -> MeetAccum {
@@ -1464,7 +1705,7 @@ impl MeetAggrObj for MeetAggrBitOr {
     }
 }
 
-normal_aggr!(AGGR_BIT_XOR, "bit_xor", AggrBitXor);
+normal_aggr!(AGGR_BIT_XOR, "bit_xor", BitXor, AggrBitXor);
 
 /// Bytewise XOR of equal-length byte strings. Not a meet: XOR is not
 /// idempotent (folding a row twice cancels it), so it must never run
@@ -1473,6 +1714,8 @@ normal_aggr!(AGGR_BIT_XOR, "bit_xor", AggrBitXor);
 pub(crate) struct AggrBitXor {
     res: Vec<u8>,
 }
+
+impl seal::Sealed for AggrBitXor {}
 
 impl NormalAggrObj for AggrBitXor {
     fn set(&mut self, value: &DataValue) -> Result<()> {

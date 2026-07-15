@@ -68,7 +68,7 @@ use std::sync::Arc;
 
 use miette::Result;
 
-use crate::data::aggr::{MeetAccum, MeetAggrObj, parse_aggr};
+use crate::data::aggr::{MeetAccum, MeetAggr, parse_aggr};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
@@ -234,6 +234,9 @@ impl ModelBody {
         }
     }
 }
+
+impl crate::query::eval::seal::Sealed for ModelBody {}
+
 
 impl RuleBody for ModelBody {
     fn for_each_derivation(
@@ -2942,7 +2945,7 @@ fn expected_meet(
                     changed = true;
                 }
                 Some(mut cur) => {
-                    let op: Box<dyn MeetAggrObj> =
+                    let op: MeetAggr =
                         aggregation.meet_op().expect("meet-capable aggregation");
                     if op.update(&mut cur, &val).expect("meet update") {
                         acc.insert(b.clone(), cur);

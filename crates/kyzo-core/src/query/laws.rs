@@ -149,7 +149,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::data::aggr::{Aggregation, MeetAccum, MeetAggrObj, NormalAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr, NormalAggr};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
@@ -1272,14 +1272,14 @@ fn eval_normal_aggr_head(
         .enumerate()
         .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
         .collect();
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>, Rejection> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>, Rejection> {
         val_positions
             .iter()
             .map(|(_, aggr, args)| aggr.normal_op(args).map_err(aggr_err))
             .collect()
     };
 
-    let mut groups: BTreeMap<Tuple, Vec<Box<dyn NormalAggrObj>>> = BTreeMap::new();
+    let mut groups: BTreeMap<Tuple, Vec<NormalAggr>> = BTreeMap::new();
     for rule in rules {
         for row in derived_rows(rule, program, db, default_as_of) {
             let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
@@ -1320,7 +1320,7 @@ fn eval_normal_aggr_head(
 struct MeetState {
     key_positions: Vec<usize>,
     val_positions: Vec<usize>,
-    ops: Vec<Box<dyn MeetAggrObj>>,
+    ops: Vec<MeetAggr>,
     arity: usize,
     acc: BTreeMap<Tuple, Vec<MeetAccum>>,
 }
@@ -2051,13 +2051,13 @@ fn eval_one_group(
     signature_len: usize,
     group_key: &Tuple,
 ) -> Result<Option<Tuple>, Rejection> {
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>, Rejection> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>, Rejection> {
         val_positions
             .iter()
             .map(|(_, aggr, args)| aggr.normal_op(args).map_err(aggr_err))
             .collect()
     };
-    let mut ops: Option<Vec<Box<dyn NormalAggrObj>>> = None;
+    let mut ops: Option<Vec<NormalAggr>> = None;
     for rule in rules {
         // Seed a binding fixing each key position's variable to this
         // group's value; a `Const` key position that disagrees with
@@ -3281,7 +3281,7 @@ mod tests {
     fn semi_naive_meet_reach(
         edges: &BTreeSet<(i64, i64)>,
         seeds: &BTreeMap<i64, DataValue>,
-        op: &dyn MeetAggrObj,
+        op: &MeetAggr,
         mode: FlagMode,
     ) -> BTreeMap<i64, DataValue> {
         let mut total: BTreeMap<i64, MeetAccum> = BTreeMap::new();
@@ -3398,7 +3398,7 @@ mod tests {
                 .meet_op()
                 .expect("meet form");
             // The honest flag reaches the oracle's fixpoint...
-            let honest = semi_naive_meet_reach(&edges, &seeds, op.as_ref(), FlagMode::Landed);
+            let honest = semi_naive_meet_reach(&edges, &seeds, &op, FlagMode::Landed);
             assert_eq!(
                 honest, oracle,
                 "honest semi-naive equals the oracle for {name}"
@@ -3407,7 +3407,7 @@ mod tests {
             // to the store but never re-enters the delta, so node 3 keeps
             // its seed value.
             let buggy =
-                semi_naive_meet_reach(&edges, &seeds, op.as_ref(), FlagMode::UpstreamInverted);
+                semi_naive_meet_reach(&edges, &seeds, &op, FlagMode::UpstreamInverted);
             assert_ne!(
                 buggy, oracle,
                 "the upstream inversion must be observable for {name}"
@@ -3500,7 +3500,7 @@ mod tests {
                 .meet_op()
                 .expect("meet form");
             let semi_naive: BTreeSet<Tuple> =
-                semi_naive_meet_reach(&case.edges, &case.seeds, op.as_ref(), FlagMode::Landed)
+                semi_naive_meet_reach(&case.edges, &case.seeds, &op, FlagMode::Landed)
                     .into_iter()
                     .map(|(k, val)| vec![v(k), val])
                     .map(Tuple::from_vec).collect();
