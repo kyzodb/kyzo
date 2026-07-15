@@ -103,9 +103,9 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-/* DEMOLISHED bytecode import */
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
+use crate::data::expr::Expr;
 use crate::data::value::{DataValue, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::runtime::relation::RelationHandle;
@@ -384,8 +384,7 @@ pub(crate) fn sparse_search(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &SparseSearchParams,
-    filter_code: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
-    stack: &mut Vec<DataValue>,
+    filter_code: &Option<Expr>,
 ) -> Result<Vec<Tuple>> {
     let query = admit_sparse(query)?;
     if query.is_empty() {
@@ -451,8 +450,8 @@ pub(crate) fn sparse_search(
         if params.bind_score {
             cand.push(DataValue::from(score as f64));
         }
-        if let Some((code, span)) = filter_code
-            && !/*DEMOLISHED_eval_bytecode_pred*/(code, &cand, stack, *span)?
+        if let Some(code) = filter_code
+            && !code.eval_pred(&cand)?
         {
             continue;
         }
@@ -564,9 +563,8 @@ mod tests {
     /// Run a search and project `(key, score)`.
     fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, f32)> {
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
         let hits =
-            sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None, &mut stack).unwrap();
+            sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
         hits.iter()
             .map(|t| {
                 (
@@ -730,8 +728,7 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let f = setup(&db, docs);
             let rtx = db.read_tx().unwrap();
-            let mut stack = vec![];
-            sparse_search(&rtx, query, &f.base, &f.idx, &params(10), &None, &mut stack).unwrap()
+            sparse_search(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap()
         };
 
         let a = build_and_search();
@@ -761,7 +758,6 @@ mod tests {
         };
         let search_err = || -> miette::Report {
             let rtx = db.read_tx().unwrap();
-            let mut stack = vec![];
             sparse_search(
                 &rtx,
                 &[(0, 1.0)],
@@ -769,7 +765,6 @@ mod tests {
                 &f.idx,
                 &params(1),
                 &None,
-                &mut stack,
             )
             .expect_err("corrupt posting must error, not panic")
         };
@@ -931,23 +926,21 @@ mod tests {
         ];
         let f = setup(&db, docs);
         // Filter: tag == "keep". Column layout of the candidate: [k, tag, score].
-        let filter = vec![
-            /*DEMOLISHED_Bytecode*/::Binding {
-                var: Symbol::new("tag", SourceSpan(0, 0)),
-                tuple_pos: Some(1),
-            },
-            /*DEMOLISHED_Bytecode*/::Const {
-                val: DataValue::from("keep"),
-                span: SourceSpan(0, 0),
-            },
-            /*DEMOLISHED_Bytecode*/::Apply {
-                op: &crate::data::functions::OP_EQ,
-                arity: 2,
-                span: SourceSpan(0, 0),
-            },
-        ];
+        let filter = Expr::Apply {
+            op: &crate::data::functions::OP_EQ,
+            args: Box::new([
+                Expr::Binding {
+                    var: Symbol::new("tag", SourceSpan(0, 0)),
+                    tuple_pos: Some(1),
+                },
+                Expr::Const {
+                    val: DataValue::from("keep"),
+                    span: SourceSpan(0, 0),
+                },
+            ]),
+            span: SourceSpan(0, 0),
+        };
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
         let p = SparseSearchParams {
             k: 10,
             bind_score: true,
@@ -958,8 +951,7 @@ mod tests {
             &f.base,
             &f.idx,
             &p,
-            &Some((filter, SourceSpan(0, 0))),
-            &mut stack,
+            &Some(filter),
         )
         .unwrap();
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();

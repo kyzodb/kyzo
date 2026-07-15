@@ -95,13 +95,11 @@ fn astar(
     // proved every tuple has a first column.
     let start_node = &starting.as_slice()[0];
     let goal_node = &goal.as_slice()[0];
-    let heuristic_bytecode = heuristic.compile()?;
-    let mut stack = vec![];
-    let mut eval_heuristic = |node: &Tuple| -> Result<f64> {
+    let eval_heuristic = |node: &Tuple| -> Result<f64> {
         let mut v = node.clone();
         v.extend(goal.iter().cloned());
         let t = v;
-        let cost_val = /*DEMOLISHED_eval_bytecode*/(&heuristic_bytecode, &t, &mut stack)?;
+        let cost_val = heuristic.eval(&t)?;
         let cost = cost_val.get_float().ok_or_else(|| {
             BadExprValueError(
                 cost_val,

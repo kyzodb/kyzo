@@ -94,14 +94,14 @@ impl ReorderRA {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// FilteredRA: bytecode predicate filters
+// FilteredRA: Expr predicate filters
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Keep only tuples satisfying every compiled predicate.
 pub(crate) struct FilteredRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,
 }
@@ -131,7 +131,7 @@ impl FilteredRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&parent_bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()));
+            self.filters_bytecodes.push(e.clone());
         }
         Ok(())
     }
@@ -152,7 +152,6 @@ impl FilteredRA {
             parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
             filters: &self.filters_bytecodes,
             eliminate_indices,
-            stack: vec![],
         }))
     }
 }
@@ -168,7 +167,6 @@ pub(crate) struct UnificationRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) binding: Symbol,
     pub(crate) expr: Expr,
-    pub(crate) expr_bytecode: Vec</*DEMOLISHED_Bytecode*/>,
     pub(crate) is_multi: bool,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,
@@ -184,7 +182,6 @@ impl UnificationRA {
             .map(|(a, b)| (b, a))
             .collect();
         self.expr.fill_binding_indices(&parent_bindings)?;
-        self.expr_bytecode = self.expr.compile()?;
         Ok(())
     }
 

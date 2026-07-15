@@ -46,15 +46,12 @@ impl FixedRule for Dfs {
         let mut condition = payload.expr_option("condition", None)?;
         let binding_map = nodes.get_binding_map(0);
         condition.fill_binding_indices(&binding_map)?;
-        let condition_bytecode = condition.compile()?;
-        let condition_span = condition.span();
         let binding_indices = condition.binding_indices()?;
         let skip_query_nodes = binding_indices.is_subset(&BTreeSet::from([0]));
 
         let mut visited: BTreeSet<DataValue> = Default::default();
         let mut backtrace: BTreeMap<DataValue, DataValue> = Default::default();
         let mut found: Vec<(DataValue, DataValue)> = vec![];
-        let mut stack = vec![];
 
         'outer: for node_tuple in starting_nodes.iter()? {
             let node_tuple = node_tuple?;
@@ -89,7 +86,7 @@ impl FixedRule for Dfs {
                         })??
                 };
 
-                if /*DEMOLISHED_eval_bytecode_pred*/(&condition_bytecode, &cand_tuple, &mut stack, condition_span)?
+                if condition.eval_pred(&cand_tuple)?
                 {
                     found.push((starting_node.clone(), candidate.clone()));
                     if found.len() >= limit {

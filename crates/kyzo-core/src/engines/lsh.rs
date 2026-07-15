@@ -107,9 +107,9 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
-/* DEMOLISHED bytecode import */
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
+use crate::data::expr::Expr;
 use crate::data::value::{DataValue, Tuple, append_canonical};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::TokenizerConfig;
@@ -570,8 +570,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
 pub(crate) fn lsh_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[/*DEMOLISHED_Bytecode*/],
-    stack: &mut Vec<DataValue>,
+    extractor: &Expr,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -592,7 +591,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
         let chunks = decode_inv_chunks(found, inv_idx, inv_key_part)?;
         lsh_del(tx, tuple, Some(chunks), idx, inv_idx)?;
     }
-    let to_index = /*DEMOLISHED_eval_bytecode*/(extractor, tuple, stack)?;
+    let to_index = extractor.eval(tuple)?;
     let min_hash = match &to_index {
         DataValue::Null => return Ok(()),
         DataValue::List(l) => HashValues::new(l.iter().map(element_bytes), perms),
@@ -661,8 +660,7 @@ pub(crate) fn lsh_search(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &LshSearchParams,
-    stack: &mut Vec<DataValue>,
-    filter_code: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
+    filter_code: &Option<Expr>,
     perms: &HashPermutations,
     tokenizer: &TextAnalyzer,
 ) -> Result<Vec<Tuple>> {
@@ -711,8 +709,8 @@ pub(crate) fn lsh_search(
                 "LSH index references a base row that does not exist",
             ))
         })?;
-        if let Some((filter_code, span)) = filter_code
-            && !/*DEMOLISHED_eval_bytecode_pred*/(filter_code, &orig_tuple, stack, *span)?
+        if let Some(filter_code) = filter_code
+            && !filter_code.eval_pred(&orig_tuple)?
         {
             continue;
         }
@@ -949,12 +947,11 @@ mod tests {
             )
             .unwrap();
             let tokenizer = m.tokenizer.build(&m.filters).unwrap();
-            let extractor = vec![/*DEMOLISHED_Bytecode*/::Binding {
+            let extractor = Expr::Binding {
                 var: Symbol::new("v", SourceSpan(0, 0)),
                 tuple_pos: Some(1),
-            }];
+            };
             let perms = m.get_hash_perms().unwrap();
-            let mut stack = vec![];
             for (k, text) in &rows {
                 let row = vec![DataValue::from(*k), DataValue::from(*text)];
                 base.put_fact(
@@ -965,7 +962,7 @@ mod tests {
                 )
                 .unwrap();
                 lsh_put(
-                    &mut tx, &row, &extractor, &mut stack, &tokenizer, &base, &idx, &inv, &m,
+                    &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &m,
                     &perms,
                 )
                 .unwrap();
@@ -1063,7 +1060,7 @@ mod tests {
         inv: RelationHandle,
         manifest: MinHashLshIndexManifest,
         tokenizer: TextAnalyzer,
-        extractor: Vec</*DEMOLISHED_Bytecode*/>,
+        extractor: Expr,
     }
 
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
@@ -1093,12 +1090,11 @@ mod tests {
         .unwrap();
         let tokenizer = manifest.tokenizer.build(&manifest.filters).unwrap();
         // The compiled extractor: project the text column (position 1).
-        let extractor = vec![/*DEMOLISHED_Bytecode*/::Binding {
+        let extractor = Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
             tuple_pos: Some(1),
-        }];
+        };
         let perms = manifest.get_hash_perms().unwrap();
-        let mut stack = vec![];
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
@@ -1109,7 +1105,7 @@ mod tests {
             )
             .unwrap();
             lsh_put(
-                &mut tx, &row, &extractor, &mut stack, &tokenizer, &base, &idx, &inv, &manifest,
+                &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &manifest,
                 &perms,
             )
             .unwrap();
@@ -1140,7 +1136,6 @@ mod tests {
             ],
         );
         let perms = f.manifest.get_hash_perms().unwrap();
-        let mut stack = vec![];
 
         let rtx = db.read_tx().unwrap();
         let hits = lsh_search(
@@ -1151,7 +1146,6 @@ mod tests {
             &f.base,
             &f.idx,
             &LshSearchParams { k: None },
-            &mut stack,
             &None,
             &perms,
             &f.tokenizer,
@@ -1173,7 +1167,6 @@ mod tests {
                 &f.base,
                 &f.idx,
                 &LshSearchParams { k: None },
-                &mut stack,
                 &None,
                 &perms,
                 &f.tokenizer,
@@ -1190,7 +1183,6 @@ mod tests {
                 &f.base,
                 &f.idx,
                 &LshSearchParams { k: None },
-                &mut stack,
                 &None,
                 &perms,
                 &f.tokenizer,
@@ -1218,7 +1210,6 @@ mod tests {
             &f.base,
             &f.idx,
             &LshSearchParams { k: None },
-            &mut stack,
             &None,
             &perms,
             &f.tokenizer,
@@ -1249,7 +1240,6 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let f = setup(&db, &[(1, "some indexed text here")]);
         let perms = f.manifest.get_hash_perms().unwrap();
-        let mut stack = vec![];
 
         // Overwrite the inverse row's value with a wrong-shaped (but
         // well-formed) tuple: a string where the chunk list belongs.
@@ -1280,7 +1270,6 @@ mod tests {
             &mut tx,
             &row,
             &f.extractor,
-            &mut stack,
             &f.tokenizer,
             &f.base,
             &f.idx,

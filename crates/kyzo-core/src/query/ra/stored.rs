@@ -47,7 +47,7 @@ pub(crate) struct StoredRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) span: SourceSpan,
 }
 
@@ -62,7 +62,7 @@ impl StoredRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()));
+            self.filters_bytecodes.push(e.clone());
         }
         Ok(())
     }
@@ -319,7 +319,6 @@ impl StoredRA {
             eliminate_indices,
             cur: None,
             active: None,
-            stack: vec![],
         }))
     }
 }
@@ -338,7 +337,7 @@ pub(crate) struct StoredWithValidityRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) as_of: AsOf,
     pub(crate) span: SourceSpan,
 }
@@ -365,7 +364,7 @@ impl StoredWithValidityRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()));
+            self.filters_bytecodes.push(e.clone());
         }
         Ok(())
     }
@@ -432,7 +431,6 @@ impl StoredWithValidityRA {
             eliminate_indices,
             cur: None,
             active: None,
-            stack: vec![],
         }))
     }
 }

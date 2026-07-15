@@ -183,7 +183,6 @@ fn hsetup(
         KeyspaceKind::AlgorithmState,
     )
     .unwrap();
-    let mut stack = vec![];
     for r in rows {
         base.put_fact(
             &mut tx,
@@ -192,7 +191,7 @@ fn hsetup(
             SourceSpan(0, 0),
         )
         .unwrap();
-        hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap();
+        hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap();
     }
     tx.commit().unwrap();
     (base, idx, m)
@@ -234,68 +233,60 @@ impl FilterSpec {
         }
     }
 
-    /// Compiled bytecode over the ENGINE's appended output row. Binding
+    /// Expr filter over the ENGINE's appended output row. Binding
     /// `tuple_pos = 0` is the key column `k`, at position 0 (base keys first).
-    fn bytecode(&self) -> (Vec</*DEMOLISHED_Bytecode*/>, SourceSpan) {
+    fn filter_expr(&self) -> Expr {
         let span = SourceSpan(0, 0);
         let k = Symbol::new("k", span);
-        let code = match *self {
-            FilterSpec::LessThan { threshold } => vec![
-                /*DEMOLISHED_Bytecode*/::Binding {
-                    var: k,
-                    tuple_pos: Some(0),
-                },
-                /*DEMOLISHED_Bytecode*/::Const {
-                    val: DataValue::from(threshold),
-                    span,
-                },
-                /*DEMOLISHED_Bytecode*/::Apply {
-                    op: &OP_LT,
-                    arity: 2,
-                    span,
-                },
-            ],
-            FilterSpec::ModLessThan { modulus, accept } => vec![
-                /*DEMOLISHED_Bytecode*/::Binding {
-                    var: k,
-                    tuple_pos: Some(0),
-                },
-                /*DEMOLISHED_Bytecode*/::Const {
-                    val: DataValue::from(modulus),
-                    span,
-                },
-                /*DEMOLISHED_Bytecode*/::Apply {
-                    op: &OP_MOD,
-                    arity: 2,
-                    span,
-                },
-                /*DEMOLISHED_Bytecode*/::Const {
-                    val: DataValue::from(accept),
-                    span,
-                },
-                /*DEMOLISHED_Bytecode*/::Apply {
-                    op: &OP_LT,
-                    arity: 2,
-                    span,
-                },
-            ],
-            FilterSpec::AtLeast { threshold } => vec![
-                /*DEMOLISHED_Bytecode*/::Binding {
-                    var: k,
-                    tuple_pos: Some(0),
-                },
-                /*DEMOLISHED_Bytecode*/::Const {
-                    val: DataValue::from(threshold),
-                    span,
-                },
-                /*DEMOLISHED_Bytecode*/::Apply {
-                    op: &OP_GE,
-                    arity: 2,
-                    span,
-                },
-            ],
+        let binding = Expr::Binding {
+            var: k,
+            tuple_pos: Some(0),
         };
-        (code, span)
+        match *self {
+            FilterSpec::LessThan { threshold } => Expr::Apply {
+                op: &OP_LT,
+                args: Box::new([
+                    binding,
+                    Expr::Const {
+                        val: DataValue::from(threshold),
+                        span,
+                    },
+                ]),
+                span,
+            },
+            FilterSpec::ModLessThan { modulus, accept } => Expr::Apply {
+                op: &OP_LT,
+                args: Box::new([
+                    Expr::Apply {
+                        op: &OP_MOD,
+                        args: Box::new([
+                            binding,
+                            Expr::Const {
+                                val: DataValue::from(modulus),
+                                span,
+                            },
+                        ]),
+                        span,
+                    },
+                    Expr::Const {
+                        val: DataValue::from(accept),
+                        span,
+                    },
+                ]),
+                span,
+            },
+            FilterSpec::AtLeast { threshold } => Expr::Apply {
+                op: &OP_GE,
+                args: Box::new([
+                    binding,
+                    Expr::Const {
+                        val: DataValue::from(threshold),
+                        span,
+                    },
+                ]),
+                span,
+            },
+        }
     }
 
     /// True selectivity over a concrete corpus — VERIFIES the sweep generator
@@ -414,8 +405,7 @@ fn filtered_search(
     filter: &FilterSpec,
 ) -> Vec<Tuple> {
     let params = knn_params_p2(k, ef);
-    let fb = Some(filter.bytecode());
-    let mut stack = vec![];
+    let fb = Some(filter.filter_expr());
     hnsw_knn(
         tx,
         q,
@@ -424,7 +414,6 @@ fn filtered_search(
         idx,
         &params,
         &fb,
-        &mut stack,
         &crate::fixed_rule::CancelFlag::default(),
     )
     .unwrap()
@@ -443,9 +432,8 @@ fn selected_plan(
     filter: &FilterSpec,
 ) -> Option<SearchPlan> {
     let params = knn_params_p2(k, ef);
-    let fb = filter.bytecode();
-    let mut stack = vec![];
-    hnsw_knn_selected_plan(tx, q, manifest, base, idx, &params, &fb, &mut stack).unwrap()
+    let fb = filter.filter_expr();
+    hnsw_knn_selected_plan(tx, q, manifest, base, idx, &params, &fb).unwrap()
 }
 
 /// The PINNED draft post-filter baseline (measured in Phase 1, before the
@@ -752,17 +740,14 @@ fn fallback_is_load_bearing_and_exact() {
     let f = filter_at_selectivity(0.90, true); // many matches, so graph would normally fill
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
     let params = knn_params_p2(P2_K, P2_EF);
-    let fb = f.bytecode();
+    let fb = f.filter_expr();
     let starved = SearchPlan::Graph { ef2: 1 };
-
-    let mut s1 = vec![];
     let no_fb = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, &mut s1, starved, false,
+        &rtx, &q, &m, &base, &idx, &params, &fb, starved, false,
     )
     .unwrap();
-    let mut s2 = vec![];
     let with_fb = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, &mut s2, starved, true,
+        &rtx, &q, &m, &base, &idx, &params, &fb, starved, true,
     )
     .unwrap();
 
@@ -933,11 +918,10 @@ fn min_k_matches_law_generative() {
             matches!(plan, SearchPlan::Graph { .. }),
             "pinned band precondition: selector must pick Graph, got {plan:?}"
         );
-        let fb = pinned_f.bytecode();
+        let fb = pinned_f.filter_expr();
         let params = knn_params_p2(P2_K, pinned_ef);
-        let mut stack = vec![];
         let partial = hnsw_knn_forced(
-            &rtx, &q, &m, &base, &idx, &params, &fb, &mut stack, plan, false,
+            &rtx, &q, &m, &base, &idx, &params, &fb, plan, false,
         )
         .unwrap();
         assert!(
@@ -1137,10 +1121,9 @@ fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() {
     // finish the job.
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
     let params = knn_params_p2(P2_K, P2_EF);
-    let fb = f.bytecode();
-    let mut stack = vec![];
+    let fb = f.filter_expr();
     let hits = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, &mut stack, plan, false,
+        &rtx, &q, &m, &base, &idx, &params, &fb, plan, false,
     )
     .unwrap();
     let ekeys = keys_of(&hits);
@@ -1204,7 +1187,6 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
     assert_eq!(f.true_match_count(&rows), rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
-    let mut stack = vec![];
     let unfiltered = hnsw_knn(
         &rtx,
         &q,
@@ -1213,7 +1195,6 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
         &idx,
         &params,
         &None,
-        &mut stack,
         &crate::fixed_rule::CancelFlag::default(),
     )
     .unwrap();

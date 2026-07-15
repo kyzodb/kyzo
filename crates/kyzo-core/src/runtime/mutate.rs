@@ -1363,18 +1363,18 @@ pub(crate) enum IndexCtx {
     Hnsw {
         idx: RelationHandle,
         manifest: crate::engines::hnsw::HnswIndexManifest,
-        filter: Option<Vec</*DEMOLISHED_Bytecode*/>>,
+        filter: Option<Expr>,
     },
     Fts {
         idx: RelationHandle,
-        extractor: Vec</*DEMOLISHED_Bytecode*/>,
+        extractor: Expr,
         analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
     },
     Lsh {
         idx: RelationHandle,
         inv: RelationHandle,
         manifest: crate::engines::lsh::MinHashLshIndexManifest,
-        extractor: Vec</*DEMOLISHED_Bytecode*/>,
+        extractor: Expr,
         analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
         perms: Arc<crate::engines::lsh::HashPermutations>,
     },
@@ -1405,22 +1405,22 @@ impl<T: WriteTx> SessionTx<T> {
     fn compile_row_expr(
         base: &RelationHandle,
         src: &str,
-    ) -> Result<Vec</*DEMOLISHED_Bytecode*/>> {
+    ) -> Result<Expr> {
         let mut expr = crate::parse::parse_expressions(src, &BTreeMap::new())?;
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
-        expr.compile()
+        Ok(expr)
     }
 
-    /// Compile an already-parsed row extractor ([`FtsIndexConfig::extractor`]
-    /// / the manifest's stored typed substance) into bytecode. The extractor
-    /// is never re-parsed from source at build time — it arrives typed.
+    /// Bind an already-parsed row extractor ([`FtsIndexConfig::extractor`]
+    /// / the manifest's stored typed substance) to the base column frame.
+    /// The extractor is never re-parsed from source at build time — it arrives typed.
     fn compile_row_extractor(
         base: &RelationHandle,
         extractor: &crate::data::expr::Expr,
-    ) -> Result<Vec</*DEMOLISHED_Bytecode*/>> {
+    ) -> Result<Expr> {
         let mut expr = extractor.clone();
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
-        expr.compile()
+        Ok(expr)
     }
 
     /// Resolve (and cache) a manifest index's runtime context.
@@ -1480,7 +1480,6 @@ impl<T: WriteTx> SessionTx<T> {
         new_kv: Option<&[DataValue]>,
         old_kv: Option<&[DataValue]>,
     ) -> Result<()> {
-        let mut stack = vec![];
         match ctx {
             IndexCtx::Hnsw {
                 idx,
@@ -1496,8 +1495,7 @@ impl<T: WriteTx> SessionTx<T> {
                         manifest,
                         base,
                         idx,
-                        filter.as_deref(),
-                        &mut stack,
+                        filter.as_ref(),
                         new,
                     )?;
                 }
@@ -1512,7 +1510,6 @@ impl<T: WriteTx> SessionTx<T> {
                         &mut self.store,
                         old,
                         extractor,
-                        &mut stack,
                         analyzer,
                         base,
                         idx,
@@ -1523,7 +1520,6 @@ impl<T: WriteTx> SessionTx<T> {
                         &mut self.store,
                         new,
                         extractor,
-                        &mut stack,
                         analyzer,
                         base,
                         idx,
@@ -1546,7 +1542,6 @@ impl<T: WriteTx> SessionTx<T> {
                         &mut self.store,
                         new,
                         extractor,
-                        &mut stack,
                         analyzer,
                         base,
                         idx,

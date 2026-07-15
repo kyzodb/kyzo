@@ -18,7 +18,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::RelAlgebra;
-/* DEMOLISHED bytecode import */
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::value::DataValue;
@@ -43,8 +42,6 @@ use thiserror::Error;
 pub(crate) struct SearchRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) atom: crate::query::search::SearchAtom,
-    pub(crate) query_bytecode: Vec</*DEMOLISHED_Bytecode*/>,
-    pub(crate) filter_bytecode: Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
 }
 
 /// A search query expression evaluated to a value the engine cannot accept.
@@ -65,7 +62,6 @@ impl SearchRA {
             .map(|(i, b)| (b, i))
             .collect();
         self.atom.query.fill_binding_indices(&parent_frame)?;
-        self.query_bytecode = self.atom.query.compile()?;
         // The filter sees the FULL output frame: parent ++ own_bindings.
         if let Some(filter) = self.atom.filter.as_mut() {
             let mut names = self.parent.bindings_after_eliminate();
@@ -73,7 +69,6 @@ impl SearchRA {
             let full_frame: BTreeMap<_, _> =
                 names.into_iter().enumerate().map(|(i, b)| (b, i)).collect();
             filter.fill_binding_indices(&full_frame)?;
-            self.filter_bytecode = Some((filter.compile()?, filter.span()));
         }
         Ok(())
     }
@@ -104,16 +99,14 @@ impl SearchRA {
             _ => 0,
         };
 
-        let filter_code = self.filter_bytecode.clone();
-        let query_code = self.query_bytecode.clone();
+        let filter_expr = self.atom.filter.clone();
+        let query_expr = self.atom.query.clone();
         let cancel = self.atom.cancel.clone();
         let cfg = &self.atom.cfg;
-        let mut q_stack = vec![];
-        let mut e_stack = vec![];
 
         let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {
             cancel.check()?;
-            let q = /*DEMOLISHED_eval_bytecode*/(&query_code, row, &mut q_stack)?;
+            let q = query_expr.eval(row)?;
             Ok(match cfg {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {
@@ -127,8 +120,7 @@ impl SearchRA {
                         &c.base,
                         &c.idx,
                         &c.params,
-                        &filter_code,
-                        &mut e_stack,
+                        &filter_expr,
                         &self.atom.cancel,
                     )?
                 }
@@ -144,8 +136,7 @@ impl SearchRA {
                         &c.base,
                         &c.idx,
                         &c.params,
-                        &filter_code,
-                        &mut e_stack,
+                        &filter_expr,
                         &c.analyzer,
                         fts_n_total,
                     )?
@@ -158,8 +149,7 @@ impl SearchRA {
                     &c.base,
                     &c.idx,
                     &c.params,
-                    &mut e_stack,
-                    &filter_code,
+                    &filter_expr,
                     &c.perms,
                     &c.analyzer,
                 )?,

@@ -203,9 +203,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::SmartString;
 use thiserror::Error;
 
-/* DEMOLISHED bytecode import */
 use crate::data::relation::VecElementType;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
@@ -1701,12 +1701,11 @@ pub(crate) fn hnsw_put<T: WriteTx>(
     manifest: &HnswIndexManifest,
     base: &RelationHandle,
     idx: &RelationHandle,
-    filter: Option<&[/*DEMOLISHED_Bytecode*/]>,
-    stack: &mut Vec<DataValue>,
+    filter: Option<&Expr>,
     tuple: &[DataValue],
 ) -> Result<bool> {
     if let Some(code) = filter
-        && !/*DEMOLISHED_eval_bytecode_pred*/(code, tuple, stack, SourceSpan::default())?
+        && !code.eval_pred(tuple)?
     {
         hnsw_remove(tx, base, idx, tuple)?;
         return Ok(false);
@@ -1875,8 +1874,7 @@ pub(crate) fn hnsw_knn(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter_bytecode: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
-    stack: &mut Vec<DataValue>,
+    filter_expr: &Option<Expr>,
     cancel: &crate::fixed_rule::CancelFlag,
 ) -> Result<Vec<Tuple>> {
     let q = IndexVec::admit(q, manifest)?;
@@ -1887,8 +1885,8 @@ pub(crate) fn hnsw_knn(
     // unfiltered search keeps the plain graph walk below, whose result-ordering
     // tail (the `(distance, encoded-key)` tie-break) the operator tier owns;
     // this branch is deliberately kept OUT of that site.
-    if let Some(filter) = filter_bytecode {
-        return hnsw_knn_filtered(cancel, tx, &q, manifest, base, idx, params, filter, stack);
+    if let Some(filter) = filter_expr {
+        return hnsw_knn_filtered(cancel, tx, &q, manifest, base, idx, params, filter);
     }
 
     let mut cache = VectorCache::new(manifest);
@@ -2217,8 +2215,7 @@ fn admit_candidate(
     params: &HnswKnnParams,
     cand: &VectorId,
     distance: f64,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
 ) -> Result<Option<Tuple>> {
     if let Some(r) = params.radius
         && distance > r
@@ -2226,7 +2223,7 @@ fn admit_candidate(
         return Ok(None);
     }
     let cand_tuple = build_cand_tuple(tx, base, idx, params, cand, distance)?;
-    if /*DEMOLISHED_eval_bytecode_pred*/(&filter.0, &cand_tuple, stack, filter.1)? {
+    if filter.eval_pred(&cand_tuple)? {
         Ok(Some(cand_tuple))
     } else {
         Ok(None)
@@ -2277,8 +2274,7 @@ fn select_strategy(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
 ) -> Result<SearchPlan> {
     let mut n: usize = 0;
@@ -2303,7 +2299,7 @@ fn select_strategy(
     for id in &reservoir {
         cache.ensure(tx, base, id)?;
         let d = cache.v_dist(q, id)?;
-        if admit_candidate(tx, base, idx, params, id, d, filter, stack)?.is_some() {
+        if admit_candidate(tx, base, idx, params, id, d, filter)?.is_some() {
             pass += 1;
         }
     }
@@ -2342,8 +2338,7 @@ fn scan_filtered(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
     let mut heap: BinaryHeap<Ranked> = BinaryHeap::new();
@@ -2353,7 +2348,7 @@ fn scan_filtered(
         let id = id?;
         cache.ensure(tx, base, &id)?;
         let d = cache.v_dist(q, &id)?;
-        if let Some(tuple) = admit_candidate(tx, base, idx, params, &id, d, filter, stack)? {
+        if let Some(tuple) = admit_candidate(tx, base, idx, params, &id, d, filter)? {
             let key = id_order_key(idx, &id)?;
             push_topk(
                 &mut heap,
@@ -2384,8 +2379,7 @@ fn graph_search_layer0(
     idx: &RelationHandle,
     seeds: &[VectorId],
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
     visit_cap: usize,
 ) -> Result<BinaryHeap<Ranked>> {
@@ -2398,7 +2392,7 @@ fn graph_search_layer0(
             cache.ensure(tx, base, id)?;
             let d = cache.v_dist(q, id)?;
             candidates.push(id.clone(), Reverse(Beam::of(d, id)));
-            if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter, stack)? {
+            if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter)? {
                 let key = id_order_key(idx, id)?;
                 push_topk(
                     &mut results,
@@ -2442,7 +2436,7 @@ fn graph_search_layer0(
             }
             // Visibility: seat only if it passes the filter (+radius).
             if let Some(tuple) =
-                admit_candidate(tx, base, idx, params, &neighbour, nd, filter, stack)?
+                admit_candidate(tx, base, idx, params, &neighbour, nd, filter)?
             {
                 let key = id_order_key(idx, &neighbour)?;
                 push_topk(
@@ -2473,8 +2467,7 @@ fn graph_filtered(
     bottom_layer: i64,
     ef2: usize,
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
     let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
@@ -2488,7 +2481,7 @@ fn graph_filtered(
     let seeds: Vec<VectorId> = found_nn.iter().map(|(id, _)| id.clone()).collect();
     let visit_cap = ef2.saturating_mul(manifest.m_max0.max(1)).saturating_mul(4);
     let results = graph_search_layer0(
-        tx, q, ef2, base, idx, &seeds, params, filter, stack, cache, visit_cap,
+        tx, q, ef2, base, idx, &seeds, params, filter,  cache, visit_cap,
     )?;
     Ok(drain_sorted(results, params.k))
 }
@@ -2507,8 +2500,7 @@ fn hnsw_knn_filtered(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
 ) -> Result<Vec<Tuple>> {
     if params.k == 0 {
         return Ok(vec![]);
@@ -2518,11 +2510,11 @@ fn hnsw_knn_filtered(
         return Ok(vec![]);
     };
     let plan = select_strategy(
-        tx, q, manifest, base, idx, params, filter, stack, &mut cache,
+        tx, q, manifest, base, idx, params, filter,  &mut cache,
     )?;
     match plan {
         SearchPlan::Scan => {
-            scan_filtered(cancel, tx, q, base, idx, params, filter, stack, &mut cache)
+            scan_filtered(cancel, tx, q, base, idx, params, filter,  &mut cache)
         }
         SearchPlan::Graph { ef2 } => {
             let hits = graph_filtered(
@@ -2536,13 +2528,13 @@ fn hnsw_knn_filtered(
                 ef2,
                 params,
                 filter,
-                stack,
+                
                 &mut cache,
             )?;
             if hits.len() < params.k {
                 // Hard fallback: the exact scan finds every match the graph walk
                 // could not reach, upholding min(k, M).
-                scan_filtered(cancel, tx, q, base, idx, params, filter, stack, &mut cache)
+                scan_filtered(cancel, tx, q, base, idx, params, filter,  &mut cache)
             } else {
                 Ok(hits)
             }
@@ -2561,8 +2553,7 @@ fn hnsw_knn_selected_plan(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
 ) -> Result<Option<SearchPlan>> {
     let q = IndexVec::admit(q, manifest)?;
     let mut cache = VectorCache::new(manifest);
@@ -2570,7 +2561,7 @@ fn hnsw_knn_selected_plan(
         return Ok(None);
     }
     Ok(Some(select_strategy(
-        tx, &q, manifest, base, idx, params, filter, stack, &mut cache,
+        tx, &q, manifest, base, idx, params, filter,  &mut cache,
     )?))
 }
 
@@ -2586,8 +2577,7 @@ fn hnsw_knn_forced(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     plan: SearchPlan,
     fallback: bool,
 ) -> Result<Vec<Tuple>> {
@@ -2600,7 +2590,7 @@ fn hnsw_knn_forced(
     };
     match plan {
         SearchPlan::Scan => {
-            scan_filtered(cancel, tx, &q, base, idx, params, filter, stack, &mut cache)
+            scan_filtered(cancel, tx, &q, base, idx, params, filter,  &mut cache)
         }
         SearchPlan::Graph { ef2 } => {
             let hits = graph_filtered(
@@ -2614,11 +2604,11 @@ fn hnsw_knn_forced(
                 ef2,
                 params,
                 filter,
-                stack,
+                
                 &mut cache,
             )?;
             if fallback && hits.len() < params.k {
-                scan_filtered(cancel, tx, &q, base, idx, params, filter, stack, &mut cache)
+                scan_filtered(cancel, tx, &q, base, idx, params, filter,  &mut cache)
             } else {
                 Ok(hits)
             }
@@ -2734,7 +2724,6 @@ mod tests {
             KeyspaceKind::AlgorithmState,
         )
         .unwrap();
-        let mut stack = vec![];
         for r in rows {
             base.put_fact(
                 &mut tx,
@@ -2743,7 +2732,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
         }
         tx.commit().unwrap();
         (base, idx, m)
@@ -2827,7 +2816,6 @@ mod tests {
 
         probe::reset();
         let mut state = seed;
-        let mut stack = vec![];
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
@@ -2839,7 +2827,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
         }
         let elapsed = t0.elapsed().as_secs_f64();
         let snap = probe::snapshot();
@@ -2899,7 +2887,6 @@ mod tests {
 
         probe::reset();
         let mut state = seed;
-        let mut stack = vec![];
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
@@ -2912,7 +2899,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
             tx.commit().unwrap();
         }
         let elapsed = t0.elapsed().as_secs_f64();
@@ -3011,7 +2998,6 @@ mod tests {
             )
             .unwrap();
             let mut state = 0xA5A5_1234_0000_0000u64;
-            let mut stack = vec![];
             for k in 0..n {
                 let v = probe_vec(dim, &mut state);
                 let r = vec![DataValue::from(k as i64), v];
@@ -3023,7 +3009,7 @@ mod tests {
                 )
                 .unwrap();
                 assert!(
-                    hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap()
+                    hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap()
                 );
             }
 
@@ -3263,7 +3249,6 @@ mod tests {
         .unwrap();
 
         let mut state = 0x9EC4_11AA_0000_0000u64;
-        let mut stack = vec![];
         let mut stored: Vec<Vec<f64>> = Vec::with_capacity(n);
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
@@ -3279,7 +3264,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
         }
         tx.commit().unwrap();
 
@@ -3316,7 +3301,6 @@ mod tests {
             truth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
-            let mut engine_stack = vec![];
             let hits = hnsw_knn(
                 &rtx,
                 q_vec,
@@ -3333,7 +3317,6 @@ mod tests {
                     bind_vector: false,
                 },
                 &None,
-                &mut engine_stack,
                 &CancelFlag::default(),
             )
             .unwrap();
@@ -3371,7 +3354,6 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![0.9, 0.1]);
-        let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
             &q,
@@ -3380,7 +3362,6 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3408,7 +3389,6 @@ mod tests {
             &idx,
             &p,
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3424,7 +3404,6 @@ mod tests {
             &idx,
             &knn_params(10),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3452,7 +3431,6 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![2.0, 0.0]);
-        let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
             &q,
@@ -3461,7 +3439,6 @@ mod tests {
             &idx,
             &knn_params(3),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3489,9 +3466,8 @@ mod tests {
         // Insert refusal.
         let mut tx = db.write_tx().unwrap();
         let zero = row(9, 0.0, 0.0);
-        let mut stack = vec![];
         let err =
-            hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, zero.as_slice()).unwrap_err();
+            hnsw_put(&mut tx, &m, &base, &idx, None, zero.as_slice()).unwrap_err();
         assert!(
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
@@ -3508,7 +3484,6 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap_err();
@@ -3550,7 +3525,6 @@ mod tests {
                 &base2,
                 &idx2,
                 None,
-                &mut stack,
                 zrow.as_slice()
             )
             .unwrap()
@@ -3566,7 +3540,6 @@ mod tests {
             &base2,
             &idx2,
             None,
-            &mut stack,
             nan_row.as_slice(),
         )
         .unwrap_err();
@@ -3582,7 +3555,6 @@ mod tests {
             &base2,
             &idx2,
             None,
-            &mut stack,
             bad_dim.as_slice(),
         )
         .unwrap_err();
@@ -3604,7 +3576,6 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![1.0, 0.0]);
-        let mut stack = vec![];
         let hits = hnsw_knn(
             &rtx,
             &q,
@@ -3613,7 +3584,6 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3634,7 +3604,6 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3653,8 +3622,6 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows = vec![row(1, 0.0, 0.0), row(2, 1.0, 0.0)];
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
-
-        let mut stack = vec![];
         // Unchanged put.
         let mut tx = db.write_tx().unwrap();
         assert!(
@@ -3664,7 +3631,6 @@ mod tests {
                 &base,
                 &idx,
                 None,
-                &mut stack,
                 rows[0].as_slice()
             )
             .unwrap()
@@ -3681,7 +3647,7 @@ mod tests {
             SourceSpan(0, 0),
         )
         .unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, moved.as_slice()).unwrap());
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, moved.as_slice()).unwrap());
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
@@ -3694,7 +3660,6 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap();
@@ -3847,7 +3812,6 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![0.5, 0.5]);
-        let mut stack = vec![];
         let err = hnsw_knn(
             &rtx,
             &q,
@@ -3856,7 +3820,6 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .expect_err("corrupt rows must be errors, not panics");
@@ -3974,7 +3937,6 @@ mod tests {
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
             let q = Vector::new(vec![1.0, 0.0]);
-            let mut stack = vec![];
             let hits = hnsw_knn(
                 &rtx,
                 &q,
@@ -3983,7 +3945,6 @@ mod tests {
                 &idx,
                 &knn_params(3),
                 &None,
-                &mut stack,
                 &CancelFlag::default(),
             )
             .unwrap();

@@ -97,9 +97,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-/* DEMOLISHED bytecode import */
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
+use crate::data::expr::Expr;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
@@ -211,11 +211,10 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
 /// Evaluate the extractor and return the document text, or `None` when the
 /// extraction is `Null` (a row with no text is simply not indexed).
 fn extract_text(
-    extractor: &[/*DEMOLISHED_Bytecode*/],
+    extractor: &Expr,
     tuple: &[DataValue],
-    stack: &mut Vec<DataValue>,
 ) -> Result<Option<String>> {
-    match /*DEMOLISHED_eval_bytecode*/(extractor, tuple, stack)? {
+    match extractor.eval(tuple)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
         other => bail!(FtsExtractorType {
@@ -247,8 +246,7 @@ fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
 pub(crate) fn fts_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[/*DEMOLISHED_Bytecode*/],
-    stack: &mut Vec<DataValue>,
+    extractor: &Expr,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -261,7 +259,7 @@ pub(crate) fn fts_put<T: WriteTx>(
             "row shorter than the base relation's key",
         ));
     }
-    let Some(text) = extract_text(extractor, tuple, stack)? else {
+    let Some(text) = extract_text(extractor, tuple)? else {
         return Ok(());
     };
 
@@ -311,8 +309,7 @@ pub(crate) fn fts_put<T: WriteTx>(
 pub(crate) fn fts_del<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[/*DEMOLISHED_Bytecode*/],
-    stack: &mut Vec<DataValue>,
+    extractor: &Expr,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -325,7 +322,7 @@ pub(crate) fn fts_del<T: WriteTx>(
             "row shorter than the base relation's key",
         ));
     }
-    let Some(text) = extract_text(extractor, tuple, stack)? else {
+    let Some(text) = extract_text(extractor, tuple)? else {
         return Ok(());
     };
     let mut terms: FxHashSet<SmartString<LazyCompact>> = FxHashSet::default();
@@ -629,8 +626,7 @@ pub(crate) fn fts_search(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &FtsSearchParams,
-    filter_code: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
-    stack: &mut Vec<DataValue>,
+    filter_code: &Option<Expr>,
     tokenizer: &TextAnalyzer,
     n_total: usize,
 ) -> Result<Vec<Tuple>> {
@@ -677,8 +673,8 @@ pub(crate) fn fts_search(
         if params.bind_score {
             cand.push(DataValue::from(score));
         }
-        if let Some((code, span)) = filter_code
-            && !/*DEMOLISHED_eval_bytecode_pred*/(code, &cand, stack, *span)?
+        if let Some(code) = filter_code
+            && !code.eval_pred(&cand)?
         {
             continue;
         }
@@ -756,18 +752,18 @@ mod tests {
     }
 
     /// The compiled extractor: project the text column (position 1).
-    fn extractor() -> Vec</*DEMOLISHED_Bytecode*/> {
-        vec![/*DEMOLISHED_Bytecode*/::Binding {
+    fn extractor() -> Expr {
+        Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
             tuple_pos: Some(1),
-        }]
+        }
     }
 
     struct Fixture {
         base: RelationHandle,
         idx: RelationHandle,
         analyzer: TextAnalyzer,
-        extractor: Vec</*DEMOLISHED_Bytecode*/>,
+        extractor: Expr,
     }
 
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
@@ -787,7 +783,6 @@ mod tests {
             KeyspaceKind::AlgorithmState,
         )
         .unwrap();
-        let mut stack = vec![];
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
@@ -798,7 +793,7 @@ mod tests {
             )
             .unwrap();
             fts_put(
-                &mut tx, &row, &extractor, &mut stack, &analyzer, &base, &idx,
+                &mut tx, &row, &extractor, &analyzer, &base, &idx,
             )
             .unwrap();
         }
@@ -826,7 +821,6 @@ mod tests {
         } else {
             0
         };
-        let mut stack = vec![];
         let hits = fts_search(
             &CancelFlag::default(),
             &rtx,
@@ -835,7 +829,6 @@ mod tests {
             &f.idx,
             &p,
             &None,
-            &mut stack,
             &f.analyzer,
             n,
         )
@@ -1006,13 +999,11 @@ mod tests {
         );
 
         let mut tx = db.write_tx().unwrap();
-        let mut stack = vec![];
         let row1 = vec![DataValue::from(1), DataValue::from("findme keep")];
         fts_del(
             &mut tx,
             &row1,
             &f.extractor,
-            &mut stack,
             &f.analyzer,
             &f.base,
             &f.idx,
@@ -1047,13 +1038,12 @@ mod tests {
         .unwrap();
         let a = analyzer();
         // Extractor projects the INT key column (position 0): not a string.
-        let bad_extractor = vec![/*DEMOLISHED_Bytecode*/::Binding {
+        let bad_extractor = Expr::Binding {
             var: Symbol::new("k", SourceSpan(0, 0)),
             tuple_pos: Some(0),
-        }];
+        };
         let row = vec![DataValue::from(1), DataValue::from("text")];
-        let mut stack = vec![];
-        let err = fts_put(&mut tx, &row, &bad_extractor, &mut stack, &a, &base, &idx).unwrap_err();
+        let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx).unwrap_err();
         assert!(
             err.downcast_ref::<FtsExtractorType>().is_some(),
             "typed extractor error, got: {err:?}"
@@ -1084,7 +1074,6 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
         let err = fts_search(
             &CancelFlag::default(),
             &rtx,
@@ -1093,7 +1082,6 @@ mod tests {
             &f.idx,
             &params(1, FtsScoreKind::Tf),
             &None,
-            &mut stack,
             &f.analyzer,
             0,
         )
@@ -1147,7 +1135,6 @@ mod tests {
             KeyspaceKind::AlgorithmState,
         )
         .unwrap();
-        let mut stack = vec![];
         let row = vec![DataValue::from(1), DataValue::from("the cat sat")];
         base.put_fact(
             &mut tx,
@@ -1156,7 +1143,7 @@ mod tests {
             SourceSpan(0, 0),
         )
         .unwrap();
-        fts_put(&mut tx, &row, &ex, &mut stack, &a, &base, &idx).unwrap();
+        fts_put(&mut tx, &row, &ex, &a, &base, &idx).unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
@@ -1169,7 +1156,6 @@ mod tests {
             &idx,
             &params(10, FtsScoreKind::Tf),
             &None,
-            &mut stack,
             &a,
             0,
         )
@@ -1187,7 +1173,6 @@ mod tests {
             &idx,
             &params(10, FtsScoreKind::Tf),
             &None,
-            &mut stack,
             &a,
             0,
         )
@@ -1208,12 +1193,11 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let f = setup(&db, &[(1, "cat sat")]);
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
         // Always-true filter: the constant `true`.
-        let filter = vec![/*DEMOLISHED_Bytecode*/::Const {
+        let filter = Expr::Const {
             val: DataValue::from(true),
             span: SourceSpan(0, 0),
-        }];
+        };
         let p = params(0, FtsScoreKind::Tf);
         let with_filter = fts_search(
             &CancelFlag::default(),
@@ -1222,8 +1206,7 @@ mod tests {
             &f.base,
             &f.idx,
             &p,
-            &Some((filter, SourceSpan(0, 0))),
-            &mut stack,
+            &Some(filter),
             &f.analyzer,
             0,
         )
@@ -1241,7 +1224,6 @@ mod tests {
             &f.idx,
             &p,
             &None,
-            &mut stack,
             &f.analyzer,
             0,
         )

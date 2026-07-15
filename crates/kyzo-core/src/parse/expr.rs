@@ -7,13 +7,13 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): `/*DEMOLISHED_expr2bytecode*/` is relocated to `data/expr.rs` (compiling an
- * expression is the expression's own domain) — this file is only the Pratt
- * builder; radix integer literals (`0x`/`0o`/`0b`) beyond `i64` are the
- * same `BadIntError` the decimal path raises instead of a panic; the
- * grammar-shape `unwrap`s and `unreachable!` dispatch arms go through the
- * typed-accessor layer in `parse/mod.rs`; the Pratt table is a
- * `std::sync::LazyLock` (no `lazy_static` dependency).
+ * (MPL-2.0): this file is only the Pratt builder — expression evaluation
+ * lives on `Expr::eval` in `data/expr.rs`; radix integer literals
+ * (`0x`/`0o`/`0b`) beyond `i64` are the same `BadIntError` the decimal
+ * path raises instead of a panic; the grammar-shape `unwrap`s and
+ * `unreachable!` dispatch arms go through the typed-accessor layer in
+ * `parse/mod.rs`; the Pratt table is a `std::sync::LazyLock` (no
+ * `lazy_static` dependency).
  */
 
 //! Building [`Expr`]s from parsed text: the Pratt (operator-precedence)

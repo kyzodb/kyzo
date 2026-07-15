@@ -862,8 +862,6 @@ pub(crate) fn compile_magic_rule_body(
                 ret = RelAlgebra::Search(Box::new(SearchRA {
                     parent: Box::new(ret),
                     atom: *sa,
-                    query_bytecode: vec![],
-                    filter_bytecode: None,
                 }));
                 for f in post_filters {
                     ret = ret.filter(f)?;

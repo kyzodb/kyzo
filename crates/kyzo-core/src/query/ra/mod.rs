@@ -78,7 +78,7 @@
  *  10. ra.rs:266   Debug-impl `r.data.get(0).unwrap()` — `if let` fallback.
  *  11. Slice-index sites (`tuple[*i]`, `bindings[n..m]`): positions are
  *      minted at compile time from the same plan's binding maps
- *      (`fill_binding_indices_and_compile`), so they are compiled
+ *      (`fill_binding_indices_and_compile`), so binding indices are filled
  *      knowledge, not data — the same structural argument as
  *      `TupleInIter::get` in `runtime/temp_store.rs`. The two range-slices
  *      whose in-bounds proof crosses functions (`prefix_join`'s
@@ -118,7 +118,7 @@
 //! node carries its output *bindings* (`Vec<Symbol>`, one per column); at
 //! the end of compilation `fill_binding_indices_and_compile` resolves every
 //! symbol reference inside filters and unification expressions to a tuple
-//! position and compiles the expressions to [`/*DEMOLISHED_Bytecode*/`]. Iteration never
+//! position so [`Expr::eval`] can read them. Iteration never
 //! looks at a name again.
 //!
 //! The delta discipline (the seam contract of `query/eval.rs::RuleBody`):
@@ -151,7 +151,7 @@ use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS};
+use crate::data::value::{AsOf, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -197,9 +197,8 @@ pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 /// end-of-window bookkeeping, never a real datum.
 struct BatchFilter<'a> {
     parent: BatchIter<'a>,
-    filters: &'a [(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)],
+    filters: &'a [Expr],
     eliminate_indices: BTreeSet<usize>,
-    stack: Vec<DataValue>,
 }
 
 impl Iterator for BatchFilter<'_> {
@@ -213,8 +212,8 @@ impl Iterator for BatchFilter<'_> {
             let mut out = Batch::new();
             for t in batch.into_rows() {
                 let mut keep = true;
-                for (p, span) in self.filters.iter() {
-                    match /*DEMOLISHED_eval_bytecode_pred*/(p, &t, &mut self.stack, *span) {
+                for p in self.filters.iter() {
+                    match p.eval_pred(&t) {
                         Ok(true) => {}
                         Ok(false) => {
                             keep = false;
@@ -311,7 +310,7 @@ pub(crate) enum RelAlgebra {
     /// Column permutation (only ever the plan root, aligning to the rule
     /// head; [`RelAlgebra::join`] refuses it as a join RHS).
     Reorder(ReorderRA),
-    /// /*DEMOLISHED_Bytecode*/ predicate filter.
+    /// Expr predicate filter.
     Filter(FilteredRA),
     /// Append one computed column (`binding = expr`), or one row per list
     /// element (`binding in expr`).
@@ -347,7 +346,7 @@ impl RelAlgebra {
     }
 
     /// Resolve every symbol reference inside this tree's expressions to a
-    /// tuple position and compile the expressions to bytecode. Called once,
+    /// tuple position for `Expr::eval`. Called once,
     /// at the end of `compile_magic_rule_body`; iteration never resolves a
     /// name again.
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
@@ -668,7 +667,6 @@ impl RelAlgebra {
             parent: Box::new(self),
             binding,
             expr,
-            expr_bytecode: vec![],
             is_multi,
             to_eliminate: Default::default(),
             span,
@@ -1021,7 +1019,7 @@ mod tests {
     use crate::data::program::InputRelationHandle;
     use crate::data::relation::{ColType, NullableColType};
     use crate::data::relation::{ColumnDef, StoredRelationMetadata};
-    use crate::data::value::ValidityTs;
+    use crate::data::value::{DataValue, ValidityTs};
     use crate::engines::segments::SegmentEngine;
     use crate::query::temp_store::RegularTempStore;
     use crate::runtime::relation::create_relation;

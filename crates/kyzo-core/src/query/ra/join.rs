@@ -18,10 +18,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
-/* DEMOLISHED bytecode import */
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
+use crate::data::expr::Expr;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
@@ -45,13 +45,12 @@ pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
 }
 
 pub(crate) fn filter_iter(
-    filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
+    filters_bytecodes: Vec<Expr>,
     it: impl Iterator<Item = Result<Tuple>>,
 ) -> impl Iterator<Item = Result<Tuple>> {
-    let mut stack = vec![];
     it.filter_map_ok(move |t| -> Option<Result<Tuple>> {
-        for (p, span) in filters_bytecodes.iter() {
-            match /*DEMOLISHED_eval_bytecode_pred*/(p, &t, &mut stack, *span) {
+        for p in filters_bytecodes.iter() {
+            match p.eval_pred(&t) {
                 Ok(false) => return None,
                 Err(e) => return Some(Err(e)),
                 Ok(true) => {}
@@ -155,13 +154,12 @@ pub(crate) struct PrefixProbeBatchJoin<'a> {
     /// row-at-a-time path's per-tuple closure would yield before the left
     /// prefix is appended.
     pub(crate) probe: Box<dyn FnMut(&[DataValue]) -> Result<TupleIter<'a>> + 'a>,
-    pub(crate) filters_bytecodes: &'a [(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)],
+    pub(crate) filters_bytecodes: &'a [Expr],
     pub(crate) eliminate_indices: BTreeSet<usize>,
     /// The left batch currently being probed, and the cursor into it.
     pub(crate) cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     pub(crate) active: Option<TupleIter<'a>>,
-    pub(crate) stack: Vec<DataValue>,
 }
 
 impl<'a> PrefixProbeBatchJoin<'a> {
@@ -229,8 +227,8 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     Some(Err(e)) => return Some(Err(e)),
                     Some(Ok(found)) => {
                         let mut keep = true;
-                        for (p, span) in self.filters_bytecodes.iter() {
-                            match /*DEMOLISHED_eval_bytecode_pred*/(p, &found, &mut self.stack, *span) {
+                        for p in self.filters_bytecodes.iter() {
+                            match p.eval_pred(&found) {
                                 Ok(true) => {}
                                 Ok(false) => {
                                     keep = false;

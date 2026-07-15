@@ -50,7 +50,7 @@ pub(crate) struct TempStoreRA {
     /// numbering, `atom_occurrences`).
     pub(crate) occurrence: AtomOccurrence,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) span: SourceSpan,
 }
 
@@ -65,7 +65,7 @@ impl TempStoreRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()))
+            self.filters_bytecodes.push(e.clone())
         }
         Ok(())
     }
@@ -151,7 +151,7 @@ impl TempStoreRA {
             eliminate_indices,
             cur: None,
             active: None,
-            stack: vec![],
+
         }))
     }
 }
@@ -173,7 +173,7 @@ struct TempStorePrefixBatchJoin<'a> {
     cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     active: Option<Box<dyn Iterator<Item = TupleInIter<'a>> + 'a>>,
-    stack: Vec<DataValue>,
+
 }
 
 impl<'a> TempStorePrefixBatchJoin<'a> {
@@ -274,8 +274,8 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                         } else {
                             let found_tuple = found.into_tuple();
                             let mut keep = true;
-                            for (p, span) in self.inner.filters_bytecodes.iter() {
-                                match /*DEMOLISHED_eval_bytecode_pred*/(p, &found_tuple, &mut self.stack, *span) {
+                            for p in self.inner.filters_bytecodes.iter() {
+                                match p.eval_pred(&found_tuple) {
                                     Ok(true) => {}
                                     Ok(false) => {
                                         keep = false;

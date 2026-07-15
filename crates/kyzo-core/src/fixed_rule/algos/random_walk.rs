@@ -65,17 +65,13 @@ impl FixedRule for RandomWalk {
         let seed = payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))? as u64;
 
         let mut maybe_weight = payload.expr_option("weight", None).ok();
-        let mut maybe_weight_bytecode = None;
         if let Some(weight) = &mut maybe_weight {
             let mut nodes_binding = nodes.get_binding_map(0);
             let nodes_arity = nodes.arity()?;
             let edges_binding = edges.get_binding_map(nodes_arity);
             nodes_binding.extend(edges_binding);
             weight.fill_binding_indices(&nodes_binding)?;
-            maybe_weight_bytecode = Some((weight.compile()?, weight.span()));
         }
-        let maybe_weight_bytecode = maybe_weight_bytecode;
-        let mut stack = vec![];
 
         let mut counter = 0i64;
         let mut rng = SeededRng::new(seed);
@@ -105,20 +101,20 @@ impl FixedRule for RandomWalk {
                     if candidate_steps.is_empty() {
                         break;
                     }
-                    let next_step = if let Some((weight_expr, span)) = &maybe_weight_bytecode {
+                    let next_step = if let Some(weight_expr) = &maybe_weight {
                         let weights: Vec<_> = candidate_steps
                             .iter()
                             .map(|t| -> Result<f64> {
                                 let mut cand = current_tuple.clone();
                                 cand.extend(t.iter().cloned());
-                                Ok(match /*DEMOLISHED_eval_bytecode*/(weight_expr, &cand, &mut stack)? {
+                                Ok(match weight_expr.eval(&cand)? {
                                     DataValue::Num(n) => {
                                         let f = n.to_f64();
                                         ensure!(
                                             f >= 0.,
                                             BadExprValueError(
                                                 DataValue::from(f),
-                                                *span,
+                                                weight_expr.span(),
                                                 "'weight' must evaluate to a non-negative number"
                                                     .to_string()
                                             )
@@ -127,7 +123,7 @@ impl FixedRule for RandomWalk {
                                     }
                                     v => bail!(BadExprValueError(
                                         v,
-                                        *span,
+                                        weight_expr.span(),
                                         "'weight' must evaluate to a non-negative number"
                                             .to_string()
                                     )),
@@ -143,7 +139,7 @@ impl FixedRule for RandomWalk {
                                 DataValue::List(
                                     weights.iter().map(|w| DataValue::from(*w)).collect(),
                                 ),
-                                *span,
+                                weight_expr.span(),
                                 format!(
                                     "'weight' must yield a samplable distribution \
                                      (at least one positive weight): {err}"

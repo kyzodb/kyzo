@@ -697,6 +697,14 @@ impl Expr {
             }
         }
     }
+    /// Evaluate as a predicate: `true`/`false`, or a typed refusal when the
+    /// value is not a boolean.
+    pub(crate) fn eval_pred(&self, bindings: impl AsRef<[DataValue]>) -> Result<bool> {
+        match self.eval(bindings)? {
+            DataValue::Bool(b) => Ok(b),
+            v => bail!(PredicateTypeError(self.span(), v)),
+        }
+    }
     pub(crate) fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
         Ok(match self {
             Expr::Binding { .. } | Expr::Const { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {

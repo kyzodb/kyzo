@@ -84,17 +84,13 @@ impl FixedRule for ReorderSort {
         for out in out_list.iter_mut() {
             out.fill_binding_indices(&binding_map)?;
         }
-        let out_bytecods: Vec<_> = out_list.iter().map(|e| e.compile()).try_collect()?;
-        let sort_by_bytecodes = sort_by.compile()?;
-        let mut stack = vec![];
-
         let mut buffer = vec![];
         for tuple in in_rel.iter()? {
             let tuple = tuple?;
-            let sorter = /*DEMOLISHED_eval_bytecode*/(&sort_by_bytecodes, &tuple, &mut stack)?;
-            let mut s_tuple: Vec<_> = out_bytecods
+            let sorter = sort_by.eval(&tuple)?;
+            let mut s_tuple: Vec<_> = out_list
                 .iter()
-                .map(|ex| /*DEMOLISHED_eval_bytecode*/(ex, &tuple, &mut stack))
+                .map(|ex| ex.eval(&tuple))
                 .try_collect()?;
             s_tuple.push(sorter);
             buffer.push(s_tuple);
