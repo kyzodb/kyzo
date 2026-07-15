@@ -509,6 +509,109 @@ impl DataValue {
     }
 }
 
+/// A logical row: an ordered sequence of [`DataValue`]s. Sealed row
+/// identity — a bare `Vec<DataValue>` never coerces to a `Tuple` (no
+/// `Deref`, no `From<Vec<DataValue>>`); every read or write goes through
+/// an explicit named door below.
+///
+/// @authority Tuple
+/// @layer value
+/// @owns row identity as an ordered `DataValue` sequence, distinct from any bare `Vec<DataValue>`
+/// @constructs Tuple::new | Tuple::with_capacity | Tuple::from_vec
+/// @forbids a bare `Vec<DataValue>` standing in for row authority (no Deref/DerefMut/From)
+/// @status established #300
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+pub struct Tuple(Vec<DataValue>);
+
+impl Tuple {
+    /// An empty tuple.
+    pub fn new() -> Tuple {
+        Tuple(Vec::new())
+    }
+
+    /// An empty tuple with reserved capacity.
+    pub fn with_capacity(cap: usize) -> Tuple {
+        Tuple(Vec::with_capacity(cap))
+    }
+
+    /// The one door from a bare vector into row authority: explicit,
+    /// never implicit.
+    pub fn from_vec(values: Vec<DataValue>) -> Tuple {
+        Tuple(values)
+    }
+
+    /// The bare vector back out, consuming the row.
+    pub fn into_vec(self) -> Vec<DataValue> {
+        self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn as_slice(&self) -> &[DataValue] {
+        &self.0
+    }
+
+    pub fn push(&mut self, value: DataValue) {
+        self.0.push(value);
+    }
+
+    pub fn extend(&mut self, values: impl IntoIterator<Item = DataValue>) {
+        self.0.extend(values);
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, DataValue> {
+        self.0.iter()
+    }
+
+    pub fn get(&self, i: usize) -> Option<&DataValue> {
+        self.0.get(i)
+    }
+}
+
+impl std::ops::Index<usize> for Tuple {
+    type Output = DataValue;
+
+    fn index(&self, i: usize) -> &DataValue {
+        &self.0[i]
+    }
+}
+
+impl AsRef<[DataValue]> for Tuple {
+    fn as_ref(&self) -> &[DataValue] {
+        &self.0
+    }
+}
+
+impl FromIterator<DataValue> for Tuple {
+    fn from_iter<I: IntoIterator<Item = DataValue>>(iter: I) -> Tuple {
+        Tuple(Vec::from_iter(iter))
+    }
+}
+
+impl IntoIterator for Tuple {
+    type Item = DataValue;
+    type IntoIter = std::vec::IntoIter<DataValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Tuple {
+    type Item = &'a DataValue;
+    type IntoIter = std::slice::Iter<'a, DataValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 /// Decode every canonical value in `bytes` until exhaustion (stored keys
 /// whose arity the caller does not know). Total.
 pub fn decode_values_all(bytes: &[u8]) -> Result<Vec<DataValue>, DecodeError> {
@@ -529,7 +632,7 @@ pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, Deco
     if key.len() < EncodedKey::RELATION_PREFIX_LEN {
         return Err(DecodeError::Truncated);
     }
-    let mut out = Vec::with_capacity(size_hint);
+    let mut out = Tuple::with_capacity(size_hint);
     let mut at = EncodedKey::RELATION_PREFIX_LEN;
     while at < key.len() {
         let (v, used) = canonical::decode_one(&key[at..])?;
@@ -552,7 +655,7 @@ pub fn encode_tuple_bare(vals: &[DataValue]) -> Vec<u8> {
 
 /// Decode a bare row back to values. Total.
 pub fn decode_tuple_bare(bytes: &[u8]) -> Result<Tuple, DecodeError> {
-    decode_values_all(bytes)
+    decode_values_all(bytes).map(Tuple::from_vec)
 }
 
 /// The byte length of the first `n_cols` encodings of a bare row (no
