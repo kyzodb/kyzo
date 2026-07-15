@@ -2,7 +2,7 @@
   "tool": "authority-graph",
   "tool_version": 1,
   "scope": "crates/kyzo-core/src",
-  "files_scanned": 174,
+  "files_scanned": 175,
   "layers": [
     {
       "layer": "value",
@@ -57,7 +57,7 @@
       "name": "EncodedKey",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/row.rs",
-      "line": 253,
+      "line": 247,
       "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
       "constructs": [
         "EncodedKey::from_values",
@@ -133,24 +133,22 @@
       "name": "Tuple",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/mod.rs",
-      "line": 507,
-      "owns": "the decoded-DataValue row form; not interchangeable with ExecRows codes or canonical bytes",
+      "line": 518,
+      "owns": "row identity as an ordered `DataValue` sequence, distinct from any bare `Vec<DataValue>`",
       "constructs": [
-        "typed row decode paths in data/value"
+        "Tuple::new",
+        "Tuple::with_capacity",
+        "Tuple::from_vec"
       ],
       "forbids": [
-        "blanket From<Vec<DataValue>>",
-        "Deref to Vec<DataValue> at a row-authority site"
+        "a bare `Vec<DataValue>` standing in for row authority (no Deref/DerefMut/From)"
       ],
-      "converts": [
-        "Tuple -> EncodedKey (encode at the storage boundary)",
-        "Tuple -> ExecRows (only via Domain admission)"
-      ],
-      "gate": "compile-fail once the newtype lands: Vec<DataValue> rejected where Tuple is required",
+      "converts": [],
+      "gate": "",
       "status": {
-        "kind": "pending",
-        "story": 126,
-        "note": "today a type alias; the tuple-vec-alias drift finding stays open until the newtype"
+        "kind": "established",
+        "story": 300,
+        "note": ""
       }
     }
   ],
@@ -172,18 +170,6 @@
       "to": "ExecRows",
       "context": "to_exec: the distinct rows, same Domain",
       "declared_by": "ExecDedup"
-    },
-    {
-      "from": "Tuple",
-      "to": "EncodedKey",
-      "context": "encode at the storage boundary",
-      "declared_by": "Tuple"
-    },
-    {
-      "from": "Tuple",
-      "to": "ExecRows",
-      "context": "only via Domain admission",
-      "declared_by": "Tuple"
     },
     {
       "from": "EncodedKey",
@@ -217,7 +203,7 @@
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 2059,
+      "line": 2074,
       "excerpt": "key: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
@@ -238,35 +224,35 @@
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 553,
+      "line": 557,
       "excerpt": "lower: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 554,
+      "line": 558,
       "excerpt": "upper: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 750,
+      "line": 754,
       "excerpt": "lower: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 751,
+      "line": 755,
       "excerpt": "upper: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "illegal-escape",
       "file": "crates/kyzo-core/src/data/value/row.rs",
-      "line": 440,
+      "line": 434,
       "excerpt": "impl std::ops::Deref for EncodedKey {",
       "note": "Deref dissolves the EncodedKey authority boundary",
       "allowlisted": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
@@ -328,16 +314,9 @@
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
     {
-      "class": "tuple-vec-alias",
-      "file": "crates/kyzo-core/src/data/value/mod.rs",
-      "line": 515,
-      "excerpt": "pub type Tuple = Vec<DataValue>;",
-      "note": "row authority is a bare Vec<DataValue> alias (newtype owed by #126)"
-    },
-    {
       "class": "unchecked-constructor",
       "file": "crates/kyzo-core/src/data/value/arena.rs",
-      "line": 2356,
+      "line": 2372,
       "excerpt": "fn forged_in_epoch_stamp_beyond_len_panics() {",
       "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_panics'",
       "allowlisted": "named corruption/bypass TEST asserting that a forged stamp panics — it proves the door is shut, it is not a door"
@@ -354,7 +333,6 @@
   "counts_by_class": {
     "blob-meaning": 9,
     "missing-authority": 5,
-    "searchra-decoded-tuples": 3,
-    "tuple-vec-alias": 1
+    "searchra-decoded-tuples": 3
   }
 }
