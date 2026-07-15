@@ -572,6 +572,35 @@ impl Tuple {
     pub fn get(&self, i: usize) -> Option<&DataValue> {
         self.0.get(i)
     }
+
+    /// Clone the row's values out to a bare vector (borrowing; the row
+    /// stays intact). Contrast [`Tuple::into_vec`], which consumes.
+    pub fn to_vec(&self) -> Vec<DataValue> {
+        self.0.clone()
+    }
+
+    pub fn pop(&mut self) -> Option<DataValue> {
+        self.0.pop()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.0.reserve_exact(additional);
+    }
+
+    pub fn drain<R: std::ops::RangeBounds<usize>>(
+        &mut self,
+        range: R,
+    ) -> std::vec::Drain<'_, DataValue> {
+        self.0.drain(range)
+    }
 }
 
 impl std::ops::Index<usize> for Tuple {
