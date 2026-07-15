@@ -102,6 +102,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
             let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
             vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))]
         })
+        .map(Tuple::from_vec)
         .collect()
 }
 
@@ -186,12 +187,12 @@ fn hsetup(
     for r in rows {
         base.put_fact(
             &mut tx,
-            r,
+            r.as_slice(),
             crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();
-        hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r).unwrap();
+        hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap();
     }
     tx.commit().unwrap();
     (base, idx, m)
@@ -304,7 +305,7 @@ impl FilterSpec {
     }
 
     fn true_match_count(&self, rows: &[Tuple]) -> usize {
-        rows.iter().filter(|r| self.passes(r)).count()
+        rows.iter().filter(|r| self.passes(r.as_slice())).count()
     }
 }
 
@@ -348,10 +349,10 @@ fn brute_force_filtered_knn(
     let qv = IndexVec::admit(q, manifest).expect("query admits");
     let mut scored: Vec<(OrderedFloat<f64>, i64)> = rows
         .iter()
-        .filter(|r| filter.passes(r))
+        .filter(|r| filter.passes(r.as_slice()))
         .map(|r| {
             let key = r[0].get_int().unwrap();
-            let v = match &r[1] {
+            let v = match &r.as_slice()[1] {
                 DataValue::Vector(v) => v.clone(),
                 _ => panic!("row vector"),
             };
@@ -497,27 +498,27 @@ fn sweep_generator_hits_its_bands() {
 fn oracle_is_exact_and_total_ordered() {
     let m = hmanifest(2, HnswDistance::L2);
     let rows: Vec<Tuple> = vec![
-        vec![
+        Tuple::from_vec(vec![
             DataValue::from(0),
             DataValue::Vector(Vector::new(vec![3.0, 0.0])),
-        ],
-        vec![
+        ]),
+        Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::Vector(Vector::new(vec![0.1, 0.0])),
-        ],
-        vec![
+        ]),
+        Tuple::from_vec(vec![
             DataValue::from(2),
             DataValue::Vector(Vector::new(vec![1.0, 0.0])),
-        ],
-        vec![
+        ]),
+        Tuple::from_vec(vec![
             DataValue::from(3),
             DataValue::Vector(Vector::new(vec![0.2, 0.0])),
-        ],
+        ]),
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
-        vec![
+        Tuple::from_vec(vec![
             DataValue::from(4),
             DataValue::Vector(Vector::new(vec![-1.0, 0.0])),
-        ],
+        ]),
     ];
     let q = Vector::new(vec![0.0, 0.0]);
     let even = FilterSpec::ModLessThan {
@@ -865,7 +866,7 @@ fn engine_ordering_is_total_under_ties() {
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
-            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))]
+            Tuple::from_vec(vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))])
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();
@@ -983,7 +984,7 @@ fn min_k_matches_law_generative() {
             k, modulus, accept, matches, hits.len()
         );
         for h in &hits {
-            prop_assert!(f.passes(h), "returned row {h:?} fails its own filter");
+            prop_assert!(f.passes(h.as_slice()), "returned row {h:?} fails its own filter");
         }
         // No duplicates: every returned key is distinct.
         let mut ekeys = keys_of(&hits);
@@ -1044,10 +1045,10 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
             } else {
                 comps.iter().map(|c| c + 40.0).collect()
             };
-            vec![
+            Tuple::from_vec(vec![
                 DataValue::from(k),
                 DataValue::Vector(Vector::new(v.clone())),
-            ]
+            ])
         })
         .collect();
     (n, half, rows)
@@ -1398,7 +1399,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
         .map(|i| {
             let mut comps = vec![0.0f64; dim];
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
-            vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))]
+            Tuple::from_vec(vec![DataValue::from(i), DataValue::Vector(Vector::new(comps))])
         })
         .collect();
     let dir = tempfile::tempdir().unwrap();

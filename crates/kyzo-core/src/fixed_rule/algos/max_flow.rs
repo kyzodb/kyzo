@@ -363,14 +363,14 @@ mod tests {
     ) -> Vec<(String, String, f64)> {
         let erows = edges
             .iter()
-            .map(|&(a, b, c)| vec![s(a), s(b), DataValue::from(c)])
+            .map(|&(a, b, c)| Tuple::from_vec(vec![s(a), s(b), DataValue::from(c)]))
             .collect::<Vec<Tuple>>();
         let got = run_fixed_rule(
             &MaxFlow,
             vec![
                 TestInput::new(vec!["fr", "to", "cap"], erows),
-                TestInput::new(vec!["src"], vec![vec![s(source)]]),
-                TestInput::new(vec!["snk"], vec![vec![s(sink)]]),
+                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s(source)])]),
+                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s(sink)])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -553,10 +553,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![vec![s("a"), s("b"), DataValue::from(1.0)]],
+                    vec![Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)])],
                 ),
-                TestInput::new(vec!["src"], vec![vec![s("nope")]]),
-                TestInput::new(vec!["snk"], vec![vec![s("b")]]),
+                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("nope")])]),
+                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -573,10 +573,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![vec![s("a"), s("b"), DataValue::from(1.0)]],
+                    vec![Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)])],
                 ),
-                TestInput::new(vec!["src"], vec![vec![s("a")]]),
-                TestInput::new(vec!["snk"], vec![vec![s("a")]]),
+                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -594,10 +594,10 @@ mod tests {
             vec![
                 TestInput::new(
                     vec!["fr", "to", "cap"],
-                    vec![vec![s("a"), s("b"), DataValue::from(-1.0)]],
+                    vec![Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(-1.0)])],
                 ),
-                TestInput::new(vec!["src"], vec![vec![s("a")]]),
-                TestInput::new(vec!["snk"], vec![vec![s("b")]]),
+                TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -620,17 +620,17 @@ mod tests {
         let n: u32 = 60_000;
         let edges: Vec<Tuple> = (0..n - 1)
             .map(|i| {
-                vec![
+                Tuple::from_vec(vec![
                     s(&format!("v{i}")),
                     s(&format!("v{}", i + 1)),
                     DataValue::from(1.0),
-                ]
+                ])
             })
             .collect();
         let inputs = vec![
             TestInput::new(vec!["fr", "to", "cap"], edges),
-            TestInput::new(vec!["src"], vec![vec![s("v0")]]),
-            TestInput::new(vec!["snk"], vec![vec![s(&format!("v{}", n - 1))]]),
+            TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("v0")])]),
+            TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s(&format!("v{}", n - 1))])]),
         ];
         let prepared = prepare_fixed_rule(&MaxFlow, inputs, BTreeMap::new()).unwrap();
 
@@ -670,10 +670,10 @@ mod tests {
                 vec![
                     TestInput::new(
                         vec!["fr", "to", "cap"],
-                        vec![vec![s("s"), s("t"), DataValue::from(tiny)]],
+                        vec![Tuple::from_vec(vec![s("s"), s("t"), DataValue::from(tiny)])],
                     ),
-                    TestInput::new(vec!["src"], vec![vec![s("s")]]),
-                    TestInput::new(vec!["snk"], vec![vec![s("t")]]),
+                    TestInput::new(vec!["src"], vec![Tuple::from_vec(vec![s("s")])]),
+                    TestInput::new(vec!["snk"], vec![Tuple::from_vec(vec![s("t")])]),
                 ],
                 BTreeMap::new(),
                 CancelFlag::default(),

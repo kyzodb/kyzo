@@ -17,7 +17,7 @@ use std::io::Cursor;
 
 use arrow::array::{Array, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::ipc::reader::StreamReader;
-use kyzo::{DataValue, NamedRows, Num};
+use kyzo::{DataValue, NamedRows, Num, Tuple};
 
 fn v_int(i: i64) -> DataValue {
     DataValue::Num(Num::int(i))
@@ -34,24 +34,24 @@ fn real_arrow_reader_decodes_a_uniformly_typed_batch() {
     let named = NamedRows::new(
         vec!["n".into(), "x".into(), "flag".into(), "name".into()],
         vec![
-            vec![
+            Tuple::from_vec(vec![
                 v_int(1),
                 v_float(1.5),
                 DataValue::Bool(true),
                 DataValue::Str("ab".into()),
-            ],
-            vec![
+            ]),
+            Tuple::from_vec(vec![
                 v_int(2),
                 v_float(2.5),
                 DataValue::Bool(false),
                 DataValue::Str("".into()),
-            ],
-            vec![
+            ]),
+            Tuple::from_vec(vec![
                 v_int(3),
                 v_float(3.5),
                 DataValue::Bool(true),
                 DataValue::Str("cde".into()),
-            ],
+            ]),
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");
@@ -108,10 +108,10 @@ fn real_arrow_reader_decodes_nulls_via_the_validity_bitmap() {
     let named = NamedRows::new(
         vec!["n".into()],
         vec![
-            vec![v_int(10)],
-            vec![DataValue::Null],
-            vec![v_int(30)],
-            vec![DataValue::Null],
+            Tuple::from_vec(vec![v_int(10)]),
+            Tuple::from_vec(vec![DataValue::Null]),
+            Tuple::from_vec(vec![v_int(30)]),
+            Tuple::from_vec(vec![DataValue::Null]),
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");
@@ -151,9 +151,9 @@ fn real_arrow_reader_decodes_a_binary_column() {
     let named = NamedRows::new(
         vec!["blob".into()],
         vec![
-            vec![DataValue::Bytes(vec![0, 1, 2])],
-            vec![DataValue::Bytes(vec![])],
-            vec![DataValue::Bytes(vec![255, 254])],
+            Tuple::from_vec(vec![DataValue::Bytes(vec![0, 1, 2])]),
+            Tuple::from_vec(vec![DataValue::Bytes(vec![])]),
+            Tuple::from_vec(vec![DataValue::Bytes(vec![255, 254])]),
         ],
     );
     let bytes = named.to_arrow_ipc().expect("encodes");

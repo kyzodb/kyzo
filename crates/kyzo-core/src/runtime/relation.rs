@@ -1723,12 +1723,12 @@ mod tests {
     fn system_key_shapes() {
         let counter = SystemKey::IdCounter.encode();
         assert_eq!(&counter[..8], &[0u8; 8], "SYSTEM prefix");
-        let want_counter: Tuple = vec![DataValue::Null];
+        let want_counter: Tuple = Tuple::from_vec(vec![DataValue::Null]);
         assert_eq!(decode_tuple_from_key(&counter, 1).unwrap(), want_counter);
 
         let rel = SystemKey::Relation("stored").encode();
         assert_eq!(&rel[..8], &[0u8; 8], "SYSTEM prefix");
-        let want_rel: Tuple = vec![DataValue::from("stored")];
+        let want_rel: Tuple = Tuple::from_vec(vec![DataValue::from("stored")]);
         assert_eq!(decode_tuple_from_key(&rel, 1).unwrap(), want_rel);
 
         assert!(
@@ -1775,18 +1775,18 @@ mod tests {
 
         // Write and read a row through the handle.
         let span = SourceSpan(0, 0);
-        let row: Tuple = vec![DataValue::from(1), DataValue::from("one")];
+        let row: Tuple = Tuple::from_vec(vec![DataValue::from(1), DataValue::from("one")]);
         let mut tx = db.write_tx().unwrap();
-        a.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
+        a.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)
             .unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        assert!(a.exists(&rtx, &row[..1]).unwrap());
-        assert_eq!(a.get(&rtx, &row[..1]).unwrap(), Some(row.clone()));
+        assert!(a.exists(&rtx, &row.as_slice()[..1]).unwrap());
+        assert_eq!(a.get(&rtx, &row.as_slice()[..1]).unwrap(), Some(row.clone()));
         assert_eq!(
-            a.get_val_only(&rtx, &row[..1]).unwrap(),
-            Some(vec![DataValue::from("one")])
+            a.get_val_only(&rtx, &row.as_slice()[..1]).unwrap(),
+            Some(Tuple::from_vec(vec![DataValue::from("one")]))
         );
         let scanned: Vec<Tuple> = a.scan_all(&rtx).map(|t| t.unwrap()).collect();
         assert_eq!(scanned, vec![row.clone()]);
@@ -1885,7 +1885,7 @@ mod tests {
         let rel = create_relation(&mut tx, simple_input("fleeting"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
         let row = vec![DataValue::from(9), DataValue::from("gone")];
-        rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
+        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)
             .unwrap();
         destroy_relation(&mut tx, "fleeting").unwrap();
         tx.commit().unwrap();
@@ -2042,8 +2042,8 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         let rel = create_relation(&mut tx, simple_input("before"), KeyspaceKind::Facts).unwrap();
         let span = SourceSpan(0, 0);
-        let row: Tuple = vec![DataValue::from(5), DataValue::from("five")];
-        rel.put_fact(&mut tx, &row, ValidityTs::from_raw(0), span)
+        let row: Tuple = Tuple::from_vec(vec![DataValue::from(5), DataValue::from("five")]);
+        rel.put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), span)
             .unwrap();
         rename_relation(
             &mut tx,
@@ -2057,7 +2057,7 @@ mod tests {
         assert!(!relation_exists(&rtx, "before").unwrap());
         let renamed = get_relation(&rtx, "after").unwrap();
         assert_eq!(renamed.id, rel.id, "the id — and the keyspace — survive");
-        assert_eq!(renamed.get(&rtx, &row[..1]).unwrap(), Some(row));
+        assert_eq!(renamed.get(&rtx, &row.as_slice()[..1]).unwrap(), Some(row));
     }
 
     /// Time travel through the handle's skip-scan surface: the newest
@@ -2285,7 +2285,7 @@ mod tests {
         );
 
         // Corrupt bytes are a typed decode error, never a panic (law 5).
-        let err = RelationHandle::decode(&bytes[..bytes.len() / 2]).unwrap_err();
+        let err = RelationHandle::decode(&bytes.as_slice()[..bytes.len() / 2]).unwrap_err();
         assert!(err.downcast_ref::<RelationDeserError>().is_some());
         assert!(RelationHandle::decode(b"garbage").is_err());
     }

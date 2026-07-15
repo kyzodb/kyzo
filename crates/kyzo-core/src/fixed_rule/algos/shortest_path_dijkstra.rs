@@ -76,7 +76,7 @@ impl FixedRule for ShortestPathDijkstra {
             let tuple = tuple?;
             // Structural: `ensure_min_len(1)` proved every tuple has a
             // first column.
-            let node = &tuple[0];
+            let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
             }
@@ -90,7 +90,7 @@ impl FixedRule for ShortestPathDijkstra {
                     let tuple = tuple?;
                     // Structural: `ensure_min_len(1)` proved every tuple
                     // has a first column.
-                    let node = &tuple[0];
+                    let node = &tuple.as_slice()[0];
                     if let Some(idx) = inv_indices.get(node) {
                         tn.insert(*idx);
                     }
@@ -421,7 +421,7 @@ mod tests {
     }
 
     fn e(a: &str, b: &str, w: f64) -> Tuple {
-        vec![s(a), s(b), DataValue::from(w)]
+        Tuple::from_vec(vec![s(a), s(b), DataValue::from(w)])
     }
 
     /// A deterministic pseudo-random weighted graph plus a many-node start
@@ -445,10 +445,10 @@ mod tests {
             }
         }
         edges.push(e(&format!("n{}", n - 1), "n0", 1.0));
-        let starts: Vec<Tuple> = (0..n).map(|i| vec![s(&format!("n{i}"))]).collect();
+        let starts: Vec<Tuple> = (0..n).map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))])).collect();
         let ends: Vec<Tuple> = (0..n)
             .step_by(7)
-            .map(|i| vec![s(&format!("n{i}"))])
+            .map(|i| Tuple::from_vec(vec![s(&format!("n{i}"))]))
             .collect();
         vec![
             TestInput::new(vec!["fr", "to", "w"], edges),
@@ -499,8 +499,8 @@ mod tests {
                     vec!["fr", "to", "w"],
                     vec![e("a", "b", 10.0), e("a", "c", 1.0), e("c", "b", 1.0)],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("b")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
@@ -544,8 +544,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -558,18 +558,18 @@ mod tests {
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![
+            Tuple::from_vec(vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ],
-            vec![
+            ]),
+            Tuple::from_vec(vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("c"), s("d")]),
-            ],
+            ]),
         ];
         assert_eq!(got, want);
     }
@@ -587,8 +587,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("b")], vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("d")])]),
             ],
             BTreeMap::from([(
                 SmartString::from("keep_ties"),
@@ -601,24 +601,24 @@ mod tests {
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![
+            Tuple::from_vec(vec![
                 s("a"),
                 s("b"),
                 DataValue::from(1.0),
                 DataValue::List(vec![s("a"), s("b")]),
-            ],
-            vec![
+            ]),
+            Tuple::from_vec(vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ],
-            vec![
+            ]),
+            Tuple::from_vec(vec![
                 s("a"),
                 s("d"),
                 DataValue::from(2.0),
                 DataValue::List(vec![s("a"), s("c"), s("d")]),
-            ],
+            ]),
         ];
         assert_eq!(got, want);
     }
@@ -633,8 +633,8 @@ mod tests {
             &ShortestPathDijkstra,
             vec![
                 tie_graph(),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["end"], vec![vec![s("d")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["end"], vec![Tuple::from_vec(vec![s("d")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),

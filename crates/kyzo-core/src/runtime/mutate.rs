@@ -2183,7 +2183,7 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, v] := *wi{k, v}", no_params())
             .expect("read back");
-        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(10)]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(1), DataValue::from(10)])];
         assert_eq!(
             out.rows, want,
             "the refused insert must not overwrite the existing row"
@@ -2237,11 +2237,11 @@ mod bulk_write_tests {
         let out = db
             .run_script("?[k, a, b] := *wc{k, a, b}", no_params())
             .expect("read back");
-        let want: Vec<Tuple> = vec![vec![
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             DataValue::from(1),
             DataValue::from(99),
             DataValue::from(20),
-        ]];
+        ])];
         assert_eq!(
             out.rows, want,
             "a is updated to 99; b (omitted from the :update) carries forward as 20"
@@ -2383,17 +2383,17 @@ mod temporal_index_tests {
                 let (k, v) = r.expect("posting row decodes cleanly");
                 let tup = crate::data::value::decode_tuple_from_key(&k, 4)
                     .expect("posting key decodes cleanly");
-                let leading = match &tup[0] {
-                    DataValue::Validity(vv) => vv.timestamp.raw(),
+                let leading = match tup.as_slice()[0] {
+                    DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the leading Validity column, got {other:?}"),
                 };
                 let key_col = tup[1].get_int().expect("int base key column");
-                let tail_valid = match &tup[2] {
-                    DataValue::Validity(vv) => vv.timestamp.raw(),
+                let tail_valid = match tup.as_slice()[2] {
+                    DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the tail valid slot, got {other:?}"),
                 };
-                let tail_sys = match &tup[3] {
-                    DataValue::Validity(vv) => vv.timestamp.raw(),
+                let tail_sys = match tup.as_slice()[3] {
+                    DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the tail sys slot, got {other:?}"),
                 };
                 let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
@@ -2417,12 +2417,12 @@ mod temporal_index_tests {
                 let tup = crate::data::value::decode_tuple_from_key(&k, 3)
                     .expect("base key decodes cleanly");
                 let key_col = tup[0].get_int().expect("int base key column");
-                let valid = match &tup[1] {
-                    DataValue::Validity(vv) => vv.timestamp.raw(),
+                let valid = match tup.as_slice()[1] {
+                    DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the valid slot, got {other:?}"),
                 };
-                let sys = match &tup[2] {
-                    DataValue::Validity(vv) => vv.timestamp.raw(),
+                let sys = match tup.as_slice()[2] {
+                    DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the sys slot, got {other:?}"),
                 };
                 let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)

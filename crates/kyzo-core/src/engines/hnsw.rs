@@ -2698,7 +2698,7 @@ mod tests {
     }
 
     fn row(k: i64, x: f64, y: f64) -> Tuple {
-        vec![DataValue::from(k), vec2(x, y)]
+        Tuple::from_vec(vec![DataValue::from(k), vec2(x, y)])
     }
 
     /// A base relation and its HNSW index relation on a real store.
@@ -2725,12 +2725,12 @@ mod tests {
         for r in rows {
             base.put_fact(
                 &mut tx,
-                r,
+                r.as_slice(),
                 crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
         }
         tx.commit().unwrap();
         (base, idx, m)
@@ -2821,12 +2821,12 @@ mod tests {
             let r = vec![DataValue::from(k as i64), v];
             base.put_fact(
                 &mut tx,
-                &r,
+                r.as_slice(),
                 crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &r).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
         }
         let elapsed = t0.elapsed().as_secs_f64();
         let snap = probe::snapshot();
@@ -2894,12 +2894,12 @@ mod tests {
             let mut tx = db.write_tx().unwrap();
             base.put_fact(
                 &mut tx,
-                &r,
+                r.as_slice(),
                 crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &r).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
             tx.commit().unwrap();
         }
         let elapsed = t0.elapsed().as_secs_f64();
@@ -3004,12 +3004,12 @@ mod tests {
                 let r = vec![DataValue::from(k as i64), v];
                 base.put_fact(
                     &mut tx,
-                    &r,
+                    r.as_slice(),
                     crate::data::value::ValidityTs::from_raw(0),
                     SourceSpan(0, 0),
                 )
                 .unwrap();
-                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &r).unwrap());
+                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
             }
 
             // Every row in the index relation, decoded — a full unfiltered
@@ -3021,7 +3021,7 @@ mod tests {
             let mut total_ignored_edges = 0u64;
             for row in idx.scan_prefix(&tx, &Tuple::default()) {
                 let row = row.unwrap();
-                match HnswRow::decode(&row, base.metadata.keys.len(), &idx.name).unwrap() {
+                match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name).unwrap() {
                     HnswRow::Node { layer, .. } => {
                         *layer_node_counts.entry(layer).or_insert(0) += 1;
                     }
@@ -3258,12 +3258,12 @@ mod tests {
             let r = vec![DataValue::from(k as i64), v];
             base.put_fact(
                 &mut tx,
-                &r,
+                r.as_slice(),
                 crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &r).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
         }
         tx.commit().unwrap();
 
@@ -3474,7 +3474,7 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         let zero = row(9, 0.0, 0.0);
         let mut stack = vec![];
-        let err = hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &zero).unwrap_err();
+        let err = hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, zero.as_slice()).unwrap_err();
         assert!(
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
@@ -3521,25 +3521,25 @@ mod tests {
         base2
             .put_fact(
                 &mut tx,
-                &zrow,
+                zrow.as_slice(),
                 crate::data::value::ValidityTs::from_raw(0),
                 SourceSpan(0, 0),
             )
             .unwrap();
-        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &zrow).unwrap());
+        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, zrow.as_slice()).unwrap());
         tx.commit().unwrap();
 
         // Non-finite components are refused under every metric.
         let mut tx = db.write_tx().unwrap();
         let nan_row = row(2, f64::NAN, 0.0);
-        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &nan_row).unwrap_err();
+        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, nan_row.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
             DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
         ];
-        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, &bad_dim).unwrap_err();
+        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, &mut stack, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
     }
 
@@ -3553,7 +3553,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
 
         let mut tx = db.write_tx().unwrap();
-        hnsw_remove(&mut tx, &base, &idx, &rows[1]).unwrap();
+        hnsw_remove(&mut tx, &base, &idx, rows[1].as_slice()).unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
@@ -3576,7 +3576,7 @@ mod tests {
         drop(rtx);
 
         let mut tx = db.write_tx().unwrap();
-        hnsw_remove(&mut tx, &base, &idx, &rows[0]).unwrap();
+        hnsw_remove(&mut tx, &base, &idx, rows[0].as_slice()).unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
@@ -3611,7 +3611,7 @@ mod tests {
         let mut stack = vec![];
         // Unchanged put.
         let mut tx = db.write_tx().unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &rows[0]).unwrap());
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, rows[0].as_slice()).unwrap());
         tx.commit().unwrap();
 
         // Changed vector: base row rewritten, index follows.
@@ -3619,12 +3619,12 @@ mod tests {
         let mut tx = db.write_tx().unwrap();
         base.put_fact(
             &mut tx,
-            &moved,
+            moved.as_slice(),
             crate::data::value::ValidityTs::from_raw(0),
             SourceSpan(0, 0),
         )
         .unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, &moved).unwrap());
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, moved.as_slice()).unwrap());
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
@@ -3677,12 +3677,12 @@ mod tests {
     fn row_kinds_round_trip() {
         let kl = 1usize;
         let at = VectorId {
-            tuple_key: vec![DataValue::from(7)],
+            tuple_key: Tuple::from_vec(vec![DataValue::from(7)]),
             field: 1,
             sub: None,
         };
         let other = VectorId {
-            tuple_key: vec![DataValue::from(8)],
+            tuple_key: Tuple::from_vec(vec![DataValue::from(8)]),
             field: 1,
             sub: Some(2),
         };
@@ -3708,7 +3708,7 @@ mod tests {
         for row in rows {
             let mut tuple = row.key_tuple(kl);
             tuple.extend(row.val_tuple());
-            let decoded = HnswRow::decode(&tuple, kl, "t").unwrap();
+            let decoded = HnswRow::decode(tuple.as_slice(), kl, "t").unwrap();
             assert_eq!(decoded, row, "round trip");
         }
 
@@ -3733,7 +3733,7 @@ mod tests {
         }
         .key_tuple(kl);
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));
-        assert!(c[1..].iter().all(|v| *v == DataValue::Null));
+        assert!(c.as_slice()[1..].iter().all(|v| *v == DataValue::Null));
 
         // Degree is Int on the wire (the original stored it as Float).
         assert_eq!(node.val_tuple()[0], DataValue::from(0i64));
@@ -3746,7 +3746,7 @@ mod tests {
     fn corrupt_rows_are_typed_errors() {
         // Well-formed tuple, wrong shape: node degree slot holds a string.
         let at = VectorId {
-            tuple_key: vec![DataValue::from(7)],
+            tuple_key: Tuple::from_vec(vec![DataValue::from(7)]),
             field: 1,
             sub: None,
         };
@@ -3756,11 +3756,11 @@ mod tests {
             DataValue::Bytes(vec![]),
             DataValue::from(false),
         ]);
-        let err = HnswRow::decode(&tuple, 1, "t").unwrap_err();
+        let err = HnswRow::decode(tuple.as_slice(), 1, "t").unwrap_err();
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // Truncated tuple.
-        let err = HnswRow::decode(&tuple[..3], 1, "t").unwrap_err();
+        let err = HnswRow::decode(&tuple.as_slice()[..3], 1, "t").unwrap_err();
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
 
         // A real store with a byte-flipped index row: reads error, never
@@ -3828,7 +3828,7 @@ mod tests {
             "the HNSW manifest wire format changed; this is an on-disk \
              format migration, not a refactor"
         );
-        assert!(rmp_serde::from_slice::<HnswIndexManifest>(&bytes[..bytes.len() / 2]).is_err());
+        assert!(rmp_serde::from_slice::<HnswIndexManifest>(&bytes.as_slice()[..bytes.len() / 2]).is_err());
     }
 
     /// The pinned wire bytes of the canonical manifest above (msgpack,
@@ -3843,7 +3843,7 @@ mod tests {
     fn hnsw_level_is_deterministic_and_geometric() {
         let m = manifest(HnswDistance::L2);
         let id_of = |k: i64| VectorId {
-            tuple_key: vec![DataValue::from(k)],
+            tuple_key: Tuple::from_vec(vec![DataValue::from(k)]),
             field: 1,
             sub: None,
         };

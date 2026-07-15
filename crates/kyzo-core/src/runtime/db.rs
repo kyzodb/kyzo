@@ -1886,7 +1886,7 @@ mod tests {
         let rows = db
             .run_script(&format!("?[v] := *hist[1, v @ {now}, 200]"), no_params())
             .expect("two-coordinate read");
-        let want: Vec<Tuple> = vec![vec![DataValue::from("retro")]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("retro")])];
         assert_eq!(
             rows.rows, want,
             "system-now, valid-200 must see the retroactive claim"
@@ -1937,7 +1937,7 @@ mod tests {
             "index and base must agree on current state"
         );
         assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
-        let want: Tuple = vec![DataValue::from(11), DataValue::from(1)];
+        let want: Tuple = Tuple::from_vec(vec![DataValue::from(11), DataValue::from(1)]);
         assert_eq!(via_base.rows[0], want);
     }
 

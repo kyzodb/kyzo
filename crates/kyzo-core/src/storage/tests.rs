@@ -513,7 +513,7 @@ fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
             is_assert: Reverse(true),
         })
     };
-    let tuple: Tuple = vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)];
+    let tuple: Tuple = Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
     tuple.encode_as_key(rel)
 }
 
@@ -596,12 +596,12 @@ fn time_travel_matches_naive_oracle() {
             .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
             .map(|r| {
                 let t = r.unwrap();
-                let name = match &t[0] {
+                let name = match t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
                     v => panic!("unexpected {v:?}"),
                 };
-                let ts = match &t[1] {
-                    DataValue::Validity(v) => v.timestamp.raw(),
+                let ts = match t.as_slice()[1] {
+                    DataValue::Validity(v) => v.ts_micros(),
                     v => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
@@ -709,11 +709,11 @@ fn stamped_row(
             is_assert: Reverse(true),
         })
     };
-    let tuple: Tuple = vec![
+    let tuple: Tuple = Tuple::from_vec(vec![
         DataValue::Str(name.into()),
         slot(ValidityTs::from_raw(valid_ts)),
         slot(sys),
-    ];
+    ]);
     (tuple.encode_as_key(rel), pol_val(rel, true))
 }
 
@@ -2127,12 +2127,12 @@ fn sim_time_travel_matches_naive_oracle() {
             .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
             .map(|r| {
                 let t = r.unwrap();
-                let name = match &t[0] {
+                let name = match t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
                     v => panic!("unexpected {v:?}"),
                 };
-                let ts = match &t[1] {
-                    DataValue::Validity(v) => v.timestamp.raw(),
+                let ts = match t.as_slice()[1] {
+                    DataValue::Validity(v) => v.ts_micros(),
                     v => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
@@ -2628,12 +2628,12 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                 .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
                 .map(|r| {
                     let t = r.unwrap();
-                    let name = match &t[0] {
+                    let name = match t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
                         v => panic!("unexpected {v:?}"),
                     };
-                    let ts = match &t[1] {
-                        DataValue::Validity(v) => v.timestamp.raw(),
+                    let ts = match t.as_slice()[1] {
+                        DataValue::Validity(v) => v.ts_micros(),
                         v => panic!("unexpected {v:?}"),
                     };
                     (name, ts)
@@ -3162,7 +3162,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
             timestamp: stamp,
             is_assert: Reverse(true),
         });
-        let tuple: Tuple = vec![DataValue::from(0), slot.clone(), slot];
+        let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
         tuple.encode_as_key(rel)
     };
     let current = |rows: Vec<Tuple>| -> i64 {

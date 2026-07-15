@@ -712,7 +712,14 @@ mod tests {
     /// marker to start, non-zero length, ends in the EOS marker).
     #[test]
     fn encode_stream_produces_a_framed_byte_sequence() {
-        let batch = ColumnBatch::from_rows(vec![vec![v_int(1)], vec![v_int(2)], vec![v_int(3)]], 1);
+        let batch = ColumnBatch::from_rows(
+            vec![
+                Tuple::from_vec(vec![v_int(1)]),
+                Tuple::from_vec(vec![v_int(2)]),
+                Tuple::from_vec(vec![v_int(3)]),
+            ],
+            1,
+        );
         let bytes = encode_stream(&batch, &["n"]).unwrap();
         assert!(bytes.len() > 16);
         assert_eq!(&bytes[0..4], &CONTINUATION_MARKER.to_le_bytes());
@@ -725,7 +732,7 @@ mod tests {
 
     #[test]
     fn encode_stream_refuses_a_name_count_mismatch() {
-        let batch = ColumnBatch::from_rows(vec![vec![v_int(1)]], 1);
+        let batch = ColumnBatch::from_rows(vec![Tuple::from_vec(vec![v_int(1)])], 1);
         let err = encode_stream(&batch, &[]).unwrap_err();
         assert!(err.to_string().contains("column names"));
     }

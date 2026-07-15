@@ -58,7 +58,7 @@ impl FixedRule for MinimumSpanningTreePrim {
                 })??;
                 // Structural: `ensure_min_len(1)` proved every tuple has a
                 // first column.
-                let dv = &tuple[0];
+                let dv = &tuple.as_slice()[0];
                 *inv_indices.get(dv).ok_or_else(|| {
                     #[derive(Debug, Error, Diagnostic)]
                     #[error("The requested starting node {0:?} is not found")]
@@ -152,22 +152,22 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to", "w"],
                     vec![
-                        vec![s("a"), s("b"), DataValue::from(1.0)],
-                        vec![s("b"), s("c"), DataValue::from(2.0)],
-                        vec![s("a"), s("c"), DataValue::from(4.0)],
-                        vec![s("c"), s("d"), DataValue::from(3.0)],
+                        Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
+                        Tuple::from_vec(vec![s("a"), s("c"), DataValue::from(4.0)]),
+                        Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![s("a"), s("b"), DataValue::from(1.0)],
-            vec![s("b"), s("c"), DataValue::from(2.0)],
-            vec![s("c"), s("d"), DataValue::from(3.0)],
+            Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+            Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
+            Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
         ];
         assert_eq!(got, want);
     }
@@ -187,19 +187,19 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to", "w"],
                     vec![
-                        vec![s("a"), s("b"), DataValue::from(1.0)],
-                        vec![s("b"), s("c"), DataValue::from(1.0)],
+                        Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![s("a"), s("b"), DataValue::from(1.0)],
-            vec![s("b"), s("c"), DataValue::from(1.0)],
+            Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+            Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
         ];
         assert_eq!(got, want);
     }

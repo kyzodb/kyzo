@@ -540,7 +540,7 @@ mod tests {
             .expect("typed ConstraintViolation");
         assert_eq!(viol.name, "nonneg");
         assert_eq!(viol.total, 1);
-        let want: Vec<Tuple> = vec![vec![DataValue::from(3), DataValue::from(-4)]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(3), DataValue::from(-4)])];
         assert_eq!(
             viol.witnesses, want,
             "the witness is exactly the violating row, post-write"
@@ -587,7 +587,7 @@ mod tests {
             .run_script("?[id, fk] <- [[11, 2]] :put child {id, fk}", no_params())
             .expect_err("orphan child denied");
         let viol = err.downcast_ref::<ConstraintViolation>().expect("typed");
-        let want: Vec<Tuple> = vec![vec![DataValue::from(2)]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(2)])];
         assert_eq!(viol.witnesses, want);
 
         // Deleting the parent while a child references it: denied through
@@ -626,7 +626,7 @@ mod tests {
             .downcast_ref::<ConstraintRejectedOnCreation>()
             .expect("typed creation rejection");
         assert_eq!(rej.total, 1);
-        let want: Vec<Tuple> = vec![vec![DataValue::from(1), DataValue::from(-9)]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(1), DataValue::from(-9)])];
         assert_eq!(rej.witnesses, want);
 
         // Nothing was attached by the refused creation.
@@ -691,7 +691,7 @@ mod tests {
             .expect_err("trigger write violates b's constraint");
         let viol = err.downcast_ref::<ConstraintViolation>().expect("typed");
         assert_eq!(viol.name, "small_b");
-        let want: Vec<Tuple> = vec![vec![DataValue::from(50)]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from(50)])];
         assert_eq!(viol.witnesses, want);
         assert_eq!(
             ints(&db.run_script("?[x] := *a[x]", no_params()).unwrap()),
@@ -1097,7 +1097,7 @@ mod tests {
             )
             .expect_err("duplicate email denied");
         let viol = err.downcast_ref::<ConstraintViolation>().expect("typed");
-        let want: Vec<Tuple> = vec![vec![DataValue::from("a@x.com")]];
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("a@x.com")])];
         assert_eq!(viol.witnesses, want);
     }
 }

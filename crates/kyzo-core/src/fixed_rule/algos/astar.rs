@@ -93,8 +93,8 @@ fn astar(
 ) -> Result<(f64, Vec<DataValue>)> {
     // Structural: the caller's `ensure_min_len(1)` on `starting`/`goals`
     // proved every tuple has a first column.
-    let start_node = &starting[0];
-    let goal_node = &goal[0];
+    let start_node = &starting.as_slice()[0];
+    let goal_node = &goal.as_slice()[0];
     let heuristic_bytecode = heuristic.compile()?;
     let mut stack = vec![];
     let mut eval_heuristic = |node: &Tuple| -> Result<f64> {
@@ -144,7 +144,7 @@ fn astar(
 
         for edge in edges.prefix_iter(&node)? {
             let edge = edge?;
-            let edge_dst = &edge[1];
+            let edge_dst = &edge.as_slice()[1];
             let edge_cost = match edge.get(2) {
                 None => 1.,
                 Some(cost) => cost.get_float().ok_or_else(|| {
@@ -228,32 +228,32 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to", "w"],
                     vec![
-                        vec![s("a"), s("b"), DataValue::from(1.0)],
-                        vec![s("b"), s("c"), DataValue::from(1.0)],
-                        vec![s("a"), s("c"), DataValue::from(3.0)],
+                        Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("a"), s("c"), DataValue::from(3.0)]),
                     ],
                 ),
                 TestInput::new(
                     vec!["id", "h"],
                     vec![
-                        vec![s("a"), DataValue::from(2.0)],
-                        vec![s("b"), DataValue::from(1.0)],
-                        vec![s("c"), DataValue::from(0.0)],
+                        Tuple::from_vec(vec![s("a"), DataValue::from(2.0)]),
+                        Tuple::from_vec(vec![s("b"), DataValue::from(1.0)]),
+                        Tuple::from_vec(vec![s("c"), DataValue::from(0.0)]),
                     ],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
-                TestInput::new(vec!["goal"], vec![vec![s("c")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
+                TestInput::new(vec!["goal"], vec![Tuple::from_vec(vec![s("c")])]),
             ],
             BTreeMap::from([(SmartString::from("heuristic"), h_binding)]),
             CancelFlag::default(),
         )
         .unwrap();
-        let want: Vec<Tuple> = vec![vec![
+        let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
             s("a"),
             s("c"),
             DataValue::from(2.0),
             DataValue::List(vec![s("a"), s("b"), s("c")]),
-        ]];
+        ])];
         assert_eq!(got, want);
     }
 }
