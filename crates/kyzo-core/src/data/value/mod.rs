@@ -901,7 +901,7 @@ mod facade_tests {
                     .collect(),
             )),
             10 => DataValue::Validity(Validity::new(
-                rng.next() as i64,
+                ValidityTs::from_raw(rng.next() as i64),
                 rng.next().is_multiple_of(2),
             )),
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {

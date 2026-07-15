@@ -195,10 +195,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(1.0)],
-                    vec![s("b"), s("c"), DataValue::from(2.0)],
-                    vec![s("a"), s("c"), DataValue::from(4.0)],
-                    vec![s("c"), s("d"), DataValue::from(3.0)],
+                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                    Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(2.0)]),
+                    Tuple::from_vec(vec![s("a"), s("c"), DataValue::from(4.0)]),
+                    Tuple::from_vec(vec![s("c"), s("d"), DataValue::from(3.0)]),
                 ],
             )],
             BTreeMap::new(),
@@ -228,9 +228,9 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(2.0)],
-                    vec![s("a"), s("b"), DataValue::from(5.0)],
-                    vec![s("b"), s("c"), DataValue::from(3.0)],
+                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(2.0)]),
+                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(5.0)]),
+                    Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(3.0)]),
                 ],
             )],
             BTreeMap::new(),
@@ -259,8 +259,8 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to", "w"],
                 vec![
-                    vec![s("a"), s("b"), DataValue::from(1.0)],
-                    vec![s("b"), s("c"), DataValue::from(1.0)],
+                    Tuple::from_vec(vec![s("a"), s("b"), DataValue::from(1.0)]),
+                    Tuple::from_vec(vec![s("b"), s("c"), DataValue::from(1.0)]),
                 ],
             )],
             BTreeMap::new(),

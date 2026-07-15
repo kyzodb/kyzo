@@ -216,7 +216,7 @@ mod tests {
         )]);
         let got = run_fixed_rule(&Constant, vec![], options, CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
-        let want: Tuple = vec![DataValue::from(1i64), DataValue::from("x")];
+        let want: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("x")]);
         assert_eq!(got[0], want);
     }
 

@@ -73,7 +73,7 @@ pub use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::sync::LazyLock;
 
-use crate::data::value::{DataValue, Json, JsonNum, JsonObj, Num};
+use crate::data::value::{DataValue, Json, JsonNum, JsonObj, Num, Tuple};
 use crate::fixed_rule::NamedRows;
 
 /// The serde bridge value: engine-side JSON carried as `serde_json`
@@ -440,10 +440,7 @@ mod tests {
         let dv = DataValue::Uuid(UuidWrapper(uuid::Uuid::nil()));
         assert_eq!(JsonValue::from(&dv), json!(uuid::Uuid::nil().to_string()));
 
-        let v = Validity {
-            timestamp: ValidityTs::from_raw(5),
-            is_assert: Reverse(true),
-        };
+        let v = Validity::new(ValidityTs::from_raw(5), true);
         assert_eq!(JsonValue::from(&DataValue::Validity(v)), json!([5, true]));
     }
 
@@ -470,8 +467,8 @@ mod tests {
         let nr = NamedRows::new(
             vec!["a".to_string(), "b".to_string()],
             vec![
-                vec![DataValue::from(1_i64), DataValue::from("x")],
-                vec![DataValue::from(2_i64), DataValue::from("y")],
+                Tuple::from_vec(vec![DataValue::from(1_i64), DataValue::from("x")]),
+                Tuple::from_vec(vec![DataValue::from(2_i64), DataValue::from("y")]),
             ],
         );
         let j = nr.clone().into_json();

@@ -2013,8 +2013,8 @@ mod tests {
         let t = Instant::now();
         let mut m: BTreeMap<Box<[u8]>, bool> = BTreeMap::new();
         for &(a, b) in &pairs {
-            let tup: Tuple = vec![DataValue::from(a), DataValue::from(b)];
-            let key = encode_tuple_bare(&tup).into_boxed_slice();
+            let tup: Tuple = Tuple::from_vec(vec![DataValue::from(a), DataValue::from(b)]);
+            let key = encode_tuple_bare(tup.as_slice()).into_boxed_slice();
             m.entry(key).or_insert(false);
         }
         let bytes_ms = t.elapsed().as_secs_f64() * 1000.0;

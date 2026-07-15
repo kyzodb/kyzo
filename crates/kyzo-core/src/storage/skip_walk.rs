@@ -332,10 +332,7 @@ mod tests {
     }
 
     fn slot(t: i64) -> Validity {
-        Validity {
-            timestamp: vts(t),
-            is_assert: Reverse(true),
-        }
+        Validity::new(vts(t), true)
     }
 
     /// A bitemporal key: `[int fact, valid(ts), sys(ts)]` under `REL`,

@@ -739,7 +739,7 @@ mod tests {
                     oracle.len() < production.len(),
                     "the sabotaged oracle must be missing rows: {oracle:?}"
                 );
-                let dropped: Tuple = vec![DataValue::from(3), DataValue::from(4)];
+                let dropped: Tuple = Tuple::from_vec(vec![DataValue::from(3), DataValue::from(4)]);
                 assert!(
                     !oracle.contains(&dropped) || oracle.len() != production.len(),
                     "sabotage must be visible in the oracle's answer"

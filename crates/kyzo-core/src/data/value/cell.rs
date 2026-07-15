@@ -275,7 +275,7 @@ mod tests {
     fn residency_table_by_kind_is_pinned() {
         use super::super::wide::interval::{Bound, Interval};
         use super::super::wide::json::Json;
-        use super::super::wide::validity::Validity;
+        use super::super::wide::validity::{Validity, ValidityTs};
         let mut arena = Arena::new();
         let inline =
             |cb: &CanonicalBytes, arena: &mut Arena| -> bool { Value::mint(cb, arena).is_inline() };
@@ -289,7 +289,7 @@ mod tests {
             &mut arena
         ));
         assert!(inline(
-            &encode(Datum::Validity(Validity::new(i64::MAX, false))),
+            &encode(Datum::Validity(Validity::new(ValidityTs::from_raw(i64::MAX), false))),
             &mut arena
         ));
         assert!(inline(

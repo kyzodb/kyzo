@@ -1004,7 +1004,7 @@ mod tests {
                 match batches.next()? {
                     Err(e) => return Some(Err(e)),
                     Ok(b) => {
-                        current = (0..b.len()).map(|i| b.row(i).to_vec()).collect();
+                        current = (0..b.len()).map(|i| b.row(i).to_vec()).map(Tuple::from_vec).collect();
                         idx = 0;
                     }
                 }
@@ -1069,7 +1069,7 @@ mod tests {
     /// singleton, fixed) against a two-row left stream.
     #[test]
     fn inline_fixed_join_branches() {
-        let left_rows = [vec![v(1)], vec![v(2)]];
+        let left_rows = [Tuple::from_vec(vec![v(1)]), Tuple::from_vec(vec![v(2)])];
         let mk_left = || -> TupleIter<'_> { Box::new(left_rows.iter().map(|t| Ok(t.clone()))) };
 
         let null = InlineFixedRA {
@@ -1243,7 +1243,7 @@ mod tests {
         let mut expected: Vec<Tuple> = (0..2000i64)
             .map(|i| vec![v(7), v(i), v(7)])
             .chain((5000..5003i64).map(|i| vec![v(8), v(i), v(8)]))
-            .collect();
+            .map(Tuple::from_vec).collect();
         expected.sort();
         assert_eq!(got, expected, "materialized batch join vs analytic oracle");
     }
@@ -1590,7 +1590,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        let expected: Vec<Tuple> = (1..=5i64).map(|k| vec![v(k), v(k + 1000)]).collect();
+        let expected: Vec<Tuple> = (1..=5i64).map(|k| vec![v(k), v(k + 1000)]).map(Tuple::from_vec).collect();
         assert_eq!(got, expected, "eliminate_indices: wrong surviving columns");
     }
 
@@ -1607,14 +1607,14 @@ mod tests {
 
         let mut store = EpochStore::new_normal(2);
         let mut baseline = RegularTempStore::default();
-        baseline.put(vec![v(0), DataValue::from("a")]);
-        baseline.put(vec![v(1), DataValue::from("b")]);
+        baseline.put(Tuple::from_vec(vec![v(0), DataValue::from("a")]));
+        baseline.put(Tuple::from_vec(vec![v(1), DataValue::from("b")]));
         store.merge_in(baseline.wrap(), &mut ()).unwrap();
         // First merge into an empty total swaps the whole store in (the
         // `use_total_for_delta` fast path) — so this second merge is the
         // one that actually narrows the delta to what's fresh.
         let mut fresh = RegularTempStore::default();
-        fresh.put(vec![v(2), DataValue::from("c")]);
+        fresh.put(Tuple::from_vec(vec![v(2), DataValue::from("c")]));
         store.merge_in(fresh.wrap(), &mut ()).unwrap();
         assert!(store.has_delta(), "the second merge must have a delta");
 
@@ -1720,7 +1720,7 @@ mod tests {
                 right_handle
                     .put_fact(&mut tx, &[v(k), v(k * 10)], ValidityTs::from_raw(0), sp())
                     .unwrap();
-                expected.push(vec![v(k), v(k), v(k * 10)]);
+                expected.push(Tuple::from_vec(vec![v(k), v(k), v(k * 10)]));
             }
         }
         tx.commit().unwrap();
@@ -1801,7 +1801,7 @@ mod tests {
                 right_handle
                     .put_fact(&mut tx, &[v(z), v(w)], ValidityTs::from_raw(0), sp())
                     .unwrap();
-                expected.push(vec![v(z), v(z), v(w)]);
+                expected.push(Tuple::from_vec(vec![v(z), v(z), v(w)]));
             }
         }
         tx.commit().unwrap();
@@ -1890,7 +1890,7 @@ mod tests {
         const N_PROBES: usize = 200_000;
         let probe_rows: Vec<Tuple> = (0..N_PROBES)
             .map(|i| vec![v((i as i64) % N_NODES)])
-            .collect();
+            .map(Tuple::from_vec).collect();
         let left_of = |rows: Vec<Tuple>| -> BatchIter<'static> {
             let chunks: Vec<Batch> = rows
                 .chunks(BATCH_ROWS)
@@ -1989,10 +1989,10 @@ mod tests {
             span: Default::default(),
         };
         let stream: Vec<Result<Tuple>> = vec![
-            Ok(vec![DataValue::from(5)]),
-            Ok(vec![DataValue::from("poison")]),
+            Ok(Tuple::from_vec(vec![DataValue::from(5)])),
+            Ok(Tuple::from_vec(vec![DataValue::from("poison")])),
             Err(miette::miette!("simulated decode error at row 2")),
-            Ok(vec![DataValue::from(7)]),
+            Ok(Tuple::from_vec(vec![DataValue::from(7)])),
         ];
         let mut node = BatchTupleFilter {
             inner: stream.into_iter(),

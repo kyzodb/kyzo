@@ -169,17 +169,17 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")],
-                        vec![s("a"), s("c")],
-                        vec![s("b"), s("d")],
-                        vec![s("c"), s("d")],
+                        Tuple::from_vec(vec![s("a"), s("b")]),
+                        Tuple::from_vec(vec![s("a"), s("c")]),
+                        Tuple::from_vec(vec![s("b"), s("d")]),
+                        Tuple::from_vec(vec![s("c"), s("d")]),
                     ],
                 ),
                 TestInput::new(
                     vec!["id"],
-                    vec![vec![s("a")], vec![s("b")], vec![s("c")], vec![s("d")]],
+                    vec![Tuple::from_vec(vec![s("a")]), Tuple::from_vec(vec![s("b")]), Tuple::from_vec(vec![s("c")]), Tuple::from_vec(vec![s("d")])],
                 ),
-                TestInput::new(vec!["start"], vec![vec![s("a")]]),
+                TestInput::new(vec!["start"], vec![Tuple::from_vec(vec![s("a")])]),
             ],
             BTreeMap::from([
                 (
@@ -201,13 +201,13 @@ mod tests {
         )
         .unwrap();
         let want: Vec<Tuple> = vec![
-            vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])],
-            vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])],
-            vec![
+            Tuple::from_vec(vec![s("a"), s("b"), DataValue::List(vec![s("a"), s("b")])]),
+            Tuple::from_vec(vec![s("a"), s("c"), DataValue::List(vec![s("a"), s("c")])]),
+            Tuple::from_vec(vec![
                 s("a"),
                 s("d"),
                 DataValue::List(vec![s("a"), s("b"), s("d")]),
-            ],
+            ]),
         ];
         assert_eq!(got, want);
     }

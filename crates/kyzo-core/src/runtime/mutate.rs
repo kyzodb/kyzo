@@ -2383,16 +2383,16 @@ mod temporal_index_tests {
                 let (k, v) = r.expect("posting row decodes cleanly");
                 let tup = crate::data::value::decode_tuple_from_key(&k, 4)
                     .expect("posting key decodes cleanly");
-                let leading = match tup.as_slice()[0] {
+                let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the leading Validity column, got {other:?}"),
                 };
                 let key_col = tup[1].get_int().expect("int base key column");
-                let tail_valid = match tup.as_slice()[2] {
+                let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the tail valid slot, got {other:?}"),
                 };
-                let tail_sys = match tup.as_slice()[3] {
+                let tail_sys = match &tup.as_slice()[3] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the tail sys slot, got {other:?}"),
                 };
@@ -2417,11 +2417,11 @@ mod temporal_index_tests {
                 let tup = crate::data::value::decode_tuple_from_key(&k, 3)
                     .expect("base key decodes cleanly");
                 let key_col = tup[0].get_int().expect("int base key column");
-                let valid = match tup.as_slice()[1] {
+                let valid = match &tup.as_slice()[1] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the valid slot, got {other:?}"),
                 };
-                let sys = match tup.as_slice()[2] {
+                let sys = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
                     other => panic!("expected the sys slot, got {other:?}"),
                 };

@@ -308,9 +308,9 @@ mod tests {
             )])
         };
         for (steps, expected_path) in [
-            (3, vec![s("a"), s("b"), s("c"), s("d")]),
-            (2, vec![s("a"), s("b"), s("c")]),
-            (10, vec![s("a"), s("b"), s("c"), s("d")]),
+            (3, Tuple::from_vec(vec![s("a"), s("b"), s("c"), s("d")])),
+            (2, Tuple::from_vec(vec![s("a"), s("b"), s("c")])),
+            (10, Tuple::from_vec(vec![s("a"), s("b"), s("c"), s("d")])),
         ] {
             let got = run_fixed_rule(
                 &RandomWalk,
@@ -322,7 +322,7 @@ mod tests {
             let want: Vec<Tuple> = vec![Tuple::from_vec(vec![
                 DataValue::from(1i64),
                 s("a"),
-                DataValue::List(expected_path),
+                DataValue::List(expected_path.into_vec()),
             ])];
             assert_eq!(got, want, "steps = {steps}");
         }

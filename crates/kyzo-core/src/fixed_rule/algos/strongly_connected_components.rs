@@ -228,12 +228,12 @@ mod tests {
                 TestInput::new(
                     vec!["fr", "to"],
                     vec![
-                        vec![s("a"), s("b")],
-                        vec![s("b"), s("a")],
-                        vec![s("b"), s("c")],
+                        Tuple::from_vec(vec![s("a"), s("b")]),
+                        Tuple::from_vec(vec![s("b"), s("a")]),
+                        Tuple::from_vec(vec![s("b"), s("c")]),
                     ],
                 ),
-                TestInput::new(vec!["id"], vec![vec![s("lonely")]]),
+                TestInput::new(vec!["id"], vec![Tuple::from_vec(vec![s("lonely")])]),
             ],
             BTreeMap::new(),
             CancelFlag::default(),

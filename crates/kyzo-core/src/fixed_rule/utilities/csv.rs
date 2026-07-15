@@ -289,11 +289,11 @@ mod tests {
         let url = format!("file://{}", f.path().display());
         let got = run_fixed_rule(&CsvReader, vec![], options(&url), CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
-        let want: Tuple = vec![
+        let want: Tuple = Tuple::from_vec(vec![
             DataValue::from("a"),
             DataValue::from(1i64),
             DataValue::from(1.5f64),
-        ];
+        ]);
         assert_eq!(got[0], want);
         assert_eq!(got[1][2], DataValue::Null); // nullable Float? absorbed "oops"
     }

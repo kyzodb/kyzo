@@ -287,11 +287,11 @@ fn write_history(
             let mut row = key_cols;
             row.extend(ver.vals.iter().cloned());
             handle
-                .put_fact(&mut tx, &row, vts(ver.ts), sp())
+                .put_fact(&mut tx, row.as_slice(), vts(ver.ts), sp())
                 .expect("put version");
         } else {
             handle
-                .retract_fact(&mut tx, &key_cols, vts(ver.ts), sp())
+                .retract_fact(&mut tx, key_cols.as_slice(), vts(ver.ts), sp())
                 .expect("retract version");
         }
     }
@@ -320,7 +320,7 @@ fn stored_plain(db: &FjallStorage, name: &str, arity: usize, rows: &[Vec<i64>]) 
     for r in rows {
         let row: Tuple = r.iter().copied().map(v).collect();
         handle
-            .put_fact(&mut tx, &row, ValidityTs::from_raw(0), sp())
+            .put_fact(&mut tx, row.as_slice(), ValidityTs::from_raw(0), sp())
             .expect("put row");
     }
     tx.commit().expect("commit");
@@ -361,7 +361,7 @@ fn naive_asof_cfg(
             // `ver.ts` is a small, bounded generated/fixture timestamp
             // throughout this file: never the reserved terminal tick.
             if ver.assert {
-                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
+                laws::Event::assert(key, Tuple::from_vec(ver.vals.clone()), ver.ts, sys)
                     .expect("version timestamps in this file are never the reserved terminal tick")
             } else {
                 laws::Event::retract(key, ver.ts, sys)
@@ -593,11 +593,11 @@ fn boundary_at_instant_is_inclusive() {
     assert!(compile_and_run(&db, select_asof(1, &["val"], Some(9))).is_empty());
     assert_eq!(
         compile_and_run(&db, select_asof(1, &["val"], Some(10))),
-        BTreeSet::from([vec![v(1), s("ten")]])
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("ten")])])
     );
     assert_eq!(
         compile_and_run(&db, select_asof(1, &["val"], Some(11))),
-        BTreeSet::from([vec![v(1), s("ten")]])
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("ten")])])
     );
 }
 
@@ -628,7 +628,7 @@ fn same_instant_newest_write_governs() {
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     let got = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
-    assert_eq!(got, BTreeSet::from([vec![v(1), s("present")]]));
+    assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(1), s("present")])]));
     assert_eq!(got, naive_asof(&hist, 10));
 }
 
@@ -666,7 +666,7 @@ fn same_instant_identical_key_last_write_wins() {
     ];
     write_history(&db, "hist", 1, &["val"], &hist);
     let got = compile_and_run(&db, select_asof(1, &["val"], Some(10)));
-    assert_eq!(got, BTreeSet::from([vec![v(1), s("second")]]));
+    assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(1), s("second")])]));
     assert_eq!(got, naive_asof(&hist, 10));
 }
 
@@ -832,7 +832,7 @@ fn join_two_relations_at_same_instant() {
         for ar in &a_rows {
             for br in &b_rows {
                 if ar[0] == br[0] {
-                    expected.insert(vec![ar[0].clone(), ar[1].clone(), br[1].clone()]);
+                    expected.insert(Tuple::from_vec(vec![ar[0].clone(), ar[1].clone(), br[1].clone()]));
                 }
             }
         }
@@ -885,9 +885,9 @@ fn normal_aggregation_over_asof_read() {
             .sum();
         let got = compile_and_run(&db, agg_program(at_i));
         let expected = if cnt == 0 {
-            BTreeSet::from([vec![v(0), v(0)]])
+            BTreeSet::from([Tuple::from_vec(vec![v(0), v(0)])])
         } else {
-            BTreeSet::from([vec![v(cnt), v(total)]])
+            BTreeSet::from([Tuple::from_vec(vec![v(cnt), v(total)])])
         };
         assert_eq!(got, expected, "aggregation mismatch at instant {at_i}");
     }
@@ -936,8 +936,8 @@ fn meet_aggregation_over_asof_read() {
         // time-travel-orthogonal Cozo semantic, pinned here so the meet fold
         // over an empty as-of read is a defined value, not a silent gap.
         let expected = match min_val {
-            Some(m) => BTreeSet::from([vec![v(m)]]),
-            None => BTreeSet::from([vec![DataValue::Null]]),
+            Some(m) => BTreeSet::from([Tuple::from_vec(vec![v(m)])]),
+            None => BTreeSet::from([Tuple::from_vec(vec![DataValue::Null])]),
         };
         assert_eq!(got, expected, "meet-aggregation mismatch at instant {at_i}");
     }
@@ -1007,15 +1007,15 @@ fn bounded_asof_scan_over_post_prefix_key_range() {
     assert_eq!(
         compile_and_run(&db, bounded_program(10)),
         BTreeSet::from([
-            vec![v(1), v(25), s("b")],
-            vec![v(1), v(35), s("c")],
-            vec![v(2), v(30), s("e")],
-        ])
+Tuple::from_vec(vec![v(1), v(25), s("b")]),
+Tuple::from_vec(vec![v(1), v(35), s("c")]),
+Tuple::from_vec(vec![v(2), v(30), s("e")])
+])
     );
     // After the retraction at t=50, (1,25) drops out.
     assert_eq!(
         compile_and_run(&db, bounded_program(55)),
-        BTreeSet::from([vec![v(1), v(35), s("c")], vec![v(2), v(30), s("e")]])
+        BTreeSet::from([Tuple::from_vec(vec![v(1), v(35), s("c")]), Tuple::from_vec(vec![v(2), v(30), s("e")])])
     );
     // Full differential across every interesting instant.
     for at_i in interesting_instants(&hist) {
@@ -1048,11 +1048,11 @@ fn retraction_is_revision_not_erasure() {
     let read = |at: i64| compile_and_run(&db, select_asof(1, &["val"], Some(at)));
 
     // Before retraction: the original fact is still addressable.
-    assert_eq!(read(30), BTreeSet::from([vec![v(1), s("born")]]));
+    assert_eq!(read(30), BTreeSet::from([Tuple::from_vec(vec![v(1), s("born")])]));
     // Between retraction and re-assertion: absent.
     assert!(read(70).is_empty());
     // After re-assertion: the new fact.
-    assert_eq!(read(100), BTreeSet::from([vec![v(1), s("reborn")]]));
+    assert_eq!(read(100), BTreeSet::from([Tuple::from_vec(vec![v(1), s("reborn")])]));
     // The retracted instant is INCLUSIVE of the retraction → absent at t=50.
     assert!(read(50).is_empty());
     // Every instant agrees with the oracle.
@@ -1089,7 +1089,7 @@ fn plain_scan_reads_current_state_not_versions() {
     )]]);
     let got = compile_and_run(&db, prog);
     // Key 1 is retracted, key 2 asserted, key 3's newest value governs.
-    let expected: BTreeSet<Tuple> = BTreeSet::from([vec![v(2), s("b")], vec![v(3), s("new")]]);
+    let expected: BTreeSet<Tuple> = BTreeSet::from([Tuple::from_vec(vec![v(2), s("b")]), Tuple::from_vec(vec![v(3), s("new")])]);
     assert_eq!(got, expected, "a plain scan is a current-state read");
 }
 
@@ -1211,7 +1211,7 @@ fn negation_over_asof_matches_the_independent_complement_generatively() {
             let present = naive_asof(&hist, at);
             let want: BTreeSet<Tuple> = candidates
                 .iter()
-                .map(|&(k, val)| vec![v(k), v(val)])
+                .map(|&(k, val)| Tuple::from_vec(vec![v(k), v(val)]))
                 .filter(|row| !present.contains(row))
                 .collect();
             assert_eq!(got, want, "seed {seed} at {at}: hist={hist:?}");
@@ -1266,7 +1266,7 @@ fn negation_over_asof_non_prefix_join_matches_independent_complement() {
     // At t=10, both 100 and 200 are present (the retraction has not
     // happened yet), so both are negated out; 999 is present nowhere, at
     // any instant.
-    assert_eq!(got, BTreeSet::from([vec![v(999)]]));
+    assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(999)])]));
 }
 
 /// Fixed rules reading stored relations (validity-keyed or not) go through
@@ -1453,7 +1453,7 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
             sys: s1,
             valid: vts(150)
         }),
-        BTreeSet::from([vec![v(1), s("original")]]),
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("original")])]),
         "before the correction was recorded, the original governs"
     );
     // As the record stands at s2 (and currently): the correction.
@@ -1462,12 +1462,12 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
             sys: s2,
             valid: vts(150)
         }),
-        BTreeSet::from([vec![v(1), s("corrected")]]),
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("corrected")])]),
         "from the correction's stamp on, it governs"
     );
     assert_eq!(
         read_at(AsOf::current(vts(150))),
-        BTreeSet::from([vec![v(1), s("corrected")]]),
+        BTreeSet::from([Tuple::from_vec(vec![v(1), s("corrected")])]),
         "current belief is the corrected claim"
     );
     // Valid-axis still resolves under both system cuts.
@@ -1510,7 +1510,7 @@ fn naive_transitive_closure(edges: &BTreeSet<(i64, i64)>) -> BTreeSet<Tuple> {
             break;
         }
     }
-    reach.into_iter().map(|(a, b)| vec![v(a), v(b)]).collect()
+    reach.into_iter().map(|(a, b)| vec![v(a), v(b)]).map(Tuple::from_vec).collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1566,11 +1566,11 @@ fn write_history_multi_tx(
             let mut row = key_cols;
             row.extend(ver.vals.iter().cloned());
             handle
-                .put_fact(&mut tx, &row, vts(ver.ts), sp())
+                .put_fact(&mut tx, row.as_slice(), vts(ver.ts), sp())
                 .expect("put version");
         } else {
             handle
-                .retract_fact(&mut tx, &key_cols, vts(ver.ts), sp())
+                .retract_fact(&mut tx, key_cols.as_slice(), vts(ver.ts), sp())
                 .expect("retract version");
         }
         tx.commit().expect("commit");
@@ -1591,7 +1591,7 @@ fn events_of(versions: &[Version], sys_stamps: &[i64]) -> Vec<laws::Event> {
         .map(|(ver, &sys)| {
             let key: Tuple = ver.key.iter().copied().map(v).collect();
             if ver.assert {
-                laws::Event::assert(key, ver.vals.clone(), ver.ts, sys)
+                laws::Event::assert(key, Tuple::from_vec(ver.vals.clone()), ver.ts, sys)
             } else {
                 laws::Event::retract(key, ver.ts, sys)
             }
@@ -1652,11 +1652,11 @@ fn delta_atom(
 fn oracle_spans(events: &[laws::Event], keys: &[Tuple], fixed_sys: i64) -> BTreeSet<Tuple> {
     let mut want = BTreeSet::new();
     for key in keys {
-        let real_key = crate::data::value::Tuple::from_vec(key.clone());
+        let real_key = key.clone();
         for iv in laws::derive_intervals(events, &real_key, laws::Axis::Valid, fixed_sys) {
             let mut row = iv.tuple.clone();
             row.push(DataValue::Interval(plane_interval(iv.start, iv.end)));
-            want.insert(row.to_vec());
+            want.insert(row);
         }
     }
     want
@@ -2036,11 +2036,11 @@ fn plane_interval(start: i64, end: i64) -> Interval {
 }
 
 fn one_interval(k: i64, val: i64, start: i64, end: i64) -> Tuple {
-    vec![
+    Tuple::from_vec(vec![
         v(k),
         v(val),
         DataValue::Interval(plane_interval(start, end)),
-    ]
+    ])
 }
 
 #[test]
@@ -2420,7 +2420,7 @@ fn negation_over_spans_matches_the_independent_complement_generatively() {
                 .iter()
                 .map(|&(k, val)| vec![v(k), v(val)])
                 .filter(|row| !present_pairs.contains(&(k0_of(row), val_of(row))))
-                .collect();
+                .map(Tuple::from_vec).collect();
             assert_eq!(
                 got, want,
                 "seed {seed} fixed_sys={fixed_sys:?}: versions={versions:?}"
@@ -2504,7 +2504,7 @@ fn negation_over_delta_matches_the_independent_complement_generatively() {
                 .iter()
                 .map(|&(k, val)| vec![v(k), v(val)])
                 .filter(|row| !present_pairs.contains(&(k0_of(row), val_of(row))))
-                .collect();
+                .map(Tuple::from_vec).collect();
             assert_eq!(
                 got, want,
                 "seed {seed} valid axis {valid_at}->{valid_to}: versions={versions:?}"

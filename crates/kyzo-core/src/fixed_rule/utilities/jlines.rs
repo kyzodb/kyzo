@@ -266,8 +266,8 @@ mod tests {
         let got =
             run_fixed_rule(&JsonReader, vec![], options(&url), CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
-        let want0: Tuple = vec![DataValue::from(1i64), DataValue::from("a")];
-        let want1: Tuple = vec![DataValue::from(2i64), DataValue::Null];
+        let want0: Tuple = Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("a")]);
+        let want1: Tuple = Tuple::from_vec(vec![DataValue::from(2i64), DataValue::Null]);
         assert_eq!(got[0], want0);
         assert_eq!(got[1], want1);
     }

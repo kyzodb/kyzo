@@ -47,8 +47,8 @@ impl FixedRule for TopSort {
             // Structural: `kahn_g` only emits ids of the graph's nodes,
             // and `indices` has an entry per node.
             let val = indices.get(*val_id as usize).unwrap();
-            let tuple = vec![DataValue::from(idx as i64), val.clone()];
-            out.put(Tuple::from_vec(tuple))?;
+            let tuple = Tuple::from_vec(vec![DataValue::from(idx as i64), val.clone()]);
+            out.put(tuple)?;
         }
 
         Ok(())
@@ -113,10 +113,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("a"), s("c")],
-                    vec![s("b"), s("d")],
-                    vec![s("c"), s("d")],
+                    Tuple::from_vec(vec![s("a"), s("b")]),
+                    Tuple::from_vec(vec![s("a"), s("c")]),
+                    Tuple::from_vec(vec![s("b"), s("d")]),
+                    Tuple::from_vec(vec![s("c"), s("d")]),
                 ],
             )],
             BTreeMap::new(),
@@ -154,10 +154,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("a"), s("c")],
-                    vec![s("b"), s("d")],
-                    vec![s("c"), s("d")],
+                    Tuple::from_vec(vec![s("a"), s("b")]),
+                    Tuple::from_vec(vec![s("a"), s("c")]),
+                    Tuple::from_vec(vec![s("b"), s("d")]),
+                    Tuple::from_vec(vec![s("c"), s("d")]),
                 ],
             )],
             BTreeMap::new(),
@@ -166,11 +166,11 @@ mod tests {
         .unwrap();
         let i = |v: i64| DataValue::from(v);
         let want: Vec<Tuple> = vec![
-            vec![i(0), s("a")],
-            vec![i(1), s("c")],
-            vec![i(2), s("b")],
-            vec![i(3), s("d")],
-        ];
+Tuple::from_vec(vec![i(0), s("a")]),
+Tuple::from_vec(vec![i(1), s("c")]),
+Tuple::from_vec(vec![i(2), s("b")]),
+Tuple::from_vec(vec![i(3), s("d")])
+];
         assert_eq!(got, want);
     }
 }

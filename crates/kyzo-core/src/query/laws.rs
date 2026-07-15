@@ -2491,7 +2491,7 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
         facts.insert(
             "edge",
-            edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).collect(),
+            edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
         );
         facts
     }
@@ -2581,7 +2581,7 @@ mod tests {
         let want: BTreeSet<Tuple> = [(1, 2), (2, 3), (3, 4), (1, 3), (2, 4), (1, 4)]
             .into_iter()
             .map(|(a, b)| vec![v(a), v(b)])
-            .collect();
+            .map(Tuple::from_vec).collect();
         assert_eq!(db["path"], want);
     }
 
@@ -2639,7 +2639,7 @@ mod tests {
     fn law2_stratified_negation_evaluates_correctly() {
         // unreachable(X,Y) :- node(X), node(Y), not path(X,Y).
         let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert("node", (1..=3).map(|i| vec![v(i)]).collect());
+        facts.insert("node", (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         let mut rules = transitive_closure();
         rules.push(Rule::plain(
             "unreachable",
@@ -2659,7 +2659,7 @@ mod tests {
         let want: BTreeSet<Tuple> = [(1, 1), (2, 1), (2, 2), (3, 1), (3, 2), (3, 3)]
             .into_iter()
             .map(|(a, b)| vec![v(a), v(b)])
-            .collect();
+            .map(Tuple::from_vec).collect();
         assert_eq!(db["unreachable"], want);
     }
 
@@ -2706,7 +2706,7 @@ mod tests {
     fn constants_and_repeated_variables_unify_exactly() {
         // same(X) :- edge(X, X).  eq3(X) :- edge(3, X).
         let mut facts = edge_facts(&[(1, 1), (1, 2), (3, 5)]);
-        facts.get_mut("edge").unwrap().insert(vec![v(4), v(4)]);
+        facts.get_mut("edge").unwrap().insert(Tuple::from_vec(vec![v(4), v(4)]));
         let program = Program {
             rules: vec![
                 Rule::plain("same", vec![x()], vec![lit("edge", vec![x(), x()], false)]),
@@ -2720,8 +2720,8 @@ mod tests {
             ..Program::default()
         };
         let db = naive_eval(&program).unwrap();
-        assert_eq!(db["same"], [vec![v(1)], vec![v(4)]].into_iter().collect());
-        assert_eq!(db["eq3"], [vec![v(5)]].into_iter().collect());
+        assert_eq!(db["same"], [vec![v(1)], vec![v(4)]].into_iter().map(Tuple::from_vec).collect());
+        assert_eq!(db["eq3"], [vec![v(5)]].into_iter().map(Tuple::from_vec).collect());
     }
 
     /// Normal aggregation: group by the non-aggregated head positions and
@@ -2736,9 +2736,9 @@ mod tests {
             [(1, 10), (1, 20), (2, 5)]
                 .iter()
                 .map(|(d, a)| vec![v(*d), v(*a)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
-        facts.insert("bonus", [vec![v(1), v(40)]].into_iter().collect());
+        facts.insert("bonus", [vec![v(1), v(40)]].into_iter().map(Tuple::from_vec).collect());
         let rule = |rel| {
             Rule::aggregated(
                 "total",
@@ -2756,7 +2756,7 @@ mod tests {
         let want: BTreeSet<Tuple> = [(1, 70, 3), (2, 5, 1)]
             .into_iter()
             .map(|(d, s, c)| vec![v(d), v(s), v(c)])
-            .collect();
+            .map(Tuple::from_vec).collect();
         assert_eq!(db["total"], want);
     }
 
@@ -2774,7 +2774,7 @@ mod tests {
             ..Program::default()
         };
         let db = naive_eval(&all_aggregated).unwrap();
-        assert_eq!(db["c"], [vec![v(0), v(0)]].into_iter().collect());
+        assert_eq!(db["c"], [vec![v(0), v(0)]].into_iter().map(Tuple::from_vec).collect());
 
         let keyed = Program {
             rules: vec![Rule::aggregated(
@@ -2810,7 +2810,7 @@ mod tests {
         let want: BTreeSet<Tuple> = [(1, 3), (2, 2), (3, 1)]
             .into_iter()
             .map(|(n, c)| vec![v(n), v(c)])
-            .collect();
+            .map(Tuple::from_vec).collect();
         assert_eq!(db["reach_count"], want);
     }
 
@@ -2825,7 +2825,7 @@ mod tests {
             [(1, 5), (4, 1)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let program = Program {
             rules: meet_reach_rules("min"),
@@ -2837,7 +2837,7 @@ mod tests {
         let want: BTreeSet<Tuple> = [(1, 5), (2, 5), (3, 5), (4, 1)]
             .into_iter()
             .map(|(n, l)| vec![v(n), v(l)])
-            .collect();
+            .map(Tuple::from_vec).collect();
         assert_eq!(db["m"], want);
     }
 
@@ -2859,7 +2859,7 @@ mod tests {
             db["g"],
             [vec![DataValue::Null, DataValue::from(false)]]
                 .into_iter()
-                .collect()
+                .map(Tuple::from_vec).collect()
         );
     }
 
@@ -2877,7 +2877,7 @@ mod tests {
             "edge",
             [vec![DataValue::from(false), DataValue::from(true)]]
                 .into_iter()
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let rules = vec![
             Rule::aggregated(
@@ -2902,7 +2902,7 @@ mod tests {
             ..Program::default()
         };
         let db = naive_eval(&program).unwrap();
-        assert_eq!(db["m"], [vec![DataValue::from(true)]].into_iter().collect());
+        assert_eq!(db["m"], [vec![DataValue::from(true)]].into_iter().map(Tuple::from_vec).collect());
     }
 
     /// Review finding 1, second wave: the identity row must be *invisible*
@@ -2916,8 +2916,8 @@ mod tests {
     fn meet_identity_row_is_invisible_when_derivations_exist() {
         // m(min(W)) :- seed(W);  m(min(W)) :- edge(V, W), m(V).
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("seed", [vec![v(5)]].into_iter().collect());
-        facts.insert("edge", [vec![DataValue::Null, v(1)]].into_iter().collect());
+        facts.insert("seed", [vec![v(5)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert("edge", [vec![DataValue::Null, v(1)]].into_iter().map(Tuple::from_vec).collect());
         let rules = vec![
             Rule::aggregated(
                 "m",
@@ -2941,7 +2941,7 @@ mod tests {
             ..Program::default()
         };
         let db = naive_eval(&program).unwrap();
-        assert_eq!(db["m"], [vec![v(5)]].into_iter().collect());
+        assert_eq!(db["m"], [vec![v(5)]].into_iter().map(Tuple::from_vec).collect());
     }
 
     /// Negation over a meet-aggregated relation forces a stratum, so the
@@ -2952,9 +2952,9 @@ mod tests {
         let mut facts = edge_facts(&[(1, 2)]);
         facts.insert(
             "seed",
-            [vec![v(1), DataValue::from(true)]].into_iter().collect(),
+            [vec![v(1), DataValue::from(true)]].into_iter().map(Tuple::from_vec).collect(),
         );
-        facts.insert("node", (1..=3).map(|i| vec![v(i)]).collect());
+        facts.insert("node", (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         let mut rules = meet_reach_rules("or");
         rules.push(Rule::plain(
             "unseeded",
@@ -2971,7 +2971,7 @@ mod tests {
         };
         let db = naive_eval(&program).unwrap();
         // m accumulates {(1,true),(2,true)}; node 3 has no m row at all.
-        assert_eq!(db["unseeded"], [vec![v(3)]].into_iter().collect());
+        assert_eq!(db["unseeded"], [vec![v(3)]].into_iter().map(Tuple::from_vec).collect());
     }
 
     /// Fixed rules are opaque relation transformers on stratum boundaries:
@@ -2987,13 +2987,13 @@ mod tests {
                 [(1, 2), (2, 3)]
                     .iter()
                     .map(|(a, b)| vec![v(*a), v(*b)])
-                    .collect()
+                    .map(Tuple::from_vec).collect()
             },
         };
         let path_sources = FixedRule {
             head_rel: "sources",
             inputs: vec!["path"],
-            eval: |inputs| inputs[0].iter().map(|t| vec![t[0].clone()]).collect(),
+            eval: |inputs| inputs[0].iter().map(|t| vec![t[0].clone()]).map(Tuple::from_vec).collect(),
         };
         let mut rules = transitive_closure();
         rules.push(Rule::plain(
@@ -3018,7 +3018,7 @@ mod tests {
         assert!(s["out"] > s["sources"]);
         let db = naive_eval(&program).unwrap();
         assert_eq!(db["path"].len(), 3);
-        let want: BTreeSet<Tuple> = [vec![v(1)], vec![v(2)]].into_iter().collect();
+        let want: BTreeSet<Tuple> = [vec![v(1)], vec![v(2)]].into_iter().map(Tuple::from_vec).collect();
         assert_eq!(db["sources"], want);
         assert_eq!(db["out"], want);
     }
@@ -3036,7 +3036,7 @@ mod tests {
                 vec![v(1), DataValue::from(true)],
             ]
             .into_iter()
-            .collect(),
+            .map(Tuple::from_vec).collect(),
         );
         facts.insert("edge", BTreeSet::new());
         let program = Program {
@@ -3050,7 +3050,7 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "d",
-            [vec![v(1), DataValue::from(true)]].into_iter().collect(),
+            [vec![v(1), DataValue::from(true)]].into_iter().map(Tuple::from_vec).collect(),
         );
         let program = Program {
             rules: vec![Rule::aggregated(
@@ -3123,7 +3123,7 @@ mod tests {
 
         // Facts under an aggregated head.
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("m", [vec![v(1), v(1)]].into_iter().collect());
+        facts.insert("m", [vec![v(1), v(1)]].into_iter().map(Tuple::from_vec).collect());
         let seeded = Program {
             rules: meet_reach_rules("min"),
             facts,
@@ -3268,14 +3268,14 @@ mod tests {
             let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
             facts.insert(
                 "edge",
-                edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).collect(),
+                edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
             );
             facts.insert(
                 "seed",
                 seeds
                     .iter()
                     .map(|(k, val)| vec![v(*k), val.clone()])
-                    .collect(),
+                    .map(Tuple::from_vec).collect(),
             );
             let program = Program {
                 rules: meet_reach_rules(name),
@@ -3377,11 +3377,11 @@ mod tests {
             let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
             facts.insert(
                 "edge",
-                case.edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).collect(),
+                case.edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
             );
             facts.insert(
                 "seed",
-                case.seeds.iter().map(|(k, val)| vec![v(*k), val.clone()]).collect(),
+                case.seeds.iter().map(|(k, val)| vec![v(*k), val.clone()]).map(Tuple::from_vec).collect(),
             );
             let mut rules = meet_reach_rules(case.aggr_name);
             rules.push(Rule::plain(
@@ -3401,7 +3401,7 @@ mod tests {
                 semi_naive_meet_reach(&case.edges, &case.seeds, op.as_ref(), FlagMode::Landed)
                     .into_iter()
                     .map(|(k, val)| vec![v(k), val])
-                    .collect();
+                    .map(Tuple::from_vec).collect();
             prop_assert_eq!(&m, &semi_naive);
             prop_assert_eq!(db.get("out").cloned().unwrap_or_default(), m);
         }
@@ -3415,14 +3415,14 @@ mod tests {
     // ═════════════════════════════════════════════════════════════════
 
     fn k(i: i64) -> Tuple {
-        vec![v(i)]
+        Tuple::from_vec(vec![v(i)])
     }
     fn pay(i: i64) -> Tuple {
-        vec![v(i)]
+        Tuple::from_vec(vec![v(i)])
     }
     /// The full governing tuple `key ++ payload` for key `i`, payload `p`.
     fn kv(i: i64, p: i64) -> Tuple {
-        vec![v(i), v(p)]
+        Tuple::from_vec(vec![v(i), v(p)])
     }
 
     /// `Event` construction is fallible only for the reserved terminal
@@ -3735,10 +3735,7 @@ mod tests {
             ValidityTs::from_raw(t)
         }
         fn slot(t: i64) -> Validity {
-            Validity {
-                timestamp: vts(t),
-                is_assert: Reverse(true),
-            }
+            Validity::new(vts(t), true)
         }
         fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
             [
@@ -3815,8 +3812,8 @@ mod tests {
         let events: Vec<Event> = rows
             .iter()
             .map(|(f, valid, sys, polarity)| Event {
-                key: vec![v(*f)],
-                payload: vec![],
+                key: Tuple::from_vec(vec![v(*f)]),
+                payload: Tuple::from_vec(vec![]),
                 valid: *valid,
                 sys: *sys,
                 polarity: *polarity,
@@ -4022,7 +4019,7 @@ mod tests {
         // the query-level default like any other literal — only an
         // EXPLICIT per-literal as-of on a negated literal is refused.
         let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
-        histories.insert("hist", vec![ev_assert(k(1), vec![], 5, 0)]);
+        histories.insert("hist", vec![ev_assert(k(1), Tuple::from_vec(vec![]), 5, 0)]);
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert("base", [k(1), k(2)].into_iter().collect());
         let program = Program {
@@ -4088,8 +4085,8 @@ mod tests {
         histories.insert(
             "hist",
             vec![
-                ev_assert(k(1), vec![], 5, 0),
-                ev_assert(k(2), vec![], 20, 0),
+                ev_assert(k(1), Tuple::from_vec(vec![]), 5, 0),
+                ev_assert(k(2), Tuple::from_vec(vec![]), 20, 0),
                 ev_erase(k(2), 20, 5),
             ],
         );
@@ -4173,7 +4170,7 @@ mod tests {
     fn negation_over_as_of_is_correct_even_when_the_negated_literal_precedes_its_binder_in_source_order()
      {
         let mut histories: BTreeMap<Rel, Vec<Event>> = BTreeMap::new();
-        histories.insert("hist", vec![ev_assert(k(1), vec![], 5, 0)]);
+        histories.insert("hist", vec![ev_assert(k(1), Tuple::from_vec(vec![]), 5, 0)]);
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert("base", [k(1), k(2)].into_iter().collect());
         let at = AsOf { valid: 10, sys: 10 };
@@ -4279,7 +4276,7 @@ mod tests {
             let valid = rng.range(0, 6);
             let sys = rng.range(0, 6);
             match rng.one_of(&polarities) {
-                ClaimPolarity::Assert => history.push(ev_assert(key.clone(), vec![], valid, sys)),
+                ClaimPolarity::Assert => history.push(ev_assert(key.clone(), Tuple::from_vec(vec![]), valid, sys)),
                 ClaimPolarity::Retract => history.push(ev_retract(key.clone(), valid, sys)),
                 ClaimPolarity::Erase => history.push(ev_erase(key.clone(), valid, sys)),
             }
@@ -4607,8 +4604,8 @@ mod tests {
     #[test]
     fn incremental_retraction_through_negation_produces_a_new_fact() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1)]].into_iter().collect());
-        facts.insert("r", [vec![v(1)]].into_iter().collect());
+        facts.insert("p", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert("r", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![Rule::plain(
                 "q",
@@ -4618,13 +4615,13 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
+        let patch = patch_of(vec![("r", SignedFact::Minus(Tuple::from_vec(vec![v(1)])))]);
         assert_incremental_matches_recompute(&program, &patch, "retract through negation");
         // Spelled out, not just differentialed: q(1) must appear as Plus.
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["q"],
-            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
+            [SignedFact::Plus(Tuple::from_vec(vec![v(1)]))].into_iter().collect()
         );
     }
 
@@ -4633,7 +4630,7 @@ mod tests {
     #[test]
     fn incremental_assertion_into_negation_retracts_the_dependent_fact() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1)]].into_iter().collect());
+        facts.insert("p", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![Rule::plain(
                 "q",
@@ -4643,12 +4640,12 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("r", SignedFact::Plus(vec![v(1)]))]);
+        let patch = patch_of(vec![("r", SignedFact::Plus(Tuple::from_vec(vec![v(1)])))]);
         assert_incremental_matches_recompute(&program, &patch, "assert into negation");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["q"],
-            [SignedFact::Minus(vec![v(1)])].into_iter().collect()
+            [SignedFact::Minus(Tuple::from_vec(vec![v(1)]))].into_iter().collect()
         );
     }
 
@@ -4659,8 +4656,8 @@ mod tests {
     #[test]
     fn incremental_negation_propagates_through_two_strata() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1)]].into_iter().collect());
-        facts.insert("r", [vec![v(1)]].into_iter().collect());
+        facts.insert("p", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert("r", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![
                 Rule::plain(
@@ -4677,16 +4674,16 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("r", SignedFact::Minus(vec![v(1)]))]);
+        let patch = patch_of(vec![("r", SignedFact::Minus(Tuple::from_vec(vec![v(1)])))]);
         assert_incremental_matches_recompute(&program, &patch, "two-stratum negation chain");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["mid"],
-            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
+            [SignedFact::Plus(Tuple::from_vec(vec![v(1)]))].into_iter().collect()
         );
         assert_eq!(
             got["q"],
-            [SignedFact::Plus(vec![v(1)])].into_iter().collect()
+            [SignedFact::Plus(Tuple::from_vec(vec![v(1)]))].into_iter().collect()
         );
     }
 
@@ -4696,8 +4693,8 @@ mod tests {
     #[test]
     fn incremental_two_simultaneously_varying_relations() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1), v(10)]].into_iter().collect());
-        facts.insert("r2", [vec![v(2), v(20)]].into_iter().collect());
+        facts.insert("p", [vec![v(1), v(10)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert("r2", [vec![v(2), v(20)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![Rule::plain(
                 "q",
@@ -4714,14 +4711,14 @@ mod tests {
         // has it — q must gain (2, 20). p ALSO loses (1, 10) (r2 never
         // had it, so that alone changes nothing at q).
         let patch = patch_of(vec![
-            ("p", SignedFact::Plus(vec![v(2), v(20)])),
-            ("p", SignedFact::Minus(vec![v(1), v(10)])),
+            ("p", SignedFact::Plus(Tuple::from_vec(vec![v(2), v(20)]))),
+            ("p", SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)]))),
         ]);
         assert_incremental_matches_recompute(&program, &patch, "two simultaneously varying");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["q"],
-            [SignedFact::Plus(vec![v(2), v(20)])].into_iter().collect()
+            [SignedFact::Plus(Tuple::from_vec(vec![v(2), v(20)]))].into_iter().collect()
         );
     }
 
@@ -4731,8 +4728,8 @@ mod tests {
     #[test]
     fn incremental_payload_change_through_a_join() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1), v(100)]].into_iter().collect());
-        facts.insert("r2", [vec![v(1)]].into_iter().collect());
+        facts.insert("p", [vec![v(1), v(100)]].into_iter().map(Tuple::from_vec).collect());
+        facts.insert("r2", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![Rule::plain(
                 "q",
@@ -4743,16 +4740,16 @@ mod tests {
             facts,
         );
         let patch = patch_of(vec![
-            ("p", SignedFact::Minus(vec![v(1), v(100)])),
-            ("p", SignedFact::Plus(vec![v(1), v(200)])),
+            ("p", SignedFact::Minus(Tuple::from_vec(vec![v(1), v(100)]))),
+            ("p", SignedFact::Plus(Tuple::from_vec(vec![v(1), v(200)]))),
         ]);
         assert_incremental_matches_recompute(&program, &patch, "payload change through join");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["q"],
             [
-                SignedFact::Minus(vec![v(1), v(100)]),
-                SignedFact::Plus(vec![v(1), v(200)])
+                SignedFact::Minus(Tuple::from_vec(vec![v(1), v(100)])),
+                SignedFact::Plus(Tuple::from_vec(vec![v(1), v(200)]))
             ]
             .into_iter()
             .collect()
@@ -4766,7 +4763,7 @@ mod tests {
     #[test]
     fn incremental_refuses_recursion_even_when_perfectly_stratifiable() {
         let program = Program::untimed(transitive_closure(), vec![], edge_facts(&[(1, 2), (2, 3)]));
-        let patch = patch_of(vec![("edge", SignedFact::Plus(vec![v(3), v(4)]))]);
+        let patch = patch_of(vec![("edge", SignedFact::Plus(Tuple::from_vec(vec![v(3), v(4)])))]);
         let err = incremental_eval(&program, &patch).unwrap_err();
         assert!(matches!(err, Rejection::Unstratifiable(_)));
     }
@@ -4780,7 +4777,7 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "p",
-            [vec![v(1), v(10)], vec![v(1), v(20)]].into_iter().collect(),
+            [vec![v(1), v(10)], vec![v(1), v(20)]].into_iter().map(Tuple::from_vec).collect(),
         );
         let program = Program::untimed(
             vec![Rule::aggregated(
@@ -4792,14 +4789,14 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("p", SignedFact::Plus(vec![v(1), v(30)]))]);
+        let patch = patch_of(vec![("p", SignedFact::Plus(Tuple::from_vec(vec![v(1), v(30)])))]);
         assert_incremental_matches_recompute(&program, &patch, "aggregation sum grows");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["total"],
             [
-                SignedFact::Minus(vec![v(1), v(30)]),
-                SignedFact::Plus(vec![v(1), v(60)]),
+                SignedFact::Minus(Tuple::from_vec(vec![v(1), v(30)])),
+                SignedFact::Plus(Tuple::from_vec(vec![v(1), v(60)])),
             ]
             .into_iter()
             .collect()
@@ -4817,7 +4814,7 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "p",
-            [vec![v(1), v(10)], vec![v(1), v(20)]].into_iter().collect(),
+            [vec![v(1), v(10)], vec![v(1), v(20)]].into_iter().map(Tuple::from_vec).collect(),
         );
         let program = Program::untimed(
             vec![Rule::aggregated(
@@ -4829,14 +4826,14 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(1), v(10)]))]);
+        let patch = patch_of(vec![("p", SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)])))]);
         assert_incremental_matches_recompute(&program, &patch, "min retraction rescans");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["total"],
             [
-                SignedFact::Minus(vec![v(1), v(10)]),
-                SignedFact::Plus(vec![v(1), v(20)]),
+                SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)])),
+                SignedFact::Plus(Tuple::from_vec(vec![v(1), v(20)])),
             ]
             .into_iter()
             .collect()
@@ -4850,7 +4847,7 @@ mod tests {
     #[test]
     fn incremental_aggregation_group_vanishes_when_its_last_member_is_retracted() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1), v(10)]].into_iter().collect());
+        facts.insert("p", [vec![v(1), v(10)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![Rule::aggregated(
                 "total",
@@ -4861,12 +4858,12 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(1), v(10)]))]);
+        let patch = patch_of(vec![("p", SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)])))]);
         assert_incremental_matches_recompute(&program, &patch, "group vanishes");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["total"],
-            [SignedFact::Minus(vec![v(1), v(10)])].into_iter().collect()
+            [SignedFact::Minus(Tuple::from_vec(vec![v(1), v(10)]))].into_iter().collect()
         );
     }
 
@@ -4878,7 +4875,7 @@ mod tests {
     #[test]
     fn incremental_aggregation_global_count_reverts_to_identity_on_total_retraction() {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("p", [vec![v(1)]].into_iter().collect());
+        facts.insert("p", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
         let program = Program::untimed(
             vec![Rule::aggregated(
                 "total",
@@ -4889,12 +4886,12 @@ mod tests {
             vec![],
             facts,
         );
-        let patch = patch_of(vec![("p", SignedFact::Minus(vec![v(1)]))]);
+        let patch = patch_of(vec![("p", SignedFact::Minus(Tuple::from_vec(vec![v(1)])))]);
         assert_incremental_matches_recompute(&program, &patch, "global count reverts to identity");
         let got = incremental_eval(&program, &patch).unwrap();
         assert_eq!(
             got["total"],
-            [SignedFact::Minus(vec![v(1)]), SignedFact::Plus(vec![v(0)]),]
+            [SignedFact::Minus(Tuple::from_vec(vec![v(1)])), SignedFact::Plus(Tuple::from_vec(vec![v(0)])),]
                 .into_iter()
                 .collect()
         );
@@ -4911,7 +4908,7 @@ mod tests {
             fixed: vec![FixedRule {
                 head_rel: "constant",
                 inputs: vec![],
-                eval: |_| [vec![v(1)]].into_iter().collect(),
+                eval: |_| [vec![v(1)]].into_iter().map(Tuple::from_vec).collect(),
             }],
             facts,
             histories: BTreeMap::new(),
@@ -4996,9 +4993,9 @@ mod tests {
                     for _ in 0..n {
                         let a = v(rng.range(0, 4));
                         if rel == "p" || rel == "r2" {
-                            set.insert(vec![a, v(rng.range(0, 4))]);
+                            set.insert(Tuple::from_vec(vec![a, v(rng.range(0, 4))]));
                         } else {
-                            set.insert(vec![a]);
+                            set.insert(Tuple::from_vec(vec![a]));
                         }
                     }
                     facts.insert(rel, set);
@@ -5032,9 +5029,9 @@ mod tests {
                     } else {
                         let a = v(rng.range(0, 4));
                         let t: Tuple = if rel == "p" || rel == "r2" {
-                            vec![a, v(rng.range(0, 4))]
+                            Tuple::from_vec(vec![a, v(rng.range(0, 4))])
                         } else {
-                            vec![a]
+                            Tuple::from_vec(vec![a])
                         };
                         patch.entry(rel).or_default().insert(SignedFact::Plus(t));
                     }

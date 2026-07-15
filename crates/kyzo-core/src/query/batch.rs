@@ -144,8 +144,8 @@ mod tests {
     #[test]
     fn batch_pivots_and_selects() {
         let rows = vec![
-            vec![DataValue::from(1i64), DataValue::from("a")],
-            vec![DataValue::from(2i64), DataValue::from("b")],
+            Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("a")]),
+            Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from("b")]),
         ];
         let b = ColumnBatch::from_rows(rows, 2);
         assert_eq!((b.width(), b.height()), (2, 2));

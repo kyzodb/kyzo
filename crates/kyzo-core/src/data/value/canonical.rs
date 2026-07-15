@@ -1186,9 +1186,9 @@ mod tests {
         out.push(DataValue::Vector(Vector::new(vec![])));
         out.push(DataValue::Vector(Vector::new(vec![0.0])));
         out.push(DataValue::Vector(Vector::new(vec![-1.5, f64::NAN])));
-        out.push(DataValue::Validity(Validity::new(0, true)));
-        out.push(DataValue::Validity(Validity::new(0, false)));
-        out.push(DataValue::Validity(Validity::new(i64::MAX, true)));
+        out.push(DataValue::Validity(Validity::new(ValidityTs::from_raw(0), true)));
+        out.push(DataValue::Validity(Validity::new(ValidityTs::from_raw(0), false)));
+        out.push(DataValue::Validity(Validity::new(ValidityTs::from_raw(i64::MAX), true)));
         out.push(DataValue::Interval(Interval::EMPTY));
         out.push(DataValue::Interval(Interval::new(
             Bound::Closed(0),
@@ -1405,7 +1405,7 @@ mod tests {
                 ))
             }
             10 => DataValue::Validity(Validity::new(
-                rng.next() as i64,
+                ValidityTs::from_raw(rng.next() as i64),
                 rng.next().is_multiple_of(2),
             )),
             _ => DataValue::Json(random_json(rng, 0)),
@@ -1473,7 +1473,7 @@ mod tests {
             "400000000103043980000000000000000001"
         );
         assert_eq!(
-            hex(&encode(Datum::Validity(Validity::new(0, true)))),
+            hex(&encode(Datum::Validity(Validity::new(ValidityTs::from_raw(0), true)))),
             "587fffffffffffffff00"
         );
         assert_eq!(hex(&encode(Datum::Interval(Interval::EMPTY))), "6001");

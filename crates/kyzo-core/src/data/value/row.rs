@@ -792,13 +792,13 @@ mod tests {
     /// exactly what the codec produces.
     #[test]
     fn validity_slot_width_is_pinned() {
-        use super::super::wide::validity::Validity;
+        use super::super::wide::validity::{Validity, ValidityTs};
         let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
-            Validity::new(123, true),
+            Validity::new(ValidityTs::from_raw(123), true),
         ));
         assert_eq!(enc.len(), EncodedKey::VALIDITY_TAIL_LEN);
         let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
-            Validity::new(i64::MIN, false),
+            Validity::new(ValidityTs::from_raw(i64::MIN), false),
         ));
         assert_eq!(enc2.len(), EncodedKey::VALIDITY_TAIL_LEN);
     }

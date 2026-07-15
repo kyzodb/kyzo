@@ -434,12 +434,12 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("a"), s("c")],
-                    vec![s("b"), s("c")],
-                    vec![s("c"), s("a")],
-                    vec![s("d"), s("a")],
-                    vec![s("b"), s("d")],
+                    Tuple::from_vec(vec![s("a"), s("b")]),
+                    Tuple::from_vec(vec![s("a"), s("c")]),
+                    Tuple::from_vec(vec![s("b"), s("c")]),
+                    Tuple::from_vec(vec![s("c"), s("a")]),
+                    Tuple::from_vec(vec![s("d"), s("a")]),
+                    Tuple::from_vec(vec![s("b"), s("d")]),
                 ],
             )],
             BTreeMap::new(),
@@ -453,7 +453,7 @@ mod tests {
         let want: Vec<Tuple> = ["a", "b", "c", "d"]
             .iter()
             .zip(want_scores.iter())
-            .map(|(name, score)| vec![s(name), DataValue::from(*score as f64)])
+            .map(|(name, score)| Tuple::from_vec(vec![s(name), DataValue::from(*score as f64)]))
             .collect();
         assert_eq!(got, want);
     }

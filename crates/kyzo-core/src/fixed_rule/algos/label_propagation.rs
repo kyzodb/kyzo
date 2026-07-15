@@ -138,7 +138,7 @@ mod tests {
     fn ring_inputs() -> Vec<TestInput> {
         let n = 12usize;
         let edges: Vec<Tuple> = (0..n)
-            .map(|i| vec![s(&format!("a{i}")), s(&format!("a{}", (i + 1) % n))])
+            .map(|i| Tuple::from_vec(vec![s(&format!("a{i}")), s(&format!("a{}", (i + 1) % n))]))
             .collect();
         vec![TestInput::new(vec!["fr", "to"], edges)]
     }
@@ -243,10 +243,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("b"), s("a")],
-                    vec![s("c"), s("a")],
-                    vec![s("y"), s("x")],
-                    vec![s("z"), s("x")],
+                    Tuple::from_vec(vec![s("b"), s("a")]),
+                    Tuple::from_vec(vec![s("c"), s("a")]),
+                    Tuple::from_vec(vec![s("y"), s("x")]),
+                    Tuple::from_vec(vec![s("z"), s("x")]),
                 ],
             )],
             BTreeMap::new(),
@@ -256,13 +256,13 @@ mod tests {
         let one = DataValue::from(1i64);
         let four = DataValue::from(4i64);
         let want: Vec<Tuple> = vec![
-            vec![one.clone(), s("a")],
-            vec![one.clone(), s("b")],
-            vec![one, s("c")],
-            vec![four.clone(), s("x")],
-            vec![four.clone(), s("y")],
-            vec![four, s("z")],
-        ];
+Tuple::from_vec(vec![one.clone(), s("a")]),
+Tuple::from_vec(vec![one.clone(), s("b")]),
+Tuple::from_vec(vec![one, s("c")]),
+Tuple::from_vec(vec![four.clone(), s("x")]),
+Tuple::from_vec(vec![four.clone(), s("y")]),
+Tuple::from_vec(vec![four, s("z")])
+];
         assert_eq!(got, want);
     }
 }

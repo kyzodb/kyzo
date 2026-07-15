@@ -37,10 +37,7 @@ fn key(i: u64) -> EncodedKey {
 
 fn bitemp_key(name: i64, valid_ts: i64, sys_ts: i64) -> EncodedKey {
     let slot = |t: i64| {
-        DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(t),
-            is_assert: Reverse(true),
-        })
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true))
     };
     [DataValue::from(name), slot(valid_ts), slot(sys_ts)]
         .encode_as_key(RelationId::new(9).expect("below cap"))
@@ -205,7 +202,7 @@ fn asof(c: &mut Criterion) {
                     let name = name_n.as_int().unwrap();
                     // Assert polarity byte opens the stored value.
                     let assert = v[0] == 0;
-                    let ts = vld.timestamp.raw();
+                    let ts = vld.timestamp().raw();
                     if ts <= cutoff {
                         let e = newest.entry(name).or_insert((ts, assert));
                         if ts > e.0 {

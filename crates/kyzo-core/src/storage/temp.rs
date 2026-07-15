@@ -264,10 +264,7 @@ mod tests {
     /// flags pinned to assert (the row's polarity lives in the value).
     fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
         let slot = |ts: i64| {
-            DataValue::Validity(Validity {
-                timestamp: ValidityTs::from_raw(ts),
-                is_assert: Reverse(true),
-            })
+            DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), true))
         };
         vec![DataValue::from(x), slot(valid_ts), slot(sys_ts)]
             .encode_as_key(REL)
@@ -301,7 +298,7 @@ mod tests {
                 let tup = r.expect("engine-shaped rows decode cleanly");
                 let x = tup[0].get_int().expect("int key column");
                 let version_ts = match &tup[1] {
-                    DataValue::Validity(v) => v.timestamp.raw(),
+                    DataValue::Validity(v) => v.timestamp().raw(),
                     other => panic!("expected a valid-instant slot, got {other:?}"),
                 };
                 (x, version_ts)

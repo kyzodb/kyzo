@@ -20,7 +20,7 @@
 mod common;
 use common::*;
 
-use kyzo::{DataValue, UuidWrapper, Validity};
+use kyzo::{DataValue, UuidWrapper, Validity, ValidityTs};
 
 #[test]
 fn every_data_type_round_trips_through_a_stored_relation() {
@@ -68,7 +68,7 @@ fn every_data_type_round_trips_through_a_stored_relation() {
     let expected_json = DataValue::from(serde_json::json!({"a": 1}));
     assert_eq!(row[7], expected_json, "Json");
 
-    let expected_validity = DataValue::Validity(Validity::from((100, true)));
+    let expected_validity = DataValue::Validity(Validity::new(ValidityTs::from_raw(100), true));
     assert_eq!(row[8], expected_validity, "Validity");
 
     assert_eq!(row[9].get_int(), Some(10), "Interval start");
@@ -91,8 +91,8 @@ fn validity_polarity_is_part_of_the_value() {
     let out = db
         .run_script("?[id, val] := *v{id, val}", no_params())
         .expect("scan v");
-    let asserted = DataValue::Validity(Validity::from((100, true)));
-    let retracted = DataValue::Validity(Validity::from((100, false)));
+    let asserted = DataValue::Validity(Validity::new(ValidityTs::from_raw(100), true));
+    let retracted = DataValue::Validity(Validity::new(ValidityTs::from_raw(100), false));
     for r in &out.rows {
         let id = r[0].get_int().unwrap();
         if id == 1 {

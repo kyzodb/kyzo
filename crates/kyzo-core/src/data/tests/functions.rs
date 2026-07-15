@@ -1771,7 +1771,7 @@ fn test_pre_epoch_timestamps() {
         )
         .unwrap();
     match coerced {
-        DataValue::Validity(vld) => assert!(vld.timestamp.raw() < 0),
+        DataValue::Validity(vld) => assert!(vld.timestamp().raw() < 0),
         v => panic!("expected a validity, got {v:?}"),
     }
 }
@@ -1958,7 +1958,7 @@ fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
     typing
         .coerce(DataValue::Str(s.into()), ValidityTs::from_raw(999))
         .map(|v| match v {
-            DataValue::Validity(vld) => (vld.timestamp.raw(), vld.is_assert.0),
+            DataValue::Validity(vld) => (vld.timestamp().raw(), vld.is_assert()),
             other => panic!("expected Validity, got {other:?}"),
         })
         .map_err(|e| e.to_string())
@@ -2001,10 +2001,7 @@ fn format_timestamp_validity_input_agreed() {
     use crate::data::value::Validity;
     use std::cmp::Reverse;
     let f = |micros: i64| {
-        let vld = DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(micros),
-            is_assert: Reverse(true),
-        });
+        let vld = DataValue::Validity(Validity::new(ValidityTs::from_raw(micros), true));
         fmt(&[vld]).unwrap()
     };
     // Validity stores microseconds; the op divides by 1000 to milliseconds.

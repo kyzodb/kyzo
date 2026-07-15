@@ -739,8 +739,8 @@ mod tests {
         assert_eq!(a, b, "two fresh builds must yield identical result tuples");
         // Strict: the score column's bit pattern is identical, not merely equal.
         let bits = |t: &[DataValue]| t.last().unwrap().get_float().unwrap().to_bits();
-        let a_bits: Vec<u64> = a.iter().map(|t| bits(t)).collect();
-        let b_bits: Vec<u64> = b.iter().map(|t| bits(t)).collect();
+        let a_bits: Vec<u64> = a.iter().map(|t| bits(t.as_slice())).collect();
+        let b_bits: Vec<u64> = b.iter().map(|t| bits(t.as_slice())).collect();
         assert_eq!(a_bits, b_bits, "score bit patterns are byte-identical");
         assert!(!a.is_empty());
     }

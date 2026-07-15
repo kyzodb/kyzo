@@ -872,7 +872,7 @@ mod tests {
     }
 
     fn gv(group: &str, val: DataValue) -> Tuple {
-        vec![DataValue::from(group), val]
+        Tuple::from_vec(vec![DataValue::from(group), val])
     }
 
     /// A recording sink: collects every admission, in the order reported.
@@ -1007,7 +1007,7 @@ mod tests {
 
         // Epoch 0: g starts false.
         let mut out0 = MeetAggrStore::new(spec.clone()).unwrap();
-        out0.meet_put(&gv("g", DataValue::from(false))).unwrap();
+        out0.meet_put(gv("g", DataValue::from(false)).as_slice()).unwrap();
         let admitted = store.merge_in(out0.wrap(), &mut ()).unwrap();
         assert_eq!(admitted, Admitted(1));
         assert!(store.has_delta());
@@ -1017,7 +1017,7 @@ mod tests {
         // Old inverted flag: empty delta here (the bug). Landed contract:
         // the changed group, with its UPDATED value, is the delta.
         let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
-        out1.meet_put(&gv("g", DataValue::from(true))).unwrap();
+        out1.meet_put(gv("g", DataValue::from(true)).as_slice()).unwrap();
         let mut rec = Recorder::default();
         let admitted = store.merge_in(out1.wrap(), &mut rec).unwrap();
         assert_eq!(admitted, Admitted(1));
@@ -1036,7 +1036,7 @@ mod tests {
         // flag would have reported "changed" here: spurious epochs, the
         // benign direction of the same bug.)
         let mut out2 = MeetAggrStore::new(spec).unwrap();
-        out2.meet_put(&gv("g", DataValue::from(false))).unwrap();
+        out2.meet_put(gv("g", DataValue::from(false)).as_slice()).unwrap();
         let admitted = store.merge_in(out2.wrap(), &mut ()).unwrap();
         assert_eq!(admitted, Admitted(0));
         assert!(!store.has_delta());
@@ -1054,20 +1054,20 @@ mod tests {
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(store.is_empty());
         // New group: changed.
-        assert!(store.meet_put(&gv("g", DataValue::from(false))).unwrap());
+        assert!(store.meet_put(gv("g", DataValue::from(false)).as_slice()).unwrap());
         // false | true = true: CHANGED (the old inverted flag said false).
-        assert!(store.meet_put(&gv("g", DataValue::from(true))).unwrap());
+        assert!(store.meet_put(gv("g", DataValue::from(true)).as_slice()).unwrap());
         // true | true = true: unchanged (the old flag said changed).
-        assert!(!store.meet_put(&gv("g", DataValue::from(true))).unwrap());
+        assert!(!store.meet_put(gv("g", DataValue::from(true)).as_slice()).unwrap());
         assert!(!store.is_empty());
 
         let min_aggr = parse_aggr("min").unwrap();
         let spec = vec![None, Some((min_aggr, vec![]))];
         let mut store = MeetAggrStore::new(spec).unwrap();
-        assert!(store.meet_put(&gv("g", DataValue::from(5i64))).unwrap());
-        assert!(!store.meet_put(&gv("g", DataValue::from(7i64))).unwrap()); // 5 stays
-        assert!(store.meet_put(&gv("g", DataValue::from(3i64))).unwrap()); // 3 wins
-        assert!(store.exists(&gv("g", DataValue::from(999i64)))); // group-key lookup
+        assert!(store.meet_put(gv("g", DataValue::from(5i64)).as_slice()).unwrap());
+        assert!(!store.meet_put(gv("g", DataValue::from(7i64)).as_slice()).unwrap()); // 5 stays
+        assert!(store.meet_put(gv("g", DataValue::from(3i64)).as_slice()).unwrap()); // 3 wins
+        assert!(store.exists(gv("g", DataValue::from(999i64)).as_slice())); // group-key lookup
     }
 
     /// A meet store refuses a normal-only aggregation at construction —
@@ -1095,15 +1095,15 @@ mod tests {
         assert_eq!(store.arity, 2);
 
         let mut out = MeetAggrStore::new(spec).unwrap();
-        out.meet_put(&gv("a", DataValue::from(4i64))).unwrap();
-        out.meet_put(&gv("b", DataValue::from(2i64))).unwrap();
+        out.meet_put(gv("a", DataValue::from(4i64)).as_slice()).unwrap();
+        out.meet_put(gv("b", DataValue::from(2i64)).as_slice()).unwrap();
         store.merge_in(out.wrap(), &mut ()).unwrap();
 
-        assert!(store.exists(&gv("a", DataValue::from(0i64))));
-        assert!(!store.exists(&gv("c", DataValue::from(0i64))));
+        assert!(store.exists(gv("a", DataValue::from(0i64)).as_slice()));
+        assert!(!store.exists(gv("c", DataValue::from(0i64)).as_slice()));
 
         let got = store
-            .prefix_iter(&vec![DataValue::from("b")])
+            .prefix_iter(&Tuple::from_vec(vec![DataValue::from("b")]))
             .map(TupleInIter::into_tuple)
             .collect_vec();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
@@ -1142,10 +1142,10 @@ mod tests {
         let mut out = RegularTempStore::default();
         out.put(t(&[1]));
         out.put_with_skip(t(&[2]));
-        assert!(out.exists(&t(&[2])));
+        assert!(out.exists(t(&[2]).as_slice()));
         store.merge_in(out.wrap(), &mut ()).unwrap();
 
-        assert!(store.exists(&t(&[2])));
+        assert!(store.exists(t(&[2]).as_slice()));
         assert_eq!(all(&store).len(), 2);
         let returned = store
             .early_returned_iter()
@@ -1155,7 +1155,7 @@ mod tests {
 
         // Delta iteration honors the same store (first epoch: via total).
         let d = store
-            .delta_prefix_iter(&vec![DataValue::from(2i64)])
+            .delta_prefix_iter(&Tuple::from_vec(vec![DataValue::from(2i64)]))
             .map(TupleInIter::into_tuple)
             .collect_vec();
         assert_eq!(d, vec![t(&[2])]);
@@ -1175,7 +1175,7 @@ mod tests {
     /// A head tuple with the meet value at position 0 and the grouping key
     /// at position 1 — the layout the suffix-prefix store could not hold.
     fn vg(val: DataValue, group: &str) -> Tuple {
-        vec![val, DataValue::from(group)]
+        Tuple::from_vec(vec![val, DataValue::from(group)])
     }
 
     /// [`MeetLayout`] projections and their inverse round-trip for an
@@ -1192,20 +1192,20 @@ mod tests {
         assert_eq!(layout.key_positions, vec![1]);
         assert_eq!(layout.val_positions, vec![0, 2]);
 
-        let row: Tuple = vec![
+        let row: Tuple = Tuple::from_vec(vec![
             DataValue::from(2i64),
             DataValue::from("g"),
             DataValue::from(9i64),
-        ];
-        let key = layout.project_key(&row);
-        let vals = layout.project_vals(&row);
+        ]);
+        let key = layout.project_key(row.as_slice());
+        let vals = layout.project_vals(row.as_slice());
         assert_eq!(key, Tuple::from_vec(vec![DataValue::from("g")]));
         assert_eq!(
             vals,
             Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)])
         );
         assert_eq!(
-            layout.interleave(&encode_tuple_bare(&key), &vals),
+            layout.interleave(&encode_tuple_bare(key.as_slice()), vals.as_slice()),
             row,
             "interleave is the exact inverse of the two projections"
         );
@@ -1221,14 +1221,14 @@ mod tests {
         let spec = vec![Some((min_aggr, vec![])), None];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // group "a": min(4, 2, 9) = 2 ; group "b": 5.
-        assert!(out.meet_put(&vg(DataValue::from(4i64), "a")).unwrap());
-        assert!(out.meet_put(&vg(DataValue::from(2i64), "a")).unwrap()); // 2 < 4
-        assert!(!out.meet_put(&vg(DataValue::from(9i64), "a")).unwrap()); // 2 stays
-        assert!(out.meet_put(&vg(DataValue::from(5i64), "b")).unwrap());
+        assert!(out.meet_put(vg(DataValue::from(4i64), "a").as_slice()).unwrap());
+        assert!(out.meet_put(vg(DataValue::from(2i64), "a").as_slice()).unwrap()); // 2 < 4
+        assert!(!out.meet_put(vg(DataValue::from(9i64), "a").as_slice()).unwrap()); // 2 stays
+        assert!(out.meet_put(vg(DataValue::from(5i64), "b").as_slice()).unwrap());
         // `exists` is group membership, projected to position 1 (the value
         // in the probe is irrelevant).
-        assert!(out.exists(&vg(DataValue::from(999i64), "a")));
-        assert!(!out.exists(&vg(DataValue::from(0i64), "c")));
+        assert!(out.exists(vg(DataValue::from(999i64), "a").as_slice()));
+        assert!(!out.exists(vg(DataValue::from(0i64), "c").as_slice()));
 
         let mut store = EpochStore::new_meet(&spec).unwrap();
         store.merge_in(out.wrap(), &mut ()).unwrap();
@@ -1260,8 +1260,8 @@ mod tests {
         // Group "a" holds value 9, group "z" holds value 1. Group-key order
         // is a < z; head-tuple (value-first) order is (1,z) < (9,a) — the
         // two orders disagree, which is the whole point.
-        out.meet_put(&vg(DataValue::from(9i64), "a")).unwrap();
-        out.meet_put(&vg(DataValue::from(1i64), "z")).unwrap();
+        out.meet_put(vg(DataValue::from(9i64), "a").as_slice()).unwrap();
+        out.meet_put(vg(DataValue::from(1i64), "z").as_slice()).unwrap();
 
         let mut store = EpochStore::new_meet(&spec).unwrap();
         let mut rec = Recorder::default();
@@ -1296,14 +1296,14 @@ mod tests {
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
         let mut out0 = MeetAggrStore::new(spec.clone()).unwrap();
-        out0.meet_put(&vg(DataValue::from(5i64), "a")).unwrap();
+        out0.meet_put(vg(DataValue::from(5i64), "a").as_slice()).unwrap();
         assert_eq!(store.merge_in(out0.wrap(), &mut ()).unwrap(), Admitted(1));
         assert_eq!(all(&store), vec![vg(DataValue::from(5i64), "a")]);
 
         // Epoch 1: a lower value moves the group — delta carries it, and the
         // scan surface reflects the new row, not the old.
         let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
-        out1.meet_put(&vg(DataValue::from(3i64), "a")).unwrap();
+        out1.meet_put(vg(DataValue::from(3i64), "a").as_slice()).unwrap();
         let mut rec = Recorder::default();
         assert_eq!(store.merge_in(out1.wrap(), &mut rec).unwrap(), Admitted(1));
         assert!(store.has_delta());
@@ -1313,7 +1313,7 @@ mod tests {
 
         // Epoch 2: a non-improving value changes nothing — empty delta.
         let mut out2 = MeetAggrStore::new(spec).unwrap();
-        out2.meet_put(&vg(DataValue::from(8i64), "a")).unwrap();
+        out2.meet_put(vg(DataValue::from(8i64), "a").as_slice()).unwrap();
         assert_eq!(store.merge_in(out2.wrap(), &mut ()).unwrap(), Admitted(0));
         assert!(!store.has_delta());
         assert_eq!(all(&store), vec![vg(DataValue::from(3i64), "a")]);
@@ -1336,7 +1336,7 @@ mod tests {
         let derived: BTreeSet<Tuple> = store
             .by_group
             .iter()
-            .map(|(k, v)| store.layout.interleave(k, v))
+            .map(|(k, v)| store.layout.interleave(k, v.as_slice()))
             .collect();
         if store.layout.is_suffix() {
             assert!(
@@ -1365,7 +1365,7 @@ mod tests {
             let mut derived: Vec<Tuple> = level
                 .groups
                 .iter()
-                .map(|(k, v)| spec.layout.interleave(k, v))
+                .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
                 .collect();
             derived.sort();
             assert_eq!(
@@ -1387,13 +1387,13 @@ mod tests {
 
         // meet_put: vacant, changed, unchanged.
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
-        assert!(out.meet_put(&vg(DataValue::from(9i64), "a")).unwrap());
+        assert!(out.meet_put(vg(DataValue::from(9i64), "a").as_slice()).unwrap());
         rev_assert_lockstep(&out);
-        assert!(out.meet_put(&vg(DataValue::from(4i64), "a")).unwrap());
+        assert!(out.meet_put(vg(DataValue::from(4i64), "a").as_slice()).unwrap());
         rev_assert_lockstep(&out);
-        assert!(!out.meet_put(&vg(DataValue::from(7i64), "a")).unwrap());
+        assert!(!out.meet_put(vg(DataValue::from(7i64), "a").as_slice()).unwrap());
         rev_assert_lockstep(&out);
-        assert!(out.meet_put(&vg(DataValue::from(1i64), "z")).unwrap());
+        assert!(out.meet_put(vg(DataValue::from(1i64), "z").as_slice()).unwrap());
         rev_assert_lockstep(&out);
 
         // Fast-path swap into an empty total (use_total_for_delta epoch).
@@ -1403,9 +1403,9 @@ mod tests {
 
         // Incremental merge: one changed group, one unchanged, one vacant.
         let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
-        out1.meet_put(&vg(DataValue::from(2i64), "a")).unwrap(); // changes 4 -> 2
-        out1.meet_put(&vg(DataValue::from(5i64), "z")).unwrap(); // no change
-        out1.meet_put(&vg(DataValue::from(8i64), "q")).unwrap(); // vacant
+        out1.meet_put(vg(DataValue::from(2i64), "a").as_slice()).unwrap(); // changes 4 -> 2
+        out1.meet_put(vg(DataValue::from(5i64), "z").as_slice()).unwrap(); // no change
+        out1.meet_put(vg(DataValue::from(8i64), "q").as_slice()).unwrap(); // vacant
         store.merge_in(out1.wrap(), &mut ()).unwrap();
         rev_lockstep_of(&store);
         assert_eq!(
@@ -1446,11 +1446,11 @@ mod tests {
         let max_aggr = parse_aggr("max").unwrap();
         let spec = vec![Some((min_aggr, vec![])), Some((max_aggr, vec![]))];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
-        assert!(out.meet_put(&t(&[5, 5])).unwrap());
-        assert!(out.meet_put(&t(&[3, 9])).unwrap()); // min 3, max 9
-        assert!(!out.meet_put(&t(&[4, 6])).unwrap()); // no change
+        assert!(out.meet_put(t(&[5, 5]).as_slice()).unwrap());
+        assert!(out.meet_put(t(&[3, 9]).as_slice()).unwrap()); // min 3, max 9
+        assert!(!out.meet_put(t(&[4, 6]).as_slice()).unwrap()); // no change
         assert_eq!(out.by_group.len(), 1, "one group keyed by the empty tuple");
-        assert!(out.exists(&t(&[100, -100])), "any probe hits the one group");
+        assert!(out.exists(t(&[100, -100]).as_slice()), "any probe hits the one group");
         rev_assert_lockstep(&out);
 
         let mut store = EpochStore::new_meet(&spec).unwrap();
@@ -1476,7 +1476,7 @@ mod tests {
         let run = |order: &[usize]| -> (Vec<Tuple>, Vec<Tuple>, Vec<Tuple>) {
             let mut out = MeetAggrStore::new(spec.clone()).unwrap();
             for i in order {
-                out.meet_put(&rows[*i]).unwrap();
+                out.meet_put(rows[*i].as_slice()).unwrap();
             }
             let mut store = EpochStore::new_meet(&spec).unwrap();
             let mut rec = Recorder::default();
@@ -1505,8 +1505,8 @@ mod tests {
         let k1 = t(&[1]);
         let v1 = t(&[5]);
         let k2 = t(&[1, 5]);
-        let joined = TupleInIter::new(&k1, &v1, false);
-        let flat = TupleInIter::new(&k2, empty_tuple_ref(), false);
+        let joined = TupleInIter::new(k1.as_slice(), v1.as_slice(), false);
+        let flat = TupleInIter::new(k2.as_slice(), empty_tuple_ref().as_slice(), false);
         assert_eq!(joined, flat);
         assert_eq!(joined.cmp(&flat), Ordering::Equal);
         assert_eq!(

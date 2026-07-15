@@ -136,18 +136,9 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Json(crate::data::json::json_from_serde(&serde_json::json!([
             1, 2, 3
         ]))),
-        DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(42),
-            is_assert: Reverse(true),
-        }),
-        DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(42),
-            is_assert: Reverse(false),
-        }),
-        DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(41),
-            is_assert: Reverse(true),
-        }),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), true)),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), false)),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(41), true)),
         // Intervals: the i64::MIN/MAX boundaries, adjacent pairs (meets: end
         // of one equals start of the next), an overlapping pair, and an
         // open-ended interval (end == i64::MAX, the plain-max-tick "END"
@@ -239,10 +230,9 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
         proptest::collection::vec(any::<f64>(), 0..6)
             .prop_map(|v| DataValue::Vector(Vector::new(v))),
-        (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(ts),
-            is_assert: Reverse(a),
-        })),
+        (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| {
+            DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), a))
+        }),
         // Two arbitrary i64s, ordered into a closed interval (a tie is the
         // single-instant interval, a lawful value of the kind).
         (any::<i64>(), any::<i64>()).prop_map(|(a, b)| {
@@ -508,10 +498,7 @@ fn del_range_kills_own_writes_too() {
 /// (the row's polarity lives in the value — see [`pol_val`]).
 fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
     let slot = |t: i64| {
-        DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(t),
-            is_assert: Reverse(true),
-        })
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true))
     };
     let tuple: Tuple = Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
     tuple.encode_as_key(rel)
@@ -596,11 +583,11 @@ fn time_travel_matches_naive_oracle() {
             .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
             .map(|r| {
                 let t = r.unwrap();
-                let name = match t.as_slice()[0] {
+                let name = match &t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
                     v => panic!("unexpected {v:?}"),
                 };
-                let ts = match t.as_slice()[1] {
+                let ts = match &t.as_slice()[1] {
                     DataValue::Validity(v) => v.ts_micros(),
                     v => panic!("unexpected {v:?}"),
                 };
@@ -704,10 +691,7 @@ fn stamped_row(
     sys: ValidityTs,
 ) -> (EncodedKey, Vec<u8>) {
     let slot = |ts: ValidityTs| {
-        DataValue::Validity(Validity {
-            timestamp: ts,
-            is_assert: Reverse(true),
-        })
+        DataValue::Validity(Validity::new(ts, true))
     };
     let tuple: Tuple = Tuple::from_vec(vec![
         DataValue::Str(name.into()),
@@ -954,10 +938,7 @@ fn corrupt_inputs_error_never_panic() {
     let mut enc = vec![];
     crate::data::value::append_canonical(
         &mut enc,
-        &DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(1),
-            is_assert: Reverse(true),
-        }),
+        &DataValue::Validity(Validity::new(ValidityTs::from_raw(1), true)),
     );
     k.extend(enc);
     let _ = crate::data::bitemporal::check_key_for_bitemporal(
@@ -2127,11 +2108,11 @@ fn sim_time_travel_matches_naive_oracle() {
             .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
             .map(|r| {
                 let t = r.unwrap();
-                let name = match t.as_slice()[0] {
+                let name = match &t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
                     v => panic!("unexpected {v:?}"),
                 };
-                let ts = match t.as_slice()[1] {
+                let ts = match &t.as_slice()[1] {
                     DataValue::Validity(v) => v.ts_micros(),
                     v => panic!("unexpected {v:?}"),
                 };
@@ -2628,11 +2609,11 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                 .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(at)))
                 .map(|r| {
                     let t = r.unwrap();
-                    let name = match t.as_slice()[0] {
+                    let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
                         v => panic!("unexpected {v:?}"),
                     };
-                    let ts = match t.as_slice()[1] {
+                    let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
                         v => panic!("unexpected {v:?}"),
                     };
@@ -3158,10 +3139,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).
     let key_at = |stamp: ValidityTs| -> EncodedKey {
-        let slot = DataValue::Validity(Validity {
-            timestamp: stamp,
-            is_assert: Reverse(true),
-        });
+        let slot = DataValue::Validity(Validity::new(stamp, true));
         let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
         tuple.encode_as_key(rel)
     };

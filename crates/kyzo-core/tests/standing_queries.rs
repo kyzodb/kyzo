@@ -125,7 +125,7 @@ fn standing_query_recomputes_min_after_retracting_it_mid_batch() {
     let mut sq = db.register_standing(query, no_params()).expect("register");
     let expected_initial: BTreeSet<Tuple> = [vec![DataValue::from(1), DataValue::from(10)]]
         .into_iter()
-        .collect();
+        .map(Tuple::from_vec).collect();
     assert_eq!(
         sq.current_answer().clone(),
         expected_initial,

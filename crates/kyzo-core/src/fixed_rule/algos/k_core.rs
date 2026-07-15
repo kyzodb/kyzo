@@ -263,7 +263,7 @@ mod tests {
     fn run(edges: &[(&str, &str)]) -> BTreeMap<String, u32> {
         let rows = edges
             .iter()
-            .map(|&(a, b)| vec![s(a), s(b)])
+            .map(|&(a, b)| Tuple::from_vec(vec![s(a), s(b)]))
             .collect::<Vec<_>>();
         let got = run_fixed_rule(
             &KCoreDecomposition,
@@ -400,7 +400,7 @@ mod tests {
 
         let n: u32 = 60_000;
         let edges: Vec<_> = (0..n - 1)
-            .map(|i| vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))])
+            .map(|i| Tuple::from_vec(vec![s(&format!("v{i}")), s(&format!("v{}", i + 1))]))
             .collect();
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
         let prepared = prepare_fixed_rule(&KCoreDecomposition, inputs, BTreeMap::new()).unwrap();

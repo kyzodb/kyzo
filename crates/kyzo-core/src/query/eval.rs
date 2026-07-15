@@ -2008,7 +2008,7 @@ mod tests {
                 Ok(store
                     .prefix_iter(probe)
                     .next()
-                    .is_some_and(|t| t == probe[..]))
+                    .is_some_and(|t| t == probe.as_slice()[..]))
             } else {
                 Ok(self.facts.get(rel).is_some_and(|set| set.contains(probe)))
             }
@@ -2046,7 +2046,7 @@ mod tests {
                 } else {
                     Premises::NotRequested
                 };
-                return f(Cow::Owned(head), arg);
+                return f(Cow::Owned(head.into_vec()), arg);
             }
             let (body_pos, l) = ordered[idx];
             if l.negated {
@@ -2072,7 +2072,7 @@ mod tests {
             let is_delta = delta_from == Some(AtomOccurrence(body_pos));
             let rows = self.rows_of(stores, l.rel, is_delta)?;
             for row in &rows {
-                if let Some(b) = unify(&l.args, row, bound) {
+                if let Some(b) = unify(&l.args, row.as_slice(), bound) {
                     if want_premises {
                         premises.push(row.clone());
                     }
@@ -2495,7 +2495,7 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = Default::default();
         facts.insert(
             "edge",
-            edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).collect(),
+            edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
         );
         facts
     }
@@ -2609,7 +2609,7 @@ mod tests {
     #[test]
     fn differential_stratified_negation() {
         let mut facts = edge_facts(&[(1, 2), (2, 3)]);
-        facts.insert("node", (1..=3).map(|i| vec![v(i)]).collect());
+        facts.insert("node", (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         let mut rules = transitive_closure();
         rules.push(Rule::plain(
             "unreachable",
@@ -2668,7 +2668,7 @@ mod tests {
             [(1, 5), (4, 1)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         assert_matches_oracle(&Program {
             rules: meet_reach_rules("min"),
@@ -2690,7 +2690,7 @@ mod tests {
                 "seed",
                 (1..=3)
                     .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
-                    .collect(),
+                    .map(Tuple::from_vec).collect(),
             );
             let model = Program {
                 rules: meet_reach_rules(name),
@@ -2722,7 +2722,7 @@ mod tests {
             [(1, 5), (4, 1)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         assert_matches_oracle(&Program {
             rules: meet_reach_rules_pos0("min"),
@@ -2744,7 +2744,7 @@ mod tests {
                 "seed",
                 (1..=3)
                     .map(|k| vec![v(k), DataValue::from(seed_of[(k - 1) as usize])])
-                    .collect(),
+                    .map(Tuple::from_vec).collect(),
             );
             let model = Program {
                 rules: meet_reach_rules_pos0(name),
@@ -2775,7 +2775,7 @@ mod tests {
             [(1, 5), (1, 2), (1, 8), (2, 4), (2, 7), (3, 3)]
                 .iter()
                 .map(|(k, val)| vec![v(*k), v(*val)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         // g[min(V), K, max(V)] :- obs[K, V].
         let rules = vec![Rule::aggregated(
@@ -2802,7 +2802,7 @@ mod tests {
             [(1, 5, 5), (2, 1, 1)]
                 .iter()
                 .map(|(k, lo, hi)| vec![v(*k), v(*lo), v(*hi)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         // m[min(Lo), K, max(Hi)] seeded, then relaxed along edges: each hop
         // carries the source group's folded (min, max) to the target node.
@@ -2847,7 +2847,7 @@ mod tests {
             "edge",
             [vec![DataValue::from(false), DataValue::from(true)]]
                 .into_iter()
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         facts.insert("seed", BTreeSet::new());
         let rules = vec![
@@ -2879,9 +2879,9 @@ mod tests {
         let mut facts = edge_facts(&[(1, 2)]);
         facts.insert(
             "seed",
-            [vec![v(1), DataValue::from(true)]].into_iter().collect(),
+            [vec![v(1), DataValue::from(true)]].into_iter().map(Tuple::from_vec).collect(),
         );
-        facts.insert("node", (1..=3).map(|i| vec![v(i)]).collect());
+        facts.insert("node", (1..=3).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         let mut rules = meet_reach_rules("or");
         rules.push(Rule::plain(
             "unseeded",
@@ -2907,13 +2907,13 @@ mod tests {
                 [(1, 2), (2, 3)]
                     .iter()
                     .map(|(a, b)| vec![v(*a), v(*b)])
-                    .collect()
+                    .map(Tuple::from_vec).collect()
             },
         };
         let path_sources = FixedRule {
             head_rel: "sources",
             inputs: vec!["path"],
-            eval: |inputs| inputs[0].iter().map(|t| vec![t[0].clone()]).collect(),
+            eval: |inputs| inputs[0].iter().map(|t| vec![t[0].clone()]).map(Tuple::from_vec).collect(),
         };
         let rules = vec![
             Rule::plain(
@@ -2949,7 +2949,7 @@ mod tests {
             [(2, 5), (5, 3), (4, 1)]
                 .iter()
                 .map(|(a, b)| vec![v(*a), v(*b)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let rules = vec![
             Rule::plain(
@@ -2993,7 +2993,7 @@ mod tests {
             [(4, 5), (5, 6), (6, 7)]
                 .iter()
                 .map(|(a, b)| vec![v(*a), v(*b)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let mut rules = transitive_closure(); // path = TC(edge)
         rules.push(Rule::plain(
@@ -3046,7 +3046,7 @@ mod tests {
             [(1, 5), (2, 7), (3, 9)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let rules = vec![
             Rule::aggregated(
@@ -3098,14 +3098,14 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "long_edge",
-            (0..8i64).map(|i| vec![v(i), v(i + 1)]).collect(),
+            (0..8i64).map(|i| vec![v(i), v(i + 1)]).map(Tuple::from_vec).collect(),
         );
         facts.insert(
             "short_edge",
             [(100, 101), (101, 102)]
                 .iter()
                 .map(|(a, b)| vec![v(*a), v(*b)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let rules = vec![
             Rule::plain(
@@ -3226,16 +3226,16 @@ mod tests {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
         facts.insert(
             "edge",
-            case.edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).collect(),
+            case.edges.iter().map(|(a, b)| vec![v(*a), v(*b)]).map(Tuple::from_vec).collect(),
         );
         facts.insert(
             "seed",
             case.seeds
                 .iter()
                 .map(|(k, val)| vec![v(*k), val.clone()])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
-        facts.insert("node", (0..case.n).map(|i| vec![v(i)]).collect());
+        facts.insert("node", (0..case.n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         let mut rules = if case.self_join {
             transitive_closure_self_join()
         } else {
@@ -3340,7 +3340,7 @@ mod tests {
             [(0, 9), (5, 2), (11, 4)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let mut rules = transitive_closure_self_join();
         rules.extend(meet_reach_rules("min"));
@@ -3423,7 +3423,7 @@ mod tests {
             [(0, 9), (5, 2), (11, 4)]
                 .iter()
                 .map(|(k, l)| vec![v(*k), v(*l)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let model = Program {
             rules: meet_reach_rules_pos0("min"),
@@ -3807,8 +3807,8 @@ mod tests {
     /// `== 0`. This is the reviewer's `hostile_probe_meet_tightslack_low`.
     fn equal_seed_cycle_facts(n: i64, seed_val: i64) -> BTreeMap<Rel, BTreeSet<Tuple>> {
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("edge", (0..n).map(|i| vec![v(i), v((i + 1) % n)]).collect());
-        facts.insert("seed", (0..n).map(|i| vec![v(i), v(seed_val)]).collect());
+        facts.insert("edge", (0..n).map(|i| vec![v(i), v((i + 1) % n)]).map(Tuple::from_vec).collect());
+        facts.insert("seed", (0..n).map(|i| vec![v(i), v(seed_val)]).map(Tuple::from_vec).collect());
         facts
     }
 
@@ -4082,7 +4082,7 @@ mod tests {
             let mut ticker = budget.ticker(baseline, &self.symb);
             for i in 0..self.rows {
                 ticker.tick(out.len())?;
-                out.put(vec![v(i)]);
+                out.put(Tuple::from_vec(vec![v(i)]));
             }
             Ok(())
         }
@@ -4171,8 +4171,8 @@ mod tests {
     fn harness_killer_cross_product_streams_through_the_guard() {
         let n = 10_000i64;
         let mut facts: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-        facts.insert("a", (0..n).map(|i| vec![v(i)]).collect());
-        facts.insert("b", (0..n).map(|i| vec![v(i)]).collect());
+        facts.insert("a", (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
+        facts.insert("b", (0..n).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         let model = Program {
             rules: vec![Rule::plain(
                 "out",
@@ -4429,7 +4429,7 @@ mod tests {
         ]
         .iter()
         .map(|(a, b)| vec![v(*a), v(*b)])
-        .collect();
+        .map(Tuple::from_vec).collect();
         assert_eq!(
             rows, expected,
             "the traced limited set: D2 dedup keeps (1,4); N2 overshoot admits (0,4)"
@@ -4490,13 +4490,13 @@ mod tests {
         // Base tuples: rule 0, premise = the edge row.
         assert_eq!(
             path_witnesses[0].derivation,
-            Some((0, vec![vec![v(1), v(2)]]))
+            Some((0, vec![Tuple::from_vec(vec![v(1), v(2)])]))
         );
         // The recursive tuple: rule 1, premises = edge(1,2) then path(2,3).
         assert_eq!(path_witnesses[2].tuple, Tuple::from_vec(vec![v(1), v(3)]));
         assert_eq!(
             path_witnesses[2].derivation,
-            Some((1, vec![vec![v(1), v(2)], vec![v(2), v(3)]]))
+            Some((1, vec![Tuple::from_vec(vec![v(1), v(2)]), Tuple::from_vec(vec![v(2), v(3)])]))
         );
     }
 
@@ -4589,7 +4589,7 @@ mod tests {
             [(1, 5), (1, 3), (2, 9)]
                 .iter()
                 .map(|(k, val)| vec![v(*k), v(*val)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         // m[min(V), K] :- obs[K, V].  Grouping position is 1 (K), the meet
         // column is position 0 — a non-suffix layout the old store refused.
@@ -4628,7 +4628,7 @@ mod tests {
                 vec![v(2), v(3)],
             ]
             .into_iter()
-            .collect(),
+            .map(Tuple::from_vec).collect(),
         );
         // m[min(V), K] :- obs[K, V]  — Null group key, Null meet value.
         let rules = vec![Rule::aggregated(
@@ -4654,7 +4654,7 @@ mod tests {
             [(1, 5), (1, 3), (2, 3), (2, 9)]
                 .iter()
                 .map(|(k, val)| vec![v(*k), v(*val)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         let rules = vec![Rule::aggregated(
             "m",
@@ -4675,7 +4675,7 @@ mod tests {
     #[test]
     fn rev_differential_meet_all_aggregated_recursive() {
         let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 5), (5, 1)]);
-        facts.insert("start", [vec![v(3), v(3)]].into_iter().collect());
+        facts.insert("start", [vec![v(3), v(3)]].into_iter().map(Tuple::from_vec).collect());
         // m[min(A), max(B)] :- start[A, B]
         // m[min(Y), max(Y)] :- m[X, _ignored], edge[X, Y]
         let rules = vec![
@@ -4714,10 +4714,10 @@ mod tests {
             .flat_map(|i| vec![(i, (i * 5 + 7) % 24), (i, (i * 11 + 3) % 24)])
             .collect();
         let mut facts = edge_facts(&edges);
-        facts.insert("node", (0..24).map(|i| vec![v(i)]).collect());
+        facts.insert("node", (0..24).map(|i| vec![v(i)]).map(Tuple::from_vec).collect());
         facts.insert(
             "special",
-            [0i64, 7, 13, 21].iter().map(|i| vec![v(*i)]).collect(),
+            [0i64, 7, 13, 21].iter().map(|i| vec![v(*i)]).map(Tuple::from_vec).collect(),
         );
         let mut rules = vec![
             // Stratum below: nonspecial via negation.
@@ -4802,7 +4802,7 @@ mod tests {
             [(1, 5), (1, 3), (2, 9)]
                 .iter()
                 .map(|(k, val)| vec![v(*k), v(*val)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         // m[min(V), K] :- obs[K, V]
         let model = Program {
@@ -4844,7 +4844,7 @@ mod tests {
         let (_, premises) = ws[0].derivation.as_ref().unwrap();
         assert_eq!(premises.len(), 1);
         assert!(
-            premises[0] == vec![v(1), v(3)] || premises[0] == vec![v(1), v(5)],
+            premises[0] == Tuple::from_vec(vec![v(1), v(3)]) || premises[0] == Tuple::from_vec(vec![v(1), v(5)]),
             "premise must be a real obs row for group 1: {:?}",
             premises[0]
         );
@@ -4863,7 +4863,7 @@ mod tests {
             [(1, 3), (1, 5), (2, 3)]
                 .iter()
                 .map(|(k, val)| vec![v(*k), v(*val)])
-                .collect(),
+                .map(Tuple::from_vec).collect(),
         );
         // m[min(V), K] :- obs[K, V]; groups 1 and 2 both fold to min 3.
         let model = Program {
@@ -4997,7 +4997,7 @@ mod tests {
             )],
             facts: {
                 let mut f: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
-                f.insert("d", [vec![v(1)]].into_iter().collect());
+                f.insert("d", [vec![v(1)]].into_iter().map(Tuple::from_vec).collect());
                 f
             },
             ..Program::default()

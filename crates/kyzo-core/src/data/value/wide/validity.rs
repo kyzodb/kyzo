@@ -134,10 +134,7 @@ impl StoredValiditySlot {
     }
 
     pub fn as_validity(self) -> Validity {
-        Validity {
-            timestamp: self.0,
-            is_assert: Reverse(true),
-        }
+        Validity::new(self.0, true)
     }
 }
 

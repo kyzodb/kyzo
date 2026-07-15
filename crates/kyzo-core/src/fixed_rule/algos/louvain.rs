@@ -284,7 +284,7 @@ fn louvain_step(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::data::value::DataValue;
+    use crate::data::value::{DataValue, Tuple};
     use crate::fixed_rule::CancelFlag;
     use crate::fixed_rule::algos::louvain::{CommunityDetectionLouvain, louvain};
     use crate::fixed_rule::graph::DirectedCsrGraph;
@@ -374,10 +374,10 @@ mod tests {
             vec![TestInput::new(
                 vec!["fr", "to"],
                 vec![
-                    vec![s("a"), s("b")],
-                    vec![s("b"), s("a")],
-                    vec![s("b"), s("c")],
-                    vec![s("c"), s("b")],
+                    Tuple::from_vec(vec![s("a"), s("b")]),
+                    Tuple::from_vec(vec![s("b"), s("a")]),
+                    Tuple::from_vec(vec![s("b"), s("c")]),
+                    Tuple::from_vec(vec![s("c"), s("b")]),
                 ],
             )],
             BTreeMap::new(),
