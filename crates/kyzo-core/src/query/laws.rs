@@ -149,7 +149,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::data::aggr::{Aggregation, MeetAggrObj, NormalAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggrObj, NormalAggrObj};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
@@ -1322,7 +1322,7 @@ struct MeetState {
     val_positions: Vec<usize>,
     ops: Vec<Box<dyn MeetAggrObj>>,
     arity: usize,
-    acc: BTreeMap<Tuple, Tuple>,
+    acc: BTreeMap<Tuple, Vec<MeetAccum>>,
 }
 
 impl MeetState {
@@ -1359,7 +1359,11 @@ impl MeetState {
     /// value changed (a fresh key always counts).
     fn meet_row(&mut self, row: &Tuple) -> Result<bool, Rejection> {
         let key: Tuple = self.key_positions.iter().map(|i| row[*i].clone()).collect();
-        let vals: Tuple = self.val_positions.iter().map(|i| row[*i].clone()).collect();
+        let vals: Vec<MeetAccum> = self
+            .val_positions
+            .iter()
+            .map(|i| MeetAccum::from_derived(row[*i].clone()))
+            .collect();
         match self.acc.entry(key) {
             Entry::Vacant(e) => {
                 e.insert(vals);
@@ -1390,7 +1394,7 @@ impl MeetState {
                     row[*i] = key[slot].clone();
                 }
                 for (slot, i) in self.val_positions.iter().enumerate() {
-                    row[*i] = vals[slot].clone();
+                    row[*i] = vals[slot].to_value();
                 }
                 row
             })
@@ -1607,7 +1611,8 @@ fn naive_eval_at_impl(
                         && state.key_positions.is_empty()
                         && !state.ops.is_empty()
                     {
-                        let identity: Tuple = state.ops.iter().map(|op| op.init_val()).collect();
+                        let identity: Vec<MeetAccum> =
+                            state.ops.iter().map(|op| op.init_val()).collect();
                         state.acc.insert(Tuple::new(), identity);
                         changed = true;
                     }
@@ -3279,13 +3284,15 @@ mod tests {
         op: &dyn MeetAggrObj,
         mode: FlagMode,
     ) -> BTreeMap<i64, DataValue> {
-        let mut total: BTreeMap<i64, DataValue> = BTreeMap::new();
+        let mut total: BTreeMap<i64, MeetAccum> = BTreeMap::new();
         // Epoch 0: only the seed rule fires — the recursive store is empty.
-        let mut epoch_rows: Vec<(i64, DataValue)> =
-            seeds.iter().map(|(k, val)| (*k, val.clone())).collect();
+        let mut epoch_rows: Vec<(i64, MeetAccum)> = seeds
+            .iter()
+            .map(|(k, val)| (*k, MeetAccum::from_derived(val.clone())))
+            .collect();
         for _epoch in 0..100_000 {
             // The epoch's own meet store: rows meet together before merging.
-            let mut fresh: BTreeMap<i64, DataValue> = BTreeMap::new();
+            let mut fresh: BTreeMap<i64, MeetAccum> = BTreeMap::new();
             for (k, val) in epoch_rows {
                 match fresh.entry(k) {
                     Entry::Vacant(e) => {
@@ -3297,7 +3304,7 @@ mod tests {
                 }
             }
             // merge_in: flag-gated delta discovery.
-            let mut delta: BTreeMap<i64, DataValue> = BTreeMap::new();
+            let mut delta: BTreeMap<i64, MeetAccum> = BTreeMap::new();
             for (k, val) in fresh {
                 match total.entry(k) {
                     Entry::Vacant(e) => {
@@ -3317,7 +3324,10 @@ mod tests {
                 }
             }
             if delta.is_empty() {
-                return total;
+                return total
+                    .into_iter()
+                    .map(|(k, a)| (k, a.to_value()))
+                    .collect();
             }
             // Next epoch: the recursive rule joined against the delta only.
             let mut next = Vec::new();

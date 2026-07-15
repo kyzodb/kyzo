@@ -13,7 +13,7 @@ use std::fmt::{Debug, Formatter};
 use itertools::{Either, Itertools};
 use miette::{Result, bail};
 
-use crate::data::aggr::{Aggregation, MeetAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggrObj};
 use crate::data::value::DataValue;
 use crate::data::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
@@ -186,19 +186,18 @@ impl NormalLevel {
 }
 
 /// One sealed level of a meet rule's total: groups ascending by group
-/// key, each holding its WHOLE folded value; a row-order mirror rides
+/// key, each holding its WHOLE folded accumulator; a row-order mirror rides
 /// along only when the layout interleaves (row order ≠ group order).
 #[derive(Debug, Default)]
 pub(crate) struct MeetLevel {
     /// Group key bytes (story #77, same [`encode_tuple_bare`] treatment as
-    /// `NormalLevel`'s rows) → folded meet values — still `DataValue`-typed;
-    /// see `MeetAggrStore`'s doc for why the fold itself stays typed.
-    pub(crate) groups: Vec<(Box<[u8]>, Tuple)>,
+    /// `NormalLevel`'s rows) → folded meet accumulators.
+    pub(crate) groups: Vec<(Box<[u8]>, Vec<MeetAccum>)>,
     pub(crate) by_row: Vec<Tuple>,
 }
 
 impl MeetLevel {
-    fn find(&self, group_key: &[u8]) -> Option<&(Box<[u8]>, Tuple)> {
+    fn find(&self, group_key: &[u8]) -> Option<&(Box<[u8]>, Vec<MeetAccum>)> {
         self.groups
             .binary_search_by(|(k, _)| k.as_ref().cmp(group_key))
             .ok()
@@ -233,12 +232,12 @@ impl MeetSpec {
         &self,
         levels: &[MeetLevel],
         group_key: &[u8],
-        incoming_vals: &[DataValue],
+        incoming_vals: &[MeetAccum],
     ) -> Result<bool> {
         match levels.iter().rev().find_map(|l| l.find(group_key)) {
             None => Ok(true),
             Some((_, target)) => {
-                let mut probe: Vec<DataValue> = target.to_vec();
+                let mut probe = target.clone();
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
                     changed |= op.update(&mut probe[i], &incoming_vals[i])?;
@@ -260,7 +259,7 @@ impl MeetTotalView<'_> {
     pub(crate) fn would_admit(
         &self,
         group_key: &[u8],
-        incoming_vals: &[DataValue],
+        incoming_vals: &[MeetAccum],
     ) -> Result<bool> {
         self.spec.would_admit(self.levels, group_key, incoming_vals)
     }
@@ -766,7 +765,7 @@ fn meet_ranged<'s>(
     if spec.layout.is_suffix() {
         // Group order is row order: k-way over `groups`, newest wins.
         let mut cursors: Vec<(
-            std::iter::Peekable<std::slice::Iter<'s, (Box<[u8]>, Tuple)>>,
+            std::iter::Peekable<std::slice::Iter<'s, (Box<[u8]>, Vec<MeetAccum>)>>,
             usize,
         )> = picked
             .iter()
@@ -792,7 +791,7 @@ fn meet_ranged<'s>(
                     }
                 }
                 let (key, win_idx) = best?;
-                let mut winner: Option<&'s (Box<[u8]>, Tuple)> = None;
+                let mut winner: Option<&'s (Box<[u8]>, Vec<MeetAccum>)> = None;
                 for (cur, idx) in cursors.iter_mut() {
                     while cur.peek().is_some_and(|(k, _)| k.as_ref() == key) {
                         let g = cur.next().expect("peeked");

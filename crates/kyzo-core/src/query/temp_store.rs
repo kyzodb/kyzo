@@ -101,9 +101,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 
 use itertools::Itertools;
-use miette::{Result, miette};
+use miette::{Result, ensure, miette};
 
-use crate::data::aggr::{Aggregation, MeetAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggrObj};
 use crate::data::value::DataValue;
 use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
 
@@ -283,9 +283,13 @@ impl MeetLayout {
     }
 
     /// The meet values of a head tuple: its projection onto the aggregated
-    /// positions, in head order (aligned one-to-one with `meets`).
-    fn project_vals(&self, row: &[DataValue]) -> Tuple {
-        self.val_positions.iter().map(|i| row[*i].clone()).collect()
+    /// positions, in head order (aligned one-to-one with `meets`), each
+    /// wrapped as [`MeetAccum::Value`].
+    fn project_vals(&self, row: &[DataValue]) -> Vec<MeetAccum> {
+        self.val_positions
+            .iter()
+            .map(|i| MeetAccum::from_derived(row[*i].clone()))
+            .collect()
     }
 
     /// Whether the aggregated positions form a *suffix* — equivalently, the
@@ -325,15 +329,17 @@ impl MeetLayout {
     /// decodes back through [`decode_tuple_bare`]; the fold values were
     /// never bytes, per this module's doc). Every position is either a key
     /// or a value position (they partition `0..arity`), so no `Null`
-    /// placeholder survives.
-    pub(crate) fn interleave(&self, key: &[u8], vals: &[DataValue]) -> Tuple {
+    /// placeholder survives. [`MeetAccum::Empty`] materializes as
+    /// [`DataValue::Null`] (result meaning "no input"), distinct from the
+    /// in-fold Empty state.
+    pub(crate) fn interleave(&self, key: &[u8], vals: &[MeetAccum]) -> Tuple {
         let key = decode_tuple_bare(key).expect("this store's own bytes decode");
         let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
         for (slot, i) in self.key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
         }
         for (slot, i) in self.val_positions.iter().enumerate() {
-            row[*i] = vals[slot].clone();
+            row[*i] = vals[slot].to_value();
         }
         row
     }
@@ -357,22 +363,13 @@ impl MeetLayout {
 /// replaces.
 pub(crate) struct MeetAggrStore {
     /// Group key bytes ([`encode_tuple_bare`], story #77 — same footprint
-    /// argument as [`RegularTempStore`]) → folded meet values (projection
-    /// onto the aggregated positions, in head order). The fold/delta
-    /// authority, iterated in canonical group-key order at the merge
-    /// barrier so admissions stay schedule-independent. The VALUES stay
-    /// `DataValue`-typed — not because every meet kind NEEDS typed
-    /// computation: byte-backing wins where a value is only ever COMPARED
-    /// (the key, and — since memcomparable order embeds value order — the
-    /// order-based `min`/`max` folds too), and loses nothing where it is.
-    /// `set union/intersection`, `bitand/bitor`, and tropical `min-cost`
-    /// genuinely need decode to compute (no byte-level union or bitwise
-    /// op exists), so SOME meet kinds have no byte path regardless. Given
-    /// that, one typed value representation serving every kind uniformly
-    /// beats a bytes-for-min/max-only special case for a fold that is not
-    /// this store's hot path (the hot path is the key comparison, already
-    /// byte-native) — a marginal win traded for less code, not a wall.
-    pub(crate) by_group: BTreeMap<Box<[u8]>, Tuple>,
+    /// argument as [`RegularTempStore`]) → folded meet accumulators
+    /// (projection onto the aggregated positions, in head order). The
+    /// fold/delta authority, iterated in canonical group-key order at the
+    /// merge barrier so admissions stay schedule-independent. Accumulators
+    /// are [`MeetAccum`] — `Empty | Value(v)` — so a domain `Null` is never
+    /// the empty sentinel.
+    pub(crate) by_group: BTreeMap<Box<[u8]>, Vec<MeetAccum>>,
     /// The current logical head tuples — each the [`MeetLayout::interleave`]
     /// of a group key with its folded values — kept in canonical head-tuple
     /// order for the range/prefix scans joins issue (`query/ra.rs`).
@@ -533,7 +530,9 @@ impl MeetAggrStore {
                 let old_vals = materialize.then(|| vals.clone());
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    changed |= op.update(&mut vals[i], &tuple[self.layout.val_positions[i]])?;
+                    let incoming =
+                        MeetAccum::from_derived(tuple[self.layout.val_positions[i]].clone());
+                    changed |= op.update(&mut vals[i], &incoming)?;
                 }
                 if changed && materialize {
                     let old_vals = old_vals.expect("materialize implies a snapshot");
@@ -554,6 +553,24 @@ impl MeetAggrStore {
                 Ok(true)
             }
         }
+    }
+
+    /// Seed the all-aggregated empty-head identity row: each meet's
+    /// [`MeetAggrObj::init_val`] stored as a typed accumulator (so
+    /// [`MeetAccum::Empty`] stays Empty, never `Value(Null)`).
+    pub(crate) fn seed_identity(&mut self) -> Result<bool> {
+        ensure!(
+            self.is_empty(),
+            "seed_identity requires an empty meet store"
+        );
+        let vals: Vec<MeetAccum> = self.meets.iter().map(|(_, op)| op.init_val()).collect();
+        let key = encode_tuple_bare(&[]);
+        if !self.layout.is_suffix() {
+            self.by_row
+                .insert(self.layout.interleave(&key, vals.as_slice()));
+        }
+        self.by_group.insert(key.into_boxed_slice(), vals);
+        Ok(true)
     }
 }
 
@@ -583,13 +600,10 @@ impl TempStore {}
 /// ([`RegularTempStore`]/`NormalLevel`'s whole row, `MeetAggrStore`/
 /// `MeetLevel`'s group-key projection, `query/levels.rs`) — pure
 /// comparison data, never computed on, so the footprint cut applies to
-/// both. Meet's FOLDED VALUES stay `DataValue`-typed uniformly across
-/// every meet kind — see [`MeetAggrStore`]'s doc for the precise
-/// reasoning (byte-backing wins on comparison, not computation; `min`/
-/// `max` could go either way since memcomparable order embeds value
-/// order, but one typed representation for every kind beats a
-/// bytes-for-order-only special case on a fold that isn't this store's
-/// hot path). One enum keeps every consumer (`AdmissionSink`, the RA join
+/// both. Meet's FOLDED VALUES are [`MeetAccum`] (`Empty | Value`) so a
+/// domain `Null` is never the empty sentinel; iteration materializes
+/// via [`MeetAccum::to_value`]. One enum keeps every consumer
+/// (`AdmissionSink`, the RA join
 /// probes, the provenance/trials iteration surfaces) working over ONE
 /// type regardless of which
 /// store produced the row and which layout (suffix or interleaved) it
@@ -606,10 +620,10 @@ pub(crate) enum TupleInIter<'a> {
     /// row in `key` — a regular row has no separate value region.
     Bytes { key: &'a [u8], skip: bool },
     /// A meet store's SUFFIX-layout row: group-key bytes (the row's own
-    /// head prefix — no interleave needed) + folded meet values, typed.
+    /// head prefix — no interleave needed) + folded meet accumulators.
     MeetSuffix {
         key: &'a [u8],
-        val: &'a [DataValue],
+        val: &'a [MeetAccum],
         skip: bool,
     },
     /// A meet store's INTERLEAVED-layout row: [`MeetLayout::interleave`]
@@ -635,8 +649,8 @@ impl<'a> TupleInIter<'a> {
         TupleInIter::Bytes { key, skip }
     }
     /// Construct a view over a suffix-layout meet store's group-key bytes
-    /// plus its typed folded values.
-    pub(crate) fn new_meet_suffix(key: &'a [u8], val: &'a [DataValue], skip: bool) -> Self {
+    /// plus its typed folded accumulators.
+    pub(crate) fn new_meet_suffix(key: &'a [u8], val: &'a [MeetAccum], skip: bool) -> Self {
         TupleInIter::MeetSuffix { key, val, skip }
     }
 }
@@ -655,7 +669,7 @@ impl TupleInIter<'_> {
                 let key = decode_tuple_bare(key).expect("this store's own bytes decode");
                 key.get(idx)
                     .cloned()
-                    .or_else(|| val.get(idx - key.len()).cloned())
+                    .or_else(|| val.get(idx - key.len()).map(|a| a.to_value()))
                     .expect("compiled position within this row's arity")
             }
             TupleInIter::Values { key, val, .. } => key
@@ -679,7 +693,7 @@ impl TupleInIter<'_> {
             }
             TupleInIter::MeetSuffix { key, val, .. } => {
                 let mut key = decode_tuple_bare(key).expect("this store's own bytes decode");
-                key.extend(val.iter().cloned());
+                key.extend(val.iter().map(|a| a.to_value()));
                 key
             }
             TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cloned().collect(),
@@ -700,8 +714,8 @@ impl TupleInIter<'_> {
             TupleInIter::Bytes { key, .. } => (*key).cmp(probe),
             TupleInIter::MeetSuffix { key, val, .. } => {
                 let mut full = key.to_vec();
-                for v in val.iter() {
-                    crate::data::value::append_canonical(&mut full, v);
+                for a in val.iter() {
+                    crate::data::value::append_canonical(&mut full, &a.to_value());
                 }
                 full.as_slice().cmp(probe)
             }
@@ -723,7 +737,10 @@ impl TupleInIter<'_> {
             }
             TupleInIter::MeetSuffix { key, val, .. } => {
                 let key = decode_tuple_bare(key).expect("this store's own bytes decode");
-                key.iter().chain(val.iter()).cmp(other.iter())
+                key.iter()
+                    .cloned()
+                    .chain(val.iter().map(|a| a.to_value()))
+                    .cmp(other.iter().cloned())
             }
             TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cmp(other.iter()),
         }
@@ -772,7 +789,7 @@ enum TupleInIterState<'a> {
     /// values always precede the meet-suffix value's in head order.
     MeetSuffix {
         key_remaining: &'a [u8],
-        val: &'a [DataValue],
+        val: &'a [MeetAccum],
         val_idx: usize,
     },
     Values {
@@ -843,7 +860,7 @@ impl Iterator for TupleInIterIterator<'_> {
                     *key_remaining = next;
                     return Some(v);
                 }
-                let ret = val.get(*val_idx)?.clone();
+                let ret = val.get(*val_idx)?.to_value();
                 *val_idx += 1;
                 Some(ret)
             }
@@ -1234,7 +1251,10 @@ mod tests {
         assert_eq!(key, Tuple::from_vec(vec![DataValue::from("g")]));
         assert_eq!(
             vals,
-            Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)])
+            vec![
+                MeetAccum::from_derived(DataValue::from(2i64)),
+                MeetAccum::from_derived(DataValue::from(9i64)),
+            ]
         );
         assert_eq!(
             layout.interleave(&encode_tuple_bare(key.as_slice()), vals.as_slice()),

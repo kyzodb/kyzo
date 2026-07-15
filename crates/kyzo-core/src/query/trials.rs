@@ -68,7 +68,7 @@ use std::sync::Arc;
 
 use miette::Result;
 
-use crate::data::aggr::{MeetAggrObj, parse_aggr};
+use crate::data::aggr::{MeetAccum, MeetAggrObj, parse_aggr};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
@@ -2919,9 +2919,9 @@ fn expected_meet(
     meet_op: &str,
 ) -> BTreeSet<Tuple> {
     let aggregation = parse_aggr(meet_op).expect("real aggregation");
-    let mut acc: BTreeMap<DataValue, DataValue> = BTreeMap::new();
+    let mut acc: BTreeMap<DataValue, MeetAccum> = BTreeMap::new();
     for row in seeds {
-        acc.insert(row[0].clone(), row[1].clone());
+        acc.insert(row[0].clone(), MeetAccum::from_derived(row[1].clone()));
     }
     let mut steps = 0usize;
     loop {
@@ -2956,7 +2956,7 @@ fn expected_meet(
         }
     }
     acc.into_iter()
-        .map(|(k, val)| vec![k, val])
+        .map(|(k, val)| vec![k, val.to_value()])
         .map(Tuple::from_vec)
         .collect()
 }

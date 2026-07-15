@@ -60,16 +60,44 @@ pub(crate) trait NormalAggrObj: Send + Sync {
     fn get(&self) -> Result<DataValue>;
 }
 
+/// Running state of a meet fold. `Empty` is the lattice identity when it
+/// has no finite [`DataValue`] spelling (and the uniform "not yet folded"
+/// state); `Value` holds the running result — including [`DataValue::Null`]
+/// when Null is real data, never when it means "empty."
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MeetAccum {
+    Empty,
+    Value(DataValue),
+}
+
+impl MeetAccum {
+    /// Wrap a derived / incoming datum as an accumulator value.
+    pub(crate) fn from_derived(v: DataValue) -> Self {
+        Self::Value(v)
+    }
+
+    /// Materialize for storage outside the fold (identity rows, head
+    /// tuples). `Empty` becomes [`DataValue::Null`] as a *result* meaning
+    /// "no input," not as an in-fold sentinel — the fold matches on
+    /// [`MeetAccum::Empty`], never on `Null`.
+    pub(crate) fn to_value(&self) -> DataValue {
+        match self {
+            MeetAccum::Empty => DataValue::Null,
+            MeetAccum::Value(v) => v.clone(),
+        }
+    }
+}
+
 /// A semilattice fold, safe inside recursion. `init_val` is the identity
-/// element; `update` folds one value into the accumulator in place.
+/// element; `update` folds one accumulator into another in place.
 ///
 /// `update` must return `true` iff the accumulator actually changed. The
 /// flag gates delta propagation in recursive evaluation, so it is not
 /// cosmetic: a false "unchanged" reaches a premature fixpoint (missing
 /// answers), a false "changed" merely re-propagates.
 pub(crate) trait MeetAggrObj: Send + Sync {
-    fn init_val(&self) -> DataValue;
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool>;
+    fn init_val(&self) -> MeetAccum;
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool>;
 }
 
 /// Builds a fresh normal fold. `args` are the aggregation's compile-time
@@ -199,13 +227,20 @@ impl NormalAggrObj for AggrAnd {
 pub(crate) struct MeetAggrAnd;
 
 impl MeetAggrObj for MeetAggrAnd {
-    fn init_val(&self) -> DataValue {
-        DataValue::from(true)
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(DataValue::from(true))
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
         match (left, right) {
-            (DataValue::Bool(l), DataValue::Bool(r)) => {
+            (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
                 let old = *l;
                 *l &= *r;
                 // The flag gates delta propagation in recursive evaluation:
@@ -247,13 +282,20 @@ impl NormalAggrObj for AggrOr {
 pub(crate) struct MeetAggrOr;
 
 impl MeetAggrObj for MeetAggrOr {
-    fn init_val(&self) -> DataValue {
-        DataValue::from(false)
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(DataValue::from(false))
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
         match (left, right) {
-            (DataValue::Bool(l), DataValue::Bool(r)) => {
+            (MeetAccum::Value(DataValue::Bool(l)), MeetAccum::Value(DataValue::Bool(r))) => {
                 let old = *l;
                 *l |= *r;
                 // Same inverted-flag fix as `MeetAggrAnd::update`.
@@ -359,11 +401,21 @@ impl NormalAggrObj for AggrUnion {
 pub(crate) struct MeetAggrUnion;
 
 impl MeetAggrObj for MeetAggrUnion {
-    fn init_val(&self) -> DataValue {
-        DataValue::Set(BTreeSet::new())
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(DataValue::Set(BTreeSet::new()))
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
+        let (MeetAccum::Value(left), MeetAccum::Value(right)) = (left, right) else {
+            unreachable!("Empty handled above");
+        };
         if let DataValue::List(l) = left {
             let set: BTreeSet<_> = l.iter().cloned().collect();
             *left = DataValue::Set(set);
@@ -430,22 +482,26 @@ impl NormalAggrObj for AggrIntersection {
     }
 }
 
-/// Set intersection as a meet, with `Null` standing in for the missing
-/// top element ("everything") as the identity.
+/// Set intersection as a meet. The identity is the missing top element
+/// ("everything") — [`MeetAccum::Empty`], never [`DataValue::Null`].
 pub(crate) struct MeetAggrIntersection;
 
 impl MeetAggrObj for MeetAggrIntersection {
-    fn init_val(&self) -> DataValue {
-        DataValue::Null
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
-        if *left == DataValue::Null && *right != DataValue::Null {
-            *left = right.clone();
-            return Ok(true);
-        } else if *right == DataValue::Null {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
             return Ok(false);
         }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
+        let (MeetAccum::Value(left), MeetAccum::Value(right)) = (left, right) else {
+            unreachable!("Empty handled above");
+        };
         if let DataValue::List(l) = left {
             let set: BTreeSet<_> = l.iter().cloned().collect();
             *left = DataValue::Set(set);
@@ -832,29 +888,38 @@ impl NormalAggrObj for AggrMin {
 }
 
 /// Minimum as a meet: numbers under `min` in `Num`'s exact total order,
-/// with `Null` as the identity.
+/// with [`MeetAccum::Empty`] as the identity (Null inputs are skipped, as
+/// in the normal form — they are not the empty sentinel).
 pub(crate) struct MeetAggrMin;
 
 impl MeetAggrObj for MeetAggrMin {
-    fn init_val(&self) -> DataValue {
-        DataValue::Null
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
-        if *right == DataValue::Null {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        let MeetAccum::Value(right_v) = right else {
+            return Ok(false);
+        };
+        // Null inputs are ignored (same as the normal form), not treated as
+        // identity — Empty is the only empty state.
+        if *right_v == DataValue::Null {
             return Ok(false);
         }
-        if *left == DataValue::Null {
+        if matches!(left, MeetAccum::Empty) {
             *left = right.clone();
             return Ok(true);
         }
+        let MeetAccum::Value(left_v) = left else {
+            unreachable!("Empty handled above");
+        };
         // Exact `Num` comparison; see `AggrMin::set`.
-        let (l, r) = match (&*left, right) {
+        let (l, r) = match (&*left_v, right_v) {
             (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
             _ => bail!("'min' applied to non-numerical values"),
         };
         Ok(if r < l {
-            *left = right.clone();
+            *left_v = right_v.clone();
             true
         } else {
             false
@@ -903,29 +968,36 @@ impl NormalAggrObj for AggrMax {
 }
 
 /// Maximum as a meet: numbers under `max` in `Num`'s exact total order,
-/// with `Null` as the identity.
+/// with [`MeetAccum::Empty`] as the identity (Null inputs are skipped, as
+/// in the normal form — they are not the empty sentinel).
 pub(crate) struct MeetAggrMax;
 
 impl MeetAggrObj for MeetAggrMax {
-    fn init_val(&self) -> DataValue {
-        DataValue::Null
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
-        if *right == DataValue::Null {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        let MeetAccum::Value(right_v) = right else {
+            return Ok(false);
+        };
+        if *right_v == DataValue::Null {
             return Ok(false);
         }
-        if *left == DataValue::Null {
+        if matches!(left, MeetAccum::Empty) {
             *left = right.clone();
             return Ok(true);
         }
+        let MeetAccum::Value(left_v) = left else {
+            unreachable!("Empty handled above");
+        };
         // Exact `Num` comparison; see `AggrMin::set`.
-        let (l, r) = match (&*left, right) {
+        let (l, r) = match (&*left_v, right_v) {
             (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
             _ => bail!("'max' applied to non-numerical values"),
         };
         Ok(if r > l {
-            *left = right.clone();
+            *left_v = right_v.clone();
             true
         } else {
             false
@@ -1061,13 +1133,23 @@ impl NormalAggrObj for AggrMinCost {
 pub(crate) struct MeetAggrMinCost;
 
 impl MeetAggrObj for MeetAggrMinCost {
-    fn init_val(&self) -> DataValue {
-        DataValue::List(vec![DataValue::Null, DataValue::from(f64::INFINITY)])
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(DataValue::List(vec![
+            DataValue::Null,
+            DataValue::from(f64::INFINITY),
+        ]))
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
         Ok(match (left, right) {
-            (DataValue::List(prev), DataValue::List(l)) => {
+            (MeetAccum::Value(DataValue::List(prev)), MeetAccum::Value(DataValue::List(l))) => {
                 let [_, cur_cost] = &l[..] else {
                     bail!(
                         "'min_cost' requires a list of length 2 as argument, got {:?}, {:?}",
@@ -1136,23 +1218,27 @@ impl NormalAggrObj for AggrShortest {
     }
 }
 
-/// Shortest list as a meet, with `Null` as the identity.
+/// Shortest list as a meet, with [`MeetAccum::Empty`] as the identity.
 pub(crate) struct MeetAggrShortest;
 
 impl MeetAggrObj for MeetAggrShortest {
-    fn init_val(&self) -> DataValue {
-        DataValue::Null
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
-        if *left == DataValue::Null && *right != DataValue::Null {
-            *left = right.clone();
-            return Ok(true);
-        } else if *right == DataValue::Null {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
             return Ok(false);
         }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
         match (left, right) {
-            (DataValue::List(l), DataValue::List(r)) => Ok(if r.len() < l.len() {
+            (
+                MeetAccum::Value(DataValue::List(l)),
+                MeetAccum::Value(DataValue::List(r)),
+            ) => Ok(if r.len() < l.len() {
                 *l = r.clone();
                 true
             } else {
@@ -1191,17 +1277,21 @@ impl NormalAggrObj for AggrChoice {
     }
 }
 
-/// First-non-null as a meet: idempotent and associative, deliberately not
-/// commutative — which value wins is arbitrary by contract.
+/// First-seen as a meet: idempotent and associative, deliberately not
+/// commutative — which value wins is arbitrary by contract. [`DataValue::Null`]
+/// is ordinary data (adopted from Empty); only [`MeetAccum::Empty`] is vacant.
 pub(crate) struct MeetAggrChoice;
 
 impl MeetAggrObj for MeetAggrChoice {
-    fn init_val(&self) -> DataValue {
-        DataValue::Null
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Empty
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
-        Ok(if *left == DataValue::Null && *right != DataValue::Null {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        Ok(if matches!(left, MeetAccum::Empty) {
             *left = right.clone();
             true
         } else {
@@ -1253,13 +1343,23 @@ impl NormalAggrObj for AggrBitAnd {
 pub(crate) struct MeetAggrBitAnd;
 
 impl MeetAggrObj for MeetAggrBitAnd {
-    fn init_val(&self) -> DataValue {
-        DataValue::Bytes(Vec::new())
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(DataValue::Bytes(Vec::new()))
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
         match (left, right) {
-            (DataValue::Bytes(left), DataValue::Bytes(right)) => {
+            (
+                MeetAccum::Value(DataValue::Bytes(left)),
+                MeetAccum::Value(DataValue::Bytes(right)),
+            ) => {
                 if left.is_empty() {
                     *left = right.clone();
                     return Ok(!left.is_empty());
@@ -1324,13 +1424,23 @@ impl NormalAggrObj for AggrBitOr {
 pub(crate) struct MeetAggrBitOr;
 
 impl MeetAggrObj for MeetAggrBitOr {
-    fn init_val(&self) -> DataValue {
-        DataValue::Bytes(Vec::new())
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(DataValue::Bytes(Vec::new()))
     }
 
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
         match (left, right) {
-            (DataValue::Bytes(left), DataValue::Bytes(right)) => {
+            (
+                MeetAccum::Value(DataValue::Bytes(left)),
+                MeetAccum::Value(DataValue::Bytes(right)),
+            ) => {
                 if left.is_empty() {
                     *left = right.clone();
                     return Ok(!left.is_empty());
@@ -1432,6 +1542,10 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    fn v(d: DataValue) -> MeetAccum {
+        MeetAccum::Value(d)
+    }
+
     /// One fold with the changed-flag contract pinned in both directions:
     /// after every `update`, the flag must equal "the stored value
     /// changed". The comparison goes through `canon`, because some
@@ -1439,9 +1553,9 @@ mod tests {
     /// canonicalizes a `List` seed to a `Set` on first contact).
     fn update_checked(
         op: &dyn MeetAggrObj,
-        acc: &mut DataValue,
-        x: &DataValue,
-        canon: fn(&DataValue) -> DataValue,
+        acc: &mut MeetAccum,
+        x: &MeetAccum,
+        canon: fn(&MeetAccum) -> MeetAccum,
     ) -> bool {
         let before = acc.clone();
         let changed = op.update(acc, x).expect("meet update failed");
@@ -1453,14 +1567,14 @@ mod tests {
         changed
     }
 
-    /// `meet(a, b)` as a binary operation on values: fold `b` into a copy
-    /// of `a`, with the changed flag checked.
+    /// `meet(a, b)` as a binary operation on accumulators: fold `b` into a
+    /// copy of `a`, with the changed flag checked.
     fn alg_meet(
         op: &dyn MeetAggrObj,
-        a: &DataValue,
-        b: &DataValue,
-        canon: fn(&DataValue) -> DataValue,
-    ) -> DataValue {
+        a: &MeetAccum,
+        b: &MeetAccum,
+        canon: fn(&MeetAccum) -> MeetAccum,
+    ) -> MeetAccum {
         let mut acc = a.clone();
         update_checked(op, &mut acc, b, canon);
         acc
@@ -1468,16 +1582,19 @@ mod tests {
 
     /// Identity canonicalizer, for ops whose accumulator is already the
     /// value itself.
-    fn ident(v: &DataValue) -> DataValue {
-        v.clone()
+    fn ident(a: &MeetAccum) -> MeetAccum {
+        a.clone()
     }
 
     /// Canonicalizer for the set-valued ops, whose accumulators may be
     /// `List` or `Set` representations of the same set.
-    fn as_set(v: &DataValue) -> DataValue {
-        match v {
-            DataValue::List(l) => DataValue::Set(l.iter().cloned().collect()),
-            v => v.clone(),
+    fn as_set(a: &MeetAccum) -> MeetAccum {
+        match a {
+            MeetAccum::Empty => MeetAccum::Empty,
+            MeetAccum::Value(DataValue::List(l)) => {
+                MeetAccum::Value(DataValue::Set(l.iter().cloned().collect()))
+            }
+            MeetAccum::Value(v) => MeetAccum::Value(v.clone()),
         }
     }
 
@@ -1489,23 +1606,23 @@ mod tests {
     /// [`update_checked`].
     fn assert_semilattice_laws(
         op: &dyn MeetAggrObj,
-        samples: [&DataValue; 3],
-        canon: fn(&DataValue) -> DataValue,
+        samples: [&MeetAccum; 3],
+        canon: fn(&MeetAccum) -> MeetAccum,
         commutative: bool,
     ) {
         let [x, y, z] = samples;
         // Idempotent: meet(x, x) leaves x unchanged and must say so.
-        for v in samples {
-            let mut acc = v.clone();
-            let changed = update_checked(op, &mut acc, v, canon);
-            assert!(!changed, "meet(x, x) reported a change for x = {v:?}");
-            assert_eq!(canon(&acc), canon(v), "meet(x, x) altered x = {v:?}");
+        for a in samples {
+            let mut acc = a.clone();
+            let changed = update_checked(op, &mut acc, a, canon);
+            assert!(!changed, "meet(x, x) reported a change for x = {a:?}");
+            assert_eq!(canon(&acc), canon(a), "meet(x, x) altered x = {a:?}");
         }
         // Identity: meet(init_val, x) == x.
-        for v in samples {
+        for a in samples {
             let mut acc = op.init_val();
-            update_checked(op, &mut acc, v, canon);
-            assert_eq!(canon(&acc), canon(v), "meet(init, x) != x for x = {v:?}");
+            update_checked(op, &mut acc, a, canon);
+            assert_eq!(canon(&acc), canon(a), "meet(init, x) != x for x = {a:?}");
         }
         // Associative: meet(meet(x, y), z) == meet(x, meet(y, z)).
         let l = alg_meet(op, &alg_meet(op, x, y, canon), z, canon);
@@ -1579,24 +1696,27 @@ mod tests {
     proptest! {
         #[test]
         fn meet_laws_and_or(x in any::<bool>(), y in any::<bool>(), z in any::<bool>()) {
-            let (x, y, z) = (DataValue::from(x), DataValue::from(y), DataValue::from(z));
+            let (x, y, z) = (v(DataValue::from(x)), v(DataValue::from(y)), v(DataValue::from(z)));
             assert_semilattice_laws(&MeetAggrAnd, [&x, &y, &z], ident, true);
             assert_semilattice_laws(&MeetAggrOr, [&x, &y, &z], ident, true);
         }
 
         #[test]
         fn meet_laws_min_max(x in arb_num(), y in arb_num(), z in arb_num()) {
+            let (x, y, z) = (v(x), v(y), v(z));
             assert_semilattice_laws(&MeetAggrMin, [&x, &y, &z], ident, true);
             assert_semilattice_laws(&MeetAggrMax, [&x, &y, &z], ident, true);
         }
 
         #[test]
         fn meet_laws_choice(x in arb_value(), y in arb_value(), z in arb_value()) {
+            let (x, y, z) = (v(x), v(y), v(z));
             assert_semilattice_laws(&MeetAggrChoice, [&x, &y, &z], ident, false);
         }
 
         #[test]
         fn meet_laws_bit_and_or((x, y, z) in arb_bytes_triple()) {
+            let (x, y, z) = (v(x), v(y), v(z));
             assert_semilattice_laws(&MeetAggrBitAnd, [&x, &y, &z], ident, true);
             assert_semilattice_laws(&MeetAggrBitOr, [&x, &y, &z], ident, true);
         }
@@ -1607,6 +1727,7 @@ mod tests {
             y in arb_small_list(),
             z in arb_small_list(),
         ) {
+            let (x, y, z) = (v(x), v(y), v(z));
             assert_semilattice_laws(&MeetAggrUnion, [&x, &y, &z], as_set, true);
             assert_semilattice_laws(&MeetAggrIntersection, [&x, &y, &z], as_set, true);
         }
@@ -1617,6 +1738,7 @@ mod tests {
             y in arb_small_list(),
             z in arb_small_list(),
         ) {
+            let (x, y, z) = (v(x), v(y), v(z));
             assert_semilattice_laws(&MeetAggrShortest, [&x, &y, &z], ident, false);
         }
 
@@ -1626,6 +1748,7 @@ mod tests {
             y in arb_costed_pair(),
             z in arb_costed_pair(),
         ) {
+            let (x, y, z) = (v(x), v(y), v(z));
             assert_semilattice_laws(&MeetAggrMinCost, [&x, &y, &z], ident, false);
         }
     }
@@ -1634,30 +1757,30 @@ mod tests {
     /// `true` iff the stored value changed — in both directions.
     #[test]
     fn and_or_changed_flag() {
-        let t = DataValue::from(true);
-        let f = DataValue::from(false);
+        let t = v(DataValue::from(true));
+        let f = v(DataValue::from(false));
 
         // and: true & false changes the value; the flag must say so.
-        let mut v = t.clone();
-        assert!(MeetAggrAnd.update(&mut v, &f).unwrap());
-        assert_eq!(v, f);
+        let mut acc = t.clone();
+        assert!(MeetAggrAnd.update(&mut acc, &f).unwrap());
+        assert_eq!(acc, f);
         // and: false & true leaves it false; the flag must say unchanged.
-        assert!(!MeetAggrAnd.update(&mut v, &t).unwrap());
-        assert_eq!(v, f);
+        assert!(!MeetAggrAnd.update(&mut acc, &t).unwrap());
+        assert_eq!(acc, f);
         // and: true & true is unchanged.
-        let mut v = t.clone();
-        assert!(!MeetAggrAnd.update(&mut v, &t).unwrap());
+        let mut acc = t.clone();
+        assert!(!MeetAggrAnd.update(&mut acc, &t).unwrap());
 
         // or: false | true changes the value; the flag must say so.
-        let mut v = f.clone();
-        assert!(MeetAggrOr.update(&mut v, &t).unwrap());
-        assert_eq!(v, t);
+        let mut acc = f.clone();
+        assert!(MeetAggrOr.update(&mut acc, &t).unwrap());
+        assert_eq!(acc, t);
         // or: true | false leaves it true; the flag must say unchanged.
-        assert!(!MeetAggrOr.update(&mut v, &f).unwrap());
-        assert_eq!(v, t);
+        assert!(!MeetAggrOr.update(&mut acc, &f).unwrap());
+        assert_eq!(acc, t);
         // or: false | false is unchanged.
-        let mut v = f.clone();
-        assert!(!MeetAggrOr.update(&mut v, &f).unwrap());
+        let mut acc = f.clone();
+        assert!(!MeetAggrOr.update(&mut acc, &f).unwrap());
     }
 
     /// Regression: the bit-op meets must report the changed flag exactly.
@@ -1665,27 +1788,27 @@ mod tests {
     /// the fold left the accumulator unchanged.
     #[test]
     fn bit_meet_changed_flag_exact() {
-        let zero = DataValue::Bytes(vec![0x00]);
-        let ones = DataValue::Bytes(vec![0xff]);
-        let some = DataValue::Bytes(vec![0x0f]);
+        let zero = v(DataValue::Bytes(vec![0x00]));
+        let ones = v(DataValue::Bytes(vec![0xff]));
+        let some = v(DataValue::Bytes(vec![0x0f]));
 
         // and: 0x00 & 0x0f leaves 0x00 — the flag must say unchanged.
-        let mut v = zero.clone();
-        assert!(!MeetAggrBitAnd.update(&mut v, &some).unwrap());
-        assert_eq!(v, zero);
+        let mut acc = zero.clone();
+        assert!(!MeetAggrBitAnd.update(&mut acc, &some).unwrap());
+        assert_eq!(acc, zero);
         // and: 0xff & 0x0f changes the value to 0x0f.
-        let mut v = ones.clone();
-        assert!(MeetAggrBitAnd.update(&mut v, &some).unwrap());
-        assert_eq!(v, some);
+        let mut acc = ones.clone();
+        assert!(MeetAggrBitAnd.update(&mut acc, &some).unwrap());
+        assert_eq!(acc, some);
 
         // or: 0xff | 0x0f leaves 0xff — the flag must say unchanged.
-        let mut v = ones.clone();
-        assert!(!MeetAggrBitOr.update(&mut v, &some).unwrap());
-        assert_eq!(v, ones);
+        let mut acc = ones.clone();
+        assert!(!MeetAggrBitOr.update(&mut acc, &some).unwrap());
+        assert_eq!(acc, ones);
         // or: 0x00 | 0x0f changes the value to 0x0f.
-        let mut v = zero.clone();
-        assert!(MeetAggrBitOr.update(&mut v, &some).unwrap());
-        assert_eq!(v, some);
+        let mut acc = zero.clone();
+        assert!(MeetAggrBitOr.update(&mut acc, &some).unwrap());
+        assert_eq!(acc, some);
     }
 
     /// Regression: min/max must compare exactly. Upstream compared through
@@ -1701,6 +1824,7 @@ mod tests {
                 DataValue::from((1i64 << 53) + 1),
             ),
         ] {
+            let (lo, hi) = (v(lo), v(hi));
             // Meet forms, both argument orders.
             let mut acc = lo.clone();
             assert!(!MeetAggrMin.update(&mut acc, &hi).unwrap());
@@ -1719,12 +1843,12 @@ mod tests {
             for order in [[&lo, &hi], [&hi, &lo]] {
                 let mut min = AggrMin::default();
                 let mut max = AggrMax::default();
-                for v in order {
-                    min.set(v).unwrap();
-                    max.set(v).unwrap();
+                for a in order {
+                    min.set(&a.to_value()).unwrap();
+                    max.set(&a.to_value()).unwrap();
                 }
-                assert_eq!(min.get().unwrap(), lo);
-                assert_eq!(max.get().unwrap(), hi);
+                assert_eq!(min.get().unwrap(), lo.to_value());
+                assert_eq!(max.get().unwrap(), hi.to_value());
             }
         }
 
@@ -1732,8 +1856,8 @@ mod tests {
         // ones: `2^53 + 1` (Int, exact) is genuinely GREATER than
         // `2^53.0` (Float), where the old lossy `i as f64` comparison
         // would have collided them. So min picks the float, max the int.
-        let int_val = DataValue::from((1i64 << 53) + 1);
-        let float_val = DataValue::from((1i64 << 53) as f64);
+        let int_val = v(DataValue::from((1i64 << 53) + 1));
+        let float_val = v(DataValue::from((1i64 << 53) as f64));
         let mut acc = int_val.clone();
         assert!(MeetAggrMin.update(&mut acc, &float_val).unwrap());
         assert_eq!(acc, float_val);
@@ -1901,14 +2025,16 @@ mod tests {
     /// oracles pin which operation actually runs, both directions.
     #[test]
     fn set_ops_compute_the_right_operation() {
-        let two = |a: i64, b: i64| DataValue::List(vec![DataValue::from(a), DataValue::from(b)]);
+        let two =
+            |a: i64, b: i64| v(DataValue::List(vec![DataValue::from(a), DataValue::from(b)]));
         let meet = MeetAggrIntersection;
         let mut acc = meet.init_val();
+        assert!(matches!(acc, MeetAccum::Empty));
         meet.update(&mut acc, &two(1, 2)).unwrap();
         meet.update(&mut acc, &two(2, 3)).unwrap();
         assert_eq!(
             acc,
-            DataValue::Set([DataValue::from(2)].into_iter().collect()),
+            v(DataValue::Set([DataValue::from(2)].into_iter().collect())),
             "intersection of {{1,2}} and {{2,3}} must be {{2}}"
         );
         let meet = MeetAggrUnion;
@@ -1917,12 +2043,56 @@ mod tests {
         meet.update(&mut acc, &two(2, 3)).unwrap();
         assert_eq!(
             acc,
-            DataValue::Set(
+            v(DataValue::Set(
                 [DataValue::from(1), DataValue::from(2), DataValue::from(3)]
                     .into_iter()
                     .collect()
-            ),
+            )),
             "union of {{1,2}} and {{2,3}} must be {{1,2,3}}"
         );
+    }
+
+    /// Closure: `DataValue::Null` is ordinary set-element data under meet
+    /// intersection — it round-trips through the fold. Empty is only
+    /// [`MeetAccum::Empty`], never Null-as-sentinel.
+    #[test]
+    fn meet_intersection_null_as_data_round_trips() {
+        let meet = MeetAggrIntersection;
+        assert!(matches!(meet.init_val(), MeetAccum::Empty));
+
+        let with_null = |elems: &[DataValue]| v(DataValue::List(elems.to_vec()));
+        let mut acc = meet.init_val();
+        meet.update(
+            &mut acc,
+            &with_null(&[DataValue::Null, DataValue::from(1), DataValue::from(2)]),
+        )
+        .unwrap();
+        meet.update(
+            &mut acc,
+            &with_null(&[DataValue::Null, DataValue::from(2), DataValue::from(3)]),
+        )
+        .unwrap();
+        assert_eq!(
+            acc,
+            v(DataValue::Set(
+                [DataValue::Null, DataValue::from(2)].into_iter().collect()
+            )),
+            "Null as a set element must survive meet intersection"
+        );
+
+        // Null alone as a singleton set is data, not identity: folding it
+        // into Empty adopts Value([Null]), and Empty on the right is a no-op.
+        let mut acc = meet.init_val();
+        assert!(
+            meet.update(&mut acc, &with_null(&[DataValue::Null]))
+                .unwrap()
+        );
+        assert_eq!(
+            acc,
+            v(DataValue::List(vec![DataValue::Null])),
+            "adopting [Null] from Empty must yield Value, not stay Empty"
+        );
+        assert!(!meet.update(&mut acc, &MeetAccum::Empty).unwrap());
+        assert_eq!(acc, v(DataValue::List(vec![DataValue::Null])));
     }
 }

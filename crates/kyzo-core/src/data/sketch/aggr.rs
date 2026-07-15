@@ -30,7 +30,7 @@
 
 use miette::{Result, bail, ensure, miette};
 
-use crate::data::aggr::{AggrKind, Aggregation, MeetAggrObj, NormalAggrObj};
+use crate::data::aggr::{AggrKind, Aggregation, MeetAccum, MeetAggrObj, NormalAggrObj};
 use crate::data::sketch::count_min::CountMinSketch;
 use crate::data::sketch::hll::HyperLogLog;
 use crate::data::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
@@ -103,15 +103,25 @@ fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
 struct MeetAggrHllUnion;
 
 impl MeetAggrObj for MeetAggrHllUnion {
-    fn init_val(&self) -> DataValue {
-        HyperLogLog::default_precision().to_value()
+    fn init_val(&self) -> MeetAccum {
+        MeetAccum::Value(HyperLogLog::default_precision().to_value())
     }
-    fn update(&self, left: &mut DataValue, right: &DataValue) -> Result<bool> {
-        let mut l = as_hll(left)?;
-        let r = as_hll(right)?;
+    fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
+        if matches!(right, MeetAccum::Empty) {
+            return Ok(false);
+        }
+        if matches!(left, MeetAccum::Empty) {
+            *left = right.clone();
+            return Ok(true);
+        }
+        let (MeetAccum::Value(left_v), MeetAccum::Value(right_v)) = (left, right) else {
+            unreachable!("Empty handled above");
+        };
+        let mut l = as_hll(left_v)?;
+        let r = as_hll(right_v)?;
         let changed = l.merge(&r)?;
         if changed {
-            *left = l.to_value();
+            *left_v = l.to_value();
         }
         Ok(changed)
     }
@@ -328,12 +338,12 @@ mod tests {
             }
             h.to_value()
         };
-        let x = mk(0, 3000);
-        let y = mk(1000, 5000);
-        let z = mk(4000, 6000);
+        let x = MeetAccum::Value(mk(0, 3000));
+        let y = MeetAccum::Value(mk(1000, 5000));
+        let z = MeetAccum::Value(mk(4000, 6000));
 
-        // meet as a binary op on values.
-        let meet = |a: &DataValue, b: &DataValue| {
+        // meet as a binary op on accumulators.
+        let meet = |a: &MeetAccum, b: &MeetAccum| {
             let mut acc = a.clone();
             op.update(&mut acc, b).unwrap();
             acc
@@ -374,11 +384,16 @@ mod tests {
         let meet = AGGR_HLL_UNION.meet_op().unwrap();
         let mut acc = meet.init_val();
         for s in &sketches {
-            meet.update(&mut acc, s).unwrap();
+            meet.update(&mut acc, &MeetAccum::Value(s.clone()))
+                .unwrap();
         }
 
         let normal_out = run_normal(AGGR_HLL_UNION.normal_op(&[]).unwrap(), &sketches);
-        assert_eq!(acc, normal_out, "meet and normal folds disagree");
+        assert_eq!(
+            acc.to_value(),
+            normal_out,
+            "meet and normal folds disagree"
+        );
     }
 
     /// `hll_union` is registered as a meet; `hll`, `count_min`, `tdigest`,

@@ -1646,19 +1646,8 @@ fn initial_meet_eval<R: RuleBody>(
         budget.check_interrupt()?;
     }
     if out.is_empty() && rule_set.aggr.iter().all(Option::is_some) {
-        let identity: Tuple = rule_set
-            .aggr
-            .iter()
-            .flatten()
-            .map(|(aggregation, _)| -> Result<DataValue> {
-                let op = aggregation.meet_op().ok_or(EvalInvariantError(
-                    "a Meet-classified head holds a non-meet aggregation",
-                ))?;
-                Ok(op.init_val())
-            })
-            .collect::<Result<_>>()?;
         // No pending entry: the identity row's witness is `None` by design.
-        out.meet_put(identity.as_slice())?;
+        out.seed_identity()?;
     }
     Ok((false, out.wrap(), pending))
 }
