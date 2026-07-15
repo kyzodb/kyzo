@@ -5,7 +5,6 @@ tools: Read, Edit, Write, Bash, Grep, Glob, Task
 disallowedTools: CallMcpTool to project-0-kyzo-board (all board mutate/read — board denied)
 skills:
   - kyzo-plan-task-completion-request
-model: sonnet
 ---
 
 # Development Task

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 300" width="860" height="300" font-family="ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" role="img" aria-label="Contrast: naive post-filter vector search returns empty at low selectivity; KyzoDB filtered HNSW returns min of k and matches.">
+  <rect x="1" y="1" width="858" height="298" rx="3" fill="#0f1713" stroke="#26362d"/>
+  <rect x="1" y="1" width="858" height="34" rx="3" fill="#161d18"/>
+  <rect x="1" y="30" width="858" height="5" fill="#161d18"/>
+  <circle cx="22" cy="18" r="5.5" fill="#9c5342"/>
+  <circle cx="41" cy="18" r="5.5" fill="#d6ca8a"/>
+  <circle cx="60" cy="18" r="5.5" fill="#3f6b50"/>
+  <text x="430" y="22" font-size="11.5" fill="#6d8074" text-anchor="middle">kyzo · filtered ANN: k counts matches - not candidates you later throw away</text>
+
+  <!-- left panel -->
+  <rect x="20" y="48" width="400" height="200" rx="3" fill="#141c18" stroke="#9c5342"/>
+  <text x="220" y="72" font-size="12" fill="#9c5342" text-anchor="middle" font-weight="600">naive stack (post-filter)</text>
+  <text x="36" y="100" font-size="11" fill="#7c8f83" xml:space="preserve">1. take k=5 nearest</text>
+  <text x="36" y="120" font-size="11" fill="#7c8f83" xml:space="preserve">2. drop live == false</text>
+  <text x="36" y="140" font-size="11" fill="#7c8f83" xml:space="preserve">3. hope something survives</text>
+  <text x="36" y="180" font-size="12" fill="#c9d6cc" xml:space="preserve">rows:  (empty)</text>
+  <text x="36" y="210" font-size="11" fill="#9c5342" xml:space="preserve">top-k filled with live hits;</text>
+  <text x="36" y="228" font-size="11" fill="#9c5342" xml:space="preserve">filter wipes the slate</text>
+
+  <!-- right panel -->
+  <rect x="440" y="48" width="400" height="200" rx="3" fill="#141c18" stroke="#2F7E52"/>
+  <text x="640" y="72" font-size="12" fill="#5fc492" text-anchor="middle" font-weight="600">KyzoDB (filter in the search)</text>
+  <text x="456" y="100" font-size="11" fill="#7c8f83" xml:space="preserve">~incident:emb{id, live |</text>
+  <text x="456" y="118" font-size="11" fill="#7c8f83" xml:space="preserve">  query: vec($v), k: 5,</text>
+  <text x="456" y="136" font-size="11" fill="#7c8f83" xml:space="preserve">  filter: live == false}</text>
+  <text x="456" y="170" font-size="11" fill="#c9d6cc" xml:space="preserve"> id       | dist</text>
+  <text x="456" y="186" font-size="11" fill="#35443b" xml:space="preserve">----------+-------</text>
+  <text x="456" y="206" font-size="11" fill="#c9d6cc" xml:space="preserve"> INC-old  | 0.0008</text>
+  <text x="456" y="230" font-size="11" fill="#5fc492" xml:space="preserve">min(k, matches) = 1</text>
+
+  <text x="22" y="278" font-size="11" fill="#6d8074" xml:space="preserve">same store, same k, same selectivity - different contract. empty-k is a wrong answer, not bad luck.</text>
+</svg>
