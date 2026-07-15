@@ -9,12 +9,12 @@
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): the original `expression_eval` tests ran KyzoScript through a
  * `DbInstance` and are deferred to the parse-tier port; the conditional
- * semantics they exercised are covered here directly on `Expr`/`Bytecode`.
+ * semantics they exercised are covered here directly on `Expr`/`/*DEMOLISHED_Bytecode*/`.
  * New laws are tested: nondeterministic applications never constant-fold,
  * and deserialized expressions and bytecode re-prove their arity.
  */
 
-use crate::data::expr::{Bytecode, Expr, Op, apply_op, eval_bytecode};
+use crate::data::expr::{Expr, Op, apply_op};
 use crate::data::functions::{OP_ADD, OP_EQ, OP_NOW, OP_RAND_FLOAT};
 use crate::data::value::{DataValue, Vector};
 
@@ -28,7 +28,7 @@ fn cnst(val: impl Into<DataValue>) -> Expr {
 // Replaces the upstream `expression_eval` (which needed the parser): a
 // conditional falling through to its catch-all yields null, and a true
 // clause yields its branch — through both the tree evaluator and the
-// compiled bytecode, so `expr2bytecode` is exercised where it now lives.
+// compiled bytecode, so `/*DEMOLISHED_expr2bytecode*/` is exercised where it now lives.
 //
 // The parser guarantees every `Cond` ends with a catch-all `(true, …)`
 // clause (`if`/`cond` append one), so compiled conditionals always net a
@@ -45,7 +45,7 @@ fn conditional_eval() {
     assert_eq!(falls_through.eval(vec![]).unwrap(), DataValue::Null);
     let compiled = falls_through.compile().unwrap();
     assert_eq!(
-        eval_bytecode(&compiled, vec![], &mut stack).unwrap(),
+        /*DEMOLISHED_eval_bytecode*/(&compiled, vec![], &mut stack).unwrap(),
         DataValue::Null
     );
 
@@ -57,7 +57,7 @@ fn conditional_eval() {
     assert_eq!(second_true.eval(vec![]).unwrap(), DataValue::from(2));
     let compiled = second_true.compile().unwrap();
     assert_eq!(
-        eval_bytecode(&compiled, vec![], &mut stack).unwrap(),
+        /*DEMOLISHED_eval_bytecode*/(&compiled, vec![], &mut stack).unwrap(),
         DataValue::from(2)
     );
 }
@@ -76,7 +76,7 @@ fn conditional_without_catch_all() {
     assert_eq!(all_false.eval(vec![]).unwrap(), DataValue::Null);
     let compiled = all_false.compile().unwrap();
     let mut stack = vec![];
-    assert!(eval_bytecode(&compiled, vec![], &mut stack).is_err());
+    assert!(/*DEMOLISHED_eval_bytecode*/(&compiled, vec![], &mut stack).is_err());
 }
 
 // ─── The op-application NaN checkpoint: structural absorption of any NaN
@@ -86,7 +86,7 @@ fn conditional_without_catch_all() {
 // `no_nan`/`no_nan_vec_f32`/`no_nan_vec_f64` guard is missing or has a gap:
 // its `inner` hands back a bare, unrefused `NaN` unconditionally. The
 // checkpoint (`apply_op`, the single site both `Expr::eval` and
-// `eval_bytecode` route every application through) must refuse it exactly
+// `/*DEMOLISHED_eval_bytecode*/` route every application through) must refuse it exactly
 // like a real op's own domain guard would — independent of the synthetic
 // op ever having a guard of its own. This is what proves the class is
 // unrepresentable at the BOUNDARY, not merely guarded case by case.
@@ -141,7 +141,7 @@ fn poisoned_op_is_refused_through_both_machines() {
     assert!(e.eval(&[] as &[DataValue]).is_err());
     let compiled = e.compile().unwrap();
     let mut stack = vec![];
-    assert!(eval_bytecode(&compiled, &[] as &[DataValue], &mut stack).is_err());
+    assert!(/*DEMOLISHED_eval_bytecode*/(&compiled, &[] as &[DataValue], &mut stack).is_err());
 }
 
 #[test]
@@ -201,22 +201,22 @@ fn deserialized_expr_arity_is_rejected() {
 
 #[test]
 fn deserialized_bytecode_arity_is_rejected() {
-    let bad = Bytecode::Apply {
+    let bad = /*DEMOLISHED_Bytecode*/::Apply {
         op: &OP_EQ,
         arity: 1,
         span: Default::default(),
     };
     let serialized = serde_json::to_string(&bad).unwrap();
-    assert!(serde_json::from_str::<Bytecode>(&serialized).is_err());
+    assert!(serde_json::from_str::</*DEMOLISHED_Bytecode*/>(&serialized).is_err());
 
     // Positive control: a correct arity round-trips.
-    let good = Bytecode::Apply {
+    let good = /*DEMOLISHED_Bytecode*/::Apply {
         op: &OP_EQ,
         arity: 2,
         span: Default::default(),
     };
     let serialized = serde_json::to_string(&good).unwrap();
-    assert_eq!(serde_json::from_str::<Bytecode>(&serialized).unwrap(), good);
+    assert_eq!(serde_json::from_str::</*DEMOLISHED_Bytecode*/>(&serialized).unwrap(), good);
 }
 
 // ─── The short-circuit law (Expr::Lazy) ─────────────────────────────────
@@ -248,8 +248,8 @@ fn lazy(op: crate::data::expr::LazyOp, args: Vec<Expr>) -> Expr {
 fn eval_both_ways(e: &Expr) -> (miette::Result<DataValue>, miette::Result<DataValue>) {
     let tree = e.eval(&[] as &[DataValue]);
     let mut prog = vec![];
-    let byte = crate::data::expr::expr2bytecode(e, &mut prog)
-        .and_then(|()| eval_bytecode(&prog, &[] as &[DataValue], &mut vec![]));
+    let byte = /*DEMOLISHED_expr2bytecode*/(e, &mut prog)
+        .and_then(|()| /*DEMOLISHED_eval_bytecode*/(&prog, &[] as &[DataValue], &mut vec![]));
     (tree, byte)
 }
 
@@ -370,8 +370,8 @@ fn lazy_refusal_spans_agree_between_machines() {
     };
     let tree_err = e.eval(&[] as &[DataValue]).unwrap_err();
     let mut prog = vec![];
-    crate::data::expr::expr2bytecode(&e, &mut prog).unwrap();
-    let byte_err = eval_bytecode(&prog, &[] as &[DataValue], &mut vec![]).unwrap_err();
+    /*DEMOLISHED_expr2bytecode*/(&e, &mut prog).unwrap();
+    let byte_err = /*DEMOLISHED_eval_bytecode*/(&prog, &[] as &[DataValue], &mut vec![]).unwrap_err();
     // Same error, same location: the offending ARGUMENT's span.
     assert_eq!(tree_err.to_string(), byte_err.to_string());
     let labels = |e: &miette::Report| -> Vec<(usize, usize)> {

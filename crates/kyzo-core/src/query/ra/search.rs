@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::RelAlgebra;
-use crate::data::expr::{Bytecode, eval_bytecode};
+/* DEMOLISHED bytecode import */
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::value::DataValue;
@@ -43,8 +43,8 @@ use thiserror::Error;
 pub(crate) struct SearchRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) atom: crate::query::search::SearchAtom,
-    pub(crate) query_bytecode: Vec<Bytecode>,
-    pub(crate) filter_bytecode: Option<(Vec<Bytecode>, SourceSpan)>,
+    pub(crate) query_bytecode: Vec</*DEMOLISHED_Bytecode*/>,
+    pub(crate) filter_bytecode: Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
 }
 
 /// A search query expression evaluated to a value the engine cannot accept.
@@ -113,7 +113,7 @@ impl SearchRA {
 
         let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {
             cancel.check()?;
-            let q = eval_bytecode(&query_code, row, &mut q_stack)?;
+            let q = /*DEMOLISHED_eval_bytecode*/(&query_code, row, &mut q_stack)?;
             Ok(match cfg {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {

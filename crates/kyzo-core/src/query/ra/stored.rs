@@ -18,7 +18,7 @@
 
 use super::{StoredRowTooShortError, TupleIter};
 use crate::Tuple;
-use crate::data::expr::{Bytecode, Expr, compute_bounds};
+use crate::data::expr::{Expr, compute_bounds};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{AsOf, DataValue, ScanBound};
@@ -47,7 +47,7 @@ pub(crate) struct StoredRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     pub(crate) span: SourceSpan,
 }
 
@@ -338,7 +338,7 @@ pub(crate) struct StoredWithValidityRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     pub(crate) as_of: AsOf,
     pub(crate) span: SourceSpan,
 }

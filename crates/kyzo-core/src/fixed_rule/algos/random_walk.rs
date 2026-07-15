@@ -37,7 +37,7 @@ use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode};
+use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
@@ -111,7 +111,7 @@ impl FixedRule for RandomWalk {
                             .map(|t| -> Result<f64> {
                                 let mut cand = current_tuple.clone();
                                 cand.extend(t.iter().cloned());
-                                Ok(match eval_bytecode(weight_expr, &cand, &mut stack)? {
+                                Ok(match /*DEMOLISHED_eval_bytecode*/(weight_expr, &cand, &mut stack)? {
                                     DataValue::Num(n) => {
                                         let f = n.to_f64();
                                         ensure!(

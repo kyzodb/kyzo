@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BatchFilter, PlanInvariantError, RelAlgebra};
-use crate::data::expr::{Bytecode, Expr};
+use crate::data::expr::Expr;
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -101,7 +101,7 @@ impl ReorderRA {
 pub(crate) struct FilteredRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,
 }
@@ -168,7 +168,7 @@ pub(crate) struct UnificationRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) binding: Symbol,
     pub(crate) expr: Expr,
-    pub(crate) expr_bytecode: Vec<Bytecode>,
+    pub(crate) expr_bytecode: Vec</*DEMOLISHED_Bytecode*/>,
     pub(crate) is_multi: bool,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,

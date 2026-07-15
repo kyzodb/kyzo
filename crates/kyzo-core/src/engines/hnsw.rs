@@ -203,7 +203,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::SmartString;
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, eval_bytecode_pred};
+/* DEMOLISHED bytecode import */
 use crate::data::relation::VecElementType;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -1701,12 +1701,12 @@ pub(crate) fn hnsw_put<T: WriteTx>(
     manifest: &HnswIndexManifest,
     base: &RelationHandle,
     idx: &RelationHandle,
-    filter: Option<&[Bytecode]>,
+    filter: Option<&[/*DEMOLISHED_Bytecode*/]>,
     stack: &mut Vec<DataValue>,
     tuple: &[DataValue],
 ) -> Result<bool> {
     if let Some(code) = filter
-        && !eval_bytecode_pred(code, tuple, stack, SourceSpan::default())?
+        && !/*DEMOLISHED_eval_bytecode_pred*/(code, tuple, stack, SourceSpan::default())?
     {
         hnsw_remove(tx, base, idx, tuple)?;
         return Ok(false);
@@ -1875,7 +1875,7 @@ pub(crate) fn hnsw_knn(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter_bytecode: &Option<(Vec<Bytecode>, SourceSpan)>,
+    filter_bytecode: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     stack: &mut Vec<DataValue>,
     cancel: &crate::fixed_rule::CancelFlag,
 ) -> Result<Vec<Tuple>> {
@@ -2217,7 +2217,7 @@ fn admit_candidate(
     params: &HnswKnnParams,
     cand: &VectorId,
     distance: f64,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
 ) -> Result<Option<Tuple>> {
     if let Some(r) = params.radius
@@ -2226,7 +2226,7 @@ fn admit_candidate(
         return Ok(None);
     }
     let cand_tuple = build_cand_tuple(tx, base, idx, params, cand, distance)?;
-    if eval_bytecode_pred(&filter.0, &cand_tuple, stack, filter.1)? {
+    if /*DEMOLISHED_eval_bytecode_pred*/(&filter.0, &cand_tuple, stack, filter.1)? {
         Ok(Some(cand_tuple))
     } else {
         Ok(None)
@@ -2277,7 +2277,7 @@ fn select_strategy(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
     cache: &mut VectorCache<'_>,
 ) -> Result<SearchPlan> {
@@ -2342,7 +2342,7 @@ fn scan_filtered(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
@@ -2384,7 +2384,7 @@ fn graph_search_layer0(
     idx: &RelationHandle,
     seeds: &[VectorId],
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
     cache: &mut VectorCache<'_>,
     visit_cap: usize,
@@ -2473,7 +2473,7 @@ fn graph_filtered(
     bottom_layer: i64,
     ef2: usize,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
@@ -2507,7 +2507,7 @@ fn hnsw_knn_filtered(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
 ) -> Result<Vec<Tuple>> {
     if params.k == 0 {
@@ -2561,7 +2561,7 @@ fn hnsw_knn_selected_plan(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
 ) -> Result<Option<SearchPlan>> {
     let q = IndexVec::admit(q, manifest)?;
@@ -2586,7 +2586,7 @@ fn hnsw_knn_forced(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
+    filter: &(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan),
     stack: &mut Vec<DataValue>,
     plan: SearchPlan,
     fallback: bool,

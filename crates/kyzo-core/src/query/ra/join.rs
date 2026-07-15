@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
-use crate::data::expr::{Bytecode, eval_bytecode_pred};
+/* DEMOLISHED bytecode import */
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -45,13 +45,13 @@ pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
 }
 
 pub(crate) fn filter_iter(
-    filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
+    filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     it: impl Iterator<Item = Result<Tuple>>,
 ) -> impl Iterator<Item = Result<Tuple>> {
     let mut stack = vec![];
     it.filter_map_ok(move |t| -> Option<Result<Tuple>> {
         for (p, span) in filters_bytecodes.iter() {
-            match eval_bytecode_pred(p, &t, &mut stack, *span) {
+            match /*DEMOLISHED_eval_bytecode_pred*/(p, &t, &mut stack, *span) {
                 Ok(false) => return None,
                 Err(e) => return Some(Err(e)),
                 Ok(true) => {}
@@ -155,7 +155,7 @@ pub(crate) struct PrefixProbeBatchJoin<'a> {
     /// row-at-a-time path's per-tuple closure would yield before the left
     /// prefix is appended.
     pub(crate) probe: Box<dyn FnMut(&[DataValue]) -> Result<TupleIter<'a>> + 'a>,
-    pub(crate) filters_bytecodes: &'a [(Vec<Bytecode>, SourceSpan)],
+    pub(crate) filters_bytecodes: &'a [(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)],
     pub(crate) eliminate_indices: BTreeSet<usize>,
     /// The left batch currently being probed, and the cursor into it.
     pub(crate) cur: Option<(Batch, usize)>,
@@ -230,7 +230,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     Some(Ok(found)) => {
                         let mut keep = true;
                         for (p, span) in self.filters_bytecodes.iter() {
-                            match eval_bytecode_pred(p, &found, &mut self.stack, *span) {
+                            match /*DEMOLISHED_eval_bytecode_pred*/(p, &found, &mut self.stack, *span) {
                                 Ok(true) => {}
                                 Ok(false) => {
                                     keep = false;

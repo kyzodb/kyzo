@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode_pred};
+use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
@@ -89,7 +89,7 @@ impl FixedRule for Dfs {
                         })??
                 };
 
-                if eval_bytecode_pred(&condition_bytecode, &cand_tuple, &mut stack, condition_span)?
+                if /*DEMOLISHED_eval_bytecode_pred*/(&condition_bytecode, &cand_tuple, &mut stack, condition_span)?
                 {
                     found.push((starting_node.clone(), candidate.clone()));
                     if found.len() >= limit {

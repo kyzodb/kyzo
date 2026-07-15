@@ -97,7 +97,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
+/* DEMOLISHED bytecode import */
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
@@ -211,11 +211,11 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
 /// Evaluate the extractor and return the document text, or `None` when the
 /// extraction is `Null` (a row with no text is simply not indexed).
 fn extract_text(
-    extractor: &[Bytecode],
+    extractor: &[/*DEMOLISHED_Bytecode*/],
     tuple: &[DataValue],
     stack: &mut Vec<DataValue>,
 ) -> Result<Option<String>> {
-    match eval_bytecode(extractor, tuple, stack)? {
+    match /*DEMOLISHED_eval_bytecode*/(extractor, tuple, stack)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
         other => bail!(FtsExtractorType {
@@ -247,7 +247,7 @@ fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
 pub(crate) fn fts_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[Bytecode],
+    extractor: &[/*DEMOLISHED_Bytecode*/],
     stack: &mut Vec<DataValue>,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
@@ -311,7 +311,7 @@ pub(crate) fn fts_put<T: WriteTx>(
 pub(crate) fn fts_del<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[Bytecode],
+    extractor: &[/*DEMOLISHED_Bytecode*/],
     stack: &mut Vec<DataValue>,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
@@ -629,7 +629,7 @@ pub(crate) fn fts_search(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &FtsSearchParams,
-    filter_code: &Option<(Vec<Bytecode>, SourceSpan)>,
+    filter_code: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     stack: &mut Vec<DataValue>,
     tokenizer: &TextAnalyzer,
     n_total: usize,
@@ -678,7 +678,7 @@ pub(crate) fn fts_search(
             cand.push(DataValue::from(score));
         }
         if let Some((code, span)) = filter_code
-            && !eval_bytecode_pred(code, &cand, stack, *span)?
+            && !/*DEMOLISHED_eval_bytecode_pred*/(code, &cand, stack, *span)?
         {
             continue;
         }
@@ -756,8 +756,8 @@ mod tests {
     }
 
     /// The compiled extractor: project the text column (position 1).
-    fn extractor() -> Vec<Bytecode> {
-        vec![Bytecode::Binding {
+    fn extractor() -> Vec</*DEMOLISHED_Bytecode*/> {
+        vec![/*DEMOLISHED_Bytecode*/::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
             tuple_pos: Some(1),
         }]
@@ -767,7 +767,7 @@ mod tests {
         base: RelationHandle,
         idx: RelationHandle,
         analyzer: TextAnalyzer,
-        extractor: Vec<Bytecode>,
+        extractor: Vec</*DEMOLISHED_Bytecode*/>,
     }
 
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
@@ -1047,7 +1047,7 @@ mod tests {
         .unwrap();
         let a = analyzer();
         // Extractor projects the INT key column (position 0): not a string.
-        let bad_extractor = vec![Bytecode::Binding {
+        let bad_extractor = vec![/*DEMOLISHED_Bytecode*/::Binding {
             var: Symbol::new("k", SourceSpan(0, 0)),
             tuple_pos: Some(0),
         }];
@@ -1210,7 +1210,7 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let mut stack = vec![];
         // Always-true filter: the constant `true`.
-        let filter = vec![Bytecode::Const {
+        let filter = vec![/*DEMOLISHED_Bytecode*/::Const {
             val: DataValue::from(true),
             span: SourceSpan(0, 0),
         }];

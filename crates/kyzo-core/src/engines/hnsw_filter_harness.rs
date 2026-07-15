@@ -236,59 +236,59 @@ impl FilterSpec {
 
     /// Compiled bytecode over the ENGINE's appended output row. Binding
     /// `tuple_pos = 0` is the key column `k`, at position 0 (base keys first).
-    fn bytecode(&self) -> (Vec<Bytecode>, SourceSpan) {
+    fn bytecode(&self) -> (Vec</*DEMOLISHED_Bytecode*/>, SourceSpan) {
         let span = SourceSpan(0, 0);
         let k = Symbol::new("k", span);
         let code = match *self {
             FilterSpec::LessThan { threshold } => vec![
-                Bytecode::Binding {
+                /*DEMOLISHED_Bytecode*/::Binding {
                     var: k,
                     tuple_pos: Some(0),
                 },
-                Bytecode::Const {
+                /*DEMOLISHED_Bytecode*/::Const {
                     val: DataValue::from(threshold),
                     span,
                 },
-                Bytecode::Apply {
+                /*DEMOLISHED_Bytecode*/::Apply {
                     op: &OP_LT,
                     arity: 2,
                     span,
                 },
             ],
             FilterSpec::ModLessThan { modulus, accept } => vec![
-                Bytecode::Binding {
+                /*DEMOLISHED_Bytecode*/::Binding {
                     var: k,
                     tuple_pos: Some(0),
                 },
-                Bytecode::Const {
+                /*DEMOLISHED_Bytecode*/::Const {
                     val: DataValue::from(modulus),
                     span,
                 },
-                Bytecode::Apply {
+                /*DEMOLISHED_Bytecode*/::Apply {
                     op: &OP_MOD,
                     arity: 2,
                     span,
                 },
-                Bytecode::Const {
+                /*DEMOLISHED_Bytecode*/::Const {
                     val: DataValue::from(accept),
                     span,
                 },
-                Bytecode::Apply {
+                /*DEMOLISHED_Bytecode*/::Apply {
                     op: &OP_LT,
                     arity: 2,
                     span,
                 },
             ],
             FilterSpec::AtLeast { threshold } => vec![
-                Bytecode::Binding {
+                /*DEMOLISHED_Bytecode*/::Binding {
                     var: k,
                     tuple_pos: Some(0),
                 },
-                Bytecode::Const {
+                /*DEMOLISHED_Bytecode*/::Const {
                     val: DataValue::from(threshold),
                     span,
                 },
-                Bytecode::Apply {
+                /*DEMOLISHED_Bytecode*/::Apply {
                     op: &OP_GE,
                     arity: 2,
                     span,

@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::epoch_store_of;
-use crate::data::expr::{Bytecode, Expr, compute_bounds, eval_bytecode_pred};
+use crate::data::expr::{Expr, compute_bounds};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -50,7 +50,7 @@ pub(crate) struct TempStoreRA {
     /// numbering, `atom_occurrences`).
     pub(crate) occurrence: AtomOccurrence,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
+    pub(crate) filters_bytecodes: Vec<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     pub(crate) span: SourceSpan,
 }
 
@@ -275,7 +275,7 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                             let found_tuple = found.into_tuple();
                             let mut keep = true;
                             for (p, span) in self.inner.filters_bytecodes.iter() {
-                                match eval_bytecode_pred(p, &found_tuple, &mut self.stack, *span) {
+                                match /*DEMOLISHED_eval_bytecode_pred*/(p, &found_tuple, &mut self.stack, *span) {
                                     Ok(true) => {}
                                     Ok(false) => {
                                         keep = false;

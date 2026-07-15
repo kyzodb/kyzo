@@ -118,7 +118,7 @@
 //! node carries its output *bindings* (`Vec<Symbol>`, one per column); at
 //! the end of compilation `fill_binding_indices_and_compile` resolves every
 //! symbol reference inside filters and unification expressions to a tuple
-//! position and compiles the expressions to [`Bytecode`]. Iteration never
+//! position and compiles the expressions to [`/*DEMOLISHED_Bytecode*/`]. Iteration never
 //! looks at a name again.
 //!
 //! The delta discipline (the seam contract of `query/eval.rs::RuleBody`):
@@ -146,7 +146,7 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, Expr, eval_bytecode_pred};
+use crate::data::expr::Expr;
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -197,7 +197,7 @@ pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 /// end-of-window bookkeeping, never a real datum.
 struct BatchFilter<'a> {
     parent: BatchIter<'a>,
-    filters: &'a [(Vec<Bytecode>, SourceSpan)],
+    filters: &'a [(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)],
     eliminate_indices: BTreeSet<usize>,
     stack: Vec<DataValue>,
 }
@@ -214,7 +214,7 @@ impl Iterator for BatchFilter<'_> {
             for t in batch.into_rows() {
                 let mut keep = true;
                 for (p, span) in self.filters.iter() {
-                    match eval_bytecode_pred(p, &t, &mut self.stack, *span) {
+                    match /*DEMOLISHED_eval_bytecode_pred*/(p, &t, &mut self.stack, *span) {
                         Ok(true) => {}
                         Ok(false) => {
                             keep = false;
@@ -311,7 +311,7 @@ pub(crate) enum RelAlgebra {
     /// Column permutation (only ever the plan root, aligning to the rule
     /// head; [`RelAlgebra::join`] refuses it as a join RHS).
     Reorder(ReorderRA),
-    /// Bytecode predicate filter.
+    /// /*DEMOLISHED_Bytecode*/ predicate filter.
     Filter(FilteredRA),
     /// Append one computed column (`binding = expr`), or one row per list
     /// element (`binding in expr`).

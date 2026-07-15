@@ -107,7 +107,7 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
-use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
+/* DEMOLISHED bytecode import */
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple, append_canonical};
@@ -570,7 +570,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
 pub(crate) fn lsh_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[Bytecode],
+    extractor: &[/*DEMOLISHED_Bytecode*/],
     stack: &mut Vec<DataValue>,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
@@ -592,7 +592,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
         let chunks = decode_inv_chunks(found, inv_idx, inv_key_part)?;
         lsh_del(tx, tuple, Some(chunks), idx, inv_idx)?;
     }
-    let to_index = eval_bytecode(extractor, tuple, stack)?;
+    let to_index = /*DEMOLISHED_eval_bytecode*/(extractor, tuple, stack)?;
     let min_hash = match &to_index {
         DataValue::Null => return Ok(()),
         DataValue::List(l) => HashValues::new(l.iter().map(element_bytes), perms),
@@ -662,7 +662,7 @@ pub(crate) fn lsh_search(
     idx: &RelationHandle,
     params: &LshSearchParams,
     stack: &mut Vec<DataValue>,
-    filter_code: &Option<(Vec<Bytecode>, SourceSpan)>,
+    filter_code: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     perms: &HashPermutations,
     tokenizer: &TextAnalyzer,
 ) -> Result<Vec<Tuple>> {
@@ -712,7 +712,7 @@ pub(crate) fn lsh_search(
             ))
         })?;
         if let Some((filter_code, span)) = filter_code
-            && !eval_bytecode_pred(filter_code, &orig_tuple, stack, *span)?
+            && !/*DEMOLISHED_eval_bytecode_pred*/(filter_code, &orig_tuple, stack, *span)?
         {
             continue;
         }
@@ -949,7 +949,7 @@ mod tests {
             )
             .unwrap();
             let tokenizer = m.tokenizer.build(&m.filters).unwrap();
-            let extractor = vec![Bytecode::Binding {
+            let extractor = vec![/*DEMOLISHED_Bytecode*/::Binding {
                 var: Symbol::new("v", SourceSpan(0, 0)),
                 tuple_pos: Some(1),
             }];
@@ -1063,7 +1063,7 @@ mod tests {
         inv: RelationHandle,
         manifest: MinHashLshIndexManifest,
         tokenizer: TextAnalyzer,
-        extractor: Vec<Bytecode>,
+        extractor: Vec</*DEMOLISHED_Bytecode*/>,
     }
 
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
@@ -1093,7 +1093,7 @@ mod tests {
         .unwrap();
         let tokenizer = manifest.tokenizer.build(&manifest.filters).unwrap();
         // The compiled extractor: project the text column (position 1).
-        let extractor = vec![Bytecode::Binding {
+        let extractor = vec![/*DEMOLISHED_Bytecode*/::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
             tuple_pos: Some(1),
         }];

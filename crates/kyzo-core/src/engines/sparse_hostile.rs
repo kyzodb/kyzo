@@ -348,7 +348,7 @@ fn k_zero_filter_path_returns_zero_rows() {
     let rtx = db.read_tx().unwrap();
     let mut stack = vec![];
     // Always-true filter: the constant `true`.
-    let filter = vec![crate::data::expr::Bytecode::Const {
+    let filter = vec![/*DEMOLISHED_Bytecode*/::Const {
         val: DataValue::from(true),
         span: SourceSpan(0, 0),
     }];

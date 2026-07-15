@@ -23,7 +23,7 @@ use itertools::Itertools;
 use miette::{Result, bail};
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode};
+use crate::data::expr::Expr;
 use crate::data::functions::OP_LIST;
 use crate::data::program::WrongFixedRuleOptionError;
 use crate::data::span::SourceSpan;
@@ -91,10 +91,10 @@ impl FixedRule for ReorderSort {
         let mut buffer = vec![];
         for tuple in in_rel.iter()? {
             let tuple = tuple?;
-            let sorter = eval_bytecode(&sort_by_bytecodes, &tuple, &mut stack)?;
+            let sorter = /*DEMOLISHED_eval_bytecode*/(&sort_by_bytecodes, &tuple, &mut stack)?;
             let mut s_tuple: Vec<_> = out_bytecods
                 .iter()
-                .map(|ex| eval_bytecode(ex, &tuple, &mut stack))
+                .map(|ex| /*DEMOLISHED_eval_bytecode*/(ex, &tuple, &mut stack))
                 .try_collect()?;
             s_tuple.push(sorter);
             buffer.push(s_tuple);

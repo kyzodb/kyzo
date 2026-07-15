@@ -30,7 +30,7 @@ pub(crate) const BATCH_ROWS: usize = 1024;
 /// [`Batch::push_with`]) — the BATCH itself is never a whole [`Tuple`] nor
 /// a per-column `Vec<DataValue>` array. Row-major matches the substrate: the
 /// engine's currency is the positional tuple, the predicate/unification VM
-/// (`eval_bytecode`) reads one `&[DataValue]` row at a time, and the batched
+/// (`/*DEMOLISHED_eval_bytecode*/`) reads one `&[DataValue]` row at a time, and the batched
 /// scan (`BatchScanFilter`) decodes raw key/value bytes through one scratch
 /// `Tuple` (inline, no heap allocation for the common arity-<=3 row) and
 /// copies its values once into the flattened buffer — no per-row `Vec` or

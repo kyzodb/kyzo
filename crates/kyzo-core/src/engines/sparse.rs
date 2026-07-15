@@ -103,7 +103,7 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, eval_bytecode_pred};
+/* DEMOLISHED bytecode import */
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple};
@@ -384,7 +384,7 @@ pub(crate) fn sparse_search(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &SparseSearchParams,
-    filter_code: &Option<(Vec<Bytecode>, SourceSpan)>,
+    filter_code: &Option<(Vec</*DEMOLISHED_Bytecode*/>, SourceSpan)>,
     stack: &mut Vec<DataValue>,
 ) -> Result<Vec<Tuple>> {
     let query = admit_sparse(query)?;
@@ -452,7 +452,7 @@ pub(crate) fn sparse_search(
             cand.push(DataValue::from(score as f64));
         }
         if let Some((code, span)) = filter_code
-            && !eval_bytecode_pred(code, &cand, stack, *span)?
+            && !/*DEMOLISHED_eval_bytecode_pred*/(code, &cand, stack, *span)?
         {
             continue;
         }
@@ -932,15 +932,15 @@ mod tests {
         let f = setup(&db, docs);
         // Filter: tag == "keep". Column layout of the candidate: [k, tag, score].
         let filter = vec![
-            Bytecode::Binding {
+            /*DEMOLISHED_Bytecode*/::Binding {
                 var: Symbol::new("tag", SourceSpan(0, 0)),
                 tuple_pos: Some(1),
             },
-            Bytecode::Const {
+            /*DEMOLISHED_Bytecode*/::Const {
                 val: DataValue::from("keep"),
                 span: SourceSpan(0, 0),
             },
-            Bytecode::Apply {
+            /*DEMOLISHED_Bytecode*/::Apply {
                 op: &crate::data::functions::OP_EQ,
                 arity: 2,
                 span: SourceSpan(0, 0),

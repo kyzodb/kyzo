@@ -1363,18 +1363,18 @@ pub(crate) enum IndexCtx {
     Hnsw {
         idx: RelationHandle,
         manifest: crate::engines::hnsw::HnswIndexManifest,
-        filter: Option<Vec<crate::data::expr::Bytecode>>,
+        filter: Option<Vec</*DEMOLISHED_Bytecode*/>>,
     },
     Fts {
         idx: RelationHandle,
-        extractor: Vec<crate::data::expr::Bytecode>,
+        extractor: Vec</*DEMOLISHED_Bytecode*/>,
         analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
     },
     Lsh {
         idx: RelationHandle,
         inv: RelationHandle,
         manifest: crate::engines::lsh::MinHashLshIndexManifest,
-        extractor: Vec<crate::data::expr::Bytecode>,
+        extractor: Vec</*DEMOLISHED_Bytecode*/>,
         analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
         perms: Arc<crate::engines::lsh::HashPermutations>,
     },
@@ -1405,7 +1405,7 @@ impl<T: WriteTx> SessionTx<T> {
     fn compile_row_expr(
         base: &RelationHandle,
         src: &str,
-    ) -> Result<Vec<crate::data::expr::Bytecode>> {
+    ) -> Result<Vec</*DEMOLISHED_Bytecode*/>> {
         let mut expr = crate::parse::parse_expressions(src, &BTreeMap::new())?;
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
         expr.compile()
@@ -1417,7 +1417,7 @@ impl<T: WriteTx> SessionTx<T> {
     fn compile_row_extractor(
         base: &RelationHandle,
         extractor: &crate::data::expr::Expr,
-    ) -> Result<Vec<crate::data::expr::Bytecode>> {
+    ) -> Result<Vec</*DEMOLISHED_Bytecode*/>> {
         let mut expr = extractor.clone();
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
         expr.compile()

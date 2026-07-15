@@ -25,7 +25,7 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode};
+use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -101,7 +101,7 @@ fn astar(
         let mut v = node.clone();
         v.extend(goal.iter().cloned());
         let t = v;
-        let cost_val = eval_bytecode(&heuristic_bytecode, &t, &mut stack)?;
+        let cost_val = /*DEMOLISHED_eval_bytecode*/(&heuristic_bytecode, &t, &mut stack)?;
         let cost = cost_val.get_float().ok_or_else(|| {
             BadExprValueError(
                 cost_val,

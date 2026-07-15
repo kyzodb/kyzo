@@ -7,7 +7,7 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): `expr2bytecode` is relocated to `data/expr.rs` (compiling an
+ * (MPL-2.0): `/*DEMOLISHED_expr2bytecode*/` is relocated to `data/expr.rs` (compiling an
  * expression is the expression's own domain) — this file is only the Pratt
  * builder; radix integer literals (`0x`/`0o`/`0b`) beyond `i64` are the
  * same `BadIntError` the decimal path raises instead of a panic; the
