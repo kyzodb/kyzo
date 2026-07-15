@@ -100,6 +100,7 @@ fuzz-internals = []
 tempfile = "3"
 proptest = "1"
 criterion = "0.8.2"
+trybuild = "1"
 # Story #31 phase 2: the crash-matrix harness (storage::crash_matrix) drives
 # a real FjallStorage through kyzo-crashfs's FUSE fault injector. Test-only
 # — the dependency edge phase 1's design doc anticipated running this
