@@ -6,6 +6,9 @@
 # REPL history written to cwd when the binary runs interactively
 .kyzo_repl_history
 
+# Cursor allowlist arm / hook session state (local, per-task)
+.kyzo/
+
 # Board context (#140) — generated from GitHub, never truth
 .claude/active-story.md
 .claude/next-work.md
