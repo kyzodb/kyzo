@@ -83,8 +83,27 @@ pub const TERMINAL_VALIDITY: Validity = Validity {
 };
 
 impl Validity {
+    /// The one checked constructor: consumes a proven [`ValidityTs`]
+    /// coordinate. There is no raw-`i64` door — a user-asserted write
+    /// coordinate is proven through [`ValidityTs::for_assertion`] (which
+    /// refuses the reserved terminal tick) before it can become a
+    /// `Validity`, so the reserved state `for_assertion` refuses cannot be
+    /// reconstructed at the assertion boundary. Storage decode and slot
+    /// builders supply an already-legal coordinate directly.
+    pub fn new(timestamp: ValidityTs, is_assert: bool) -> Validity {
+        Validity {
+            timestamp,
+            is_assert: Reverse(is_assert),
+        }
+    }
+
     pub fn ts_micros(self) -> i64 {
         self.timestamp.0.0
+    }
+
+    /// The valid-time coordinate as its proven type.
+    pub fn timestamp(self) -> ValidityTs {
+        self.timestamp
     }
 
     pub fn is_assert(self) -> bool {
@@ -96,12 +115,6 @@ impl Validity {
     /// mean.
     pub fn cmp_as_of_order(self, other: Validity) -> std::cmp::Ordering {
         self.cmp(&other)
-    }
-}
-
-impl From<(i64, bool)> for Validity {
-    fn from((ts_micros, is_assert): (i64, bool)) -> Validity {
-        Validity::new(ts_micros, is_assert)
     }
 }
 
@@ -161,17 +174,21 @@ impl AsOf {
 mod tests {
     use super::*;
 
+    fn v(ts: i64, is_assert: bool) -> Validity {
+        Validity::new(ValidityTs::from_raw(ts), is_assert)
+    }
+
     #[test]
     fn imported_law_descending_ts_assert_first_by_shape() {
         // Later instants sort first (descending), assert before retract —
         // now the DERIVED order, declared by the Reverse fields.
-        assert!(Validity::new(10, true) < Validity::new(5, true));
-        assert!(Validity::new(5, true) < Validity::new(5, false));
-        assert!(Validity::new(i64::MAX, false) < Validity::new(i64::MIN, true));
-        assert_eq!(Validity::new(7, true), Validity::new(7, true));
+        assert!(v(10, true) < v(5, true));
+        assert!(v(5, true) < v(5, false));
+        assert!(v(i64::MAX, false) < v(i64::MIN, true));
+        assert_eq!(v(7, true), v(7, true));
         // The named alias agrees with the shape.
         assert_eq!(
-            Validity::new(10, true).cmp_as_of_order(Validity::new(5, true)),
+            v(10, true).cmp_as_of_order(v(5, true)),
             std::cmp::Ordering::Less
         );
     }
@@ -183,8 +200,8 @@ mod tests {
         assert!(MAX_VALIDITY_TS < ValidityTs::from_raw(0));
         assert_eq!(ValidityTs::from_raw(42).raw(), 42);
         // Terminal sorts after every ordinary slot.
-        assert!(Validity::new(i64::MIN, true) < TERMINAL_VALIDITY);
-        assert!(Validity::new(i64::MAX, false) < TERMINAL_VALIDITY);
+        assert!(v(i64::MIN, true) < TERMINAL_VALIDITY);
+        assert!(v(i64::MAX, false) < TERMINAL_VALIDITY);
         // Stored slots are pinned to assert.
         let slot = StoredValiditySlot::new(ValidityTs::from_raw(7)).as_validity();
         assert!(slot.is_assert());

@@ -520,7 +520,7 @@ impl DataValue {
 /// @constructs Tuple::new | Tuple::with_capacity | Tuple::from_vec
 /// @forbids a bare `Vec<DataValue>` standing in for row authority (no Deref/DerefMut/From)
 /// @status established #300
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct Tuple(Vec<DataValue>);
 
 impl Tuple {
