@@ -1999,7 +1999,6 @@ fn format_timestamp_numeric_agreed() {
 #[test]
 fn format_timestamp_validity_input_agreed() {
     use crate::data::value::Validity;
-    use std::cmp::Reverse;
     let f = |micros: i64| {
         let vld = DataValue::Validity(Validity::new(ValidityTs::from_raw(micros), true));
         fmt(&[vld]).unwrap()

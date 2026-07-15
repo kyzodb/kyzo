@@ -249,7 +249,6 @@ impl<C: SkipCursor> Iterator for SkipWalk<C> {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::cmp::Reverse;
     use std::collections::BTreeMap;
     use std::ops::Bound;
 

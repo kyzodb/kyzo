@@ -29,8 +29,6 @@ use kyzo::{
     DataValue, EncodedKey, ReadTx, RelationId, Storage, TupleT, Validity, ValidityTs, WriteTx,
     new_fjall_storage,
 };
-use std::cmp::Reverse;
-
 fn key(i: u64) -> EncodedKey {
     [DataValue::from(i as i64)].encode_as_key(RelationId::new(7).expect("below cap"))
 }

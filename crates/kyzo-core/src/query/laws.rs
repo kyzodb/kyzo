@@ -3821,7 +3821,6 @@ mod tests {
         use crate::data::bitemporal::check_key_for_bitemporal;
         use crate::data::value::{RelationId, TupleT};
         use crate::data::value::{Validity, ValidityTs};
-        use std::cmp::Reverse;
 
         fn vts(t: i64) -> ValidityTs {
             ValidityTs::from_raw(t)

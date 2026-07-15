@@ -251,7 +251,6 @@ impl WriteTx for TempTx {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Reverse;
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;

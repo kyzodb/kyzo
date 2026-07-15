@@ -26,7 +26,6 @@
 //! time-travel scan is checked against a naive full-scan reference
 //! implementation of the as-of semantics.
 
-use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use fjall::Slice;
