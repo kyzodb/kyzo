@@ -76,7 +76,11 @@ use super::{DataValue, UuidWrapper, Vector};
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
 /// `Ord`/`Eq` are the storage total order over values, byte for byte.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct CanonicalBytes(Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<CanonicalBytes>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<CanonicalBytes>() == std::mem::align_of::<Vec<u8>>());
 
 impl CanonicalBytes {
     pub fn as_bytes(&self) -> &[u8] {

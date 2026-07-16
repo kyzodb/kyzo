@@ -239,7 +239,11 @@ impl SystemClock {
 /// garbage. Any change to the encoding is a migration and must bump
 /// [`FormatVersion::CURRENT`] (see .claude/rules/memcmp.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
 pub struct FormatVersion(u16);
+
+const _: () = assert!(std::mem::size_of::<FormatVersion>() == std::mem::size_of::<u16>());
+const _: () = assert!(std::mem::align_of::<FormatVersion>() == std::mem::align_of::<u16>());
 
 impl FormatVersion {
     /// The format this build reads and writes. v3 is the bitemporal

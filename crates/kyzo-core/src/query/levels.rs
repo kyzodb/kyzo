@@ -57,6 +57,9 @@ use crate::query::temp_store::{
 #[repr(transparent)]
 pub(crate) struct LevelArenaBytes(pub(crate) Vec<u8>);
 
+const _: () = assert!(std::mem::size_of::<LevelArenaBytes>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<LevelArenaBytes>() == std::mem::align_of::<Vec<u8>>());
+
 impl std::ops::Deref for LevelArenaBytes {
     type Target = [u8];
     fn deref(&self) -> &[u8] { &self.0 }
@@ -76,6 +79,9 @@ impl From<Vec<u8>> for LevelArenaBytes {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct LevelBoundKey(pub(crate) Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<LevelBoundKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<LevelBoundKey>() == std::mem::align_of::<Vec<u8>>());
 
 impl std::ops::Deref for LevelBoundKey {
     type Target = [u8];

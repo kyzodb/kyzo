@@ -484,6 +484,9 @@ const CANARY_LAYER: i64 = 1;
 #[repr(transparent)]
 pub(crate) struct VecContentHash(pub(crate) Vec<u8>);
 
+const _: () = assert!(std::mem::size_of::<VecContentHash>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<VecContentHash>() == std::mem::align_of::<Vec<u8>>());
+
 impl std::ops::Deref for VecContentHash {
     type Target = [u8];
     fn deref(&self) -> &[u8] { &self.0 }
@@ -504,6 +507,9 @@ impl From<Vec<u8>> for VecContentHash {
 #[repr(transparent)]
 pub(crate) struct HnswEntryKey(pub(crate) Vec<u8>);
 
+const _: () = assert!(std::mem::size_of::<HnswEntryKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<HnswEntryKey>() == std::mem::align_of::<Vec<u8>>());
+
 impl std::ops::Deref for HnswEntryKey {
     type Target = [u8];
     fn deref(&self) -> &[u8] { &self.0 }
@@ -523,6 +529,9 @@ impl From<Vec<u8>> for HnswEntryKey {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct HnswHitKey(pub(crate) Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<HnswHitKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<HnswHitKey>() == std::mem::align_of::<Vec<u8>>());
 
 impl std::ops::Deref for HnswHitKey {
     type Target = [u8];

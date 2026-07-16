@@ -68,7 +68,11 @@ use crate::data::value::{DataValue, RelationId, Tuple};
 /// a fresh process starts every relation at zero with an empty cache, so
 /// cross-process staleness cannot arise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
 pub(crate) struct Watermark(u64);
+
+const _: () = assert!(std::mem::size_of::<Watermark>() == std::mem::size_of::<u64>());
+const _: () = assert!(std::mem::align_of::<Watermark>() == std::mem::align_of::<u64>());
 
 /// The execution path's segment context: `OFF` (tests, benches, callers
 /// without a session) or a borrow of the session's engine. `Copy`, so it

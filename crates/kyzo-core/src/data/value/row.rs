@@ -275,6 +275,7 @@ fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
 pub struct TupleKey(pub(crate) Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<TupleKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<TupleKey>() == std::mem::align_of::<Vec<u8>>());
 
 /// Relation-prefixed storage key (keyspace layout v1): 8-byte relation id
 /// then key columns (then optional bitemporal tails).
@@ -287,6 +288,7 @@ const _: () = assert!(std::mem::size_of::<TupleKey>() == std::mem::size_of::<Vec
 pub struct StorageKey(pub(crate) Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<StorageKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<StorageKey>() == std::mem::align_of::<Vec<u8>>());
 
 /// A stored relation's identity: the 8-byte big-endian keyspace prefix
 /// every key of the relation opens with (storage key layout v1).

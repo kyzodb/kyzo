@@ -41,7 +41,11 @@
 /// constants are typed `RegexFlags`, composed with [`RegexFlags::union`]
 /// and probed with [`RegexFlags::contains`] — no loose `u8` bit passing.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
 pub struct RegexFlags(u8);
+
+const _: () = assert!(std::mem::size_of::<RegexFlags>() == std::mem::size_of::<u8>());
+const _: () = assert!(std::mem::align_of::<RegexFlags>() == std::mem::align_of::<u8>());
 
 impl RegexFlags {
     pub const NONE: RegexFlags = RegexFlags(0);

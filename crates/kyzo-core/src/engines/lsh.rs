@@ -130,6 +130,9 @@ use crate::storage::{ReadTx, WriteTx};
 #[repr(transparent)]
 pub(crate) struct LshPermutationBytes(pub(crate) Vec<u8>);
 
+const _: () = assert!(std::mem::size_of::<LshPermutationBytes>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<LshPermutationBytes>() == std::mem::align_of::<Vec<u8>>());
+
 impl std::ops::Deref for LshPermutationBytes {
     type Target = [u8];
     fn deref(&self) -> &[u8] { &self.0 }

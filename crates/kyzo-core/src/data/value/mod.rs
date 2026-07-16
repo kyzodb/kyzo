@@ -123,7 +123,11 @@ impl std::hash::Hash for Vector {
 /// bytes, per the uuid face's law). Field is private — construction and
 /// reads go through the accessors so the wrapper stays the only door.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct UuidWrapper(uuid::Uuid);
+
+const _: () = assert!(std::mem::size_of::<UuidWrapper>() == std::mem::size_of::<uuid::Uuid>());
+const _: () = assert!(std::mem::align_of::<UuidWrapper>() == std::mem::align_of::<uuid::Uuid>());
 
 impl UuidWrapper {
     pub fn new(uuid: uuid::Uuid) -> UuidWrapper {

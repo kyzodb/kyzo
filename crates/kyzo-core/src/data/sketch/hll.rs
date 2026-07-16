@@ -72,6 +72,13 @@ const FORMAT_TAG: u8 = 0x01;
 #[repr(transparent)]
 pub(crate) struct HllRegisters<const M: usize>(Box<[u8; M]>);
 
+const _: () = assert!(
+    std::mem::size_of::<HllRegisters<16>>() == std::mem::size_of::<Box<[u8; 16]>>()
+);
+const _: () = assert!(
+    std::mem::align_of::<HllRegisters<16>>() == std::mem::align_of::<Box<[u8; 16]>>()
+);
+
 impl<const M: usize> HllRegisters<M> {
     fn zeros() -> Self {
         // Heap-allocate without a temporary `[u8; M]` on the stack (M can be

@@ -37,7 +37,11 @@ use std::cmp::Reverse;
 /// microsecond timestamp, so smaller means LATER — exactly how the
 /// stored key slots sort.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct ValidityTs(pub Reverse<i64>);
+
+const _: () = assert!(std::mem::size_of::<ValidityTs>() == std::mem::size_of::<Reverse<i64>>());
+const _: () = assert!(std::mem::align_of::<ValidityTs>() == std::mem::align_of::<Reverse<i64>>());
 
 impl ValidityTs {
     pub fn from_raw(ts_micros: i64) -> ValidityTs {
@@ -122,7 +126,12 @@ impl Validity {
 /// lives in row values, per the guardrail), so a slot is fully
 /// determined by its coordinate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
 pub struct StoredValiditySlot(pub ValidityTs);
+
+const _: () = assert!(std::mem::size_of::<StoredValiditySlot>() == std::mem::size_of::<ValidityTs>());
+const _: () =
+    assert!(std::mem::align_of::<StoredValiditySlot>() == std::mem::align_of::<ValidityTs>());
 
 impl StoredValiditySlot {
     pub fn new(ts: ValidityTs) -> StoredValiditySlot {

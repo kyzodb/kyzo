@@ -450,7 +450,11 @@ impl ArenaId {
 /// commit boundaries. Codes mean something relative to an epoch; every
 /// spend verifies the stamp.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct Epoch(pub(super) u64);
+
+const _: () = assert!(std::mem::size_of::<Epoch>() == std::mem::size_of::<u64>());
+const _: () = assert!(std::mem::align_of::<Epoch>() == std::mem::align_of::<u64>());
 
 impl Epoch {
     /// The raw counter, for display and diagnostics. Minting stays with

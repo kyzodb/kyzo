@@ -30,7 +30,11 @@
 /// [`ByteLen::checked_add`] or extract to `usize` via [`ByteLen::as_usize`]
 /// for slice indexing (where the usize domain is safe).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub(super) struct ByteLen(u32);
+
+const _: () = assert!(std::mem::size_of::<ByteLen>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<ByteLen>() == std::mem::align_of::<u32>());
 
 impl ByteLen {
     pub(super) const ZERO: ByteLen = ByteLen(0);
@@ -67,7 +71,11 @@ impl ByteLen {
 /// Raw arithmetic operators are absent; use [`ByteOff::checked_add`] to
 /// advance by a [`ByteLen`], or [`ByteOff::as_usize`] for slice indexing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub(super) struct ByteOff(u32);
+
+const _: () = assert!(std::mem::size_of::<ByteOff>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<ByteOff>() == std::mem::align_of::<u32>());
 
 impl ByteOff {
     pub(super) const ZERO: ByteOff = ByteOff(0);
@@ -93,7 +101,11 @@ impl ByteOff {
 /// Raw arithmetic operators are absent; use [`ChunkId::from_usize`] and
 /// [`ChunkId::as_usize`] at the boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub(super) struct ChunkId(u32);
+
+const _: () = assert!(std::mem::size_of::<ChunkId>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<ChunkId>() == std::mem::align_of::<u32>());
 
 impl ChunkId {
     /// Construct from a `usize`; panics if `n > u32::MAX`.
