@@ -133,7 +133,7 @@
       "name": "Tuple",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/mod.rs",
-      "line": 518,
+      "line": 533,
       "owns": "row identity as an ordered `DataValue` sequence, distinct from any bare `Vec<DataValue>`",
       "constructs": [
         "Tuple::new",
@@ -203,7 +203,7 @@
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 2074,
+      "line": 2072,
       "excerpt": "key: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
@@ -224,30 +224,37 @@
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 557,
+      "line": 556,
       "excerpt": "lower: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 558,
+      "line": 557,
       "excerpt": "upper: Vec<u8>,",
+      "note": "generic byte blob carrying meaning outside the byte plane"
+    },
+    {
+      "class": "blob-meaning",
+      "file": "crates/kyzo-core/src/query/levels.rs",
+      "line": 753,
+      "excerpt": "lower: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
       "class": "blob-meaning",
       "file": "crates/kyzo-core/src/query/levels.rs",
       "line": 754,
-      "excerpt": "lower: Vec<u8>,",
+      "excerpt": "upper: Vec<u8>,",
       "note": "generic byte blob carrying meaning outside the byte plane"
     },
     {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 755,
-      "excerpt": "upper: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
+      "class": "freshness-twin",
+      "file": "crates/kyzo-core/src/engines/segments.rs",
+      "line": 71,
+      "excerpt": "pub(crate) struct Watermark(u64);",
+      "note": "per-projection Watermark freshness twin of the catalog generation authority (#135 / #301 T7)"
     },
     {
       "class": "illegal-escape",
@@ -295,21 +302,21 @@
     {
       "class": "searchra-decoded-tuples",
       "file": "crates/kyzo-core/src/query/ra/search.rs",
-      "line": 114,
+      "line": 107,
       "excerpt": "let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {",
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
     {
       "class": "searchra-decoded-tuples",
       "file": "crates/kyzo-core/src/query/ra/search.rs",
-      "line": 186,
+      "line": 176,
       "excerpt": "hits: Vec<Tuple>,",
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
     {
       "class": "searchra-decoded-tuples",
       "file": "crates/kyzo-core/src/query/ra/search.rs",
-      "line": 188,
+      "line": 178,
       "excerpt": "search: Box<dyn FnMut(&[DataValue]) -> Result<Vec<Tuple>> + 'a>,",
       "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
     },
@@ -332,6 +339,7 @@
   ],
   "counts_by_class": {
     "blob-meaning": 9,
+    "freshness-twin": 1,
     "missing-authority": 5,
     "searchra-decoded-tuples": 3
   }
