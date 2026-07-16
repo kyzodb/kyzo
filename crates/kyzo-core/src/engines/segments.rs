@@ -122,6 +122,26 @@ impl SegmentEngine {
         Watermark(self.slot(relation).load(AtomicOrdering::Acquire))
     }
 
+    /// Record an imminent committed write to `relation` — called BEFORE the
+    /// storage commit, so a bump precedes any snapshot that can see the
+    /// write. A subsequent rollback leaves a harmless early orphan.
+    ///
+    /// # Non-transition (proven invariant)
+    ///
+    /// Not a Domain-style consuming field transition. The engine is an
+    /// `Arc`-shared capability handle ([`crate::runtime::db::Db::segments`]);
+    /// the per-relation watermark is an [`AtomicU64`] under a stated
+    /// concurrent-access requirement (many writers/readers across
+    /// transactions). The bump is a monotone counter advance on that shared
+    /// atomic — reassignment of a Domain-like proof is unrepresentable
+    /// without breaking Arc sharing. `rust-state` Capability Handle permits
+    /// Atomic/Mutex only with that concurrency need; `rust-verbs` Transition
+    /// (field reassignment) applies to single-owner handles, which this is
+    /// not.
+    pub(crate) fn bump_before_commit(&self, relation: RelationId) {
+        self.slot(relation).fetch_add(1, AtomicOrdering::AcqRel);
+    }
+
     /// The relation's segment, iff still exactly valid at `witness`.
     pub(crate) fn get(&self, relation: RelationId, witness: Watermark) -> Option<Arc<Segment>> {
         let segments = self.segments.lock().expect("segment lock poisoned");
@@ -343,8 +363,7 @@ mod tests {
         engine.install(rel, Segment::build([row(&[1, 2])].into_iter(), w0).unwrap());
         assert!(engine.get(rel, w0).is_some(), "fresh segment serves");
 
-        // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
-        let _ = rel;
+        engine.bump_before_commit(rel);
         let w1 = engine.witness_after_snapshot(&snapshot, rel);
         assert_ne!(w0, w1);
         assert!(
@@ -380,8 +399,7 @@ mod tests {
 
         // A write bumps the witness: the next miss resets the streak to 1,
         // exactly like a fresh relation.
-        // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
-        let _ = rel;
+        engine.bump_before_commit(rel);
         let w2 = engine.witness_after_snapshot(&snapshot, rel);
         assert_ne!(w, w2);
         assert!(
@@ -404,7 +422,7 @@ mod tests {
         let rel = RelationId::new(5).expect("below cap");
         let snapshot = ();
         for _ in 0..50 {
-            // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
+            engine.bump_before_commit(rel);
             let w = engine.witness_after_snapshot(&snapshot, rel);
             assert!(
                 !engine.should_build(rel, w),

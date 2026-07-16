@@ -76,8 +76,32 @@ impl Domain {
         }
     }
 
-    // Domain::absorb_stamp (&mut self extent bump) DELETED — #302 demolition.
-    // Call sites intentionally broken; T4 rebuilds as consume-and-return.
+    /// Cover `sc` in this domain's extent. Consumes `self` and returns a
+    /// new [`Domain`] — extent growth is construction of a larger proof,
+    /// never in-place mutation of an existing one (`rust-verbs` consuming
+    /// rebuild; `Domain` is a proven value, not a live handle).
+    fn absorb_stamp(self, sc: StampedCode, what: &str) -> Domain {
+        assert_eq!(
+            sc.arena(),
+            self.arena,
+            "{what} of arena {:?} fed a stamp from foreign arena {:?}",
+            self.arena,
+            sc.arena()
+        );
+        assert_eq!(
+            sc.epoch(),
+            self.epoch,
+            "{what} of epoch {:?} fed a stamp of epoch {:?}: cross through the gather door",
+            self.epoch,
+            sc.epoch()
+        );
+        let raw = sc.code().raw();
+        Domain {
+            arena: self.arena,
+            epoch: self.epoch,
+            extent: self.extent.max(raw + 1),
+        }
+    }
 
     /// The plane-internal arena identity (row containers verify typed).
     pub(super) fn arena_id(&self) -> ArenaId {
@@ -147,7 +171,7 @@ impl CodeColumn {
     /// The write door: a stamp-verified push. This per-push check is what
     /// the kernels' zero-per-code reads are amortizing.
     pub fn push(&mut self, sc: StampedCode) {
-        // T4: Domain::absorb_stamp consume-and-return not yet rebuilt — call severed.
+        self.domain = self.domain.absorb_stamp(sc, "code column");
         self.codes.push(sc.code().raw());
     }
 
@@ -321,8 +345,7 @@ impl WordColumn {
             }
             Some(stamp) => {
                 debug_assert_eq!(value.code(), Some(stamp.code()), "Minted coherence broken");
-                // T4: Domain::absorb_stamp consume-and-return not yet rebuilt — call severed.
-                let _ = stamp;
+                self.domain = self.domain.absorb_stamp(stamp, "word column");
                 self.words.push(value);
             }
         }
