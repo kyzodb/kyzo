@@ -57,7 +57,7 @@ impl FixedRule for ReorderSort {
                 })
                 .collect_vec(),
             Expr::Apply { op, args, .. } if *op == OP_LIST => args.to_vec(),
-            _ => {
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                 bail!(WrongFixedRuleOptionError {
                     name: "out".to_string(),
                     span: payload.span(),
@@ -153,7 +153,7 @@ impl FixedRule for ReorderSort {
                 ..
             } => l.len() + 1,
             Expr::Apply { op, args, .. } if **op == OP_LIST => args.len() + 1,
-            _ => bail!(CannotDetermineArity(
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => bail!(CannotDetermineArity(
                 "ReorderSort".to_string(),
                 "invalid option 'out' given, expect a list".to_string(),
                 span

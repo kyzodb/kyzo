@@ -364,7 +364,7 @@ fn write_conjunct_member(atom: &InputAtom, out: &mut String) {
                 write_disjunct_member(m, out);
             }
         }
-        _ => write_plain_atom(atom, out),
+        InputAtom::Rule { .. } | InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => write_plain_atom(atom, out),
     }
 }
 
@@ -384,7 +384,7 @@ fn write_disjunct_member(atom: &InputAtom, out: &mut String) {
             }
             out.push(')');
         }
-        _ => write_plain_atom(atom, out),
+        InputAtom::Rule { .. } | InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => write_plain_atom(atom, out),
     }
 }
 
@@ -392,7 +392,7 @@ fn flatten_conjunction<'a>(members: &'a [InputAtom], out: &mut Vec<&'a InputAtom
     for m in members {
         match m {
             InputAtom::Conjunction { inner, .. } => flatten_conjunction(inner, out),
-            other => out.push(other),
+            other @ InputAtom::Rule { .. } | other @ InputAtom::NamedFieldRelation { .. } | other @ InputAtom::Relation { .. } | other @ InputAtom::Predicate { .. } | other @ InputAtom::Negation { .. } | other @ InputAtom::Disjunction { .. } | other @ InputAtom::Unification { .. } | other @ InputAtom::Search { .. } => out.push(other),
         }
     }
 }
@@ -401,7 +401,7 @@ fn flatten_disjunction<'a>(members: &'a [InputAtom], out: &mut Vec<&'a InputAtom
     for m in members {
         match m {
             InputAtom::Disjunction { inner, .. } => flatten_disjunction(inner, out),
-            other => out.push(other),
+            other @ InputAtom::Rule { .. } | other @ InputAtom::NamedFieldRelation { .. } | other @ InputAtom::Relation { .. } | other @ InputAtom::Predicate { .. } | other @ InputAtom::Negation { .. } | other @ InputAtom::Conjunction { .. } | other @ InputAtom::Unification { .. } | other @ InputAtom::Search { .. } => out.push(other),
         }
     }
 }
@@ -422,7 +422,7 @@ fn write_plain_atom(atom: &InputAtom, out: &mut String) {
                 InputAtom::Conjunction { .. } | InputAtom::Disjunction { .. } => {
                     write_disjunct_member(inner, out);
                 }
-                _ => write_plain_atom(inner, out),
+                InputAtom::Rule { .. } | InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => write_plain_atom(inner, out),
             }
         }
         InputAtom::Rule {
@@ -751,7 +751,7 @@ fn infix_form(e: &Expr) -> Option<(u8, Assoc, &'static str)> {
             LazyOp::And => (2, Assoc::Left, "&&"),
             LazyOp::Coalesce => (9, Assoc::Left, "~"),
         }),
-        _ => None,
+        Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => None,
     }
 }
 
@@ -769,7 +769,7 @@ fn prefix_form(e: &Expr) -> Option<(u8, &'static str)> {
             "OP_NEGATE" => Some((11, "!")),
             _ => None,
         },
-        _ => None,
+        Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => None,
     }
 }
 
@@ -788,7 +788,7 @@ fn write_expr(e: &Expr, out: &mut String) {
         let args: &[Expr] = match e {
             Expr::Apply { args, .. } => args,
             Expr::Lazy { args, .. } => args,
-            _ => unreachable!("infix_form only returns Some for Apply/Lazy"),
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } => unreachable!("infix_form only returns Some for Apply/Lazy"),
         };
         write_operand(&args[0], prec, assoc == Assoc::Left, out);
         out.push(' ');
@@ -801,7 +801,7 @@ fn write_expr(e: &Expr, out: &mut String) {
         out.push_str(sym);
         let inner = match e {
             Expr::Apply { args, .. } => &args[0],
-            _ => unreachable!("prefix_form only returns Some for Apply"),
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => unreachable!("prefix_form only returns Some for Apply"),
         };
         write_prefix_operand(inner, prec, out);
         return;
@@ -918,7 +918,7 @@ fn unwrap_hidden_regex_arg<'a>(op_name: &str, arg: &'a Expr) -> Option<&'a Expr>
     }
     match arg {
         Expr::Apply { op, args, .. } if op.name == "OP_REGEX" && args.len() == 1 => Some(&args[0]),
-        _ => None,
+        Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => None,
     }
 }
 

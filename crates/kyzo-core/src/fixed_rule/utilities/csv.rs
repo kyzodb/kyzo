@@ -165,7 +165,7 @@ impl FixedRule for CsvReader {
                                     None => bail!("cannot convert {} to type {}", s, typ),
                                 };
                             }
-                            _ => bail!("cannot convert {} to type {}", s, typ),
+                            ColType::Bool | ColType::Bytes | ColType::List { .. } | ColType::Vec { .. } | ColType::Tuple(_) | ColType::Validity | ColType::Json => bail!("cannot convert {} to type {}", s, typ),
                         }
                     }
                 }

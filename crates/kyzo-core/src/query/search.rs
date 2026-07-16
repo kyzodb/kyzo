@@ -198,7 +198,7 @@ pub(crate) struct NegatedSearchUnsupported(#[label] pub(crate) SourceSpan);
 fn expr_as_var(what: &str, e: &Expr, span: SourceSpan) -> Result<Symbol> {
     match e {
         Expr::Binding { var, .. } => Ok(var.clone()),
-        _ => bail!(SearchBindingNotVariable(what.to_string(), span)),
+        Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => bail!(SearchBindingNotVariable(what.to_string(), span)),
     }
 }
 

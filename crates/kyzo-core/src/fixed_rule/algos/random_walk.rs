@@ -45,6 +45,7 @@ use crate::fixed_rule::rng::SeededRng;
 use crate::fixed_rule::{
     BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
+use crate::data::value::data_value_any;
 
 pub(crate) struct RandomWalk;
 
@@ -121,7 +122,7 @@ impl FixedRule for RandomWalk {
                                         );
                                         f
                                     }
-                                    v => bail!(BadExprValueError(
+                                    v @ (data_value_any!()) => bail!(BadExprValueError(
                                         v,
                                         weight_expr.span(),
                                         "'weight' must evaluate to a non-negative number"

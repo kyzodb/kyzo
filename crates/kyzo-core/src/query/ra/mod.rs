@@ -696,7 +696,7 @@ impl RelAlgebra {
                     "a NegJoin cannot be the right side of a join"
                 ))
             }
-            _ => {}
+            RelAlgebra::Fixed(_) | RelAlgebra::TempStore(_) | RelAlgebra::Stored(_) | RelAlgebra::StoredWithValidity(_) | RelAlgebra::Join(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
         }
         Ok(RelAlgebra::Join(Box::new(InnerJoin {
             left: self,
@@ -730,7 +730,7 @@ impl RelAlgebra {
             RelAlgebra::StoredWithValidity(v) => NegRight::StoredWithValidity(v),
             RelAlgebra::Spans(v) => NegRight::Spans(v),
             RelAlgebra::Delta(v) => NegRight::Delta(v),
-            _ => bail!(PlanInvariantError(
+            RelAlgebra::Fixed(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) => bail!(PlanInvariantError(
                 "the right side of a negation must be a rule or stored-relation scan"
             )),
         };

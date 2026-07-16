@@ -2104,10 +2104,10 @@ mod tests {
                         assert_eq!(var.name.as_str(), "a");
                         assert!(tuple_pos.is_none());
                     }
-                    other => panic!("expected a binding, got {other:?}"),
+                    other @ Expr::Const { .. } | other @ Expr::Apply { .. } | other @ Expr::UnboundApply { .. } | other @ Expr::Cond { .. } | other @ Expr::Lazy { .. } => panic!("expected a binding, got {other:?}"),
                 }
             }
-            other => panic!("expected a unification, got {other:?}"),
+            other @ NormalFormAtom::Rule(_) | other @ NormalFormAtom::Relation(_) | other @ NormalFormAtom::NegatedRule(_) | other @ NormalFormAtom::NegatedRelation(_) | other @ NormalFormAtom::Predicate(_) | other @ NormalFormAtom::Search(_) => panic!("expected a unification, got {other:?}"),
         }
     }
 

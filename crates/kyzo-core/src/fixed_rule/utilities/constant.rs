@@ -35,6 +35,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::data::value::data_value_any;
 
 pub(crate) struct Constant;
 
@@ -141,7 +142,7 @@ impl FixedRule for Constant {
         let data = options.get("data").ok_or_else(wrong_option)?;
         let data = match data.clone().eval_to_const()? {
             DataValue::List(l) => l,
-            _ => bail!(wrong_option()),
+            data_value_any!() => bail!(wrong_option()),
         };
 
         let mut tuples = vec![];
@@ -168,7 +169,7 @@ impl FixedRule for Constant {
                     last_len = Some(tuple.len());
                     tuples.push(DataValue::List(tuple));
                 }
-                row => {
+                row @ (data_value_any!()) => {
                     #[derive(Error, Debug, Diagnostic)]
                     #[error("Bad row for constant rule: {0:?}")]
                     #[diagnostic(code(parser::bad_row_for_const))]

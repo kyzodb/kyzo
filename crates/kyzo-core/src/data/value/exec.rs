@@ -38,6 +38,7 @@ use super::arity::Arity;
 use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
+use crate::data::value::data_value_any;
 
 /// Which input a projected output column is copied from.
 #[derive(Clone, Copy, Debug)]
@@ -550,7 +551,7 @@ mod tests {
     fn decode_int(bytes: &[u8]) -> i64 {
         match super::super::canonical::decode(bytes).expect("lawful") {
             DataValue::Num(n) => n.as_int().expect("int"),
-            other => panic!("not an int: {other:?}"),
+            other @ (data_value_any!()) => panic!("not an int: {other:?}"),
         }
     }
 }

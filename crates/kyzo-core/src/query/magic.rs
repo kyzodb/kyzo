@@ -365,7 +365,7 @@ impl NormalFormStratum {
                                 {
                                     dependencies.insert(r_app.name.clone());
                                 }
-                                _ => {}
+                                NormalFormAtom::Rule(_) | NormalFormAtom::Relation(_) | NormalFormAtom::NegatedRule(_) | NormalFormAtom::NegatedRelation(_) | NormalFormAtom::Predicate(_) | NormalFormAtom::Unification(_) | NormalFormAtom::Search(_) => {}
                             }
                         }
                     }
@@ -757,7 +757,7 @@ impl AdornedProgram {
                 AdornedHead::Magic { inner, adornment } if !adornment.iter().any(|b| *b) => {
                     Some(inner.clone())
                 }
-                _ => None,
+                AdornedHead::Muggle { .. } | AdornedHead::Magic { .. } => None,
             })
             .collect();
         if ff_names.is_empty() {
@@ -779,7 +779,7 @@ impl AdornedProgram {
                             MagicAtom::Rule(r) | MagicAtom::NegatedRule(r) => {
                                 redirect_to_ff(&mut r.name);
                             }
-                            _ => {}
+                            MagicAtom::Relation(_) | MagicAtom::Predicate(_) | MagicAtom::NegatedRelation(_) | MagicAtom::Unification(_) | MagicAtom::Search(_) => {}
                         }
                     }
                 }
@@ -1705,7 +1705,7 @@ mod tests {
                 MagicSymbol::Magic { inner, adornment } if inner.name.as_str() == "r" => {
                     Some(adornment.clone())
                 }
-                _ => None,
+                MagicSymbol::Muggle { .. } | MagicSymbol::Magic { .. } | MagicSymbol::Input { .. } | MagicSymbol::Sup { .. } => None,
             })
             .collect();
         assert_eq!(

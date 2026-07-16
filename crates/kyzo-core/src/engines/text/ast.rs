@@ -120,7 +120,7 @@ impl FtsExpr {
                 for e in exprs {
                     match e.flatten() {
                         FtsExpr::And(es) => flattened.extend(es),
-                        e => {
+                        e @ FtsExpr::Literal(_) | e @ FtsExpr::Near(_) | e @ FtsExpr::Or(_) | e @ FtsExpr::Not(..) => {
                             if !e.is_empty() {
                                 flattened.push(e)
                             }
@@ -139,7 +139,7 @@ impl FtsExpr {
                 for e in exprs {
                     match e.flatten() {
                         FtsExpr::Or(es) => flattened.extend(es),
-                        e => {
+                        e @ FtsExpr::Literal(_) | e @ FtsExpr::Near(_) | e @ FtsExpr::And(_) | e @ FtsExpr::Not(..) => {
                             if !e.is_empty() {
                                 flattened.push(e)
                             }
@@ -275,7 +275,7 @@ mod tests {
         let e = FtsExpr::And(vec![FtsExpr::And(vec![lit("a"), lit("b")]), lit("c")]);
         match e.flatten() {
             FtsExpr::And(v) => assert_eq!(v.len(), 3),
-            other => panic!("expected And, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Or(Or(a,b), Or(c,d)) → Or(a,b,c,d)
         let e = FtsExpr::Or(vec![
@@ -284,7 +284,7 @@ mod tests {
         ]);
         match e.flatten() {
             FtsExpr::Or(v) => assert_eq!(v.len(), 4),
-            other => panic!("expected Or, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Not(..) => panic!("expected Or, got {other:?}"),
         }
         // Single-survivor collapse: And(a, "") → a
         let e = FtsExpr::And(vec![lit("a"), lit("")]);
@@ -319,7 +319,7 @@ mod tests {
                 assert_eq!(v[0], lit("run"));
                 assert_eq!(v[1], lit("dog"));
             }
-            other => panic!("expected And, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // A literal that tokenizes to one term stays a literal.
         assert_eq!(lit("Running").tokenize(&an), lit("run"));
@@ -328,7 +328,7 @@ mod tests {
         let e = FtsExpr::And(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
         match &e {
             FtsExpr::And(v) => assert_eq!(v.len(), 2, "'the' must vanish: {v:?}"),
-            other => panic!("expected And, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Prefix literals pass through untouched.
         let p = FtsExpr::Literal(FtsLiteral {
@@ -361,7 +361,7 @@ mod tests {
                 assert_eq!(literals[0].value, "run");
                 assert_eq!(literals[1].value, "dog");
             }
-            other => panic!("expected Near, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected Near, got {other:?}"),
         }
     }
 }

@@ -22,6 +22,7 @@ use crate::data::value::{
     AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
     decode_tuple_from_key, decode_values_all,
 };
+use crate::data::value::data_value_any;
 
 /// Fact-payload format v1: a stored row VALUE opens directly with its
 /// polarity byte (no header precedes it); the non-key columns' canonical
@@ -341,7 +342,18 @@ mod tests {
             .iter()
             .map(|t| match &t[0] {
                 DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                other => panic!("non-integer fact column: {other:?}"),
+                DataValue::Null
+                | DataValue::Bool(_)
+                | DataValue::Str(_)
+                | DataValue::Bytes(_)
+                | DataValue::Uuid(_)
+                | DataValue::Regex(_)
+                | DataValue::Json(_)
+                | DataValue::Vector(_)
+                | DataValue::List(_)
+                | DataValue::Set(_)
+                | DataValue::Validity(_)
+                | DataValue::Interval(_) => panic!("non-integer fact column"),
             })
             .collect()
     }
@@ -614,7 +626,18 @@ mod tests {
                     .into_iter()
                     .map(|t| match &t[0] {
                         DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                        other => panic!("non-integer fact column: {other:?}"),
+                        DataValue::Null
+                        | DataValue::Bool(_)
+                        | DataValue::Str(_)
+                        | DataValue::Bytes(_)
+                        | DataValue::Uuid(_)
+                        | DataValue::Regex(_)
+                        | DataValue::Json(_)
+                        | DataValue::Vector(_)
+                        | DataValue::List(_)
+                        | DataValue::Set(_)
+                        | DataValue::Validity(_)
+                        | DataValue::Interval(_) => panic!("non-integer fact column"),
                     })
                     .collect();
                     assert_eq!(

@@ -223,6 +223,7 @@ use crate::engines::projection::ProjectionKind;
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+use crate::data::value::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -1065,7 +1066,7 @@ impl<'m> VectorCache<'m> {
                         ))
                     })?;
                 }
-                _ => bail!(IndexRowCorrupt::new(
+                data_value_any!() => bail!(IndexRowCorrupt::new(
                     &base.name,
                     tuple.as_slice(),
                     "HNSW index expects a list of vectors at this field",
@@ -1078,7 +1079,7 @@ impl<'m> VectorCache<'m> {
                 self.cache.insert(id.clone(), admitted);
                 Ok(())
             }
-            _ => bail!(IndexRowCorrupt::new(
+            data_value_any!() => bail!(IndexRowCorrupt::new(
                 &base.name,
                 tuple.as_slice(),
                 "HNSW index expects a vector at this field",
@@ -1427,7 +1428,7 @@ fn read_node_row(
         None => Ok(None),
         Some(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             node @ HnswRow::Node { .. } => Ok(Some(node)),
-            _ => bail!(IndexRowCorrupt::new(
+            HnswRow::Edge { .. } | HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
                 "node key decoded to a non-node row",
@@ -1923,7 +1924,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             }
             // Non-vector values (including Null) are simply not indexed,
             // matching the original.
-            _ => {}
+            data_value_any!() => {}
         }
     }
     if extracted.is_empty() {
@@ -2167,7 +2168,7 @@ pub(crate) fn hnsw_knn(
                             ))
                         })?
                         .clone(),
-                    _ => bail!(IndexRowCorrupt::new(
+                    data_value_any!() => bail!(IndexRowCorrupt::new(
                         &idx.name,
                         cand_tuple.as_slice(),
                         "indexed field is not a list of vectors",
@@ -2360,7 +2361,7 @@ fn build_cand_tuple(
                         ))
                     })?
                     .clone(),
-                _ => bail!(IndexRowCorrupt::new(
+                data_value_any!() => bail!(IndexRowCorrupt::new(
                     &idx.name,
                     cand_tuple.as_slice(),
                     "indexed field is not a list of vectors",

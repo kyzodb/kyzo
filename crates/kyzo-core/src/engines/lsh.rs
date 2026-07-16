@@ -125,6 +125,7 @@ use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+use crate::data::value::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -551,7 +552,7 @@ fn decode_inv_chunks(
             .into_iter()
             .map(|chunk| match chunk {
                 DataValue::Bytes(b) => Ok(b),
-                other => Err(miette!(IndexRowCorrupt::new(
+                other @ (data_value_any!()) => Err(miette!(IndexRowCorrupt::new(
                     &inv_idx.name,
                     key,
                     format!("inverse LSH row holds a non-bytes chunk: {other:?}"),
@@ -659,7 +660,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
             let n_grams = tokenizer.unique_ngrams(s, manifest.n_gram);
             HashValues::new(n_grams.iter().map(|t| ngram_bytes(t)), perms)
         }
-        _ => bail!("cannot put value {to_index:?} into an LSH index"),
+        data_value_any!() => bail!("cannot put value {to_index:?} into an LSH index"),
     };
     let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
 
@@ -731,7 +732,7 @@ pub(crate) fn lsh_search(
             let n_grams = tokenizer.unique_ngrams(s, manifest.n_gram);
             HashValues::new(n_grams.iter().map(|t| ngram_bytes(t)), perms)
         }
-        _ => bail!("cannot search for value {q:?} in an LSH index"),
+        data_value_any!() => bail!("cannot search for value {q:?} in an LSH index"),
     };
     let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
     // Collect EVERY colliding candidate into a BTreeSet (sorted by base key),

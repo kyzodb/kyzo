@@ -52,6 +52,7 @@ use miette::{Result, bail, ensure, miette};
 use rand::prelude::*;
 
 use crate::data::value::{DataValue, Num, NumRepr};
+use crate::data::value::data_value_any;
 
 /// Private supertrait seal for aggregation op traits — crate visibility
 /// alone is not the seal.
@@ -384,7 +385,7 @@ impl NormalAggrObj for AggrAnd {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Bool(v) => self.accum &= *v,
-            v => bail!("cannot compute 'and' for {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'and' for {:?}", v),
         }
         Ok(())
     }
@@ -443,7 +444,7 @@ impl NormalAggrObj for AggrOr {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Bool(v) => self.accum |= *v,
-            v => bail!("cannot compute 'or' for {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'or' for {:?}", v),
         }
         Ok(())
     }
@@ -575,7 +576,7 @@ impl NormalAggrObj for AggrUnion {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::List(v) => self.accum.extend(v.iter().cloned()),
-            v => bail!("cannot compute 'union' for value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'union' for value {:?}", v),
         }
         Ok(())
     }
@@ -665,7 +666,7 @@ impl NormalAggrObj for AggrIntersection {
                     self.accum = Some(v.iter().cloned().collect())
                 }
             }
-            v => bail!("cannot compute 'intersection' for value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'intersection' for value {:?}", v),
         }
         Ok(())
     }
@@ -872,7 +873,7 @@ impl NormalAggrObj for AggrVariance {
                 self.sum_sq += f * f;
                 self.count += 1;
             }
-            v => bail!("cannot compute 'variance': encountered value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'variance': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -906,7 +907,7 @@ impl NormalAggrObj for AggrStdDev {
                 self.sum_sq += f * f;
                 self.count += 1;
             }
-            v => bail!("cannot compute 'std_dev': encountered value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'std_dev': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -936,7 +937,7 @@ impl NormalAggrObj for AggrMean {
                 self.sum += n.to_f64();
                 self.count += 1;
             }
-            v => bail!("cannot compute 'mean': encountered value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'mean': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -1014,7 +1015,7 @@ impl NormalAggrObj for AggrSum {
     fn set(&mut self, value: &DataValue) -> Result<()> {
         match value {
             DataValue::Num(n) => self.sum = self.sum.fold(n, i128::checked_add, |a, b| a + b),
-            v => bail!("cannot compute 'sum': encountered value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'sum': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -1049,7 +1050,7 @@ impl NormalAggrObj for AggrProduct {
             DataValue::Num(n) => {
                 self.product = self.product.fold(n, i128::checked_mul, |a, b| a * b)
             }
-            v => bail!("cannot compute 'product': encountered value {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'product': encountered value {:?}", v),
         }
         Ok(())
     }
@@ -1262,7 +1263,7 @@ impl NormalAggrObj for AggrLatestBy {
                 }
                 Ok(())
             }
-            v => bail!("cannot compute 'latest_by' on {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'latest_by' on {:?}", v),
         }
     }
 
@@ -1303,7 +1304,7 @@ impl NormalAggrObj for AggrSmallestBy {
                 }
                 Ok(())
             }
-            v => bail!("cannot compute 'smallest_by' on {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'smallest_by' on {:?}", v),
         }
     }
 
@@ -1354,7 +1355,7 @@ impl NormalAggrObj for AggrMinCost {
                 }
                 Ok(())
             }
-            v => bail!("cannot compute 'min_cost' on {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'min_cost' on {:?}", v),
         }
     }
 
@@ -1455,7 +1456,7 @@ impl NormalAggrObj for AggrShortest {
                 }
                 Ok(())
             }
-            v => bail!("cannot compute 'shortest' on {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot compute 'shortest' on {:?}", v),
         }
     }
 
@@ -1597,7 +1598,7 @@ impl NormalAggrObj for AggrBitAnd {
                 }
                 Ok(())
             }
-            v => bail!("cannot apply 'bit_and' to {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot apply 'bit_and' to {:?}", v),
         }
     }
 
@@ -1691,7 +1692,7 @@ impl NormalAggrObj for AggrBitOr {
                 }
                 Ok(())
             }
-            v => bail!("cannot apply 'bit_or' to {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot apply 'bit_or' to {:?}", v),
         }
     }
 
@@ -1778,7 +1779,7 @@ impl NormalAggrObj for AggrBitXor {
                 }
                 Ok(())
             }
-            v => bail!("cannot apply 'bit_xor' to {:?}", v),
+            v @ (data_value_any!()) => bail!("cannot apply 'bit_xor' to {:?}", v),
         }
     }
 
@@ -2301,7 +2302,7 @@ mod tests {
                     "product demotion lost an operand: got {f:e}, expected {expected:e}"
                 );
             }
-            other => panic!("expected float after i128 overflow, got {other:?}"),
+            other @ (data_value_any!()) => panic!("expected float after i128 overflow, got {other:?}"),
         }
     }
 

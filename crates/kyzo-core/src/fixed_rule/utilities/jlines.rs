@@ -44,6 +44,7 @@ use crate::data::value::Tuple;
 use crate::fixed_rule::{
     CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
+use crate::data::value::data_value_any;
 
 /// The network seam of the reader utilities: fetching a non-`file://` URL
 /// needs an HTTP(S) client the engine deliberately does not carry (yet) —
@@ -110,10 +111,10 @@ impl FixedRule for JsonReader {
                 .into_iter()
                 .map(|d| match d {
                     DataValue::Str(s) => Ok(s),
-                    _ => Err(BadFields(fields_span)),
+                    data_value_any!() => Err(BadFields(fields_span)),
                 })
                 .try_collect()?,
-            _ => bail!(BadFields(fields_span)),
+            data_value_any!() => bail!(BadFields(fields_span)),
         };
         let mut counter = -1i64;
         let mut process_row = |row: &BTreeMap<String, JsonValue>| -> Result<()> {
@@ -214,7 +215,7 @@ impl FixedRule for JsonReader {
         })?;
         Ok(match fields.clone().eval_to_const()? {
             DataValue::List(l) => l.len() + with_row_num,
-            _ => bail!(CannotDetermineArity(
+            data_value_any!() => bail!(CannotDetermineArity(
                 "JsonReader".to_string(),
                 "invalid option 'fields' given, expect a list".to_string(),
                 span

@@ -23,6 +23,7 @@ use serde_json::json;
 use crate::data::functions::*;
 use crate::data::relation::{ColType, NullableColType};
 use crate::data::value::{DataValue, ValidityTs, Vector};
+use crate::data::value::data_value_any;
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-5
@@ -1772,7 +1773,7 @@ fn test_pre_epoch_timestamps() {
         .unwrap();
     match coerced {
         DataValue::Validity(vld) => assert!(vld.timestamp().raw() < 0),
-        v => panic!("expected a validity, got {v:?}"),
+        v @ (data_value_any!()) => panic!("expected a validity, got {v:?}"),
     }
 }
 
@@ -1857,7 +1858,7 @@ fn test_vec_rejects_trailing_bytes() {
     let ok = STANDARD.encode([0u8, 0, 128, 63]);
     match op_vec(&[DataValue::Str(ok)]).unwrap() {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other => panic!("expected vector, got {other:?}"),
+        other @ (data_value_any!()) => panic!("expected vector, got {other:?}"),
     }
     // The F64 path is equally strict: 9 bytes is one f64 plus trailing.
     let bad64 = STANDARD.encode([0u8; 9]);
@@ -1865,7 +1866,7 @@ fn test_vec_rejects_trailing_bytes() {
     let ok64 = STANDARD.encode([0u8; 8]);
     match op_vec(&[DataValue::Str(ok64), DataValue::Str("F64".into())]).unwrap() {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other => panic!("expected vector, got {other:?}"),
+        other @ (data_value_any!()) => panic!("expected vector, got {other:?}"),
     }
 }
 
@@ -1959,7 +1960,7 @@ fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
         .coerce(DataValue::Str(s.into()), ValidityTs::from_raw(999))
         .map(|v| match v {
             DataValue::Validity(vld) => (vld.timestamp().raw(), vld.is_assert()),
-            other => panic!("expected Validity, got {other:?}"),
+            other @ (data_value_any!()) => panic!("expected Validity, got {other:?}"),
         })
         .map_err(|e| e.to_string())
 }

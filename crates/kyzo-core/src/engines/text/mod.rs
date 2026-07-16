@@ -46,6 +46,7 @@ use smartstring::{LazyCompact, SmartString};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
+use crate::data::value::data_value_any;
 
 pub(crate) mod ast;
 pub(crate) mod cangjie;
@@ -245,7 +246,7 @@ impl TokenizerConfig {
                             })?);
                         }
                     }
-                    _ => bail!("First argument `compound_words_list` must be a list of strings"),
+                    data_value_any!() => bail!("First argument `compound_words_list` must be a list of strings"),
                 }
                 SplitCompoundWords::from_dictionary(list_values)
                     .map_err(|e| miette!("Failed to load dictionary: {}", e))?
@@ -305,7 +306,7 @@ impl TokenizerConfig {
                         }
                         StopWordFilter::new(stopwords).into()
                     }
-                    _ => bail!("Filter Stopwords requires language name or a list of stopwords"),
+                    data_value_any!() => bail!("Filter Stopwords requires language name or a list of stopwords"),
                 }
             }
             _ => bail!("Unknown token filter: {:?}", self.name),

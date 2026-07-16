@@ -78,6 +78,7 @@ use crate::runtime::db::Db;
 use crate::storage::Storage;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
 use crate::storage::sim::SimRng;
+use crate::data::value::data_value_any;
 
 fn no_params() -> std::collections::BTreeMap<String, DataValue> {
     std::collections::BTreeMap::new()
@@ -265,7 +266,7 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
         let entity = row[0].get_int().expect("int key");
         let val = match &row[1] {
             DataValue::Str(s) => s.to_string(),
-            other => panic!("expected a string value, got {other:?}"),
+            other @ (data_value_any!()) => panic!("expected a string value, got {other:?}"),
         };
         (entity, val)
     })
@@ -416,7 +417,7 @@ fn engine_asof(db: &Db<FjallStorage>, rel_name: &str, at: i64) -> BTreeSet<(i64,
             let k0 = r[0].get_int().expect("k0 is an int");
             let val = match &r[1] {
                 DataValue::Str(s) => s.to_string(),
-                other => panic!("expected a string value, got {other:?}"),
+                other @ (data_value_any!()) => panic!("expected a string value, got {other:?}"),
             };
             (k0, val)
         })
@@ -435,7 +436,7 @@ fn engine_current(db: &Db<FjallStorage>, rel_name: &str) -> BTreeSet<(i64, Strin
             let k0 = r[0].get_int().expect("k0 is an int");
             let val = match &r[1] {
                 DataValue::Str(s) => s.to_string(),
-                other => panic!("expected a string value, got {other:?}"),
+                other @ (data_value_any!()) => panic!("expected a string value, got {other:?}"),
             };
             (k0, val)
         })
@@ -605,7 +606,7 @@ fn two_coordinate_asof_script_sees_the_record_as_it_was() {
                 let k0 = r[0].get_int().expect("int");
                 let val = match &r[1] {
                     DataValue::Str(s) => s.to_string(),
-                    other => panic!("expected string, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected string, got {other:?}"),
                 };
                 (k0, val)
             })

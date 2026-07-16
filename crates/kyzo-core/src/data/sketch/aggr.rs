@@ -37,6 +37,7 @@ use crate::data::sketch::count_min::CountMinSketch;
 use crate::data::sketch::hll::HyperLogLog;
 use crate::data::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
 use crate::data::value::DataValue;
+use crate::data::value::data_value_any;
 
 // ── HyperLogLog: approximate distinct count (normal) ─────────────────────
 
@@ -99,7 +100,7 @@ impl NormalAggrObj for AggrHllSketch {
 fn as_hll(v: &DataValue) -> Result<HyperLogLog> {
     match v {
         DataValue::Bytes(b) => HyperLogLog::from_bytes(b),
-        other => bail!("hll_union expects sketch bytes, got {other:?}"),
+        other @ (data_value_any!()) => bail!("hll_union expects sketch bytes, got {other:?}"),
     }
 }
 

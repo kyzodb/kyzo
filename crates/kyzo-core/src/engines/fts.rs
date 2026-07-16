@@ -116,6 +116,7 @@ use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+use crate::data::value::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Projection kind — `K` of the shared build→seal→query machine (#305).
@@ -250,7 +251,7 @@ fn extract_text(extractor: &Expr, tuple: &[DataValue]) -> Result<Option<String>>
     match extractor.eval(tuple)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
-        other => bail!(FtsExtractorType {
+        other @ (data_value_any!()) => bail!(FtsExtractorType {
             got: format!("{other:?}"),
         }),
     }

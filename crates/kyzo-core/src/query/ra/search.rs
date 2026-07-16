@@ -31,6 +31,7 @@ use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use thiserror::Error;
+use crate::data::value::data_value_any;
 
 /// An index search driven once per parent row: the query expression is
 /// evaluated against the parent tuple, the engine's pure search function
@@ -96,7 +97,7 @@ impl SearchRA {
             {
                 crate::engines::fts::fts_total_docs(tx, &c.base)?
             }
-            _ => 0,
+            SearchConfig::Hnsw(_) | SearchConfig::Fts(_) | SearchConfig::Lsh(_) => 0,
         };
 
         let filter_expr = self.atom.filter.clone();
@@ -111,7 +112,7 @@ impl SearchRA {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {
                         DataValue::Vector(v) => v,
-                        other => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
+                        other @ (data_value_any!()) => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
                     };
                     crate::engines::hnsw::hnsw_knn(
                         tx,
@@ -127,7 +128,7 @@ impl SearchRA {
                 SearchConfig::Fts(c) => {
                     let text = match &q {
                         DataValue::Str(t) => t,
-                        other => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
+                        other @ (data_value_any!()) => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
                     };
                     crate::engines::fts::fts_search(
                         &self.atom.cancel,

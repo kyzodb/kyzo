@@ -286,7 +286,7 @@ impl Segment {
         for (v, p) in row.iter().zip(prefix) {
             match v.cmp(p) {
                 std::cmp::Ordering::Equal => continue,
-                ord => return ord,
+                ord @ std::cmp::Ordering::Less | ord @ std::cmp::Ordering::Greater => return ord,
             }
         }
         std::cmp::Ordering::Equal

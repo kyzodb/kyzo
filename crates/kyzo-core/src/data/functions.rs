@@ -55,7 +55,7 @@ use crate::data::json::{json_from_serde, serde_from_json};
 use crate::data::relation::VecElementType;
 use crate::data::value::{
     Bound, DataValue, Interval, Json, Num, NumRepr, NumericOrd, RegexFlags, RegexSource, Validity,
-    ValidityTs, Vector,
+    ValidityTs, Vector, data_value_any,
 };
 use serde_json::Value as JsonValue;
 
@@ -167,7 +167,7 @@ fn get_json_path_immutable<'a>(
                     .ok_or_else(|| miette!("json path does not exist"))?;
                 pointer = val;
             }
-            _ => {
+            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {
                 bail!("json path does not exist")
             }
         }
@@ -194,7 +194,7 @@ fn get_json_path<'a>(
                 // In bounds: just resized to at least `key + 1`.
                 pointer = &mut arr[key];
             }
-            _ => {
+            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {
                 bail!("json path does not exist")
             }
         }
@@ -224,7 +224,7 @@ pub(crate) fn op_remove_json_path(args: &[DataValue]) -> Result<DataValue> {
             ensure!(key < arr.len(), "json path does not exist");
             arr.remove(key);
         }
-        _ => {
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {
             bail!("json path does not exist")
         }
     }
@@ -338,7 +338,7 @@ define_op!(OP_DUMP_JSON, 1, false, true);
 pub(crate) fn op_dump_json(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Json(j) => Ok(DataValue::Str(serde_from_json(j).to_string())),
-        _ => bail!("dump_json requires a json argument"),
+        data_value_any!() => bail!("dump_json requires a json argument"),
     }
 }
 
@@ -367,7 +367,7 @@ define_op!(OP_JSON_TO_SCALAR, 1, false, true);
 pub(crate) fn op_json_to_scalar(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Json(j) => json2val(serde_from_json(j)),
-        d => d.clone(),
+        d @ (data_value_any!()) => d.clone(),
     })
 }
 
@@ -522,7 +522,7 @@ pub(crate) fn result_has_nan(v: &DataValue) -> bool {
     match v {
         DataValue::Num(n) => matches!(n.repr(), NumRepr::Float(x) if x.is_nan()),
         DataValue::Vector(v) => v.as_slice().iter().any(|x| x.is_nan()),
-        _ => false,
+        data_value_any!() => false,
     }
 }
 
@@ -540,7 +540,7 @@ pub(crate) fn op_add(args: &[DataValue]) -> Result<DataValue> {
                 NumRepr::Float(f) => f_accum += f,
             },
             DataValue::Vector(_) => return add_vecs(args),
-            _ => bail!("addition requires numbers"),
+            data_value_any!() => bail!("addition requires numbers"),
         }
     }
     if f_accum == 0.0f64 {
@@ -684,7 +684,7 @@ pub(crate) fn op_mul(args: &[DataValue]) -> Result<DataValue> {
                 NumRepr::Float(f) => f_accum *= f,
             },
             DataValue::Vector(_) => return mul_vecs(args),
-            _ => bail!("multiplication requires numbers"),
+            data_value_any!() => bail!("multiplication requires numbers"),
         }
     }
     if f_accum == 1.0f64 {
@@ -792,7 +792,7 @@ pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Vector(v) => {
             DataValue::Vector(Vector::new(v.as_slice().iter().map(|x| -x).collect()))
         }
-        _ => bail!("minus can only be applied to numbers"),
+        data_value_any!() => bail!("minus can only be applied to numbers"),
     })
 }
 
@@ -809,7 +809,7 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Vector(v) => {
             DataValue::Vector(Vector::new(v.as_slice().iter().map(|x| x.abs()).collect()))
         }
-        _ => bail!("'abs' requires numbers"),
+        data_value_any!() => bail!("'abs' requires numbers"),
     })
 }
 
@@ -831,7 +831,7 @@ pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
                 DataValue::from(f64::NAN)
             }
         }
-        _ => bail!("'signum' requires numbers"),
+        data_value_any!() => bail!("'signum' requires numbers"),
     })
 }
 
@@ -842,7 +842,7 @@ pub(crate) fn op_floor(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Int(i) => DataValue::Num(Num::int(i)),
             NumRepr::Float(f) => DataValue::Num(Num::float(f.floor())),
         },
-        _ => bail!("'floor' requires numbers"),
+        data_value_any!() => bail!("'floor' requires numbers"),
     })
 }
 
@@ -853,7 +853,7 @@ pub(crate) fn op_ceil(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Int(i) => DataValue::Num(Num::int(i)),
             NumRepr::Float(f) => DataValue::Num(Num::float(f.ceil())),
         },
-        _ => bail!("'ceil' requires numbers"),
+        data_value_any!() => bail!("'ceil' requires numbers"),
     })
 }
 
@@ -864,7 +864,7 @@ pub(crate) fn op_round(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Int(i) => DataValue::Num(Num::int(i)),
             NumRepr::Float(f) => DataValue::Num(Num::float(f.round())),
         },
-        _ => bail!("'round' requires numbers"),
+        data_value_any!() => bail!("'round' requires numbers"),
     })
 }
 
@@ -877,7 +877,7 @@ pub(crate) fn op_exp(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.exp()).collect(),
             )));
         }
-        _ => bail!("'exp' requires numbers"),
+        data_value_any!() => bail!("'exp' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.exp())))
 }
@@ -891,7 +891,7 @@ pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.exp2()).collect(),
             )));
         }
-        _ => bail!("'exp2' requires numbers"),
+        data_value_any!() => bail!("'exp2' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.exp2())))
 }
@@ -906,7 +906,7 @@ pub(crate) fn op_ln(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("ln", v.as_slice().iter().map(|x| x.ln()).collect());
         }
-        _ => bail!("'ln' requires numbers"),
+        data_value_any!() => bail!("'ln' requires numbers"),
     };
     // `ln` is defined only for positive reals: zero diverges to `-inf` and a
     // negative argument has no real logarithm (`NaN`) — both are silent
@@ -927,7 +927,7 @@ pub(crate) fn op_log2(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("log2", v.as_slice().iter().map(|x| x.log2()).collect());
         }
-        _ => bail!("'log2' requires numbers"),
+        data_value_any!() => bail!("'log2' requires numbers"),
     };
     // Same domain as `ln`: only positive reals have a base-2 logarithm.
     if a <= 0.0 {
@@ -946,7 +946,7 @@ pub(crate) fn op_log10(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("log10", v.as_slice().iter().map(|x| x.log10()).collect());
         }
-        _ => bail!("'log10' requires numbers"),
+        data_value_any!() => bail!("'log10' requires numbers"),
     };
     // Same domain as `ln`: only positive reals have a base-10 logarithm.
     if a <= 0.0 {
@@ -964,7 +964,7 @@ pub(crate) fn op_sin(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.sin()).collect(),
             )));
         }
-        _ => bail!("'sin' requires numbers"),
+        data_value_any!() => bail!("'sin' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.sin())))
 }
@@ -978,7 +978,7 @@ pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.cos()).collect(),
             )));
         }
-        _ => bail!("'cos' requires numbers"),
+        data_value_any!() => bail!("'cos' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.cos())))
 }
@@ -992,7 +992,7 @@ pub(crate) fn op_tan(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.tan()).collect(),
             )));
         }
-        _ => bail!("'tan' requires numbers"),
+        data_value_any!() => bail!("'tan' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.tan())))
 }
@@ -1007,7 +1007,7 @@ pub(crate) fn op_asin(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("asin", v.as_slice().iter().map(|x| x.asin()).collect());
         }
-        _ => bail!("'asin' requires numbers"),
+        data_value_any!() => bail!("'asin' requires numbers"),
     };
     // `asin` is defined only on [-1, 1]; outside it the raw `f64` method
     // returns `NaN`.
@@ -1027,7 +1027,7 @@ pub(crate) fn op_acos(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("acos", v.as_slice().iter().map(|x| x.acos()).collect());
         }
-        _ => bail!("'acos' requires numbers"),
+        data_value_any!() => bail!("'acos' requires numbers"),
     };
     // `acos` is defined only on [-1, 1]; outside it the raw `f64` method
     // returns `NaN`.
@@ -1046,7 +1046,7 @@ pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.atan()).collect(),
             )));
         }
-        _ => bail!("'atan' requires numbers"),
+        data_value_any!() => bail!("'atan' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.atan())))
 }
@@ -1055,11 +1055,11 @@ define_op!(OP_ATAN2, 2, false, true);
 pub(crate) fn op_atan2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
-        _ => bail!("'atan2' requires numbers"),
+        data_value_any!() => bail!("'atan2' requires numbers"),
     };
     let b = match &args[1] {
         DataValue::Num(n) => n.to_f64(),
-        _ => bail!("'atan2' requires numbers"),
+        data_value_any!() => bail!("'atan2' requires numbers"),
     };
 
     Ok(DataValue::Num(Num::float(a.atan2(b))))
@@ -1074,7 +1074,7 @@ pub(crate) fn op_sinh(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.sinh()).collect(),
             )));
         }
-        _ => bail!("'sinh' requires numbers"),
+        data_value_any!() => bail!("'sinh' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.sinh())))
 }
@@ -1088,7 +1088,7 @@ pub(crate) fn op_cosh(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.cosh()).collect(),
             )));
         }
-        _ => bail!("'cosh' requires numbers"),
+        data_value_any!() => bail!("'cosh' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.cosh())))
 }
@@ -1102,7 +1102,7 @@ pub(crate) fn op_tanh(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.tanh()).collect(),
             )));
         }
-        _ => bail!("'tanh' requires numbers"),
+        data_value_any!() => bail!("'tanh' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.tanh())))
 }
@@ -1116,7 +1116,7 @@ pub(crate) fn op_asinh(args: &[DataValue]) -> Result<DataValue> {
                 v.as_slice().iter().map(|x| x.asinh()).collect(),
             )));
         }
-        _ => bail!("'asinh' requires numbers"),
+        data_value_any!() => bail!("'asinh' requires numbers"),
     };
     Ok(DataValue::Num(Num::float(a.asinh())))
 }
@@ -1131,7 +1131,7 @@ pub(crate) fn op_acosh(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("acosh", v.as_slice().iter().map(|x| x.acosh()).collect());
         }
-        _ => bail!("'acosh' requires numbers"),
+        data_value_any!() => bail!("'acosh' requires numbers"),
     };
     // `acosh` is defined only on [1, +inf); below 1 the raw `f64` method
     // returns `NaN`.
@@ -1151,7 +1151,7 @@ pub(crate) fn op_atanh(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("atanh", v.as_slice().iter().map(|x| x.atanh()).collect());
         }
-        _ => bail!("'atanh' requires numbers"),
+        data_value_any!() => bail!("'atanh' requires numbers"),
     };
     // `atanh` is defined only on the open interval (-1, 1): outside it the
     // raw `f64` method returns `NaN`, and at either endpoint it diverges to
@@ -1172,7 +1172,7 @@ pub(crate) fn op_sqrt(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("sqrt", v.as_slice().iter().map(|x| x.sqrt()).collect());
         }
-        _ => bail!("'sqrt' requires numbers"),
+        data_value_any!() => bail!("'sqrt' requires numbers"),
     };
     // `sqrt` is defined only for non-negative reals; a negative argument has
     // no real square root and the raw `f64` method returns `NaN`.
@@ -1203,11 +1203,11 @@ pub(crate) fn op_pow(args: &[DataValue]) -> Result<DataValue> {
             }
             return no_nan_vec("pow", v.as_slice().iter().map(|x| x.powf(b)).collect());
         }
-        _ => bail!("'pow' requires numbers"),
+        data_value_any!() => bail!("'pow' requires numbers"),
     };
     let b = match &args[1] {
         DataValue::Num(n) => n.to_f64(),
-        _ => bail!("'pow' requires numbers"),
+        data_value_any!() => bail!("'pow' requires numbers"),
     };
     if pow_out_of_domain(a, b) {
         bail!(DomainError { op: "pow".into() });
@@ -1302,7 +1302,7 @@ pub(crate) fn op_bit_not(args: &[DataValue]) -> Result<DataValue> {
             }
             Ok(DataValue::Bytes(ret))
         }
-        _ => bail!("'bit_not' requires bytes"),
+        data_value_any!() => bail!("'bit_not' requires bytes"),
     }
 }
 
@@ -1372,7 +1372,7 @@ pub(crate) fn op_pack_bits(args: &[DataValue]) -> Result<DataValue> {
                         }
                     }
                 }
-                _ => bail!("'pack_bits' requires list of booleans"),
+                data_value_any!() => bail!("'pack_bits' requires list of booleans"),
             }
         }
         Ok(DataValue::Bytes(res))
@@ -1422,7 +1422,7 @@ pub(crate) fn op_concat(args: &[DataValue]) -> Result<DataValue> {
             }
             Ok(DataValue::Json(json_from_serde(&ret)))
         }
-        _ => bail!("'concat' requires strings, lists, or JSON objects"),
+        data_value_any!() => bail!("'concat' requires strings, lists, or JSON objects"),
     }
 }
 
@@ -1455,7 +1455,7 @@ define_op!(OP_LOWERCASE, 1, false, true);
 pub(crate) fn op_lowercase(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.to_lowercase())),
-        _ => bail!("'lowercase' requires strings"),
+        data_value_any!() => bail!("'lowercase' requires strings"),
     }
 }
 
@@ -1463,7 +1463,7 @@ define_op!(OP_UPPERCASE, 1, false, true);
 pub(crate) fn op_uppercase(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.to_uppercase())),
-        _ => bail!("'uppercase' requires strings"),
+        data_value_any!() => bail!("'uppercase' requires strings"),
     }
 }
 
@@ -1471,7 +1471,7 @@ define_op!(OP_TRIM, 1, false, true);
 pub(crate) fn op_trim(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim())),
-        _ => bail!("'trim' requires strings"),
+        data_value_any!() => bail!("'trim' requires strings"),
     }
 }
 
@@ -1479,7 +1479,7 @@ define_op!(OP_TRIM_START, 1, false, true);
 pub(crate) fn op_trim_start(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim_start())),
-        v => bail!("'trim_start' requires strings, got {}", v),
+        v @ (data_value_any!()) => bail!("'trim_start' requires strings, got {}", v),
     }
 }
 
@@ -1487,7 +1487,7 @@ define_op!(OP_TRIM_END, 1, false, true);
 pub(crate) fn op_trim_end(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Str(s) => Ok(DataValue::from(s.trim_end())),
-        _ => bail!("'trim_end' requires strings"),
+        data_value_any!() => bail!("'trim_end' requires strings"),
     }
 }
 
@@ -1522,7 +1522,7 @@ pub(crate) fn op_regex(args: &[DataValue]) -> Result<DataValue> {
             RegexSource::validated(RegexFlags::NONE, s.clone())
                 .map_err(|err| miette!("The string cannot be interpreted as regex: {err:?}"))?,
         ),
-        _ => bail!("'regex' requires strings"),
+        data_value_any!() => bail!("'regex' requires strings"),
     })
 }
 
@@ -1595,7 +1595,7 @@ define_op!(OP_T2S, 1, false, true);
 fn op_t2s(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
         DataValue::Str(s) => DataValue::Str(fast2s::convert(s)),
-        d => d.clone(),
+        d @ (data_value_any!()) => d.clone(),
     })
 }
 
@@ -1630,7 +1630,7 @@ pub(crate) fn op_is_finite(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Int(_) => true,
             NumRepr::Float(f) => f.is_finite(),
         },
-        _ => false,
+        data_value_any!() => false,
     }))
 }
 
@@ -1679,7 +1679,7 @@ pub(crate) fn op_append(args: &[DataValue]) -> Result<DataValue> {
             l.push(args[1].clone());
             Ok(DataValue::List(l))
         }
-        _ => bail!("'append' requires first argument to be a list"),
+        data_value_any!() => bail!("'append' requires first argument to be a list"),
     }
 }
 
@@ -1696,7 +1696,7 @@ pub(crate) fn op_prepend(args: &[DataValue]) -> Result<DataValue> {
             l.extend(pl.iter().cloned());
             Ok(DataValue::List(l))
         }
-        _ => bail!("'prepend' requires first argument to be a list"),
+        data_value_any!() => bail!("'prepend' requires first argument to be a list"),
     }
 }
 
@@ -1713,7 +1713,7 @@ pub(crate) fn op_length(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Str(s) => s.chars().count() as i64,
         DataValue::Bytes(b) => b.len() as i64,
         DataValue::Vector(v) => v.len() as i64,
-        _ => bail!("'length' requires lists"),
+        data_value_any!() => bail!("'length' requires lists"),
     }))
 }
 
@@ -1920,12 +1920,12 @@ fn get_impl(args: &[DataValue]) -> Result<DataValue> {
                         .clone()
                 }
                 DataValue::List(l) => get_json_path_immutable(&json, l)?.clone(),
-                _ => bail!("second argument to 'get' mut be a string or integer"),
+                data_value_any!() => bail!("second argument to 'get' mut be a string or integer"),
             };
             let res = json2val(res);
             Ok(res)
         }
-        _ => bail!("first argument to 'get' mut be a list or json"),
+        data_value_any!() => bail!("first argument to 'get' mut be a list or json"),
     }
 }
 
@@ -2030,7 +2030,7 @@ pub(crate) fn op_from_substrings(args: &[DataValue]) -> Result<DataValue> {
                 }
             }
         }
-        _ => bail!("'from_substring' requires a list of strings"),
+        data_value_any!() => bail!("'from_substring' requires a list of strings"),
     }
     Ok(DataValue::from(ret))
 }
@@ -2042,7 +2042,7 @@ pub(crate) fn op_encode_base64(args: &[DataValue]) -> Result<DataValue> {
             let s = STANDARD.encode(b);
             Ok(DataValue::from(s))
         }
-        _ => bail!("'encode_base64' requires bytes"),
+        data_value_any!() => bail!("'encode_base64' requires bytes"),
     }
 }
 
@@ -2055,7 +2055,7 @@ pub(crate) fn op_decode_base64(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("Data is not properly encoded"))?;
             Ok(DataValue::Bytes(b))
         }
-        _ => bail!("'decode_base64' requires strings"),
+        data_value_any!() => bail!("'decode_base64' requires strings"),
     }
 }
 
@@ -2130,7 +2130,7 @@ pub(crate) fn op_to_int(args: &[DataValue]) -> Result<DataValue> {
                 .into()
         }
         DataValue::Validity(vld) => DataValue::Num(Num::int(vld.ts_micros())),
-        v => bail!("'to_int' does not recognize {:?}", v),
+        v @ (data_value_any!()) => bail!("'to_int' does not recognize {:?}", v),
     })
 }
 
@@ -2150,7 +2150,7 @@ pub(crate) fn op_to_float(args: &[DataValue]) -> Result<DataValue> {
                 .map_err(|_| miette!("The string cannot be interpreted as float"))?
                 .into(),
         },
-        v => bail!("'to_float' does not recognize {:?}", v),
+        v @ (data_value_any!()) => bail!("'to_float' does not recognize {:?}", v),
     })
 }
 
@@ -2164,10 +2164,14 @@ fn val2str(arg: &DataValue) -> String {
         DataValue::Str(s) => s.to_string(),
         DataValue::Json(j) => match j {
             Json::Str(s) => s.clone(),
-            _ => to_json(arg).to_string(),
+            Json::Null
+            | Json::Bool(_)
+            | Json::Num(_)
+            | Json::Arr(_)
+            | Json::Obj(_) => to_json(arg).to_string(),
         },
-        v => {
-            let jv = to_json(v);
+        data_value_any!() => {
+            let jv = to_json(arg);
             jv.to_string()
         }
     }
@@ -2260,7 +2264,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
             };
             Ok(DataValue::Vector(Vector::new(components)))
         }
-        _ => bail!("'vec' requires a list or a vector"),
+        data_value_any!() => bail!("'vec' requires a list or a vector"),
     }
 }
 
@@ -2296,7 +2300,7 @@ pub(crate) fn op_l2_normalize(args: &[DataValue]) -> Result<DataValue> {
             }
             no_nan_vec("l2_normalize", s.iter().map(|x| x / norm).collect())
         }
-        _ => bail!("'l2_normalize' requires a vector"),
+        data_value_any!() => bail!("'l2_normalize' requires a vector"),
     }
 }
 
@@ -2442,7 +2446,7 @@ pub(crate) fn op_rand_bernoulli(args: &[DataValue]) -> Result<DataValue> {
             );
             f
         }
-        _ => bail!("'rand_bernoulli' requires number between 0. and 1."),
+        data_value_any!() => bail!("'rand_bernoulli' requires number between 0. and 1."),
     };
     Ok(DataValue::from(rand::rng().random_bool(prob)))
 }
@@ -2480,7 +2484,7 @@ pub(crate) fn op_rand_choose(args: &[DataValue]) -> Result<DataValue> {
             .cloned()
             .cloned()
             .unwrap_or(DataValue::Null)),
-        _ => bail!("'rand_choice' requires lists"),
+        data_value_any!() => bail!("'rand_choice' requires lists"),
     }
 }
 
@@ -2488,7 +2492,7 @@ define_op!(OP_ASSERT, 1, true, true);
 pub(crate) fn op_assert(args: &[DataValue]) -> Result<DataValue> {
     match &args[0] {
         DataValue::Bool(true) => Ok(DataValue::from(true)),
-        _ => bail!("assertion failed: {:?}", args),
+        data_value_any!() => bail!("assertion failed: {:?}", args),
     }
 }
 
@@ -2507,7 +2511,7 @@ pub(crate) fn op_union(args: &[DataValue]) -> Result<DataValue> {
                     ret.insert(el.clone());
                 }
             }
-            _ => bail!("'union' requires lists"),
+            data_value_any!() => bail!("'union' requires lists"),
         }
     }
     Ok(DataValue::List(ret.into_iter().collect()))
@@ -2518,7 +2522,7 @@ pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
     let mut start: BTreeSet<_> = match &args[0] {
         DataValue::List(l) => l.iter().cloned().collect(),
         DataValue::Set(s) => s.iter().cloned().collect(),
-        _ => bail!("'difference' requires lists"),
+        data_value_any!() => bail!("'difference' requires lists"),
     };
     for arg in &args[1..] {
         match arg {
@@ -2532,7 +2536,7 @@ pub(crate) fn op_difference(args: &[DataValue]) -> Result<DataValue> {
                     start.remove(el);
                 }
             }
-            _ => bail!("'difference' requires lists"),
+            data_value_any!() => bail!("'difference' requires lists"),
         }
     }
     Ok(DataValue::List(start.into_iter().collect()))
@@ -2543,7 +2547,7 @@ pub(crate) fn op_intersection(args: &[DataValue]) -> Result<DataValue> {
     let mut start: BTreeSet<_> = match &args[0] {
         DataValue::List(l) => l.iter().cloned().collect(),
         DataValue::Set(s) => s.iter().cloned().collect(),
-        _ => bail!("'intersection' requires lists"),
+        data_value_any!() => bail!("'intersection' requires lists"),
     };
     for arg in &args[1..] {
         match arg {
@@ -2552,7 +2556,7 @@ pub(crate) fn op_intersection(args: &[DataValue]) -> Result<DataValue> {
                 start = start.intersection(&other).cloned().collect();
             }
             DataValue::Set(s) => start = start.intersection(s).cloned().collect(),
-            _ => bail!("'intersection' requires lists"),
+            data_value_any!() => bail!("'intersection' requires lists"),
         }
     }
     Ok(DataValue::List(start.into_iter().collect()))
@@ -2566,7 +2570,7 @@ pub(crate) fn op_to_uuid(args: &[DataValue]) -> Result<DataValue> {
             let id = uuid::Uuid::try_parse(s.as_str()).map_err(|_| miette!("invalid UUID"))?;
             Ok(DataValue::uuid(id))
         }
-        _ => bail!("'to_uuid' requires a string"),
+        data_value_any!() => bail!("'to_uuid' requires a string"),
     }
 }
 
@@ -2623,7 +2627,7 @@ define_op!(OP_FORMAT_TIMESTAMP, 1, true, true);
 pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
     let millis = match &args[0] {
         DataValue::Validity(vld) => vld.ts_micros() / 1000,
-        v => {
+        v @ (data_value_any!()) => {
             let f = v
                 .get_float()
                 .ok_or_else(|| miette!("'format_timestamp' expects a number"))?;
@@ -2723,7 +2727,7 @@ pub(crate) fn data_value_to_vld_spec(
             "END" => Ok(crate::data::value::MAX_VALIDITY_TS),
             s => Ok(str2vld(s).map_err(|_| BadValiditySpecification(span))?),
         },
-        _ => {
+        data_value_any!() => {
             bail!(BadValiditySpecification(span))
         }
     }
@@ -2765,7 +2769,7 @@ pub(crate) fn op_uuid_timestamp(args: &[DataValue]) -> Result<DataValue> {
                 s.into()
             }
         },
-        _ => bail!("not an UUID"),
+        data_value_any!() => bail!("not an UUID"),
     })
 }
 

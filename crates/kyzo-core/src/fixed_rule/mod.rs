@@ -104,6 +104,7 @@ use crate::fixed_rule::utilities::*;
 use crate::query::eval::{BudgetDimension, LimitExceeded};
 use crate::query::levels::EpochStore;
 use crate::query::temp_store::RegularTempStore;
+use crate::data::value::data_value_any;
 
 pub(crate) mod algos;
 pub(crate) mod graph;
@@ -485,7 +486,7 @@ impl<'a> FixedRulePayload<'a> {
         match self.manifest.options.get(name) {
             Some(ex) => match ex.clone().eval_to_const()? {
                 DataValue::Str(s) => Ok(s),
-                _ => Err(WrongFixedRuleOptionError {
+                data_value_any!() => Err(WrongFixedRuleOptionError {
                     name: name.to_string(),
                     span: ex.span(),
                     rule_name: self.manifest.fixed_handle.name.to_string(),

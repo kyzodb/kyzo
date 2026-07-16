@@ -60,6 +60,7 @@ use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
+use crate::data::value::data_value_any;
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The variable '{0}' is unbound")]
@@ -435,7 +436,7 @@ impl Expr {
                 args,
                 ..
             } => args.to_vec(),
-            v => vec![v.clone()],
+            v @ Expr::Binding { .. } | v @ Expr::Const { .. } | v @ Expr::Apply { .. } | v @ Expr::UnboundApply { .. } | v @ Expr::Cond { .. } | v @ Expr::Lazy { .. } => vec![v.clone()],
         }
     }
     pub(crate) fn fill_binding_indices(
@@ -702,7 +703,7 @@ impl Expr {
     pub(crate) fn eval_pred(&self, bindings: impl AsRef<[DataValue]>) -> Result<bool> {
         match self.eval(bindings)? {
             DataValue::Bool(b) => Ok(b),
-            v => bail!(PredicateTypeError(self.span(), v)),
+            v @ (data_value_any!()) => bail!(PredicateTypeError(self.span(), v)),
         }
     }
     pub(crate) fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
@@ -838,7 +839,7 @@ impl Expr {
                     for field in args.iter() {
                         match field {
                             Expr::Binding { var, .. } => collected.push(var.name.clone()),
-                            _ => {
+                            Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                                 return Err(InvalidFieldsError(
                                     format!("`{field}` is not a plain variable"),
                                     field.span(),
@@ -851,7 +852,7 @@ impl Expr {
                 }
             }
             Expr::Binding { var, .. } => Ok(vec![var.name.clone()]),
-            _ => Err(InvalidFieldsError(
+            Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => Err(InvalidFieldsError(
                 format!("`{self}` is not a variable or list"),
                 self.span(),
             )

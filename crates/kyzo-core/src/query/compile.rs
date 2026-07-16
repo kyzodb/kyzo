@@ -303,7 +303,7 @@ impl MagicInlineRule {
                 MagicAtom::Rule(rule) | MagicAtom::NegatedRule(rule) => {
                     coll.insert(occurrence, rule.name.clone());
                 }
-                _ => {}
+                MagicAtom::Relation(_) | MagicAtom::Predicate(_) | MagicAtom::NegatedRelation(_) | MagicAtom::Unification(_) | MagicAtom::Search(_) => {}
             }
         }
         coll

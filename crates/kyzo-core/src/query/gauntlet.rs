@@ -309,7 +309,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Db<S>, script: &str) -> Vec<MagicSymb
         .expect("gauntlet script parses")
     {
         Script::Single(p) => *p,
-        _ => panic!("gauntlet scripts are always a single query"),
+        Script::Imperative(_) | Script::Sys(_) => panic!("gauntlet scripts are always a single query"),
     };
     let tx = SessionTx::new_read(
         db.storage.read_tx().expect("read tx"),

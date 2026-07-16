@@ -67,7 +67,10 @@ impl<S: Storage> Db<S> {
                 .map(|(k, v)| (k.clone(), DataValue::from(v)))
                 .collect(),
             JsonValue::Null => BTreeMap::new(),
-            _ => {
+            JsonValue::Bool(_)
+            | JsonValue::Number(_)
+            | JsonValue::String(_)
+            | JsonValue::Array(_) => {
                 return format_error_as_json(
                     miette::miette!("query parameters must be a JSON object"),
                     Some(payload),

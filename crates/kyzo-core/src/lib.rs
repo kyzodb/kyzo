@@ -241,6 +241,11 @@
 // `cargo xtask unsafe` enforces that this lint stays and that no
 // `allow(unsafe_code)` appears anywhere in kyzo-core.
 #![forbid(unsafe_code)]
+// Joins the panic-lint rung: sealed discriminants are matched exhaustively
+// (workspace `[workspace.lints.clippy] wildcard_enum_match_arm = "deny"`).
+// No `allow(wildcard_enum_match_arm)` escapes — name the remaining variants
+// or use `if let` / `let else` for single-variant gates.
+#![deny(clippy::wildcard_enum_match_arm)]
 // The transaction traits return boxed iterator types by design; naming them
 // would not simplify the contract.
 #![allow(clippy::type_complexity)]

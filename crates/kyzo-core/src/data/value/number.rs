@@ -190,7 +190,7 @@ impl Num {
                 out.push(CLASS_NAN);
                 out.push(REPR_FLOAT);
             }
-            _ => {
+            Repr::Int(_) | Repr::Float(_) => {
                 let (neg, mag) = self.sign_magnitude();
                 out.push(if neg { CLASS_NEG } else { CLASS_POS });
                 let start = out.len();
@@ -469,7 +469,7 @@ impl Ord for NumericOrd {
         // tie-break yields the numeric order exactly.
         match self.0.cmp(&other.0) {
             Ordering::Equal => Ordering::Equal,
-            o => {
+            o @ Ordering::Less | o @ Ordering::Greater => {
                 if self.0.repr_byte() != other.0.repr_byte() {
                     let same = matches!(
                         (self.0.as_int(), other.0.as_float()),

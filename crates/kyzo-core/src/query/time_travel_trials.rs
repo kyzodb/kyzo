@@ -63,6 +63,7 @@ use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
 use crate::storage::{Storage, WriteTx};
+use crate::data::value::data_value_any;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Plumbing (reconstructed from query/compile.rs's private test module).
@@ -890,7 +891,7 @@ fn normal_aggregation_over_asof_read() {
             .iter()
             .map(|r| match &r[1] {
                 DataValue::Num(_) => r[1].get_int().unwrap_or(0),
-                _ => 0,
+                data_value_any!() => 0,
             })
             .sum();
         let got = compile_and_run(&db, agg_program(at_i));
@@ -2238,7 +2239,7 @@ fn parsed_validity_clause(script: &str) -> ValidityClause {
             .validity
             .clone()
             .expect("expected a validity clause on the atom"),
-        other => panic!("expected a stored-relation atom, got {other:?}"),
+        other @ InputAtom::Rule { .. } | other @ InputAtom::NamedFieldRelation { .. } | other @ InputAtom::Predicate { .. } | other @ InputAtom::Negation { .. } | other @ InputAtom::Conjunction { .. } | other @ InputAtom::Disjunction { .. } | other @ InputAtom::Unification { .. } | other @ InputAtom::Search { .. } => panic!("expected a stored-relation atom, got {other:?}"),
     }
 }
 
@@ -2249,7 +2250,7 @@ fn spans_clause_parses_through_real_script_text() {
             assert_eq!(sys, MAX_VALIDITY_TS, "default sys is the current snapshot");
             assert_eq!(var.name, "iv");
         }
-        other => panic!("expected a Spans clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Delta { .. } => panic!("expected a Spans clause, got {other:?}"),
     }
 }
 
@@ -2260,7 +2261,7 @@ fn spans_clause_with_explicit_sys_parses_through_real_script_text() {
             assert_eq!(sys, vts(5));
             assert_eq!(var.name, "iv");
         }
-        other => panic!("expected a Spans clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Delta { .. } => panic!("expected a Spans clause, got {other:?}"),
     }
 }
 
@@ -2278,7 +2279,7 @@ fn delta_clause_parses_through_real_script_text() {
             assert_eq!(to, vts(10));
             assert_eq!(var.name, "sgn");
         }
-        other => panic!("expected a Delta clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Spans { .. } => panic!("expected a Delta clause, got {other:?}"),
     }
 }
 
@@ -2296,7 +2297,7 @@ fn delta_sys_clause_parses_through_real_script_text() {
             assert_eq!(to, vts(10));
             assert_eq!(var.name, "sgn");
         }
-        other => panic!("expected a Delta clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Spans { .. } => panic!("expected a Delta clause, got {other:?}"),
     }
 }
 

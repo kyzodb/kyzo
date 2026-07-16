@@ -36,6 +36,7 @@ use crate::data::symb::Symbol;
 use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
 use crate::storage::Storage;
 use crate::storage::fjall::new_fjall_storage;
+use crate::data::value::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
@@ -345,7 +346,7 @@ fn brute_force_filtered_knn(
             let key = r[0].get_int().unwrap();
             let v = match &r.as_slice()[1] {
                 DataValue::Vector(v) => v.clone(),
-                _ => panic!("row vector"),
+                data_value_any!() => panic!("row vector"),
             };
             let vv = IndexVec::admit(&v, manifest).expect("row admits");
             (OrderedFloat(qv.dist(&vv, manifest.distance)), key)

@@ -140,6 +140,7 @@ use crate::data::bitemporal::{
 };
 use crate::data::value::AsOf;
 use crate::data::value::Tuple;
+use crate::data::value::data_value_any;
 
 /// A single positioned cursor, repositioned forward by [`Self::seek`]
 /// rather than rebuilt. `target` is always non-decreasing across calls on
@@ -365,7 +366,7 @@ mod tests {
             .iter()
             .map(|t| match &t[0] {
                 DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                other => panic!("non-integer fact column: {other:?}"),
+                other @ (data_value_any!()) => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
     }

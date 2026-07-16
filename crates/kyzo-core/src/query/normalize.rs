@@ -360,7 +360,7 @@ fn do_disjunctive_normal_form(
                 normalize_relation_apply(r, true, symb_gen)
             }
             // NNF proved negation sits only on applications.
-            _ => bail!(CompileInvariantError("negation not in normal form")),
+            InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Conjunction { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => bail!(CompileInvariantError("negation not in normal form")),
         },
         InputAtom::Unification { inner } => vec![vec![NormalFormAtom::Unification(inner)]],
         InputAtom::Search { inner } => vec![vec![NormalFormAtom::Search(Box::new(
@@ -463,7 +463,7 @@ fn normalize_args(
                     out_args.push(dup);
                 }
             }
-            expr => {
+            expr @ Expr::Const { .. } | expr @ Expr::Apply { .. } | expr @ Expr::UnboundApply { .. } | expr @ Expr::Cond { .. } | expr @ Expr::Lazy { .. } => {
                 let span = expr.span();
                 let kw = symb_gen.next(span);
                 out_args.push(kw.clone());

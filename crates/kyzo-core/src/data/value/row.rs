@@ -55,6 +55,7 @@ use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
 use super::{DataValue, ScanBound};
+use crate::data::value::data_value_any;
 
 /// The execution form of a relation fragment: `arity`-wide tuples as
 /// row-major packed codes under one container domain.
@@ -694,7 +695,7 @@ mod tests {
                 let (datum, _) = decode_one(&bytes).expect("lawful");
                 let n = match datum {
                     super::super::DataValue::Num(n) => n.as_int().expect("int domain"),
-                    other => panic!("wrong kind: {other:?}"),
+                    other @ (data_value_any!()) => panic!("wrong kind: {other:?}"),
                 };
                 if n + 3 <= 12 {
                     fresh.push(stamp_of(&mut arena, Datum::Num(Num::int(n + 3))));

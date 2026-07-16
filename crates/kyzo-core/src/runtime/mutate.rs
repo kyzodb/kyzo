@@ -79,6 +79,7 @@ use crate::runtime::relation::{
     Residency,
 };
 use crate::storage::{Storage, WriteTx};
+use crate::data::value::data_value_any;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Assertion failure for {key:?} of {relation}: {notice}")]
@@ -1580,7 +1581,7 @@ impl<T: WriteTx> SessionTx<T> {
         // current-only state.
         let kind = match &index_ref.kind {
             IndexKind::Plain { .. } | IndexKind::Temporal => KeyspaceKind::Facts,
-            _ => KeyspaceKind::AlgorithmState,
+            IndexKind::Hnsw(_) | IndexKind::Fts(_) | IndexKind::Lsh { .. } => KeyspaceKind::AlgorithmState,
         };
         for (name, metadata) in index_metas {
             self.create_relation(
@@ -2387,16 +2388,16 @@ mod temporal_index_tests {
                     .expect("posting key decodes cleanly");
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the leading Validity column, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the leading Validity column, got {other:?}"),
                 };
                 let key_col = tup[1].get_int().expect("int base key column");
                 let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the tail valid slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the tail valid slot, got {other:?}"),
                 };
                 let tail_sys = match &tup.as_slice()[3] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the tail sys slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the tail sys slot, got {other:?}"),
                 };
                 let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
                     .expect("posting value decodes cleanly");
@@ -2421,11 +2422,11 @@ mod temporal_index_tests {
                 let key_col = tup[0].get_int().expect("int base key column");
                 let valid = match &tup.as_slice()[1] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the valid slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the valid slot, got {other:?}"),
                 };
                 let sys = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the sys slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the sys slot, got {other:?}"),
                 };
                 let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
                     .expect("base value decodes cleanly");

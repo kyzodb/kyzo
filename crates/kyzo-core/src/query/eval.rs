@@ -1384,7 +1384,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 // The collapse boundary: aggregated and fixed-rule stores
                 // ground out. (An absent store here is fine — nothing can
                 // premise it without tripping the liveness refusal below.)
-                _ => {
+                EvalDefinition::Rules(_) | EvalDefinition::Fixed { .. } => {
                     if let Some(store) = stores.get(name) {
                         for t in store.all_iter() {
                             graph

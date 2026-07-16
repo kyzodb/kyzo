@@ -692,7 +692,7 @@ mod tests {
         let fixed = std::collections::BTreeMap::new();
         match parse_script(payload, &no_params(), &fixed, cur_vld).expect("script parses") {
             Script::Single(prog) => (*prog, cur_vld),
-            _ => panic!("expected a single query script"),
+            Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query script"),
         }
     }
 
@@ -710,7 +710,7 @@ mod tests {
                 // 6 pairs (1,2)(1,3)(1,4)(2,3)(2,4)(3,4).
                 assert_eq!(row_count, 6, "unexpected row count for the seeded chain");
             }
-            other => panic!("expected Match, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -753,7 +753,7 @@ mod tests {
                     "sabotage must be visible in the oracle's answer"
                 );
             }
-            other => panic!("expected Mismatch, got {other:?}"),
+            other @ VerifyOutcome::Match { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Mismatch, got {other:?}"),
         }
     }
 
@@ -776,7 +776,7 @@ mod tests {
                     "expected a predicate-atom refusal, got: {reason}"
                 );
             }
-            other => panic!("expected Unsupported, got {other:?}"),
+            other @ VerifyOutcome::Match { .. } | other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
@@ -878,7 +878,7 @@ mod tests {
             .expect("verify_script runs");
         match outcome {
             VerifyOutcome::Match { .. } => {}
-            other => panic!("expected Match, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -978,7 +978,7 @@ mod tests {
             .expect("verify_script runs");
         match at_100 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
-            other => panic!("expected Match at valid=100, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match at valid=100, got {other:?}"),
         }
 
         let at_200 = db
@@ -990,7 +990,7 @@ mod tests {
             .expect("verify_script runs");
         match at_200 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
-            other => panic!("expected Match at valid=200, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match at valid=200, got {other:?}"),
         }
 
         // Before the fact existed at all: empty, not a refusal.
@@ -1003,7 +1003,7 @@ mod tests {
             .expect("verify_script runs");
         match at_50 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 0),
-            other => panic!("expected an empty Match at valid=50, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected an empty Match at valid=50, got {other:?}"),
         }
     }
 
@@ -1041,7 +1041,7 @@ mod tests {
             // At valid=50 nothing existed in hist yet, so both probe pairs
             // pass the negation.
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 2),
-            other => panic!("expected Match, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -1075,7 +1075,7 @@ mod tests {
                     "expected an @spans-named refusal, got: {reason}"
                 );
             }
-            other => panic!("expected Unsupported, got {other:?}"),
+            other @ VerifyOutcome::Match { .. } | other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
@@ -1133,7 +1133,7 @@ mod tests {
             .expect("verify_script runs");
         match outcome {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
-            other => panic!("expected Match, got {other:?}"),
+            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
         }
     }
 

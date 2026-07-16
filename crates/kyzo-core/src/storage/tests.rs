@@ -583,11 +583,11 @@ fn time_travel_matches_naive_oracle() {
                 let t = r.unwrap();
                 let name = match &t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 let ts = match &t.as_slice()[1] {
                     DataValue::Validity(v) => v.ts_micros(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
             })
@@ -620,7 +620,7 @@ fn time_travel_sees_own_writes() {
         .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(5)))
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
-            v => panic!("unexpected {v:?}"),
+            v @ (data_value_any!()) => panic!("unexpected {v:?}"),
         })
         .collect();
     assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
@@ -891,7 +891,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
         )
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
-            v => panic!("unexpected {v:?}"),
+            v @ (data_value_any!()) => panic!("unexpected {v:?}"),
         })
         .collect();
     assert_eq!(got, vec!["a".to_string()]);
@@ -1772,6 +1772,7 @@ use crate::storage::retry::retry_on_conflict;
 use crate::storage::sim::{
     FaultConfig, SimRng, SimStorage, TxBody, for_each_seed, run_interleaved,
 };
+use crate::data::value::data_value_any;
 
 /// The sim must satisfy the same KV contract as the real backend: the mixed
 /// workload from `kv_contract_matches_model`, checked against the BTreeMap
@@ -2105,11 +2106,11 @@ fn sim_time_travel_matches_naive_oracle() {
                 let t = r.unwrap();
                 let name = match &t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 let ts = match &t.as_slice()[1] {
                     DataValue::Validity(v) => v.ts_micros(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
             })
@@ -2606,11 +2607,11 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                     let t = r.unwrap();
                     let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
-                        v => panic!("unexpected {v:?}"),
+                        v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                     };
                     let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
-                        v => panic!("unexpected {v:?}"),
+                        v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                     };
                     (name, ts)
                 })

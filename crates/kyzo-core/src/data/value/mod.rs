@@ -169,6 +169,28 @@ pub enum DataValue {
     Interval(Interval),
 }
 
+/// Exhaustive [`DataValue`] or-pattern for refuse / default arms under
+/// `clippy::wildcard_enum_match_arm`. Prefer specific arms above; a newly
+/// added variant omitted here makes those matches non-exhaustive.
+macro_rules! data_value_any {
+    () => {
+        DataValue::Null
+            | DataValue::Bool(_)
+            | DataValue::Num(_)
+            | DataValue::Str(_)
+            | DataValue::Bytes(_)
+            | DataValue::Uuid(_)
+            | DataValue::Regex(_)
+            | DataValue::Json(_)
+            | DataValue::Vector(_)
+            | DataValue::List(_)
+            | DataValue::Set(_)
+            | DataValue::Validity(_)
+            | DataValue::Interval(_)
+    };
+}
+pub(crate) use data_value_any;
+
 impl DataValue {
     /// The value's kind: the cross-type order authority.
     pub fn tag(&self) -> Tag {
@@ -195,81 +217,81 @@ impl DataValue {
 
     /// The integer, for `Num` values holding the int representation.
     pub fn get_int(&self) -> Option<i64> {
-        match self {
-            // Coercing numeric read: an integral in-range float yields its
-            // int value (a `3.0` written into an `Int` column is `3`). Use
-            // `Num::as_int` for the pure "is an Int representation" test.
-            DataValue::Num(n) => n.to_int_coerced(),
-            _ => None,
-        }
+        // Coercing numeric read: an integral in-range float yields its
+        // int value (a `3.0` written into an `Int` column is `3`). Use
+        // `Num::as_int` for the pure "is an Int representation" test.
+        let DataValue::Num(n) = self else {
+            return None;
+        };
+        n.to_int_coerced()
     }
 
     /// The numeric value as f64 (ints promote losslessly where they can;
     /// this is a NUMERIC read, not an identity claim).
     pub fn get_float(&self) -> Option<f64> {
-        match self {
-            DataValue::Num(n) => Some(match n.as_float() {
-                Some(f) => f,
-                None => n.as_int().expect("Num is int or float") as f64,
-            }),
-            _ => None,
-        }
+        let DataValue::Num(n) = self else {
+            return None;
+        };
+        Some(match n.as_float() {
+            Some(f) => f,
+            None => n.as_int().expect("Num is int or float") as f64,
+        })
     }
 
     pub fn get_str(&self) -> Option<&str> {
-        match self {
-            DataValue::Str(s) => Some(s),
-            _ => None,
-        }
+        let DataValue::Str(s) = self else {
+            return None;
+        };
+        Some(s)
     }
 
     pub fn get_bytes(&self) -> Option<&[u8]> {
-        match self {
-            DataValue::Bytes(b) => Some(b),
-            _ => None,
-        }
+        let DataValue::Bytes(b) = self else {
+            return None;
+        };
+        Some(b)
     }
 
     pub fn get_bool(&self) -> Option<bool> {
-        match self {
-            DataValue::Bool(b) => Some(*b),
-            _ => None,
-        }
+        let DataValue::Bool(b) = self else {
+            return None;
+        };
+        Some(*b)
     }
 
     pub fn get_slice(&self) -> Option<&[DataValue]> {
-        match self {
-            DataValue::List(l) => Some(l),
-            _ => None,
-        }
+        let DataValue::List(l) = self else {
+            return None;
+        };
+        Some(l)
     }
 
     pub fn get_interval(&self) -> Option<Interval> {
-        match self {
-            DataValue::Interval(iv) => Some(*iv),
-            _ => None,
-        }
+        let DataValue::Interval(iv) = self else {
+            return None;
+        };
+        Some(*iv)
     }
 
     pub fn get_validity(&self) -> Option<Validity> {
-        match self {
-            DataValue::Validity(v) => Some(*v),
-            _ => None,
-        }
+        let DataValue::Validity(v) = self else {
+            return None;
+        };
+        Some(*v)
     }
 
     pub fn get_json(&self) -> Option<&Json> {
-        match self {
-            DataValue::Json(j) => Some(j),
-            _ => None,
-        }
+        let DataValue::Json(j) = self else {
+            return None;
+        };
+        Some(j)
     }
 
     pub fn get_vector(&self) -> Option<&Vector> {
-        match self {
-            DataValue::Vector(v) => Some(v),
-            _ => None,
-        }
+        let DataValue::Vector(v) = self else {
+            return None;
+        };
+        Some(v)
     }
 }
 

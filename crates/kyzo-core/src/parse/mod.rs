@@ -456,7 +456,7 @@ impl ImperativeStmt {
                 SysOp::RemoveIndex(rel, idx) => {
                     collector.insert(SmartString::from(format!("{}:{}", rel.name, idx.name)));
                 }
-                _ => {}
+                SysOp::Compact | SysOp::MerkleRoot(_) | SysOp::ListColumns(_) | SysOp::ListIndices(_) | SysOp::ListRelations | SysOp::ListRunning | SysOp::ListFixedRules | SysOp::KillRunning(_) | SysOp::Explain(_) | SysOp::Verify(_) | SysOp::ShowTrigger(_) | SysOp::SetTriggers(..) | SysOp::CreateConstraint(..) | SysOp::RemoveConstraint(_) | SysOp::ListConstraints | SysOp::SetAccessLevel(..) | SysOp::DescribeRelation(..) => {}
             },
         }
     }
@@ -657,7 +657,7 @@ fn describe_rule(r: Rule) -> String {
         | Rule::or_op
         | Rule::in_op
         | Rule::not_op => "an operator (`+`, `==`, `and`, `or`, `.`, …)",
-        _ => return format!("{r:?}").replace('_', " "),
+        Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::sys_script_inner | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::index_create_adv | Rule::index_drop | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::search_index_ident | Rule::compound_or_index_ident | Rule::aggr_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::rule_body | Rule::search_apply | Rule::disjunction | Rule::apply | Rule::named_apply_pair | Rule::operation | Rule::unary_op | Rule::object_pair | Rule::grouping | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string_inner | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::table_cols | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return format!("{r:?}").replace('_', " "),
     };
     phrase.to_string()
 }
@@ -1263,7 +1263,7 @@ pub fn parse_script(
             fixed_rules,
             cur_vld,
         )?),
-        _ => return Err(unexpected("a script species", &parsed)),
+        Rule::EOI | Rule::script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::index_create_adv | Rule::index_drop | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("a script species", &parsed)),
     })
 }
 
@@ -1440,13 +1440,13 @@ mod tests {
     fn merkle_root_op_parses_to_the_right_variant() {
         match parse("::merkle_root").unwrap() {
             Script::Sys(SysOp::MerkleRoot(None)) => {}
-            other => panic!("bare ::merkle_root parsed as {other:?}"),
+            other @ Script::Single(_) | other @ Script::Imperative(_) | other @ Script::Sys(_) => panic!("bare ::merkle_root parsed as {other:?}"),
         }
         match parse("::merkle_root my_rel").unwrap() {
             Script::Sys(SysOp::MerkleRoot(Some(rel))) => {
                 assert_eq!(rel.name.as_str(), "my_rel");
             }
-            other => panic!("::merkle_root my_rel parsed as {other:?}"),
+            other @ Script::Single(_) | other @ Script::Imperative(_) | other @ Script::Sys(_) => panic!("::merkle_root my_rel parsed as {other:?}"),
         }
     }
 
@@ -1884,7 +1884,7 @@ mod tests {
     fn parse_program(src: &str) -> InputProgram {
         match parse(src).unwrap_or_else(|e| panic!("{src}: {e:?}")) {
             Script::Single(prog) => *prog,
-            other => panic!("expected a query script, got {other:?}"),
+            other @ Script::Imperative(_) | other @ Script::Sys(_) => panic!("expected a query script, got {other:?}"),
         }
     }
 

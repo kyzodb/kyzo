@@ -581,9 +581,9 @@ mod tests {
                                 span: inner.span,
                             }));
                         }
-                        _ => panic!("test bodies negate rule reads only"),
+                        InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Conjunction { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => panic!("test bodies negate rule reads only"),
                     },
-                    _ => panic!("test bodies contain rule reads only"),
+                    InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => panic!("test bodies contain rule reads only"),
                 }
             }
             let mut out = vec![];

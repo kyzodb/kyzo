@@ -72,7 +72,7 @@ pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
                 PrefixCmp::NeedPayload
             }
         }
-        decided => PrefixCmp::Decided(decided),
+        decided @ Ordering::Less | decided @ Ordering::Greater => PrefixCmp::Decided(decided),
     }
 }
 

@@ -48,6 +48,7 @@ use crate::data::functions::to_json;
 use crate::data::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
 
 use crate::data::json::{json_from_serde, serde_from_json};
+use crate::data::value::data_value_any;
 
 /// Schema vocabulary: a vector column's declared element width. Stored
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
@@ -291,7 +292,7 @@ impl NullableColType {
         Ok(match &self.coltype {
             ColType::Any => match data {
                 DataValue::Set(s) => DataValue::List(s.into_iter().collect_vec()),
-                d => d,
+                d @ (data_value_any!()) => d,
             },
             ColType::Bool => DataValue::from(data.get_bool().ok_or_else(make_err)?),
             ColType::Int => DataValue::from(data.get_int().ok_or_else(make_err)?),
@@ -315,7 +316,7 @@ impl NullableColType {
                         .map_err(|e| BadBase64EncodedString(e.to_string()))?;
                     DataValue::Bytes(b)
                 }
-                _ => bail!(make_err()),
+                data_value_any!() => bail!(make_err()),
             },
             ColType::Uuid => match data {
                 u @ DataValue::Uuid(_) => u,
@@ -324,7 +325,7 @@ impl NullableColType {
                 DataValue::Str(ref s) => {
                     DataValue::uuid(uuid::Uuid::try_parse(s).map_err(|_| make_err())?)
                 }
-                _ => bail!(make_err()),
+                data_value_any!() => bail!(make_err()),
             },
             ColType::List { eltype, len } => {
                 if let DataValue::List(l) = data {
@@ -415,7 +416,7 @@ impl NullableColType {
                     };
                     DataValue::Vector(Vector::new(collected))
                 }
-                _ => bail!(make_err()),
+                data_value_any!() => bail!(make_err()),
             },
             ColType::Tuple(typ) => {
                 if let DataValue::List(l) = data {
@@ -484,7 +485,7 @@ impl NullableColType {
                         }
                         bail!(InvalidValidity(DataValue::List(l)))
                     }
-                    v => bail!(InvalidValidity(v)),
+                    v @ (data_value_any!()) => bail!(InvalidValidity(v)),
                 }
             }
             ColType::Json => {

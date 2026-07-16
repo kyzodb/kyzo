@@ -368,7 +368,7 @@ impl InnerJoin {
         left.extend(self.joiner.left_keys.clone());
         if let Some(filters) = match &self.right {
             RelAlgebra::TempStore(r) => Some(&r.filters),
-            _ => None,
+            RelAlgebra::Fixed(_) | RelAlgebra::Stored(_) | RelAlgebra::StoredWithValidity(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => None,
         } {
             for filter in filters {
                 left.extend(filter.bindings()?);
@@ -534,7 +534,7 @@ impl InnerJoin {
                     return r.prefix_join_batched(tx, left, join_indices, eliminate_indices);
                 }
             }
-            _ => {}
+            RelAlgebra::Fixed(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
         }
         let bindings = self.bindings();
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);

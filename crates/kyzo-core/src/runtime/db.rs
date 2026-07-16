@@ -597,7 +597,7 @@ impl<S: Storage> Db<S> {
                         meta.name.name
                     )));
                 }
-                _ => {}
+                RelationOp::Put | RelationOp::Insert | RelationOp::Update | RelationOp::Rm | RelationOp::Delete | RelationOp::Ensure | RelationOp::EnsureNot => {}
             }
         }
 
@@ -2331,7 +2331,7 @@ mod tests {
         let fixed = db.fixed_rules();
         let prog = match parse_script(script, &no_params(), &fixed, cur_vld).unwrap() {
             Script::Single(p) => *p,
-            _ => panic!("expected a single query"),
+            Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
         };
         let tx = SessionTx::new_read(db.storage.read_tx().unwrap(), ScriptOptions::default());
         let view = SessionView {

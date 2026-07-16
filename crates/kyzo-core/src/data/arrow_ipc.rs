@@ -57,6 +57,7 @@ use flatbuffers::{FlatBufferBuilder, UOffsetT, WIPOffset};
 use miette::{Result, bail};
 
 use crate::data::value::{DataValue, NumRepr, Tuple};
+use crate::data::value::data_value_any;
 
 /// One export column, decided once from its values: a uniform typed
 /// vector when every value fits one of the four Arrow-mappable kinds,
@@ -89,7 +90,7 @@ impl ColumnVec {
                 },
                 DataValue::Bool(_) => Fit::Bool,
                 DataValue::Str(_) => Fit::Str,
-                _ => return ColumnVec::Mixed(values),
+                data_value_any!() => return ColumnVec::Mixed(values),
             };
             match fit {
                 None => fit = Some(this),
@@ -121,7 +122,7 @@ impl ColumnVec {
                     .into_iter()
                     .map(|v| match v {
                         DataValue::Str(s) => s,
-                        _ => unreachable!("uniform str column"),
+                        data_value_any!() => unreachable!("uniform str column"),
                     })
                     .collect(),
             ),
@@ -370,7 +371,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             DataValue::Bool(_) => Kind::Bool,
             DataValue::Str(_) => Kind::Str,
             DataValue::Bytes(_) => Kind::Binary,
-            other => bail!(
+            other @ (data_value_any!()) => bail!(
                 "Arrow export: column value {other:?} has no Arrow mapping in this encoder \
                  (supported: null, int, float, bool, str, bytes)"
             ),
@@ -417,7 +418,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 .iter()
                 .map(|v| match v {
                     DataValue::Num(n) => n.as_float().unwrap_or(0.0),
-                    _ => 0.0,
+                    data_value_any!() => 0.0,
                 })
                 .collect();
             Ok(PlannedColumn {
@@ -443,7 +444,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let empty = String::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
                 DataValue::Str(s) => s.as_bytes(),
-                _ => empty.as_bytes(),
+                data_value_any!() => empty.as_bytes(),
             }));
             Ok(PlannedColumn {
                 arrow_type: TYPE_UTF8,
@@ -456,7 +457,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let empty: Vec<u8> = Vec::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
                 DataValue::Bytes(b) => b.as_slice(),
-                _ => empty.as_slice(),
+                data_value_any!() => empty.as_slice(),
             }));
             Ok(PlannedColumn {
                 arrow_type: TYPE_BINARY,

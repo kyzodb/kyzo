@@ -69,7 +69,7 @@ pub(crate) fn sort_and_collect(
         for (idx, dir) in &idx_sorters {
             match a[*idx].cmp(&b[*idx]) {
                 Ordering::Equal => {}
-                o => {
+                o @ Ordering::Less | o @ Ordering::Greater => {
                     return match dir {
                         SortDir::Asc => o,
                         SortDir::Dsc => o.reverse(),
