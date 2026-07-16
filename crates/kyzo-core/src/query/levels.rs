@@ -491,8 +491,8 @@ impl EpochStore {
         upper_inclusive: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         self.ranged(
-            bare_bounds_lower(lower),
-            bare_bounds_upper(upper),
+            LevelBoundKey(bare_bounds_lower(lower)),
+            LevelBoundKey(bare_bounds_upper(upper)),
             upper_inclusive,
             false,
         )
@@ -504,8 +504,8 @@ impl EpochStore {
         upper_inclusive: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         self.ranged(
-            bare_bounds_lower(lower),
-            bare_bounds_upper(upper),
+            LevelBoundKey(bare_bounds_lower(lower)),
+            LevelBoundKey(bare_bounds_upper(upper)),
             upper_inclusive,
             true,
         )
@@ -516,18 +516,18 @@ impl EpochStore {
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         // The 0xFF tail (which no canonical encoding begins) bounds every
         // extension of `prefix`, inclusively.
-        let lower = encode_tuple_bare(prefix.as_slice());
+        let lower = LevelBoundKey(encode_tuple_bare(prefix.as_slice()));
         let mut upper = lower.clone();
-        upper.push(0xFF);
+        upper.0.push(0xFF);
         self.ranged(lower, upper, true, false)
     }
     pub(crate) fn delta_prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        let lower = encode_tuple_bare(prefix.as_slice());
+        let lower = LevelBoundKey(encode_tuple_bare(prefix.as_slice()));
         let mut upper = lower.clone();
-        upper.push(0xFF);
+        upper.0.push(0xFF);
         self.ranged(lower, upper, true, true)
     }
     /// [`prefix_iter`](Self::prefix_iter)/[`delta_prefix_iter`](Self::delta_prefix_iter)
@@ -562,9 +562,9 @@ impl EpochStore {
             }
             LevelKind::Meet { spec, levels } => {
                 let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
-                let lower = encode_tuple_bare(prefix.as_slice());
+                let lower = LevelBoundKey(encode_tuple_bare(prefix.as_slice()));
                 let mut upper = lower.clone();
-                upper.push(0xFF);
+                upper.0.push(0xFF);
                 let picked: &[MeetLevel] = if delta_only {
                     std::slice::from_ref(levels.last().expect("a level always exists"))
                 } else {
@@ -593,8 +593,8 @@ impl EpochStore {
     /// bound window. Delta scope reads the newest level alone.
     fn ranged<'s>(
         &'s self,
-        lower: Vec<u8>,
-        upper: Vec<u8>,
+        lower: LevelBoundKey,
+        upper: LevelBoundKey,
         upper_inclusive: bool,
         delta_only: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
@@ -609,7 +609,7 @@ impl EpochStore {
                 let mut cursors: Vec<(&'s NormalLevel, usize, usize)> = picked
                     .iter()
                     .map(|l| {
-                        let (lo, hi) = l.bounds(&LevelBoundKey(lower.clone()), &LevelBoundKey(upper.clone()), upper_inclusive);
+                        let (lo, hi) = l.bounds(&lower, &upper, upper_inclusive);
                         (l, lo, hi)
                     })
                     .collect();
@@ -790,8 +790,8 @@ fn meet_ranged<'s>(
     spec: &'s MeetSpec,
     picked: &'s [MeetLevel],
     all: &'s [MeetLevel],
-    lower: Vec<u8>,
-    upper: Vec<u8>,
+    lower: LevelBoundKey,
+    upper: LevelBoundKey,
     upper_inclusive: bool,
 ) -> Box<dyn Iterator<Item = TupleInIter<'s>> + 's> {
     let within = move |row: TupleInIter<'_>| -> bool {
