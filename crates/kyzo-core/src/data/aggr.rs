@@ -1124,12 +1124,16 @@ impl MeetAggrObj for MeetAggrMin {
         if *right_v == DataValue::Null {
             return Ok(false);
         }
-        if matches!(left, MeetAccum::Empty) {
+        // A materialized Empty (`Null` result) must not linger as a
+        // candidate — Min never accumulates Null.
+        if matches!(left, MeetAccum::Empty)
+            || matches!(left, MeetAccum::Value(DataValue::Null))
+        {
             *left = right.clone();
             return Ok(true);
         }
         let MeetAccum::Value(left_v) = left else {
-            unreachable!("Empty handled above");
+            unreachable!("Empty/Null handled above");
         };
         // Exact `Num` comparison; see `AggrMin::set`.
         let (l, r) = match (&*left_v, right_v) {
@@ -1206,12 +1210,15 @@ impl MeetAggrObj for MeetAggrMax {
         if *right_v == DataValue::Null {
             return Ok(false);
         }
-        if matches!(left, MeetAccum::Empty) {
+        // Same as Min: Null is never a Max candidate, only Empty is empty.
+        if matches!(left, MeetAccum::Empty)
+            || matches!(left, MeetAccum::Value(DataValue::Null))
+        {
             *left = right.clone();
             return Ok(true);
         }
         let MeetAccum::Value(left_v) = left else {
-            unreachable!("Empty handled above");
+            unreachable!("Empty/Null handled above");
         };
         // Exact `Num` comparison; see `AggrMin::set`.
         let (l, r) = match (&*left_v, right_v) {

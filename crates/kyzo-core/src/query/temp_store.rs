@@ -544,7 +544,17 @@ impl MeetAggrStore {
                 Ok(changed)
             }
             None => {
-                let vals = self.layout.project_vals(tuple);
+                // Fold the first row through each meet's identity — never
+                // install `Value(v)` raw. A Null first input must run the
+                // same skip/absorb path as every later row (Min/Max skip
+                // Null and stay Empty; Intersection takes Null as data).
+                let mut vals: Vec<MeetAccum> =
+                    self.meets.iter().map(|(_, op)| op.init_val()).collect();
+                for (i, (_aggr, op)) in self.meets.iter().enumerate() {
+                    let incoming =
+                        MeetAccum::from_derived(tuple[self.layout.val_positions[i]].clone());
+                    op.update(&mut vals[i], &incoming)?;
+                }
                 if materialize {
                     self.by_row
                         .insert(self.layout.interleave(&key, vals.as_slice()));

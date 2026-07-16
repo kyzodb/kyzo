@@ -1359,13 +1359,21 @@ impl MeetState {
     /// value changed (a fresh key always counts).
     fn meet_row(&mut self, row: &Tuple) -> Result<bool, Rejection> {
         let key: Tuple = self.key_positions.iter().map(|i| row[*i].clone()).collect();
-        let vals: Vec<MeetAccum> = self
+        let incoming: Vec<MeetAccum> = self
             .val_positions
             .iter()
             .map(|i| MeetAccum::from_derived(row[*i].clone()))
             .collect();
         match self.acc.entry(key) {
             Entry::Vacant(e) => {
+                // Same admit path as `MeetAggrStore::meet_put`: fold the
+                // first row through each op's identity so Null-first Min/Max
+                // stays Empty instead of installing `Value(Null)`.
+                let mut vals: Vec<MeetAccum> = self.ops.iter().map(|op| op.init_val()).collect();
+                for (slot, op) in self.ops.iter().enumerate() {
+                    op.update(&mut vals[slot], &incoming[slot])
+                        .map_err(aggr_err)?;
+                }
                 e.insert(vals);
                 Ok(true)
             }
@@ -1374,7 +1382,7 @@ impl MeetState {
                 let mut changed = false;
                 for (slot, op) in self.ops.iter().enumerate() {
                     changed |= op
-                        .update(&mut stored[slot], &vals[slot])
+                        .update(&mut stored[slot], &incoming[slot])
                         .map_err(aggr_err)?;
                 }
                 Ok(changed)
