@@ -1,0 +1,6 @@
+error[E0599]: no method named `query` found for struct `Stale<DemoKind>` in the current scope
+  --> tests/compile_fail/projection_query_on_stale.rs:27:18
+   |
+26 | fn query_on_stale(stale: Stale<DemoKind>) {
+27 |     let _ = stale.query(&());
+   |                  ^^^^^ method not found in `Stale<DemoKind>`

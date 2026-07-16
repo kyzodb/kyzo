@@ -1,0 +1,6 @@
+error[E0599]: no method named `query` found for struct `ProjectionBuilder<DemoKind>` in the current scope
+  --> tests/compile_fail/projection_query_on_builder.rs:26:20
+   |
+25 | fn query_on_builder(builder: ProjectionBuilder<DemoKind>) {
+26 |     let _ = builder.query(&());
+   |                    ^^^^^ method not found in `ProjectionBuilder<DemoKind>`

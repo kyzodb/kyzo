@@ -13,9 +13,12 @@
 //! index bytes (or a base row an index points at) do not decode as the
 //! format says they must. It extends the kernel's corruption doctrine —
 //! corruption is an error, never a panic — into every index read path.
-//! That error is not the engines' only shared concept: the prior
-//! shared-only-error posture for projection freshness/config is condemned
-//! (story #305).
+//!
+//! Projection freshness and staged construction are the shared
+//! [`projection`] machine (story #305): [`projection::ProjectionBuilder`]
+//! seals into generation-carrying [`projection::Sealed`]; staleness is
+//! [`projection::Stale`], not an `Option` from a get-shaped call. Kind
+//! engines re-land as `K` parameterizations of that machine (T3).
 
 // `fts`/`hnsw`/`lsh`'s `db.rs` surface has landed (`::fts|hnsw|lsh
 // create/drop` in `runtime/mutate.rs` dispatch to the real creation/
@@ -24,6 +27,8 @@
 // no `db.rs` surface yet and are still lib-dead by construction; their
 // in-file tests keep them live under test, so a plain `allow` covers them.
 pub(crate) mod fts;
+/// Generic build→seal→query machine for every projection kind (story #305).
+pub(crate) mod projection;
 // gazetteer has no `db.rs` surface yet (see the block comment above);
 // its in-file tests keep it live under test, so a plain `allow` covers it.
 #[allow(dead_code)]

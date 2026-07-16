@@ -302,6 +302,12 @@ pub use storage::retry::retry_on_conflict;
 pub use storage::verify::{CorruptEntry, VerifyReport, verify_storage};
 pub use storage::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
+/// Build→seal→query projection machine (story #305). Public so compile-fail
+/// proofs and later kind parameterizations share one crate-root door.
+pub use engines::projection::{
+    Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale,
+};
+
 pub use fixed_rule::{
     CancelFlag, FixedRule, FixedRuleInputRelation, FixedRulePayload, NamedRows, SimpleFixedRule,
 };
