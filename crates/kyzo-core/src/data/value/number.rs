@@ -290,6 +290,7 @@ impl Num {
             if m > 1u64 << 63 {
                 return Err(NumDecodeError::IntRange);
             }
+            // INVARIANT(num_twos_complement): magnitude already range-checked; wrap-neg is two's-complement encode.
             Ok(Num::int((m as i128).wrapping_neg() as i64))
         } else {
             if m > i64::MAX as u64 {
@@ -552,6 +553,7 @@ mod tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
     }

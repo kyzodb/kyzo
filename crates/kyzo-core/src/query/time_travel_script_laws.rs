@@ -356,6 +356,7 @@ fn gen_events(rng: &mut SimRng, n_entities: i64, n_events: usize) -> Vec<Event> 
 fn oracle_at_matches_an_independent_reference_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = SimRng::new(0xACE0_ACE0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let n_entities = 1 + rng.below(4) as i64;
         let n_events = 1 + rng.below(20) as usize;

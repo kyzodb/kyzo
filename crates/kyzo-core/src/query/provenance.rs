@@ -75,6 +75,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -1047,6 +1048,7 @@ fn tropical_overflow_is_a_typed_refusal() {
 #[test]
 fn boolean_annotation_matches_naive_eval_byte_identical() {
     for i in 0..24u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         let model = gen_positive(seed, false);
         let oracle = naive_eval(&model).expect("oracle accepts the positive fragment");
@@ -1137,6 +1139,7 @@ fn check_tropical_against_reference(seed: u64, unit: bool) {
 #[test]
 fn tropical_min_cost_matches_independent_reference_unit_weights() {
     for i in 0..12u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(i.wrapping_mul(0x517C_C1B7_2722_0A95)).next_u64();
         check_tropical_against_reference(seed, true);
     }
@@ -1145,6 +1148,7 @@ fn tropical_min_cost_matches_independent_reference_unit_weights() {
 #[test]
 fn tropical_min_cost_matches_independent_reference_random_weights() {
     for i in 0..12u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(i.wrapping_mul(0x2545_F491_4F6C_DD1D)).next_u64();
         check_tropical_against_reference(seed, false);
     }
@@ -1351,6 +1355,7 @@ fn provenance_fingerprint(seed: u64, threads: usize) -> String {
 #[test]
 fn provenance_is_deterministic_across_thread_counts() {
     for i in 0..3u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(0xD1CE ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         let baseline = provenance_fingerprint(seed, 1);
         assert!(!baseline.is_empty());

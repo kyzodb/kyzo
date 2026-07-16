@@ -129,6 +129,7 @@ mod tests {
         let n = 200u32;
         let mut state = 0x1234_5678_9abc_def0u64;
         let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

@@ -53,6 +53,7 @@ impl SeededRng {
     /// One splitmix64 step: mirrors `storage::sim::SimRng::next_u64`.
     #[inline]
     fn step(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

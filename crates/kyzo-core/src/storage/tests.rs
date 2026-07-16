@@ -2560,6 +2560,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
         );
         // A seeded history, deduplicated on (name, ts) so the oracle's
         // tie-break never diverges from key order, split across 3 writers.
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = SimRng::new(seed.wrapping_mul(0x9E37_79B9).wrapping_add(1));
         let mut seen = BTreeSet::new();
         let mut history: Vec<(String, i64, bool)> = vec![];

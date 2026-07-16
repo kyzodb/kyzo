@@ -457,6 +457,7 @@ impl BridgeRng {
         BridgeRng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -504,6 +505,7 @@ fn gen_versions(rng: &mut BridgeRng, n_keys: i64, n_events: usize) -> Vec<Versio
 fn naive_asof_cfg_matches_an_independent_reference_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xA50F_0FFE_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 20) as usize;
@@ -1199,6 +1201,7 @@ fn asof_run_is_byte_identical_across_threads() {
 fn negation_over_asof_matches_the_independent_complement_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0x9E6A5F_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -1712,6 +1715,7 @@ fn oracle_delta(events: &[laws::Event], from: laws::AsOf, to: laws::AsOf) -> BTr
 fn spans_engine_matches_the_unified_oracle_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0x5FA5FA_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -1816,6 +1820,7 @@ fn spans_composes_through_ordinary_rule_nesting() {
 fn delta_engine_matches_the_unified_oracle_generatively_both_axes() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xDE17AD_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -1911,6 +1916,7 @@ fn delta_engine_matches_the_unified_oracle_generatively_both_axes() {
 #[test]
 fn delta_composition_law_holds_through_the_real_engine() {
     for seed in 0..80u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xC02EC0_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 3);
         let n_events = rng.range(2, 12) as usize;
@@ -1974,6 +1980,7 @@ fn delta_composition_law_holds_through_the_real_engine() {
 #[test]
 fn production_compose_matches_the_composition_law_on_real_engine_output() {
     for seed in 0..80u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xC0DE_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 3);
         let n_events = rng.range(2, 12) as usize;
@@ -2396,6 +2403,7 @@ fn neg_delta_atom(
 fn negation_over_spans_matches_the_independent_complement_generatively() {
     let mut cases = 0usize;
     for seed in 0..150u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xB16_5FA5_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -2471,6 +2479,7 @@ fn negation_over_spans_matches_the_independent_complement_generatively() {
 fn negation_over_delta_matches_the_independent_complement_generatively() {
     let mut cases = 0usize;
     for seed in 0..150u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xDE17ADBADu64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;

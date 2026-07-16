@@ -303,6 +303,7 @@ pub(crate) const DEFAULT_PERM_SEED: u64 = 0x4c53_485f_5045_524d; // "LSH_PERM"
 /// the drawn permutations on every target.
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
+    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -1111,6 +1112,7 @@ mod tests {
     /// overwhelming probability (1 - (1 - 0.75^4)^16 ≈ 0.998), and the
     /// fixed seeds make the outcome the SAME on every run.
     fn test_manifest() -> MinHashLshIndexManifest {
+        // INVARIANT(test_perm_mix): fixture permutation tags use modular golden-ratio mix.
         manifest_with_perms((0u32..64).map(|i| i.wrapping_mul(2654435761)).collect(), 16)
     }
 

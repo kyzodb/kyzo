@@ -440,6 +440,7 @@ mod tests {
     fn skip_walk_matches_independent_oracle_over_2000_seeded_histories() {
         let mut state: u64 = 0x5EED_9E52_5E15_C0DE;
         let mut next = move |m: usize| -> usize {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

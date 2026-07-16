@@ -4349,6 +4349,7 @@ mod tests {
             Rng { state: seed }
         }
         fn next_u64(&mut self) -> u64 {
+            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
             self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = self.state;
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -4467,6 +4468,7 @@ mod tests {
     fn grid_differential_derived_intervals_equal_maximal_runs() {
         let mut cases = 0usize;
         for seed in 0..500u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng::new(0xB17E_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let key = k(1);
             let history = gen_history(&mut rng, &key);
@@ -4524,6 +4526,7 @@ mod tests {
     fn diff_composition_law_holds_across_axes() {
         let mut cases = 0usize;
         for seed in 0..300u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng::new(0xD1FF_C0DE_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let key = k(1);
             let history = gen_history(&mut rng, &key);
@@ -4603,6 +4606,7 @@ mod tests {
     fn negation_over_fixed_as_of_matches_independent_complement_generatively() {
         let mut cases = 0usize;
         for seed in 0..500u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng::new(0x4E6A_7104_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let key = k(1);
             let history = gen_existential_history(&mut rng, &key);

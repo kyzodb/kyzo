@@ -347,6 +347,7 @@ mod tests {
     fn deterministic_across_runs() {
         let mut state = 0x51ed_2701_dead_c0deu64;
         let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

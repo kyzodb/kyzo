@@ -2852,6 +2852,7 @@ mod tests {
     /// A tiny deterministic LCG — a seeded random-graph campaign without a
     /// proptest harness, so it runs in the always-on suite under caps.
     fn lcg(state: &mut u64) -> u64 {
+        // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
         *state = state
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
@@ -2865,6 +2866,7 @@ mod tests {
         // oracle for every one. This is the mini-campaign the vectorization
         // ascent's mutation test sabotages.
         for seed in 0u64..120 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut st = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
             let n_verts = 3 + (lcg(&mut st) % 8) as i64; // 3..10 vertices
             let n_edges = 2 + (lcg(&mut st) % 14) as usize; // 2..15 edges

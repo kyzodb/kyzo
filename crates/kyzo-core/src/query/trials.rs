@@ -102,6 +102,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -1180,6 +1181,7 @@ fn determinism_campaign() {
     let mut failures: Vec<(u64, String)> = Vec::new();
     for i in 0..count {
         // splitmix64 the index so consecutive seeds are unrelated.
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         if let Err(f) = run_seed(seed) {
             failures.push((seed, format!("{f:?}")));
@@ -1937,6 +1939,7 @@ fn grid_differential_over_generated_temporal_programs() {
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0x7E57_A105_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let hist = gen_temporal_histories(&mut rng, &params);
@@ -2068,6 +2071,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xD1FF_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let key: Tuple = Tuple::from_vec(vec![v(0)]);
@@ -2169,6 +2173,7 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0x9A5D_6E1B_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let mut history = Vec::new();
@@ -2335,6 +2340,7 @@ fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
 
     let mut caught_without_erase = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history_no_erase(&mut rng, &key, &params);
@@ -2349,6 +2355,7 @@ fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
 
     let mut caught_with_erase = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params); // the real generator
@@ -2462,6 +2469,7 @@ fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
 
     let mut caught_nonneg_only = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history_nonneg(&mut rng, &key, &params);
@@ -2476,6 +2484,7 @@ fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
 
     let mut caught_with_negatives = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params); // the real generator
@@ -2586,6 +2595,7 @@ fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end
     let mut caught_without_ticks = 0usize;
     let mut caught_with_ticks = 0usize;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0x9BAD_E1D0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params);
@@ -2968,6 +2978,7 @@ fn temporal_negation_recursion_and_both_aggregation_families_match_independent_r
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xF00D_BA11_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let fx = gen_reachability_fixture(&mut rng);
         let program = reachability_program(&mut rng, &fx);

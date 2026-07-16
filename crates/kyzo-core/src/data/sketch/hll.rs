@@ -294,6 +294,7 @@ mod tests {
     fn sketch_of<const M: usize>(n: i64, salt: i64) -> HyperLogLog<M> {
         let mut hll = HyperLogLog::<M>::new();
         for i in 0..n {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             hll.add(&val(salt.wrapping_mul(1_000_003).wrapping_add(i)));
         }
         hll
@@ -448,6 +449,7 @@ mod tests {
         const M: usize = 1 << 10;
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
         let mut next = move || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

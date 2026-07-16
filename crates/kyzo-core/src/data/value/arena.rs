@@ -1675,6 +1675,7 @@ mod tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
 
@@ -2052,6 +2053,7 @@ mod tests {
     #[test]
     fn laws_random_differential_multi_epoch() {
         for seed in 1u64..=9 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let alphabet: &[u8] = match seed % 3 {
                 0 => &[0x00, 0x01],
@@ -2410,6 +2412,7 @@ mod tests {
         let ops = 8_000_000usize;
         let pairs: Vec<(i64, i64)> = (0..ops)
             .map(|i| {
+                // INVARIANT(test_pair_mix): bench pair ids are modular hashes of the index.
                 let a = ((i as i64).wrapping_mul(2654435761)).rem_euclid(distinct);
                 let b = ((i as i64).wrapping_mul(40503) + 7).rem_euclid(distinct);
                 (a, b)

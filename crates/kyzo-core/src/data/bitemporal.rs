@@ -380,6 +380,7 @@ mod tests {
     fn bitemporal_skip_scan_matches_oracle() {
         let mut state: u64 = 0x5EED_B17E_44C0_FFEE;
         let mut next = move |m: usize| -> usize {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -570,6 +571,7 @@ mod tests {
         use crate::query::laws;
         let mut state: u64 = 0xDEAD_BEEF_CAFE_F00D;
         let mut next = move |m: usize| -> usize {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

@@ -955,6 +955,7 @@ mod tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
 
@@ -1516,6 +1517,7 @@ mod tests {
         assert_eq!(value_hex, "4c186100000501");
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in value_span {
+            // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
             h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
         }
         assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());

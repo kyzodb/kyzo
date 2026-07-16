@@ -453,6 +453,7 @@ mod tests {
         // differential. Deterministic LCG — no wall clock, no rand crate.
         let mut rng: u64 = 0x5EED_C011;
         fn next(rng: &mut u64) -> u64 {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             *rng = rng
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

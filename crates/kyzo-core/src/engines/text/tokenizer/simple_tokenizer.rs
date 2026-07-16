@@ -46,6 +46,7 @@ impl<'a> SimpleTokenStream<'a> {
 impl<'a> TokenStream for SimpleTokenStream<'a> {
     fn advance(&mut self) -> bool {
         self.token.text.clear();
+        // INVARIANT(token_position): tokenizer position is a modular counter; wrap is intentional.
         self.token.position = self.token.position.wrapping_add(1);
         while let Some((offset_from, c)) = self.chars.next() {
             if c.is_alphanumeric() {

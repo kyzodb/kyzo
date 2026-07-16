@@ -902,6 +902,7 @@ mod facade_tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
 

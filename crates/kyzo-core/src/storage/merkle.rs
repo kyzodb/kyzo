@@ -452,6 +452,7 @@ mod tests {
         shuffled.sort_by_key(|(k, _)| {
             let mut s = 0u64;
             for b in k {
+                // INVARIANT(djb2): classic djb2 string hash; wrap is the published mix.
                 s = s.wrapping_mul(131).wrapping_add(u64::from(*b));
             }
             s

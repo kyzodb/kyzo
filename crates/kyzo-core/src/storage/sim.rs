@@ -114,6 +114,7 @@ impl SimRng {
     }
 
     pub(crate) fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -170,6 +171,7 @@ fn op_identity(tag: u64, parts: &[&[u8]]) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01B3;
     fn eat(h: &mut u64, bytes: &[u8]) {
         for &b in bytes {
+            // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
             *h = (*h ^ u64::from(b)).wrapping_mul(PRIME);
         }
     }
@@ -191,6 +193,7 @@ fn fault_hit(seed: u64, identity: u64, attempt: u64, salt: u64, ppm: u32) -> boo
     if ppm == 0 {
         return false;
     }
+    // INVARIANT(fault_ppm): deterministic fault draw mixes identity/attempt/salt via wrap.
     let mut z = seed
         ^ identity.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ attempt.wrapping_mul(0xA24B_AED4_963E_E407)
@@ -441,6 +444,7 @@ impl SimCtx {
     /// epoch. Epoch 0 leaves the seed untouched, so pre-crash fault streams
     /// are unchanged by the salting.
     fn fault_seed(&self) -> u64 {
+        // INVARIANT(epoch_salt): epoch salt is a modular mix into the fault seed stream.
         self.seed ^ self.epoch.wrapping_mul(0xE703_37A9_D9C8_2D95)
     }
 

@@ -110,6 +110,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -524,6 +525,7 @@ fn magic_sets_norec_sweep_matches_naive_oracle_across_bound_unbound_adornment() 
     let count = seed_count();
     let mut failures: Vec<String> = Vec::new();
     for i in 0..count {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         if let Err(f) = run_one_seed(seed) {
             failures.push(f);
