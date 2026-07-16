@@ -300,7 +300,7 @@ pub use storage::fjall::{
 };
 pub use storage::retry::retry_on_conflict;
 pub use storage::verify::{CorruptEntry, VerifyReport, verify_storage};
-pub use storage::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+pub use storage::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
 
 pub use fixed_rule::{
     CancelFlag, FixedRule, FixedRuleInputRelation, FixedRulePayload, NamedRows, SimpleFixedRule,

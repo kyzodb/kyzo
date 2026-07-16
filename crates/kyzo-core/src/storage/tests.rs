@@ -1488,7 +1488,7 @@ fn write_write_race_aborts_second_committer() {
         .commit()
         .expect_err("a write-write race must abort the second committer");
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "the write-write abort must be the typed, retryable conflict: {err:?}"
     );
     assert_eq!(
@@ -1516,7 +1516,7 @@ fn write_write_race_aborts_second_committer() {
     let err = tx2
         .commit()
         .expect_err("del vs put on one key is a write-write race");
-    assert!(err.downcast_ref::<ConflictError>().is_some());
+    assert!(err.is_conflict());
     // Disjoint blind writers still never conflict.
     let mut tx1 = db.write_tx().unwrap();
     let mut tx2 = db.write_tx().unwrap();
@@ -1567,7 +1567,7 @@ fn conflict_is_typed_and_options_and_stats_work() {
     tx1.commit().unwrap();
     let err = tx2.commit().unwrap_err();
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "conflict must be matchable as ConflictError, got: {err:?}"
     );
     let stats = db.stats();
@@ -1727,7 +1727,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
                             .parse()
                             .unwrap();
                         tx.put(b"n", (cur + 1).to_string().as_bytes())?;
-                        tx.commit()
+                        { let _ = tx.commit()?; Ok(()) }
                     })
                     .unwrap();
                 }
@@ -1926,7 +1926,7 @@ fn sim_mvcc_semantics_smoke() {
     tx1.commit().unwrap();
     let err = tx2.commit().unwrap_err();
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "conflict must downcast to ConflictError, got {err:?}"
     );
     // Blind write-write on one key: writes are validated (contract v2), so
@@ -1944,7 +1944,7 @@ fn sim_mvcc_semantics_smoke() {
         .commit()
         .expect_err("a write-write race must abort the second committer");
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "the write-write abort must be the typed conflict, got {err:?}"
     );
     assert_eq!(
@@ -1966,8 +1966,7 @@ fn sim_mvcc_semantics_smoke() {
     assert!(
         tx2.commit()
             .unwrap_err()
-            .downcast_ref::<ConflictError>()
-            .is_some(),
+            .is_conflict(),
         "del vs put on one key must abort the second committer"
     );
     // Disjoint blind writers never conflict. (Keys chosen outside every
@@ -2053,7 +2052,7 @@ fn sim_spurious_conflict_is_typed_and_discards() {
     tx.put(b"a", b"1").unwrap();
     let err = tx.commit().unwrap_err();
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "spurious conflict must be indistinguishable from a real one: {err:?}"
     );
     assert!(
@@ -2254,7 +2253,7 @@ fn sim_interleaving_seed_deterministic_and_diverse() {
                             let mut log = tx.get(b"log")?.unwrap().to_vec();
                             log.push(b'0' + id);
                             tx.put(b"log", &log)?;
-                            tx.commit()
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2300,7 +2299,7 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
         retry_on_conflict(10_000, || {
             let mut tx = db.write_tx()?;
             tx.put(b"counter", b"0")?;
-            tx.commit()
+            { let _ = tx.commit()?; Ok(()) }
         })
         .unwrap();
 
@@ -2317,7 +2316,7 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
                                 .unwrap();
                             tx.put(b"counter", (cur + 1).to_string().as_bytes())?;
                             tx.put(format!("b{b}-k{i}").as_bytes(), b"x")?;
-                            tx.commit()
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2584,7 +2583,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                             let mut tx = db.write_tx()?;
                             let (k, v) = vld_row(rel, &name, ts, a);
                             tx.put(&k, &v)?;
-                            tx.commit()
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2668,7 +2667,7 @@ fn sim_campaign_write_skew_aborts_and_serializes() {
                     tx.put(dst, (n + 1).to_string().as_bytes()).unwrap();
                     if let Err(e) = tx.commit() {
                         assert!(
-                            e.downcast_ref::<ConflictError>().is_some(),
+                            e.is_conflict(),
                             "only the typed conflict is a legal abort: {e:?}"
                         );
                         aborts.fetch_add(1, Ordering::Relaxed);
@@ -2676,7 +2675,7 @@ fn sim_campaign_write_skew_aborts_and_serializes() {
                             let mut tx = db.write_tx()?;
                             let n = parse(tx.get(src)?);
                             tx.put(dst, (n + 1).to_string().as_bytes())?;
-                            tx.commit()
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2740,7 +2739,7 @@ fn sim_campaign_no_lost_phantom_under_interleaving() {
                         let mut tx = db.write_tx()?;
                         let n = tx.range_scan(b"p", b"q").count();
                         tx.put(b"summary", n.to_string().as_bytes())?;
-                        tx.commit()
+                        { let _ = tx.commit()?; Ok(()) }
                     })
                     .unwrap();
                 }
@@ -2831,14 +2830,14 @@ fn sim_campaign_write_write_race_first_committer_wins() {
                     tx.put(b"hot", val).unwrap();
                     if let Err(e) = tx.commit() {
                         assert!(
-                            e.downcast_ref::<ConflictError>().is_some(),
+                            e.is_conflict(),
                             "only the typed conflict is a legal abort: {e:?}"
                         );
                         aborts.fetch_add(1, Ordering::Relaxed);
                         retry_on_conflict(10_000, || {
                             let mut tx = db.write_tx()?;
                             tx.put(b"hot", val)?;
-                            tx.commit()
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2901,7 +2900,7 @@ fn sim_fault_plan_identical_at_any_thread_count() {
             for i in 0..KEYS {
                 tx.put(format!("r{i:02}").as_bytes(), b"v")?;
             }
-            tx.commit()
+            { let _ = tx.commit()?; Ok(()) }
         })
         .unwrap();
 
@@ -2994,7 +2993,7 @@ fn sim_retry_liveness_escapes_injected_faults() {
             retry_on_conflict(1_000, || {
                 let mut tx = db.write_tx()?;
                 tx.put(format!("k{i}").as_bytes(), b"v")?;
-                tx.commit()
+                { let _ = tx.commit()?; Ok(()) }
             })
             .unwrap_or_else(|e| panic!("commit k{i} never escaped its injected conflict: {e}"));
         }
@@ -3175,11 +3174,11 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
                         let old = current(rows);
                         tx.put(&key_at(stamp), &val_of(old + 1)).unwrap();
                         match tx.commit() {
-                            Ok(()) => {
+                            Ok(_committed) => {
                                 commits.fetch_add(1, Ordering::SeqCst);
                                 break;
                             }
-                            Err(e) if e.downcast_ref::<ConflictError>().is_some() => {
+                            Err(e) if e.is_conflict() => {
                                 continue;
                             }
                             Err(e) => panic!("unexpected commit error: {e:?}"),

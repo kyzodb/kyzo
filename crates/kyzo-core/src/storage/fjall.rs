@@ -60,7 +60,10 @@ use miette::{Result, bail, miette};
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
+use crate::storage::{
+    Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, SystemClock,
+    WriteTx,
+};
 
 const KEYSPACE_NAME: &str = "kyzo";
 const META_KEYSPACE_NAME: &str = "kyzo_meta";
@@ -476,7 +479,7 @@ impl Storage for FjallStorage {
             .map_err(|e| miette!("fjall write tx: {e}"))?;
         let stamp = self.stamp_after_snapshot(&tx)?;
         Ok(FjallWriteTx {
-            tx: std::mem::ManuallyDrop::new(tx),
+            tx: Some(tx),
             ks: self.ks.clone(),
             db: self.db.clone(),
             stamp,
@@ -576,14 +579,22 @@ pub struct FjallReadTx {
 /// set. Reads see the transaction's own writes; `commit` consumes the value,
 /// so a committed transaction cannot be touched again by construction.
 pub struct FjallWriteTx {
-    /// ManuallyDrop: Drop-as-abort deleted (#302). Inner must not abort on outer Drop.
-    tx: std::mem::ManuallyDrop<OptimisticWriteTx>,
+    /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
+    tx: Option<OptimisticWriteTx>,
     ks: OptimisticTxKeyspace,
     db: OptimisticTxDatabase,
     stamp: ValidityTs,
 }
 
 impl FjallWriteTx {
+    fn open_tx(&self) -> &OptimisticWriteTx {
+        self.tx.as_ref().expect("FjallWriteTx used after commit/abort")
+    }
+
+    fn open_tx_mut(&mut self) -> &mut OptimisticWriteTx {
+        self.tx.as_mut().expect("FjallWriteTx used after commit/abort")
+    }
+
     /// Contract v2 (write-set validation): put every written key on the
     /// commit-time conflict surface. fjall's `insert`/`remove` register the
     /// key only as a conflict SOURCE (something that aborts *others*); the
@@ -596,8 +607,9 @@ impl FjallWriteTx {
     /// concurrent transaction committed a write to the same key. Mutating
     /// this call away breaks `write_write_race_aborts_second_committer`.
     fn mark_written_key_validated(&mut self, key: &[u8]) -> Result<()> {
-        self.tx
-            .contains_key(&self.ks, key)
+        let ks = self.ks.clone();
+        self.open_tx_mut()
+            .contains_key(&ks, key)
             .map_err(|e| miette!("fjall read: {e}"))?;
         Ok(())
     }
@@ -792,7 +804,64 @@ macro_rules! impl_read_tx {
 }
 
 impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
-impl_read_tx!(FjallWriteTx, tx, fjall::TrackedSeekIter<'c>);
+
+impl ReadTx for FjallWriteTx {
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
+        read_get(self.open_tx(), &self.ks, key)
+    }
+
+    fn exists(&self, key: &[u8]) -> Result<bool> {
+        read_exists(self.open_tx(), &self.ks, key)
+    }
+
+    fn range_scan<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        Box::new(raw_range(self.open_tx(), &self.ks, lower, upper).map(materialize_row))
+    }
+
+    fn range_scan_keys<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+        Box::new(raw_range(self.open_tx(), &self.ks, lower, upper).map(materialize_key))
+    }
+
+    fn range_skip_scan_tuple<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+        as_of: AsOf,
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
+    }
+
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        read_total_scan(self.open_tx(), &self.ks)
+    }
+}
+
+impl OpenSkipCursor for FjallWriteTx {
+    type Cursor<'c> = FjallSkipCursor<fjall::TrackedSeekIter<'c>>;
+
+    fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        if lower >= upper {
+            return FjallSkipCursor::Empty;
+        }
+        FjallSkipCursor::Live(self.open_tx().seek_range::<&[u8], _>(
+            &self.ks,
+            (Bound::Included(lower), Bound::Excluded(upper)),
+        ))
+    }
+}
 
 impl WriteTx for FjallWriteTx {
     fn system_stamp(&self) -> ValidityTs {
@@ -800,30 +869,28 @@ impl WriteTx for FjallWriteTx {
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.tx.insert(&self.ks, key, val);
+        let ks = self.ks.clone();
+        self.open_tx_mut().insert(&ks, key, val);
         self.mark_written_key_validated(key)
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.tx.remove(&self.ks, key);
+        let ks = self.ks.clone();
+        self.open_tx_mut().remove(&ks, key);
         self.mark_written_key_validated(key)
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
-        // Everything visible to this transaction in the range dies: snapshot
-        // data and the transaction's own writes alike. Chunked with a
-        // resuming cursor, so scratch memory is bounded and no pass re-walks
-        // the tombstones of previous passes (a naive rescan-from-lower is
-        // quadratic in range size). The write set itself necessarily holds
-        // one tombstone per deleted key until commit.
         const CHUNK: usize = 1024;
         let mut cursor = lower.to_vec();
         loop {
-            // Keys only: a delete never needs the value bytes.
-            let keys: Vec<Slice> = raw_range(&self.tx, &self.ks, &cursor, upper)
-                .map(materialize_key)
-                .take(CHUNK)
-                .collect::<Result<_>>()?;
+            let keys: Vec<Slice> = {
+                let tx = self.open_tx();
+                raw_range(tx, &self.ks, &cursor, upper)
+                    .map(materialize_key)
+                    .take(CHUNK)
+                    .collect::<Result<_>>()?
+            };
             let Some(last) = keys.last() else {
                 return Ok(());
             };
@@ -833,8 +900,9 @@ impl WriteTx for FjallWriteTx {
                 succ
             };
             let full_chunk = keys.len() == CHUNK;
+            let ks = self.ks.clone();
             for k in keys {
-                self.tx.remove(&self.ks, k);
+                self.open_tx_mut().remove(&ks, k);
             }
             if !full_chunk {
                 return Ok(());
@@ -842,12 +910,50 @@ impl WriteTx for FjallWriteTx {
         }
     }
 
+    fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
+        let tx = self
+            .tx
+            .take()
+            .expect("FjallWriteTx commit after spend");
+        match tx
+            .commit()
+            .map_err(|e| CommitFailure::Io(format!("fjall commit: {e}")))?
+        {
+            Ok(()) => Ok(Committed),
+            Err(Conflict) => Err(CommitFailure::Conflict(ConflictError)),
+        }
+    }
+
+    fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
+        let db = self.db.clone();
+        let tx = self
+            .tx
+            .take()
+            .expect("FjallWriteTx commit_durable after spend");
+        match tx
+            .commit()
+            .map_err(|e| CommitFailure::Io(format!("fjall commit: {e}")))?
+        {
+            Ok(()) => {}
+            Err(Conflict) => return Err(CommitFailure::Conflict(ConflictError)),
+        }
+        db.persist(fjall::PersistMode::SyncAll)
+            .map_err(|e| CommitFailure::Io(format!("fjall sync: {e}")))?;
+        Ok(Committed)
+    }
+
+    fn abort(mut self) -> Aborted {
+        if let Some(tx) = self.tx.take() {
+            tx.rollback();
+        }
+        Aborted
+    }
 }
 
 impl Drop for FjallWriteTx {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            panic!("Drop-as-abort deleted (#302): WriteTx requires abort(self)");
+        if self.tx.is_some() && !std::thread::panicking() {
+            panic!("Open WriteTx dropped without commit() or abort(self)");
         }
     }
 }

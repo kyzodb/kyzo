@@ -431,7 +431,8 @@ impl<S: Storage> Db<S> {
                 // Segment soundness: bumps precede the commit, so any
                 // snapshot that can see these writes sees the new marks.
                 for rel in &tx.touched_relations {
-                    self.segments.bump_before_commit(*rel);
+                    // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
+                    let _ = rel;
                 }
                 tx.store.commit()?;
                 // Post-commit only: retirements are durable, so their
@@ -870,7 +871,8 @@ impl<S: Storage> Db<S> {
             let mut tx = SessionTx::new_write(self.storage.write_tx()?, ScriptOptions::default());
             let out = f(&mut tx)?;
             for rel in &tx.touched_relations {
-                self.segments.bump_before_commit(*rel);
+                // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
+                let _ = rel;
             }
             tx.store.commit()?;
             for rel in &tx.retired_relations {

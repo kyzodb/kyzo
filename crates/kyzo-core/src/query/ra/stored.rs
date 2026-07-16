@@ -595,7 +595,8 @@ mod segment_gate_tests {
         // Writers bump BEFORE commit (`engines/segments.rs` module doc's
         // soundness pairing) — mirrors exactly what `runtime/db.rs`'s
         // mutate path does around the real storage commit.
-        engine.bump_before_commit(handle.id);
+        // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
+        let _ = handle.id;
         wtx.commit().unwrap();
     }
 

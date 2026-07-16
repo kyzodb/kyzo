@@ -1038,7 +1038,7 @@ fn time_travel_under_faults_answers_or_errors() {
                 h.retract_fact(&mut tx, &[v(id)], ValidityTs::from_raw(at), sp())?;
             }
         }
-        tx.commit()
+        { let _ = tx.commit()?; Ok(()) }
     };
 
     let asof_program = |at: i64| -> StratifiedMagicProgram {

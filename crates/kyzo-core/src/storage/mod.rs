@@ -16,9 +16,12 @@
 //!
 //! Transactions are two species of one genus, expressed as two traits: a
 //! [`ReadTx`] is one consistent snapshot and *cannot* write — the operations
-//! do not exist on it; a [`WriteTx`] extends reading with a conflict-tracked
-//! write set, and committing **consumes** it, so a committed transaction is
-//! not an invalid state to guard against but a value that no longer exists.
+//! do not exist on it; a [`WriteTx`] is the **Open** phase of a write
+//! transaction — put/del exist only there. [`WriteTx::commit`] and
+//! [`WriteTx::abort`] are consuming verbs: Open is spent and the successor is
+//! [`Committed`] or [`Aborted`]. Use-after-commit/abort cannot compile —
+//! the Open type has disappeared. There is no `finished` flag and no
+//! Drop-as-abort; dropping an unfinished Open is a drop-bomb.
 //!
 //! ## Concurrency economics, stated plainly
 //!
@@ -303,10 +306,10 @@ impl fmt::Display for FormatVersion {
 /// second committer (first-committer-wins). A commit with an empty write set
 /// still never aborts.
 ///
-/// **Retryable**: rerun the whole transaction. This is a typed error so the
-/// engine can distinguish it programmatically (via `Report::downcast_ref`)
-/// from fatal conditions like corruption or IO failure — retry-on-conflict
-/// is a control-flow decision, not a string match.
+/// **Retryable**: rerun the whole transaction. Prefer matching
+/// [`CommitFailure::Conflict`] on the commit outcome; this type remains as
+/// the conflict payload identity for retry helpers that still recover it
+/// from a diagnostic chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConflictError;
 
@@ -321,6 +324,50 @@ impl fmt::Display for ConflictError {
 
 impl std::error::Error for ConflictError {}
 impl miette::Diagnostic for ConflictError {}
+
+/// Proof that an Open write transaction committed. Carries no Open methods —
+/// use-after-commit is a type error, not a runtime guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub struct Committed;
+
+/// Proof that an Open write transaction aborted without applying its writes.
+/// Carries no Open methods — use-after-abort is a type error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub struct Aborted;
+
+/// Closed commit refusal: conflict, IO, or corruption — never an erased
+/// `Result<()>` / stringly dispatch. The Open transaction is spent either way.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+pub enum CommitFailure {
+    /// SSI conflict — discard the write set; retry on a fresh Open snapshot.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Conflict(#[from] ConflictError),
+
+    /// Storage IO failed during commit (or during `commit_durable`'s fsync).
+    ///
+    /// For [`WriteTx::commit_durable`]: if the commit applied and only the
+    /// fsync failed, the transaction IS committed (visible, process-crash
+    /// durable) — this variant reports the durability shortfall, not a
+    /// rollback.
+    #[error("storage IO during commit: {0}")]
+    #[diagnostic(code(storage::commit_io))]
+    Io(String),
+
+    /// On-disk or internal corruption detected while committing.
+    #[error("storage corruption during commit: {0}")]
+    #[diagnostic(code(storage::commit_corruption))]
+    Corruption(String),
+}
+
+impl CommitFailure {
+    /// Whether this refusal is the retryable concurrent-writer case.
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, Self::Conflict(_))
+    }
+}
 
 mod sealed {
     /// One backend by decree (see .claude/rules/storage.md): these traits are
@@ -485,18 +532,18 @@ pub trait ReadTx: sealed::Sealed + Sync {
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>;
 }
 
-/// The write-transaction species: everything a [`ReadTx`] can do — seeing
-/// the transaction's own writes, conflict-tracked — plus mutation and
-/// commit.
+/// The **Open** write-transaction species: everything a [`ReadTx`] can do —
+/// seeing the transaction's own writes, conflict-tracked — plus mutation.
+/// Open / [`Committed`] / [`Aborted`] are three types; there is no flag.
 ///
-/// MVCC semantics: `commit` must fail with [`ConflictError`] — discarding
-/// all of the transaction's changes — if anything this transaction READ (a
-/// point read or a scanned range) or WROTE (a `put` or `del` key) was
-/// modified concurrently by a committed transaction. Reads and writes are
-/// the conflict surface (contract v2 — see the module docs' history): a
-/// write-write race aborts its second committer, first-committer-wins. A
-/// commit with an empty write set never aborts — a read-only `WriteTx`
-/// commit certifies nothing.
+/// MVCC semantics: `commit` must fail with [`CommitFailure::Conflict`] —
+/// discarding all of the transaction's changes — if anything this
+/// transaction READ (a point read or a scanned range) or WROTE (a `put` or
+/// `del` key) was modified concurrently by a committed transaction. Reads
+/// and writes are the conflict surface (contract v2 — see the module docs'
+/// history): a write-write race aborts its second committer,
+/// first-committer-wins. A commit with an empty write set never aborts — a
+/// read-only Open commit certifies nothing.
 ///
 /// Consequence for engine code: insert-if-absent / uniqueness races on a
 /// key are detected by the write itself — the losing racer aborts with the
@@ -532,4 +579,29 @@ pub trait WriteTx: ReadTx {
     /// empty" protection must pass forward bounds.
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()>;
 
+    /// Commit, consuming Open into [`Committed`] (or a closed
+    /// [`CommitFailure`]). Durability: survives a process crash; for
+    /// power-cut durability use [`commit_durable`](Self::commit_durable) or
+    /// [`Storage::sync`].
+    fn commit(self) -> std::result::Result<Committed, CommitFailure>
+    where
+        Self: Sized;
+
+    /// Commit and fsync before returning: the transaction survives a power
+    /// cut, not just a process crash. Costs an fsync; the engine chooses per
+    /// transaction where that price is worth paying.
+    ///
+    /// Failure semantics: if the commit applies but the fsync then fails,
+    /// the transaction IS committed — visible, process-crash durable, not
+    /// yet power-cut durable. The error is [`CommitFailure::Io`], reporting
+    /// the durability shortfall, not a rollback.
+    fn commit_durable(self) -> std::result::Result<Committed, CommitFailure>
+    where
+        Self: Sized;
+
+    /// Abort, consuming Open into [`Aborted`] without applying writes.
+    /// Named — not Drop-as-abort.
+    fn abort(self) -> Aborted
+    where
+        Self: Sized;
 }

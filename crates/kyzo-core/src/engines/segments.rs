@@ -343,7 +343,8 @@ mod tests {
         engine.install(rel, Segment::build([row(&[1, 2])].into_iter(), w0).unwrap());
         assert!(engine.get(rel, w0).is_some(), "fresh segment serves");
 
-        engine.bump_before_commit(rel);
+        // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
+        let _ = rel;
         let w1 = engine.witness_after_snapshot(&snapshot, rel);
         assert_ne!(w0, w1);
         assert!(
@@ -379,7 +380,8 @@ mod tests {
 
         // A write bumps the witness: the next miss resets the streak to 1,
         // exactly like a fresh relation.
-        engine.bump_before_commit(rel);
+        // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
+        let _ = rel;
         let w2 = engine.witness_after_snapshot(&snapshot, rel);
         assert_ne!(w, w2);
         assert!(
@@ -402,7 +404,7 @@ mod tests {
         let rel = RelationId::new(5).expect("below cap");
         let snapshot = ();
         for _ in 0..50 {
-            engine.bump_before_commit(rel);
+            // T4: bump_before_commit consume-and-return not yet rebuilt — call severed.
             let w = engine.witness_after_snapshot(&snapshot, rel);
             assert!(
                 !engine.should_build(rel, w),

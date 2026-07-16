@@ -1926,7 +1926,7 @@ mod tests {
             .commit()
             .expect_err("racing counter writes must conflict");
         assert!(
-            err.downcast_ref::<ConflictError>().is_some(),
+            err.is_conflict(),
             "the loser gets the typed, retryable conflict: {err:?}"
         );
 

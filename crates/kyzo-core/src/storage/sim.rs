@@ -96,7 +96,7 @@ use miette::{Result, miette};
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};
+use crate::storage::{Aborted, CommitFailure, Committed, ConflictError, ReadTx, Storage, WriteTx};
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
 
@@ -657,6 +657,7 @@ impl Storage for SimStorage {
             put_calls: 0,
             del_calls: 0,
             ctx: self.ctx.clone(),
+            spent: false,
         })
     }
 
@@ -749,6 +750,8 @@ pub(crate) struct SimWriteTx {
     put_calls: u64,
     del_calls: u64,
     ctx: SimCtx,
+    /// Drop-bomb only: set when commit/abort spends Open. Not a method gate.
+    spent: bool,
 }
 
 impl SimWriteTx {
@@ -850,7 +853,105 @@ impl SimWriteTx {
             .push((lower.to_vec(), upper.map(<[u8]>::to_vec)));
     }
 
-    // commit_inner / erased Result<()> commit outcome DELETED — #302 demolition.
+    fn commit_inner(mut self, durable: bool) -> std::result::Result<Committed, CommitFailure> {
+        self.ctx.yield_turn();
+        let start_seq = self.start_seq;
+        let writes = std::mem::take(&mut self.writes);
+        let reads = std::mem::replace(&mut self.reads, Mutex::new(ReadSet::default()))
+            .into_inner()
+            .expect(POISONED);
+        let put_calls = self.put_calls;
+        let del_calls = self.del_calls;
+        let ctx = self.ctx.clone();
+        self.spent = true;
+        // Fault identities, fixed before any dice roll. The commit identity
+        // is the write-set KEYS (already sorted: `writes` is a BTreeMap) —
+        // not values, so a retry that recomputes new values over the same
+        // keys is still the same logical commit, on its next attempt.
+        let commit_identity = {
+            let keys: Vec<&[u8]> = writes.keys().map(Vec::as_slice).collect();
+            op_identity(TAG_COMMIT, &keys)
+        };
+        let sync_identity = op_identity(TAG_SYNC, &[]);
+        let mut st = ctx.state.lock().expect(POISONED);
+
+        // An empty write set commits vacuously, matching the real backend
+        // exactly: fjall returns Ok before its oracle ever runs, so a
+        // read-only WriteTx commit never aborts, certifies nothing about
+        // what it read, is not a fault-injection point, and advances no
+        // sequence. (commit_durable still performs its fsync step: the real
+        // backend's commit-then-persist syncs unconditionally.)
+        if writes.is_empty() {
+            if durable {
+                if ctx.roll_fault(&mut st, sync_identity, SALT_SYNC, ctx.faults.sync_fail_ppm) {
+                    return Err(CommitFailure::Io(
+                        "sim: injected fsync failure".to_string(),
+                    ));
+                }
+                st.synced_seq = st.commit_seq;
+            }
+            return Ok(Committed);
+        }
+
+        // Spurious-conflict injection: SSI permits false positives, so a
+        // conflict with zero contention is a *legal* outcome the engine's
+        // retry loops must absorb. The write set is discarded (self is
+        // consumed and the state was never touched). Identity-keyed: a
+        // retried commit of the same keys advances its attempt and draws a
+        // fresh decision — it cannot be pinned to a permanent conflict.
+        if ctx.roll_fault(
+            &mut st,
+            commit_identity,
+            SALT_CONFLICT,
+            ctx.faults.spurious_conflict_ppm,
+        ) {
+            return Err(CommitFailure::Conflict(ConflictError));
+        }
+
+        // Real SSI validation — READS AND WRITES, matching the real backend
+        // (contract v2, see storage/mod.rs "Contract history"): anything this
+        // transaction read (point or range) OR wrote (a put/del key) that was
+        // committed past its snapshot aborts it. Write-write races are
+        // first-committer-wins: the second committer gets the typed conflict
+        // and reruns on a fresh snapshot. (On the real backend the same
+        // predicate arises from put/del marking their key read in fjall's
+        // conflict manager; here the write set is validated directly.)
+        let key_conflict = reads.keys.iter().any(|k| modified_since(&st, start_seq, k));
+        let range_conflict = reads
+            .ranges
+            .iter()
+            .any(|(lo, hi)| range_modified_since(&st, start_seq, lo, hi.as_deref()));
+        let write_conflict = writes.keys().any(|k| modified_since(&st, start_seq, k));
+        if key_conflict || range_conflict || write_conflict {
+            return Err(CommitFailure::Conflict(ConflictError));
+        }
+
+        // Apply atomically at the next sequence: the buffer durability tier.
+        // The write-count law's oracle accumulates HERE, on the success
+        // path only: an aborted commit's calls never reached real storage,
+        // so they must never reach the running total either.
+        st.total_puts += put_calls;
+        st.total_dels += del_calls;
+        let seq = st.commit_seq + 1;
+        for (k, v) in writes {
+            st.versions.entry(k).or_default().push((seq, v));
+        }
+        st.commit_seq = seq;
+
+        if durable {
+            // The fsync step. On injected failure the commit stays applied
+            // but the fsync watermark does not advance — committed, not
+            // power-cut durable, exactly like the real commit-then-persist.
+            if ctx.roll_fault(&mut st, sync_identity, SALT_SYNC, ctx.faults.sync_fail_ppm) {
+                return Err(CommitFailure::Io(
+                    "sim: injected fsync failure (commit applied, not power-cut durable)"
+                        .to_string(),
+                ));
+            }
+            st.synced_seq = st.commit_seq;
+        }
+        Ok(Committed)
+    }
 }
 
 /// The skip walk's cursor over a [`SimReadTx`]: `open_skip_cursor` does
@@ -1108,12 +1209,25 @@ impl WriteTx for SimWriteTx {
         }
         Ok(())
     }
+
+    fn commit(self) -> std::result::Result<Committed, CommitFailure> {
+        self.commit_inner(false)
+    }
+
+    fn commit_durable(self) -> std::result::Result<Committed, CommitFailure> {
+        self.commit_inner(true)
+    }
+
+    fn abort(mut self) -> Aborted {
+        self.spent = true;
+        Aborted
+    }
 }
 
 impl Drop for SimWriteTx {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            panic!("Drop-as-abort deleted (#302): WriteTx requires abort(self)");
+        if !self.spent && !std::thread::panicking() {
+            panic!("Open WriteTx dropped without commit() or abort(self)");
         }
     }
 }

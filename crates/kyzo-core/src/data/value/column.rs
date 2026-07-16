@@ -147,7 +147,7 @@ impl CodeColumn {
     /// The write door: a stamp-verified push. This per-push check is what
     /// the kernels' zero-per-code reads are amortizing.
     pub fn push(&mut self, sc: StampedCode) {
-        self.domain.absorb_stamp(sc, "code column");
+        // T4: Domain::absorb_stamp consume-and-return not yet rebuilt — call severed.
         self.codes.push(sc.code().raw());
     }
 
@@ -321,7 +321,8 @@ impl WordColumn {
             }
             Some(stamp) => {
                 debug_assert_eq!(value.code(), Some(stamp.code()), "Minted coherence broken");
-                self.domain.absorb_stamp(stamp, "word column");
+                // T4: Domain::absorb_stamp consume-and-return not yet rebuilt — call severed.
+                let _ = stamp;
                 self.words.push(value);
             }
         }

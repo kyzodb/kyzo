@@ -17,7 +17,7 @@
 
 use miette::Result;
 
-use crate::storage::ConflictError;
+use crate::storage::{CommitFailure, ConflictError};
 
 /// Run `attempt` until it commits without conflict, retrying HOT (no
 /// pause between attempts).
@@ -40,7 +40,11 @@ pub fn retry_on_conflict<T>(
     for _ in 0..max_attempts {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(e) if e.downcast_ref::<ConflictError>().is_some() => {
+            Err(e)
+                if e.downcast_ref::<ConflictError>().is_some()
+                    || e.downcast_ref::<CommitFailure>()
+                        .is_some_and(CommitFailure::is_conflict) =>
+            {
                 last_err = Some(e);
             }
             Err(e) => return Err(e),
@@ -66,7 +70,11 @@ pub fn retry_on_conflict_with_backoff<T>(
     for n in 0..max_attempts {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(e) if e.downcast_ref::<ConflictError>().is_some() => {
+            Err(e)
+                if e.downcast_ref::<ConflictError>().is_some()
+                    || e.downcast_ref::<CommitFailure>()
+                        .is_some_and(CommitFailure::is_conflict) =>
+            {
                 last_err = Some(e);
                 backoff(n);
             }

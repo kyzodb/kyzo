@@ -266,8 +266,8 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
             }
         }
         match tx.commit() {
-            Ok(()) => return CommittedTxn { ops, stamp },
-            Err(e) if e.downcast_ref::<ConflictError>().is_some() => continue,
+            Ok(_committed) => return CommittedTxn { ops, stamp },
+            Err(e) if e.is_conflict() => continue,
             Err(e) => panic!("unexpected commit error (not a SSI conflict): {e:?}"),
         }
     }

@@ -84,7 +84,7 @@ use miette::Result;
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{ReadTx, WriteTx};
+use crate::storage::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
 
 /// One session's temp keyspace: an ordered map with the kernel's
 /// transaction interface. "Transaction" is honorary — the map IS the
@@ -99,6 +99,8 @@ pub(crate) struct TempTx {
     /// session state, so stamps need no wall-clock meaning, and logical
     /// time keeps runs deterministic.
     stamp: ValidityTs,
+    /// Drop-bomb only: set when commit/abort spends Open. Not a method gate.
+    spent: bool,
 }
 
 impl Default for TempTx {
@@ -109,6 +111,7 @@ impl Default for TempTx {
             stamp: ValidityTs::from_raw(
                 TEMP_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             ),
+            spent: false,
         }
     }
 }
@@ -236,12 +239,30 @@ impl WriteTx for TempTx {
         Ok(())
     }
 
+    /// Vacuous: a temp store's transaction IS the session's lifetime. The
+    /// method exists because the species contract requires it; consuming
+    /// Open here would only ever be called by generic code that is about
+    /// to drop the store anyway.
+    fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
+        self.spent = true;
+        Ok(Committed)
+    }
+
+    fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
+        self.spent = true;
+        Ok(Committed)
+    }
+
+    fn abort(mut self) -> Aborted {
+        self.spent = true;
+        Aborted
+    }
 }
 
 impl Drop for TempTx {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            panic!("Drop-as-abort deleted (#302): WriteTx requires abort(self)");
+        if !self.spent && !std::thread::panicking() {
+            panic!("Open WriteTx dropped without commit() or abort(self)");
         }
     }
 }
