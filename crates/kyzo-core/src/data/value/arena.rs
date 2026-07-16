@@ -25,15 +25,18 @@
 //!   two ways to open an observer. It has no read methods — there is no
 //!   unnamed frame to smuggle a code through.
 //! - [`Frame`] is the live observer: a borrow of the arena's current
-//!   state. Every spend verifies the stamp exactly (arena identity and
-//!   epoch) — deliberately no lifetime-branded witness, because a
+//!   state. Nest scopes open an invariant-lifetime [`NestedDomainCtx`]
+//!   for raw-handle identity/order ([`Frame::with_nested_ctx`]). Every
+//!   spend still verifies the stamp via mint-checked [`DomainCtx`] —
+//!   deliberately no lifetime-branded *spend* witness, because a borrow
 //!   lifetime cannot prove frame identity across coexisting arenas.
 //!   `intern` and `seal` take `&mut Arena`, so the borrow checker retires
 //!   every frame at the next mutation.
 //! - [`Snapshot`] is the pinned observer: run references + a delta cut +
 //!   frozen heap chunks + the epoch — the dictionary as one moment saw
-//!   it, owned and `Send + Sync`. It answers identically forever while
-//!   the writer interns and seals past it.
+//!   it, owned and `Send + Sync`. Same nest-brand / mint-checked-spend
+//!   split as [`Frame`]. It answers identically forever while the writer
+//!   interns and seals past it.
 //! - [`EpochRemap`] is the morphism between frames: minted only by
 //!   [`Arena::seal`], it restamps a [`StampedCode`] from its epoch into
 //!   the next — strictly monotone over sealed codes, a permutation over
@@ -59,11 +62,10 @@
 //! - For a [`Snapshot`], visibility is **not** implied by the epoch: the
 //!   delta cut is part of the observer, and a same-epoch code minted
 //!   after the cut is invisible to it. Snapshots therefore verify both
-//!   stamp and cut, exactly and loudly, on every spend. (A snapshot is
-//!   deliberately not a lifetime-witness observer: two owned snapshots of
-//!   different epochs can coexist with unifiable lifetimes, and a
-//!   compile-time brand that unifies across them would claim a safety it
-//!   cannot deliver.)
+//!   stamp and cut, exactly and loudly, on every spend. Nest brands
+//!   ([`Snapshot::with_nested_ctx`]) cover compare/identity under one
+//!   pinned observer; spend stays mint-checked because two owned
+//!   snapshots can coexist with unifiable lifetimes.
 //!
 //! ## The transition theorem, held by types
 //!
@@ -105,6 +107,7 @@
 #![allow(dead_code)]
 
 use std::cmp::Ordering;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
 
@@ -473,6 +476,23 @@ impl Epoch {
 /// consumable permission ([`BulkSpendAuthority`] is the move-only spend
 /// token).
 ///
+/// ## Coexisting-arena boundary (why this token is not lifetime-branded)
+///
+/// KyzoDB's executor holds **multiple arenas live simultaneously**, and
+/// epoch-stamped containers ([`super::column::Domain`], [`ExecRows`](super::exec::ExecRows))
+/// **outlive** any one [`Frame`] borrow. An invariant-lifetime brand
+/// ([`NestId`] / [`NestedDomainCtx`]) mints a compiler-unique identity per
+/// nest scope and is applied where a single live observer nest is
+/// provable — see [`Frame::with_nested_ctx`] / [`Snapshot::with_nested_ctx`].
+/// A brand cannot prove frame identity across coexisting arenas (two
+/// frames over different arenas can share a borrow lifetime), so full
+/// branding of this durable token would claim a safety it cannot deliver.
+/// Measurement and rejection rationale: [`super::code`] module docs.
+///
+/// Where instances coexist or values outlive the nest, this mint-checked
+/// token is the ceiling: [`DomainCtx::prove_shared`] (typed refusal) or
+/// [`DomainCtx::from_observer`] / plane-internal [`DomainCtx::at`].
+///
 /// Mint paths: [`DomainCtx::from_observer`] (infallible — the observer
 /// *is* the context) and [`DomainCtx::prove_shared`] (typed refusal when
 /// two sides disagree). No `Default`: a context cannot be conjured empty.
@@ -489,9 +509,68 @@ pub enum DomainCtxRefusal {
     EpochMismatch { left: Epoch, right: Epoch },
 }
 
+/// Invariant lifetime brand: each nest scope mints a compiler-unique `'id`
+/// at zero runtime cost (GhostCell / generativity).
+///
+/// Variance: `fn(&'id ()) -> &'id ()` is **invariant** in `'id`, so a
+/// value branded `'a` cannot coerce to `'b`. Brands from different
+/// [`Frame::with_nested_ctx`] / [`Snapshot::with_nested_ctx`] nests stay
+/// unmixable. Private constructor — only those nest doors mint one.
+#[derive(Clone, Copy, Debug)]
+pub struct NestId<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
+
+/// Domain context branded to one nest scope under a single live observer.
+/// Cross-nest mixing of `NestedDomainCtx` fails to compile.
+///
+/// Applied only where scopes nest (one live [`Frame`] or [`Snapshot`]
+/// nest). For coexisting arenas and outliving containers, use unbranded
+/// [`DomainCtx`] — see that type's coexisting-arena boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct NestedDomainCtx<'id> {
+    ctx: DomainCtx,
+    _nest: NestId<'id>,
+}
+
+impl<'id> NestedDomainCtx<'id> {
+    /// The durable unbranded fact (for APIs that must outlive the nest or
+    /// cross coexisting arenas under a later [`DomainCtx::prove_shared`]).
+    #[inline]
+    pub fn ctx(self) -> DomainCtx {
+        self.ctx
+    }
+
+    #[inline]
+    pub fn arena(self) -> ArenaId {
+        self.ctx.arena
+    }
+
+    #[inline]
+    pub fn epoch(self) -> Epoch {
+        self.ctx.epoch
+    }
+
+    /// Physical handle equality under this nest brand.
+    #[inline]
+    pub fn same_handle(self, a: Code, b: Code) -> bool {
+        self.ctx.same_handle(a, b)
+    }
+
+    /// Identity order of packed handles under this nest brand.
+    #[inline]
+    pub fn cmp_identity(self, a: Code, b: Code) -> Ordering {
+        self.ctx.cmp_identity(a, b)
+    }
+}
+
 impl DomainCtx {
     /// Mint from a bulk observer: the observer's arena and epoch *are*
     /// the context. Infallible.
+    ///
+    /// **Coexisting-arena boundary:** returns the unbranded durable token
+    /// — observers from different arenas can be named in one scope, and
+    /// the result may outlive a nest. For a compiler-unique nest brand
+    /// under one live frame/snapshot, use [`Frame::with_nested_ctx`] /
+    /// [`Snapshot::with_nested_ctx`].
     pub fn from_observer<O: BulkObserver>(o: &O) -> DomainCtx {
         DomainCtx {
             arena: o.bulk_arena(),
@@ -503,6 +582,11 @@ impl DomainCtx {
     /// refusal on mismatch — never a panic. Cross-context comparison
     /// cannot obtain a token, so it cannot call `same_word` / handle
     /// equality under a forged shared context.
+    ///
+    /// **Coexisting-arena boundary:** this is the deliberate unbranded
+    /// door — join/admit/gather must name two sides that may have been
+    /// built under different nest brands (or no brand). A lifetime brand
+    /// cannot unify those sides; mint-checked equality is the ceiling.
     pub fn prove_shared(
         left_arena: ArenaId,
         left_epoch: Epoch,
@@ -530,6 +614,10 @@ impl DomainCtx {
     /// Plane-internal: mint from already-proven domain parts (a
     /// [`super::column::Domain`] or gather product). The caller holds the
     /// proof; this does not re-check.
+    ///
+    /// **Coexisting-arena boundary:** containers carry unbranded domain
+    /// identity across seals and across coexisting arenas; branding here
+    /// would fake a nest that no longer exists.
     pub(super) fn at(arena: ArenaId, epoch: Epoch) -> DomainCtx {
         DomainCtx { arena, epoch }
     }
@@ -638,6 +726,10 @@ impl EpochRemap {
     ///
     /// Typed refusal on a foreign arena or wrong-epoch stamp. Panics only
     /// if the code was not live in the source epoch (minting discipline).
+    ///
+    /// **Coexisting-arena boundary:** remaps and stamps are owned values
+    /// that outlive any nest brand; arena/epoch proof stays mint-checked
+    /// [`DomainCtx::prove_shared`].
     pub fn apply(&self, sc: StampedCode) -> Result<StampedCode, DomainCtxRefusal> {
         DomainCtx::prove_shared(self.arena, self.from, sc.arena(), sc.epoch())?;
         Ok(StampedCode::mint(
@@ -892,15 +984,16 @@ impl<'a, S: Store> View<'a, S> {
 /// quiescent stretch of one epoch — the borrow checker retires it at the
 /// next mutation.
 ///
-/// There is deliberately **no lifetime-branded spendable witness**: a
-/// lifetime cannot prove frame identity (two frames over *different*
-/// arenas can coexist and unify lifetimes), so a witness "admitted" by
-/// one frame would compile as spendable in another — the smuggle would
-/// just move from admission to spending. Instead, every spend proves
-/// the stamp via [`DomainCtx::prove_shared`] (typed refusal on arena or
-/// epoch mismatch), symmetric with [`Snapshot`]. Bulk amortization of
-/// that check belongs to the epoch-stamped containers, which prove one
-/// domain for a whole column at kernel admission.
+/// **Nest brands vs spend witnesses.** [`Frame::with_nested_ctx`] opens an
+/// invariant-lifetime [`NestedDomainCtx`] for raw-handle identity/order
+/// under this single live frame (one nest, compiler-unique `'id`). There
+/// is deliberately **no lifetime-branded spendable witness**: a borrow
+/// lifetime cannot prove frame identity across coexisting arenas (two
+/// frames over *different* arenas can unify lifetimes), so a spend
+/// witness "admitted" by one frame would compile as spendable in another.
+/// Every spend therefore proves the stamp via [`DomainCtx::prove_shared`]
+/// (typed refusal), symmetric with [`Snapshot`]. Bulk amortization of
+/// that check belongs to the epoch-stamped containers.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
     arena: ArenaId,
@@ -921,6 +1014,24 @@ impl<'a> Frame<'a> {
             sorted: self.sorted,
             store: self.heap,
         }
+    }
+
+    /// Open an invariant-lifetime brand nest under this single live frame.
+    ///
+    /// `'id` cannot unify with any other nest's brand — including a nest
+    /// opened on a coexisting frame that happens to share borrow lifetime
+    /// `'a`. The branded token is for nested raw-handle compare/identity
+    /// inside `f`; it cannot escape the closure (HRTB). Spend paths stay
+    /// on mint-checked [`DomainCtx`] — see the frame-level coexisting-arena
+    /// boundary.
+    pub fn with_nested_ctx<R>(&self, f: impl for<'id> FnOnce(NestedDomainCtx<'id>) -> R) -> R {
+        f(NestedDomainCtx {
+            ctx: DomainCtx {
+                arena: self.arena,
+                epoch: self.epoch,
+            },
+            _nest: NestId(PhantomData),
+        })
     }
 
     pub fn epoch(&self) -> Epoch {
@@ -953,6 +1064,10 @@ impl<'a> Frame<'a> {
     /// Arena/epoch mismatch is a typed refusal — cross through
     /// [`EpochRemap::apply`] for a stale epoch. Bounds failures remain
     /// asserts (minting discipline broken).
+    ///
+    /// **Coexisting-arena boundary:** stamps are owned and may arrive from
+    /// any arena; proof is mint-checked [`DomainCtx::prove_shared`], not a
+    /// nest brand (a brand cannot refuse a foreign stamp at compile time).
     fn check(&self, sc: StampedCode) -> Result<usize, DomainCtxRefusal> {
         DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let c = sc.code().raw() as usize;
@@ -1020,10 +1135,13 @@ impl<'a> Frame<'a> {
 ///
 /// Visibility is **not** implied by the epoch here: the delta cut is part
 /// of the observer, so every spend verifies both the stamp and the cut,
-/// exactly and loudly. (Deliberately not a lifetime witness: two owned
-/// snapshots of different epochs can coexist with unifiable lifetimes,
-/// and a compile-time brand that unifies across them would claim a safety
-/// it cannot deliver.)
+/// exactly and loudly.
+///
+/// **Nest brands vs spend witnesses.** [`Snapshot::with_nested_ctx`] brands
+/// raw-handle identity/order under this one pinned observer. Spend stays
+/// mint-checked: two owned snapshots of different epochs (or arenas) can
+/// coexist with unifiable lifetimes, and a branded spend witness that
+/// unified across them would claim a safety it cannot deliver.
 pub struct Snapshot {
     arena: ArenaId,
     runs: Vec<Arc<Run>>,
@@ -1043,6 +1161,18 @@ impl Snapshot {
             sorted: &self.sorted,
             store: &self.store,
         }
+    }
+
+    /// Open an invariant-lifetime brand nest under this pinned snapshot
+    /// (see [`Frame::with_nested_ctx`]). Spend paths remain mint-checked.
+    pub fn with_nested_ctx<R>(&self, f: impl for<'id> FnOnce(NestedDomainCtx<'id>) -> R) -> R {
+        f(NestedDomainCtx {
+            ctx: DomainCtx {
+                arena: self.arena,
+                epoch: self.epoch,
+            },
+            _nest: NestId(PhantomData),
+        })
     }
 
     pub fn epoch(&self) -> Epoch {
@@ -1066,6 +1196,9 @@ impl Snapshot {
     /// same-epoch code minted *after* the snapshot is beyond its view).
     /// Arena/epoch mismatch is a typed refusal; cut overflow remains an
     /// assert (visibility, not domain-identity mixup).
+    ///
+    /// **Coexisting-arena boundary:** owned snapshots and stamps outlive
+    /// nest brands; domain identity is mint-checked [`DomainCtx::prove_shared`].
     fn check(&self, sc: StampedCode) -> Result<usize, DomainCtxRefusal> {
         DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let c = sc.code().raw() as usize;
@@ -1930,6 +2063,37 @@ mod tests {
             ),
             "foreign-arena stamp must refuse typed"
         );
+    }
+
+    /// Nest brands apply under one live frame: handle identity is lawful
+    /// inside the nest, and the durable unbranded token remains available
+    /// via [`NestedDomainCtx::ctx`] for coexisting-arena APIs.
+    #[test]
+    fn nested_ctx_brands_handle_identity_under_one_frame() {
+        let mut arena = Arena::new();
+        let a = arena.intern(b"a");
+        let b = arena.intern(b"b");
+        let f = arena.frame();
+        f.with_nested_ctx(|ctx| {
+            assert!(ctx.same_handle(a.code(), a.code()));
+            assert!(!ctx.same_handle(a.code(), b.code()));
+            assert_eq!(
+                ctx.cmp_identity(a.code(), b.code()),
+                std::cmp::Ordering::Less
+            );
+            // Nest can project the durable mint-checked token; that token
+            // is what coexisting-arena sites accept.
+            let durable = ctx.ctx();
+            assert_eq!(durable.arena(), f.arena);
+            assert_eq!(durable.epoch(), f.epoch);
+        });
+        // Snapshot nest is the same shape.
+        let mut arena = Arena::new();
+        let sc = arena.intern(b"x");
+        let snap = arena.snapshot();
+        snap.with_nested_ctx(|ctx| {
+            assert!(ctx.same_handle(sc.code(), sc.code()));
+        });
     }
 
     #[test]

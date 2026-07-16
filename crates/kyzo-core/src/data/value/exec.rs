@@ -115,6 +115,12 @@ impl ExecRows {
     ///
     /// Typed refusal when the two inputs are not the same arena+epoch
     /// domain (u32 identity would not mean value identity across domains).
+    ///
+    /// **Coexisting-arena boundary:** both inputs are owned execution rows
+    /// that outlive any observer nest and may have been built under
+    /// different brands (or none). Shared identity is mint-checked
+    /// [`DomainCtx::prove_shared`] — a nest brand cannot unify two
+    /// coexisting domains at compile time.
     pub fn join_project(
         &self,
         other: &ExecRows,
@@ -191,6 +197,9 @@ impl ExecRows {
     }
 
     /// The compare/identity context for raw handles in these rows.
+    ///
+    /// **Coexisting-arena boundary:** unbranded durable [`DomainCtx`] —
+    /// [`ExecRows`] outlives observer nests (see [`Domain::ctx`]).
     pub fn ctx(&self) -> DomainCtx {
         self.domain.ctx()
     }
@@ -263,6 +272,9 @@ impl ExecDedup {
 
     /// Absorb every row of `rows` (same domain), deduping. Returns the
     /// count of genuinely-new tuples. Typed refusal when domains disagree.
+    ///
+    /// **Coexisting-arena boundary:** two owned sinks/rows; mint-checked
+    /// [`DomainCtx::prove_shared`].
     pub fn absorb(&mut self, rows: &ExecRows) -> Result<usize, DomainCtxRefusal> {
         assert_eq!(self.arity, rows.arity(), "absorb arity mismatch");
         DomainCtx::prove_shared(

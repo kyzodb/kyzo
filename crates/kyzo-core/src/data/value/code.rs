@@ -8,6 +8,27 @@
  */
 
 //! `Code(u32)`: the dense interned value handle — the hot-path identity the recursive relations and residency layers consume.
+//!
+//! ## Lifetime brands vs coexisting arenas (ceiling measurement)
+//!
+//! An invariant-lifetime brand
+//! ([`NestId`](super::arena::NestId) / [`NestedDomainCtx`](super::arena::NestedDomainCtx))
+//! mints a compiler-unique identity per nest at zero cost and is applied
+//! where a single live observer nest is provable
+//! ([`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx) /
+//! [`Snapshot::with_nested_ctx`](super::arena::Snapshot::with_nested_ctx)).
+//!
+//! **Rejection of full branding:** a lifetime-branded *spend* witness
+//! cannot prove frame identity across coexisting arenas — two frames over
+//! different arenas can share a borrow lifetime, so a brand that unified
+//! them would claim a safety it cannot deliver. KyzoDB's executor holds
+//! multiple arenas live simultaneously, and epoch-stamped containers
+//! outlive any one frame borrow. That measurement bounds full
+//! lifetime-branding to nesting scopes; where instances coexist, the
+//! ceiling is the mint-checked [`DomainCtx`](super::arena::DomainCtx)
+//! token ([`DomainCtx::prove_shared`](super::arena::DomainCtx::prove_shared)),
+//! which still deletes every domain-mixup panic and every unproven
+//! comparison.
 #![allow(dead_code)] // #119 foundation: dead_code is target-split, #120 wires it
 
 /// The raw dense handle for an interned value: **identity only, no read
@@ -15,9 +36,11 @@
 /// codes are only valid as observed through an arena [`Frame`](super::arena::Frame)
 /// or [`Snapshot`](super::arena::Snapshot). Handle equality and
 /// identity-order are [`DomainCtx::same_handle`](super::arena::DomainCtx::same_handle)
-/// / [`DomainCtx::cmp_identity`](super::arena::DomainCtx::cmp_identity) —
-/// packed storage uses [`Code::raw`] under a container that already holds
-/// the domain proof. To spend one you need its epoch and arena:
+/// / [`DomainCtx::cmp_identity`](super::arena::DomainCtx::cmp_identity)
+/// (or the nest-branded [`NestedDomainCtx`](super::arena::NestedDomainCtx)
+/// under one live observer) — packed storage uses [`Code::raw`] under a
+/// container that already holds the domain proof. To spend one you need
+/// its epoch and arena:
 ///
 /// - [`StampedCode`] — code + epoch, minted by `Arena::intern` and by
 ///   [`EpochRemap::apply`](super::arena::EpochRemap::apply) (the morphism
@@ -26,8 +49,8 @@
 ///   [`Snapshot`](super::arena::Snapshot)s both spend a `StampedCode`
 ///   directly, proving arena identity and epoch via
 ///   [`DomainCtx::prove_shared`](super::arena::DomainCtx::prove_shared)
-///   on every spend (typed refusal; a lifetime-branded witness cannot
-///   prove frame identity across coexisting arenas, so none is offered).
+///   on every spend (typed refusal — see module-level coexisting-arena
+///   measurement; no lifetime-branded spend witness is offered).
 ///
 /// There is deliberately no `Ord`: value order is the arena's to answer,
 /// inside a frame. Structural identity-order under a proven context is

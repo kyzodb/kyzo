@@ -54,6 +54,14 @@ use super::code::{Code, StampedCode};
 /// `extent <= observer.bulk_len()` proves every code inside is visible —
 /// including against a snapshot's cut.
 ///
+/// **Coexisting-arena boundary:** a `Domain` is owned container state — it
+/// outlives [`Frame`](super::arena::Frame) nests and coexists with other
+/// arenas' domains. Identity is therefore mint-checked
+/// [`DomainCtx`](super::arena::DomainCtx), not an invariant-lifetime nest
+/// brand (see [`super::code`] module measurement). Nest brands apply only
+/// while a single live observer nest is open
+/// ([`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)).
+///
 /// @authority Domain
 /// @layer value
 /// @owns arena+epoch+visibility admission; a raw u32 code is meaningful only under a proven Domain; cross-Domain code comparison is invalid
@@ -84,6 +92,9 @@ impl Domain {
     /// rebuild; `Domain` is a proven value, not a live handle).
     ///
     /// Typed refusal on foreign arena or wrong epoch — never a panic.
+    ///
+    /// **Coexisting-arena boundary:** stamps arrive from any mint path;
+    /// proof is [`DomainCtx::prove_shared`], not a nest brand.
     fn absorb_stamp(self, sc: StampedCode) -> Result<Domain, DomainCtxRefusal> {
         DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let raw = sc.code().raw();
@@ -112,6 +123,10 @@ impl Domain {
     /// The admission check: arena/epoch via [`DomainCtx::prove_shared`]
     /// (typed refusal, never panic); visibility extent remains an
     /// observer-cut assert (not a domain-identity mixup).
+    ///
+    /// **Coexisting-arena boundary:** container domain and observer may
+    /// have been created under different nest brands (or none); shared
+    /// identity is mint-checked here.
     fn admit_to<O: BulkObserver>(
         &self,
         o: &O,
@@ -138,6 +153,11 @@ impl Domain {
 
     /// The compare/identity context for raw handles under this domain.
     /// Durable fact token — not a spend authority.
+    ///
+    /// **Coexisting-arena boundary:** returns unbranded [`DomainCtx`] —
+    /// domains outlive observer nests; use
+    /// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)
+    /// when a compiler-unique nest brand is available.
     pub fn ctx(&self) -> DomainCtx {
         DomainCtx::at(self.arena, self.epoch)
     }
@@ -200,6 +220,9 @@ impl CodeColumn {
     /// The gather door: consume this column into the next epoch. The only
     /// mint of a new-epoch container; the old one ceases to exist here.
     /// Typed refusal when the remap is not this container's arena/epoch.
+    ///
+    /// **Coexisting-arena boundary:** gather joins owned container + owned
+    /// remap; identity is mint-checked [`DomainCtx::prove_shared`].
     pub fn gather(self, remap: &EpochRemap) -> Result<CodeColumn, DomainCtxRefusal> {
         DomainCtx::prove_shared(
             self.domain.arena,
@@ -231,6 +254,12 @@ impl CodeColumn {
 /// An admitted code column: the domain is proven against `obs`, so every
 /// read here spends raw codes with no further checks. Identity and
 /// identity-order of packed handles go through [`DomainCtx`].
+///
+/// **Coexisting-arena boundary:** `ctx` is the unbranded durable token —
+/// admission returns a value that callers store and pass across sites
+/// where nest brands cannot unify (multiple arenas / outliving the
+/// `with_nested_ctx` closure). Nest brands stay on
+/// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx).
 pub struct AdmittedCodes<'a, O: BulkObserver> {
     codes: &'a [u32],
     obs: &'a O,
@@ -395,6 +424,9 @@ impl WordColumn {
     /// The gather door: consume into the next epoch, rewriting every wide
     /// word's handle through the remap (values, tags, prefixes unchanged).
     /// Typed refusal when the remap is not this container's arena/epoch.
+    ///
+    /// **Coexisting-arena boundary:** owned column + owned remap; mint-checked
+    /// [`DomainCtx::prove_shared`].
     pub fn gather(self, remap: &EpochRemap) -> Result<WordColumn, DomainCtxRefusal> {
         DomainCtx::prove_shared(
             self.domain.arena,
@@ -427,6 +459,9 @@ impl WordColumn {
 
 /// An admitted word column: reads and comparisons under the proven
 /// domain. Physical word identity goes through [`DomainCtx`].
+///
+/// **Coexisting-arena boundary:** same as [`AdmittedCodes`] — unbranded
+/// durable [`DomainCtx`], not a nest brand that cannot escape admission.
 pub struct AdmittedWords<'a, O: BulkObserver> {
     words: &'a [Value],
     obs: &'a O,

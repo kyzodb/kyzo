@@ -42,7 +42,9 @@
 //!   lawfully decide, `None` otherwise — never a deref) and
 //!   [`Value::same_word`] (physical 16-byte identity under a proven
 //!   [`DomainCtx`](super::arena::DomainCtx) — without the token the call
-//!   does not compile).
+//!   does not compile; the token is mint-checked / unbranded because
+//!   words from coexisting arenas must share one compare API — nest
+//!   brands live on [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)).
 
 // #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
 // laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
@@ -240,6 +242,13 @@ impl Value {
     /// Value identity only when both words were minted in that context —
     /// without [`DomainCtx`], this call does not compile, so cross-context
     /// comparison cannot affirmatively lie.
+    ///
+    /// **Coexisting-arena boundary:** takes the unbranded durable
+    /// [`DomainCtx`] (mint via [`DomainCtx::prove_shared`] /
+    /// [`DomainCtx::from_observer`]). Nest-branded compare under one live
+    /// frame uses [`NestedDomainCtx`](super::arena::NestedDomainCtx) /
+    /// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)
+    /// and projects `.ctx()` when calling here.
     #[inline]
     pub fn same_word(&self, other: &Value, _ctx: &DomainCtx) -> bool {
         self.bytes == other.bytes
@@ -269,8 +278,12 @@ mod tests {
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
         let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
-        let ctx = DomainCtx::from_observer(&arena.frame());
-        assert!(outline_edge.value().same_word(&again.value(), &ctx));
+        // Nest brand under one live frame; project durable DomainCtx for
+        // same_word (coexisting-arena API).
+        let ok = arena.frame().with_nested_ctx(|nest| {
+            outline_edge.value().same_word(&again.value(), &nest.ctx())
+        });
+        assert!(ok);
     }
 
     /// The per-kind residency table, pinned: residency is

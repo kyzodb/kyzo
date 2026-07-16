@@ -132,6 +132,10 @@ impl Rows {
 
     /// The admission: one container-domain check for the whole relation
     /// fragment. Arena/epoch mismatch is a typed refusal.
+    ///
+    /// **Coexisting-arena boundary:** delegates to [`CodeColumn::admit`] —
+    /// mint-checked [`super::arena::DomainCtx`], not a nest brand (rows
+    /// outlive observer nests; see [`super::code`] measurement).
     pub fn admit<'a, O: BulkObserver>(
         &'a self,
         o: &'a O,

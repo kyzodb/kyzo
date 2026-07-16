@@ -26,7 +26,7 @@
 
 use super::DataValue;
 use super::Tuple;
-use super::arena::{BulkSpendAuthority, DomainCtx};
+use super::arena::{BulkSpendAuthority, DomainCtx, NestedDomainCtx};
 use super::canonical::CanonicalBytes;
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -81,7 +81,14 @@ assert_not_impl!(Value: Eq);
 
 // A context token cannot be conjured empty — only from_observer /
 // prove_shared / plane-internal `at`. Durable fact: Copy is intentional.
+// Coexisting-arena form: deliberately unbranded (see DomainCtx docs /
+// code.rs measurement); nest brands are NestedDomainCtx under
+// Frame/Snapshot::with_nested_ctx.
 assert_not_impl!(DomainCtx: Default);
+
+// Nest-branded context cannot be conjured empty either — only the
+// with_nested_ctx doors mint one (and HRTB keeps `'id` from escaping).
+assert_not_impl!(NestedDomainCtx<'static>: Default);
 
 // A stamped code cannot be conjured: no `Default`. Its only mints are
 // `Arena::intern` and `EpochRemap::apply`, both demanding the arena's
