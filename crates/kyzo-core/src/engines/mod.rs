@@ -17,8 +17,12 @@
 //! Projection freshness and staged construction are the shared
 //! [`projection`] machine (story #305): [`projection::ProjectionBuilder`]
 //! seals into generation-carrying [`projection::Sealed`]; staleness is
-//! [`projection::Stale`], not an `Option` from a get-shaped call. Kind
-//! engines re-land as `K` parameterizations of that machine (T3).
+//! [`projection::Stale`], not an `Option` from a get-shaped call. The five
+//! kind engines (`hnsw`/`fts`/`lsh`/`sparse`/`spatial`) are `K`
+//! parameterizations of that machine — each implements
+//! [`projection::ProjectionKind`] and routes build→seal→query through it;
+//! relation-backed put/search math remains the kernel algorithm, not a
+//! second protocol.
 
 // `fts`/`hnsw`/`lsh`'s `db.rs` surface has landed (`::fts|hnsw|lsh
 // create/drop` in `runtime/mutate.rs` dispatch to the real creation/

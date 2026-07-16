@@ -15,9 +15,12 @@
 //! `Option`/`Err` from a get-shaped call — it is the distinct type
 //! [`Stale<K>`], which has no query method.
 //!
-//! Kind-specific engines (HNSW, FTS, …) become `K` parameterizations of this
-//! machine (story #305 T3). Freshness at the segment seam is a later seat
-//! (T5); this module owns the protocol types only.
+//! Kind-specific engines re-land as `K` parameterizations of this machine
+//! (story #305 T3): [`crate::engines::hnsw::Hnsw`], [`crate::engines::fts::Fts`],
+//! [`crate::engines::lsh::Lsh`], [`crate::engines::sparse::Sparse`], and
+//! [`crate::engines::spatial::Spatial`]. Relation-backed put/search math stays
+//! in those modules; this module owns the shared protocol types only.
+//! Freshness at the segment seam is a later seat (T5).
 
 use std::fmt;
 
@@ -220,5 +223,67 @@ mod tests {
         assert_eq!(stale.generation(), Generation::new(4));
         assert_eq!(stale.expected(), Generation::new(9));
         assert_eq!(stale.kind(), &DemoKind { hits: 1 });
+    }
+
+    /// Closure test (story #305): one machine typechecks build→seal→query
+    /// for all five engine kinds — no per-engine protocol twin.
+    #[test]
+    fn five_engine_kinds_share_one_machine() {
+        use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams};
+        use crate::engines::hnsw::{Hnsw, HnswKnnParams};
+        use crate::engines::lsh::{Lsh, LshSearchParams};
+        use crate::engines::sparse::{Sparse, SparseSearchParams};
+        use crate::engines::spatial::{Spatial, SpatialQuery};
+
+        let generation = Generation::new(1);
+
+        let hnsw = ProjectionBuilder::new(Hnsw).seal(generation);
+        assert_eq!(
+            hnsw.query(&HnswKnnParams {
+                k: 10,
+                ef: 5,
+                radius: None,
+                bind_field: false,
+                bind_field_idx: false,
+                bind_distance: false,
+                bind_vector: false,
+            }),
+            10,
+            "HNSW search law: ef is at least k"
+        );
+
+        let fts = ProjectionBuilder::new(Fts).seal(generation);
+        assert_eq!(
+            fts.query(&FtsSearchParams {
+                k: 3,
+                score_kind: FtsScoreKind::Tf,
+                bind_score: true,
+            }),
+            3
+        );
+
+        let lsh = ProjectionBuilder::new(Lsh).seal(generation);
+        assert_eq!(lsh.query(&LshSearchParams { k: Some(7) }), Some(7));
+        assert_eq!(lsh.query(&LshSearchParams { k: None }), None);
+
+        let sparse = ProjectionBuilder::new(Sparse).seal(generation);
+        assert_eq!(
+            sparse.query(&SparseSearchParams {
+                k: 4,
+                bind_score: false,
+            }),
+            4
+        );
+
+        let spatial = ProjectionBuilder::new(Spatial).seal(generation);
+        assert_eq!(spatial.query(&SpatialQuery::Range), 0);
+        assert_eq!(spatial.query(&SpatialQuery::Knn { k: 5 }), 5);
+
+        // Freshness classify works uniformly for every kind.
+        let sealed = ProjectionBuilder::new(Hnsw).seal(Generation::new(2));
+        assert!(Generation::new(2).classify(sealed).is_ok());
+        let sealed = ProjectionBuilder::new(Fts).seal(Generation::new(2));
+        let stale = Generation::new(3).classify(sealed).expect_err("stale");
+        assert_eq!(stale.expected(), Generation::new(3));
     }
 }

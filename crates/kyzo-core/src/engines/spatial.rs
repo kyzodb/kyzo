@@ -94,6 +94,14 @@
 //! - **Lifecycle tier**: `::spatial create/drop` — create the index relation
 //!   from [`spatial_index_metadata`], record `lat_field`/`lon_field`, backfill
 //!   via [`spatial_put`], attach the manifest keeping `indices` sorted by name.
+//!
+//! ## Projection kind (story #305)
+//!
+//! [`Spatial`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through that machine; there is no bespoke per-engine seal or
+//! freshness protocol. Relation-backed [`spatial_put`] /
+//! [`spatial_range_query`] / [`spatial_knn`] remain the kernel curve algorithms.
 
 use std::collections::BinaryHeap;
 
@@ -107,8 +115,50 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, ScanBound, Tuple};
 use crate::engines::IndexRowCorrupt;
+use crate::engines::projection::ProjectionKind;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// Geospatial index as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed curve maintenance and search ([`spatial_put`],
+/// [`spatial_range_query`], [`spatial_knn`]) are the kernel algorithms — not
+/// a second build/seal/freshness protocol.
+///
+/// Constructed at seal sites once generation freshness is seated (T5 /
+/// projections-views); the type is live under the machine's tests today.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Spatial;
+
+/// Query surface for a sealed [`Spatial`] projection: range or k-NN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum SpatialQuery {
+    /// Bounding-box range — no `k` truncation in the search law itself.
+    Range,
+    /// Expanding-ring k-NN with result-set bound `k`.
+    Knn { k: usize },
+}
+
+impl ProjectionKind for Spatial {
+    type Query = SpatialQuery;
+    /// For range: `0` (unbounded by k). For knn: the `k` bound.
+    type Candidates = usize;
+
+    fn search(&self, query: &Self::Query) -> Self::Candidates {
+        match *query {
+            SpatialQuery::Range => 0,
+            SpatialQuery::Knn { k } => k,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Format constants (on-disk).

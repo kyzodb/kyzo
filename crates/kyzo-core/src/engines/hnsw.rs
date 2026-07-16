@@ -104,6 +104,15 @@
 //! zero/all-match filters, determinism, and a recall table against ground
 //! truth).
 //!
+//! ## Projection kind (story #305)
+//!
+//! [`Hnsw`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+//! [`Sealed`](crate::engines::projection::Sealed); there is no bespoke
+//! per-engine seal or freshness protocol. Relation-backed [`hnsw_put`] /
+//! [`hnsw_knn`] remain the kernel graph algorithms.
+//!
 //! ## Seams
 //!
 //! - **RA operator tier** (`query/ra.rs`): drives [`hnsw_knn`] per parent
@@ -210,9 +219,39 @@ use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
 use crate::engines::IndexRowCorrupt;
+use crate::engines::projection::ProjectionKind;
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// HNSW as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// The kind carries the search-law identity for this engine. Relation-backed
+/// graph maintenance and knn ([`hnsw_put`], [`hnsw_knn`]) are the kernel
+/// algorithms — not a second build/seal/freshness protocol.
+///
+/// Constructed at seal sites once generation freshness is seated (T5 /
+/// projections-views); the type is live under the machine's tests today.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Hnsw;
+
+impl ProjectionKind for Hnsw {
+    type Query = HnswKnnParams;
+    /// Effective layer-0 beam: `max(ef, k)`, the RA contract that fewer than
+    /// `k` results come back if `ef < k`.
+    type Candidates = usize;
+
+    fn search(&self, query: &Self::Query) -> Self::Candidates {
+        query.ef.max(query.k)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.

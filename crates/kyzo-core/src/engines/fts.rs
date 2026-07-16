@@ -76,6 +76,14 @@
 //! filter is present) suppresses the score-based truncation until after
 //! filtering, so `k` counts MATCHING rows. See its docs.
 //!
+//! ## Projection kind (story #305)
+//!
+//! [`Fts`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through that machine; there is no bespoke per-engine seal or
+//! freshness protocol. Relation-backed [`fts_put`] / [`fts_search`] remain
+//! the kernel inverted-index algorithms.
+//!
 //! ## Seams
 //!
 //! - **RA operator tier** (`query/ra.rs`): drives [`fts_search`] per parent
@@ -102,11 +110,39 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::engines::IndexRowCorrupt;
+use crate::engines::projection::ProjectionKind;
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// FTS as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed posting maintenance and search ([`fts_put`], [`fts_search`])
+/// are the kernel algorithms — not a second build/seal/freshness protocol.
+///
+/// Constructed at seal sites once generation freshness is seated (T5 /
+/// projections-views); the type is live under the machine's tests today.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Fts;
+
+impl ProjectionKind for Fts {
+    type Query = FtsSearchParams;
+    /// Result-set bound `k` — the search law's truncation contract.
+    type Candidates = usize;
+
+    fn search(&self, query: &Self::Query) -> Self::Candidates {
+        query.k
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Scoring vocabulary.
