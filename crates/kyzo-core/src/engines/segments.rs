@@ -128,7 +128,7 @@ impl SegmentEngine {
     ///
     /// # Non-transition (proven invariant)
     ///
-    /// Not a Domain-style consuming field transition. The engine is an
+    /// Story #302 T4: not a Domain-style consuming field transition. The engine is an
     /// `Arc`-shared capability handle ([`crate::runtime::db::Db::segments`]);
     /// the per-relation watermark is an [`AtomicU64`] under a stated
     /// concurrent-access requirement (many writers/readers across
