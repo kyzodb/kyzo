@@ -259,9 +259,8 @@ const SIGN_PLUS: i64 = 1;
 const SIGN_MINUS: i64 = -1;
 
 /// One stored point-event, decoded from a raw bitemporal row without
-/// resolving it against any coordinate: the valid instant, the system
-/// version, the claim polarity, and (for [`ClaimPolarity::Assert`] only)
-/// the row's non-key payload columns.
+/// resolving it against any coordinate. Polarity is the discriminant; only
+/// an assertion owns a non-key payload.
 ///
 /// `pub(crate)` (story #80): `runtime/verify.rs`'s `::verify` oracle-feed
 /// needs a relation's FULL version history (every assert/retract/erase, not
@@ -269,12 +268,39 @@ const SIGN_MINUS: i64 = -1;
 /// as-of/validity queries — this is the one primitive that decodes raw
 /// bitemporal rows without resolving them, so it is reused, not
 /// re-derived, exactly as this module's own doc argues for itself.
-/// Visibility only; the decode logic is unchanged.
-pub(crate) struct RawVersion {
-    pub(crate) valid: i64,
-    pub(crate) sys: i64,
-    pub(crate) polarity: ClaimPolarity,
-    pub(crate) payload: Tuple,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RawVersion {
+    Assert {
+        valid: i64,
+        sys: i64,
+        payload: Tuple,
+    },
+    Retract {
+        valid: i64,
+        sys: i64,
+    },
+    Erase {
+        valid: i64,
+        sys: i64,
+    },
+}
+
+impl RawVersion {
+    pub(crate) fn valid(&self) -> i64 {
+        match self {
+            RawVersion::Assert { valid, .. }
+            | RawVersion::Retract { valid, .. }
+            | RawVersion::Erase { valid, .. } => *valid,
+        }
+    }
+
+    pub(crate) fn sys(&self) -> i64 {
+        match self {
+            RawVersion::Assert { sys, .. }
+            | RawVersion::Retract { sys, .. }
+            | RawVersion::Erase { sys, .. } => *sys,
+        }
+    }
 }
 
 /// The relation's whole keyspace, as raw byte bounds. Duplicates
@@ -334,19 +360,33 @@ pub(crate) fn decode_raw_version(
         );
     }
     let polarity = claim_polarity_of_value(val)?;
-    let mut row = full.clone();
-    extend_tuple_from_bitemporal_v(&mut row, val)?;
-    let payload: Tuple = row.drain(key_len..).collect();
-    Ok((
-        key[..prefix_len].to_vec(),
-        full,
-        RawVersion {
-            valid: valid_slot.timestamp().raw(),
-            sys: sys_slot.timestamp().raw(),
-            polarity,
-            payload,
-        },
-    ))
+    let valid = valid_slot.timestamp().raw();
+    let sys = sys_slot.timestamp().raw();
+    let version = match polarity {
+        ClaimPolarity::Assert => {
+            let mut row = full.clone();
+            extend_tuple_from_bitemporal_v(&mut row, val)?;
+            let payload: Tuple = row.drain(key_len..).collect();
+            RawVersion::Assert {
+                valid,
+                sys,
+                payload,
+            }
+        }
+        ClaimPolarity::Retract => {
+            // Still decode the value body so corruption refuses here, not
+            // later — then drop the columns; retract owns none.
+            let mut row = full.clone();
+            extend_tuple_from_bitemporal_v(&mut row, val)?;
+            RawVersion::Retract { valid, sys }
+        }
+        ClaimPolarity::Erase => {
+            let mut row = full.clone();
+            extend_tuple_from_bitemporal_v(&mut row, val)?;
+            RawVersion::Erase { valid, sys }
+        }
+    };
+    Ok((key[..prefix_len].to_vec(), full, version))
 }
 
 /// The governing tuple for one fact's already-collected version set, at
@@ -365,7 +405,7 @@ fn resolve_at(
 ) -> Option<Tuple> {
     let mut instants: Vec<i64> = group
         .iter()
-        .map(|e| e.valid)
+        .map(|e| e.valid())
         .filter(|v| *v <= at_valid)
         .collect();
     instants.sort_unstable();
@@ -373,17 +413,16 @@ fn resolve_at(
     for instant in instants.into_iter().rev() {
         let governing = group
             .iter()
-            .filter(|e| e.valid == instant && e.sys <= at_sys)
-            .max_by_key(|e| e.sys);
-        match governing.map(|e| e.polarity) {
-            Some(ClaimPolarity::Assert) => {
-                let e = governing.expect("just matched Some");
+            .filter(|e| e.valid() == instant && e.sys() <= at_sys)
+            .max_by_key(|e| e.sys());
+        match governing {
+            Some(RawVersion::Assert { payload, .. }) => {
                 let mut tuple: Tuple = Tuple::from_vec(key.to_vec());
-                tuple.extend(e.payload.iter().cloned());
+                tuple.extend(payload.iter().cloned());
                 return Some(tuple);
             }
-            Some(ClaimPolarity::Retract) => return None,
-            Some(ClaimPolarity::Erase) | None => {}
+            Some(RawVersion::Retract { .. }) => return None,
+            Some(RawVersion::Erase { .. }) | None => {}
         }
     }
     None
@@ -397,7 +436,7 @@ fn resolve_at(
 /// exactly mirroring `laws::derive_intervals`. Returns one `key ++
 /// payload ++ Interval` row per maximal run.
 fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Result<Vec<Tuple>> {
-    let mut breaks: Vec<i64> = group.iter().map(|e| e.valid).collect();
+    let mut breaks: Vec<i64> = group.iter().map(|e| e.valid()).collect();
     breaks.sort_unstable();
     breaks.dedup();
 

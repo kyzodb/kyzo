@@ -90,12 +90,37 @@ fn no_params() -> std::collections::BTreeMap<String, DataValue> {
 /// One version write: entity, its valid instant, and its polarity. Values
 /// are globally unique per assert (`format!("v{version_ctr}")`) so a probe result
 /// pins exactly which generation is visible, not merely whether one is.
+/// Assert owns its value; retract carries none — a freestanding
+/// `is_assert` beside an optional `val` is unrepresentable.
 #[derive(Clone, Debug)]
-struct Event {
-    entity: i64,
-    ts: i64,
-    is_assert: bool,
-    val: Option<String>,
+enum Event {
+    Assert {
+        entity: i64,
+        ts: i64,
+        val: String,
+    },
+    Retract {
+        entity: i64,
+        ts: i64,
+    },
+}
+
+impl Event {
+    fn entity(&self) -> i64 {
+        match self {
+            Event::Assert { entity, .. } | Event::Retract { entity, .. } => *entity,
+        }
+    }
+
+    fn ts(&self) -> i64 {
+        match self {
+            Event::Assert { ts, .. } | Event::Retract { ts, .. } => *ts,
+        }
+    }
+
+    fn is_assert(&self) -> bool {
+        matches!(self, Event::Assert { .. })
+    }
 }
 
 /// A seeded, wall-clock-free pseudo-random history: `n_events` writes over
@@ -127,16 +152,16 @@ fn seeded_history(seed: u64, n_entities: i64, n_events: usize, chunk: usize) -> 
             // 90% assert-from-dead, 10% redundant retract (no-op, robustness).
             rng.below(10) < 9
         };
-        let val = is_assert.then(|| {
-            version_ctr += 1;
-            format!("v{version_ctr}")
-        });
         alive.insert(entity, is_assert);
-        all.push(Event {
-            entity,
-            ts,
-            is_assert,
-            val,
+        all.push(if is_assert {
+            version_ctr += 1;
+            Event::Assert {
+                entity,
+                ts,
+                val: format!("v{version_ctr}"),
+            }
+        } else {
+            Event::Retract { entity, ts }
         });
     }
     all.chunks(chunk).map(|c| c.to_vec()).collect()
@@ -166,17 +191,13 @@ fn write_transaction(
         .expect("create relation");
     }
     for ev in events {
-        let script = if ev.is_assert {
-            let val = ev.val.as_deref().expect("assert carries a value");
-            format!(
-                "?[k0, val] <- [[{}, '{val}']] :put {rel_name} {{k0 => val}} @ {}",
-                ev.entity, ev.ts
-            )
-        } else {
-            format!(
-                "?[k0] <- [[{}]] :rm {rel_name} {{k0}} @ {}",
-                ev.entity, ev.ts
-            )
+        let script = match ev {
+            Event::Assert { entity, ts, val } => format!(
+                "?[k0, val] <- [[{entity}, '{val}']] :put {rel_name} {{k0 => val}} @ {ts}"
+            ),
+            Event::Retract { entity, ts } => {
+                format!("?[k0] <- [[{entity}]] :rm {rel_name} {{k0}} @ {ts}")
+            }
         };
         db.run_script(&script, no_params())
             .unwrap_or_else(|e| panic!("write script `{script}` failed: {e}"));
@@ -210,21 +231,24 @@ fn oracle_at(events: &[Event], at: i64, boundary_inclusive: bool) -> BTreeSet<(i
         .iter()
         .enumerate()
         .map(|(i, ev)| {
-            let key = Tuple::from_vec(vec![DataValue::from(ev.entity)]);
-            // `ev.ts` is a small, bounded generated/fixture timestamp
-            // throughout this file: never the reserved terminal tick.
-            if ev.is_assert {
-                let val = ev.val.clone().expect("assert carries a value");
-                laws::Event::assert(
-                    key,
-                    Tuple::from_vec(vec![DataValue::from(val)]),
-                    ev.ts,
+            // Timestamps here are small generated/fixture values: never the
+            // reserved terminal tick.
+            match ev {
+                Event::Assert { entity, ts, val } => laws::Event::assert(
+                    Tuple::from_vec(vec![DataValue::from(*entity)]),
+                    Tuple::from_vec(vec![DataValue::from(val.clone())]),
+                    *ts,
                     i as i64,
                 )
-                .expect("event timestamps in this file are never the reserved terminal tick")
-            } else {
-                laws::Event::retract(key, ev.ts, i as i64)
+                .expect("event timestamps in this file are never the reserved terminal tick"),
+                Event::Retract { entity, ts } => {
+                    laws::Event::retract(
+                        Tuple::from_vec(vec![DataValue::from(*entity)]),
+                        *ts,
+                        i as i64,
+                    )
                     .expect("event timestamps in this file are never the reserved terminal tick")
+                }
             }
         })
         .collect();
@@ -264,19 +288,19 @@ fn independent_oracle_at_reference(
     at: i64,
     boundary_inclusive: bool,
 ) -> BTreeSet<(i64, String)> {
-    let mut best: std::collections::BTreeMap<i64, (i64, usize, bool, Option<String>)> =
+    let mut best: std::collections::BTreeMap<i64, (i64, usize, Event)> =
         std::collections::BTreeMap::new();
     for (i, ev) in events.iter().enumerate() {
         let in_window = if boundary_inclusive {
-            ev.ts <= at
+            ev.ts() <= at
         } else {
-            ev.ts < at
+            ev.ts() < at
         };
         if !in_window {
             continue;
         }
-        let candidate = (ev.ts, i, ev.is_assert, ev.val.clone());
-        match best.entry(ev.entity) {
+        let candidate = (ev.ts(), i, ev.clone());
+        match best.entry(ev.entity()) {
             std::collections::btree_map::Entry::Vacant(e) => {
                 e.insert(candidate);
             }
@@ -294,8 +318,9 @@ fn independent_oracle_at_reference(
         }
     }
     best.into_iter()
-        .filter_map(|(entity, (_, _, is_assert, val))| {
-            is_assert.then(|| (entity, val.expect("assert carries a value")))
+        .filter_map(|(entity, (_, _, ev))| match ev {
+            Event::Assert { val, .. } => Some((entity, val)),
+            Event::Retract { .. } => None,
         })
         .collect()
 }
@@ -308,16 +333,15 @@ fn gen_events(rng: &mut SimRng, n_entities: i64, n_events: usize) -> Vec<Event> 
         .map(|_| {
             let entity = 1 + rng.below(n_entities as u64) as i64;
             let ts = rng.below(8) as i64;
-            let is_assert = rng.below(10) < 7;
-            let val = is_assert.then(|| {
+            if rng.below(10) < 7 {
                 version_ctr += 1;
-                format!("v{version_ctr}")
-            });
-            Event {
-                entity,
-                ts,
-                is_assert,
-                val,
+                Event::Assert {
+                    entity,
+                    ts,
+                    val: format!("v{version_ctr}"),
+                }
+            } else {
+                Event::Retract { entity, ts }
             }
         })
         .collect()
@@ -356,7 +380,7 @@ fn oracle_at_matches_an_independent_reference_generatively() {
 /// (strictly between): before-all, at-every-event, between-every-pair,
 /// after-all.
 fn probe_instants(events: &[Event]) -> Vec<i64> {
-    let mut ts: Vec<i64> = events.iter().map(|e| e.ts).collect();
+    let mut ts: Vec<i64> = events.iter().map(|e| e.ts()).collect();
     ts.sort_unstable();
     ts.dedup();
     let mut out = vec![];
@@ -483,7 +507,7 @@ fn asof_script_matches_naive_oracle_over_seeded_history() {
     // The no-`@`-clause read is CURRENT state: it must equal the oracle at
     // (or beyond) the last event's instant — the newest believed claim per
     // entity, exactly like the storage-level as-of tests' plain scan.
-    let last_ts = all_events.iter().map(|e| e.ts).max().unwrap();
+    let last_ts = all_events.iter().map(|e| e.ts()).max().unwrap();
     assert_eq!(
         engine_current(&db, "hist"),
         oracle_at(&all_events, last_ts, true),
@@ -510,9 +534,9 @@ fn asof_script_boundary_mutation_is_caught() {
     // Pick an exact assert-event timestamp to probe at.
     let assert_ts = all_events
         .iter()
-        .find(|e| e.is_assert)
+        .find(|e| e.is_assert())
         .expect("history has at least one assert")
-        .ts;
+        .ts();
 
     let engine = engine_asof(&db, "hist2", assert_ts);
     let correct = oracle_at(&all_events, assert_ts, true);

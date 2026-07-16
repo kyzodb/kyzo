@@ -442,7 +442,6 @@ fn scan_full_histories(
     tx: &impl ReadTx,
     historical_names: &BTreeSet<laws::Rel>,
 ) -> Result<BTreeMap<laws::Rel, Vec<laws::Event>>> {
-    use crate::data::bitemporal::ClaimPolarity;
     use crate::query::ra::temporal::{decode_raw_version, relation_keyspace_bounds};
 
     let mut histories = BTreeMap::new();
@@ -454,12 +453,18 @@ fn scan_full_histories(
         for kv in tx.range_scan(&lower, &upper) {
             let (key, val) = kv?;
             let (_, key_tuple, raw) = decode_raw_version(&key, &val, key_len)?;
-            let event = match raw.polarity {
-                ClaimPolarity::Assert => {
-                    laws::Event::assert(key_tuple, raw.payload, raw.valid, raw.sys)
+            let event = match raw {
+                crate::query::ra::temporal::RawVersion::Assert {
+                    valid,
+                    sys,
+                    payload,
+                } => laws::Event::assert(key_tuple, payload, valid, sys),
+                crate::query::ra::temporal::RawVersion::Retract { valid, sys } => {
+                    laws::Event::retract(key_tuple, valid, sys)
                 }
-                ClaimPolarity::Retract => laws::Event::retract(key_tuple, raw.valid, raw.sys),
-                ClaimPolarity::Erase => laws::Event::erase(key_tuple, raw.valid, raw.sys),
+                crate::query::ra::temporal::RawVersion::Erase { valid, sys } => {
+                    laws::Event::erase(key_tuple, valid, sys)
+                }
             }
             .map_err(|e| miette::miette!("{e}"))?;
             events.push(event);

@@ -1911,8 +1911,8 @@ fn program_grid(history: &[Event], axis: Axis) -> Vec<i64> {
         .iter()
         .flat_map(|e| {
             let c = match axis {
-                Axis::Valid => e.valid,
-                Axis::Sys => e.sys,
+                Axis::Valid => e.valid(),
+                Axis::Sys => e.sys(),
             };
             [c - 1, c, c + 1]
         })
@@ -1943,7 +1943,7 @@ fn grid_differential_over_generated_temporal_programs() {
         let program = temporal_program(&mut rng, &hist);
 
         for (&rel, history) in &program.histories {
-            let keys: BTreeSet<&Tuple> = history.iter().map(|e| &e.key).collect();
+            let keys: BTreeSet<&Tuple> = history.iter().map(|e| e.key()).collect();
             for key in keys {
                 let valid_grid = program_grid(history, Axis::Valid);
                 let sys_grid = program_grid(history, Axis::Sys);
@@ -1970,7 +1970,7 @@ fn grid_differential_over_generated_temporal_programs() {
                         cases += 1;
                     }
                 }
-                for &fixed_valid in &[history.first().map(|e| e.valid).unwrap_or(0), 0] {
+                for &fixed_valid in &[history.first().map(|e| e.valid()).unwrap_or(0), 0] {
                     let ivs = derive_intervals(history, key, Axis::Sys, fixed_valid);
                     for &sys_pt in &sys_grid {
                         let direct = resolve(
@@ -2097,7 +2097,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         );
         cases += 1;
 
-        let fixed_valid = history.first().map(|e| e.valid).unwrap_or(0);
+        let fixed_valid = history.first().map(|e| e.valid()).unwrap_or(0);
         let (asys, bsys, csys) = ordered_triple(&mut rng, params.coord_span);
         let a = AsOf {
             valid: fixed_valid,
@@ -2154,8 +2154,8 @@ fn near_coordinate(rng: &mut Rng, history: &[Event]) -> AsOf {
     let events: Vec<&Event> = history.iter().collect();
     let e = rng.one_of(&events);
     AsOf {
-        valid: nudge(rng, e.valid),
-        sys: nudge(rng, e.sys),
+        valid: nudge(rng, e.valid()),
+        sys: nudge(rng, e.sys()),
     }
 }
 
@@ -2253,26 +2253,27 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
 fn resolve_erase_as_retract_bug(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
     let mut instants: Vec<i64> = history
         .iter()
-        .filter(|e| &e.key == key && e.valid <= at.valid)
-        .map(|e| e.valid)
+        .filter(|e| e.key() == key && e.valid() <= at.valid)
+        .map(|e| e.valid())
         .collect();
     instants.sort_unstable();
     instants.dedup();
     for instant in instants.into_iter().rev() {
         let governing = history
             .iter()
-            .filter(|e| &e.key == key && e.valid == instant && e.sys <= at.sys)
-            .max_by_key(|e| e.sys);
-        match governing.map(|e| e.polarity) {
-            Some(ClaimPolarity::Assert) => {
-                let e = governing.expect("just matched Some");
-                let mut t = e.key.clone();
-                t.extend(e.payload.iter().cloned());
+            .filter(|e| e.key() == key && e.valid() == instant && e.sys() <= at.sys)
+            .max_by_key(|e| e.sys());
+        match governing {
+            Some(Event::Assert {
+                key: k, payload, ..
+            }) => {
+                let mut t = k.clone();
+                t.extend(payload.iter().cloned());
                 return Some(t);
             }
             // BUG: Erase should fall through (continue the loop, `{}`),
             // not settle absent like Retract.
-            Some(ClaimPolarity::Retract) | Some(ClaimPolarity::Erase) => return None,
+            Some(Event::Retract { .. }) | Some(Event::Erase { .. }) => return None,
             None => {}
         }
     }
@@ -2375,10 +2376,10 @@ fn derive_intervals_abs_sort_bug(
 ) -> Vec<Interval> {
     let mut breaks: Vec<i64> = history
         .iter()
-        .filter(|e| &e.key == key)
+        .filter(|e| e.key() == key)
         .map(|e| match axis {
-            Axis::Valid => e.valid,
-            Axis::Sys => e.sys,
+            Axis::Valid => e.valid(),
+            Axis::Sys => e.sys(),
         })
         .collect();
     breaks.sort_unstable_by_key(|b| b.unsigned_abs()); // BUG: magnitude, not ascending
@@ -2504,10 +2505,10 @@ fn derive_intervals_short_end_bug(
 ) -> Vec<Interval> {
     let mut breaks: Vec<i64> = history
         .iter()
-        .filter(|e| &e.key == key)
+        .filter(|e| e.key() == key)
         .map(|e| match axis {
-            Axis::Valid => e.valid,
-            Axis::Sys => e.sys,
+            Axis::Valid => e.valid(),
+            Axis::Sys => e.sys(),
         })
         .collect();
     breaks.sort_unstable();
@@ -2592,8 +2593,8 @@ fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end
         // The mutated grid: stored coordinates only, no ±1, no extremes.
         let mut stored_only: Vec<i64> = history
             .iter()
-            .filter(|e| e.key == key)
-            .map(|e| e.valid)
+            .filter(|e| *e.key() == key)
+            .map(|e| e.valid())
             .collect();
         stored_only.sort_unstable();
         stored_only.dedup();

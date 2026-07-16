@@ -214,12 +214,12 @@ impl AsOf {
     }
 }
 
-/// One stored point-event in a fact's bitemporal history: the fact's
-/// identifying key columns, the non-key payload it claims (populated only
-/// for [`ClaimPolarity::Assert`] — empty for `Retract`/`Erase`, mirroring
-/// the stored format where polarity lives in the value and a
-/// retract/erase carries no payload, `data/bitemporal.rs`), the valid
-/// instant, the system version, and the polarity.
+/// One stored point-event in a fact's bitemporal history. Polarity is the
+/// enum discriminant; an assertion owns its non-key payload, while
+/// retract/erase carry none — mirroring the stored format
+/// (`data/bitemporal.rs`) where polarity lives in the value and a
+/// retract/erase has no payload. A freestanding `polarity` beside an
+/// optional/`empty`-for-other-modes `payload` field is unrepresentable.
 ///
 /// **The untimed embedding.** A plain (non-historical) fact tuple `t` in
 /// `Program::facts` is sugar for exactly one canonical `Event`: assert
@@ -235,12 +235,23 @@ impl AsOf {
 /// overlap) — the two worlds are cleanly disjoint, unified only through
 /// the one evaluator that reads either.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Event {
-    pub key: Tuple,
-    pub payload: Tuple,
-    pub valid: i64,
-    pub sys: i64,
-    pub polarity: ClaimPolarity,
+pub(crate) enum Event {
+    Assert {
+        key: Tuple,
+        payload: Tuple,
+        valid: i64,
+        sys: i64,
+    },
+    Retract {
+        key: Tuple,
+        valid: i64,
+        sys: i64,
+    },
+    Erase {
+        key: Tuple,
+        valid: i64,
+        sys: i64,
+    },
 }
 
 impl Event {
@@ -265,33 +276,20 @@ impl Event {
     }
     pub(crate) fn assert(key: Tuple, payload: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
         Self::check_valid_not_reserved(valid)?;
-        Ok(Event {
+        Ok(Event::Assert {
             key,
             payload,
             valid,
             sys,
-            polarity: ClaimPolarity::Assert,
         })
     }
     pub(crate) fn retract(key: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
         Self::check_valid_not_reserved(valid)?;
-        Ok(Event {
-            key,
-            payload: Tuple::new(),
-            valid,
-            sys,
-            polarity: ClaimPolarity::Retract,
-        })
+        Ok(Event::Retract { key, valid, sys })
     }
     pub(crate) fn erase(key: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
         Self::check_valid_not_reserved(valid)?;
-        Ok(Event {
-            key,
-            payload: Tuple::new(),
-            valid,
-            sys,
-            polarity: ClaimPolarity::Erase,
-        })
+        Ok(Event::Erase { key, valid, sys })
     }
     /// The untimed embedding: sugar for "this fact has always held, as
     /// far as any historical read can see." See the type doc. Bypasses
@@ -299,12 +297,41 @@ impl Event {
     /// 0` is a fixed internal constant, never user input, so there is no
     /// coordinate here to validate.
     pub(crate) fn untimed(tuple: Tuple) -> Self {
-        Event {
+        Event::Assert {
             key: tuple,
             payload: Tuple::new(),
             valid: 0,
             sys: 0,
-            polarity: ClaimPolarity::Assert,
+        }
+    }
+
+    pub(crate) fn key(&self) -> &Tuple {
+        match self {
+            Event::Assert { key, .. } | Event::Retract { key, .. } | Event::Erase { key, .. } => key,
+        }
+    }
+
+    pub(crate) fn valid(&self) -> i64 {
+        match self {
+            Event::Assert { valid, .. }
+            | Event::Retract { valid, .. }
+            | Event::Erase { valid, .. } => *valid,
+        }
+    }
+
+    pub(crate) fn sys(&self) -> i64 {
+        match self {
+            Event::Assert { sys, .. } | Event::Retract { sys, .. } | Event::Erase { sys, .. } => {
+                *sys
+            }
+        }
+    }
+
+    /// Non-key payload of an assertion; `None` for retract/erase.
+    pub(crate) fn payload(&self) -> Option<&Tuple> {
+        match self {
+            Event::Assert { payload, .. } => Some(payload),
+            Event::Retract { .. } | Event::Erase { .. } => None,
         }
     }
 }
@@ -321,7 +348,7 @@ impl Event {
 fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
     let mut instants: Vec<i64> = events
         .iter()
-        .map(|e| e.valid)
+        .map(|e| e.valid())
         .filter(|v| *v <= at.valid)
         .collect();
     instants.sort_unstable();
@@ -329,17 +356,16 @@ fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
     for instant in instants.into_iter().rev() {
         let governing = events
             .iter()
-            .filter(|e| e.valid == instant && e.sys <= at.sys)
-            .max_by_key(|e| e.sys);
-        match governing.map(|e| e.polarity) {
-            Some(ClaimPolarity::Assert) => {
-                let e = governing.expect("just matched Some");
-                let mut tuple = e.key.clone();
-                tuple.extend(e.payload.iter().cloned());
+            .filter(|e| e.valid() == instant && e.sys() <= at.sys)
+            .max_by_key(|e| e.sys());
+        match governing {
+            Some(Event::Assert { key, payload, .. }) => {
+                let mut tuple = key.clone();
+                tuple.extend(payload.iter().cloned());
                 return Some(tuple);
             }
-            Some(ClaimPolarity::Retract) => return None,
-            Some(ClaimPolarity::Erase) | None => {}
+            Some(Event::Retract { .. }) => return None,
+            Some(Event::Erase { .. }) | None => {}
         }
     }
     None
@@ -348,7 +374,7 @@ fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
 /// [`resolve_events`] for one named fact key within a relation's whole
 /// event history.
 pub(crate) fn resolve(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
-    let events: Vec<&Event> = history.iter().filter(|e| &e.key == key).collect();
+    let events: Vec<&Event> = history.iter().filter(|e| e.key() == key).collect();
     resolve_events(&events, at)
 }
 
@@ -357,7 +383,7 @@ pub(crate) fn resolve(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple>
 pub(crate) fn resolve_relation(history: &[Event], at: AsOf) -> BTreeSet<Tuple> {
     let mut by_key: BTreeMap<&Tuple, Vec<&Event>> = BTreeMap::new();
     for e in history {
-        by_key.entry(&e.key).or_default().push(e);
+        by_key.entry(e.key()).or_default().push(e);
     }
     by_key
         .into_values()
@@ -406,19 +432,19 @@ pub(crate) fn derive_intervals(
     axis: Axis,
     fixed: i64,
 ) -> Vec<Interval> {
-    let events: Vec<&Event> = history.iter().filter(|e| &e.key == key).collect();
+    let events: Vec<&Event> = history.iter().filter(|e| e.key() == key).collect();
     let mut breaks: Vec<i64> = match axis {
         // Every stored valid instant of this fact is a candidate
         // breakpoint at the fixed system snapshot.
-        Axis::Valid => events.iter().map(|e| e.valid).collect(),
+        Axis::Valid => events.iter().map(|e| e.valid()).collect(),
         // Only versions recorded at or before the fixed valid instant can
         // ever govern it (fall-through only reaches OLDER instants, never
         // newer ones), so later instants' system stamps are irrelevant
         // breakpoints here.
         Axis::Sys => events
             .iter()
-            .filter(|e| e.valid <= fixed)
-            .map(|e| e.sys)
+            .filter(|e| e.valid() <= fixed)
+            .map(|e| e.sys())
             .collect(),
     };
     breaks.sort_unstable();
@@ -999,21 +1025,17 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // history is ill-formed the same way a fact tuple at the wrong arity
     // is.
     for (rel, history) in &program.histories {
-        let key_arity = history.first().map(|e| e.key.len());
+        let key_arity = history.first().map(|e| e.key().len());
         for e in history {
-            if Some(e.key.len()) != key_arity {
+            if Some(e.key().len()) != key_arity {
                 return Err(Rejection::Malformed(rel));
             }
         }
         let payload_arity = history
             .iter()
-            .find(|e| e.polarity == ClaimPolarity::Assert)
-            .map(|e| e.payload.len());
-        for e in history
-            .iter()
-            .filter(|e| e.polarity == ClaimPolarity::Assert)
-        {
-            if Some(e.payload.len()) != payload_arity {
+            .find_map(|e| e.payload().map(|p| p.len()));
+        for e in history.iter().filter_map(Event::payload) {
+            if Some(e.len()) != payload_arity {
                 return Err(Rejection::Malformed(rel));
             }
         }
@@ -1052,11 +1074,10 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     }
     for (rel, history) in &program.histories {
         if let (Some(k), Some(v)) = (
-            history.first().map(|e| e.key.len()),
+            history.first().map(|e| e.key().len()),
             history
                 .iter()
-                .find(|e| e.polarity == ClaimPolarity::Assert)
-                .map(|e| e.payload.len()),
+                .find_map(|e| e.payload().map(|p| p.len())),
         ) {
             check_arity(rel, k + v)?;
         }
@@ -3916,12 +3937,26 @@ mod tests {
             .collect();
         let events: Vec<Event> = rows
             .iter()
-            .map(|(f, valid, sys, polarity)| Event {
-                key: Tuple::from_vec(vec![v(*f)]),
-                payload: Tuple::from_vec(vec![]),
-                valid: *valid,
-                sys: *sys,
-                polarity: *polarity,
+            .map(|(f, valid, sys, polarity)| {
+                let key = Tuple::from_vec(vec![v(*f)]);
+                match polarity {
+                    ClaimPolarity::Assert => Event::Assert {
+                        key,
+                        payload: Tuple::from_vec(vec![]),
+                        valid: *valid,
+                        sys: *sys,
+                    },
+                    ClaimPolarity::Retract => Event::Retract {
+                        key,
+                        valid: *valid,
+                        sys: *sys,
+                    },
+                    ClaimPolarity::Erase => Event::Erase {
+                        key,
+                        valid: *valid,
+                        sys: *sys,
+                    },
+                }
             })
             .collect();
 
@@ -4400,8 +4435,8 @@ mod tests {
             .iter()
             .flat_map(|e| {
                 let c = match axis {
-                    Axis::Valid => e.valid,
-                    Axis::Sys => e.sys,
+                    Axis::Valid => e.valid(),
+                    Axis::Sys => e.sys(),
                 };
                 [c - 1, c, c + 1]
             })
@@ -4459,7 +4494,7 @@ mod tests {
                     cases += 1;
                 }
             }
-            for &fixed_valid in &[history.first().map(|e| e.valid).unwrap_or(0), 3] {
+            for &fixed_valid in &[history.first().map(|e| e.valid()).unwrap_or(0), 3] {
                 let ivs = derive_intervals(&history, &key, Axis::Sys, fixed_valid);
                 for &sys_pt in &sys_grid {
                     let direct = resolve(
