@@ -93,43 +93,49 @@ use crate::storage::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
 /// transaction).
 #[derive(Debug)]
 pub(crate) struct TempTx {
-    map: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
+    map: Option<BTreeMap<Vec<u8>, Vec<u8>>>,
     /// This session-store's system stamp: logical time from a
     /// process-wide monotone counter. The temp keyspace is private
     /// session state, so stamps need no wall-clock meaning, and logical
     /// time keeps runs deterministic.
     stamp: ValidityTs,
-    /// Drop-bomb only: set when commit/abort spends Open. Not a method gate.
-    spent: bool,
 }
 
 impl Default for TempTx {
     fn default() -> Self {
         static TEMP_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
         TempTx {
-            map: BTreeMap::new(),
+            map: Some(BTreeMap::new()),
             stamp: ValidityTs::from_raw(
                 TEMP_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             ),
-            spent: false,
         }
     }
 }
 
 impl TempTx {
+    fn open_map(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> {
+        self.map.as_ref().expect("TempTx used after commit/abort")
+    }
+
+    fn open_map_mut(&mut self) -> &mut BTreeMap<Vec<u8>, Vec<u8>> {
+        self.map.as_mut().expect("TempTx used after commit/abort")
+    }
+
     /// Whether nothing has ever been written (used by tests/diagnostics).
     pub(crate) fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.open_map().is_empty()
     }
 }
 
 impl ReadTx for TempTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        Ok(self.map.get(key).map(Slice::from))
+        Ok(self.open_map().get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        Ok(self.map.contains_key(key))
+        Ok(self.open_map().contains_key(key))
     }
 
     fn range_scan<'a>(
@@ -143,7 +149,7 @@ impl ReadTx for TempTx {
             return Box::new(std::iter::empty());
         }
         Box::new(
-            self.map
+            self.open_map()
                 .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
                 .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
@@ -169,7 +175,7 @@ impl ReadTx for TempTx {
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         Box::new(
-            self.map
+            self.open_map()
                 .iter()
                 .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
@@ -203,7 +209,7 @@ impl OpenSkipCursor for TempTx {
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
         TempSkipCursor {
-            map: &self.map,
+            map: self.open_map(),
             upper: upper.to_vec(),
         }
     }
@@ -215,12 +221,12 @@ impl WriteTx for TempTx {
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.map.insert(key.to_vec(), val.to_vec());
+        self.open_map_mut().insert(key.to_vec(), val.to_vec());
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.map.remove(key);
+        self.open_map_mut().remove(key);
         Ok(())
     }
 
@@ -229,12 +235,13 @@ impl WriteTx for TempTx {
             return Ok(()); // the kernel's degenerate-bounds contract
         }
         let doomed: Vec<Vec<u8>> = self
-            .map
+            .open_map()
             .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
             .map(|(k, _)| k.clone())
             .collect();
+        let map = self.open_map_mut();
         for k in doomed {
-            self.map.remove(&k);
+            map.remove(&k);
         }
         Ok(())
     }
@@ -244,24 +251,24 @@ impl WriteTx for TempTx {
     /// Open here would only ever be called by generic code that is about
     /// to drop the store anyway.
     fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
-        self.spent = true;
+        let _ = self.map.take().expect("TempTx commit after spend");
         Ok(Committed)
     }
 
     fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
-        self.spent = true;
+        let _ = self.map.take().expect("TempTx commit_durable after spend");
         Ok(Committed)
     }
 
     fn abort(mut self) -> Aborted {
-        self.spent = true;
+        let _ = self.map.take().expect("TempTx abort after spend");
         Aborted
     }
 }
 
 impl Drop for TempTx {
     fn drop(&mut self) {
-        if !self.spent && !std::thread::panicking() {
+        if self.map.is_some() && !std::thread::panicking() {
             panic!("Open WriteTx dropped without commit() or abort(self)");
         }
     }

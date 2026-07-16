@@ -649,15 +649,16 @@ impl Storage for SimStorage {
         st.next_system_stamp += 1;
         let stamp = ValidityTs::from_raw(st.next_system_stamp);
         Ok(SimWriteTx {
-            snapshot: snapshot_at(&st, st.commit_seq),
-            stamp,
-            start_seq: st.commit_seq,
-            writes: BTreeMap::new(),
-            reads: Mutex::new(ReadSet::default()),
-            put_calls: 0,
-            del_calls: 0,
-            ctx: self.ctx.clone(),
-            spent: false,
+            inner: Some(SimWriteInner {
+                snapshot: snapshot_at(&st, st.commit_seq),
+                stamp,
+                start_seq: st.commit_seq,
+                writes: BTreeMap::new(),
+                reads: Mutex::new(ReadSet::default()),
+                put_calls: 0,
+                del_calls: 0,
+                ctx: self.ctx.clone(),
+            }),
         })
     }
 
@@ -732,9 +733,9 @@ struct ReadSet {
 }
 
 /// A write transaction: snapshot + overlay write set + tracked read set.
-/// The read set lives behind a `Mutex` because the trait reads through
-/// `&self` (and requires `Sync`) while conflict tracking must record.
-pub(crate) struct SimWriteTx {
+/// Open write-transaction payload. Presence of [`SimWriteTx::inner`] is Open;
+/// `take` on commit/abort spends it (Fjall's `Option` pattern).
+struct SimWriteInner {
     snapshot: BTreeMap<Vec<u8>, Vec<u8>>,
     stamp: ValidityTs,
     start_seq: u64,
@@ -750,11 +751,28 @@ pub(crate) struct SimWriteTx {
     put_calls: u64,
     del_calls: u64,
     ctx: SimCtx,
-    /// Drop-bomb only: set when commit/abort spends Open. Not a method gate.
-    spent: bool,
+}
+
+/// The read set lives behind a `Mutex` because the trait reads through
+/// `&self` (and requires `Sync`) while conflict tracking must record.
+pub(crate) struct SimWriteTx {
+    /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
+    inner: Option<SimWriteInner>,
 }
 
 impl SimWriteTx {
+    fn open(&self) -> &SimWriteInner {
+        self.inner
+            .as_ref()
+            .expect("SimWriteTx used after commit/abort")
+    }
+
+    fn open_mut(&mut self) -> &mut SimWriteInner {
+        self.inner
+            .as_mut()
+            .expect("SimWriteTx used after commit/abort")
+    }
+
     /// The transaction's visible view of `[lower, upper)`, LAZY: a
     /// sorted-merge of two cursors (`self.snapshot`'s range, `self.writes`'s
     /// range) rather than the eager "clone the whole snapshot range into a
@@ -777,8 +795,9 @@ impl SimWriteTx {
         lower: &[u8],
         upper: Option<&[u8]>,
     ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a {
-        let mut snap = map_range(&self.snapshot, lower, upper).peekable();
-        let mut writes = map_range(&self.writes, lower, upper).peekable();
+        let open = self.open();
+        let mut snap = map_range(&open.snapshot, lower, upper).peekable();
+        let mut writes = map_range(&open.writes, lower, upper).peekable();
         std::iter::from_fn(move || {
             loop {
                 let snap_key = snap.peek().map(|(k, _)| *k);
@@ -842,11 +861,17 @@ impl SimWriteTx {
     }
 
     fn track_key(&self, key: &[u8]) {
-        self.reads.lock().expect(POISONED).keys.insert(key.to_vec());
+        self.open()
+            .reads
+            .lock()
+            .expect(POISONED)
+            .keys
+            .insert(key.to_vec());
     }
 
     fn track_range(&self, lower: &[u8], upper: Option<&[u8]>) {
-        self.reads
+        self.open()
+            .reads
             .lock()
             .expect(POISONED)
             .ranges
@@ -854,16 +879,19 @@ impl SimWriteTx {
     }
 
     fn commit_inner(mut self, durable: bool) -> std::result::Result<Committed, CommitFailure> {
-        self.ctx.yield_turn();
-        let start_seq = self.start_seq;
-        let writes = std::mem::take(&mut self.writes);
-        let reads = std::mem::replace(&mut self.reads, Mutex::new(ReadSet::default()))
+        let mut inner = self
+            .inner
+            .take()
+            .expect("SimWriteTx commit after spend");
+        inner.ctx.yield_turn();
+        let start_seq = inner.start_seq;
+        let writes = std::mem::take(&mut inner.writes);
+        let reads = std::mem::replace(&mut inner.reads, Mutex::new(ReadSet::default()))
             .into_inner()
             .expect(POISONED);
-        let put_calls = self.put_calls;
-        let del_calls = self.del_calls;
-        let ctx = self.ctx.clone();
-        self.spent = true;
+        let put_calls = inner.put_calls;
+        let del_calls = inner.del_calls;
+        let ctx = inner.ctx.clone();
         // Fault identities, fixed before any dice roll. The commit identity
         // is the write-set KEYS (already sorted: `writes` is a BTreeMap) —
         // not values, so a retry that recomputes new values over the same
@@ -1008,10 +1036,10 @@ pub(crate) struct SimWriteSkipCursor<'a> {
 
 impl SkipCursor for SimWriteSkipCursor<'_> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        self.tx.ctx.yield_turn();
+        let open = self.tx.open();
+        open.ctx.yield_turn();
         self.tx.track_range(target, Some(&self.upper));
-        if let Err(e) = self
-            .tx
+        if let Err(e) = open
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[target, &self.upper]))
         {
@@ -1104,22 +1132,24 @@ impl ReadTx for SimReadTx {
 
 impl ReadTx for SimWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         self.track_key(key);
-        self.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
-        Ok(match self.writes.get(key) {
+        open.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
+        Ok(match open.writes.get(key) {
             Some(w) => w.as_deref().map(Slice::from),
-            None => self.snapshot.get(key).map(Slice::from),
+            None => open.snapshot.get(key).map(Slice::from),
         })
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         self.track_key(key);
-        self.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
-        Ok(match self.writes.get(key) {
+        open.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
+        Ok(match open.writes.get(key) {
             Some(w) => w.is_some(),
-            None => self.snapshot.contains_key(key),
+            None => open.snapshot.contains_key(key),
         })
     }
 
@@ -1128,11 +1158,12 @@ impl ReadTx for SimWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         // Track the whole requested range even if iteration stops early:
         // conservative (more false conflicts) and therefore legal under SSI.
         self.track_range(lower, Some(upper));
-        if let Err(e) = self
+        if let Err(e) = open
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
         {
@@ -1159,9 +1190,10 @@ impl ReadTx for SimWriteTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         self.track_range(&[], None);
-        if let Err(e) = self.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
+        if let Err(e) = open.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
         }
         Box::new(
@@ -1173,25 +1205,27 @@ impl ReadTx for SimWriteTx {
 
 impl WriteTx for SimWriteTx {
     fn system_stamp(&self) -> ValidityTs {
-        self.stamp
+        self.open().stamp
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.ctx.yield_turn();
-        self.writes.insert(key.to_vec(), Some(val.to_vec()));
-        self.put_calls += 1;
+        let open = self.open_mut();
+        open.ctx.yield_turn();
+        open.writes.insert(key.to_vec(), Some(val.to_vec()));
+        open.put_calls += 1;
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.ctx.yield_turn();
-        self.writes.insert(key.to_vec(), None);
-        self.del_calls += 1;
+        let open = self.open_mut();
+        open.ctx.yield_turn();
+        open.writes.insert(key.to_vec(), None);
+        open.del_calls += 1;
         Ok(())
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
-        self.ctx.yield_turn();
+        self.open().ctx.yield_turn();
         // Deleting "everything visible" reads the range: tracked, so a
         // concurrent insert into it is a conflict (matching the real
         // backend, whose del_range scans through the transaction).
@@ -1203,9 +1237,10 @@ impl WriteTx for SimWriteTx {
             .collect();
         // Each doomed key is its own del CALL for the write-count law, same
         // as a caller looping `del` over the same keys one at a time.
-        self.del_calls += doomed.len() as u64;
+        let open = self.open_mut();
+        open.del_calls += doomed.len() as u64;
         for k in doomed {
-            self.writes.insert(k, None);
+            open.writes.insert(k, None);
         }
         Ok(())
     }
@@ -1219,14 +1254,14 @@ impl WriteTx for SimWriteTx {
     }
 
     fn abort(mut self) -> Aborted {
-        self.spent = true;
+        let _ = self.inner.take().expect("SimWriteTx abort after spend");
         Aborted
     }
 }
 
 impl Drop for SimWriteTx {
     fn drop(&mut self) {
-        if !self.spent && !std::thread::panicking() {
+        if self.inner.is_some() && !std::thread::panicking() {
             panic!("Open WriteTx dropped without commit() or abort(self)");
         }
     }
