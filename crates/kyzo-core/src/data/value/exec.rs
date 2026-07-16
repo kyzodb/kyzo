@@ -32,7 +32,8 @@
 
 use std::collections::HashMap;
 
-use super::arena::BulkObserver;
+use super::arena::{BulkObserver, DomainCtx};
+use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
 
@@ -129,8 +130,11 @@ impl ExecRows {
             other.domain.epoch(),
             "join across different epochs: gather to a common epoch first"
         );
+        // Shared context for raw-handle identity (asserts above are T3's
+        // panic sites; prove_shared is the typed door once those go).
+        let ctx = self.domain.ctx();
         // Build a probe on `other`'s join column: code -> the row indices
-        // carrying it.
+        // carrying it. Keys are packed under `ctx`.
         let mut index: HashMap<u32, Vec<usize>> = HashMap::new();
         for r in 0..other.len() {
             index.entry(other.row(r)[other_col]).or_default().push(r);
@@ -142,6 +146,9 @@ impl ExecRows {
             let Some(matches) = index.get(&key) else {
                 continue;
             };
+            debug_assert!(matches
+                .iter()
+                .all(|&rr| ctx.same_handle(Code(key), Code(other.row(rr)[other_col]))));
             for &rr in matches {
                 for &(side, col) in out {
                     let code = match side {
@@ -177,7 +184,12 @@ impl ExecRows {
     /// materialize bytes only at storage/scan/output boundaries.
     pub fn resolve_cell<'o, O: BulkObserver>(&self, o: &'o O, row: usize, col: usize) -> &'o [u8] {
         let proof = self.domain.admit(o);
-        o.resolve_raw(self.row(row)[col] as usize, &proof)
+        o.resolve_raw(self.row(row)[col] as usize, proof)
+    }
+
+    /// The compare/identity context for raw handles in these rows.
+    pub fn ctx(&self) -> DomainCtx {
+        self.domain.ctx()
     }
 }
 

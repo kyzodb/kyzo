@@ -39,9 +39,10 @@
 //!   `Value`: any of them would either lie across contexts or secretly
 //!   consult one. What exists is exact and named:
 //!   [`Value::try_cmp_storage`] (decides only what local information can
-//!   lawfully decide, `None` otherwise — never a deref).
-//!   Physical word identity under a proven shared context is rebuilt
-//!   elsewhere (DomainCtx) — the unproven `same_word` surface was cut.
+//!   lawfully decide, `None` otherwise — never a deref) and
+//!   [`Value::same_word`] (physical 16-byte identity under a proven
+//!   [`DomainCtx`](super::arena::DomainCtx) — without the token the call
+//!   does not compile).
 
 // #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
 // laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
@@ -50,7 +51,7 @@
 
 use std::cmp::Ordering;
 
-use super::arena::Arena;
+use super::arena::{Arena, DomainCtx};
 use super::canonical::CanonicalBytes;
 use super::code::{Code, StampedCode};
 use super::tag::Tag;
@@ -235,13 +236,19 @@ impl Value {
         }
     }
 
-    // DEMOLISHED (#304): `Value::same_word` — physical 16-byte compare with
-    // no proof of shared arena/epoch; could affirmatively lie across
-    // contexts. T2 rebuilds identity under DomainCtx.
+    /// Physical 16-byte word identity under a proven shared context.
+    /// Value identity only when both words were minted in that context —
+    /// without [`DomainCtx`], this call does not compile, so cross-context
+    /// comparison cannot affirmatively lie.
+    #[inline]
+    pub fn same_word(&self, other: &Value, _ctx: &DomainCtx) -> bool {
+        self.bytes == other.bytes
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::arena::BulkObserver;
     use super::super::canonical::{Datum, decode, encode};
     use super::super::number::Num;
     use super::*;
@@ -262,9 +269,8 @@ mod tests {
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
         let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
-        // SEVERED (#304): same_word cut — T2 rebuilds under DomainCtx.
-        // was: assert!(outline_edge.value().same_word(&again.value()));
-        let _ = (outline_edge, again);
+        let ctx = DomainCtx::from_observer(&arena.frame());
+        assert!(outline_edge.value().same_word(&again.value(), &ctx));
     }
 
     /// The per-kind residency table, pinned: residency is
@@ -404,7 +410,38 @@ mod tests {
         }
     }
 
-    // DEMOLISHED (#304): `same_word_is_physical_not_semantic` trap test —
-    // documented the lie the cut API could tell across arenas. Gone with
-    // `Value::same_word`.
+    /// Cross-arena mint cannot obtain a shared [`DomainCtx`], so the old
+    /// trap — calling `same_word` across contexts and getting a lying
+    /// `true` — cannot be written. Physical identity remains only under a
+    /// proven token; storage cmp still refuses the unresolved prefix tie.
+    #[test]
+    fn same_word_requires_shared_domain_ctx() {
+        let mut arena_a = Arena::new();
+        let mut arena_b = Arena::new();
+        let big_x = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxx"));
+        let big_y = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxy"));
+        // Same prefix, different values, DIFFERENT arenas: both get code
+        // 0, producing identical words — the trap the unproven API told.
+        let va = Value::mint(&big_x, &mut arena_a).value();
+        let vb = Value::mint(&big_y, &mut arena_b).value();
+        assert_eq!(va.try_cmp_storage(&vb), None, "storage cmp refuses it");
+        let fa = arena_a.frame();
+        let fb = arena_b.frame();
+        assert!(
+            matches!(
+                DomainCtx::prove_shared(
+                    fa.bulk_arena(),
+                    fa.bulk_epoch(),
+                    fb.bulk_arena(),
+                    fb.bulk_epoch(),
+                ),
+                Err(super::super::arena::DomainCtxRefusal::ArenaMismatch { .. })
+            ),
+            "cross-arena prove_shared must refuse — no token, no same_word"
+        );
+        // Under one arena, identical minting yields same_word.
+        let again = Value::mint(&big_x, &mut arena_a).value();
+        let ctx = DomainCtx::from_observer(&arena_a.frame());
+        assert!(va.same_word(&again, &ctx));
+    }
 }

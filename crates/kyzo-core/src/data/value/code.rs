@@ -13,10 +13,11 @@
 /// The raw dense handle for an interned value: **identity only, no read
 /// authority**. By design, no read API anywhere accepts a bare `Code` —
 /// codes are only valid as observed through an arena [`Frame`](super::arena::Frame)
-/// or [`Snapshot`](super::arena::Snapshot). What a `Code` *can* do is be
-/// identity: equality, hashing, and packed storage (via `raw()` for u32
-/// runs, bitmaps, quantization) — always stamped with the [`StampedCode`]
-/// that carries its epoch. To spend one you need its epoch and arena:
+/// or [`Snapshot`](super::arena::Snapshot). Handle equality and
+/// identity-order are [`DomainCtx::same_handle`](super::arena::DomainCtx::same_handle)
+/// / [`DomainCtx::cmp_identity`](super::arena::DomainCtx::cmp_identity) —
+/// packed storage uses [`Code::raw`] under a container that already holds
+/// the domain proof. To spend one you need its epoch and arena:
 ///
 /// - [`StampedCode`] — code + epoch, minted by `Arena::intern` and by
 ///   [`EpochRemap::apply`](super::arena::EpochRemap::apply) (the morphism
@@ -27,18 +28,19 @@
 ///   (a lifetime-branded witness cannot prove frame identity across
 ///   coexisting arenas, so none is offered).
 ///
-/// There is deliberately no `Ord`: order is the arena's to answer, inside
-/// a frame. Structural ordering (deterministic iteration, dedup by
-/// identity) is spelled over [`Code::raw`], which claims identity order,
-/// never value order.
+/// There is deliberately no `Ord`: value order is the arena's to answer,
+/// inside a frame. Structural identity-order under a proven context is
+/// [`DomainCtx::cmp_identity`](super::arena::DomainCtx::cmp_identity).
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
 pub struct Code(pub(super) u32);
 
 impl Code {
-    /// The raw handle, for packed storage. Reading is free; minting stays
-    /// with the arena and the epoch-stamped containers.
+    /// The raw handle, for packed storage under a proven domain. Reading
+    /// is free; minting stays with the arena and the epoch-stamped
+    /// containers. Comparing handles for identity or order requires a
+    /// [`DomainCtx`](super::arena::DomainCtx).
     #[inline]
     pub fn raw(self) -> u32 {
         self.0

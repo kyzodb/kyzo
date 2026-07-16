@@ -43,9 +43,11 @@
 
 use std::cmp::Ordering;
 
-use super::arena::{ArenaId, BulkObserver, BulkSpendAuthority, Epoch, EpochRemap};
+use super::arena::{
+    ArenaId, BulkObserver, BulkSpendAuthority, DomainCtx, Epoch, EpochRemap,
+};
 use super::cell::{Minted, Value};
-use super::code::StampedCode;
+use super::code::{Code, StampedCode};
 
 /// The container domain: the one fact a kernel admission verifies.
 /// Extent is `max code + 1` over the contents (0 when empty), so
@@ -139,6 +141,12 @@ impl Domain {
     pub fn extent(&self) -> u32 {
         self.extent
     }
+
+    /// The compare/identity context for raw handles under this domain.
+    /// Durable fact token — not a spend authority.
+    pub fn ctx(&self) -> DomainCtx {
+        DomainCtx::at(self.arena, self.epoch)
+    }
 }
 
 /// A stamped column of raw codes: the packed execution currency. Codes
@@ -180,11 +188,11 @@ impl CodeColumn {
     /// The admission: one container-domain check (arena + epoch +
     /// visibility extent), then every read is check-free.
     pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedCodes<'a, O> {
-        let proof = self.domain.admit_to(o, "code column");
+        let _proof = self.domain.admit_to(o, "code column");
         AdmittedCodes {
             codes: &self.codes,
             obs: o,
-            proof,
+            ctx: self.domain.ctx(),
             all_sealed: self.domain.extent as usize <= o.bulk_sealed_len(),
         }
     }
@@ -226,11 +234,12 @@ impl CodeColumn {
 }
 
 /// An admitted code column: the domain is proven against `obs`, so every
-/// read here spends raw codes with no further checks.
+/// read here spends raw codes with no further checks. Identity and
+/// identity-order of packed handles go through [`DomainCtx`].
 pub struct AdmittedCodes<'a, O: BulkObserver> {
     codes: &'a [u32],
     obs: &'a O,
-    proof: BulkSpendAuthority,
+    ctx: DomainCtx,
     all_sealed: bool,
 }
 
@@ -243,8 +252,14 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         self.codes.is_empty()
     }
 
+    /// The proven compare context for this admission.
+    pub fn ctx(&self) -> &DomainCtx {
+        &self.ctx
+    }
+
     /// Raw codes for identity operations (equality, hashing, dedup) —
-    /// lawful within this one domain. Not an ordering surface.
+    /// lawful within this one domain under [`AdmittedCodes::ctx`]. Not a
+    /// value-ordering surface.
     pub fn raw(&self) -> &'a [u32] {
         self.codes
     }
@@ -268,22 +283,30 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// The canonical bytes of the value at `i`.
     pub fn resolve(&self, i: usize) -> &'a [u8] {
-        // SEVERED (#304): by-ref spend cut — T5 rebuilds consume-on-spend.
-        self.obs.resolve_raw(self.codes[i] as usize, &self.proof)
+        // Interim one-shot spend mint after admission already proved the
+        // domain — T5 owns true consume-on-spend multiplicity.
+        self.obs
+            .resolve_raw(self.codes[i] as usize, BulkSpendAuthority::after_domain_admission())
     }
 
-    /// Semantic (byte-order) comparison of two positions: numeric when
-    /// the fast lane holds, prefix-first through the observer otherwise.
+    /// Semantic (byte-order) comparison of two positions: raw-handle
+    /// identity / sealed identity-order under [`DomainCtx`], else
+    /// prefix-first through the observer.
     pub fn cmp_at(&self, i: usize, j: usize) -> Ordering {
-        let (a, b) = (self.codes[i], self.codes[j]);
-        if a == b {
+        let a = Code(self.codes[i]);
+        let b = Code(self.codes[j]);
+        if self.ctx.same_handle(a, b) {
             return Ordering::Equal;
         }
         if self.all_sealed {
-            return a.cmp(&b);
+            return self.ctx.cmp_identity(a, b);
         }
-        // SEVERED (#304): by-ref spend cut — T5 rebuilds consume-on-spend.
-        self.obs.cmp_raw(a as usize, b as usize, &self.proof)
+        // Interim one-shot spend mint — T5 owns consume-on-spend.
+        self.obs.cmp_raw(
+            a.raw() as usize,
+            b.raw() as usize,
+            BulkSpendAuthority::after_domain_admission(),
+        )
     }
 
     /// A deterministic sort permutation by value order (the kernel the
@@ -295,7 +318,12 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         );
         let mut idx: Vec<u32> = (0..self.codes.len() as u32).collect();
         if self.all_sealed {
-            idx.sort_by_key(|&i| self.codes[i as usize]);
+            idx.sort_by(|&i, &j| {
+                self.ctx.cmp_identity(
+                    Code(self.codes[i as usize]),
+                    Code(self.codes[j as usize]),
+                )
+            });
         } else {
             idx.sort_by(|&i, &j| self.cmp_at(i as usize, j as usize));
         }
@@ -356,11 +384,11 @@ impl WordColumn {
     }
 
     pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedWords<'a, O> {
-        let proof = self.domain.admit_to(o, "word column");
+        let _proof = self.domain.admit_to(o, "word column");
         AdmittedWords {
             words: &self.words,
             obs: o,
-            proof,
+            ctx: self.domain.ctx(),
         }
     }
 
@@ -403,11 +431,11 @@ impl WordColumn {
 }
 
 /// An admitted word column: reads and comparisons under the proven
-/// domain.
+/// domain. Physical word identity goes through [`DomainCtx`].
 pub struct AdmittedWords<'a, O: BulkObserver> {
     words: &'a [Value],
     obs: &'a O,
-    proof: BulkSpendAuthority,
+    ctx: DomainCtx,
 }
 
 impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
@@ -423,27 +451,36 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
         self.words[i]
     }
 
+    /// The proven compare context for this admission.
+    pub fn ctx(&self) -> &DomainCtx {
+        &self.ctx
+    }
+
     /// The canonical bytes of the word at `i` (inline: rebuilt; wide:
     /// resolved through the observer).
     pub fn canonical(&self, i: usize) -> Vec<u8> {
         let w = &self.words[i];
         match w.inline_canonical() {
             Some(bytes) => bytes,
-            // SEVERED (#304): by-ref spend cut — T5 rebuilds consume-on-spend.
+            // Interim one-shot spend mint — T5 owns consume-on-spend.
             None => self
                 .obs
                 .resolve_raw(
                     w.code().expect("non-inline word carries a code").raw() as usize,
-                    &self.proof,
+                    BulkSpendAuthority::after_domain_admission(),
                 )
                 .to_vec(),
         }
     }
 
-    /// Storage-order comparison: the word's local knowledge first
-    /// (tags, inline bytes, prefixes), the observer only on a tie.
+    /// Storage-order comparison: physical word identity under
+    /// [`DomainCtx`] first, then the word's local knowledge (tags, inline
+    /// bytes, prefixes), the observer only on a remaining tie.
     pub fn cmp_at(&self, i: usize, j: usize) -> Ordering {
         let (a, b) = (&self.words[i], &self.words[j]);
+        if a.same_word(b, &self.ctx) {
+            return Ordering::Equal;
+        }
         match a.try_cmp_storage(b) {
             Some(o) => o,
             None => self.canonical(i).cmp(&self.canonical(j)),

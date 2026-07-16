@@ -26,7 +26,7 @@
 
 use super::DataValue;
 use super::Tuple;
-use super::arena::BulkSpendAuthority;
+use super::arena::{BulkSpendAuthority, DomainCtx};
 use super::canonical::CanonicalBytes;
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -65,20 +65,23 @@ macro_rules! assert_not_impl {
 // beside the builders they guard, never re-spelled.
 pub(crate) use assert_not_impl;
 
-// Code is identity ONLY: no order. It cannot be compared, so no read path
-// can sneak an ordering out of a bare handle — order is the observer's
-// through resolved bytes, never the code's.
+// Code is identity ONLY: no order. Value order is the observer's through
+// resolved bytes. Handle identity/identity-order under a proven context
+// are `DomainCtx::same_handle` / `DomainCtx::cmp_identity`.
 assert_not_impl!(Code: PartialOrd);
 assert_not_impl!(Code: Ord);
 
 // The 16-byte cell exposes no semantic equality or order TRAIT: comparison
-// is `try_cmp_storage` (locality-only). Physical word identity under a
-// proven context is rebuilt under DomainCtx (#304 cut `same_word`).
+// is `try_cmp_storage` (locality-only) and `same_word` under `&DomainCtx`.
 // A derived `Ord`/`Eq` would silently deref or misjudge; it must not exist.
 assert_not_impl!(Value: PartialOrd);
 assert_not_impl!(Value: Ord);
 assert_not_impl!(Value: PartialEq);
 assert_not_impl!(Value: Eq);
+
+// A context token cannot be conjured empty — only from_observer /
+// prove_shared / plane-internal `at`. Durable fact: Copy is intentional.
+assert_not_impl!(DomainCtx: Default);
 
 // A stamped code cannot be conjured: no `Default`. Its only mints are
 // `Arena::intern` and `EpochRemap::apply`, both demanding the arena's

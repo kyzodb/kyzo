@@ -465,6 +465,100 @@ impl Epoch {
     }
 }
 
+/// Proof that a caller holds one `(arena, epoch)` context. Raw-handle
+/// equality and order — and physical word identity — are lawful only under
+/// a reference to this token. `Copy`: a durable re-checkable fact, not a
+/// consumable permission ([`BulkSpendAuthority`] is the move-only spend
+/// token).
+///
+/// Mint paths: [`DomainCtx::from_observer`] (infallible — the observer
+/// *is* the context) and [`DomainCtx::prove_shared`] (typed refusal when
+/// two sides disagree). No `Default`: a context cannot be conjured empty.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DomainCtx {
+    arena: ArenaId,
+    epoch: Epoch,
+}
+
+/// Why [`DomainCtx::prove_shared`] refused to mint a context token.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DomainCtxRefusal {
+    ArenaMismatch { left: ArenaId, right: ArenaId },
+    EpochMismatch { left: Epoch, right: Epoch },
+}
+
+impl DomainCtx {
+    /// Mint from a bulk observer: the observer's arena and epoch *are*
+    /// the context. Infallible.
+    pub fn from_observer<O: BulkObserver>(o: &O) -> DomainCtx {
+        DomainCtx {
+            arena: o.bulk_arena(),
+            epoch: o.bulk_epoch(),
+        }
+    }
+
+    /// Mint proving two `(arena, epoch)` pairs name one context. Typed
+    /// refusal on mismatch — never a panic. Cross-context comparison
+    /// cannot obtain a token, so it cannot call `same_word` / handle
+    /// equality under a forged shared context.
+    pub fn prove_shared(
+        left_arena: ArenaId,
+        left_epoch: Epoch,
+        right_arena: ArenaId,
+        right_epoch: Epoch,
+    ) -> Result<DomainCtx, DomainCtxRefusal> {
+        if left_arena != right_arena {
+            return Err(DomainCtxRefusal::ArenaMismatch {
+                left: left_arena,
+                right: right_arena,
+            });
+        }
+        if left_epoch != right_epoch {
+            return Err(DomainCtxRefusal::EpochMismatch {
+                left: left_epoch,
+                right: right_epoch,
+            });
+        }
+        Ok(DomainCtx {
+            arena: left_arena,
+            epoch: left_epoch,
+        })
+    }
+
+    /// Plane-internal: mint from already-proven domain parts (a
+    /// [`super::column::Domain`] or gather product). The caller holds the
+    /// proof; this does not re-check.
+    pub(super) fn at(arena: ArenaId, epoch: Epoch) -> DomainCtx {
+        DomainCtx { arena, epoch }
+    }
+
+    #[inline]
+    pub fn arena(self) -> ArenaId {
+        self.arena
+    }
+
+    #[inline]
+    pub fn epoch(self) -> Epoch {
+        self.epoch
+    }
+
+    /// Physical handle equality under this proven context. Without a
+    /// [`DomainCtx`], raw-handle equality has no lawful API — cross-context
+    /// comparison cannot affirmatively lie.
+    #[inline]
+    pub fn same_handle(self, a: Code, b: Code) -> bool {
+        a.0 == b.0
+    }
+
+    /// Identity order of packed handles under this proven context
+    /// (sealed-rank numeric order when the domain is sealed — never a
+    /// substitute for observer value-order over tail codes).
+    #[inline]
+    pub fn cmp_identity(self, a: Code, b: Code) -> Ordering {
+        a.0.cmp(&b.0)
+    }
+}
+
 /// The delta head: values interned since the last seal, in arrival order,
 /// with a small sorted index for dedup and ordered queries. Tail code =
 /// `sealed_len + arrival index` — arrival-stable, equality-exact, no
