@@ -141,21 +141,6 @@ pub(crate) struct MinHashLshIndexManifest {
     pub(crate) n_bands: usize,
     pub(crate) n_rows_in_band: usize,
     pub(crate) threshold: f64,
-    /// The permutation seeds as EXPLICIT LITTLE-ENDIAN u32 bytes (the ratified
-    /// format fix; the original wrote native-endian by unsafe reinterpretation).
-    /// The seeds are drawn DETERMINISTICALLY from the index's `seed` (default
-    /// [`DEFAULT_PERM_SEED`]) via splitmix64, so two fresh builds of the same
-    /// index produce byte-identical permutations — see [`HashPermutations::new`].
-    ///
-    /// FORMAT-RELEVANT (resolved, not a residual): the signature VALUES minted
-    /// from these seeds hash the **memcmp-encoded** bytes of each element (and
-    /// each n-gram's tokens) through a seeded, portable xxHash32 stream — NOT
-    /// `std::hash::Hash`, whose integer and length writes are native-endian and
-    /// unpinned across Rust versions. The stored band chunks are therefore
-    /// portable across architectures and toolchains, and pinned by
-    /// `signature_bytes_are_pinned_and_portable`. Changing the element encoding
-    /// or the hash is an on-disk-format migration.
-    pub(crate) perms: Vec<u8>,
 }
 
 impl MinHashLshIndexManifest {

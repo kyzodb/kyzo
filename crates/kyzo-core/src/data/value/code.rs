@@ -32,18 +32,6 @@
 /// identity) is spelled over [`Code::raw`], which claims identity order,
 /// never value order.
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Code(pub(super) u32);
-
-impl Code {
-    /// The raw handle, for packed storage. Reading is free; minting stays
-    /// with the arena and the epoch-stamped containers.
-    #[inline]
-    pub fn raw(self) -> u32 {
-        self.0
-    }
-}
-
 /// A code together with the arena identity and epoch that give it meaning:
 /// the loose-scalar currency for holding a value's identity across
 /// statements.

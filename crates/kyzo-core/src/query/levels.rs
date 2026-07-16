@@ -60,8 +60,7 @@ pub(crate) struct NormalLevel {
     /// `refresh` marks a re-derived row present only to carry a
     /// refreshed flag — shadowing, not admitted, invisible to delta
     /// iteration.
-    values: Vec<u8>,
-    /// `offsets[i]` is the END of row `i` in `values` (row 0 starts at 0).
+    /// `offsets[i]` is the END of row `i` in the (cut) values arena (row 0 starts at 0).
     offsets: Vec<u32>,
     flags: Vec<(bool, bool)>,
 }
@@ -153,8 +152,7 @@ impl NormalLevel {
         (start, lo.max(start))
     }
 
-    fn bounds(&self, lower: &[u8], upper: &[u8], upper_inclusive: bool) -> (usize, usize) {
-        let (lower, upper) = (lower.to_vec(), upper.to_vec());
+    fn bounds(&self, upper_inclusive: bool) -> (usize, usize) {
         let mut lo = 0usize;
         let mut hi = self.len();
         while lo < hi {
@@ -553,8 +551,6 @@ impl EpochStore {
     /// bound window. Delta scope reads the newest level alone.
     fn ranged<'s>(
         &'s self,
-        lower: Vec<u8>,
-        upper: Vec<u8>,
         upper_inclusive: bool,
         delta_only: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
@@ -750,8 +746,6 @@ fn meet_ranged<'s>(
     spec: &'s MeetSpec,
     picked: &'s [MeetLevel],
     all: &'s [MeetLevel],
-    lower: Vec<u8>,
-    upper: Vec<u8>,
     upper_inclusive: bool,
 ) -> Box<dyn Iterator<Item = TupleInIter<'s>> + 's> {
     let within = move |row: TupleInIter<'_>| -> bool {

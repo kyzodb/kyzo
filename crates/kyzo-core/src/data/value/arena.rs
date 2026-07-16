@@ -422,26 +422,6 @@ impl Run {
 /// path manufactures one from nothing.
 pub(super) struct StampMintAuthority(pub(self) ());
 
-/// Process-unique arena identity: minted once per [`Arena::new`] from a
-/// monotone counter (creation order — deterministic, no clock), carried by
-/// every stamp and observer, verified on every spend. Never part of any
-/// answer, so determinism of results is untouched.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ArenaId(u64);
-
-static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(0);
-
-impl ArenaId {
-    fn mint() -> ArenaId {
-        let id = NEXT_ARENA_ID.fetch_add(1, AtomicOrd::Relaxed);
-        // The contract says process-unique, so wrap-around is refused,
-        // not silently recycled (2^63 arenas is unreachable; the assert
-        // is the contract made executable).
-        assert!(id < u64::MAX / 2, "ArenaId space exhausted");
-        ArenaId(id)
-    }
-}
-
 /// The arena's epoch: advances exactly at [`Arena::seal`], which rides
 /// commit boundaries. Codes mean something relative to an epoch; every
 /// spend verifies the stamp.

@@ -488,7 +488,6 @@ pub(crate) enum HnswRow {
         layer: i64,
         at: VectorId,
         degree: usize,
-        vec_hash: Vec<u8>,
     },
     /// A directed link between two vectors at one layer. `ignore_link` is
     /// the tombstone the shrink pass leaves instead of deleting a link a
@@ -527,7 +526,6 @@ pub(crate) enum HnswRow {
     /// removal is a concurrency-semantics decision, not a port decision).
     Canary {
         bottom_layer: i64,
-        entry_key: Vec<u8>,
     },
 }
 
@@ -2069,7 +2067,6 @@ enum SearchPlan {
 /// path). `key` is the memcmp encoding of the entry's layer-0 node key.
 struct Ranked {
     dist: OrderedFloat<f64>,
-    key: Vec<u8>,
     tuple: Tuple,
 }
 

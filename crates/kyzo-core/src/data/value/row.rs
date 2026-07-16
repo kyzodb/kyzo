@@ -196,16 +196,6 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
         std::cmp::Ordering::Equal
     }
 
-    /// The execution→bytes door: the written form of row `i`. Minted only
-    /// here — an `EncodedKey` in hand is proof its bytes are concatenated
-    /// canonical encodings.
-    pub fn encode_row(&self, i: usize) -> EncodedKey {
-        let mut out = Vec::new();
-        for k in 0..self.arity {
-            out.extend_from_slice(self.resolve_cell(i, k));
-        }
-        EncodedKey(out)
-    }
 }
 
 /// Typed refusals of the bytes→execution door.
@@ -236,120 +226,6 @@ fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeEr
         return Err(DecodeError::TrailingBytes);
     }
     Ok(splits)
-}
-
-/// The written form of a tuple: concatenated canonical encodings. Byte
-/// order equals elementwise semantic tuple order (self-terminating
-/// elements). No code accessors exist: stored bytes cannot leak execution
-/// currency, and codes cannot leak into storage — the code-lifetime law,
-/// held by the type surface.
-///
-/// @authority EncodedKey
-/// @layer value
-/// @owns canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)
-/// @constructs EncodedKey::from_values | EncodedKey::from_stored | encode_row
-/// @forbids leaking codes out of an EncodedKey | forging bytes bypassing canonical encode | confusing storage identity with record/entity identity
-/// @converts EncodedKey -> Domain (admitted into an arena via push_encoded)
-/// @gate round-trip + byte-order law (storage format gate)
-/// @status established #119
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct EncodedKey(Vec<u8>);
-
-/// A stored relation's identity: the 8-byte big-endian keyspace prefix
-/// every key of the relation opens with (storage key layout v1).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RelationId(u64);
-
-impl RelationId {
-    /// The system catalog keyspace.
-    pub const SYSTEM: RelationId = RelationId(0);
-
-    /// The one checked constructor: `None` at or beyond [`RelationId::CAP`].
-    /// Every other mint (decode, allocation) routes through the same
-    /// refusal, so an over-cap id is unrepresentable.
-    pub const fn new(raw: u64) -> Option<RelationId> {
-        if raw >= RelationId::CAP {
-            None
-        } else {
-            Some(RelationId(raw))
-        }
-    }
-
-    /// The raw id (read-only; construction goes through [`RelationId::new`]
-    /// or [`RelationId::raw_decode`]).
-    pub const fn raw(self) -> u64 {
-        self.0
-    }
-
-    /// The exclusive allocation ceiling: every assignable id stays below
-    /// `1 << 48`, so a key's 8-byte relation prefix always begins with two
-    /// `0x00` bytes — far below the `0xFF` the scan-bound vocabulary
-    /// reserves as its `Greatest` tail, and the bound every storage
-    /// consumer (merkle roots, keyspace probes) already assumes.
-    pub const CAP: u64 = 1_u64 << 48;
-
-    pub fn raw_encode(self) -> [u8; 8] {
-        self.0.to_be_bytes()
-    }
-
-    /// Decode 8 big-endian bytes as a relation id, REFUSING anything at
-    /// or beyond [`RelationId::CAP`] — the exhaustion door: stored bytes
-    /// cannot smuggle an unassignable id back into the allocator.
-    pub fn raw_decode(bytes: &[u8]) -> Result<RelationId, DecodeError> {
-        let Some(head) = bytes.get(..8) else {
-            return Err(DecodeError::Truncated);
-        };
-        let id = u64::from_be_bytes(head.try_into().expect("8 bytes"));
-        if id >= RelationId::CAP {
-            return Err(DecodeError::RelationIdOverCap);
-        }
-        Ok(RelationId(id))
-    }
-
-    /// The next id, `None` on exhaustion (the caller owns the typed
-    /// refusal).
-    pub fn next(self) -> Option<RelationId> {
-        self.0.checked_add(1).map(RelationId)
-    }
-}
-
-/// Displays as the bare numeric id — the form diagnostics and error
-/// messages carry; the typed identity never has to degrade to a raw `u64`
-/// just to be printed.
-impl std::fmt::Display for RelationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Key encoding for anything that dereferences to a value slice: the
-/// relation prefix, then each value's canonical bytes.
-pub trait TupleT {
-    fn encode_as_key(&self, rel: RelationId) -> EncodedKey;
-}
-
-impl<S: AsRef<[DataValue]> + ?Sized> TupleT for S {
-    fn encode_as_key(&self, rel: RelationId) -> EncodedKey {
-        encode_key_with_suffix(rel, self.as_ref(), &[])
-    }
-}
-
-/// The write path's key mint: prefix, key columns, then a value suffix
-/// (e.g. the two bitemporal slots), in one pass.
-pub fn encode_key_with_suffix(
-    rel: RelationId,
-    cols: &[DataValue],
-    suffix: &[DataValue],
-) -> EncodedKey {
-    let mut out = Vec::with_capacity(8 + 16 * (cols.len() + suffix.len()));
-    out.extend_from_slice(&rel.raw_encode());
-    for v in cols {
-        super::canonical::append_canonical(&mut out, v);
-    }
-    for v in suffix {
-        super::canonical::append_canonical(&mut out, v);
-    }
-    EncodedKey(out)
 }
 
 /// Column-wise bound arrays close a scan key the moment they hit a
@@ -429,64 +305,6 @@ pub fn scan_key_upper_projected(
     }
     append_bounds(&mut out, bounds, true);
     out
-}
-
-impl std::ops::Deref for EncodedKey {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl AsRef<[u8]> for EncodedKey {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl EncodedKey {
-    /// Storage key layout v1: keys open with the relation id as 8
-    /// big-endian bytes (the keyspace prefix), then the key columns'
-    /// canonical encodings, then — for bitemporal relations — the two
-    /// fixed-width validity slots.
-    pub const RELATION_PREFIX_LEN: usize = 8;
-    /// One canonical validity slot: tag byte + 9-byte payload.
-    pub const VALIDITY_TAIL_LEN: usize = 10;
-    /// Both time slots of a bitemporal key.
-    pub const BITEMPORAL_TAIL_LEN: usize = 2 * Self::VALIDITY_TAIL_LEN;
-
-    /// The lawful multi-value mint: encode each value through the codec
-    /// authority and concatenate — the execution-free path from logical
-    /// values to their written form.
-    pub fn from_values<'v>(values: impl IntoIterator<Item = &'v super::DataValue>) -> EncodedKey {
-        let mut out = Vec::new();
-        for v in values {
-            out.extend_from_slice(super::canonical::encode_owned(v).as_bytes());
-        }
-        EncodedKey(out)
-    }
-
-    /// The storage-facing door: claim stored bytes as a written tuple by
-    /// proving they split into exactly `arity` lawful canonical
-    /// encodings with nothing trailing. The ONLY public byte constructor
-    /// — random bytes cannot masquerade as a key.
-    pub fn from_stored(bytes: Vec<u8>, arity: usize) -> Result<EncodedKey, DecodeError> {
-        split_key(&bytes, arity)?;
-        Ok(EncodedKey(bytes))
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 #[cfg(test)]
