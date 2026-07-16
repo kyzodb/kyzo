@@ -231,7 +231,6 @@ pub struct ExecDedup {
 impl ExecDedup {
     /// A fresh dedup sink over `domain`, holding `arity`-wide tuples.
     pub fn new(domain: Domain, arity: usize) -> ExecDedup {
-        assert!(arity >= 1, "a tuple has at least one column");
         ExecDedup {
             domain,
             arity,

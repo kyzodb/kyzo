@@ -64,12 +64,7 @@ pub struct Rows {
 
 impl Rows {
     /// An empty tuple container in the observer's domain.
-    ///
-    /// # Panics
-    ///
-    /// Panics on zero arity (a relation has columns).
     pub fn new_in<O: BulkObserver>(arity: usize, o: &O) -> Rows {
-        assert!(arity >= 1, "a relation has at least one column");
         Rows {
             arity,
             codes: CodeColumn::new_in(o),
