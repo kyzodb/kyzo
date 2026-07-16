@@ -77,9 +77,11 @@ const CANON_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
 /// A number of the unified domain: exactly an `i64` or an `f64`, held in
 /// normalized identity form (no `-0.0`, one NaN). Construct through
-/// [`Num::int`] / [`Num::float`]; `Ord` is the semantic law (exact real
+/// [`Num::int`] / [`Num::float`]; `Ord` is the **storage** law (exact real
 /// order, `Int < Float` on equal reals, NaN greatest) — lawful as a trait
-/// here because `Num` is fully inline: no deref, no context.
+/// here because `Num` is fully inline: no deref, no context. Query-semantic
+/// numeric order (ties equal: `1 == 1.0`) lives on [`NumericOrd`], never
+/// as a second method on this type.
 #[derive(Clone, Copy, Debug)]
 pub struct Num(Repr);
 
@@ -408,8 +410,9 @@ impl PartialOrd for Num {
 }
 
 impl Ord for Num {
-    /// The semantic law: exact real order, `Int < Float` on equal reals,
-    /// NaN greatest and equal to itself.
+    /// Storage / identity order: exact real order, `Int < Float` on equal
+    /// reals, NaN greatest and equal to itself. Matches the order-preserving
+    /// key. Query-semantic numeric order is [`NumericOrd`].
     fn cmp(&self, other: &Self) -> Ordering {
         let (ca, cb) = (self.class(), other.class());
         if ca != cb {
@@ -434,6 +437,70 @@ impl Ord for Num {
             }
         }
     }
+}
+
+/// Exact real-value order for query/expression semantics.
+///
+/// Law: real-number order with ties EQUAL — `Int(1)` and `Float(1.0)`
+/// compare `Equal` here. Distinct from [`Num`]'s storage `Ord`, which
+/// places `Int < Float` on equal reals. Two total orders = two types;
+/// expression compare/eq/min/max must go through this newtype, never
+/// through a second method on [`Num`].
+#[derive(Clone, Copy, Debug)]
+pub struct NumericOrd(pub Num);
+
+impl PartialEq for NumericOrd {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for NumericOrd {}
+
+impl PartialOrd for NumericOrd {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NumericOrd {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Storage order is (real value, repr tie-break); stripping the
+        // tie-break yields the numeric order exactly.
+        match self.0.cmp(&other.0) {
+            Ordering::Equal => Ordering::Equal,
+            o => {
+                if self.0.repr_byte() != other.0.repr_byte() {
+                    let same = matches!(
+                        (self.0.as_int(), other.0.as_float()),
+                        (Some(i), Some(f)) if int_float_eq(i, f)
+                    ) || matches!(
+                        (self.0.as_float(), other.0.as_int()),
+                        (Some(f), Some(i)) if int_float_eq(i, f)
+                    );
+                    if same {
+                        Ordering::Equal
+                    } else {
+                        o
+                    }
+                } else {
+                    o
+                }
+            }
+        }
+    }
+}
+
+/// Exact int/float real-value equality (no lossy casts): true iff the
+/// float is integral, in range, and equal.
+fn int_float_eq(i: i64, f: f64) -> bool {
+    if !f.is_finite() || f.fract() != 0.0 {
+        return false;
+    }
+    if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
+        return false;
+    }
+    f as i64 == i
 }
 
 impl std::hash::Hash for Num {
@@ -667,6 +734,50 @@ mod tests {
             assert_eq!(used, k.len());
             assert_eq!(back, n, "round-trip changed identity for {n:?}");
             assert_eq!(back.repr_byte(), n.repr_byte(), "repr changed for {n:?}");
+        }
+    }
+
+    /// Query-semantic numeric order: ties equal, exact beyond 2^53, typed
+    /// apart from storage order on [`Num`].
+    #[test]
+    fn numeric_ord_is_value_order_with_ties_equal() {
+        assert_eq!(
+            NumericOrd(Num::int(1)).cmp(&NumericOrd(Num::float(1.0))),
+            Ordering::Equal
+        );
+        assert_eq!(
+            NumericOrd(Num::float(1.0)).cmp(&NumericOrd(Num::int(1))),
+            Ordering::Equal
+        );
+        assert_eq!(NumericOrd(Num::int(1)), NumericOrd(Num::float(1.0)));
+        assert_eq!(
+            NumericOrd(Num::int(1)).cmp(&NumericOrd(Num::float(1.5))),
+            Ordering::Less
+        );
+        assert_eq!(
+            NumericOrd(Num::float(2.5)).cmp(&NumericOrd(Num::int(2))),
+            Ordering::Greater
+        );
+        // Beyond 2^53: floats cannot represent the int; NOT equal.
+        assert_ne!(
+            NumericOrd(Num::int((1 << 53) + 1))
+                .cmp(&NumericOrd(Num::float(9_007_199_254_740_992.0))),
+            Ordering::Equal
+        );
+        // Storage keeps its tie-break; NumericOrd drops it. Both named.
+        assert_eq!(Num::int(1).cmp(&Num::float(1.0)), Ordering::Less);
+        // Differential vs storage over the corpus: equal reals are the
+        // ONLY places the two authorities differ.
+        let mut c = corpus();
+        extend_random(&mut c, 300, 0xACE);
+        for &a in &c {
+            for &b in &c {
+                let num = NumericOrd(a).cmp(&NumericOrd(b));
+                let sto = a.cmp(&b);
+                if num != sto {
+                    assert_eq!(num, Ordering::Equal, "authorities may differ only on ties");
+                }
+            }
         }
     }
 

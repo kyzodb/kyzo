@@ -55,7 +55,7 @@ pub mod wide;
 
 pub use admission::{Admission, Denial};
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
-pub use number::{Num, NumRepr};
+pub use number::{Num, NumRepr, NumericOrd};
 pub use row::{
     TupleKey, StorageKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
     scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
