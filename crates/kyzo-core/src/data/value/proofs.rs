@@ -26,7 +26,7 @@
 
 use super::DataValue;
 use super::Tuple;
-use super::arena::{BulkSpendAuthority, DomainCtx, NestedDomainCtx};
+use super::arena::{BulkSpendAuthority, DomainCtx, NestId, NestedDomainCtx};
 use super::canonical::CanonicalBytes;
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -80,7 +80,7 @@ assert_not_impl!(Value: PartialEq);
 assert_not_impl!(Value: Eq);
 
 // A context token cannot be conjured empty — only from_observer /
-// prove_shared / plane-internal `at`. Durable fact: Copy is intentional.
+// prove_shared / plane-internal `at`. Durable re-checkable fact: Copy.
 // Coexisting-arena form: deliberately unbranded (see DomainCtx docs /
 // code.rs measurement); nest brands are NestedDomainCtx under
 // Frame/Snapshot::with_nested_ctx.
@@ -90,15 +90,23 @@ assert_not_impl!(DomainCtx: Default);
 // with_nested_ctx doors mint one (and HRTB keeps `'id` from escaping).
 assert_not_impl!(NestedDomainCtx<'static>: Default);
 
+// Durable fact tokens are Copy (re-checkable, not consumable permission).
+const _: fn() = || {
+    fn needs_copy<T: Copy>() {}
+    needs_copy::<DomainCtx>();
+    needs_copy::<NestId<'static>>();
+    needs_copy::<NestedDomainCtx<'static>>();
+};
+
 // A stamped code cannot be conjured: no `Default`. Its only mints are
 // `Arena::intern` and `EpochRemap::apply`, both demanding the arena's
 // private mint token.
 assert_not_impl!(StampedCode: Default);
 
-// The bulk-spend authority is one-per-admission and non-duplicable: no
-// `Clone`, no `Copy`, no `Default`. Its only mint is
-// `Domain::admit_to` after `DomainCtx::prove_shared` (plane-internal).
-// By-ref spend was cut (#304); T5 rebuilds consume-on-spend.
+// Consumable permission: one-per-admission, move-only consume-on-spend.
+// No `Clone`/`Copy`/`Default` — duplication would forge a second spend.
+// Reuse after `resolve_raw`/`cmp_raw`/`open_pass` is a move error (E0382);
+// these absence proofs are the static half of that refusal.
 assert_not_impl!(BulkSpendAuthority: Clone);
 assert_not_impl!(BulkSpendAuthority: Copy);
 assert_not_impl!(BulkSpendAuthority: Default);

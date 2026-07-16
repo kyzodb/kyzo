@@ -1248,22 +1248,54 @@ impl Snapshot {
 }
 
 mod sealed {
-    pub trait Sealed {}
-    impl Sealed for super::Frame<'_> {}
-    impl Sealed for super::Snapshot {}
+    use std::cmp::Ordering;
+
+    /// Observer sealing PLUS the unchecked raw read core. The raw methods
+    /// are reachable only inside this module and from
+    /// [`super::BulkSpendAuthority`] spend paths / [`super::BulkPass`] —
+    /// never as a public forge surface on a bare [`super::Frame`].
+    pub trait Sealed {
+        fn raw_bytes(&self, c: usize) -> &[u8];
+        fn raw_cmp(&self, a: usize, b: usize) -> Ordering;
+    }
+
+    impl Sealed for super::Frame<'_> {
+        #[inline]
+        fn raw_bytes(&self, c: usize) -> &[u8] {
+            self.view().resolve(c)
+        }
+
+        #[inline]
+        fn raw_cmp(&self, a: usize, b: usize) -> Ordering {
+            self.view().cmp(a, b)
+        }
+    }
+
+    impl Sealed for super::Snapshot {
+        #[inline]
+        fn raw_bytes(&self, c: usize) -> &[u8] {
+            self.view().resolve(c)
+        }
+
+        #[inline]
+        fn raw_cmp(&self, a: usize, b: usize) -> Ordering {
+            self.view().cmp(a, b)
+        }
+    }
 }
 
-/// Proof that a container-domain admission verified arena identity,
-/// epoch, and visibility extent against an observer. The only mint is
-/// plane-internal ([`BulkSpendAuthority::after_domain_admission`]), so the
-/// raw spend methods below are UNCALLABLE outside the plane: holding a
-/// `Frame` is not enough — sealing the trait guards who observes, this
-/// token guards who spends.
+/// Consumable permission that a container-domain admission verified arena
+/// identity, epoch, and visibility extent against an observer. The only
+/// mint is plane-internal ([`BulkSpendAuthority::after_domain_admission`]).
+/// Holding a [`Frame`] is not enough — sealing [`BulkObserver`] guards who
+/// observes; this token guards who spends.
 ///
-/// NOT a skeleton key, by shape: no `Clone`/`Copy`, no accessor ever
-/// returns one. By-ref spend was demolished (#304); T5 rebuilds
-/// consume-on-spend. Callers that still pass `&BulkSpendAuthority` are
-/// intentionally severed.
+/// Move-only consume-on-spend: no `Clone`/`Copy`/`Default`, no accessor
+/// ever returns one. Spend either (a) into a single
+/// [`BulkObserver::resolve_raw`] / [`BulkObserver::cmp_raw`] call, or (b)
+/// into [`BulkSpendAuthority::open_pass`] for an amortized bulk pass. After
+/// either spend the token is gone — reuse is a move error (and duplication
+/// is refused by the absence proofs in [`super::proofs`]).
 pub struct BulkSpendAuthority(());
 
 impl BulkSpendAuthority {
@@ -1271,6 +1303,38 @@ impl BulkSpendAuthority {
     /// checks pass.
     pub(super) fn after_domain_admission() -> BulkSpendAuthority {
         BulkSpendAuthority(())
+    }
+
+    /// Spend this authority into a [`BulkPass`] under `o`. The consumable
+    /// token disappears; the pass is the lasting capability for that
+    /// admission (many raw reads, zero remints).
+    pub(super) fn open_pass<'a, O: BulkObserver>(self, o: &'a O) -> BulkPass<'a, O> {
+        let BulkSpendAuthority(()) = self;
+        BulkPass { obs: o }
+    }
+}
+
+/// Bulk-pass capability opened by spending [`BulkSpendAuthority`]. The
+/// consumable permission is gone; this handle proves admission for the
+/// observer borrow and may resolve/cmp raw codes without further tokens.
+///
+/// Not a second mint path: private fields, only
+/// [`BulkSpendAuthority::open_pass`] constructs one. Not `Clone` of the
+/// *consumable* — the authority was already spent; this is the opened
+/// capability, used by shared reference across the pass.
+pub(super) struct BulkPass<'a, O: BulkObserver> {
+    obs: &'a O,
+}
+
+impl<'a, O: BulkObserver> BulkPass<'a, O> {
+    #[inline]
+    pub(super) fn resolve(&self, c: usize) -> &'a [u8] {
+        sealed::Sealed::raw_bytes(self.obs, c)
+    }
+
+    #[inline]
+    pub(super) fn cmp(&self, a: usize, b: usize) -> Ordering {
+        sealed::Sealed::raw_cmp(self.obs, a, b)
     }
 }
 
@@ -1280,12 +1344,10 @@ impl BulkSpendAuthority {
 /// an admission. Sealed: exactly [`Frame`] and [`Snapshot`] observe;
 /// nothing else can implement this and forge an observer.
 ///
-/// The raw spend methods take bare indices with no stamp: their safety
-/// precondition is a container admission whose domain extent is within
-/// `bulk_len()`. DEMOLISHED (#304): by-ref `proof: &BulkSpendAuthority`
-/// spend surface cut — signatures now demand owned `BulkSpendAuthority`
-/// so shared-ref multi-spend across a bulk pass cannot compile; T5
-/// rebuilds consume-on-spend.
+/// One-shot raw spends take owned [`BulkSpendAuthority`] (consume-on-spend).
+/// Amortized bulk reads spend that authority once into [`BulkPass`] via
+/// [`BulkSpendAuthority::open_pass`] — never by reminting a fresh authority
+/// per resolve.
 pub trait BulkObserver: sealed::Sealed {
     fn bulk_arena(&self) -> ArenaId;
     fn bulk_epoch(&self) -> Epoch;
@@ -1293,9 +1355,20 @@ pub trait BulkObserver: sealed::Sealed {
     fn bulk_len(&self) -> usize;
     /// Sealed prefix bound (codes below it compare numerically).
     fn bulk_sealed_len(&self) -> usize;
-    // DEMOLISHED (#304): by-ref spend cut — owned proof only (T5 consume-on-spend).
-    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> &[u8];
-    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Ordering;
+
+    /// One-shot spend: consumes `proof`. Reuse of the same binding after
+    /// this call is a move error.
+    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> &[u8] {
+        let BulkSpendAuthority(()) = proof;
+        sealed::Sealed::raw_bytes(self, c)
+    }
+
+    /// One-shot spend: consumes `proof`. Reuse of the same binding after
+    /// this call is a move error.
+    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Ordering {
+        let BulkSpendAuthority(()) = proof;
+        sealed::Sealed::raw_cmp(self, a, b)
+    }
 }
 
 impl BulkObserver for Frame<'_> {
@@ -1314,14 +1387,6 @@ impl BulkObserver for Frame<'_> {
     fn bulk_sealed_len(&self) -> usize {
         self.sealed_len
     }
-
-    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
-        self.view().resolve(c)
-    }
-
-    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
-        self.view().cmp(a, b)
-    }
 }
 
 impl BulkObserver for Snapshot {
@@ -1339,14 +1404,6 @@ impl BulkObserver for Snapshot {
 
     fn bulk_sealed_len(&self) -> usize {
         self.sealed_len
-    }
-
-    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
-        self.view().resolve(c)
-    }
-
-    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
-        self.view().cmp(a, b)
     }
 }
 
@@ -2068,6 +2125,35 @@ mod tests {
     /// Nest brands apply under one live frame: handle identity is lawful
     /// inside the nest, and the durable unbranded token remains available
     /// via [`NestedDomainCtx::ctx`] for coexisting-arena APIs.
+    /// Consumable authority is spent by move into a bulk pass; the pass
+    /// then amortizes many raw reads with zero remints.
+    #[test]
+    fn bulk_spend_authority_open_pass_is_consume_on_spend() {
+        let mut arena = Arena::new();
+        let sc = arena.intern(b"x");
+        let f = arena.frame();
+        let auth = BulkSpendAuthority::after_domain_admission();
+        let pass = auth.open_pass(&f);
+        assert_eq!(pass.resolve(sc.code().raw() as usize), b"x");
+        assert_eq!(pass.resolve(sc.code().raw() as usize), b"x");
+        // `auth` was moved into `open_pass` — a second use would be E0382.
+        // Absence of Clone/Copy is locked in `super::proofs`.
+    }
+
+    /// One-shot `resolve_raw` likewise consumes the authority by value.
+    #[test]
+    fn bulk_spend_authority_resolve_raw_is_consume_on_spend() {
+        let mut arena = Arena::new();
+        let sc = arena.intern(b"y");
+        let f = arena.frame();
+        let auth = BulkSpendAuthority::after_domain_admission();
+        assert_eq!(
+            f.resolve_raw(sc.code().raw() as usize, auth),
+            b"y"
+        );
+        // `auth` spent — reuse would be E0382 (see `super::proofs`).
+    }
+
     #[test]
     fn nested_ctx_brands_handle_identity_under_one_frame() {
         let mut arena = Arena::new();

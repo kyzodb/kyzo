@@ -44,7 +44,8 @@
 use std::cmp::Ordering;
 
 use super::arena::{
-    ArenaId, BulkObserver, BulkSpendAuthority, DomainCtx, DomainCtxRefusal, Epoch, EpochRemap,
+    ArenaId, BulkObserver, BulkPass, BulkSpendAuthority, DomainCtx, DomainCtxRefusal, Epoch,
+    EpochRemap,
 };
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -208,10 +209,12 @@ impl CodeColumn {
         &'a self,
         o: &'a O,
     ) -> Result<AdmittedCodes<'a, O>, DomainCtxRefusal> {
-        let _proof = self.domain.admit_to(o, "code column")?;
+        // One admission authority, spent by value into the bulk pass —
+        // not discarded and reminted per resolve.
+        let proof = self.domain.admit_to(o, "code column")?;
         Ok(AdmittedCodes {
             codes: &self.codes,
-            obs: o,
+            pass: proof.open_pass(o),
             ctx: self.domain.ctx(),
             all_sealed: self.domain.extent as usize <= o.bulk_sealed_len(),
         })
@@ -262,7 +265,8 @@ impl CodeColumn {
 /// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx).
 pub struct AdmittedCodes<'a, O: BulkObserver> {
     codes: &'a [u32],
-    obs: &'a O,
+    /// Admission authority spent into this pass at [`CodeColumn::admit`].
+    pass: BulkPass<'a, O>,
     ctx: DomainCtx,
     all_sealed: bool,
 }
@@ -307,10 +311,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// The canonical bytes of the value at `i`.
     pub fn resolve(&self, i: usize) -> &'a [u8] {
-        // Interim one-shot spend mint after admission already proved the
-        // domain — T5 owns true consume-on-spend multiplicity.
-        self.obs
-            .resolve_raw(self.codes[i] as usize, BulkSpendAuthority::after_domain_admission())
+        self.pass.resolve(self.codes[i] as usize)
     }
 
     /// Semantic (byte-order) comparison of two positions: raw-handle
@@ -325,12 +326,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         if self.all_sealed {
             return self.ctx.cmp_identity(a, b);
         }
-        // Interim one-shot spend mint — T5 owns consume-on-spend.
-        self.obs.cmp_raw(
-            a.raw() as usize,
-            b.raw() as usize,
-            BulkSpendAuthority::after_domain_admission(),
-        )
+        self.pass.cmp(a.raw() as usize, b.raw() as usize)
     }
 
     /// A deterministic sort permutation by value order (the kernel the
@@ -413,10 +409,10 @@ impl WordColumn {
         &'a self,
         o: &'a O,
     ) -> Result<AdmittedWords<'a, O>, DomainCtxRefusal> {
-        let _proof = self.domain.admit_to(o, "word column")?;
+        let proof = self.domain.admit_to(o, "word column")?;
         Ok(AdmittedWords {
             words: &self.words,
-            obs: o,
+            pass: proof.open_pass(o),
             ctx: self.domain.ctx(),
         })
     }
@@ -464,7 +460,8 @@ impl WordColumn {
 /// durable [`DomainCtx`], not a nest brand that cannot escape admission.
 pub struct AdmittedWords<'a, O: BulkObserver> {
     words: &'a [Value],
-    obs: &'a O,
+    /// Admission authority spent into this pass at [`WordColumn::admit`].
+    pass: BulkPass<'a, O>,
     ctx: DomainCtx,
 }
 
@@ -492,13 +489,9 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
         let w = &self.words[i];
         match w.inline_canonical() {
             Some(bytes) => bytes,
-            // Interim one-shot spend mint — T5 owns consume-on-spend.
             None => self
-                .obs
-                .resolve_raw(
-                    w.code().expect("non-inline word carries a code").raw() as usize,
-                    BulkSpendAuthority::after_domain_admission(),
-                )
+                .pass
+                .resolve(w.code().expect("non-inline word carries a code").raw() as usize)
                 .to_vec(),
         }
     }
