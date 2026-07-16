@@ -76,24 +76,8 @@ impl Domain {
         }
     }
 
-    fn absorb_stamp(&mut self, sc: StampedCode, what: &str) {
-        assert_eq!(
-            sc.arena(),
-            self.arena,
-            "{what} of arena {:?} fed a stamp from foreign arena {:?}",
-            self.arena,
-            sc.arena()
-        );
-        assert_eq!(
-            sc.epoch(),
-            self.epoch,
-            "{what} of epoch {:?} fed a stamp of epoch {:?}: cross through the gather door",
-            self.epoch,
-            sc.epoch()
-        );
-        let raw = sc.code().raw();
-        self.extent = self.extent.max(raw + 1);
-    }
+    // Domain::absorb_stamp (&mut self extent bump) DELETED — #302 demolition.
+    // Call sites intentionally broken; T4 rebuilds as consume-and-return.
 
     /// The plane-internal arena identity (row containers verify typed).
     pub(super) fn arena_id(&self) -> ArenaId {

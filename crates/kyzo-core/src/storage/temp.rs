@@ -236,16 +236,13 @@ impl WriteTx for TempTx {
         Ok(())
     }
 
-    /// Vacuous: a temp store's transaction IS the session's lifetime. The
-    /// method exists because the species contract requires it; consuming
-    /// self here would only ever be called by generic code that is about
-    /// to drop the store anyway.
-    fn commit(self) -> Result<()> {
-        Ok(())
-    }
+}
 
-    fn commit_durable(self) -> Result<()> {
-        Ok(())
+impl Drop for TempTx {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            panic!("Drop-as-abort deleted (#302): WriteTx requires abort(self)");
+        }
     }
 }
 

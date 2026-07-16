@@ -122,13 +122,6 @@ impl SegmentEngine {
         Watermark(self.slot(relation).load(AtomicOrdering::Acquire))
     }
 
-    /// Record an imminent committed write to `relation` — called BEFORE the
-    /// storage commit, so a bump precedes any snapshot that can see the
-    /// write. A subsequent rollback leaves a harmless early orphan.
-    pub(crate) fn bump_before_commit(&self, relation: RelationId) {
-        self.slot(relation).fetch_add(1, AtomicOrdering::AcqRel);
-    }
-
     /// The relation's segment, iff still exactly valid at `witness`.
     pub(crate) fn get(&self, relation: RelationId, witness: Watermark) -> Option<Arc<Segment>> {
         let segments = self.segments.lock().expect("segment lock poisoned");

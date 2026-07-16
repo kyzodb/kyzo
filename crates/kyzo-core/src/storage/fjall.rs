@@ -476,7 +476,7 @@ impl Storage for FjallStorage {
             .map_err(|e| miette!("fjall write tx: {e}"))?;
         let stamp = self.stamp_after_snapshot(&tx)?;
         Ok(FjallWriteTx {
-            tx,
+            tx: std::mem::ManuallyDrop::new(tx),
             ks: self.ks.clone(),
             db: self.db.clone(),
             stamp,
@@ -576,7 +576,8 @@ pub struct FjallReadTx {
 /// set. Reads see the transaction's own writes; `commit` consumes the value,
 /// so a committed transaction cannot be touched again by construction.
 pub struct FjallWriteTx {
-    tx: OptimisticWriteTx,
+    /// ManuallyDrop: Drop-as-abort deleted (#302). Inner must not abort on outer Drop.
+    tx: std::mem::ManuallyDrop<OptimisticWriteTx>,
     ks: OptimisticTxKeyspace,
     db: OptimisticTxDatabase,
     stamp: ValidityTs,
@@ -841,17 +842,12 @@ impl WriteTx for FjallWriteTx {
         }
     }
 
-    fn commit(self) -> Result<()> {
-        match self.tx.commit().map_err(|e| miette!("fjall commit: {e}"))? {
-            Ok(()) => Ok(()),
-            Err(Conflict) => Err(ConflictError.into()),
-        }
-    }
+}
 
-    fn commit_durable(self) -> Result<()> {
-        let db = self.db.clone();
-        self.commit()?;
-        db.persist(fjall::PersistMode::SyncAll)
-            .map_err(|e| miette!("fjall sync: {e}"))
+impl Drop for FjallWriteTx {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            panic!("Drop-as-abort deleted (#302): WriteTx requires abort(self)");
+        }
     }
 }

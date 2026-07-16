@@ -532,23 +532,4 @@ pub trait WriteTx: ReadTx {
     /// empty" protection must pass forward bounds.
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()>;
 
-    /// Commit, consuming the transaction: there is no committed-but-alive
-    /// state. Durability: survives a process crash; for power-cut durability
-    /// use [`commit_durable`](Self::commit_durable) or [`Storage::sync`].
-    fn commit(self) -> Result<()>
-    where
-        Self: Sized;
-
-    /// Commit and fsync before returning: the transaction survives a power
-    /// cut, not just a process crash. Costs an fsync; the engine chooses per
-    /// transaction where that price is worth paying.
-    ///
-    /// Failure semantics: if the commit applies but the fsync then fails,
-    /// the transaction IS committed — visible, process-crash durable, not
-    /// yet power-cut durable. The error reports the durability shortfall,
-    /// not a rollback; callers needing all-or-nothing durability must treat
-    /// it accordingly.
-    fn commit_durable(self) -> Result<()>
-    where
-        Self: Sized;
 }
