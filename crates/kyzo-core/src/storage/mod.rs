@@ -307,10 +307,11 @@ impl fmt::Display for FormatVersion {
 /// still never aborts.
 ///
 /// **Retryable**: rerun the whole transaction. Prefer matching
-/// [`CommitFailure::Conflict`] on the commit outcome; this type remains as
-/// the conflict payload identity for retry helpers that still recover it
-/// from a diagnostic chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// [`CommitFailure::Conflict`] on the commit outcome. Diagnostic code
+/// `storage::conflict` is the Report-era signal for retry helpers until
+/// story #273 removes the erased carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, miette::Diagnostic)]
+#[diagnostic(code(storage::conflict))]
 pub struct ConflictError;
 
 impl fmt::Display for ConflictError {
@@ -323,7 +324,6 @@ impl fmt::Display for ConflictError {
 }
 
 impl std::error::Error for ConflictError {}
-impl miette::Diagnostic for ConflictError {}
 
 /// Proof that an Open write transaction committed. Carries no Open methods —
 /// use-after-commit is a type error, not a runtime guard.

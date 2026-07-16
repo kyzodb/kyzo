@@ -2,6 +2,7 @@
   "blob-meaning": 9,
   "duplicate-generation-counter": 0,
   "encoder-twin": 0,
+  "error-downcast": 0,
   "freshness-twin": 1,
   "missing-authority": 5,
   "searchra-decoded-tuples": 3

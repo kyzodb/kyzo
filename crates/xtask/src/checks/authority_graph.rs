@@ -32,7 +32,12 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
+use quote::ToTokens;
 use serde::Serialize;
+use syn::visit::{self, Visit};
+
+use crate::fsutil::span_line;
+use crate::synutil::mod_is_test_scope;
 
 pub const TOOL_VERSION: u32 = 1;
 
@@ -252,6 +257,7 @@ enum FindingClass {
     DuplicateAuthorityAlias,
     DuplicateGenerationCounter,
     EncoderTwin,
+    ErrorDowncast,
     FreshnessTwin,
     IllegalEscape,
     LayerMismatch,
@@ -273,6 +279,7 @@ impl FindingClass {
             FindingClass::DuplicateAuthorityAlias => "duplicate-authority-alias",
             FindingClass::DuplicateGenerationCounter => "duplicate-generation-counter",
             FindingClass::EncoderTwin => "encoder-twin",
+            FindingClass::ErrorDowncast => "error-downcast",
             FindingClass::FreshnessTwin => "freshness-twin",
             FindingClass::IllegalEscape => "illegal-escape",
             FindingClass::LayerMismatch => "layer-mismatch",
@@ -868,6 +875,115 @@ fn scan_code(
     }
 }
 
+/// Harness / panic-payload paths: Any downcasts here are not Report error recovery.
+fn path_skips_error_downcast(path: &str) -> bool {
+    path.ends_with("trials.rs")
+        || path.ends_with("fuzz_tests.rs")
+        || path.contains("jepsen")
+        || path.ends_with("/sim.rs")
+}
+
+fn attrs_mark_test_item(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("test")
+            || (a.path().is_ident("cfg")
+                && a.parse_args::<syn::Meta>()
+                    .map(|m| {
+                        m.path().is_ident("test")
+                            || m.to_token_stream().to_string().contains("test")
+                    })
+                    .unwrap_or(false))
+    })
+}
+
+fn turbofish_is_any_payload(args: &syn::AngleBracketedGenericArguments) -> bool {
+    let types: Vec<&syn::Type> = args
+        .args
+        .iter()
+        .filter_map(|a| match a {
+            syn::GenericArgument::Type(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    if types.len() != 1 {
+        return false;
+    }
+    match types[0] {
+        syn::Type::Path(p) if p.qself.is_none() && p.path.is_ident("String") => true,
+        syn::Type::Reference(r) => matches!(
+            r.elem.as_ref(),
+            syn::Type::Path(p) if p.qself.is_none() && p.path.is_ident("str")
+        ),
+        _ => false,
+    }
+}
+
+struct ErrorDowncastScanner<'a> {
+    path: &'a str,
+    findings: &'a mut Vec<Finding>,
+}
+
+impl<'ast> Visit<'ast> for ErrorDowncastScanner<'_> {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        if mod_is_test_scope(&node.ident, &node.attrs) {
+            return;
+        }
+        visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if attrs_mark_test_item(&node.attrs) {
+            return;
+        }
+        visit::visit_item_fn(self, node);
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if attrs_mark_test_item(&node.attrs) {
+            return;
+        }
+        visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if node.method == "downcast_ref" {
+            let skip_payload = node
+                .turbofish
+                .as_ref()
+                .is_some_and(turbofish_is_any_payload);
+            if !skip_payload {
+                let lineno = span_line(&node.method.span());
+                self.findings.push(Finding::new(
+                    FindingClass::ErrorDowncast,
+                    self.path.to_string(),
+                    lineno,
+                    format!(".downcast_ref{}", quote_turbofish(node.turbofish.as_ref())),
+                    "Report.downcast_ref recovering typed errors in product code".to_string(),
+                ));
+            }
+        }
+        visit::visit_expr_method_call(self, node);
+    }
+}
+
+fn quote_turbofish(args: Option<&syn::AngleBracketedGenericArguments>) -> String {
+    match args {
+        Some(a) => a.to_token_stream().to_string().replace(' ', ""),
+        None => String::new(),
+    }
+}
+
+fn scan_error_downcasts(path: &str, text: &str, findings: &mut Vec<Finding>) {
+    if path_skips_error_downcast(path) {
+        return;
+    }
+    let Ok(file) = syn::parse_file(text) else {
+        return;
+    };
+    let mut scanner = ErrorDowncastScanner { path, findings };
+    scanner.visit_file(&file);
+}
+
 fn check_missing(nodes: &BTreeMap<String, Node>, findings: &mut Vec<Finding>) -> Vec<Planned> {
     let mut planned = Vec::new();
     let mut expected: Vec<&ExpectedNode> = EXPECTED.iter().collect();
@@ -991,6 +1107,8 @@ fn run_scan(root: &Path, allowlist_path: &Path) -> anyhow::Result<(ScanOutput, V
     let (nodes, edges) = check_declarations(decls, &mut findings);
     for (rel, raw_lines) in &per_file {
         scan_code(rel, raw_lines, &nodes, &mut findings);
+        let text = raw_lines.join("\n");
+        scan_error_downcasts(rel, &text, &mut findings);
     }
     let planned = check_missing(&nodes, &mut findings);
 

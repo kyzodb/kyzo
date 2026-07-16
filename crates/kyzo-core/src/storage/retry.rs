@@ -12,12 +12,18 @@
 //! Under SSI, a conflicted transaction is not a failure — it is an
 //! instruction to rerun. This is the single place that instruction is
 //! obeyed: retryable work is expressed as a closure that builds, runs, and
-//! commits a fresh transaction; [`ConflictError`] triggers a rerun and every
-//! other error propagates untouched.
+//! commits a fresh transaction; [`crate::storage::ConflictError`] triggers a
+//! rerun and every other error propagates untouched.
 
 use miette::Result;
 
-use crate::storage::{CommitFailure, ConflictError};
+/// True when the report carries the conflict diagnostic code
+/// (`storage::conflict`) — typed [`crate::storage::ConflictError`] or a
+/// transparent [`crate::storage::CommitFailure::Conflict`] wrapper.
+fn report_is_conflict(err: &miette::Report) -> bool {
+    err.code()
+        .is_some_and(|c| c.to_string() == "storage::conflict")
+}
 
 /// Run `attempt` until it commits without conflict, retrying HOT (no
 /// pause between attempts).
@@ -25,7 +31,7 @@ use crate::storage::{CommitFailure, ConflictError};
 /// `attempt` must be a complete transaction cycle — create, read/write,
 /// commit — so each retry sees a fresh snapshot. Non-conflict errors
 /// propagate immediately. `max_attempts` bounds pathological contention;
-/// exhausting it returns the final [`ConflictError`].
+/// exhausting it returns the final [`crate::storage::ConflictError`].
 ///
 /// Hot retry is for harnesses whose conflicts are injected or simulated
 /// (the DST campaigns): pausing there wastes wall-clock on races that
@@ -40,11 +46,7 @@ pub fn retry_on_conflict<T>(
     for _ in 0..max_attempts {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(e)
-                if e.downcast_ref::<ConflictError>().is_some()
-                    || e.downcast_ref::<CommitFailure>()
-                        .is_some_and(CommitFailure::is_conflict) =>
-            {
+            Err(e) if report_is_conflict(&e) => {
                 last_err = Some(e);
             }
             Err(e) => return Err(e),
@@ -70,11 +72,7 @@ pub fn retry_on_conflict_with_backoff<T>(
     for n in 0..max_attempts {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(e)
-                if e.downcast_ref::<ConflictError>().is_some()
-                    || e.downcast_ref::<CommitFailure>()
-                        .is_some_and(CommitFailure::is_conflict) =>
-            {
+            Err(e) if report_is_conflict(&e) => {
                 last_err = Some(e);
                 backoff(n);
             }

@@ -136,9 +136,14 @@ impl<'de> serde::Deserialize<'de> for DataValue {
     }
 }
 
-/// Typed refusals compose with the engine's diagnostics: default
-/// `Diagnostic` surface over the plane's `Error` impl.
-impl miette::Diagnostic for crate::data::value::DecodeError {}
+/// Typed refusals compose with the engine's diagnostics. Stable code
+/// `value::decode` lets product boundaries recognize a codec refusal
+/// without `downcast_ref` (story #302 T6).
+impl miette::Diagnostic for crate::data::value::DecodeError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        Some(Box::new("value::decode"))
+    }
+}
 
 /// `RelationId`'s wire form: the raw u64 (catalog metadata).
 impl serde::Serialize for crate::data::value::RelationId {
