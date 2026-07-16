@@ -1408,7 +1408,7 @@ impl<T: WriteTx> SessionTx<T> {
         Ok(expr)
     }
 
-    /// Bind an already-parsed row extractor ([`FtsIndexConfig::extractor`]
+    /// Bind an already-parsed row extractor ([`crate::parse::sys::FtsIndexConfig::extractor`]
     /// / the manifest's stored typed substance) to the base column frame.
     /// The extractor is never re-parsed from source at build time — it arrives typed.
     fn compile_row_extractor(

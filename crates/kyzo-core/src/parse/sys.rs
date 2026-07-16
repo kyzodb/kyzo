@@ -163,6 +163,13 @@ struct Built;
 /// Configuration of an FTS (full-text search) index, as declared.
 /// Constructible ONLY through [`FtsConfigBuilder`] (the private `_built`
 /// witness seals it), so every value carries a proven `extractor`.
+///
+/// **Sole spelling (story #305 T4).** This is the only `struct FtsIndexConfig`
+/// in the crate. The mutation tier consumes it by path
+/// (`crate::parse::sys::FtsIndexConfig`); the stored catalog form is
+/// [`crate::engines::text::FtsIndexManifest`], a different concept. A second
+/// declared-config spelling must not reappear — pinned by the
+/// `fts_index_config_is_the_sole_spelling` unit test in this module.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtsIndexConfig {
@@ -1420,5 +1427,43 @@ mod tests {
             .build();
         assert_eq!(lsh.extractor, ex());
         assert_eq!(lsh.n_gram, 3);
+    }
+
+    /// Story #305 T4: one `struct FtsIndexConfig` spelling. The mutation tier
+    /// names this module's type by path; a second definition must not exist
+    /// anywhere under `src/` (the engines/text twin is already gone).
+    #[test]
+    fn fts_index_config_is_the_sole_spelling() {
+        // Type identity: the path the mutation tier uses IS this definition.
+        fn mutation_tier_consumes(cfg: &crate::parse::sys::FtsIndexConfig) {
+            let _: &FtsIndexConfig = cfg;
+        }
+        let _ = mutation_tier_consumes;
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut defs = Vec::new();
+        fn walk(dir: &std::path::Path, defs: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read src tree") {
+                let entry = entry.expect("dir entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, defs);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&path).expect("read .rs");
+                if src.contains("struct FtsIndexConfig") {
+                    defs.push(path);
+                }
+            }
+        }
+        walk(&root, &mut defs);
+        assert_eq!(
+            defs,
+            [root.join("parse/sys.rs")],
+            "exactly one `struct FtsIndexConfig` — parse/sys.rs owns the sole spelling"
+        );
     }
 }

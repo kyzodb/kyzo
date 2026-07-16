@@ -102,9 +102,9 @@
 //!   manifest (`IndexKind::Lsh`, naming the inverse relation) keeping
 //!   `indices` sorted by name, and keys the tokenizer cache by FULL index
 //!   handle name (see the header block).
-//! - **`FtsIndexConfig` dedup** (recorded obligation): the declared-config
-//!   type is duplicated between `parse/sys.rs` and `fts/mod.rs`; the
-//!   lifecycle tier unifies them when it lands — one concept, one name.
+//! - **`FtsIndexConfig` singularity** (story #305 T4, discharged): one
+//!   declared-config spelling — [`crate::parse::sys::FtsIndexConfig`] —
+//!   consumed by both parse and mutation; the engines/text twin is gone.
 
 use std::cmp::min;
 use std::collections::BTreeSet;
