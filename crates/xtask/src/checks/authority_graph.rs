@@ -193,6 +193,24 @@ static GEN_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static GEN_STRUCT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bstruct\s+(\w+Generation)\b").unwrap());
+/// Per-projection freshness twin of the catalog generation authority (#135 /
+/// #301 T7): `Watermark` and raw integer freshness/watermark counters.
+static FRESHNESS_STRUCT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bstruct\s+Watermark\b").unwrap());
+static FRESHNESS_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^\s*(?:pub(?:\(\w+\))?\s+)?\w*(?:watermark|freshness)\w*\s*:\s*(?:u8|u16|u32|u64|u128|usize|i32|i64|AtomicU(?:32|64))\b",
+    )
+    .unwrap()
+});
+/// A second independently-written value encoder: pushing a `Tag::*.byte()`
+/// outside the one encoder seat (canonical + Num component).
+static ENCODER_TAG_PUSH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[^\w])(?:out\.)?push\(\s*Tag::\w+\.byte\(\)").unwrap());
+const ENCODER_SEAT: &[&str] = &[
+    "crates/kyzo-core/src/data/value/canonical.rs",
+    "crates/kyzo-core/src/data/value/number.rs",
+];
 static RAW_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\bfn\s+\w+\s*[(<][^)]*?\b([a-z]\w*_id)\s*:\s*(?:u8|u16|u32|u64|usize)\b").unwrap()
 });
@@ -233,6 +251,8 @@ enum FindingClass {
     DuplicateAuthority,
     DuplicateAuthorityAlias,
     DuplicateGenerationCounter,
+    EncoderTwin,
+    FreshnessTwin,
     IllegalEscape,
     LayerMismatch,
     MalformedDeclaration,
@@ -252,6 +272,8 @@ impl FindingClass {
             FindingClass::DuplicateAuthority => "duplicate-authority",
             FindingClass::DuplicateAuthorityAlias => "duplicate-authority-alias",
             FindingClass::DuplicateGenerationCounter => "duplicate-generation-counter",
+            FindingClass::EncoderTwin => "encoder-twin",
+            FindingClass::FreshnessTwin => "freshness-twin",
             FindingClass::IllegalEscape => "illegal-escape",
             FindingClass::LayerMismatch => "layer-mismatch",
             FindingClass::MalformedDeclaration => "malformed-declaration",
@@ -776,6 +798,40 @@ fn scan_code(
             }
         }
 
+        if FRESHNESS_STRUCT_RE.is_match(cs) {
+            findings.push(Finding::new(
+                FindingClass::FreshnessTwin,
+                path.to_string(),
+                idx,
+                cs.to_string(),
+                "per-projection Watermark freshness twin of the catalog generation authority (#135 / #301 T7)"
+                    .to_string(),
+            ));
+        }
+        if FRESHNESS_FIELD_RE.is_match(&code) {
+            findings.push(Finding::new(
+                FindingClass::FreshnessTwin,
+                path.to_string(),
+                idx,
+                cs.to_string(),
+                "raw-integer freshness/watermark counter (catalog generations are the one validity authority, #135)"
+                    .to_string(),
+            ));
+        }
+
+        if ENCODER_TAG_PUSH_RE.is_match(cs)
+            && !ENCODER_SEAT.iter().any(|p| path == *p)
+        {
+            findings.push(Finding::new(
+                FindingClass::EncoderTwin,
+                path.to_string(),
+                idx,
+                cs.to_string(),
+                "Tag::*.byte() push outside the one value-encoder seat (canonical.rs + number.rs)"
+                    .to_string(),
+            ));
+        }
+
         if in_sensitive {
             let raw_id = RAW_ID_RE
                 .captures(cs)
@@ -1263,6 +1319,7 @@ pub fn self_test() -> Result<String, AuthorityError> {
             "type Tuple = Vec<DataValue>;\n\
              type ExecRows = Vec<u32>;\n\
              fn lookup(relation_id: u64) -> bool { relation_id == 0 }\n\
+             fn encode_twin(out: &mut Vec<u8>) { out.push(Tag::Null.byte()); }\n\
              struct Carrier {\n\
              \u{20}   payload: Vec<u8>,\n\
              \u{20}   owner_id: u32,\n\
@@ -1285,7 +1342,8 @@ pub fn self_test() -> Result<String, AuthorityError> {
             "/// @authority ResidentIndexKey\n\
              /// @layer value\n\
              /// @owns residency cache identity\n\
-             pub struct ResidentIndexKey;\n",
+             pub struct ResidentIndexKey;\n\
+             pub(crate) struct Watermark(u64);\n",
         ),
         (
             "crates/kyzo-core/src/runtime/catalog.rs",
@@ -1328,6 +1386,8 @@ pub fn self_test() -> Result<String, AuthorityError> {
         (FindingClass::BlobMeaning, 1),
         (FindingClass::SearchraDecodedTuples, 1),
         (FindingClass::DuplicateGenerationCounter, 2),
+        (FindingClass::EncoderTwin, 1),
+        (FindingClass::FreshnessTwin, 1),
         (FindingClass::StringTaxonomy, 1),
         (FindingClass::MalformedDeclaration, 1),
         (FindingClass::MissingAuthority, non_conditional_expected - 3),
@@ -1376,7 +1436,7 @@ pub fn self_test() -> Result<String, AuthorityError> {
 
     let total: u32 = counts.values().sum();
     Ok(format!(
-        "SELF-TEST OK — planted violations all detected (from_raw(Vec<u32>) ExecRows door, plan-cache generation counter, decoded Vec<Tuple> SearchRA path, Deref escape, duplicate Tuple alias, raw id, string taxonomy, blob field); clean fixtures stayed clean; {total} findings across {} classes",
+        "SELF-TEST OK — planted violations all detected (from_raw(Vec<u32>) ExecRows door, plan-cache generation counter, decoded Vec<Tuple> SearchRA path, Deref escape, duplicate Tuple alias, raw id, string taxonomy, blob field, encoder Tag push twin, Watermark freshness twin); clean fixtures stayed clean; {total} findings across {} classes",
         counts.len()
     ))
 }
