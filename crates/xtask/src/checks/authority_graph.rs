@@ -52,14 +52,14 @@ const LAYERS: &[(&str, &[&str])] = &[
 ];
 
 const LAYER_SPINE: &[(&str, &str)] = &[
-    ("value", "Tuple · Domain · ExecRows/ExecDedup · EncodedKey"),
+    ("value", "Tuple · Domain · ExecRows/ExecDedup · TupleKey/StorageKey"),
     (
         "runtime-catalog",
         "CatalogGeneration · RelationGeneration · IndexGeneration",
     ),
     (
         "storage",
-        "encoded-key / order integrity (consumes EncodedKey)",
+        "encoded-key / order integrity (consumes StorageKey)",
     ),
     ("engines", "ResidentIndexKey (rebuildable projections)"),
     ("query", "QueryDomainAdmission (admission into execution)"),
@@ -103,9 +103,15 @@ const EXPECTED: &[ExpectedNode] = &[
         conditional: false,
     },
     ExpectedNode {
-        name: "EncodedKey",
+        name: "TupleKey",
         layer: "value",
-        story: 119,
+        story: 303,
+        conditional: false,
+    },
+    ExpectedNode {
+        name: "StorageKey",
+        layer: "value",
+        story: 303,
         conditional: false,
     },
     ExpectedNode {

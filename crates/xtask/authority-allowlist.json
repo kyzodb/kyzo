@@ -14,7 +14,13 @@
   {
     "class": "illegal-escape",
     "file": "crates/kyzo-core/src/data/value/row.rs",
-    "contains": "impl std::ops::Deref for EncodedKey",
-    "reason": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+    "contains": "impl std::ops::Deref for TupleKey",
+    "reason": "read-only &[u8] view: the one legal TupleKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+  },
+  {
+    "class": "illegal-escape",
+    "file": "crates/kyzo-core/src/data/value/row.rs",
+    "contains": "impl std::ops::Deref for StorageKey",
+    "reason": "read-only &[u8] view: the one legal StorageKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
   }
 ]

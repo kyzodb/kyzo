@@ -6,7 +6,7 @@
   "layers": [
     {
       "layer": "value",
-      "holds": "Tuple · Domain · ExecRows/ExecDedup · EncodedKey"
+      "holds": "Tuple · Domain · ExecRows/ExecDedup · TupleKey/StorageKey"
     },
     {
       "layer": "runtime-catalog",
@@ -14,7 +14,7 @@
     },
     {
       "layer": "storage",
-      "holds": "encoded-key / order integrity (consumes EncodedKey)"
+      "holds": "encoded-key / order integrity (consumes StorageKey)"
     },
     {
       "layer": "engines",
@@ -47,32 +47,6 @@
         "Domain -> ExecRows (Rows::admit(observer) -> AdmittedRows, under this Domain)"
       ],
       "gate": "join_project panics cross-arena/epoch; raw-code use requires admission (value-plane.md)",
-      "status": {
-        "kind": "established",
-        "story": 119,
-        "note": ""
-      }
-    },
-    {
-      "name": "EncodedKey",
-      "layer": "value",
-      "file": "crates/kyzo-core/src/data/value/row.rs",
-      "line": 247,
-      "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
-      "constructs": [
-        "EncodedKey::from_values",
-        "EncodedKey::from_stored",
-        "encode_row"
-      ],
-      "forbids": [
-        "leaking codes out of an EncodedKey",
-        "forging bytes bypassing canonical encode",
-        "confusing storage identity with record/entity identity"
-      ],
-      "converts": [
-        "EncodedKey -> Domain (admitted into an arena via push_encoded)"
-      ],
-      "gate": "round-trip + byte-order law (storage format gate)",
       "status": {
         "kind": "established",
         "story": 119,
@@ -120,7 +94,7 @@
         "reconstruction outside admission"
       ],
       "converts": [
-        "ExecRows -> EncodedKey (canonical bytes only at a storage/output boundary, never durable identity)"
+        "ExecRows -> StorageKey (canonical bytes only at a storage/output boundary, never durable identity)"
       ],
       "gate": "no raw-code door exposed; zero-canonical-encode-in-fixpoint law (#120)",
       "status": {
@@ -130,10 +104,36 @@
       }
     },
     {
+      "name": "StorageKey",
+      "layer": "value",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
+      "line": 288,
+      "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
+      "constructs": [
+        "TupleT::encode_as_key",
+        "encode_key_with_suffix"
+      ],
+      "forbids": [
+        "leaking codes out of a StorageKey",
+        "forging bytes bypassing canonical encode",
+        "confusing storage identity with record/entity identity",
+        "treating a StorageKey as a bare TupleKey"
+      ],
+      "converts": [
+        "StorageKey -> Domain (admitted into an arena via push_encoded)"
+      ],
+      "gate": "round-trip + byte-order law (storage format gate)",
+      "status": {
+        "kind": "established",
+        "story": 303,
+        "note": ""
+      }
+    },
+    {
       "name": "Tuple",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/mod.rs",
-      "line": 533,
+      "line": 537,
       "owns": "row identity as an ordered `DataValue` sequence, distinct from any bare `Vec<DataValue>`",
       "constructs": [
         "Tuple::new",
@@ -150,6 +150,30 @@
         "story": 300,
         "note": ""
       }
+    },
+    {
+      "name": "TupleKey",
+      "layer": "value",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
+      "line": 270,
+      "owns": "bare-tuple memcmp identity (no relation prefix); bytewise order equals DataValue structural order (byte-order law)",
+      "constructs": [
+        "TupleKey::from_values",
+        "TupleKey::from_stored"
+      ],
+      "forbids": [
+        "forging bytes bypassing canonical encode",
+        "treating a TupleKey as a relation-prefixed StorageKey"
+      ],
+      "converts": [
+        "TupleKey -> StorageKey (prefix with RelationId at the storage boundary)"
+      ],
+      "gate": "round-trip + byte-order law (storage format gate)",
+      "status": {
+        "kind": "established",
+        "story": 303,
+        "note": ""
+      }
     }
   ],
   "edges": [
@@ -161,7 +185,7 @@
     },
     {
       "from": "ExecRows",
-      "to": "EncodedKey",
+      "to": "StorageKey",
       "context": "canonical bytes only at a storage/output boundary, never durable identity",
       "declared_by": "ExecRows"
     },
@@ -172,10 +196,16 @@
       "declared_by": "ExecDedup"
     },
     {
-      "from": "EncodedKey",
+      "from": "TupleKey",
+      "to": "StorageKey",
+      "context": "prefix with RelationId at the storage boundary",
+      "declared_by": "TupleKey"
+    },
+    {
+      "from": "StorageKey",
       "to": "Domain",
       "context": "admitted into an arena via push_encoded",
-      "declared_by": "EncodedKey"
+      "declared_by": "StorageKey"
     }
   ],
   "planned": [
@@ -187,82 +217,27 @@
   ],
   "findings": [
     {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 491,
-      "excerpt": "vec_hash: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 530,
-      "excerpt": "entry_key: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 2072,
-      "excerpt": "key: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/lsh.rs",
-      "line": 158,
-      "excerpt": "pub(crate) perms: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 63,
-      "excerpt": "values: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 556,
-      "excerpt": "lower: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 557,
-      "excerpt": "upper: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 753,
-      "excerpt": "lower: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 754,
-      "excerpt": "upper: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
       "class": "freshness-twin",
       "file": "crates/kyzo-core/src/engines/segments.rs",
-      "line": 71,
+      "line": 72,
       "excerpt": "pub(crate) struct Watermark(u64);",
       "note": "per-projection Watermark freshness twin of the catalog generation authority (#135 / #301 T7)"
     },
     {
       "class": "illegal-escape",
       "file": "crates/kyzo-core/src/data/value/row.rs",
-      "line": 434,
-      "excerpt": "impl std::ops::Deref for EncodedKey {",
-      "note": "Deref dissolves the EncodedKey authority boundary",
-      "allowlisted": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+      "line": 405,
+      "excerpt": "impl std::ops::Deref for TupleKey {",
+      "note": "Deref dissolves the TupleKey authority boundary",
+      "allowlisted": "read-only &[u8] view: the one legal TupleKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+    },
+    {
+      "class": "illegal-escape",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
+      "line": 418,
+      "excerpt": "impl std::ops::Deref for StorageKey {",
+      "note": "Deref dissolves the StorageKey authority boundary",
+      "allowlisted": "read-only &[u8] view: the one legal StorageKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
     },
     {
       "class": "missing-authority",
@@ -323,7 +298,7 @@
     {
       "class": "unchecked-constructor",
       "file": "crates/kyzo-core/src/data/value/arena.rs",
-      "line": 2372,
+      "line": 2380,
       "excerpt": "fn forged_in_epoch_stamp_beyond_len_panics() {",
       "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_panics'",
       "allowlisted": "named corruption/bypass TEST asserting that a forged stamp panics — it proves the door is shut, it is not a door"
@@ -331,14 +306,13 @@
     {
       "class": "unchecked-constructor",
       "file": "crates/kyzo-core/src/data/value/wide/validity.rs",
-      "line": 43,
+      "line": 47,
       "excerpt": "pub fn from_raw(ts_micros: i64) -> ValidityTs {",
       "note": "raw-door constructor 'from_raw'",
       "allowlisted": "total boundary constructor: every i64 is a valid validity-timestamp micros value; parse-at-boundary, not an authority bypass"
     }
   ],
   "counts_by_class": {
-    "blob-meaning": 9,
     "freshness-twin": 1,
     "missing-authority": 5,
     "searchra-decoded-tuples": 3

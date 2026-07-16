@@ -269,6 +269,11 @@ fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
 ///
 /// @authority TupleKey
 /// @layer value
+/// @owns bare-tuple memcmp identity (no relation prefix); bytewise order equals DataValue structural order (byte-order law)
+/// @constructs TupleKey::from_values | TupleKey::from_stored
+/// @forbids forging bytes bypassing canonical encode | treating a TupleKey as a relation-prefixed StorageKey
+/// @converts TupleKey -> StorageKey (prefix with RelationId at the storage boundary)
+/// @gate round-trip + byte-order law (storage format gate)
 /// @status established #303
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
@@ -282,6 +287,11 @@ const _: () = assert!(std::mem::align_of::<TupleKey>() == std::mem::align_of::<V
 ///
 /// @authority StorageKey
 /// @layer value
+/// @owns canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)
+/// @constructs TupleT::encode_as_key | encode_key_with_suffix
+/// @forbids leaking codes out of a StorageKey | forging bytes bypassing canonical encode | confusing storage identity with record/entity identity | treating a StorageKey as a bare TupleKey
+/// @converts StorageKey -> Domain (admitted into an arena via push_encoded)
+/// @gate round-trip + byte-order law (storage format gate)
 /// @status established #303
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
