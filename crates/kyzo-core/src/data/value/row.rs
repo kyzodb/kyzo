@@ -50,6 +50,7 @@
 
 use super::admission::Denial;
 use super::arena::{Arena, BulkObserver, EpochRemap};
+use super::arity::Arity;
 use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
@@ -58,25 +59,27 @@ use super::{DataValue, ScanBound};
 /// The execution form of a relation fragment: `arity`-wide tuples as
 /// row-major packed codes under one container domain.
 pub struct Rows {
-    arity: usize,
+    arity: Arity,
     codes: CodeColumn,
 }
 
 impl Rows {
     /// An empty tuple container in the observer's domain.
-    pub fn new_in<O: BulkObserver>(arity: usize, o: &O) -> Rows {
+    ///
+    /// Zero width is unrepresentable: [`Arity`] is [`NonZeroUsize`](std::num::NonZeroUsize)-backed.
+    pub fn new_in<O: BulkObserver>(arity: Arity, o: &O) -> Rows {
         Rows {
             arity,
             codes: CodeColumn::new_in(o),
         }
     }
 
-    pub fn arity(&self) -> usize {
+    pub fn arity(&self) -> Arity {
         self.arity
     }
 
     pub fn len(&self) -> usize {
-        self.codes.len() / self.arity
+        self.codes.len() / self.arity.get()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -94,7 +97,7 @@ impl Rows {
     ///
     /// Panics on arity mismatch (not a domain-identity mixup).
     pub fn push_row(&mut self, stamps: &[StampedCode]) -> Result<(), Denial> {
-        assert_eq!(stamps.len(), self.arity, "tuple arity mismatch");
+        assert_eq!(stamps.len(), self.arity.get(), "tuple arity mismatch");
         for &sc in stamps {
             self.codes.push(sc)?;
         }
@@ -118,7 +121,7 @@ impl Rows {
         let bytes = key.as_bytes();
         // Validate and split FIRST — nothing is interned unless the whole
         // key is lawful (no partial tuples on refusal).
-        let splits = split_key(bytes, self.arity).map_err(PushError::Decode)?;
+        let splits = split_key(bytes, self.arity.get()).map_err(PushError::Decode)?;
         for (lo, hi) in splits {
             let sc = arena.intern(&bytes[lo..hi]);
             self.codes.push(sc);
@@ -155,20 +158,20 @@ impl Rows {
 
 /// Admitted tuples: raw-code reads under the proven domain.
 pub struct AdmittedRows<'a, O: BulkObserver> {
-    arity: usize,
+    arity: Arity,
     codes: AdmittedCodes<'a, O>,
 }
 
 impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     pub fn len(&self) -> usize {
-        self.codes.len() / self.arity
+        self.codes.len() / self.arity.get()
     }
 
     pub fn is_empty(&self) -> bool {
         self.codes.is_empty()
     }
 
-    pub fn arity(&self) -> usize {
+    pub fn arity(&self) -> Arity {
         self.arity
     }
 
@@ -181,19 +184,21 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     /// The raw codes of row `i` — tuple identity within this domain
     /// (equality/hash/dedup currency; never an ordering surface).
     pub fn row(&self, i: usize) -> &'a [u32] {
-        &self.codes.raw()[i * self.arity..(i + 1) * self.arity]
+        let w = self.arity.get();
+        &self.codes.raw()[i * w..(i + 1) * w]
     }
 
     /// Canonical bytes of cell `(row, col)`.
     pub fn resolve_cell(&self, row: usize, col: usize) -> &'a [u8] {
-        self.codes.resolve(row * self.arity + col)
+        self.codes.resolve(row * self.arity.get() + col)
     }
 
     /// Semantic tuple order: elementwise value order (which is exactly
     /// what the written form's byte order embeds).
     pub fn cmp_rows(&self, i: usize, j: usize) -> std::cmp::Ordering {
-        for k in 0..self.arity {
-            let c = self.codes.cmp_at(i * self.arity + k, j * self.arity + k);
+        let w = self.arity.get();
+        for k in 0..w {
+            let c = self.codes.cmp_at(i * w + k, j * w + k);
             if c != std::cmp::Ordering::Equal {
                 return c;
             }
@@ -206,7 +211,7 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     /// canonical encodings.
     pub fn encode_row(&self, i: usize) -> TupleKey {
         let mut out = Vec::new();
-        for k in 0..self.arity {
+        for k in 0..self.arity.get() {
             out.extend_from_slice(self.resolve_cell(i, k));
         }
         TupleKey(out)
@@ -563,7 +568,7 @@ mod tests {
     #[test]
     fn written_form_is_durable_across_seals_while_codes_move() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
         for i in 0..30i64 {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(i * 7 % 13)));
             let b = stamp_of(
@@ -608,7 +613,7 @@ mod tests {
     #[test]
     fn encoded_key_order_is_tuple_semantic_order() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
         let tuples: [(i64, &str); 5] = [(3, "b"), (1, "zzz"), (3, "a"), (-5, "x"), (1, "a")];
         for (n, s) in tuples {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(n)));
@@ -633,7 +638,7 @@ mod tests {
     #[test]
     fn push_encoded_round_trips_and_refuses_totally() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(42)));
         let b = stamp_of(&mut arena, Datum::Str("hello"));
         rows.push_row(&[a, b]).expect("lawful push");
@@ -642,7 +647,7 @@ mod tests {
             rows.admit(&f).expect("lawful admit").encode_row(0)
         };
         // Re-enter through the bytes door.
-        let mut rows2 = Rows::new_in(2, &arena.frame());
+        let mut rows2 = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
         rows2.push_encoded(&key, &mut arena).expect("lawful key");
         {
             let f = arena.frame();
@@ -675,7 +680,7 @@ mod tests {
         let mut arena = Arena::new();
         let epoch0 = arena.epoch();
         // Seed relation: reach(x) for x in {0}; rule: reach(x+3) up to 12.
-        let mut total = Rows::new_in(1, &arena.frame());
+        let mut total = Rows::new_in(Arity::ONE, &arena.frame());
         let seed = stamp_of(&mut arena, Datum::Num(Num::int(0)));
         total.push_row(&[seed]).expect("lawful push");
         let mut frontier: Vec<Vec<u8>> = vec![encode(Datum::Num(Num::int(0))).as_bytes().to_vec()];
@@ -738,7 +743,7 @@ mod tests {
     #[test]
     fn from_stored_is_a_validating_door() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(1)));
         let b = stamp_of(&mut arena, Datum::Str("s"));
         rows.push_row(&[a, b]).expect("lawful push");
@@ -760,7 +765,7 @@ mod tests {
     #[test]
     fn push_encoded_refuses_stale_and_foreign_domains_typed() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(1, &arena.frame());
+        let mut rows = Rows::new_in(Arity::ONE, &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(9)));
         rows.push_row(&[a]).expect("lawful push");
         let key = {
@@ -775,7 +780,7 @@ mod tests {
         ));
         // Foreign: a container from another arena entirely.
         let other = Arena::new();
-        let mut foreign_rows = Rows::new_in(1, &other.frame());
+        let mut foreign_rows = Rows::new_in(Arity::ONE, &other.frame());
         assert!(matches!(
             foreign_rows.push_encoded(&key, &mut arena),
             Err(PushError::ForeignArena)
@@ -863,7 +868,7 @@ mod tests {
     fn arity_is_enforced_at_the_write_door() {
         let mut arena = Arena::new();
         let sc = stamp_of(&mut arena, Datum::Null);
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
         rows.push_row(&[sc]).expect("lawful push");
     }
 }

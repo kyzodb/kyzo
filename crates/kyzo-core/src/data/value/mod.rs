@@ -39,6 +39,7 @@ use std::collections::BTreeSet;
 
 pub mod admission;
 pub mod arena;
+pub mod arity;
 mod bytes_qty;
 pub mod canonical;
 pub mod cell;
@@ -54,6 +55,7 @@ pub mod tag;
 pub mod wide;
 
 pub use admission::{Admission, Denial};
+pub use arity::Arity;
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
 pub use number::{Num, NumRepr, NumericOrd};
 pub use row::{

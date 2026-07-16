@@ -34,6 +34,7 @@ use std::collections::HashMap;
 
 use super::admission::{Admission, Denial};
 use super::arena::BulkObserver;
+use super::arity::Arity;
 use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
@@ -62,7 +63,7 @@ pub enum Side {
 /// @status established #119
 pub struct ExecRows {
     domain: Domain,
-    arity: usize,
+    arity: Arity,
     /// Row-major: `codes[r * arity + c]` is row `r`, column `c`.
     codes: Vec<u32>,
 }
@@ -84,12 +85,12 @@ impl ExecRows {
         })
     }
 
-    pub fn arity(&self) -> usize {
+    pub fn arity(&self) -> Arity {
         self.arity
     }
 
     pub fn len(&self) -> usize {
-        self.codes.len().checked_div(self.arity).unwrap_or(0)
+        self.codes.len().checked_div(self.arity.get()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -102,7 +103,8 @@ impl ExecRows {
 
     /// Row `r`'s codes.
     pub fn row(&self, r: usize) -> &[u32] {
-        &self.codes[r * self.arity..(r + 1) * self.arity]
+        let w = self.arity.get();
+        &self.codes[r * w..(r + 1) * w]
     }
 
     /// THE DOOR (recombine): hash-join `self` and `other` on the code
@@ -170,9 +172,11 @@ impl ExecRows {
         } else {
             other.domain
         };
+        // Empty projection is not a lawful width; keep the prior floor of 1.
+        let arity = Arity::try_new(out_arity).unwrap_or(Arity::ONE);
         Ok(ExecRows {
             domain,
-            arity: out_arity.max(1),
+            arity,
             codes,
         })
     }
@@ -221,7 +225,7 @@ impl ExecRows {
 /// @status established #119
 pub struct ExecDedup {
     domain: Domain,
-    arity: usize,
+    arity: Arity,
     /// Row-major insertion-ordered codes of the DISTINCT tuples.
     rows: Vec<u32>,
     /// Membership by packed code tuple.
@@ -230,7 +234,9 @@ pub struct ExecDedup {
 
 impl ExecDedup {
     /// A fresh dedup sink over `domain`, holding `arity`-wide tuples.
-    pub fn new(domain: Domain, arity: usize) -> ExecDedup {
+    ///
+    /// Zero width is unrepresentable: [`Arity`] is [`NonZeroUsize`](std::num::NonZeroUsize)-backed.
+    pub fn new(domain: Domain, arity: Arity) -> ExecDedup {
         ExecDedup {
             domain,
             arity,
@@ -254,14 +260,14 @@ impl ExecDedup {
     /// Is this exact code tuple already present? `u32`-slice lookup, no
     /// encode.
     pub fn contains(&self, tuple: &[u32]) -> bool {
-        debug_assert_eq!(tuple.len(), self.arity, "dedup probe arity");
+        debug_assert_eq!(tuple.len(), self.arity.get(), "dedup probe arity");
         self.seen.contains_key(tuple)
     }
 
     /// Insert a code tuple; returns `true` if it was NEW. `u32`-slice
     /// identity dedup.
     pub fn insert(&mut self, tuple: &[u32]) -> bool {
-        assert_eq!(tuple.len(), self.arity, "dedup insert arity");
+        assert_eq!(tuple.len(), self.arity.get(), "dedup insert arity");
         if self.seen.contains_key(tuple) {
             return false;
         }
@@ -325,7 +331,7 @@ mod tests {
             .map(|&(a, b)| (intern(arena, a), intern(arena, b)))
             .collect();
         let f = arena.frame();
-        let mut rows = Rows::new_in(2, &f);
+        let mut rows = Rows::new_in(Arity::new_unchecked(2), &f);
         for (a, b) in stamps {
             rows.push_row(&[a, b]).expect("lawful push");
         }
@@ -365,7 +371,7 @@ mod tests {
         let rows = rows_of(&mut arena, &[(1, 2), (2, 3), (1, 2)]);
         let f = arena.frame();
         let e = ExecRows::admit(&rows, &f).expect("lawful admit");
-        let mut dedup = ExecDedup::new(e.domain(), 2);
+        let mut dedup = ExecDedup::new(e.domain(), Arity::new_unchecked(2));
         let new = dedup.absorb(&e).expect("lawful absorb");
         assert_eq!(new, 2, "the duplicate (1,2) must not be a new tuple");
         assert_eq!(dedup.len(), 2);
@@ -396,7 +402,7 @@ mod tests {
         let step2 = step1
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
             .expect("lawful join");
-        let mut dedup = ExecDedup::new(e.domain(), 2);
+        let mut dedup = ExecDedup::new(e.domain(), Arity::new_unchecked(2));
         dedup.absorb(&e).expect("lawful absorb");
         dedup.absorb(&step1).expect("lawful absorb");
         dedup.absorb(&step2).expect("lawful absorb");
@@ -435,7 +441,7 @@ mod tests {
         let rows = rows_of(&mut arena, &[(1, 2)]);
         let f = arena.frame();
         let e = ExecRows::admit(&rows, &f).expect("lawful admit");
-        assert_eq!(e.arity(), 2);
+        assert_eq!(e.arity(), Arity::new_unchecked(2));
     }
 
     /// DIFFERENTIAL: `join_project` on codes equals a naive nested-loop
