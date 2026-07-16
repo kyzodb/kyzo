@@ -2100,7 +2100,6 @@ mod tests {
 
     impl crate::query::eval::seal::Sealed for ModelBody {}
 
-
     impl RuleBody for ModelBody {
         fn for_each_derivation(
             &self,

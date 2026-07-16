@@ -54,8 +54,8 @@ use crate::data::expr::Op;
 use crate::data::json::{json_from_serde, serde_from_json};
 use crate::data::relation::VecElementType;
 use crate::data::value::{
-    Bound, DataValue, Interval, Json, Num, NumRepr, RegexFlags, RegexSource, Validity,
-    ValidityTs, Vector,
+    Bound, DataValue, Interval, Json, Num, NumRepr, RegexFlags, RegexSource, Validity, ValidityTs,
+    Vector,
 };
 use serde_json::Value as JsonValue;
 

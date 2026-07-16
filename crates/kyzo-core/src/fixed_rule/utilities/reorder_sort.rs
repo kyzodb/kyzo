@@ -88,10 +88,7 @@ impl FixedRule for ReorderSort {
         for tuple in in_rel.iter()? {
             let tuple = tuple?;
             let sorter = sort_by.eval(&tuple)?;
-            let mut s_tuple: Vec<_> = out_list
-                .iter()
-                .map(|ex| ex.eval(&tuple))
-                .try_collect()?;
+            let mut s_tuple: Vec<_> = out_list.iter().map(|ex| ex.eval(&tuple)).try_collect()?;
             s_tuple.push(sorter);
             buffer.push(s_tuple);
             cancel.check()?;

@@ -18,10 +18,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
+use crate::data::expr::Expr;
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::expr::Expr;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::engines::segments::Segments;

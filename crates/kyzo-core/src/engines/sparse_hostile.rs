@@ -17,9 +17,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::data::expr::Expr;
 use crate::data::program::InputRelationHandle;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -354,15 +354,7 @@ fn k_zero_filter_path_returns_zero_rows() {
         k: 0,
         bind_score: false,
     };
-    let with_filter = sparse_search(
-        &rtx,
-        &[(0, 1.0)],
-        &f.base,
-        &f.idx,
-        &p,
-        &Some(filter),
-    )
-    .unwrap();
+    let with_filter = sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap();
     assert!(
         with_filter.is_empty(),
         "k=0 + filter must return 0 rows, got {}",

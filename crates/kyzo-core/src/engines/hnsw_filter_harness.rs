@@ -742,14 +742,8 @@ fn fallback_is_load_bearing_and_exact() {
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
     let starved = SearchPlan::Graph { ef2: 1 };
-    let no_fb = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, starved, false,
-    )
-    .unwrap();
-    let with_fb = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, starved, true,
-    )
-    .unwrap();
+    let no_fb = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, starved, false).unwrap();
+    let with_fb = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, starved, true).unwrap();
 
     assert!(
         no_fb.len() < P2_K,
@@ -920,10 +914,8 @@ fn min_k_matches_law_generative() {
         );
         let fb = pinned_f.filter_expr();
         let params = knn_params_p2(P2_K, pinned_ef);
-        let partial = hnsw_knn_forced(
-            &rtx, &q, &m, &base, &idx, &params, &fb, plan, false,
-        )
-        .unwrap();
+        let partial =
+            hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false).unwrap();
         assert!(
             !partial.is_empty() && partial.len() < P2_K,
             "pinned band precondition: the raw graph walk must be a NON-EMPTY \
@@ -1122,10 +1114,7 @@ fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() {
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
     let params = knn_params_p2(P2_K, P2_EF);
     let fb = f.filter_expr();
-    let hits = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, plan, false,
-    )
-    .unwrap();
+    let hits = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false).unwrap();
     let ekeys = keys_of(&hits);
 
     assert_eq!(

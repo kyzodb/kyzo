@@ -30,7 +30,9 @@
 
 use miette::{Result, bail, ensure, miette};
 
-use crate::data::aggr::{AggrKind, Aggregation, MeetAccum, MeetAggr, MeetAggrObj, NormalAggr, NormalAggrObj};
+use crate::data::aggr::{
+    AggrKind, Aggregation, MeetAccum, MeetAggr, MeetAggrObj, NormalAggr, NormalAggrObj,
+};
 use crate::data::sketch::count_min::CountMinSketch;
 use crate::data::sketch::hll::HyperLogLog;
 use crate::data::sketch::tdigest::{DEFAULT_COMPRESSION, TDigest};
@@ -398,16 +400,11 @@ mod tests {
         let meet = AGGR_HLL_UNION.meet_op().unwrap();
         let mut acc = meet.init_val();
         for s in &sketches {
-            meet.update(&mut acc, &MeetAccum::Value(s.clone()))
-                .unwrap();
+            meet.update(&mut acc, &MeetAccum::Value(s.clone())).unwrap();
         }
 
         let normal_out = run_normal(AGGR_HLL_UNION.normal_op(&[]).unwrap(), &sketches);
-        assert_eq!(
-            acc.to_value(),
-            normal_out,
-            "meet and normal folds disagree"
-        );
+        assert_eq!(acc.to_value(), normal_out, "meet and normal folds disagree");
     }
 
     /// `hll_union` is registered as a meet; `hll`, `count_min`, `tdigest`,

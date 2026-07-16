@@ -531,7 +531,12 @@ impl NormalAggrObj for AggrGroupCount {
     }
 }
 
-normal_aggr!(AGGR_COUNT_UNIQUE, "count_unique", CountUnique, AggrCountUnique);
+normal_aggr!(
+    AGGR_COUNT_UNIQUE,
+    "count_unique",
+    CountUnique,
+    AggrCountUnique
+);
 
 /// How many distinct values were seen.
 #[derive(Default)]
@@ -1304,7 +1309,14 @@ impl NormalAggrObj for AggrSmallestBy {
     }
 }
 
-meet_aggr!(AGGR_MIN_COST, "min_cost", MinCost, MeetAggrMinCost, MinCost, AggrMinCost);
+meet_aggr!(
+    AGGR_MIN_COST,
+    "min_cost",
+    MinCost,
+    MeetAggrMinCost,
+    MinCost,
+    AggrMinCost
+);
 
 /// Of `[payload, cost]` pairs, the pair with the numerically least cost.
 pub(crate) struct AggrMinCost {
@@ -1408,7 +1420,14 @@ impl MeetAggrObj for MeetAggrMinCost {
     }
 }
 
-meet_aggr!(AGGR_SHORTEST, "shortest", Shortest, MeetAggrShortest, Shortest, AggrShortest);
+meet_aggr!(
+    AGGR_SHORTEST,
+    "shortest",
+    Shortest,
+    MeetAggrShortest,
+    Shortest,
+    AggrShortest
+);
 
 /// The shortest list-valued row (a path, typically); ties keep the
 /// incumbent.
@@ -1464,21 +1483,27 @@ impl MeetAggrObj for MeetAggrShortest {
             return Ok(true);
         }
         match (left, right) {
-            (
-                MeetAccum::Value(DataValue::List(l)),
-                MeetAccum::Value(DataValue::List(r)),
-            ) => Ok(if r.len() < l.len() {
-                *l = r.clone();
-                true
-            } else {
-                false
-            }),
+            (MeetAccum::Value(DataValue::List(l)), MeetAccum::Value(DataValue::List(r))) => {
+                Ok(if r.len() < l.len() {
+                    *l = r.clone();
+                    true
+                } else {
+                    false
+                })
+            }
             (l, v) => bail!("cannot compute 'shortest' on {:?} and {:?}", l, v),
         }
     }
 }
 
-meet_aggr!(AGGR_CHOICE, "choice", Choice, MeetAggrChoice, Choice, AggrChoice);
+meet_aggr!(
+    AGGR_CHOICE,
+    "choice",
+    Choice,
+    MeetAggrChoice,
+    Choice,
+    AggrChoice
+);
 
 /// An arbitrary non-null row: the first one seen wins.
 pub(crate) struct AggrChoice {
@@ -1533,7 +1558,14 @@ impl MeetAggrObj for MeetAggrChoice {
     }
 }
 
-meet_aggr!(AGGR_BIT_AND, "bit_and", BitAnd, MeetAggrBitAnd, BitAnd, AggrBitAnd);
+meet_aggr!(
+    AGGR_BIT_AND,
+    "bit_and",
+    BitAnd,
+    MeetAggrBitAnd,
+    BitAnd,
+    AggrBitAnd
+);
 
 /// Bytewise AND of equal-length byte strings, as a fold.
 #[derive(Default)]
@@ -1620,7 +1652,14 @@ impl MeetAggrObj for MeetAggrBitAnd {
     }
 }
 
-meet_aggr!(AGGR_BIT_OR, "bit_or", BitOr, MeetAggrBitOr, BitOr, AggrBitOr);
+meet_aggr!(
+    AGGR_BIT_OR,
+    "bit_or",
+    BitOr,
+    MeetAggrBitOr,
+    BitOr,
+    AggrBitOr
+);
 
 /// Bytewise OR of equal-length byte strings, as a fold.
 #[derive(Default)]
@@ -2268,8 +2307,12 @@ mod tests {
     /// oracles pin which operation actually runs, both directions.
     #[test]
     fn set_ops_compute_the_right_operation() {
-        let two =
-            |a: i64, b: i64| v(DataValue::List(vec![DataValue::from(a), DataValue::from(b)]));
+        let two = |a: i64, b: i64| {
+            v(DataValue::List(vec![
+                DataValue::from(a),
+                DataValue::from(b),
+            ]))
+        };
         let meet = MeetAggrIntersection;
         let mut acc = meet.init_val();
         assert!(matches!(acc, MeetAccum::Empty));

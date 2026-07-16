@@ -114,9 +114,7 @@ use thiserror::Error;
 
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{InputProgram, InputRelationHandle};
-use crate::data::relation::{
-    CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata,
-};
+use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{

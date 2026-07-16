@@ -203,9 +203,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::SmartString;
 use thiserror::Error;
 
+use crate::data::expr::Expr;
 use crate::data::relation::VecElementType;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
-use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
@@ -2435,9 +2435,7 @@ fn graph_search_layer0(
                 candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
             // Visibility: seat only if it passes the filter (+radius).
-            if let Some(tuple) =
-                admit_candidate(tx, base, idx, params, &neighbour, nd, filter)?
-            {
+            if let Some(tuple) = admit_candidate(tx, base, idx, params, &neighbour, nd, filter)? {
                 let key = id_order_key(idx, &neighbour)?;
                 push_topk(
                     &mut results,
@@ -2481,7 +2479,7 @@ fn graph_filtered(
     let seeds: Vec<VectorId> = found_nn.iter().map(|(id, _)| id.clone()).collect();
     let visit_cap = ef2.saturating_mul(manifest.m_max0.max(1)).saturating_mul(4);
     let results = graph_search_layer0(
-        tx, q, ef2, base, idx, &seeds, params, filter,  cache, visit_cap,
+        tx, q, ef2, base, idx, &seeds, params, filter, cache, visit_cap,
     )?;
     Ok(drain_sorted(results, params.k))
 }
@@ -2509,13 +2507,9 @@ fn hnsw_knn_filtered(
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         return Ok(vec![]);
     };
-    let plan = select_strategy(
-        tx, q, manifest, base, idx, params, filter,  &mut cache,
-    )?;
+    let plan = select_strategy(tx, q, manifest, base, idx, params, filter, &mut cache)?;
     match plan {
-        SearchPlan::Scan => {
-            scan_filtered(cancel, tx, q, base, idx, params, filter,  &mut cache)
-        }
+        SearchPlan::Scan => scan_filtered(cancel, tx, q, base, idx, params, filter, &mut cache),
         SearchPlan::Graph { ef2 } => {
             let hits = graph_filtered(
                 tx,
@@ -2528,13 +2522,12 @@ fn hnsw_knn_filtered(
                 ef2,
                 params,
                 filter,
-                
                 &mut cache,
             )?;
             if hits.len() < params.k {
                 // Hard fallback: the exact scan finds every match the graph walk
                 // could not reach, upholding min(k, M).
-                scan_filtered(cancel, tx, q, base, idx, params, filter,  &mut cache)
+                scan_filtered(cancel, tx, q, base, idx, params, filter, &mut cache)
             } else {
                 Ok(hits)
             }
@@ -2561,7 +2554,7 @@ fn hnsw_knn_selected_plan(
         return Ok(None);
     }
     Ok(Some(select_strategy(
-        tx, &q, manifest, base, idx, params, filter,  &mut cache,
+        tx, &q, manifest, base, idx, params, filter, &mut cache,
     )?))
 }
 
@@ -2589,9 +2582,7 @@ fn hnsw_knn_forced(
         return Ok(vec![]);
     };
     match plan {
-        SearchPlan::Scan => {
-            scan_filtered(cancel, tx, &q, base, idx, params, filter,  &mut cache)
-        }
+        SearchPlan::Scan => scan_filtered(cancel, tx, &q, base, idx, params, filter, &mut cache),
         SearchPlan::Graph { ef2 } => {
             let hits = graph_filtered(
                 tx,
@@ -2604,11 +2595,10 @@ fn hnsw_knn_forced(
                 ef2,
                 params,
                 filter,
-                
                 &mut cache,
             )?;
             if fallback && hits.len() < params.k {
-                scan_filtered(cancel, tx, &q, base, idx, params, filter,  &mut cache)
+                scan_filtered(cancel, tx, &q, base, idx, params, filter, &mut cache)
             } else {
                 Ok(hits)
             }
@@ -3008,9 +2998,7 @@ mod tests {
                     SourceSpan(0, 0),
                 )
                 .unwrap();
-                assert!(
-                    hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap()
-                );
+                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
             }
 
             // Every row in the index relation, decoded — a full unfiltered
@@ -3381,17 +3369,7 @@ mod tests {
         // Radius is in squared units too: 0.5 keeps only (1,0).
         let mut p = knn_params(4);
         p.radius = Some(0.5);
-        let hits = hnsw_knn(
-            &rtx,
-            &q,
-            &m,
-            &base,
-            &idx,
-            &p,
-            &None,
-            &CancelFlag::default(),
-        )
-        .unwrap();
+        let hits = hnsw_knn(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default()).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(2));
 
@@ -3466,8 +3444,7 @@ mod tests {
         // Insert refusal.
         let mut tx = db.write_tx().unwrap();
         let zero = row(9, 0.0, 0.0);
-        let err =
-            hnsw_put(&mut tx, &m, &base, &idx, None, zero.as_slice()).unwrap_err();
+        let err = hnsw_put(&mut tx, &m, &base, &idx, None, zero.as_slice()).unwrap_err();
         assert!(
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
@@ -3518,46 +3495,20 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-        assert!(
-            hnsw_put(
-                &mut tx,
-                &m2,
-                &base2,
-                &idx2,
-                None,
-                zrow.as_slice()
-            )
-            .unwrap()
-        );
+        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, zrow.as_slice()).unwrap());
         tx.commit().unwrap();
 
         // Non-finite components are refused under every metric.
         let mut tx = db.write_tx().unwrap();
         let nan_row = row(2, f64::NAN, 0.0);
-        let err = hnsw_put(
-            &mut tx,
-            &m2,
-            &base2,
-            &idx2,
-            None,
-            nan_row.as_slice(),
-        )
-        .unwrap_err();
+        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, nan_row.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
             DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
         ];
-        let err = hnsw_put(
-            &mut tx,
-            &m2,
-            &base2,
-            &idx2,
-            None,
-            bad_dim.as_slice(),
-        )
-        .unwrap_err();
+        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
     }
 
@@ -3624,17 +3575,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
         // Unchanged put.
         let mut tx = db.write_tx().unwrap();
-        assert!(
-            hnsw_put(
-                &mut tx,
-                &m,
-                &base,
-                &idx,
-                None,
-                rows[0].as_slice()
-            )
-            .unwrap()
-        );
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, rows[0].as_slice()).unwrap());
         tx.commit().unwrap();
 
         // Changed vector: base row rewritten, index follows.

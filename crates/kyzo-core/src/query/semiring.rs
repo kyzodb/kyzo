@@ -236,19 +236,20 @@ impl Semiring {
             (Semiring::Boolean, Annotation::Boolean(x), Annotation::Boolean(y)) => {
                 Ok(Annotation::Boolean(*x && *y))
             }
-            (Semiring::Tropical, Annotation::Tropical(x), Annotation::Tropical(y)) => match (x, y)
-            {
-                (Cost::Infinite, _) | (_, Cost::Infinite) => {
-                    Ok(Annotation::Tropical(Cost::Infinite))
+            (Semiring::Tropical, Annotation::Tropical(x), Annotation::Tropical(y)) => {
+                match (x, y) {
+                    (Cost::Infinite, _) | (_, Cost::Infinite) => {
+                        Ok(Annotation::Tropical(Cost::Infinite))
+                    }
+                    (Cost::Finite(l), Cost::Finite(r)) => l
+                        .checked_add(*r)
+                        .map(|s| Annotation::Tropical(Cost::Finite(s)))
+                        .ok_or(SemiringOverflow {
+                            left: *l,
+                            right: *r,
+                        }),
                 }
-                (Cost::Finite(l), Cost::Finite(r)) => l
-                    .checked_add(*r)
-                    .map(|s| Annotation::Tropical(Cost::Finite(s)))
-                    .ok_or(SemiringOverflow {
-                        left: *l,
-                        right: *r,
-                    }),
-            },
+            }
             _ => unreachable!("semiring/annotation kind mismatch in ⊗"),
         }
     }

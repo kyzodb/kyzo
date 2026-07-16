@@ -151,7 +151,6 @@ impl TempStoreRA {
             eliminate_indices,
             cur: None,
             active: None,
-
         }))
     }
 }
@@ -173,7 +172,6 @@ struct TempStorePrefixBatchJoin<'a> {
     cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     active: Option<Box<dyn Iterator<Item = TupleInIter<'a>> + 'a>>,
-
 }
 
 impl<'a> TempStorePrefixBatchJoin<'a> {

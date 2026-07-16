@@ -97,9 +97,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
+use crate::data::expr::Expr;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::expr::Expr;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
@@ -210,10 +210,7 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
 
 /// Evaluate the extractor and return the document text, or `None` when the
 /// extraction is `Null` (a row with no text is simply not indexed).
-fn extract_text(
-    extractor: &Expr,
-    tuple: &[DataValue],
-) -> Result<Option<String>> {
+fn extract_text(extractor: &Expr, tuple: &[DataValue]) -> Result<Option<String>> {
     match extractor.eval(tuple)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
@@ -792,10 +789,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            fts_put(
-                &mut tx, &row, &extractor, &analyzer, &base, &idx,
-            )
-            .unwrap();
+            fts_put(&mut tx, &row, &extractor, &analyzer, &base, &idx).unwrap();
         }
         tx.commit().unwrap();
         Fixture {
@@ -1000,15 +994,7 @@ mod tests {
 
         let mut tx = db.write_tx().unwrap();
         let row1 = vec![DataValue::from(1), DataValue::from("findme keep")];
-        fts_del(
-            &mut tx,
-            &row1,
-            &f.extractor,
-            &f.analyzer,
-            &f.base,
-            &f.idx,
-        )
-        .unwrap();
+        fts_del(&mut tx, &row1, &f.extractor, &f.analyzer, &f.base, &f.idx).unwrap();
         tx.commit().unwrap();
 
         let got = run(&db, &f, "findme", params(10, FtsScoreKind::Tf));

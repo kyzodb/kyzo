@@ -86,8 +86,7 @@ impl FixedRule for Dfs {
                         })??
                 };
 
-                if condition.eval_pred(&cand_tuple)?
-                {
+                if condition.eval_pred(&cand_tuple)? {
                     found.push((starting_node.clone(), candidate.clone()));
                     if found.len() >= limit {
                         break 'outer;

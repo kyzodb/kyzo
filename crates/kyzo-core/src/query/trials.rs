@@ -237,7 +237,6 @@ impl ModelBody {
 
 impl crate::query::eval::seal::Sealed for ModelBody {}
 
-
 impl RuleBody for ModelBody {
     fn for_each_derivation(
         &self,
@@ -2945,8 +2944,7 @@ fn expected_meet(
                     changed = true;
                 }
                 Some(mut cur) => {
-                    let op: MeetAggr =
-                        aggregation.meet_op().expect("meet-capable aggregation");
+                    let op: MeetAggr = aggregation.meet_op().expect("meet-capable aggregation");
                     if op.update(&mut cur, &val).expect("meet update") {
                         acc.insert(b.clone(), cur);
                         changed = true;

@@ -3324,10 +3324,7 @@ mod tests {
                 }
             }
             if delta.is_empty() {
-                return total
-                    .into_iter()
-                    .map(|(k, a)| (k, a.to_value()))
-                    .collect();
+                return total.into_iter().map(|(k, a)| (k, a.to_value())).collect();
             }
             // Next epoch: the recursive rule joined against the delta only.
             let mut next = Vec::new();
@@ -3406,8 +3403,7 @@ mod tests {
             // ...the inverted flag stops early: node 2's flip is applied
             // to the store but never re-enters the delta, so node 3 keeps
             // its seed value.
-            let buggy =
-                semi_naive_meet_reach(&edges, &seeds, &op, FlagMode::UpstreamInverted);
+            let buggy = semi_naive_meet_reach(&edges, &seeds, &op, FlagMode::UpstreamInverted);
             assert_ne!(
                 buggy, oracle,
                 "the upstream inversion must be observable for {name}"

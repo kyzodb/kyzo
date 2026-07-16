@@ -226,9 +226,8 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
             &serde_json::Value::String(s)
         ))),
         proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
-        any::<u128>().prop_map(|u| {
-            DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(u)))
-        }),
+        any::<u128>()
+            .prop_map(|u| { DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(u))) }),
         proptest::collection::vec(any::<f64>(), 0..6)
             .prop_map(|v| DataValue::Vector(Vector::new(v))),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| {

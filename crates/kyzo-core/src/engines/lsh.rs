@@ -107,9 +107,9 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
+use crate::data::expr::Expr;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::expr::Expr;
 use crate::data::value::{DataValue, Tuple, append_canonical};
 use crate::engines::IndexRowCorrupt;
 use crate::engines::text::TokenizerConfig;
@@ -962,8 +962,7 @@ mod tests {
                 )
                 .unwrap();
                 lsh_put(
-                    &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &m,
-                    &perms,
+                    &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &m, &perms,
                 )
                 .unwrap();
             }
@@ -1105,8 +1104,7 @@ mod tests {
             )
             .unwrap();
             lsh_put(
-                &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &manifest,
-                &perms,
+                &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &manifest, &perms,
             )
             .unwrap();
         }

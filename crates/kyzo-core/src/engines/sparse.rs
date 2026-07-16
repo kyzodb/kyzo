@@ -103,9 +103,9 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
+use crate::data::expr::Expr;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
-use crate::data::expr::Expr;
 use crate::data::value::{DataValue, Tuple};
 use crate::engines::IndexRowCorrupt;
 use crate::runtime::relation::RelationHandle;
@@ -563,8 +563,7 @@ mod tests {
     /// Run a search and project `(key, score)`.
     fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, f32)> {
         let rtx = db.read_tx().unwrap();
-        let hits =
-            sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
+        let hits = sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
         hits.iter()
             .map(|t| {
                 (
@@ -758,15 +757,8 @@ mod tests {
         };
         let search_err = || -> miette::Report {
             let rtx = db.read_tx().unwrap();
-            sparse_search(
-                &rtx,
-                &[(0, 1.0)],
-                &f.base,
-                &f.idx,
-                &params(1),
-                &None,
-            )
-            .expect_err("corrupt posting must error, not panic")
+            sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &params(1), &None)
+                .expect_err("corrupt posting must error, not panic")
         };
 
         // (a) Garbage msgpack value: the scan's decode fails, still not a panic.
@@ -945,15 +937,7 @@ mod tests {
             k: 10,
             bind_score: true,
         };
-        let hits = sparse_search(
-            &rtx,
-            &[(0, 1.0)],
-            &f.base,
-            &f.idx,
-            &p,
-            &Some(filter),
-        )
-        .unwrap();
+        let hits = sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap();
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert_eq!(
             keys,

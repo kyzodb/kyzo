@@ -819,9 +819,7 @@ fn scan_code(
             ));
         }
 
-        if ENCODER_TAG_PUSH_RE.is_match(cs)
-            && !ENCODER_SEAT.iter().any(|p| path == *p)
-        {
+        if ENCODER_TAG_PUSH_RE.is_match(cs) && !ENCODER_SEAT.iter().any(|p| path == *p) {
             findings.push(Finding::new(
                 FindingClass::EncoderTwin,
                 path.to_string(),

@@ -203,7 +203,6 @@ impl ModelBody {
 
 impl crate::query::eval::seal::Sealed for ModelBody {}
 
-
 impl RuleBody for ModelBody {
     fn for_each_derivation(
         &self,
@@ -292,7 +291,6 @@ impl RuleBody for ModelBody {
 struct UnattributedBody(ModelBody);
 
 impl crate::query::eval::seal::Sealed for UnattributedBody {}
-
 
 impl RuleBody for UnattributedBody {
     fn for_each_derivation(
@@ -954,7 +952,8 @@ fn random_cost(rng: &mut Rng) -> Cost {
 }
 
 fn assert_axioms(semiring: Semiring, a: &Annotation, b: &Annotation, c: &Annotation) {
-    let t = |x: &Annotation, y: &Annotation| semiring.times(x, y).expect("no overflow in axiom trial");
+    let t =
+        |x: &Annotation, y: &Annotation| semiring.times(x, y).expect("no overflow in axiom trial");
     let p = |x: &Annotation, y: &Annotation| semiring.plus(x, y);
     let zero = semiring.zero();
     let one = semiring.one();

@@ -674,7 +674,10 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             }
             let mut u = [0u8; 16];
             u.copy_from_slice(&body[..16]);
-            Ok((DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u))), 17))
+            Ok((
+                DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u))),
+                17,
+            ))
         }
         Tag::List => {
             let (items, used) = decode_sequence(body, depth)?;

@@ -1402,10 +1402,7 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Parse + resolve + compile a row expression (extractor or filter)
     /// against the base relation's columns.
-    fn compile_row_expr(
-        base: &RelationHandle,
-        src: &str,
-    ) -> Result<Expr> {
+    fn compile_row_expr(base: &RelationHandle, src: &str) -> Result<Expr> {
         let mut expr = crate::parse::parse_expressions(src, &BTreeMap::new())?;
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
         Ok(expr)
