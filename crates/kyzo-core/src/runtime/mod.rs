@@ -56,7 +56,7 @@ pub(crate) mod json;
 pub(crate) mod mutate;
 // relation's catalog is fully live in production; `#[allow(dead_code)]`
 // stays for residual accessors (raw_binding_map, has_index, put_fact,
-// retract_fact, encode_val_for_store, ensure_compatible, exists,
+// retract_fact, encode_val_for_store, prove_compatible_input, exists,
 // skip_scan_bounded_prefix, relation_exists) no production path reaches
 // yet, kept live by this module's own tests.
 #[allow(dead_code)]

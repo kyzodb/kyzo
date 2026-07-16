@@ -27,6 +27,11 @@
 //!
 //! [`StoredRelationMetadata`] is a stored relation's whole schema — its key
 //! columns and its dependent columns, each a named, typed [`ColumnDef`].
+//!
+//! Input-to-stored schema compatibility is proved whole at construction
+//! ([`CompatibleInputSchema::prove`]): the constructor either yields a
+//! branded proof or refuses the whole schema. There is no column-by-column
+//! approval API — per-column checks are private internals of that proof.
 
 use std::fmt::{Display, Formatter};
 
@@ -147,8 +152,57 @@ pub(crate) struct StoredRelationMetadata {
     pub(crate) non_keys: Vec<ColumnDef>,
 }
 
+/// Write shape that decides which stored columns an input must satisfy.
+/// Variants are constructed by the mutation tier (unlanded) and by tests
+/// that exercise [`CompatibleInputSchema::prove`].
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[allow(dead_code)]
+pub(crate) enum RelationWriteShape {
+    /// Full put: every stored key and non-key must be provided (or defaulted).
+    Put,
+    /// Removal or update: only stored keys must be provided (or defaulted).
+    RemoveOrUpdate,
+}
+
+/// Branded proof that an input schema is compatible with a stored schema
+/// for one [`RelationWriteShape`]. The type *is* the certificate — mint it
+/// only through [`CompatibleInputSchema::prove`], which constructs whole
+/// or refuses whole.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct CompatibleInputSchema {
+    _private: (),
+}
+
+impl CompatibleInputSchema {
+    /// Prove that `input` may write against `stored` under `shape`.
+    ///
+    /// All column obligations are discharged inside this constructor: either
+    /// every obligation holds and a proof is returned, or the whole schema
+    /// is refused. Callers never approve columns one at a time.
+    pub(crate) fn prove(
+        stored: &StoredRelationMetadata,
+        input: &StoredRelationMetadata,
+        shape: RelationWriteShape,
+    ) -> Result<Self> {
+        for col in input.keys.iter().chain(input.non_keys.iter()) {
+            stored.require_compatible_column(col)?;
+        }
+        for col in &stored.keys {
+            input.require_provides(col)?;
+        }
+        if matches!(shape, RelationWriteShape::Put) {
+            for col in &stored.non_keys {
+                input.require_provides(col)?;
+            }
+        }
+        Ok(Self { _private: () })
+    }
+}
+
 impl StoredRelationMetadata {
-    pub(crate) fn satisfied_by_required_col(&self, col: &ColumnDef) -> Result<()> {
+    /// Private whole-proof helper: this schema provides `col` (by name) or
+    /// `col` carries a default. Not a public approval surface.
+    fn require_provides(&self, col: &ColumnDef) -> Result<()> {
         for target in self.keys.iter().chain(self.non_keys.iter()) {
             if target.name == col.name {
                 return Ok(());
@@ -164,7 +218,10 @@ impl StoredRelationMetadata {
         }
         Ok(())
     }
-    pub(crate) fn compatible_with_col(&self, col: &ColumnDef) -> Result<()> {
+
+    /// Private whole-proof helper: `col` names a column here with compatible
+    /// typing (`Any?` remains a wildcard). Not a public approval surface.
+    fn require_compatible_column(&self, col: &ColumnDef) -> Result<()> {
         for target in self.keys.iter().chain(self.non_keys.iter()) {
             if target.name == col.name {
                 #[derive(Debug, Error, Diagnostic)]

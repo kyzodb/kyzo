@@ -36,11 +36,13 @@
  *   (`#[allow(dead_code)]` upstream) and splicing a different relation id
  *   into an [`EncodedKey`]'s bytes would launder unproven provenance into
  *   the typed key. If a real consumer appears it returns as an encoder.
- * - Fix on port: the original's `ensure_compatible` chained the *input*'s
- *   key columns with the *stored* relation's own non-key columns, so an
- *   input's dependent columns were never type-checked (a self-comparison
- *   that is trivially compatible). It now checks the input's keys and the
- *   input's non-keys, as the surrounding comments always claimed.
+ * - Fix on port / #301 T6: the original's column-by-column
+ *   `ensure_compatible` chained the *input*'s key columns with the
+ *   *stored* relation's own non-key columns, so an input's dependent
+ *   columns were never type-checked (a self-comparison that is trivially
+ *   compatible). Compatibility is now one whole-schema proving constructor
+ *   ([`CompatibleInputSchema::prove`]) that checks the input's keys and
+ *   non-keys against the stored schema, or refuses the whole schema.
  * - Fix on port: the original's `create_relation` wrote the relation's id
  *   bytes under `[Str name]` and immediately overwrote them with the
  *   serialized handle under the byte-identical key (a dead store), and
@@ -112,7 +114,9 @@ use thiserror::Error;
 
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::program::{InputProgram, InputRelationHandle};
-use crate::data::relation::StoredRelationMetadata;
+use crate::data::relation::{
+    CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata,
+};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{
@@ -920,35 +924,16 @@ impl RelationHandle {
         Ok(ret)
     }
 
-    /// Check that an input declaration is compatible with this relation:
-    /// every input column exists here with a compatible type, and every
-    /// required stored column is provided (or has a default). For removals
-    /// and updates only the key columns must be provided.
-    ///
-    /// Fix on port: the original chained the input's keys with **this
-    /// relation's own** non-keys (a trivially-true self-comparison), so an
-    /// input's dependent columns were never type-checked. The input's
-    /// non-keys are checked now.
-    pub(crate) fn ensure_compatible(
+    /// Prove that an input declaration is compatible with this relation's
+    /// whole schema for `shape`. Constructs a branded
+    /// [`CompatibleInputSchema`] or refuses the whole schema — never
+    /// approves columns one at a time.
+    pub(crate) fn prove_compatible_input(
         &self,
         inp: &InputRelationHandle,
-        is_remove_or_update: bool,
-    ) -> Result<()> {
-        let InputRelationHandle { metadata, .. } = inp;
-        // Every given column must be found here and be type-compatible.
-        for col in metadata.keys.iter().chain(metadata.non_keys.iter()) {
-            self.metadata.compatible_with_col(col)?
-        }
-        // Every key must be provided or have a default.
-        for col in &self.metadata.keys {
-            metadata.satisfied_by_required_col(col)?;
-        }
-        if !is_remove_or_update {
-            for col in &self.metadata.non_keys {
-                metadata.satisfied_by_required_col(col)?;
-            }
-        }
-        Ok(())
+        shape: RelationWriteShape,
+    ) -> Result<CompatibleInputSchema> {
+        CompatibleInputSchema::prove(&self.metadata, &inp.metadata, shape)
     }
 
     /// Choose the plain index whose column mapper matches the longest
@@ -2153,19 +2138,24 @@ mod tests {
         assert_eq!(chosen.name, "by_c_b");
     }
 
-    /// The input-compatibility contract, including the ported fix: an
-    /// input's *dependent* columns are type-checked (the original compared
-    /// the stored relation's non-keys against themselves and let any input
-    /// dependent type through).
+    /// Whole-schema compatibility proof: an input's *dependent* columns are
+    /// type-checked as part of one constructor (the original compared the
+    /// stored relation's non-keys against themselves and let any input
+    /// dependent type through). Partial column approval is impossible —
+    /// prove constructs whole or refuses whole.
     #[test]
-    fn ensure_compatible_checks_input_dependents() {
+    fn prove_compatible_input_checks_input_dependents_whole() {
+        use crate::data::relation::RelationWriteShape::{Put, RemoveOrUpdate};
+
         let stored = RelationHandle::new_from_input(
             simple_input("s"),
             RelationId::new(1).expect("below cap"),
             KeyspaceKind::Facts,
         );
-        // Compatible input: same shapes.
-        stored.ensure_compatible(&simple_input("s"), false).unwrap();
+        // Compatible input: same shapes → branded proof.
+        stored
+            .prove_compatible_input(&simple_input("s"), Put)
+            .expect("compatible whole schema");
         // Incompatible dependent type: v as Int against stored String.
         let bad = input_handle(
             "s",
@@ -2173,14 +2163,16 @@ mod tests {
             vec![col("v", ColType::Int)],
         );
         assert!(
-            stored.ensure_compatible(&bad, false).is_err(),
-            "fix-on-port: dependent column types are checked now"
+            stored.prove_compatible_input(&bad, Put).is_err(),
+            "fix-on-port: dependent column types are checked in the whole-schema proof"
         );
         // Removal/update: dependents need not be provided...
         let keys_only = input_handle("s", vec![col("k", ColType::Int)], vec![]);
-        stored.ensure_compatible(&keys_only, true).unwrap();
+        stored
+            .prove_compatible_input(&keys_only, RemoveOrUpdate)
+            .expect("keys-only is enough for remove/update");
         // ...but a full put requires them (or defaults).
-        assert!(stored.ensure_compatible(&keys_only, false).is_err());
+        assert!(stored.prove_compatible_input(&keys_only, Put).is_err());
     }
 
     /// The T2 closure: a malformed trigger source is refused at the store
