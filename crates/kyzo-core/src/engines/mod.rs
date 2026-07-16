@@ -6,14 +6,16 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! Shared vocabulary of the index-operator engines (HNSW, MinHash-LSH, FTS).
+//! Index-operator engines (HNSW, MinHash-LSH, FTS, and kin) and their shared
+//! corruption boundary.
 //!
-//! One concept lives here rather than in any single engine: [`IndexRowCorrupt`],
-//! the typed error every engine raises when stored index bytes (or a base row
-//! an index points at) do not decode as the format says they must. It extends
-//! the kernel's corruption doctrine — corruption is an error, never a panic —
-//! into every index read path. The three engines all decode stored rows; they
-//! all name this one error, so it is defined once, here.
+//! [`IndexRowCorrupt`] is the typed error every engine raises when stored
+//! index bytes (or a base row an index points at) do not decode as the
+//! format says they must. It extends the kernel's corruption doctrine —
+//! corruption is an error, never a panic — into every index read path.
+//! That error is not the engines' only shared concept: the prior
+//! shared-only-error posture for projection freshness/config is condemned
+//! (story #305).
 
 // `fts`/`hnsw`/`lsh`'s `db.rs` surface has landed (`::fts|hnsw|lsh
 // create/drop` in `runtime/mutate.rs` dispatch to the real creation/
@@ -31,10 +33,9 @@ mod gazetteer_hostile;
 pub(crate) mod hnsw;
 pub(crate) mod lsh;
 /// Columnar current-state segments: rebuildable typed-column mirrors of a
-/// relation's plain scan, watermark-guarded. Wiring into the scan path has
-/// landed (`query/ra/stored.rs`'s scan reads real segments, driven by
-/// `runtime/db.rs`'s read path); `#[allow(dead_code)]` stays only for the
-/// one residual unused helper (`SegmentEngine::is_empty`).
+/// relation's plain scan. Runtime watermark equality freshness was
+/// demolished (story #305). `#[allow(dead_code)]` covers surfaces whose
+/// callers are severed until freshness is re-seated.
 #[allow(dead_code)]
 pub(crate) mod segments;
 // sparse has no `db.rs` surface yet (see the block comment above); its

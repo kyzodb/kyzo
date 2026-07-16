@@ -313,15 +313,6 @@ impl TokenizerConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) struct FtsIndexConfig {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
-    fts_fields: Vec<SmartString<LazyCompact>>,
-    tokenizer: TokenizerConfig,
-    filters: Vec<TokenizerConfig>,
-}
-
 /// The per-database analyzer cache: index name → analyzer, and config hash →
 /// analyzer, so N indices sharing one pipeline share one live instance.
 #[derive(Default)]
