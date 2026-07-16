@@ -19,7 +19,7 @@
 use miette::{Result, bail};
 
 use crate::data::value::{
-    AsOf, DataValue, EncodedKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
+    AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
     decode_tuple_from_key, decode_values_all,
 };
 
@@ -85,11 +85,11 @@ pub fn check_key_for_bitemporal(
     as_of: AsOf,
     size_hint: Option<usize>,
 ) -> Result<(Option<Tuple>, Vec<u8>)> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
         bail!("bitemporal scan over a key too short to carry its two time slots");
     }
-    let valid_off = key.len() - EncodedKey::BITEMPORAL_TAIL_LEN;
-    let sys_off = key.len() - EncodedKey::VALIDITY_TAIL_LEN;
+    let valid_off = key.len() - StorageKey::BITEMPORAL_TAIL_LEN;
+    let sys_off = key.len() - StorageKey::VALIDITY_TAIL_LEN;
     let (valid_val, rest) = DataValue::decode_from_key(&key[valid_off..sys_off])?;
     let DataValue::Validity(valid) = valid_val else {
         bail!("bitemporal scan over a key without a valid-time slot");
@@ -113,7 +113,7 @@ pub fn check_key_for_bitemporal(
 
     // Bounds live in the claimed-bytes domain, exactly as in the
     // single-axis kernel: only the tails were proven above, and blessing
-    // the prefix into `EncodedKey` would launder unproven bytes into a
+    // the prefix into `StorageKey` would launder unproven bytes into a
     // type whose possession means provenance.
     let splice_both = |v: Validity, s: Validity| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
@@ -187,10 +187,10 @@ pub fn check_key_for_bitemporal(
 /// `storage/backup.rs`) without re-deriving the whole resolution algebra
 /// `check_key_for_bitemporal` implements.
 pub(crate) fn system_stamp_of_key(key: &[u8]) -> Result<ValidityTs> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
         bail!("bitemporal key too short to carry its two time slots");
     }
-    let sys_off = key.len() - EncodedKey::VALIDITY_TAIL_LEN;
+    let sys_off = key.len() - StorageKey::VALIDITY_TAIL_LEN;
     let (sys_val, rest) = DataValue::decode_from_key(&key[sys_off..])?;
     let DataValue::Validity(sys) = sys_val else {
         bail!("bitemporal key without a system-time slot");

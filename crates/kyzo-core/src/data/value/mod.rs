@@ -55,7 +55,7 @@ pub mod wide;
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
 pub use number::{Num, NumRepr};
 pub use row::{
-    EncodedKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
+    TupleKey, StorageKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
     scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
 pub use tag::Tag;
@@ -694,11 +694,11 @@ pub fn decode_values_all(bytes: &[u8]) -> Result<Vec<DataValue>, DecodeError> {
 /// prefix): key columns plus, for bitemporal keys, the two validity
 /// slots. Total.
 pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, DecodeError> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN {
         return Err(DecodeError::Truncated);
     }
     let mut out = Tuple::with_capacity(size_hint);
-    let mut at = EncodedKey::RELATION_PREFIX_LEN;
+    let mut at = StorageKey::RELATION_PREFIX_LEN;
     while at < key.len() {
         let (v, used) = canonical::decode_one(&key[at..])?;
         out.push(v);
@@ -769,10 +769,10 @@ pub fn extend_tuple_from_v(tuple: &mut Tuple, val: &[u8]) -> Result<(), DecodeEr
 /// Decode a stored relation key's columns into a scratch tuple (the
 /// batch reader's zero-fresh-allocation path).
 pub fn decode_key_into(key: &[u8], out: &mut Tuple) -> Result<(), DecodeError> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN {
         return Err(DecodeError::Truncated);
     }
-    let mut at = EncodedKey::RELATION_PREFIX_LEN;
+    let mut at = StorageKey::RELATION_PREFIX_LEN;
     while at < key.len() {
         let (v, used) = canonical::decode_one(&key[at..])?;
         out.push(v);
@@ -1033,7 +1033,7 @@ mod facade_tests {
     #[test]
     fn decode_tuple_is_exact_and_total() {
         let vals = [DataValue::from(7i64), DataValue::from("x"), DataValue::Null];
-        let key = EncodedKey::from_values(&vals);
+        let key = TupleKey::from_values(&vals);
         let back = decode_tuple(key.as_bytes(), 3).expect("lawful");
         assert_eq!(back.as_slice(), &vals);
         assert!(decode_tuple(key.as_bytes(), 2).is_err());

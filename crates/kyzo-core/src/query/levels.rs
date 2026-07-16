@@ -52,6 +52,46 @@ use crate::query::temp_store::{
 /// `DataValue`-slice comparisons this replaces, without decoding the
 /// stored side at all — a probe value is encoded once per call, not once
 /// per row visited.
+/// Flattened row-byte arena for a normal query level.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct LevelArenaBytes(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for LevelArenaBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for LevelArenaBytes {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl AsRef<[u8]> for LevelArenaBytes {
+    fn as_ref(&self) -> &[u8] { &self.0 }
+}
+impl From<Vec<u8>> for LevelArenaBytes {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+
+/// Inclusive/exclusive scan bound key bytes for stored levels.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct LevelBoundKey(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for LevelBoundKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for LevelBoundKey {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl AsRef<[u8]> for LevelBoundKey {
+    fn as_ref(&self) -> &[u8] { &self.0 }
+}
+impl From<Vec<u8>> for LevelBoundKey {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+
 #[derive(Debug, Default)]
 pub(crate) struct NormalLevel {
     /// Rows FLATTENED into one dense byte arena: a probe or scan walks
@@ -60,7 +100,8 @@ pub(crate) struct NormalLevel {
     /// `refresh` marks a re-derived row present only to carry a
     /// refreshed flag — shadowing, not admitted, invisible to delta
     /// iteration.
-    /// `offsets[i]` is the END of row `i` in the (cut) values arena (row 0 starts at 0).
+    values: LevelArenaBytes,
+    /// `offsets[i]` is the END of row `i` in `values` (row 0 starts at 0).
     offsets: Vec<u32>,
     flags: Vec<(bool, bool)>,
 }
@@ -87,7 +128,7 @@ impl NormalLevel {
     /// per-row heap allocation beyond the byte string `RegularTempStore`
     /// already minted at derivation.
     fn push(&mut self, row: Box<[u8]>, skip: bool, refresh: bool) {
-        self.values.extend_from_slice(&row);
+        self.values.0.extend_from_slice(&row);
         self.offsets.push(self.values.len() as u32);
         self.flags.push((skip, refresh));
     }
@@ -96,7 +137,7 @@ impl NormalLevel {
     /// source level, so this one copy per compacted row is the cost of
     /// dropping the shadowed copy).
     fn push_from(&mut self, other: &NormalLevel, i: usize, skip: bool, refresh: bool) {
-        self.values.extend_from_slice(other.row(i));
+        self.values.0.extend_from_slice(other.row(i));
         self.offsets.push(self.values.len() as u32);
         self.flags.push((skip, refresh));
     }
@@ -152,7 +193,8 @@ impl NormalLevel {
         (start, lo.max(start))
     }
 
-    fn bounds(&self, upper_inclusive: bool) -> (usize, usize) {
+    fn bounds(&self, lower: &LevelBoundKey, upper: &LevelBoundKey, upper_inclusive: bool) -> (usize, usize) {
+        let (lower, upper) = (lower.0.to_vec(), upper.0.to_vec());
         let mut lo = 0usize;
         let mut hi = self.len();
         while lo < hi {
@@ -551,6 +593,8 @@ impl EpochStore {
     /// bound window. Delta scope reads the newest level alone.
     fn ranged<'s>(
         &'s self,
+        lower: Vec<u8>,
+        upper: Vec<u8>,
         upper_inclusive: bool,
         delta_only: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
@@ -565,7 +609,7 @@ impl EpochStore {
                 let mut cursors: Vec<(&'s NormalLevel, usize, usize)> = picked
                     .iter()
                     .map(|l| {
-                        let (lo, hi) = l.bounds(&lower, &upper, upper_inclusive);
+                        let (lo, hi) = l.bounds(&LevelBoundKey(lower.clone()), &LevelBoundKey(upper.clone()), upper_inclusive);
                         (l, lo, hi)
                     })
                     .collect();
@@ -746,6 +790,8 @@ fn meet_ranged<'s>(
     spec: &'s MeetSpec,
     picked: &'s [MeetLevel],
     all: &'s [MeetLevel],
+    lower: Vec<u8>,
+    upper: Vec<u8>,
     upper_inclusive: bool,
 ) -> Box<dyn Iterator<Item = TupleInIter<'s>> + 's> {
     let within = move |row: TupleInIter<'_>| -> bool {

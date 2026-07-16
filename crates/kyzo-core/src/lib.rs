@@ -43,7 +43,7 @@
 //!   assert, retract, erase (`data::bitemporal::ClaimPolarity`) — rides in
 //!   the value, so one valid instant has exactly one system lineage and
 //!   retraction is a first-class assertion of absence.
-//! - [`EncodedKey`] — a fact's written form: relation prefix, memcomparable
+//! - [`StorageKey`] — a fact's written form: relation prefix, memcomparable
 //!   tuple bytes, and a fixed-width bitemporal tail (valid instant outer,
 //!   system version inner); the value side is FormatVersion 3's
 //!   self-describing tagged fields (`data::fact_payload`). Constructed only by encoders, so
@@ -290,7 +290,7 @@ mod jepsen_trials;
 pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
 pub use data::value::{
-    AsOf, DataValue, EncodedKey, Num, RegexSource, RelationId, Tuple, TupleT, UuidWrapper,
+    AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT, UuidWrapper,
     Validity, ValidityTs, Vector, decode_tuple_from_key,
 };
 pub use storage::backup::{dump_storage, restore_storage};

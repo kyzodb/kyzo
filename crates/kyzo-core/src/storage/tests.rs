@@ -35,7 +35,7 @@ use smartstring::{LazyCompact, SmartString};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValidityTs, Vector};
-use crate::data::value::{EncodedKey, RelationId, Tuple, TupleT};
+use crate::data::value::{StorageKey, RelationId, Tuple, TupleT};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -496,7 +496,7 @@ fn del_range_kills_own_writes_too() {
 
 /// A bitemporal key: `[name, valid(ts), sys(sys_ts)]`, slot flags pinned
 /// (the row's polarity lives in the value — see [`pol_val`]).
-fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
+fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
     let slot = |t: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true));
     let tuple: Tuple = Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
     tuple.encode_as_key(rel)
@@ -507,7 +507,7 @@ fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
 /// flag. With one system version per instant, current-belief resolution
 /// (`AsOf::current`) equals the single-axis rule, so [`as_of_oracle`]
 /// stays the exact reference.
-fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (EncodedKey, Vec<u8>) {
+fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (StorageKey, Vec<u8>) {
     (bitemp_key(rel, name, ts, 1), pol_val(rel, assert))
 }
 
@@ -687,7 +687,7 @@ fn stamped_row(
     name: &str,
     valid_ts: i64,
     sys: ValidityTs,
-) -> (EncodedKey, Vec<u8>) {
+) -> (StorageKey, Vec<u8>) {
     let slot = |ts: ValidityTs| DataValue::Validity(Validity::new(ts, true));
     let tuple: Tuple = Tuple::from_vec(vec![
         DataValue::Str(name.into()),
@@ -3133,7 +3133,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
         out
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).
-    let key_at = |stamp: ValidityTs| -> EncodedKey {
+    let key_at = |stamp: ValidityTs| -> StorageKey {
         let slot = DataValue::Validity(Validity::new(stamp, true));
         let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
         tuple.encode_as_key(rel)

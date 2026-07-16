@@ -56,6 +56,171 @@ pub(crate) const DEFAULT_PRECISION: u8 = 14;
 /// format; bump on any layout change.
 const FORMAT_TAG: u8 = 0x01;
 
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[repr(transparent)]
+pub(crate) struct HllRegisters(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for HllRegisters {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for HllRegisters {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl From<Vec<u8>> for HllRegisters {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+/// A HyperLogLog over `2^precision` one-byte registers.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct HyperLogLog {
+    precision: u8,
+    registers: HllRegisters,
+}
+
+impl HyperLogLog {
+    /// An empty sketch at the given precision — the identity element of
+    /// [`Self::merge`]. `precision` must be in `4..=18` (the range over
+    /// which the register-index arithmetic and the estimator constants are
+    /// valid).
+    pub(crate) fn new(precision: u8) -> Result<Self> {
+        ensure!(
+            (4..=18).contains(&precision),
+            "HyperLogLog precision must be in 4..=18, got {precision}"
+        );
+        Ok(Self {
+            precision,
+            registers: HllRegisters(vec![0u8; 1usize << precision]),
+        })
+    }
+
+    /// An empty sketch at [`DEFAULT_PRECISION`].
+    pub(crate) fn default_precision() -> Self {
+        // The default precision is a validated constant, so this cannot fail.
+        Self::new(DEFAULT_PRECISION).expect("DEFAULT_PRECISION is in range")
+    }
+
+    fn num_registers(&self) -> usize {
+        self.registers.len()
+    }
+
+    /// Fold one already-computed element hash into the sketch. The top `p`
+    /// bits index a register; the rank is one plus the count of leading
+    /// zeros among the remaining bits (a sentinel bit bounds the rank so a
+    /// register value always fits in a byte).
+    fn add_hash(&mut self, h: u64) {
+        let p = self.precision as u32;
+        let idx = (h >> (64 - p)) as usize;
+        // Left-align the remaining 64-p bits; OR in a sentinel at bit p-1 so
+        // that leading_zeros is at most 64-p and the rank at most 64-p+1.
+        let remaining = (h << p) | (1u64 << (p - 1));
+        let rank = (remaining.leading_zeros() + 1) as u8;
+        if rank > self.registers[idx] {
+            self.registers[idx] = rank;
+        }
+    }
+
+    /// Add one value to the sketch (idempotent per distinct value).
+    pub(crate) fn add(&mut self, value: &DataValue) {
+        self.add_hash(super::hash_value(value, HASH_SEED));
+    }
+
+    /// Merge `other` into `self` by register-wise maximum — the semilattice
+    /// join. Returns whether any register actually increased (the
+    /// changed-flag the meet-aggregation contract requires). Sketches must
+    /// share a precision.
+    pub(crate) fn merge(&mut self, other: &HyperLogLog) -> Result<bool> {
+        ensure!(
+            self.precision == other.precision,
+            "cannot merge HyperLogLog sketches of precision {} and {}",
+            self.precision,
+            other.precision
+        );
+        let mut changed = false;
+        for (l, r) in self.registers.iter_mut().zip(other.registers.iter()) {
+            if *r > *l {
+                *l = *r;
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// The estimated number of distinct elements seen. A pure function of
+    /// the register bytes: equal sketches always return the same estimate.
+    pub(crate) fn estimate(&self) -> f64 {
+        let m = self.num_registers() as f64;
+        let alpha = alpha(self.num_registers());
+
+        let mut sum = 0.0f64;
+        let mut zeros = 0usize;
+        for &r in &self.registers.0 {
+            sum += 2.0f64.powi(-(r as i32));
+            if r == 0 {
+                zeros += 1;
+            }
+        }
+
+        let raw = alpha * m * m / sum;
+        // Small-range correction: when many registers are still empty the
+        // raw estimate is biased, and linear counting is more accurate.
+        if raw <= 2.5 * m && zeros != 0 {
+            m * (m / zeros as f64).ln()
+        } else {
+            raw
+        }
+    }
+
+    /// The estimate rounded to a non-negative integer count.
+    pub(crate) fn estimate_count(&self) -> i64 {
+        self.estimate().round() as i64
+    }
+
+    /// Serialize to the portable stored form: `[FORMAT_TAG, precision,
+    /// registers...]`. Byte-identical for equal sketches on every platform
+    /// (the registers are single bytes; there is no word-size or endianness
+    /// choice to make).
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + self.registers.len());
+        out.write_all(&[FORMAT_TAG, self.precision]).unwrap();
+        out.write_all(&self.registers).unwrap();
+        out
+    }
+
+    /// Parse the stored form, validating the tag, precision, and length.
+    /// Corrupt bytes are an error, never a panic.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let [tag, precision, rest @ ..] = bytes else {
+            bail!("HyperLogLog bytes too short: {} bytes", bytes.len());
+        };
+        ensure!(
+            *tag == FORMAT_TAG,
+            "unknown HyperLogLog format tag {tag:#x}"
+        );
+        ensure!(
+            (4..=18).contains(precision),
+            "HyperLogLog precision out of range: {precision}"
+        );
+        let expected = 1usize << *precision;
+        ensure!(
+            rest.len() == expected,
+            "HyperLogLog register length {} does not match precision {} (expected {expected})",
+            rest.len(),
+            precision
+        );
+        Ok(Self {
+            precision: *precision,
+            registers: HllRegisters(rest.to_vec()),
+        })
+    }
+
+    /// The sketch as a `DataValue::Bytes`, the form it takes as an
+    /// aggregation accumulator that flows through recursion.
+    pub(crate) fn to_value(&self) -> DataValue {
+        DataValue::Bytes(self.to_bytes())
+    }
+}
+
 /// The HyperLogLog `alpha_m` bias constant.
 fn alpha(m: usize) -> f64 {
     match m {

@@ -55,7 +55,7 @@ pub enum Side {
 /// @owns the admitted execution currency; codes are unforgeable (private field, no raw-code door)
 /// @constructs ExecRows::admit(&Rows, &O) | ExecRows::join_project
 /// @forbids from_raw over raw codes | injecting codes into Rows | reconstruction outside admission
-/// @converts ExecRows -> EncodedKey (canonical bytes only at a storage/output boundary, never durable identity)
+/// @converts ExecRows -> StorageKey (canonical bytes only at a storage/output boundary, never durable identity)
 /// @gate no raw-code door exposed; zero-canonical-encode-in-fixpoint law (#120)
 /// @status established #119
 pub struct ExecRows {

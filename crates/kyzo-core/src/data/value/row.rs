@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! `Row`: an interned tuple — a slice of `Code`s — with a `Value`-cell view only at the API boundary. `EncodedKey` is the written form.
+//! `Row`: an interned tuple — a slice of `Code`s — with a `Value`-cell view only at the API boundary. `StorageKey` is the written form.
 //!
 //! ## The code-lifetime law (the two-form Row)
 //!
@@ -20,7 +20,7 @@
 //!   container domain (it *is* a [`CodeColumn`] with an arity, inheriting
 //!   the write door, the admission theorem, and the gather law wholesale).
 //!   It has **no serialization surface** — you cannot write codes down.
-//! - [`EncodedKey`] is the written form: the tuple's canonical encodings
+//! - [`StorageKey`] is the written form: the tuple's canonical encodings
 //!   concatenated. Self-terminating element encodings make concatenation
 //!   order-preserving (lexicographic tuple order = elementwise semantic
 //!   order) and unambiguous to split. It has **no code accessors** — you
@@ -108,7 +108,7 @@ impl Rows {
     /// TYPED error (storage ingestion is a refusal surface, not a panic
     /// surface), validate the written key element by element (total),
     /// and only then re-intern into the current epoch.
-    pub fn push_encoded(&mut self, key: &EncodedKey, arena: &mut Arena) -> Result<(), PushError> {
+    pub fn push_encoded(&mut self, key: &TupleKey, arena: &mut Arena) -> Result<(), PushError> {
         if self.domain().arena_id() != arena.id() {
             return Err(PushError::ForeignArena);
         }
@@ -196,6 +196,17 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
         std::cmp::Ordering::Equal
     }
 
+    /// The execution→bytes door: the written form of row `i`. Minted only
+    /// here — an `TupleKey` in hand is proof its bytes are concatenated
+    /// canonical encodings.
+    pub fn encode_row(&self, i: usize) -> TupleKey {
+        let mut out = Vec::new();
+        for k in 0..self.arity {
+            out.extend_from_slice(self.resolve_cell(i, k));
+        }
+        TupleKey(out)
+    }
+
 }
 
 /// Typed refusals of the bytes→execution door.
@@ -248,6 +259,215 @@ fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
     }
     if upper {
         out.push(0xFF);
+    }
+}
+
+
+/// Bare written tuple: concatenated canonical encodings with NO relation
+/// prefix. Proof that bytes are arity-split lawful encodings — never a
+/// storage keyspace key.
+///
+/// @authority TupleKey
+/// @layer value
+/// @status established #303
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
+pub struct TupleKey(pub(crate) Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<TupleKey>() == std::mem::size_of::<Vec<u8>>());
+
+/// Relation-prefixed storage key (keyspace layout v1): 8-byte relation id
+/// then key columns (then optional bitemporal tails).
+///
+/// @authority StorageKey
+/// @layer value
+/// @status established #303
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
+pub struct StorageKey(pub(crate) Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<StorageKey>() == std::mem::size_of::<Vec<u8>>());
+
+/// A stored relation's identity: the 8-byte big-endian keyspace prefix
+/// every key of the relation opens with (storage key layout v1).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
+pub struct RelationId(u64);
+
+const _: () = assert!(std::mem::size_of::<RelationId>() == std::mem::size_of::<u64>());
+const _: () = assert!(std::mem::align_of::<RelationId>() == std::mem::align_of::<u64>());
+
+impl RelationId {
+    /// The system catalog keyspace.
+    pub const SYSTEM: RelationId = RelationId(0);
+
+    /// The one checked constructor: `None` at or beyond [`RelationId::CAP`].
+    /// Every other mint (decode, allocation) routes through the same
+    /// refusal, so an over-cap id is unrepresentable.
+    pub const fn new(raw: u64) -> Option<RelationId> {
+        if raw >= RelationId::CAP {
+            None
+        } else {
+            Some(RelationId(raw))
+        }
+    }
+
+    /// The raw id (read-only; construction goes through [`RelationId::new`]
+    /// or [`RelationId::raw_decode`]).
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    /// The exclusive allocation ceiling: every assignable id stays below
+    /// `1 << 48`, so a key's 8-byte relation prefix always begins with two
+    /// `0x00` bytes — far below the `0xFF` the scan-bound vocabulary
+    /// reserves as its `Greatest` tail, and the bound every storage
+    /// consumer (merkle roots, keyspace probes) already assumes.
+    pub const CAP: u64 = 1_u64 << 48;
+
+    pub fn raw_encode(self) -> [u8; 8] {
+        self.0.to_be_bytes()
+    }
+
+    /// Decode 8 big-endian bytes as a relation id, REFUSING anything at
+    /// or beyond [`RelationId::CAP`] — the exhaustion door: stored bytes
+    /// cannot smuggle an unassignable id back into the allocator.
+    pub fn raw_decode(bytes: &[u8]) -> Result<RelationId, DecodeError> {
+        let Some(head) = bytes.get(..8) else {
+            return Err(DecodeError::Truncated);
+        };
+        let id = u64::from_be_bytes(head.try_into().expect("8 bytes"));
+        if id >= RelationId::CAP {
+            return Err(DecodeError::RelationIdOverCap);
+        }
+        Ok(RelationId(id))
+    }
+
+    /// The next id, `None` on exhaustion (the caller owns the typed
+    /// refusal).
+    pub fn next(self) -> Option<RelationId> {
+        self.0.checked_add(1).map(RelationId)
+    }
+}
+
+/// Displays as the bare numeric id — the form diagnostics and error
+/// messages carry; the typed identity never has to degrade to a raw `u64`
+/// just to be printed.
+impl std::fmt::Display for RelationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Key encoding for anything that dereferences to a value slice: the
+/// relation prefix, then each value's canonical bytes.
+pub trait TupleT {
+    fn encode_as_key(&self, rel: RelationId) -> StorageKey;
+}
+
+impl<S: AsRef<[DataValue]> + ?Sized> TupleT for S {
+    fn encode_as_key(&self, rel: RelationId) -> StorageKey {
+        encode_key_with_suffix(rel, self.as_ref(), &[])
+    }
+}
+
+/// The write path's key mint: prefix, key columns, then a value suffix
+/// (e.g. the two bitemporal slots), in one pass.
+pub fn encode_key_with_suffix(
+    rel: RelationId,
+    cols: &[DataValue],
+    suffix: &[DataValue],
+) -> StorageKey {
+    let mut out = Vec::with_capacity(8 + 16 * (cols.len() + suffix.len()));
+    out.extend_from_slice(&rel.raw_encode());
+    for v in cols {
+        super::canonical::append_canonical(&mut out, v);
+    }
+    for v in suffix {
+        super::canonical::append_canonical(&mut out, v);
+    }
+    StorageKey(out)
+}
+
+
+impl std::ops::Deref for TupleKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for TupleKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for StorageKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for StorageKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl TupleKey {
+    /// The lawful multi-value mint: encode each value through the codec
+    /// authority and concatenate — no relation prefix.
+    pub fn from_values<'v>(values: impl IntoIterator<Item = &'v super::DataValue>) -> TupleKey {
+        let mut out = Vec::new();
+        for v in values {
+            out.extend_from_slice(super::canonical::encode_owned(v).as_bytes());
+        }
+        TupleKey(out)
+    }
+
+    /// Claim stored bare-tuple bytes by proving they split into exactly
+    /// `arity` lawful canonical encodings with nothing trailing.
+    pub fn from_stored(bytes: Vec<u8>, arity: usize) -> Result<TupleKey, DecodeError> {
+        split_key(&bytes, arity)?;
+        Ok(TupleKey(bytes))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl StorageKey {
+    /// Storage key layout v1: keys open with the relation id as 8
+    /// big-endian bytes (the keyspace prefix), then the key columns'
+    /// canonical encodings, then — for bitemporal relations — the two
+    /// fixed-width validity slots.
+    pub const RELATION_PREFIX_LEN: usize = 8;
+    /// One canonical validity slot: tag byte + 9-byte payload.
+    pub const VALIDITY_TAIL_LEN: usize = 10;
+    /// Both time slots of a bitemporal key.
+    pub const BITEMPORAL_TAIL_LEN: usize = 2 * Self::VALIDITY_TAIL_LEN;
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -335,7 +555,7 @@ mod tests {
             );
             rows.push_row(&[a, b]);
         }
-        let keys_before: Vec<EncodedKey> = {
+        let keys_before: Vec<TupleKey> = {
             let f = arena.frame();
             let adm = rows.admit(&f);
             (0..adm.len()).map(|i| adm.encode_row(i)).collect()
@@ -416,14 +636,14 @@ mod tests {
             assert_eq!(adm.row(0), adm2.row(0));
         }
         // Truncated key: typed refusal, nothing pushed.
-        let cut = EncodedKey(key.as_bytes()[..key.len() - 3].to_vec());
+        let cut = TupleKey(key.as_bytes()[..key.len() - 3].to_vec());
         let before = rows2.len();
         assert!(rows2.push_encoded(&cut, &mut arena).is_err());
         assert_eq!(rows2.len(), before, "refusal left a partial tuple");
         // Trailing garbage: refused.
         let mut fat = key.as_bytes().to_vec();
         fat.push(0x05);
-        assert!(rows2.push_encoded(&EncodedKey(fat), &mut arena).is_err());
+        assert!(rows2.push_encoded(&TupleKey(fat), &mut arena).is_err());
         assert_eq!(rows2.len(), before);
     }
 
@@ -480,7 +700,7 @@ mod tests {
         }
         // Fixpoint reached: {0,3,6,9,12}.
         assert_eq!(total.len(), 5);
-        let keys_at_fixpoint: Vec<EncodedKey> = {
+        let keys_at_fixpoint: Vec<TupleKey> = {
             let f = arena.frame();
             let adm = total.admit(&f);
             (0..adm.len()).map(|i| adm.encode_row(i)).collect()
@@ -510,12 +730,12 @@ mod tests {
             rows.admit(&f).encode_row(0)
         };
         // Lawful bytes round-trip through the storage door.
-        let reclaimed = EncodedKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
+        let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
         assert_eq!(reclaimed, key);
         // Wrong arity, garbage, truncation: typed refusals.
-        assert!(EncodedKey::from_stored(key.as_bytes().to_vec(), 3).is_err());
-        assert!(EncodedKey::from_stored(vec![0xEE, 0x00], 1).is_err());
-        assert!(EncodedKey::from_stored(key.as_bytes()[..key.len() - 1].to_vec(), 2).is_err());
+        assert!(TupleKey::from_stored(key.as_bytes().to_vec(), 3).is_err());
+        assert!(TupleKey::from_stored(vec![0xEE, 0x00], 1).is_err());
+        assert!(TupleKey::from_stored(key.as_bytes()[..key.len() - 1].to_vec(), 2).is_err());
     }
 
     /// Storage ingestion refuses stale/foreign containers with typed
@@ -614,11 +834,11 @@ mod tests {
         let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
             Validity::new(ValidityTs::from_raw(123), true),
         ));
-        assert_eq!(enc.len(), EncodedKey::VALIDITY_TAIL_LEN);
+        assert_eq!(enc.len(), StorageKey::VALIDITY_TAIL_LEN);
         let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
             Validity::new(ValidityTs::from_raw(i64::MIN), false),
         ));
-        assert_eq!(enc2.len(), EncodedKey::VALIDITY_TAIL_LEN);
+        assert_eq!(enc2.len(), StorageKey::VALIDITY_TAIL_LEN);
     }
 
     #[test]

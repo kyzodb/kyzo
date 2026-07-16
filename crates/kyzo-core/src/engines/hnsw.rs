@@ -479,6 +479,66 @@ const CANARY_LAYER: i64 = 1;
 /// | Canary | `[1, Null × (2·base_key_len + 4)]`        | `[Int bottom_layer, Bytes key, false]` |
 ///
 /// where `id…` is `tuple_key…, Int field, Int sub` (`-1` = whole field).
+/// Content hash of a stored vector (HNSW change-detection payload).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct VecContentHash(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for VecContentHash {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for VecContentHash {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl AsRef<[u8]> for VecContentHash {
+    fn as_ref(&self) -> &[u8] { &self.0 }
+}
+impl From<Vec<u8>> for VecContentHash {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+
+/// Canary entry key bytes for an HNSW index row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct HnswEntryKey(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for HnswEntryKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for HnswEntryKey {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl AsRef<[u8]> for HnswEntryKey {
+    fn as_ref(&self) -> &[u8] { &self.0 }
+}
+impl From<Vec<u8>> for HnswEntryKey {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+
+/// Ranked-hit key bytes during HNSW search.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct HnswHitKey(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for HnswHitKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for HnswHitKey {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl AsRef<[u8]> for HnswHitKey {
+    fn as_ref(&self) -> &[u8] { &self.0 }
+}
+impl From<Vec<u8>> for HnswHitKey {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HnswRow {
     /// A vector's presence at one layer (the original's "self-loop" row):
@@ -488,6 +548,7 @@ pub(crate) enum HnswRow {
         layer: i64,
         at: VectorId,
         degree: usize,
+        vec_hash: VecContentHash,
     },
     /// A directed link between two vectors at one layer. `ignore_link` is
     /// the tombstone the shrink pass leaves instead of deleting a link a
@@ -526,6 +587,7 @@ pub(crate) enum HnswRow {
     /// removal is a concurrency-semantics decision, not a port decision).
     Canary {
         bottom_layer: i64,
+        entry_key: HnswEntryKey,
     },
 }
 
@@ -573,7 +635,7 @@ impl HnswRow {
                 degree, vec_hash, ..
             } => Tuple::from_vec(vec![
                 DataValue::from(*degree as i64),
-                DataValue::Bytes(vec_hash.clone()),
+                DataValue::Bytes(vec_hash.0.clone()),
                 DataValue::from(false),
             ]),
             HnswRow::Edge {
@@ -585,7 +647,7 @@ impl HnswRow {
             ]),
             HnswRow::Canary {
                 bottom_layer,
-                entry_key,
+                entry_key: HnswEntryKey(entry_key),
             } => Tuple::from_vec(vec![
                 DataValue::from(*bottom_layer),
                 DataValue::Bytes(entry_key.clone()),
@@ -649,7 +711,7 @@ impl HnswRow {
             };
             return Ok(HnswRow::Canary {
                 bottom_layer,
-                entry_key: entry_key.clone(),
+                entry_key: HnswEntryKey(entry_key.clone()),
             });
         }
         if layer > 0 {
@@ -715,7 +777,7 @@ impl HnswRow {
                 layer,
                 at: fr,
                 degree: degree as usize,
-                vec_hash: vec_hash.clone(),
+                vec_hash: VecContentHash(vec_hash.clone()),
             })
         } else {
             let dist = tuple[2 * kl + 5].get_float().ok_or_else(|| {
@@ -1229,7 +1291,7 @@ fn put_fresh_at_levels(
         .to_vec();
     HnswRow::Canary {
         bottom_layer,
-        entry_key,
+        entry_key: HnswEntryKey(entry_key),
     }
     .write(tx, idx, base_key_len)?;
     for layer in bottom_layer..=top_layer {
@@ -1237,7 +1299,7 @@ fn put_fresh_at_levels(
             layer,
             at: at.clone(),
             degree: 0,
-            vec_hash: vec_hash.to_vec(),
+            vec_hash: VecContentHash(vec_hash.to_vec()),
         }
         .write(tx, idx, base_key_len)?;
     }
@@ -1467,7 +1529,7 @@ fn put_vector<T: WriteTx>(
         ..
     }) = read_node_row(tx, base, idx, 0, at)?
     {
-        if stored_hash == vec_hash {
+        if stored_hash.as_ref() == vec_hash {
             return Ok(());
         }
         remove_vec(tx, base, idx, at)?;
@@ -1526,7 +1588,7 @@ fn put_vector<T: WriteTx>(
             layer,
             at: at.clone(),
             degree: selected.len(),
-            vec_hash: vec_hash.clone(),
+            vec_hash: VecContentHash(vec_hash.clone()),
         }
         .write(tx, idx, base_key_len)?;
 
@@ -1662,7 +1724,7 @@ fn remove_vec<T: WriteTx>(
                 let val = idx.encode_val_only_for_store(
                     HnswRow::Canary {
                         bottom_layer,
-                        entry_key,
+                        entry_key: HnswEntryKey(entry_key),
                     }
                     .val_tuple()
                     .as_slice(),
@@ -2067,6 +2129,7 @@ enum SearchPlan {
 /// path). `key` is the memcmp encoding of the entry's layer-0 node key.
 struct Ranked {
     dist: OrderedFloat<f64>,
+    key: HnswHitKey,
     tuple: Tuple,
 }
 
@@ -2352,7 +2415,7 @@ fn scan_filtered(
                 params.k,
                 Ranked {
                     dist: OrderedFloat(d),
-                    key,
+                    key: HnswHitKey(key),
                     tuple,
                 },
             );
@@ -2396,7 +2459,7 @@ fn graph_search_layer0(
                     ef2,
                     Ranked {
                         dist: OrderedFloat(d),
-                        key,
+                        key: HnswHitKey(key),
                         tuple,
                     },
                 );
@@ -2439,7 +2502,7 @@ fn graph_search_layer0(
                     ef2,
                     Ranked {
                         dist: OrderedFloat(nd),
-                        key,
+                        key: HnswHitKey(key),
                         tuple,
                     },
                 );
@@ -3651,7 +3714,7 @@ mod tests {
                 layer: -2,
                 at: at.clone(),
                 degree: 3,
-                vec_hash: vec![1, 2, 3],
+                vec_hash: vec![1, 2, 3].into(),
             },
             HnswRow::Edge {
                 layer: 0,
@@ -3662,7 +3725,7 @@ mod tests {
             },
             HnswRow::Canary {
                 bottom_layer: -3,
-                entry_key: vec![9, 9],
+                entry_key: vec![9, 9].into(),
             },
         ];
         for row in rows {
@@ -3677,7 +3740,7 @@ mod tests {
             layer: 0,
             at: at.clone(),
             degree: 0,
-            vec_hash: vec![],
+            vec_hash: vec![].into(),
         };
         let k = node.key_tuple(kl);
         assert_eq!(k.len(), 2 * kl + 5);
@@ -3689,7 +3752,7 @@ mod tests {
         );
         let c = HnswRow::Canary {
             bottom_layer: 0,
-            entry_key: vec![],
+            entry_key: vec![].into(),
         }
         .key_tuple(kl);
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));

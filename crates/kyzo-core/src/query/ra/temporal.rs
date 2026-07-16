@@ -149,7 +149,7 @@ use crate::data::bitemporal::{
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
-use crate::data::value::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
+use crate::data::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -304,10 +304,10 @@ pub(crate) fn decode_raw_version(
     val: &[u8],
     key_len: usize,
 ) -> Result<(Vec<u8>, Tuple, RawVersion)> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
         bail!("temporal scan over a key too short to carry its two time slots");
     }
-    let prefix_len = key.len() - EncodedKey::BITEMPORAL_TAIL_LEN;
+    let prefix_len = key.len() - StorageKey::BITEMPORAL_TAIL_LEN;
     let mut full = decode_tuple_from_key(key, key_len + 2)?;
     let sys_dv = full
         .pop()
@@ -488,8 +488,8 @@ impl<'a> SpansScanBatches<'a> {
         loop {
             let Some(next) = self.raw.next() else { break };
             let (k, v) = next?;
-            if k.len() < EncodedKey::BITEMPORAL_TAIL_LEN
-                || k[..k.len() - EncodedKey::BITEMPORAL_TAIL_LEN] != prefix[..]
+            if k.len() < StorageKey::BITEMPORAL_TAIL_LEN
+                || k[..k.len() - StorageKey::BITEMPORAL_TAIL_LEN] != prefix[..]
             {
                 self.pending_key = Some((k, v));
                 break;

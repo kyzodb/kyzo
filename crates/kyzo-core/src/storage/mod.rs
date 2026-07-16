@@ -499,7 +499,7 @@ pub trait ReadTx: sealed::Sealed + Sync {
 
     /// Bitemporal as-of scan: among keys differing only in their two
     /// trailing time slots (valid instant outer, system version inner —
-    /// [`EncodedKey::BITEMPORAL_TAIL_LEN`](crate::data::value::EncodedKey)),
+    /// [`StorageKey::BITEMPORAL_TAIL_LEN`](crate::data::value::StorageKey)),
     /// resolve each fact to what the record said at the [`AsOf`]
     /// coordinate, and yield only facts whose governing
     /// row asserts them. A row's polarity (assert / retract / erase) is

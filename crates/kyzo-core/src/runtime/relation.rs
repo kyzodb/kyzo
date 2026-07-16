@@ -34,7 +34,7 @@
  *   before slicing.
  * - The original's `amend_key_prefix` is deleted: it was dead code
  *   (`#[allow(dead_code)]` upstream) and splicing a different relation id
- *   into an [`EncodedKey`]'s bytes would launder unproven provenance into
+ *   into an [`StorageKey`]'s bytes would launder unproven provenance into
  *   the typed key. If a real consumer appears it returns as an encoder.
  * - Fix on port / #301 T6: the original's column-by-column
  *   `ensure_compatible` chained the *input*'s key columns with the
@@ -118,7 +118,7 @@ use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRel
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{
-    AsOf, DataValue, EncodedKey, MAX_VALIDITY_TS, RelationId, ScanBound, StoredValiditySlot, Tuple,
+    AsOf, DataValue, StorageKey, MAX_VALIDITY_TS, RelationId, ScanBound, StoredValiditySlot, Tuple,
     TupleT, ValidityTs, decode_tuple_from_kv, encode_key_with_suffix, extend_tuple_from_v,
     scan_key_lower, scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
@@ -162,8 +162,8 @@ pub(crate) enum SystemKey<'a> {
 
 impl SystemKey<'_> {
     /// The key's written form. Encoding is infallible and the result is a
-    /// proven [`EncodedKey`], like every encoder in the kernel.
-    pub(crate) fn encode(&self) -> EncodedKey {
+    /// proven [`StorageKey`], like every encoder in the kernel.
+    pub(crate) fn encode(&self) -> StorageKey {
         match self {
             SystemKey::IdCounter => [DataValue::Null].encode_as_key(RelationId::SYSTEM),
             SystemKey::Relation(name) => [DataValue::from(*name)].encode_as_key(RelationId::SYSTEM),
@@ -759,7 +759,7 @@ impl RelationHandle {
         &self,
         tuple: &[DataValue],
         span: SourceSpan,
-    ) -> Result<EncodedKey> {
+    ) -> Result<StorageKey> {
         let len = self.metadata.keys.len();
         ensure!(
             tuple.len() >= len,
@@ -775,7 +775,7 @@ impl RelationHandle {
 
     /// Encode a key prefix (fewer columns than the full key) for prefix
     /// scans. Infallible: any prefix length is a valid scan seed.
-    pub(crate) fn encode_partial_key_for_store(&self, tuple: &[DataValue]) -> EncodedKey {
+    pub(crate) fn encode_partial_key_for_store(&self, tuple: &[DataValue]) -> StorageKey {
         tuple.encode_as_key(self.id)
     }
 
@@ -791,7 +791,7 @@ impl RelationHandle {
         valid: ValidityTs,
         sys: ValidityTs,
         span: SourceSpan,
-    ) -> Result<EncodedKey> {
+    ) -> Result<StorageKey> {
         let len = self.metadata.keys.len();
         ensure!(
             tuple.len() >= len,
@@ -1000,7 +1000,7 @@ impl RelationHandle {
 
     /// The inclusive lower bound of this relation's keyspace: the empty
     /// tuple under its prefix.
-    fn keyspace_lower(&self) -> EncodedKey {
+    fn keyspace_lower(&self) -> StorageKey {
         Tuple::default().encode_as_key(self.id)
     }
 

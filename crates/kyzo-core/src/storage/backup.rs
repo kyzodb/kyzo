@@ -26,7 +26,7 @@ use thiserror::Error;
 
 use crate::data::bitemporal::system_stamp_of_key;
 use crate::data::value::ValidityTs;
-use crate::data::value::{EncodedKey, RelationId};
+use crate::data::value::{StorageKey, RelationId};
 use crate::runtime::relation::{KeyspaceKind, list_relations};
 use crate::storage::{FormatVersion, ReadTx, Storage};
 
@@ -103,7 +103,7 @@ fn relation_kinds(tx: &impl ReadTx) -> Result<BTreeMap<RelationId, KeyspaceKind>
 /// cataloged `Facts` relation triggers the stamp check.
 fn relation_prefix(key: &[u8]) -> Option<RelationId> {
     let bytes: [u8; 8] = key
-        .get(0..EncodedKey::RELATION_PREFIX_LEN)?
+        .get(0..StorageKey::RELATION_PREFIX_LEN)?
         .try_into()
         .ok()?;
     RelationId::new(u64::from_be_bytes(bytes))

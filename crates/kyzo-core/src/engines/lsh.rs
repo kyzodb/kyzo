@@ -125,6 +125,26 @@ use crate::storage::{ReadTx, WriteTx};
 /// struct maps) as the payload of the base relation's `IndexKind::Lsh`
 /// catalog entry — **its wire form is an on-disk format**, pinned by the
 /// pinned-bytes test below; changing it is a migration decision.
+/// Stored MinHash permutation seed bytes for an LSH index.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
+#[repr(transparent)]
+pub(crate) struct LshPermutationBytes(pub(crate) Vec<u8>);
+
+impl std::ops::Deref for LshPermutationBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0 }
+}
+impl std::ops::DerefMut for LshPermutationBytes {
+    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+}
+impl AsRef<[u8]> for LshPermutationBytes {
+    fn as_ref(&self) -> &[u8] { &self.0 }
+}
+impl From<Vec<u8>> for LshPermutationBytes {
+    fn from(v: Vec<u8>) -> Self { Self(v) }
+}
+
+
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct MinHashLshIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
@@ -141,6 +161,21 @@ pub(crate) struct MinHashLshIndexManifest {
     pub(crate) n_bands: usize,
     pub(crate) n_rows_in_band: usize,
     pub(crate) threshold: f64,
+    /// The permutation seeds as EXPLICIT LITTLE-ENDIAN u32 bytes (the ratified
+    /// format fix; the original wrote native-endian by unsafe reinterpretation).
+    /// The seeds are drawn DETERMINISTICALLY from the index's `seed` (default
+    /// [`DEFAULT_PERM_SEED`]) via splitmix64, so two fresh builds of the same
+    /// index produce byte-identical permutations — see [`HashPermutations::new`].
+    ///
+    /// FORMAT-RELEVANT (resolved, not a residual): the signature VALUES minted
+    /// from these seeds hash the **memcmp-encoded** bytes of each element (and
+    /// each n-gram's tokens) through a seeded, portable xxHash32 stream — NOT
+    /// `std::hash::Hash`, whose integer and length writes are native-endian and
+    /// unpinned across Rust versions. The stored band chunks are therefore
+    /// portable across architectures and toolchains, and pinned by
+    /// `signature_bytes_are_pinned_and_portable`. Changing the element encoding
+    /// or the hash is an on-disk-format migration.
+    pub(crate) perms: LshPermutationBytes,
 }
 
 impl MinHashLshIndexManifest {
@@ -148,7 +183,7 @@ impl MinHashLshIndexManifest {
     /// catalog payload and may be corrupt (the original truncated odd
     /// lengths silently).
     pub(crate) fn get_hash_perms(&self) -> Result<HashPermutations> {
-        HashPermutations::from_bytes(&self.perms).map_err(|reason| {
+        HashPermutations::from_bytes(&self.perms.0).map_err(|reason| {
             miette!(IndexRowCorrupt::new(
                 &self.index_name,
                 &[],
@@ -748,7 +783,7 @@ mod tests {
         assert!(HashPermutations::from_bytes(&bytes[..7]).is_err());
         // And through the manifest it is the typed corruption error.
         let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4);
-        m.perms.pop();
+        m.perms.0.pop();
         let err = m.get_hash_perms().unwrap_err();
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
     }
@@ -1026,7 +1061,7 @@ mod tests {
             n_bands: params.b,
             n_rows_in_band: params.r,
             threshold: 0.5,
-            perms: HashPermutations(perm_seeds).to_bytes(),
+            perms: LshPermutationBytes(HashPermutations(perm_seeds).to_bytes()),
         }
     }
 

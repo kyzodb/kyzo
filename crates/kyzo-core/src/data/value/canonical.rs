@@ -635,7 +635,7 @@ pub fn decode(bytes: &[u8]) -> Result<DataValue, DecodeError> {
 }
 
 /// Decode ONE canonical value from the front of `bytes`, returning it
-/// and the bytes consumed (plane-internal: `EncodedKey` splitting).
+/// and the bytes consumed (plane-internal: `StorageKey` splitting).
 pub(super) fn decode_one(bytes: &[u8]) -> Result<(DataValue, usize), DecodeError> {
     decode_at(bytes, 0)
 }

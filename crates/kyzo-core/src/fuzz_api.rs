@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use miette::Result;
 
 use crate::data::value::DataValue;
-use crate::data::value::EncodedKey;
+use crate::data::value::StorageKey;
 use crate::data::value::RelationId;
 use crate::data::value::Tuple;
 use crate::data::value::decode_values_all;
@@ -61,10 +61,10 @@ pub fn fuzz_parse_script(src: &str) -> Result<()> {
 /// Encode a tuple as a relation-prefixed memcmp key
 /// (`encode_key_with_suffix` with no suffix columns), for the
 /// memcmp-codec fuzz target's round-trip law against
-/// [`crate::decode_tuple_from_key`]. `EncodedKey`/`RelationId`/`Tuple`
+/// [`crate::decode_tuple_from_key`]. `StorageKey`/`RelationId`/`Tuple`
 /// are already public; the façade exists only because
 /// `encode_key_with_suffix` itself is crate-internal.
-pub fn fuzz_encode_tuple_key(rel: u64, tuple: &Tuple) -> Option<EncodedKey> {
+pub fn fuzz_encode_tuple_key(rel: u64, tuple: &Tuple) -> Option<StorageKey> {
     let rel = RelationId::new(rel)?;
     Some(encode_key_with_suffix(rel, tuple.as_slice(), &[]))
 }

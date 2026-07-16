@@ -1945,7 +1945,7 @@ impl<T: WriteTx> SessionTx<T> {
             n_bands: params.b,
             n_rows_in_band: params.r,
             threshold: cfg.target_threshold.0,
-            perms: perms.to_bytes(),
+            perms: crate::engines::lsh::LshPermutationBytes(perms.to_bytes()),
         };
         let idx_meta = crate::engines::lsh::lsh_index_metadata(&base.metadata);
         let inv_meta = crate::engines::lsh::lsh_inv_index_metadata(&base.metadata);
