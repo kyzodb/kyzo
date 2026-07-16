@@ -25,19 +25,20 @@
 //! multiple arenas live simultaneously, and epoch-stamped containers
 //! outlive any one frame borrow. That measurement bounds full
 //! lifetime-branding to nesting scopes; where instances coexist, the
-//! ceiling is the mint-checked [`DomainCtx`](super::arena::DomainCtx)
-//! token ([`DomainCtx::prove_shared`](super::arena::DomainCtx::prove_shared)),
+//! ceiling is the mint-checked [`Admission`](super::admission::Admission)
+//! token ([`Admission::prove_shared`](super::admission::Admission::prove_shared)),
 //! which still deletes every domain-mixup panic and every unproven
-//! comparison.
+//! comparison. Admission and [`Denial`](super::admission::Denial) speak
+//! one vocabulary ([`super::admission`]).
 #![allow(dead_code)] // #119 foundation: dead_code is target-split, #120 wires it
 
 /// The raw dense handle for an interned value: **identity only, no read
 /// authority**. By design, no read API anywhere accepts a bare `Code` —
 /// codes are only valid as observed through an arena [`Frame`](super::arena::Frame)
 /// or [`Snapshot`](super::arena::Snapshot). Handle equality and
-/// identity-order are [`DomainCtx::same_handle`](super::arena::DomainCtx::same_handle)
-/// / [`DomainCtx::cmp_identity`](super::arena::DomainCtx::cmp_identity)
-/// (or the nest-branded [`NestedDomainCtx`](super::arena::NestedDomainCtx)
+/// identity-order are [`Admission::same_handle`](super::admission::Admission::same_handle)
+/// / [`Admission::cmp_identity`](super::admission::Admission::cmp_identity)
+/// (or the nest-branded [`NestedDomainCtx`](super::admission::NestedDomainCtx)
 /// under one live observer) — packed storage uses [`Code::raw`] under a
 /// container that already holds the domain proof. To spend one you need
 /// its epoch and arena:
@@ -48,13 +49,14 @@
 /// - live [`Frame`](super::arena::Frame)s and pinned
 ///   [`Snapshot`](super::arena::Snapshot)s both spend a `StampedCode`
 ///   directly, proving arena identity and epoch via
-///   [`DomainCtx::prove_shared`](super::arena::DomainCtx::prove_shared)
-///   on every spend (typed refusal — see module-level coexisting-arena
-///   measurement; no lifetime-branded spend witness is offered).
+///   [`Admission::prove_shared`](super::admission::Admission::prove_shared)
+///   on every spend (typed [`Denial`](super::admission::Denial) — see
+///   module-level coexisting-arena measurement; no lifetime-branded spend
+///   witness is offered).
 ///
 /// There is deliberately no `Ord`: value order is the arena's to answer,
 /// inside a frame. Structural identity-order under a proven context is
-/// [`DomainCtx::cmp_identity`](super::arena::DomainCtx::cmp_identity).
+/// [`Admission::cmp_identity`](super::admission::Admission::cmp_identity).
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
@@ -64,7 +66,7 @@ impl Code {
     /// The raw handle, for packed storage under a proven domain. Reading
     /// is free; minting stays with the arena and the epoch-stamped
     /// containers. Comparing handles for identity or order requires a
-    /// [`DomainCtx`](super::arena::DomainCtx).
+    /// [`Admission`](super::admission::Admission).
     #[inline]
     pub fn raw(self) -> u32 {
         self.0

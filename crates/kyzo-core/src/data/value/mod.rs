@@ -37,6 +37,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+pub mod admission;
 pub mod arena;
 mod bytes_qty;
 pub mod canonical;
@@ -52,6 +53,7 @@ pub mod string;
 pub mod tag;
 pub mod wide;
 
+pub use admission::{Admission, Denial};
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
 pub use number::{Num, NumRepr};
 pub use row::{

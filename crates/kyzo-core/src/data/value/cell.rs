@@ -41,10 +41,11 @@
 //!   [`Value::try_cmp_storage`] (decides only what local information can
 //!   lawfully decide, `None` otherwise — never a deref) and
 //!   [`Value::same_word`] (physical 16-byte identity under a proven
-//!   [`DomainCtx`](super::arena::DomainCtx) — without the token the call
+//!   [`Admission`](super::admission::Admission) — without the token the call
 //!   does not compile; the token is mint-checked / unbranded because
 //!   words from coexisting arenas must share one compare API — nest
-//!   brands live on [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)).
+//!   brands live on [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx);
+//!   refusal is typed [`Denial`](super::admission::Denial), never a bare bool).
 
 // #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
 // laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
@@ -53,7 +54,8 @@
 
 use std::cmp::Ordering;
 
-use super::arena::{Arena, DomainCtx};
+use super::admission::Admission;
+use super::arena::Arena;
 use super::canonical::CanonicalBytes;
 use super::code::{Code, StampedCode};
 use super::tag::Tag;
@@ -238,19 +240,19 @@ impl Value {
         }
     }
 
-    /// Physical 16-byte word identity under a proven shared context.
+    /// Physical 16-byte word identity under a proven shared [`Admission`].
     /// Value identity only when both words were minted in that context —
-    /// without [`DomainCtx`], this call does not compile, so cross-context
+    /// without the token this call does not compile, so cross-context
     /// comparison cannot affirmatively lie.
     ///
     /// **Coexisting-arena boundary:** takes the unbranded durable
-    /// [`DomainCtx`] (mint via [`DomainCtx::prove_shared`] /
-    /// [`DomainCtx::from_observer`]). Nest-branded compare under one live
-    /// frame uses [`NestedDomainCtx`](super::arena::NestedDomainCtx) /
+    /// [`Admission`] (mint via [`Admission::prove_shared`] /
+    /// [`Admission::from_observer`]). Nest-branded compare under one live
+    /// frame uses [`NestedDomainCtx`](super::admission::NestedDomainCtx) /
     /// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)
     /// and projects `.ctx()` when calling here.
     #[inline]
-    pub fn same_word(&self, other: &Value, _ctx: &DomainCtx) -> bool {
+    pub fn same_word(&self, other: &Value, _ctx: &Admission) -> bool {
         self.bytes == other.bytes
     }
 }
@@ -278,7 +280,7 @@ mod tests {
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
         let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
-        // Nest brand under one live frame; project durable DomainCtx for
+        // Nest brand under one live frame; project durable Admission for
         // same_word (coexisting-arena API).
         let ok = arena.frame().with_nested_ctx(|nest| {
             outline_edge.value().same_word(&again.value(), &nest.ctx())
@@ -423,12 +425,13 @@ mod tests {
         }
     }
 
-    /// Cross-arena mint cannot obtain a shared [`DomainCtx`], so the old
+    /// Cross-arena mint cannot obtain a shared [`Admission`], so the old
     /// trap — calling `same_word` across contexts and getting a lying
     /// `true` — cannot be written. Physical identity remains only under a
     /// proven token; storage cmp still refuses the unresolved prefix tie.
     #[test]
-    fn same_word_requires_shared_domain_ctx() {
+    fn same_word_requires_shared_admission() {
+        use super::super::admission::Denial;
         let mut arena_a = Arena::new();
         let mut arena_b = Arena::new();
         let big_x = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxx"));
@@ -442,19 +445,19 @@ mod tests {
         let fb = arena_b.frame();
         assert!(
             matches!(
-                DomainCtx::prove_shared(
+                Admission::prove_shared(
                     fa.bulk_arena(),
                     fa.bulk_epoch(),
                     fb.bulk_arena(),
                     fb.bulk_epoch(),
                 ),
-                Err(super::super::arena::DomainCtxRefusal::ArenaMismatch { .. })
+                Err(Denial::ArenaMismatch { .. })
             ),
             "cross-arena prove_shared must refuse — no token, no same_word"
         );
         // Under one arena, identical minting yields same_word.
         let again = Value::mint(&big_x, &mut arena_a).value();
-        let ctx = DomainCtx::from_observer(&arena_a.frame());
+        let ctx = Admission::from_observer(&arena_a.frame());
         assert!(va.same_word(&again, &ctx));
     }
 }

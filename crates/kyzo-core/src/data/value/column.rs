@@ -43,10 +43,10 @@
 
 use std::cmp::Ordering;
 
-use super::arena::{
-    ArenaId, BulkObserver, BulkPass, BulkSpendAuthority, DomainCtx, DomainCtxRefusal, Epoch,
-    EpochRemap,
+use super::admission::{
+    Admission, BulkPass, BulkSpendAuthority, Denial, SpendAdmission,
 };
+use super::arena::{ArenaId, BulkObserver, Epoch, EpochRemap};
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
 
@@ -58,10 +58,12 @@ use super::code::{Code, StampedCode};
 /// **Coexisting-arena boundary:** a `Domain` is owned container state — it
 /// outlives [`Frame`](super::arena::Frame) nests and coexists with other
 /// arenas' domains. Identity is therefore mint-checked
-/// [`DomainCtx`](super::arena::DomainCtx), not an invariant-lifetime nest
+/// [`Admission`](super::admission::Admission), not an invariant-lifetime nest
 /// brand (see [`super::code`] module measurement). Nest brands apply only
 /// while a single live observer nest is open
 /// ([`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)).
+/// Admission and [`Denial`](super::admission::Denial) speak one vocabulary
+/// ([`super::admission`]).
 ///
 /// @authority Domain
 /// @layer value
@@ -92,12 +94,13 @@ impl Domain {
     /// never in-place mutation of an existing one (`rust-verbs` consuming
     /// rebuild; `Domain` is a proven value, not a live handle).
     ///
-    /// Typed refusal on foreign arena or wrong epoch — never a panic.
+    /// Typed [`Denial`] on foreign arena or wrong epoch — never a panic,
+    /// never a bare boolean.
     ///
     /// **Coexisting-arena boundary:** stamps arrive from any mint path;
-    /// proof is [`DomainCtx::prove_shared`], not a nest brand.
-    fn absorb_stamp(self, sc: StampedCode) -> Result<Domain, DomainCtxRefusal> {
-        DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
+    /// proof is [`Admission::prove_shared`], not a nest brand.
+    fn absorb_stamp(self, sc: StampedCode) -> Result<Domain, Denial> {
+        Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let raw = sc.code().raw();
         Ok(Domain {
             arena: self.arena,
@@ -117,12 +120,12 @@ impl Domain {
     pub(super) fn admit<O: BulkObserver>(
         &self,
         o: &O,
-    ) -> Result<BulkSpendAuthority, DomainCtxRefusal> {
+    ) -> Result<SpendAdmission, Denial> {
         self.admit_to(o, "domain resolve")
     }
 
-    /// The admission check: arena/epoch via [`DomainCtx::prove_shared`]
-    /// (typed refusal, never panic); visibility extent remains an
+    /// The admission check: arena/epoch via [`Admission::prove_shared`]
+    /// (typed [`Denial`], never panic); visibility extent remains an
     /// observer-cut assert (not a domain-identity mixup).
     ///
     /// **Coexisting-arena boundary:** container domain and observer may
@@ -132,8 +135,8 @@ impl Domain {
         &self,
         o: &O,
         what: &str,
-    ) -> Result<BulkSpendAuthority, DomainCtxRefusal> {
-        DomainCtx::prove_shared(self.arena, self.epoch, o.bulk_arena(), o.bulk_epoch())?;
+    ) -> Result<SpendAdmission, Denial> {
+        Admission::prove_shared(self.arena, self.epoch, o.bulk_arena(), o.bulk_epoch())?;
         assert!(
             self.extent as usize <= o.bulk_len(),
             "{what} extent {} exceeds the observer's visibility ({} codes): \
@@ -153,14 +156,14 @@ impl Domain {
     }
 
     /// The compare/identity context for raw handles under this domain.
-    /// Durable fact token — not a spend authority.
+    /// Durable admission token — not a spend authority.
     ///
-    /// **Coexisting-arena boundary:** returns unbranded [`DomainCtx`] —
+    /// **Coexisting-arena boundary:** returns unbranded [`Admission`] —
     /// domains outlive observer nests; use
     /// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)
     /// when a compiler-unique nest brand is available.
-    pub fn ctx(&self) -> DomainCtx {
-        DomainCtx::at(self.arena, self.epoch)
+    pub fn ctx(&self) -> Admission {
+        Admission::at(self.arena, self.epoch)
     }
 }
 
@@ -182,9 +185,9 @@ impl CodeColumn {
     }
 
     /// The write door: a stamp-verified push. This per-push check is what
-    /// the kernels' zero-per-code reads are amortizing. Typed refusal on
+    /// the kernels' zero-per-code reads are amortizing. Typed [`Denial`] on
     /// foreign/stale stamps — never a panic.
-    pub fn push(&mut self, sc: StampedCode) -> Result<(), DomainCtxRefusal> {
+    pub fn push(&mut self, sc: StampedCode) -> Result<(), Denial> {
         self.domain = self.domain.absorb_stamp(sc)?;
         self.codes.push(sc.code().raw());
         Ok(())
@@ -204,11 +207,11 @@ impl CodeColumn {
 
     /// The admission: one container-domain check (arena + epoch +
     /// visibility extent), then every read is check-free. Arena/epoch
-    /// mismatch is a typed refusal.
+    /// mismatch is a typed [`Denial`].
     pub fn admit<'a, O: BulkObserver>(
         &'a self,
         o: &'a O,
-    ) -> Result<AdmittedCodes<'a, O>, DomainCtxRefusal> {
+    ) -> Result<AdmittedCodes<'a, O>, Denial> {
         // One admission authority, spent by value into the bulk pass —
         // not discarded and reminted per resolve.
         let proof = self.domain.admit_to(o, "code column")?;
@@ -222,12 +225,12 @@ impl CodeColumn {
 
     /// The gather door: consume this column into the next epoch. The only
     /// mint of a new-epoch container; the old one ceases to exist here.
-    /// Typed refusal when the remap is not this container's arena/epoch.
+    /// Typed [`Denial`] when the remap is not this container's arena/epoch.
     ///
     /// **Coexisting-arena boundary:** gather joins owned container + owned
-    /// remap; identity is mint-checked [`DomainCtx::prove_shared`].
-    pub fn gather(self, remap: &EpochRemap) -> Result<CodeColumn, DomainCtxRefusal> {
-        DomainCtx::prove_shared(
+    /// remap; identity is mint-checked [`Admission::prove_shared`].
+    pub fn gather(self, remap: &EpochRemap) -> Result<CodeColumn, Denial> {
+        Admission::prove_shared(
             self.domain.arena,
             self.domain.epoch,
             remap.arena_id(),
@@ -256,7 +259,7 @@ impl CodeColumn {
 
 /// An admitted code column: the domain is proven against `obs`, so every
 /// read here spends raw codes with no further checks. Identity and
-/// identity-order of packed handles go through [`DomainCtx`].
+/// identity-order of packed handles go through [`Admission`].
 ///
 /// **Coexisting-arena boundary:** `ctx` is the unbranded durable token —
 /// admission returns a value that callers store and pass across sites
@@ -267,7 +270,7 @@ pub struct AdmittedCodes<'a, O: BulkObserver> {
     codes: &'a [u32],
     /// Admission authority spent into this pass at [`CodeColumn::admit`].
     pass: BulkPass<'a, O>,
-    ctx: DomainCtx,
+    ctx: Admission,
     all_sealed: bool,
 }
 
@@ -281,7 +284,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
     }
 
     /// The proven compare context for this admission.
-    pub fn ctx(&self) -> &DomainCtx {
+    pub fn ctx(&self) -> &Admission {
         &self.ctx
     }
 
@@ -315,7 +318,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
     }
 
     /// Semantic (byte-order) comparison of two positions: raw-handle
-    /// identity / sealed identity-order under [`DomainCtx`], else
+    /// identity / sealed identity-order under [`Admission`], else
     /// prefix-first through the observer.
     pub fn cmp_at(&self, i: usize, j: usize) -> Ordering {
         let a = Code(self.codes[i]);
@@ -375,8 +378,8 @@ impl WordColumn {
 
     /// The write door: consumes the minted pairing. Inline words carry no
     /// context and pass freely; wide words verify their stamp into the
-    /// domain. Typed refusal on foreign/stale wide stamps — never a panic.
-    pub fn push(&mut self, m: Minted) -> Result<(), DomainCtxRefusal> {
+    /// domain. Typed [`Denial`] on foreign/stale wide stamps — never a panic.
+    pub fn push(&mut self, m: Minted) -> Result<(), Denial> {
         let value = m.value();
         match m.stamp() {
             None => {
@@ -408,7 +411,7 @@ impl WordColumn {
     pub fn admit<'a, O: BulkObserver>(
         &'a self,
         o: &'a O,
-    ) -> Result<AdmittedWords<'a, O>, DomainCtxRefusal> {
+    ) -> Result<AdmittedWords<'a, O>, Denial> {
         let proof = self.domain.admit_to(o, "word column")?;
         Ok(AdmittedWords {
             words: &self.words,
@@ -419,12 +422,12 @@ impl WordColumn {
 
     /// The gather door: consume into the next epoch, rewriting every wide
     /// word's handle through the remap (values, tags, prefixes unchanged).
-    /// Typed refusal when the remap is not this container's arena/epoch.
+    /// Typed [`Denial`] when the remap is not this container's arena/epoch.
     ///
     /// **Coexisting-arena boundary:** owned column + owned remap; mint-checked
-    /// [`DomainCtx::prove_shared`].
-    pub fn gather(self, remap: &EpochRemap) -> Result<WordColumn, DomainCtxRefusal> {
-        DomainCtx::prove_shared(
+    /// [`Admission::prove_shared`].
+    pub fn gather(self, remap: &EpochRemap) -> Result<WordColumn, Denial> {
+        Admission::prove_shared(
             self.domain.arena,
             self.domain.epoch,
             remap.arena_id(),
@@ -454,15 +457,15 @@ impl WordColumn {
 }
 
 /// An admitted word column: reads and comparisons under the proven
-/// domain. Physical word identity goes through [`DomainCtx`].
+/// domain. Physical word identity goes through [`Admission`].
 ///
 /// **Coexisting-arena boundary:** same as [`AdmittedCodes`] — unbranded
-/// durable [`DomainCtx`], not a nest brand that cannot escape admission.
+/// durable [`Admission`], not a nest brand that cannot escape admission.
 pub struct AdmittedWords<'a, O: BulkObserver> {
     words: &'a [Value],
     /// Admission authority spent into this pass at [`WordColumn::admit`].
     pass: BulkPass<'a, O>,
-    ctx: DomainCtx,
+    ctx: Admission,
 }
 
 impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
@@ -479,7 +482,7 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
     }
 
     /// The proven compare context for this admission.
-    pub fn ctx(&self) -> &DomainCtx {
+    pub fn ctx(&self) -> &Admission {
         &self.ctx
     }
 
@@ -497,7 +500,7 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
     }
 
     /// Storage-order comparison: physical word identity under
-    /// [`DomainCtx`] first, then the word's local knowledge (tags, inline
+    /// [`Admission`] first, then the word's local knowledge (tags, inline
     /// bytes, prefixes), the observer only on a remaining tie.
     pub fn cmp_at(&self, i: usize, j: usize) -> Ordering {
         let (a, b) = (&self.words[i], &self.words[j]);
@@ -540,7 +543,8 @@ impl Column {
 
 #[cfg(test)]
 mod tests {
-    use super::super::arena::{Arena, DomainCtxRefusal};
+    use super::super::admission::Denial;
+    use super::super::arena::Arena;
     use super::super::canonical::{Datum, encode};
     use super::super::number::Num;
     use super::*;
@@ -581,7 +585,7 @@ mod tests {
         assert!(
             matches!(
                 col.push(sc),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "epoch 0 stamp into an epoch 1 column must refuse typed"
         );
@@ -596,7 +600,7 @@ mod tests {
         let fb = b.frame();
         let mut col = CodeColumn::new_in(&fb);
         assert!(
-            matches!(col.push(sa), Err(DomainCtxRefusal::ArenaMismatch { .. })),
+            matches!(col.push(sa), Err(Denial::ArenaMismatch { .. })),
             "foreign-arena stamp must refuse typed"
         );
     }
@@ -621,7 +625,7 @@ mod tests {
         assert!(
             matches!(
                 col.admit(&f),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "stale container must refuse typed — gather first"
         );
@@ -789,7 +793,7 @@ mod tests {
         assert!(
             matches!(
                 col.gather(&r3),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "wrong-epoch remap must refuse typed"
         );
@@ -839,7 +843,7 @@ mod tests {
         assert!(
             matches!(
                 col.push(minted),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "stale wide word must refuse typed"
         );

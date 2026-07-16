@@ -32,7 +32,8 @@
 
 use std::collections::HashMap;
 
-use super::arena::{BulkObserver, DomainCtx, DomainCtxRefusal};
+use super::admission::{Admission, Denial};
+use super::arena::BulkObserver;
 use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
@@ -74,7 +75,7 @@ impl ExecRows {
     pub fn admit<O: BulkObserver>(
         rows: &Rows,
         o: &O,
-    ) -> Result<ExecRows, DomainCtxRefusal> {
+    ) -> Result<ExecRows, Denial> {
         let admitted: AdmittedRows<'_, O> = rows.admit(o)?;
         Ok(ExecRows {
             domain: rows.domain(),
@@ -119,7 +120,7 @@ impl ExecRows {
     /// **Coexisting-arena boundary:** both inputs are owned execution rows
     /// that outlive any observer nest and may have been built under
     /// different brands (or none). Shared identity is mint-checked
-    /// [`DomainCtx::prove_shared`] — a nest brand cannot unify two
+    /// [`Admission::prove_shared`] — a nest brand cannot unify two
     /// coexisting domains at compile time.
     pub fn join_project(
         &self,
@@ -127,10 +128,10 @@ impl ExecRows {
         self_col: usize,
         other_col: usize,
         out: &[(Side, usize)],
-    ) -> Result<ExecRows, DomainCtxRefusal> {
+    ) -> Result<ExecRows, Denial> {
         // Shared context for raw-handle identity — mint proves both sides
         // name one domain; mismatch refuses typed, never panics.
-        let ctx = DomainCtx::prove_shared(
+        let ctx = Admission::prove_shared(
             self.domain.arena_id(),
             self.domain.epoch(),
             other.domain.arena_id(),
@@ -191,16 +192,16 @@ impl ExecRows {
         o: &'o O,
         row: usize,
         col: usize,
-    ) -> Result<&'o [u8], DomainCtxRefusal> {
+    ) -> Result<&'o [u8], Denial> {
         let proof = self.domain.admit(o)?;
         Ok(o.resolve_raw(self.row(row)[col] as usize, proof))
     }
 
     /// The compare/identity context for raw handles in these rows.
     ///
-    /// **Coexisting-arena boundary:** unbranded durable [`DomainCtx`] —
+    /// **Coexisting-arena boundary:** unbranded durable [`Admission`] —
     /// [`ExecRows`] outlives observer nests (see [`Domain::ctx`]).
-    pub fn ctx(&self) -> DomainCtx {
+    pub fn ctx(&self) -> Admission {
         self.domain.ctx()
     }
 }
@@ -274,10 +275,10 @@ impl ExecDedup {
     /// count of genuinely-new tuples. Typed refusal when domains disagree.
     ///
     /// **Coexisting-arena boundary:** two owned sinks/rows; mint-checked
-    /// [`DomainCtx::prove_shared`].
-    pub fn absorb(&mut self, rows: &ExecRows) -> Result<usize, DomainCtxRefusal> {
+    /// [`Admission::prove_shared`].
+    pub fn absorb(&mut self, rows: &ExecRows) -> Result<usize, Denial> {
         assert_eq!(self.arity, rows.arity(), "absorb arity mismatch");
-        DomainCtx::prove_shared(
+        Admission::prove_shared(
             self.domain.arena_id(),
             self.domain.epoch(),
             rows.domain().arena_id(),
@@ -535,7 +536,7 @@ mod tests {
         assert!(
             matches!(
                 e1.join_project(&e2, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]),
-                Err(DomainCtxRefusal::ArenaMismatch { .. })
+                Err(Denial::ArenaMismatch { .. })
             ),
             "cross-arena join must refuse typed — never panic"
         );

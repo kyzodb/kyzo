@@ -26,7 +26,10 @@
 
 use super::DataValue;
 use super::Tuple;
-use super::arena::{BulkSpendAuthority, DomainCtx, NestId, NestedDomainCtx};
+use super::admission::{
+    Admission, BulkSpendAuthority, Denial, DomainCtx, NestId, NestedAdmission, NestedDomainCtx,
+    SpendAdmission,
+};
 use super::canonical::CanonicalBytes;
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -67,35 +70,63 @@ pub(crate) use assert_not_impl;
 
 // Code is identity ONLY: no order. Value order is the observer's through
 // resolved bytes. Handle identity/identity-order under a proven context
-// are `DomainCtx::same_handle` / `DomainCtx::cmp_identity`.
+// are `Admission::same_handle` / `Admission::cmp_identity`.
 assert_not_impl!(Code: PartialOrd);
 assert_not_impl!(Code: Ord);
 
 // The 16-byte cell exposes no semantic equality or order TRAIT: comparison
-// is `try_cmp_storage` (locality-only) and `same_word` under `&DomainCtx`.
+// is `try_cmp_storage` (locality-only) and `same_word` under `&Admission`.
 // A derived `Ord`/`Eq` would silently deref or misjudge; it must not exist.
 assert_not_impl!(Value: PartialOrd);
 assert_not_impl!(Value: Ord);
 assert_not_impl!(Value: PartialEq);
 assert_not_impl!(Value: Eq);
 
-// A context token cannot be conjured empty — only from_observer /
+// Admission/Denial vocabulary: one discipline, opposite directions.
+// Thin aliases DomainCtx / DomainCtxRefusal name the same types.
+const _: fn() = || {
+    fn admission_is_domain_ctx(a: Admission) -> DomainCtx {
+        a
+    }
+    fn denial_is_refusal(d: Denial) -> super::admission::DomainCtxRefusal {
+        d
+    }
+    fn nested_alias(n: NestedAdmission<'static>) -> NestedDomainCtx<'static> {
+        n
+    }
+    fn spend_alias(s: SpendAdmission) -> BulkSpendAuthority {
+        s
+    }
+    let _ = (
+        admission_is_domain_ctx,
+        denial_is_refusal,
+        nested_alias,
+        spend_alias,
+    );
+};
+
+// An admission token cannot be conjured empty — only from_observer /
 // prove_shared / plane-internal `at`. Durable re-checkable fact: Copy.
-// Coexisting-arena form: deliberately unbranded (see DomainCtx docs /
+// Coexisting-arena form: deliberately unbranded (see Admission docs /
 // code.rs measurement); nest brands are NestedDomainCtx under
 // Frame/Snapshot::with_nested_ctx.
+assert_not_impl!(Admission: Default);
 assert_not_impl!(DomainCtx: Default);
+assert_not_impl!(Denial: Default);
 
-// Nest-branded context cannot be conjured empty either — only the
+// Nest-branded admission cannot be conjured empty either — only the
 // with_nested_ctx doors mint one (and HRTB keeps `'id` from escaping).
 assert_not_impl!(NestedDomainCtx<'static>: Default);
+assert_not_impl!(NestedAdmission<'static>: Default);
 
 // Durable fact tokens are Copy (re-checkable, not consumable permission).
 const _: fn() = || {
     fn needs_copy<T: Copy>() {}
+    needs_copy::<Admission>();
     needs_copy::<DomainCtx>();
     needs_copy::<NestId<'static>>();
     needs_copy::<NestedDomainCtx<'static>>();
+    needs_copy::<Denial>();
 };
 
 // A stamped code cannot be conjured: no `Default`. Its only mints are

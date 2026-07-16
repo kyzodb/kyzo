@@ -48,7 +48,8 @@
 // target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
 #![allow(dead_code)]
 
-use super::arena::{Arena, BulkObserver, DomainCtxRefusal, EpochRemap};
+use super::admission::Denial;
+use super::arena::{Arena, BulkObserver, EpochRemap};
 use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
@@ -97,7 +98,7 @@ impl Rows {
     /// # Panics
     ///
     /// Panics on arity mismatch (not a domain-identity mixup).
-    pub fn push_row(&mut self, stamps: &[StampedCode]) -> Result<(), DomainCtxRefusal> {
+    pub fn push_row(&mut self, stamps: &[StampedCode]) -> Result<(), Denial> {
         assert_eq!(stamps.len(), self.arity, "tuple arity mismatch");
         for &sc in stamps {
             self.codes.push(sc)?;
@@ -134,12 +135,12 @@ impl Rows {
     /// fragment. Arena/epoch mismatch is a typed refusal.
     ///
     /// **Coexisting-arena boundary:** delegates to [`CodeColumn::admit`] —
-    /// mint-checked [`super::arena::DomainCtx`], not a nest brand (rows
+    /// mint-checked [`super::admission::Admission`], not a nest brand (rows
     /// outlive observer nests; see [`super::code`] measurement).
     pub fn admit<'a, O: BulkObserver>(
         &'a self,
         o: &'a O,
-    ) -> Result<AdmittedRows<'a, O>, DomainCtxRefusal> {
+    ) -> Result<AdmittedRows<'a, O>, Denial> {
         Ok(AdmittedRows {
             arity: self.arity,
             codes: self.codes.admit(o)?,
@@ -149,7 +150,7 @@ impl Rows {
     /// The gather door (see the gather law): consuming, the only mint of
     /// a new-epoch tuple container. Typed refusal on a foreign/wrong-epoch
     /// remap.
-    pub fn gather(self, remap: &EpochRemap) -> Result<Rows, DomainCtxRefusal> {
+    pub fn gather(self, remap: &EpochRemap) -> Result<Rows, Denial> {
         Ok(Rows {
             arity: self.arity,
             codes: self.codes.gather(remap)?,

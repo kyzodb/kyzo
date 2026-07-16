@@ -27,7 +27,7 @@
 //! - [`Frame`] is the live observer: a borrow of the arena's current
 //!   state. Nest scopes open an invariant-lifetime [`NestedDomainCtx`]
 //!   for raw-handle identity/order ([`Frame::with_nested_ctx`]). Every
-//!   spend still verifies the stamp via mint-checked [`DomainCtx`] —
+//!   spend still verifies the stamp via mint-checked [`Admission`] —
 //!   deliberately no lifetime-branded *spend* witness, because a borrow
 //!   lifetime cannot prove frame identity across coexisting arenas.
 //!   `intern` and `seal` take `&mut Arena`, so the borrow checker retires
@@ -97,9 +97,10 @@
 //! Arena identity is part of the stamp, not a convention: every
 //! [`StampedCode`] carries the [`ArenaId`] that minted it, and every spend
 //! ([`Frame::resolve`], the snapshot checks, [`EpochRemap::apply`]) proves
-//! arena+epoch via [`DomainCtx::prove_shared`] (typed refusal, never panic).
-//! Two arenas at the same epoch reject each other's stamps instead of
-//! silently resolving wrong values.
+//! arena+epoch via [`Admission::prove_shared`] (typed [`Denial`], never
+//! panic). Two arenas at the same epoch reject each other's stamps instead
+//! of silently resolving wrong values. The shared vocabulary is
+//! [`super::admission`].
 
 // #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
 // laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
@@ -470,11 +471,16 @@ impl Epoch {
     }
 }
 
-/// Proof that a caller holds one `(arena, epoch)` context. Raw-handle
-/// equality and order — and physical word identity — are lawful only under
-/// a reference to this token. `Copy`: a durable re-checkable fact, not a
-/// consumable permission ([`BulkSpendAuthority`] is the move-only spend
-/// token).
+/// Proof that a caller holds one `(arena, epoch)` context — the durable
+/// **admission** token. Raw-handle equality and order — and physical word
+/// identity — are lawful only under a reference to this token. `Copy`: a
+/// durable re-checkable fact, not a consumable permission
+/// ([`BulkSpendAuthority`] is the move-only spend token).
+///
+/// Paired with [`Denial`]: one discipline, opposite directions. A token
+/// proves why an operation was allowed; a witness proves why it was
+/// refused — never a bare boolean. The shared vocabulary door is
+/// [`super::admission`].
 ///
 /// ## Coexisting-arena boundary (why this token is not lifetime-branded)
 ///
@@ -490,24 +496,38 @@ impl Epoch {
 /// Measurement and rejection rationale: [`super::code`] module docs.
 ///
 /// Where instances coexist or values outlive the nest, this mint-checked
-/// token is the ceiling: [`DomainCtx::prove_shared`] (typed refusal) or
-/// [`DomainCtx::from_observer`] / plane-internal [`DomainCtx::at`].
+/// token is the ceiling: [`Admission::prove_shared`] (typed [`Denial`]) or
+/// [`Admission::from_observer`] / plane-internal [`Admission::at`].
 ///
-/// Mint paths: [`DomainCtx::from_observer`] (infallible — the observer
-/// *is* the context) and [`DomainCtx::prove_shared`] (typed refusal when
+/// Mint paths: [`Admission::from_observer`] (infallible — the observer
+/// *is* the context) and [`Admission::prove_shared`] (typed refusal when
 /// two sides disagree). No `Default`: a context cannot be conjured empty.
+///
+/// Thin call-site alias: [`DomainCtx`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct DomainCtx {
+pub struct Admission {
     arena: ArenaId,
     epoch: Epoch,
 }
 
-/// Why [`DomainCtx::prove_shared`] refused to mint a context token.
+/// Why [`Admission::prove_shared`] refused to mint a context token — the
+/// **denial** witness. Opposite of [`Admission`]: same discipline, refuse
+/// direction. Never a bare boolean.
+///
+/// Thin call-site alias: [`DomainCtxRefusal`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DomainCtxRefusal {
+pub enum Denial {
     ArenaMismatch { left: ArenaId, right: ArenaId },
     EpochMismatch { left: Epoch, right: Epoch },
 }
+
+/// Thin alias for [`Admission`] — existing call sites keep this name; the
+/// vocabulary module ([`super::admission`]) is the one door.
+pub type DomainCtx = Admission;
+
+/// Thin alias for [`Denial`] — existing call sites keep this name; the
+/// vocabulary module ([`super::admission`]) is the one door.
+pub type DomainCtxRefusal = Denial;
 
 /// Invariant lifetime brand: each nest scope mints a compiler-unique `'id`
 /// at zero runtime cost (GhostCell / generativity).
@@ -522,20 +542,22 @@ pub struct NestId<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
 /// Domain context branded to one nest scope under a single live observer.
 /// Cross-nest mixing of `NestedDomainCtx` fails to compile.
 ///
-/// Applied only where scopes nest (one live [`Frame`] or [`Snapshot`]
-/// nest). For coexisting arenas and outliving containers, use unbranded
-/// [`DomainCtx`] — see that type's coexisting-arena boundary.
+/// An admission token under a nest brand — same vocabulary as
+/// [`Admission`], scoped. Applied only where scopes nest (one live
+/// [`Frame`] or [`Snapshot`] nest). For coexisting arenas and outliving
+/// containers, use unbranded [`Admission`] — see that type's
+/// coexisting-arena boundary.
 #[derive(Clone, Copy, Debug)]
 pub struct NestedDomainCtx<'id> {
-    ctx: DomainCtx,
+    ctx: Admission,
     _nest: NestId<'id>,
 }
 
 impl<'id> NestedDomainCtx<'id> {
     /// The durable unbranded fact (for APIs that must outlive the nest or
-    /// cross coexisting arenas under a later [`DomainCtx::prove_shared`]).
+    /// cross coexisting arenas under a later [`Admission::prove_shared`]).
     #[inline]
-    pub fn ctx(self) -> DomainCtx {
+    pub fn ctx(self) -> Admission {
         self.ctx
     }
 
@@ -562,7 +584,7 @@ impl<'id> NestedDomainCtx<'id> {
     }
 }
 
-impl DomainCtx {
+impl Admission {
     /// Mint from a bulk observer: the observer's arena and epoch *are*
     /// the context. Infallible.
     ///
@@ -571,17 +593,18 @@ impl DomainCtx {
     /// the result may outlive a nest. For a compiler-unique nest brand
     /// under one live frame/snapshot, use [`Frame::with_nested_ctx`] /
     /// [`Snapshot::with_nested_ctx`].
-    pub fn from_observer<O: BulkObserver>(o: &O) -> DomainCtx {
-        DomainCtx {
+    pub fn from_observer<O: BulkObserver>(o: &O) -> Admission {
+        Admission {
             arena: o.bulk_arena(),
             epoch: o.bulk_epoch(),
         }
     }
 
     /// Mint proving two `(arena, epoch)` pairs name one context. Typed
-    /// refusal on mismatch — never a panic. Cross-context comparison
-    /// cannot obtain a token, so it cannot call `same_word` / handle
-    /// equality under a forged shared context.
+    /// [`Denial`] on mismatch — never a panic, never a bare boolean.
+    /// Cross-context comparison cannot obtain an [`Admission`], so it
+    /// cannot call `same_word` / handle equality under a forged shared
+    /// context.
     ///
     /// **Coexisting-arena boundary:** this is the deliberate unbranded
     /// door — join/admit/gather must name two sides that may have been
@@ -592,20 +615,20 @@ impl DomainCtx {
         left_epoch: Epoch,
         right_arena: ArenaId,
         right_epoch: Epoch,
-    ) -> Result<DomainCtx, DomainCtxRefusal> {
+    ) -> Result<Admission, Denial> {
         if left_arena != right_arena {
-            return Err(DomainCtxRefusal::ArenaMismatch {
+            return Err(Denial::ArenaMismatch {
                 left: left_arena,
                 right: right_arena,
             });
         }
         if left_epoch != right_epoch {
-            return Err(DomainCtxRefusal::EpochMismatch {
+            return Err(Denial::EpochMismatch {
                 left: left_epoch,
                 right: right_epoch,
             });
         }
-        Ok(DomainCtx {
+        Ok(Admission {
             arena: left_arena,
             epoch: left_epoch,
         })
@@ -618,8 +641,8 @@ impl DomainCtx {
     /// **Coexisting-arena boundary:** containers carry unbranded domain
     /// identity across seals and across coexisting arenas; branding here
     /// would fake a nest that no longer exists.
-    pub(super) fn at(arena: ArenaId, epoch: Epoch) -> DomainCtx {
-        DomainCtx { arena, epoch }
+    pub(super) fn at(arena: ArenaId, epoch: Epoch) -> Admission {
+        Admission { arena, epoch }
     }
 
     #[inline]
@@ -632,8 +655,8 @@ impl DomainCtx {
         self.epoch
     }
 
-    /// Physical handle equality under this proven context. Without a
-    /// [`DomainCtx`], raw-handle equality has no lawful API — cross-context
+    /// Physical handle equality under this proven context. Without an
+    /// [`Admission`], raw-handle equality has no lawful API — cross-context
     /// comparison cannot affirmatively lie.
     #[inline]
     pub fn same_handle(self, a: Code, b: Code) -> bool {
@@ -729,9 +752,9 @@ impl EpochRemap {
     ///
     /// **Coexisting-arena boundary:** remaps and stamps are owned values
     /// that outlive any nest brand; arena/epoch proof stays mint-checked
-    /// [`DomainCtx::prove_shared`].
-    pub fn apply(&self, sc: StampedCode) -> Result<StampedCode, DomainCtxRefusal> {
-        DomainCtx::prove_shared(self.arena, self.from, sc.arena(), sc.epoch())?;
+    /// [`Admission::prove_shared`].
+    pub fn apply(&self, sc: StampedCode) -> Result<StampedCode, Denial> {
+        Admission::prove_shared(self.arena, self.from, sc.arena(), sc.epoch())?;
         Ok(StampedCode::mint(
             self.apply_raw(sc.code()),
             self.to,
@@ -991,7 +1014,7 @@ impl<'a, S: Store> View<'a, S> {
 /// lifetime cannot prove frame identity across coexisting arenas (two
 /// frames over *different* arenas can unify lifetimes), so a spend
 /// witness "admitted" by one frame would compile as spendable in another.
-/// Every spend therefore proves the stamp via [`DomainCtx::prove_shared`]
+/// Every spend therefore proves the stamp via [`Admission::prove_shared`]
 /// (typed refusal), symmetric with [`Snapshot`]. Bulk amortization of
 /// that check belongs to the epoch-stamped containers.
 #[derive(Clone, Copy)]
@@ -1026,7 +1049,7 @@ impl<'a> Frame<'a> {
     /// boundary.
     pub fn with_nested_ctx<R>(&self, f: impl for<'id> FnOnce(NestedDomainCtx<'id>) -> R) -> R {
         f(NestedDomainCtx {
-            ctx: DomainCtx {
+            ctx: Admission {
                 arena: self.arena,
                 epoch: self.epoch,
             },
@@ -1066,10 +1089,10 @@ impl<'a> Frame<'a> {
     /// asserts (minting discipline broken).
     ///
     /// **Coexisting-arena boundary:** stamps are owned and may arrive from
-    /// any arena; proof is mint-checked [`DomainCtx::prove_shared`], not a
+    /// any arena; proof is mint-checked [`Admission::prove_shared`], not a
     /// nest brand (a brand cannot refuse a foreign stamp at compile time).
-    fn check(&self, sc: StampedCode) -> Result<usize, DomainCtxRefusal> {
-        DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
+    fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
+        Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let c = sc.code().raw() as usize;
         assert!(
             c < self.len(),
@@ -1092,7 +1115,7 @@ impl<'a> Frame<'a> {
     /// Resolve a stamped code to its bytes.
     ///
     /// Typed refusal on a foreign-arena or stale stamp (see [`Frame::admits`]).
-    pub fn resolve(&self, sc: StampedCode) -> Result<&'a [u8], DomainCtxRefusal> {
+    pub fn resolve(&self, sc: StampedCode) -> Result<&'a [u8], Denial> {
         let c = self.check(sc)?;
         Ok(self.view().resolve(c))
     }
@@ -1106,7 +1129,7 @@ impl<'a> Frame<'a> {
         &self,
         a: StampedCode,
         b: StampedCode,
-    ) -> Result<Ordering, DomainCtxRefusal> {
+    ) -> Result<Ordering, Denial> {
         let (ca, cb) = (self.check(a)?, self.check(b)?);
         Ok(self.view().cmp(ca, cb))
     }
@@ -1167,7 +1190,7 @@ impl Snapshot {
     /// (see [`Frame::with_nested_ctx`]). Spend paths remain mint-checked.
     pub fn with_nested_ctx<R>(&self, f: impl for<'id> FnOnce(NestedDomainCtx<'id>) -> R) -> R {
         f(NestedDomainCtx {
-            ctx: DomainCtx {
+            ctx: Admission {
                 arena: self.arena,
                 epoch: self.epoch,
             },
@@ -1198,9 +1221,9 @@ impl Snapshot {
     /// assert (visibility, not domain-identity mixup).
     ///
     /// **Coexisting-arena boundary:** owned snapshots and stamps outlive
-    /// nest brands; domain identity is mint-checked [`DomainCtx::prove_shared`].
-    fn check(&self, sc: StampedCode) -> Result<usize, DomainCtxRefusal> {
-        DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
+    /// nest brands; domain identity is mint-checked [`Admission::prove_shared`].
+    fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
+        Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let c = sc.code().raw() as usize;
         assert!(
             c < self.len(),
@@ -1214,7 +1237,7 @@ impl Snapshot {
     ///
     /// Typed refusal on a wrong-epoch or foreign-arena stamp. Panics on a
     /// code beyond the snapshot's cut.
-    pub fn resolve(&self, sc: StampedCode) -> Result<&[u8], DomainCtxRefusal> {
+    pub fn resolve(&self, sc: StampedCode) -> Result<&[u8], Denial> {
         let c = self.check(sc)?;
         Ok(self.view().resolve(c))
     }
@@ -1227,7 +1250,7 @@ impl Snapshot {
         &self,
         a: StampedCode,
         b: StampedCode,
-    ) -> Result<Ordering, DomainCtxRefusal> {
+    ) -> Result<Ordering, Denial> {
         let (ca, cb) = (self.check(a)?, self.check(b)?);
         Ok(self.view().cmp(ca, cb))
     }
@@ -1285,10 +1308,12 @@ mod sealed {
 }
 
 /// Consumable permission that a container-domain admission verified arena
-/// identity, epoch, and visibility extent against an observer. The only
-/// mint is plane-internal ([`BulkSpendAuthority::after_domain_admission`]).
-/// Holding a [`Frame`] is not enough — sealing [`BulkObserver`] guards who
-/// observes; this token guards who spends.
+/// identity, epoch, and visibility extent against an observer — an
+/// admission token in the [`super::admission`] vocabulary (paired with
+/// [`Denial`] for the refuse direction). The only mint is plane-internal
+/// ([`BulkSpendAuthority::after_domain_admission`]). Holding a [`Frame`]
+/// is not enough — sealing [`BulkObserver`] guards who observes; this
+/// token guards who spends.
 ///
 /// Move-only consume-on-spend: no `Clone`/`Copy`/`Default`, no accessor
 /// ever returns one. Spend either (a) into a single
@@ -2086,7 +2111,7 @@ mod tests {
         assert!(
             matches!(
                 r1.apply(sc_new),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "r1 reads epoch-0 codes only — typed refusal"
         );
@@ -2116,7 +2141,7 @@ mod tests {
         assert!(
             matches!(
                 b.frame().resolve(sa),
-                Err(DomainCtxRefusal::ArenaMismatch { .. })
+                Err(Denial::ArenaMismatch { .. })
             ),
             "foreign-arena stamp must refuse typed"
         );
@@ -2190,7 +2215,7 @@ mod tests {
         assert!(
             matches!(
                 arena.frame().resolve(sc),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "stale stamp must refuse typed — cross through the remap door"
         );
@@ -2205,7 +2230,7 @@ mod tests {
         assert!(
             matches!(
                 snap.resolve(sc),
-                Err(DomainCtxRefusal::EpochMismatch { .. })
+                Err(Denial::EpochMismatch { .. })
             ),
             "stamped epoch 0 into epoch-1 snapshot must refuse typed"
         );
@@ -2255,7 +2280,7 @@ mod tests {
         assert!(
             matches!(
                 b.snapshot().resolve(sa),
-                Err(DomainCtxRefusal::ArenaMismatch { .. })
+                Err(Denial::ArenaMismatch { .. })
             ),
             "foreign-arena stamp in snapshot must refuse typed"
         );
@@ -2271,7 +2296,7 @@ mod tests {
         assert!(
             matches!(
                 remap.apply(sb),
-                Err(DomainCtxRefusal::ArenaMismatch { .. })
+                Err(Denial::ArenaMismatch { .. })
             ),
             "foreign-arena stamp in remap must refuse typed"
         );
@@ -2767,7 +2792,7 @@ mod tests {
         // A forged in-epoch stamp beyond len violates the minting
         // discipline; the debug bound catches it at check, the view's
         // liveness assert in release. Domain identity matches — this is
-        // not a DomainCtxRefusal.
+        // not a Denial.
         let _ = f.resolve(stamp(7, f.epoch(), f.arena));
     }
 
