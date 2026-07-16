@@ -885,16 +885,76 @@ impl IndexVec {
     /// manifest's [`admit`](Self::admit), which pins `dtype`) is computed
     /// in `f64` rather than being an error path. See the type docs for the
     /// per-metric NaN analysis.
+    ///
+    /// Dimension arrives at runtime from the index schema; this method is the
+    /// **one** dynamic-dim dispatch seam over `f64` slices. Common widths
+    /// hang monomorphized kernels behind that seam (see [`dist_dispatch`]).
     pub(crate) fn dist(&self, other: &Self, metric: HnswDistance) -> f64 {
         #[cfg(test)]
         probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
         let (a, b) = (self.0.as_slice(), other.0.as_slice());
-        match metric {
-            HnswDistance::L2 => a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum(),
-            // Unit vectors by construction: plain dot product.
-            HnswDistance::Cosine | HnswDistance::InnerProduct => {
-                1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
+        debug_assert_eq!(a.len(), b.len(), "IndexVec pair must share dimension");
+        dist_dispatch(a, b, metric)
+    }
+}
+
+/// ONE dynamic-dim dispatch over runtime `f64` slices: match length once,
+/// then enter a const-generic kernel. Arbitrary dims fall through to the
+/// slice iterator path — schema `dim` stays a runtime value.
+#[inline]
+fn dist_dispatch(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
+    match a.len() {
+        2 => dist_kernel::<2>(a, b, metric),
+        3 => dist_kernel::<3>(a, b, metric),
+        4 => dist_kernel::<4>(a, b, metric),
+        8 => dist_kernel::<8>(a, b, metric),
+        16 => dist_kernel::<16>(a, b, metric),
+        32 => dist_kernel::<32>(a, b, metric),
+        64 => dist_kernel::<64>(a, b, metric),
+        128 => dist_kernel::<128>(a, b, metric),
+        256 => dist_kernel::<256>(a, b, metric),
+        384 => dist_kernel::<384>(a, b, metric),
+        512 => dist_kernel::<512>(a, b, metric),
+        768 => dist_kernel::<768>(a, b, metric),
+        1024 => dist_kernel::<1024>(a, b, metric),
+        1536 => dist_kernel::<1536>(a, b, metric),
+        _ => dist_kernel_dyn(a, b, metric),
+    }
+}
+
+/// Monomorphized distance kernel for a statically-known dimension `D`.
+/// Called only after [`dist_dispatch`] has matched `a.len() == D`.
+#[inline]
+fn dist_kernel<const D: usize>(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
+    debug_assert_eq!(a.len(), D);
+    debug_assert_eq!(b.len(), D);
+    match metric {
+        HnswDistance::L2 => {
+            let mut sum = 0.0f64;
+            for i in 0..D {
+                let d = a[i] - b[i];
+                sum += d * d;
             }
+            sum
+        }
+        // Unit vectors by construction for Cosine: plain dot product.
+        HnswDistance::Cosine | HnswDistance::InnerProduct => {
+            let mut sum = 0.0f64;
+            for i in 0..D {
+                sum += a[i] * b[i];
+            }
+            1.0 - sum
+        }
+    }
+}
+
+/// Fallback kernel for dimensions outside the monomorphized set.
+#[inline]
+fn dist_kernel_dyn(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
+    match metric {
+        HnswDistance::L2 => a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum(),
+        HnswDistance::Cosine | HnswDistance::InnerProduct => {
+            1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
         }
     }
 }

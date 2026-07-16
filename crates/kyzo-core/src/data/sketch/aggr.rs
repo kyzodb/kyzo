@@ -127,7 +127,7 @@ impl MeetAggrObj for MeetAggrHllUnion {
         };
         let mut l = as_hll(left_v)?;
         let r = as_hll(right_v)?;
-        let changed = l.merge(&r)?;
+        let changed = l.merge(&r);
         if changed {
             *left_v = l.to_value();
         }
@@ -150,7 +150,7 @@ impl NormalAggrObj for AggrHllUnion {
         match &mut self.acc {
             None => self.acc = Some(incoming),
             Some(acc) => {
-                acc.merge(&incoming)?;
+                acc.merge(&incoming);
             }
         }
         Ok(())
