@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 
-use super::arena::{BulkObserver, DomainCtx};
+use super::arena::{BulkObserver, DomainCtx, DomainCtxRefusal};
 use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
@@ -70,14 +70,17 @@ impl ExecRows {
     /// THE DOOR (in): admit a code-backed [`Rows`] against `o` and copy its
     /// raw codes into owned execution rows. The admission (arena + epoch +
     /// visibility) is the container's own `admit`; nothing here injects a
-    /// code.
-    pub fn admit<O: BulkObserver>(rows: &Rows, o: &O) -> ExecRows {
-        let admitted: AdmittedRows<'_, O> = rows.admit(o);
-        ExecRows {
+    /// code. Arena/epoch mismatch is a typed refusal.
+    pub fn admit<O: BulkObserver>(
+        rows: &Rows,
+        o: &O,
+    ) -> Result<ExecRows, DomainCtxRefusal> {
+        let admitted: AdmittedRows<'_, O> = rows.admit(o)?;
+        Ok(ExecRows {
             domain: rows.domain(),
             arity: rows.arity(),
             codes: admitted.raw().to_vec(),
-        }
+        })
     }
 
     pub fn arity(&self) -> usize {
@@ -110,29 +113,23 @@ impl ExecRows {
     /// rows under the SAME Domain (the wider extent of the two inputs), so
     /// its codes remain provably in-domain.
     ///
-    /// # Panics
-    /// If the two inputs are not the same arena+epoch domain (u32 identity
-    /// would not mean value identity across domains).
+    /// Typed refusal when the two inputs are not the same arena+epoch
+    /// domain (u32 identity would not mean value identity across domains).
     pub fn join_project(
         &self,
         other: &ExecRows,
         self_col: usize,
         other_col: usize,
         out: &[(Side, usize)],
-    ) -> ExecRows {
-        assert_eq!(
+    ) -> Result<ExecRows, DomainCtxRefusal> {
+        // Shared context for raw-handle identity — mint proves both sides
+        // name one domain; mismatch refuses typed, never panics.
+        let ctx = DomainCtx::prove_shared(
             self.domain.arena_id(),
-            other.domain.arena_id(),
-            "join across different arenas: u32 identity is not value identity"
-        );
-        assert_eq!(
             self.domain.epoch(),
+            other.domain.arena_id(),
             other.domain.epoch(),
-            "join across different epochs: gather to a common epoch first"
-        );
-        // Shared context for raw-handle identity (asserts above are T3's
-        // panic sites; prove_shared is the typed door once those go).
-        let ctx = self.domain.ctx();
+        )?;
         // Build a probe on `other`'s join column: code -> the row indices
         // carrying it. Keys are packed under `ctx`.
         let mut index: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -166,11 +163,11 @@ impl ExecRows {
         } else {
             other.domain
         };
-        ExecRows {
+        Ok(ExecRows {
             domain,
             arity: out_arity.max(1),
             codes,
-        }
+        })
     }
 
     /// Row-major raw codes (for the dedup sink; still admitted).
@@ -182,9 +179,15 @@ impl ExecRows {
     /// place a code becomes bytes. Admits this domain against `o` (proving
     /// visibility) and spends the code through the observer. Callers
     /// materialize bytes only at storage/scan/output boundaries.
-    pub fn resolve_cell<'o, O: BulkObserver>(&self, o: &'o O, row: usize, col: usize) -> &'o [u8] {
-        let proof = self.domain.admit(o);
-        o.resolve_raw(self.row(row)[col] as usize, proof)
+    /// Arena/epoch mismatch is a typed refusal.
+    pub fn resolve_cell<'o, O: BulkObserver>(
+        &self,
+        o: &'o O,
+        row: usize,
+        col: usize,
+    ) -> Result<&'o [u8], DomainCtxRefusal> {
+        let proof = self.domain.admit(o)?;
+        Ok(o.resolve_raw(self.row(row)[col] as usize, proof))
     }
 
     /// The compare/identity context for raw handles in these rows.
@@ -259,26 +262,22 @@ impl ExecDedup {
     }
 
     /// Absorb every row of `rows` (same domain), deduping. Returns the
-    /// count of genuinely-new tuples.
-    pub fn absorb(&mut self, rows: &ExecRows) -> usize {
+    /// count of genuinely-new tuples. Typed refusal when domains disagree.
+    pub fn absorb(&mut self, rows: &ExecRows) -> Result<usize, DomainCtxRefusal> {
         assert_eq!(self.arity, rows.arity(), "absorb arity mismatch");
-        assert_eq!(
+        DomainCtx::prove_shared(
             self.domain.arena_id(),
-            rows.domain().arena_id(),
-            "absorb across arenas"
-        );
-        assert_eq!(
             self.domain.epoch(),
+            rows.domain().arena_id(),
             rows.domain().epoch(),
-            "absorb across epochs"
-        );
+        )?;
         let mut new = 0;
         for r in 0..rows.len() {
             if self.insert(rows.row(r)) {
                 new += 1;
             }
         }
-        new
+        Ok(new)
     }
 
     /// The distinct tuples as execution rows (for the next iteration's
@@ -316,7 +315,7 @@ mod tests {
         let f = arena.frame();
         let mut rows = Rows::new_in(2, &f);
         for (a, b) in stamps {
-            rows.push_row(&[a, b]);
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         rows
     }
@@ -329,15 +328,17 @@ mod tests {
         // edges 1->2, 2->3, 3->4, 1->5
         let edges = rows_of(&mut arena, &[(1, 2), (2, 3), (3, 4), (1, 5)]);
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f);
+        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
         // one TC step: join edge(x,y) with edge(y,z) on y, emit (x, z).
-        let step = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        let step = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
         // Resolve the produced code pairs back to values and compare to
         // the hand oracle {(1,3),(2,4)}.
         let mut got: Vec<(i64, i64)> = Vec::new();
         for r in 0..step.len() {
-            let x = decode_int(step.resolve_cell(&f, r, 0));
-            let z = decode_int(step.resolve_cell(&f, r, 1));
+            let x = decode_int(step.resolve_cell(&f, r, 0).expect("lawful resolve"));
+            let z = decode_int(step.resolve_cell(&f, r, 1).expect("lawful resolve"));
             got.push((x, z));
         }
         got.sort();
@@ -351,13 +352,13 @@ mod tests {
         let mut arena = Arena::new();
         let rows = rows_of(&mut arena, &[(1, 2), (2, 3), (1, 2)]);
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f);
+        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
         let mut dedup = ExecDedup::new(e.domain(), 2);
-        let new = dedup.absorb(&e);
+        let new = dedup.absorb(&e).expect("lawful absorb");
         assert_eq!(new, 2, "the duplicate (1,2) must not be a new tuple");
         assert_eq!(dedup.len(), 2);
         // A second absorb of the same rows adds nothing.
-        assert_eq!(dedup.absorb(&e), 0);
+        assert_eq!(dedup.absorb(&e).expect("lawful absorb"), 0);
     }
 
     /// THE FOUNDATIONAL GUARANTEE (why this exists): the recombine door
@@ -375,14 +376,18 @@ mod tests {
         let derefs_after_load = arena.compare_derefs();
 
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f);
+        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
         // Two TC steps + dedup -- the recombination hot loop.
-        let step1 = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
-        let step2 = step1.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        let step1 = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
+        let step2 = step1
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
         let mut dedup = ExecDedup::new(e.domain(), 2);
-        dedup.absorb(&e);
-        dedup.absorb(&step1);
-        dedup.absorb(&step2);
+        dedup.absorb(&e).expect("lawful absorb");
+        dedup.absorb(&step1).expect("lawful absorb");
+        dedup.absorb(&step2).expect("lawful absorb");
         let _ = dedup.to_exec();
 
         // No value was interned by recombination or dedup: they only COPY
@@ -417,7 +422,7 @@ mod tests {
         let mut arena = Arena::new();
         let rows = rows_of(&mut arena, &[(1, 2)]);
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f);
+        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
         assert_eq!(e.arity(), 2);
     }
 
@@ -442,14 +447,16 @@ mod tests {
             let mut arena = Arena::new();
             let edges = rows_of(&mut arena, pairs);
             let f = arena.frame();
-            let e = ExecRows::admit(&edges, &f);
+            let e = ExecRows::admit(&edges, &f).expect("lawful admit");
             // Code path: edge(x,y) ⋈_y edge(y,z) → (x, z).
-            let step = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+            let step = e
+                .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+                .expect("lawful join");
             let mut got: Vec<(i64, i64)> = (0..step.len())
                 .map(|r| {
                     (
-                        decode_int(step.resolve_cell(&f, r, 0)),
-                        decode_int(step.resolve_cell(&f, r, 1)),
+                        decode_int(step.resolve_cell(&f, r, 0).expect("lawful resolve")),
+                        decode_int(step.resolve_cell(&f, r, 1).expect("lawful resolve")),
                     )
                 })
                 .collect();
@@ -482,9 +489,13 @@ mod tests {
         let mut arena = Arena::new();
         let edges = rows_of(&mut arena, pairs);
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f);
-        let a = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
-        let b = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
+        let a = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
+        let b = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
         assert_eq!(
             a.raw(),
             b.raw(),
@@ -495,22 +506,27 @@ mod tests {
     }
 
     /// The domain guard: joining rows from two DIFFERENT arenas is refused
-    /// — u32 code identity is only value identity within one arena+epoch.
+    /// typed — u32 code identity is only value identity within one arena+epoch.
     #[test]
-    #[should_panic(expected = "different arenas")]
-    fn join_project_across_arenas_panics() {
+    fn join_project_across_arenas_refuses_typed() {
         let mut a1 = Arena::new();
         let r1 = rows_of(&mut a1, &[(1, 2)]);
         let f1 = a1.frame();
-        let e1 = ExecRows::admit(&r1, &f1);
+        let e1 = ExecRows::admit(&r1, &f1).expect("lawful admit");
 
         let mut a2 = Arena::new();
         let r2 = rows_of(&mut a2, &[(2, 3)]);
         let f2 = a2.frame();
-        let e2 = ExecRows::admit(&r2, &f2);
+        let e2 = ExecRows::admit(&r2, &f2).expect("lawful admit");
 
         // Same shape, foreign arena: the codes are incomparable.
-        let _ = e1.join_project(&e2, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        assert!(
+            matches!(
+                e1.join_project(&e2, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]),
+                Err(DomainCtxRefusal::ArenaMismatch { .. })
+            ),
+            "cross-arena join must refuse typed — never panic"
+        );
     }
 
     fn decode_int(bytes: &[u8]) -> i64 {

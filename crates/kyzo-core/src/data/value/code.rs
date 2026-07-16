@@ -24,9 +24,10 @@
 ///   between frames);
 /// - live [`Frame`](super::arena::Frame)s and pinned
 ///   [`Snapshot`](super::arena::Snapshot)s both spend a `StampedCode`
-///   directly, verifying arena identity and epoch exactly on every spend
-///   (a lifetime-branded witness cannot prove frame identity across
-///   coexisting arenas, so none is offered).
+///   directly, proving arena identity and epoch via
+///   [`DomainCtx::prove_shared`](super::arena::DomainCtx::prove_shared)
+///   on every spend (typed refusal; a lifetime-branded witness cannot
+///   prove frame identity across coexisting arenas, so none is offered).
 ///
 /// There is deliberately no `Ord`: value order is the arena's to answer,
 /// inside a frame. Structural identity-order under a proven context is
@@ -58,9 +59,9 @@ const _: () = assert!(std::mem::align_of::<Code>() == std::mem::align_of::<u32>(
 /// [`EpochRemap::apply`](super::arena::EpochRemap::apply) (restamping into
 /// the next epoch). Spending requires an observer frame: admit it into a
 /// live [`Frame`](super::arena::Frame) or hand it to a
-/// [`Snapshot`](super::arena::Snapshot), both of which verify the stamp
-/// exactly. Persistent containers of many codes carry one stamp for all of
-/// them and cross epochs only through the gather door.
+/// [`Snapshot`](super::arena::Snapshot), both of which prove the stamp via
+/// typed refusal. Persistent containers of many codes carry one stamp for
+/// all of them and cross epochs only through the gather door.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct StampedCode {
     code: Code,

@@ -48,7 +48,7 @@
 // target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
 #![allow(dead_code)]
 
-use super::arena::{Arena, BulkObserver, EpochRemap};
+use super::arena::{Arena, BulkObserver, DomainCtxRefusal, EpochRemap};
 use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
@@ -92,16 +92,17 @@ impl Rows {
     }
 
     /// The write door: one tuple of stamped codes, verified element by
-    /// element into the domain.
+    /// element into the domain. Typed refusal on foreign/stale stamps.
     ///
     /// # Panics
     ///
-    /// Panics on arity mismatch or a stamp outside the domain.
-    pub fn push_row(&mut self, stamps: &[StampedCode]) {
+    /// Panics on arity mismatch (not a domain-identity mixup).
+    pub fn push_row(&mut self, stamps: &[StampedCode]) -> Result<(), DomainCtxRefusal> {
         assert_eq!(stamps.len(), self.arity, "tuple arity mismatch");
         for &sc in stamps {
-            self.codes.push(sc);
+            self.codes.push(sc)?;
         }
+        Ok(())
     }
 
     /// The bytes→execution door: refuse a stale/foreign container with a
@@ -130,21 +131,25 @@ impl Rows {
     }
 
     /// The admission: one container-domain check for the whole relation
-    /// fragment.
-    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedRows<'a, O> {
-        AdmittedRows {
+    /// fragment. Arena/epoch mismatch is a typed refusal.
+    pub fn admit<'a, O: BulkObserver>(
+        &'a self,
+        o: &'a O,
+    ) -> Result<AdmittedRows<'a, O>, DomainCtxRefusal> {
+        Ok(AdmittedRows {
             arity: self.arity,
-            codes: self.codes.admit(o),
-        }
+            codes: self.codes.admit(o)?,
+        })
     }
 
     /// The gather door (see the gather law): consuming, the only mint of
-    /// a new-epoch tuple container.
-    pub fn gather(self, remap: &EpochRemap) -> Rows {
-        Rows {
+    /// a new-epoch tuple container. Typed refusal on a foreign/wrong-epoch
+    /// remap.
+    pub fn gather(self, remap: &EpochRemap) -> Result<Rows, DomainCtxRefusal> {
+        Ok(Rows {
             arity: self.arity,
-            codes: self.codes.gather(remap),
-        }
+            codes: self.codes.gather(remap)?,
+        })
     }
 }
 
@@ -565,25 +570,25 @@ mod tests {
                 &mut arena,
                 Datum::Str(if i % 2 == 0 { "even" } else { "odd" }),
             );
-            rows.push_row(&[a, b]);
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         let keys_before: Vec<TupleKey> = {
             let f = arena.frame();
-            let adm = rows.admit(&f);
+            let adm = rows.admit(&f).expect("lawful admit");
             (0..adm.len()).map(|i| adm.encode_row(i)).collect()
         };
         let raw_before: Vec<Vec<u32>> = {
             let f = arena.frame();
-            let adm = rows.admit(&f);
+            let adm = rows.admit(&f).expect("lawful admit");
             (0..adm.len()).map(|i| adm.row(i).to_vec()).collect()
         };
         // Seal + gather: the execution currency moves...
         let remap = arena.seal();
-        let rows = rows.gather(&remap);
+        let rows = rows.gather(&remap).expect("lawful gather");
         // ...and moves visibly (something re-ranked: 13 distinct nums +
         // 2 strings all started as tail codes).
         let f = arena.frame();
-        let adm = rows.admit(&f);
+        let adm = rows.admit(&f).expect("lawful admit");
         let raw_after: Vec<Vec<u32>> = (0..adm.len()).map(|i| adm.row(i).to_vec()).collect();
         assert_ne!(
             raw_before, raw_after,
@@ -608,10 +613,10 @@ mod tests {
         for (n, s) in tuples {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(n)));
             let b = stamp_of(&mut arena, Datum::Str(s));
-            rows.push_row(&[a, b]);
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         let f = arena.frame();
-        let adm = rows.admit(&f);
+        let adm = rows.admit(&f).expect("lawful admit");
         for i in 0..adm.len() {
             for j in 0..adm.len() {
                 assert_eq!(
@@ -631,20 +636,20 @@ mod tests {
         let mut rows = Rows::new_in(2, &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(42)));
         let b = stamp_of(&mut arena, Datum::Str("hello"));
-        rows.push_row(&[a, b]);
+        rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0)
         };
         // Re-enter through the bytes door.
         let mut rows2 = Rows::new_in(2, &arena.frame());
         rows2.push_encoded(&key, &mut arena).expect("lawful key");
         {
             let f = arena.frame();
-            let adm2 = rows2.admit(&f);
+            let adm2 = rows2.admit(&f).expect("lawful admit");
             assert_eq!(adm2.encode_row(0), key, "bytes door changed the tuple");
             // Same epoch + arena dedup ⟹ same codes: tuple identity holds.
-            let adm = rows.admit(&f);
+            let adm = rows.admit(&f).expect("lawful admit");
             assert_eq!(adm.row(0), adm2.row(0));
         }
         // Truncated key: typed refusal, nothing pushed.
@@ -672,7 +677,7 @@ mod tests {
         // Seed relation: reach(x) for x in {0}; rule: reach(x+3) up to 12.
         let mut total = Rows::new_in(1, &arena.frame());
         let seed = stamp_of(&mut arena, Datum::Num(Num::int(0)));
-        total.push_row(&[seed]);
+        total.push_row(&[seed]).expect("lawful push");
         let mut frontier: Vec<Vec<u8>> = vec![encode(Datum::Num(Num::int(0))).as_bytes().to_vec()];
         let mut rounds = 0;
         while !frontier.is_empty() {
@@ -694,7 +699,7 @@ mod tests {
             // raw-code identity under one admitted domain, then extend.
             let novel: Vec<StampedCode> = {
                 let f = arena.frame();
-                let adm = total.admit(&f);
+                let adm = total.admit(&f).expect("lawful admit");
                 let existing: std::collections::BTreeSet<u32> = adm.raw().iter().copied().collect();
                 fresh
                     .into_iter()
@@ -702,9 +707,9 @@ mod tests {
                     .collect()
             };
             for sc in &novel {
-                total.push_row(&[*sc]);
+                total.push_row(&[*sc]).expect("lawful push");
                 let f = arena.frame();
-                let adm = total.admit(&f);
+                let adm = total.admit(&f).expect("lawful admit");
                 frontier.push(adm.resolve_cell(adm.len() - 1, 0).to_vec());
             }
             assert_eq!(arena.epoch(), epoch0, "no seal mid-fixpoint");
@@ -714,15 +719,15 @@ mod tests {
         assert_eq!(total.len(), 5);
         let keys_at_fixpoint: Vec<TupleKey> = {
             let f = arena.frame();
-            let adm = total.admit(&f);
+            let adm = total.admit(&f).expect("lawful admit");
             (0..adm.len()).map(|i| adm.encode_row(i)).collect()
         };
         // COMMIT BOUNDARY: seal once, gather the held container, and the
         // durable form is untouched.
         let remap = arena.seal();
-        let total = total.gather(&remap);
+        let total = total.gather(&remap).expect("lawful gather");
         let f = arena.frame();
-        let adm = total.admit(&f);
+        let adm = total.admit(&f).expect("lawful admit");
         for (i, k) in keys_at_fixpoint.iter().enumerate() {
             assert_eq!(&adm.encode_row(i), k);
         }
@@ -736,10 +741,10 @@ mod tests {
         let mut rows = Rows::new_in(2, &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(1)));
         let b = stamp_of(&mut arena, Datum::Str("s"));
-        rows.push_row(&[a, b]);
+        rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0)
         };
         // Lawful bytes round-trip through the storage door.
         let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
@@ -757,10 +762,10 @@ mod tests {
         let mut arena = Arena::new();
         let mut rows = Rows::new_in(1, &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(9)));
-        rows.push_row(&[a]);
+        rows.push_row(&[a]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0)
         };
         // Stale: the container predates the seal.
         arena.seal();
@@ -859,6 +864,6 @@ mod tests {
         let mut arena = Arena::new();
         let sc = stamp_of(&mut arena, Datum::Null);
         let mut rows = Rows::new_in(2, &arena.frame());
-        rows.push_row(&[sc]);
+        rows.push_row(&[sc]).expect("lawful push");
     }
 }

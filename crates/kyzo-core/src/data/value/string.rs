@@ -164,7 +164,7 @@ mod tests {
         );
         let sc = m.stamp().expect("stamp accompanies the word");
         let f = arena.frame();
-        let canonical = f.resolve(sc);
+        let canonical = f.resolve(sc).expect("lawful");
         assert_eq!(canonical[0], Tag::Str.byte());
     }
 

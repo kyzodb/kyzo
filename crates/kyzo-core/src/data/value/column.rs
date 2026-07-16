@@ -44,7 +44,7 @@
 use std::cmp::Ordering;
 
 use super::arena::{
-    ArenaId, BulkObserver, BulkSpendAuthority, DomainCtx, Epoch, EpochRemap,
+    ArenaId, BulkObserver, BulkSpendAuthority, DomainCtx, DomainCtxRefusal, Epoch, EpochRemap,
 };
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -60,7 +60,7 @@ use super::code::{Code, StampedCode};
 /// @constructs the arena/observer authority (BulkObserver admission)
 /// @forbids fabricating a Domain to bless arbitrary codes | comparing or joining codes across differing arena or epoch
 /// @converts Domain -> ExecRows (Rows::admit(observer) -> AdmittedRows, under this Domain)
-/// @gate join_project panics cross-arena/epoch; raw-code use requires admission (value-plane.md)
+/// @gate join_project / admit refuse cross-arena/epoch typed; raw-code use requires admission (value-plane.md)
 /// @status established #119
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Domain {
@@ -82,27 +82,16 @@ impl Domain {
     /// new [`Domain`] — extent growth is construction of a larger proof,
     /// never in-place mutation of an existing one (`rust-verbs` consuming
     /// rebuild; `Domain` is a proven value, not a live handle).
-    fn absorb_stamp(self, sc: StampedCode, what: &str) -> Domain {
-        assert_eq!(
-            sc.arena(),
-            self.arena,
-            "{what} of arena {:?} fed a stamp from foreign arena {:?}",
-            self.arena,
-            sc.arena()
-        );
-        assert_eq!(
-            sc.epoch(),
-            self.epoch,
-            "{what} of epoch {:?} fed a stamp of epoch {:?}: cross through the gather door",
-            self.epoch,
-            sc.epoch()
-        );
+    ///
+    /// Typed refusal on foreign arena or wrong epoch — never a panic.
+    fn absorb_stamp(self, sc: StampedCode) -> Result<Domain, DomainCtxRefusal> {
+        DomainCtx::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let raw = sc.code().raw();
-        Domain {
+        Ok(Domain {
             arena: self.arena,
             epoch: self.epoch,
             extent: self.extent.max(raw + 1),
-        }
+        })
     }
 
     /// The plane-internal arena identity (row containers verify typed).
@@ -113,17 +102,22 @@ impl Domain {
     /// Admit this domain to `o` (arena + epoch + visibility), minting the
     /// spend authority for a code resolve at a proven boundary. Used by
     /// the execution-row boundary door.
-    pub(super) fn admit<O: BulkObserver>(&self, o: &O) -> BulkSpendAuthority {
+    pub(super) fn admit<O: BulkObserver>(
+        &self,
+        o: &O,
+    ) -> Result<BulkSpendAuthority, DomainCtxRefusal> {
         self.admit_to(o, "domain resolve")
     }
 
-    /// The admission check: visibility extent remains; arena/epoch
-    /// panic gates were demolished (#304) — cross-Domain admission must
-    /// be held by the type system, not `assert_eq!`.
-    fn admit_to<O: BulkObserver>(&self, o: &O, what: &str) -> BulkSpendAuthority {
-        // DEMOLISHED (#304): assert_eq! panic gates on ArenaId / Epoch —
-        // cross-Domain admission proven by runtime panic, not types.
-        let _ = (o.bulk_arena(), o.bulk_epoch(), self.arena, self.epoch);
+    /// The admission check: arena/epoch via [`DomainCtx::prove_shared`]
+    /// (typed refusal, never panic); visibility extent remains an
+    /// observer-cut assert (not a domain-identity mixup).
+    fn admit_to<O: BulkObserver>(
+        &self,
+        o: &O,
+        what: &str,
+    ) -> Result<BulkSpendAuthority, DomainCtxRefusal> {
+        DomainCtx::prove_shared(self.arena, self.epoch, o.bulk_arena(), o.bulk_epoch())?;
         assert!(
             self.extent as usize <= o.bulk_len(),
             "{what} extent {} exceeds the observer's visibility ({} codes): \
@@ -131,7 +125,7 @@ impl Domain {
             self.extent,
             o.bulk_len()
         );
-        BulkSpendAuthority::after_domain_admission()
+        Ok(BulkSpendAuthority::after_domain_admission())
     }
 
     pub fn epoch(&self) -> Epoch {
@@ -167,10 +161,12 @@ impl CodeColumn {
     }
 
     /// The write door: a stamp-verified push. This per-push check is what
-    /// the kernels' zero-per-code reads are amortizing.
-    pub fn push(&mut self, sc: StampedCode) {
-        self.domain = self.domain.absorb_stamp(sc, "code column");
+    /// the kernels' zero-per-code reads are amortizing. Typed refusal on
+    /// foreign/stale stamps — never a panic.
+    pub fn push(&mut self, sc: StampedCode) -> Result<(), DomainCtxRefusal> {
+        self.domain = self.domain.absorb_stamp(sc)?;
         self.codes.push(sc.code().raw());
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -186,32 +182,31 @@ impl CodeColumn {
     }
 
     /// The admission: one container-domain check (arena + epoch +
-    /// visibility extent), then every read is check-free.
-    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedCodes<'a, O> {
-        let _proof = self.domain.admit_to(o, "code column");
-        AdmittedCodes {
+    /// visibility extent), then every read is check-free. Arena/epoch
+    /// mismatch is a typed refusal.
+    pub fn admit<'a, O: BulkObserver>(
+        &'a self,
+        o: &'a O,
+    ) -> Result<AdmittedCodes<'a, O>, DomainCtxRefusal> {
+        let _proof = self.domain.admit_to(o, "code column")?;
+        Ok(AdmittedCodes {
             codes: &self.codes,
             obs: o,
             ctx: self.domain.ctx(),
             all_sealed: self.domain.extent as usize <= o.bulk_sealed_len(),
-        }
+        })
     }
 
     /// The gather door: consume this column into the next epoch. The only
     /// mint of a new-epoch container; the old one ceases to exist here.
-    pub fn gather(self, remap: &EpochRemap) -> CodeColumn {
-        assert_eq!(
-            remap.arena_id(),
+    /// Typed refusal when the remap is not this container's arena/epoch.
+    pub fn gather(self, remap: &EpochRemap) -> Result<CodeColumn, DomainCtxRefusal> {
+        DomainCtx::prove_shared(
             self.domain.arena,
-            "gather fed a remap of a foreign arena"
-        );
-        assert_eq!(
             self.domain.epoch,
+            remap.arena_id(),
             remap.source_epoch(),
-            "gather fed a remap reading epoch {:?}, container is epoch {:?}",
-            remap.source_epoch(),
-            self.domain.epoch
-        );
+        )?;
         let mut extent = 0u32;
         let codes: Vec<u32> = self
             .codes
@@ -222,14 +217,14 @@ impl CodeColumn {
                 n
             })
             .collect();
-        CodeColumn {
+        Ok(CodeColumn {
             domain: Domain {
                 arena: self.domain.arena,
                 epoch: remap.target_epoch(),
                 extent,
             },
             codes,
-        }
+        })
     }
 }
 
@@ -355,18 +350,20 @@ impl WordColumn {
 
     /// The write door: consumes the minted pairing. Inline words carry no
     /// context and pass freely; wide words verify their stamp into the
-    /// domain.
-    pub fn push(&mut self, m: Minted) {
+    /// domain. Typed refusal on foreign/stale wide stamps — never a panic.
+    pub fn push(&mut self, m: Minted) -> Result<(), DomainCtxRefusal> {
         let value = m.value();
         match m.stamp() {
             None => {
                 debug_assert!(value.is_inline(), "Minted coherence broken");
                 self.words.push(value);
+                Ok(())
             }
             Some(stamp) => {
                 debug_assert_eq!(value.code(), Some(stamp.code()), "Minted coherence broken");
-                self.domain = self.domain.absorb_stamp(stamp, "word column");
+                self.domain = self.domain.absorb_stamp(stamp)?;
                 self.words.push(value);
+                Ok(())
             }
         }
     }
@@ -383,30 +380,28 @@ impl WordColumn {
         self.domain
     }
 
-    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedWords<'a, O> {
-        let _proof = self.domain.admit_to(o, "word column");
-        AdmittedWords {
+    pub fn admit<'a, O: BulkObserver>(
+        &'a self,
+        o: &'a O,
+    ) -> Result<AdmittedWords<'a, O>, DomainCtxRefusal> {
+        let _proof = self.domain.admit_to(o, "word column")?;
+        Ok(AdmittedWords {
             words: &self.words,
             obs: o,
             ctx: self.domain.ctx(),
-        }
+        })
     }
 
     /// The gather door: consume into the next epoch, rewriting every wide
     /// word's handle through the remap (values, tags, prefixes unchanged).
-    pub fn gather(self, remap: &EpochRemap) -> WordColumn {
-        assert_eq!(
-            remap.arena_id(),
+    /// Typed refusal when the remap is not this container's arena/epoch.
+    pub fn gather(self, remap: &EpochRemap) -> Result<WordColumn, DomainCtxRefusal> {
+        DomainCtx::prove_shared(
             self.domain.arena,
-            "gather fed a remap of a foreign arena"
-        );
-        assert_eq!(
             self.domain.epoch,
+            remap.arena_id(),
             remap.source_epoch(),
-            "gather fed a remap reading epoch {:?}, container is epoch {:?}",
-            remap.source_epoch(),
-            self.domain.epoch
-        );
+        )?;
         let mut extent = 0u32;
         let words: Vec<Value> = self
             .words
@@ -419,14 +414,14 @@ impl WordColumn {
                 g
             })
             .collect();
-        WordColumn {
+        Ok(WordColumn {
             domain: Domain {
                 arena: self.domain.arena,
                 epoch: remap.target_epoch(),
                 extent,
             },
             words,
-        }
+        })
     }
 }
 
@@ -517,7 +512,7 @@ impl Column {
 
 #[cfg(test)]
 mod tests {
-    use super::super::arena::Arena;
+    use super::super::arena::{Arena, DomainCtxRefusal};
     use super::super::canonical::{Datum, encode};
     use super::super::number::Num;
     use super::*;
@@ -545,22 +540,26 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Write door: only domain-lawful stamps enter.
+    // Write door: only domain-lawful stamps enter (typed refusal).
     // ------------------------------------------------------------------
 
     #[test]
-    #[should_panic(expected = "cross through the gather door")]
     fn write_door_refuses_stale_stamps() {
         let mut arena = Arena::new();
         let sc = intern_num(&mut arena, 1);
         arena.seal();
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
-        col.push(sc); // epoch 0 stamp into an epoch 1 column
+        assert!(
+            matches!(
+                col.push(sc),
+                Err(DomainCtxRefusal::EpochMismatch { .. })
+            ),
+            "epoch 0 stamp into an epoch 1 column must refuse typed"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "foreign arena")]
     fn write_door_refuses_foreign_stamps() {
         let mut a = Arena::new();
         let mut b = Arena::new();
@@ -568,7 +567,10 @@ mod tests {
         b.intern(b"x");
         let fb = b.frame();
         let mut col = CodeColumn::new_in(&fb);
-        col.push(sa);
+        assert!(
+            matches!(col.push(sa), Err(DomainCtxRefusal::ArenaMismatch { .. })),
+            "foreign-arena stamp must refuse typed"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -577,19 +579,24 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    #[should_panic(expected = "gather first")]
     fn admission_refuses_stale_containers() {
         let mut arena = Arena::new();
         let sc = intern_num(&mut arena, 1);
         let col = {
             let f = arena.frame();
             let mut c = CodeColumn::new_in(&f);
-            c.push(sc);
+            c.push(sc).expect("lawful push");
             c
         };
         arena.seal();
         let f = arena.frame();
-        col.admit(&f);
+        assert!(
+            matches!(
+                col.admit(&f),
+                Err(DomainCtxRefusal::EpochMismatch { .. })
+            ),
+            "stale container must refuse typed — gather first"
+        );
     }
 
     #[test]
@@ -601,8 +608,9 @@ mod tests {
         // Same epoch, but this code was minted after the cut.
         let late = intern_num(&mut arena, 2);
         let mut col = CodeColumn::new_in(&arena.frame());
-        col.push(late);
-        col.admit(&early);
+        col.push(late).expect("lawful push");
+        // Arena/epoch match; visibility extent is still an assert.
+        let _ = col.admit(&early);
     }
 
     #[test]
@@ -612,9 +620,9 @@ mod tests {
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for sc in stamps {
-            col.push(sc);
+            col.push(sc).expect("lawful push");
         }
-        let adm = col.admit(&f);
+        let adm = col.admit(&f).expect("lawful admit");
         for i in 0..adm.len() {
             assert!(!adm.resolve(i).is_empty());
         }
@@ -641,9 +649,9 @@ mod tests {
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for sc in stamps {
-            col.push(sc);
+            col.push(sc).expect("lawful push");
         }
-        let adm = col.admit(&f);
+        let adm = col.admit(&f).expect("lawful admit");
         assert!(adm.all_sealed());
         assert!(adm.raw_sealed().is_some());
         let perm = adm.sort_permutation();
@@ -672,9 +680,9 @@ mod tests {
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         for sc in stamps {
-            col.push(sc);
+            col.push(sc).expect("lawful push");
         }
-        let adm = col.admit(&f);
+        let adm = col.admit(&f).expect("lawful admit");
         assert!(!adm.all_sealed());
         assert!(adm.raw_sealed().is_none());
         let perm = adm.sort_permutation();
@@ -701,18 +709,18 @@ mod tests {
             .collect();
         let mut col = CodeColumn::new_in(&arena.frame());
         for sc in stamps {
-            col.push(sc);
+            col.push(sc).expect("lawful push");
         }
         // Record values + a sorted-by-value permutation before the seal.
         let before: Vec<Vec<u8>> = {
             let f = arena.frame();
-            let adm = col.admit(&f);
+            let adm = col.admit(&f).expect("lawful admit");
             (0..adm.len()).map(|i| adm.resolve(i).to_vec()).collect()
         };
         let remap = arena.seal();
-        let col = col.gather(&remap);
+        let col = col.gather(&remap).expect("lawful gather");
         let f = arena.frame();
-        let adm = col.admit(&f); // readmits in the new epoch
+        let adm = col.admit(&f).expect("lawful admit"); // readmits in the new epoch
         for (i, b) in before.iter().enumerate() {
             assert_eq!(adm.resolve(i), b.as_slice(), "gather moved a value");
         }
@@ -721,17 +729,17 @@ mod tests {
         let mut sorted_col = CodeColumn::new_in(&arena2.frame());
         for i in 0..20 {
             let sc = intern_num(&mut arena2, i);
-            sorted_col.push(sc);
+            sorted_col.push(sc).expect("lawful push");
         }
         let r1 = arena2.seal();
-        let sorted_col = sorted_col.gather(&r1);
+        let sorted_col = sorted_col.gather(&r1).expect("lawful gather");
         // Everything was tail (arrival = insertion order 0..20 which is
         // also value order); after seal, codes are sealed ranks.
         intern_num(&mut arena2, -1000); // will re-rank on next seal
         let r2 = arena2.seal();
-        let sorted_col = sorted_col.gather(&r2);
+        let sorted_col = sorted_col.gather(&r2).expect("lawful gather");
         let f2 = arena2.frame();
-        let adm2 = sorted_col.admit(&f2);
+        let adm2 = sorted_col.admit(&f2).expect("lawful admit");
         let raw = adm2.raw_sealed().expect("sealed after gathers");
         assert!(
             raw.windows(2).all(|w| w[0] < w[1]),
@@ -740,18 +748,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "remap reading epoch")]
     fn gather_refuses_the_wrong_remap() {
         let mut arena = Arena::new();
         let sc = intern_num(&mut arena, 1);
         let mut col = CodeColumn::new_in(&arena.frame());
-        col.push(sc);
+        col.push(sc).expect("lawful push");
         let r1 = arena.seal();
-        let col = col.gather(&r1);
+        let col = col.gather(&r1).expect("lawful gather");
         let _r2_skipped = arena.seal();
         let r3 = arena.seal();
         // col is at epoch 1; r3 reads epoch 2.
-        let _ = col.gather(&r3);
+        assert!(
+            matches!(
+                col.gather(&r3),
+                Err(DomainCtxRefusal::EpochMismatch { .. })
+            ),
+            "wrong-epoch remap must refuse typed"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -765,19 +778,21 @@ mod tests {
         let mut col = WordColumn::new_in(&arena.frame());
         let small = encode(Datum::Str("hi"));
         let big = encode(Datum::Str("a string well past the inline max"));
-        col.push(Value::mint(&small, &mut arena));
-        col.push(Value::mint(&big, &mut arena));
+        col.push(Value::mint(&small, &mut arena))
+            .expect("lawful push");
+        col.push(Value::mint(&big, &mut arena))
+            .expect("lawful push");
         {
             let f = arena.frame();
-            let adm = col.admit(&f);
+            let adm = col.admit(&f).expect("lawful admit");
             assert_eq!(adm.canonical(0), small.as_bytes());
             assert_eq!(adm.canonical(1), big.as_bytes());
             assert_eq!(adm.cmp_at(0, 1), small.as_bytes().cmp(big.as_bytes()));
         }
         let remap = arena.seal();
-        let col = col.gather(&remap);
+        let col = col.gather(&remap).expect("lawful gather");
         let f = arena.frame();
-        let adm = col.admit(&f);
+        let adm = col.admit(&f).expect("lawful admit");
         assert_eq!(adm.canonical(0), small.as_bytes());
         assert_eq!(
             adm.canonical(1),
@@ -787,13 +802,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cross through the gather door")]
     fn word_column_write_door_refuses_stale_wide_words() {
         let mut arena = Arena::new();
         let big = encode(Datum::Str("a string well past the inline max"));
         let minted = Value::mint(&big, &mut arena);
         arena.seal();
         let mut col = WordColumn::new_in(&arena.frame());
-        col.push(minted);
+        assert!(
+            matches!(
+                col.push(minted),
+                Err(DomainCtxRefusal::EpochMismatch { .. })
+            ),
+            "stale wide word must refuse typed"
+        );
     }
 }

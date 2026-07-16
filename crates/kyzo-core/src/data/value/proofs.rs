@@ -90,8 +90,8 @@ assert_not_impl!(StampedCode: Default);
 
 // The bulk-spend authority is one-per-admission and non-duplicable: no
 // `Clone`, no `Copy`, no `Default`. Its only mint is
-// `Domain::admit_to` (plane-internal). By-ref spend was cut (#304);
-// T5 rebuilds consume-on-spend.
+// `Domain::admit_to` after `DomainCtx::prove_shared` (plane-internal).
+// By-ref spend was cut (#304); T5 rebuilds consume-on-spend.
 assert_not_impl!(BulkSpendAuthority: Clone);
 assert_not_impl!(BulkSpendAuthority: Copy);
 assert_not_impl!(BulkSpendAuthority: Default);

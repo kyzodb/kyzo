@@ -360,7 +360,7 @@ mod tests {
         let sc = m.stamp().expect("outline mints a stamp");
         assert_eq!(v.code(), Some(sc.code()));
         let f = arena.frame();
-        let resolved = f.resolve(sc);
+        let resolved = f.resolve(sc).expect("lawful");
         assert_eq!(
             resolved,
             cb.as_bytes(),
