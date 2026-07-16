@@ -115,23 +115,13 @@ impl Domain {
         self.admit_to(o, "domain resolve")
     }
 
-    /// The admission check: arena identity, epoch, AND visibility. Mints
-    /// the spend authority the raw observer methods demand.
+    /// The admission check: visibility extent remains; arena/epoch
+    /// panic gates were demolished (#304) — cross-Domain admission must
+    /// be held by the type system, not `assert_eq!`.
     fn admit_to<O: BulkObserver>(&self, o: &O, what: &str) -> BulkSpendAuthority {
-        assert_eq!(
-            o.bulk_arena(),
-            self.arena,
-            "{what} of arena {:?} admitted to an observer of foreign arena {:?}",
-            self.arena,
-            o.bulk_arena()
-        );
-        assert_eq!(
-            o.bulk_epoch(),
-            self.epoch,
-            "{what} of epoch {:?} admitted to an observer of epoch {:?}: gather first",
-            self.epoch,
-            o.bulk_epoch()
-        );
+        // DEMOLISHED (#304): assert_eq! panic gates on ArenaId / Epoch —
+        // cross-Domain admission proven by runtime panic, not types.
+        let _ = (o.bulk_arena(), o.bulk_epoch(), self.arena, self.epoch);
         assert!(
             self.extent as usize <= o.bulk_len(),
             "{what} extent {} exceeds the observer's visibility ({} codes): \
@@ -278,6 +268,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
 
     /// The canonical bytes of the value at `i`.
     pub fn resolve(&self, i: usize) -> &'a [u8] {
+        // SEVERED (#304): by-ref spend cut — T5 rebuilds consume-on-spend.
         self.obs.resolve_raw(self.codes[i] as usize, &self.proof)
     }
 
@@ -291,6 +282,7 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
         if self.all_sealed {
             return a.cmp(&b);
         }
+        // SEVERED (#304): by-ref spend cut — T5 rebuilds consume-on-spend.
         self.obs.cmp_raw(a as usize, b as usize, &self.proof)
     }
 
@@ -437,6 +429,7 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
         let w = &self.words[i];
         match w.inline_canonical() {
             Some(bytes) => bytes,
+            // SEVERED (#304): by-ref spend cut — T5 rebuilds consume-on-spend.
             None => self
                 .obs
                 .resolve_raw(

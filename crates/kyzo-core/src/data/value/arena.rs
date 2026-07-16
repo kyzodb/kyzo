@@ -1072,10 +1072,9 @@ mod sealed {
 /// token guards who spends.
 ///
 /// NOT a skeleton key, by shape: no `Clone`/`Copy`, no accessor ever
-/// returns one, and the admitted container that minted it is its only
-/// home — the token is stored beside the observer it was verified
-/// against and passed by reference to that observer's spends. One
-/// admission, one token, one observer.
+/// returns one. By-ref spend was demolished (#304); T5 rebuilds
+/// consume-on-spend. Callers that still pass `&BulkSpendAuthority` are
+/// intentionally severed.
 pub struct BulkSpendAuthority(());
 
 impl BulkSpendAuthority {
@@ -1094,9 +1093,10 @@ impl BulkSpendAuthority {
 ///
 /// The raw spend methods take bare indices with no stamp: their safety
 /// precondition is a container admission whose domain extent is within
-/// `bulk_len()`, and they DEMAND the [`BulkSpendAuthority`] that only an
-/// admission can mint — a caller with a bare `Frame` can name them but
-/// cannot call them.
+/// `bulk_len()`. DEMOLISHED (#304): by-ref `proof: &BulkSpendAuthority`
+/// spend surface cut — signatures now demand owned `BulkSpendAuthority`
+/// so shared-ref multi-spend across a bulk pass cannot compile; T5
+/// rebuilds consume-on-spend.
 pub trait BulkObserver: sealed::Sealed {
     fn bulk_arena(&self) -> ArenaId;
     fn bulk_epoch(&self) -> Epoch;
@@ -1104,8 +1104,9 @@ pub trait BulkObserver: sealed::Sealed {
     fn bulk_len(&self) -> usize;
     /// Sealed prefix bound (codes below it compare numerically).
     fn bulk_sealed_len(&self) -> usize;
-    fn resolve_raw(&self, c: usize, proof: &BulkSpendAuthority) -> &[u8];
-    fn cmp_raw(&self, a: usize, b: usize, proof: &BulkSpendAuthority) -> Ordering;
+    // DEMOLISHED (#304): by-ref spend cut — owned proof only (T5 consume-on-spend).
+    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> &[u8];
+    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Ordering;
 }
 
 impl BulkObserver for Frame<'_> {
@@ -1125,11 +1126,11 @@ impl BulkObserver for Frame<'_> {
         self.sealed_len
     }
 
-    fn resolve_raw(&self, c: usize, _proof: &BulkSpendAuthority) -> &[u8] {
+    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
         self.view().resolve(c)
     }
 
-    fn cmp_raw(&self, a: usize, b: usize, _proof: &BulkSpendAuthority) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
         self.view().cmp(a, b)
     }
 }
@@ -1151,11 +1152,11 @@ impl BulkObserver for Snapshot {
         self.sealed_len
     }
 
-    fn resolve_raw(&self, c: usize, _proof: &BulkSpendAuthority) -> &[u8] {
+    fn resolve_raw(&self, c: usize, _proof: BulkSpendAuthority) -> &[u8] {
         self.view().resolve(c)
     }
 
-    fn cmp_raw(&self, a: usize, b: usize, _proof: &BulkSpendAuthority) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, _proof: BulkSpendAuthority) -> Ordering {
         self.view().cmp(a, b)
     }
 }

@@ -72,9 +72,9 @@ assert_not_impl!(Code: PartialOrd);
 assert_not_impl!(Code: Ord);
 
 // The 16-byte cell exposes no semantic equality or order TRAIT: comparison
-// is `try_cmp_storage` (locality-only) and identity is `same_word`
-// (physical), both explicit methods. A derived `Ord`/`Eq` would silently
-// deref or misjudge; it must not exist.
+// is `try_cmp_storage` (locality-only). Physical word identity under a
+// proven context is rebuilt under DomainCtx (#304 cut `same_word`).
+// A derived `Ord`/`Eq` would silently deref or misjudge; it must not exist.
 assert_not_impl!(Value: PartialOrd);
 assert_not_impl!(Value: Ord);
 assert_not_impl!(Value: PartialEq);
@@ -87,7 +87,8 @@ assert_not_impl!(StampedCode: Default);
 
 // The bulk-spend authority is one-per-admission and non-duplicable: no
 // `Clone`, no `Copy`, no `Default`. Its only mint is
-// `Domain::admit_to` (plane-internal), and it is spent by reference.
+// `Domain::admit_to` (plane-internal). By-ref spend was cut (#304);
+// T5 rebuilds consume-on-spend.
 assert_not_impl!(BulkSpendAuthority: Clone);
 assert_not_impl!(BulkSpendAuthority: Copy);
 assert_not_impl!(BulkSpendAuthority: Default);

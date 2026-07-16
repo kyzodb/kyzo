@@ -39,9 +39,9 @@
 //!   `Value`: any of them would either lie across contexts or secretly
 //!   consult one. What exists is exact and named:
 //!   [`Value::try_cmp_storage`] (decides only what local information can
-//!   lawfully decide, `None` otherwise — never a deref) and
-//!   [`Value::same_word`] (physical 16-byte identity, which is value
-//!   identity only within one stamped context).
+//!   lawfully decide, `None` otherwise — never a deref).
+//!   Physical word identity under a proven shared context is rebuilt
+//!   elsewhere (DomainCtx) — the unproven `same_word` surface was cut.
 
 // #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
 // laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
@@ -235,12 +235,9 @@ impl Value {
         }
     }
 
-    /// Physical 16-byte identity: value identity ONLY within one stamped
-    /// context (one arena, one epoch) — the container's law, not the
-    /// word's.
-    pub fn same_word(&self, other: &Value) -> bool {
-        self.bytes == other.bytes
-    }
+    // DEMOLISHED (#304): `Value::same_word` — physical 16-byte compare with
+    // no proof of shared arena/epoch; could affirmatively lie across
+    // contexts. T2 rebuilds identity under DomainCtx.
 }
 
 #[cfg(test)]
@@ -265,7 +262,9 @@ mod tests {
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
         let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
-        assert!(outline_edge.value().same_word(&again.value()));
+        // SEVERED (#304): same_word cut — T2 rebuilds under DomainCtx.
+        // was: assert!(outline_edge.value().same_word(&again.value()));
+        let _ = (outline_edge, again);
     }
 
     /// The per-kind residency table, pinned: residency is
@@ -405,18 +404,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn same_word_is_physical_not_semantic() {
-        let mut arena_a = Arena::new();
-        let mut arena_b = Arena::new();
-        let big_x = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxx"));
-        let big_y = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxy"));
-        // Same prefix, different values, DIFFERENT arenas: both get code
-        // 0, producing identical words — exactly why same_word is only
-        // value identity under one stamped context.
-        let va = Value::mint(&big_x, &mut arena_a).value();
-        let vb = Value::mint(&big_y, &mut arena_b).value();
-        assert!(va.same_word(&vb), "the trap this API's name warns about");
-        assert_eq!(va.try_cmp_storage(&vb), None, "and storage cmp refuses it");
-    }
+    // DEMOLISHED (#304): `same_word_is_physical_not_semantic` trap test —
+    // documented the lie the cut API could tell across arenas. Gone with
+    // `Value::same_word`.
 }
