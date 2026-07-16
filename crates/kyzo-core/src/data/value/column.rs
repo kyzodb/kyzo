@@ -388,7 +388,11 @@ impl WordColumn {
                 Ok(())
             }
             Some(stamp) => {
-                debug_assert_eq!(value.code(), Some(stamp.code()), "Minted coherence broken");
+                debug_assert_eq!(
+                    value.code().map(Code::raw),
+                    Some(stamp.code().raw()),
+                    "Minted coherence broken"
+                );
                 self.domain = self.domain.absorb_stamp(stamp)?;
                 self.words.push(value);
                 Ok(())

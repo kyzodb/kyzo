@@ -68,11 +68,15 @@ macro_rules! assert_not_impl {
 // beside the builders they guard, never re-spelled.
 pub(crate) use assert_not_impl;
 
-// Code is identity ONLY: no order. Value order is the observer's through
-// resolved bytes. Handle identity/identity-order under a proven context
-// are `Admission::same_handle` / `Admission::cmp_identity`.
+// Code is identity ONLY: no order and no inherent equality/hash. Value
+// order is the observer's through resolved bytes. Handle identity /
+// identity-order under a proven context are `Admission::same_handle` /
+// `Admission::cmp_identity` — `code_a == code_b` must not compile.
 assert_not_impl!(Code: PartialOrd);
 assert_not_impl!(Code: Ord);
+assert_not_impl!(Code: PartialEq);
+assert_not_impl!(Code: Eq);
+assert_not_impl!(Code: std::hash::Hash);
 
 // The 16-byte cell exposes no semantic equality or order TRAIT: comparison
 // is `try_cmp_storage` (locality-only) and `same_word` under `&Admission`.

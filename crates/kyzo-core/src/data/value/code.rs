@@ -54,11 +54,13 @@
 ///   module-level coexisting-arena measurement; no lifetime-branded spend
 ///   witness is offered).
 ///
-/// There is deliberately no `Ord`: value order is the arena's to answer,
-/// inside a frame. Structural identity-order under a proven context is
+/// There is deliberately no inherent `PartialEq`/`Eq`/`Hash`/`Ord`: a
+/// derived equality would let `code_a == code_b` compile with no context;
+/// value order is the arena's to answer inside a frame. Structural
+/// identity and identity-order under a proven context are
+/// [`Admission::same_handle`](super::admission::Admission::same_handle) /
 /// [`Admission::cmp_identity`](super::admission::Admission::cmp_identity).
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct Code(pub(super) u32);
 
@@ -87,11 +89,31 @@ const _: () = assert!(std::mem::align_of::<Code>() == std::mem::align_of::<u32>(
 /// [`Snapshot`](super::arena::Snapshot), both of which prove the stamp via
 /// typed refusal. Persistent containers of many codes carry one stamp for
 /// all of them and cross epochs only through the gather door.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct StampedCode {
     code: Code,
     epoch: super::arena::Epoch,
     arena: super::arena::ArenaId,
+}
+
+/// Stamp equality is (arena, epoch, raw handle) — the stamp carries its own
+/// context fields. Bare [`Code`] still has no `PartialEq`.
+impl PartialEq for StampedCode {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.arena == other.arena
+            && self.epoch == other.epoch
+            && self.code.raw() == other.code.raw()
+    }
+}
+impl Eq for StampedCode {}
+impl std::hash::Hash for StampedCode {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arena.hash(state);
+        self.epoch.hash(state);
+        self.code.raw().hash(state);
+    }
 }
 
 impl StampedCode {

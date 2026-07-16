@@ -373,7 +373,7 @@ mod tests {
         let v = m.value();
         assert!(!v.is_inline());
         let sc = m.stamp().expect("outline mints a stamp");
-        assert_eq!(v.code(), Some(sc.code()));
+        assert_eq!(v.code().map(Code::raw), Some(sc.code().raw()));
         let f = arena.frame();
         let resolved = f.resolve(sc).expect("lawful");
         assert_eq!(
