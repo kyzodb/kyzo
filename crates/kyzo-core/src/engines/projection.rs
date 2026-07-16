@@ -20,7 +20,9 @@
 //! [`crate::engines::lsh::Lsh`], [`crate::engines::sparse::Sparse`], and
 //! [`crate::engines::spatial::Spatial`]. Relation-backed put/search math stays
 //! in those modules; this module owns the shared protocol types only.
-//! Freshness at the segment seam is a later seat (T5).
+//! Segment freshness (T5) consumes [`Generation::classify`] at
+//! [`crate::engines::segments`] — staleness is [`Stale`], never an `Option`
+//! from a get-shaped call.
 
 use std::fmt;
 
@@ -123,7 +125,7 @@ impl<K> ProjectionBuilder<K> {
 ///
 /// Produced only by [`ProjectionBuilder::seal`]. The sole type that exposes
 /// [`Sealed::query`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sealed<K> {
     generation: Generation,
     kind: K,
@@ -138,6 +140,11 @@ impl<K> Sealed<K> {
     /// Borrow the kind payload.
     pub fn kind(&self) -> &K {
         &self.kind
+    }
+
+    /// Spend the sealed wrapper and return the kind payload.
+    pub fn into_kind(self) -> K {
+        self.kind
     }
 }
 

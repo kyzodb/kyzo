@@ -208,7 +208,7 @@ impl<T: WriteTx> SessionTx<T> {
         if !matches!(op, RelationOp::Ensure | RelationOp::EnsureNot) {
             self.note_constraints(&relation_store);
             // Segment soundness: every mutated relation's id is drained
-            // into a watermark bump BEFORE the commit (runtime/db.rs).
+            // into a generation bump BEFORE the commit (runtime/db.rs).
             self.touched_relations.insert(relation_store.id);
         }
         let InputRelationHandle {
@@ -1117,7 +1117,7 @@ impl<T: WriteTx> SessionTx<T> {
         let key = idx_handle.encode_bitemporal_key_for_store(idx_tup, valid, stamp, span)?;
         let val = idx_handle.encode_bitemporal_val_for_store(idx_tup, polarity, span)?;
         // The index relation is a mutated relation in its own right: its
-        // segment watermark must bump with this commit, or a served index
+        // segment generation must bump with this commit, or a served index
         // segment silently outlives the write (hostile-review finding,
         // demonstrated stale reads on `*t:by_v{..}` after a base `:put`).
         self.touched_relations.insert(idx_handle.id);

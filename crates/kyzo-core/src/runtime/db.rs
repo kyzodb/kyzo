@@ -429,13 +429,13 @@ impl<S: Storage> Db<S> {
                 // and the whole transaction rolls back.
                 self.enforce_constraints(&mut tx, cur_vld)?;
                 // Segment soundness: bumps precede the commit, so any
-                // snapshot that can see these writes sees the new marks.
+                // snapshot that can see these writes sees the new generation.
                 for rel in &tx.touched_relations {
                     self.segments.bump_before_commit(*rel);
                 }
                 tx.store.commit()?;
                 // Post-commit only: retirements are durable, so their
-                // segments and watermarks leave the engine now (a
+                // segments and generation slots leave the engine now (a
                 // rolled-back destroy never reaches this line).
                 for rel in &tx.retired_relations {
                     self.segments.evict(*rel);
@@ -986,7 +986,7 @@ pub struct SessionTx<T> {
     /// [`Db::enforce_constraints`](crate::runtime::db::Db) before commit.
     pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, String>,
     /// Every relation id this transaction wrote (user writes, trigger
-    /// writes, index backfills alike) — drained into segment-watermark
+    /// writes, index backfills alike) — drained into segment-generation
     /// bumps BEFORE the storage commit (the segments' soundness rule).
     pub(crate) touched_relations: std::collections::BTreeSet<crate::data::value::RelationId>,
     /// Relation ids permanently retired by this transaction (destroy /
@@ -1129,7 +1129,7 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Destroy a relation (catalog row and keyspace, in-transaction), routed
     /// by name. The retired id is recorded so the session evicts its
-    /// segment and watermark after commit — every permanent retirement
+    /// segment and generation slot after commit — every permanent retirement
     /// (remove, replace, ::index drop, LSH inverse drop) funnels through
     /// here, so none can leak (hostile-review finding: three sibling
     /// destroy sites leaked one engine entry per cycle, forever).
@@ -1224,7 +1224,7 @@ mod tests {
         .unwrap();
 
         // The first read's miss is ungated (declines to build, per the
-        // rebuild gate); the second read's miss is at the same witness
+        // rebuild gate); the second read's miss is at the same generation
         // (stable) and crosses the threshold, building the segment. Either
         // way both reads return the correct answer.
         let q = "?[k, v] := *w[k, v]";
@@ -1302,9 +1302,10 @@ mod tests {
     /// state, straight from its segment (`StoredRA::prefix_join_batched`)
     /// instead of the bitemporal seek-based probe. The probe side must
     /// obey the identical freshness law as a plain scan — a write to `jr`
-    /// bumps its watermark BEFORE commit, so the very next read's witness
-    /// can never match a segment built before that write, and the join
-    /// sees the new row immediately, never a cached probe answer.
+    /// bumps its generation BEFORE commit, so the very next read's live
+    /// stamp can never classify a segment sealed before that write as
+    /// fresh, and the join sees the new row immediately, never a cached
+    /// probe answer.
     #[test]
     fn segments_serve_fresh_and_never_dirty_for_join_probes() {
         let db = Db::new(SimStorage::new(9)).unwrap();
@@ -1314,7 +1315,7 @@ mod tests {
             .unwrap();
 
         // The first read's miss declines (rebuild gate); the second read's
-        // miss is at the same stable witness and builds jr's segment, so
+        // miss is at the same stable generation and builds jr's segment, so
         // its point-lookup probe is served from the cache from here on.
         let q = "?[k, v] := *jl[k], *jr[k, v]";
         assert_eq!(

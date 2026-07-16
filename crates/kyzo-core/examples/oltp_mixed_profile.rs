@@ -20,15 +20,15 @@
 //! (`Segment::build`) to serve what the caller only needed one row of. A
 //! read-only workload pays that once, amortized over every later probe. A
 //! MIXED workload does not: every committed write bumps the relation's
-//! watermark (`SegmentEngine::bump_before_commit`), so the very next read's
-//! witness never matches and `segment_at` rebuilds from scratch — an O(n)
-//! relation scan to answer one point read, every single time a read follows
-//! a write.
+//! generation (`SegmentEngine::bump_before_commit`), so the very next read's
+//! live stamp never classifies the pre-write sealed segment as fresh and
+//! `segment_at` rebuilds from scratch — an O(n) relation scan to answer one
+//! point read, every single time a read follows a write.
 //!
 //! This isolates that shape: phase A interleaves NO writes (steady state,
 //! the segment's intended case); phase B alternates one write per read (the
 //! bench lane's `phase_mixed` shape). Same op count, same relation, same
-//! backend — the only variable is whether phase B's watermark ever holds
+//! backend — the only variable is whether phase B's generation ever holds
 //! still long enough for the segment to pay off.
 //!
 //! Run: `cargo run -p kyzo --release --example oltp_mixed_profile`
@@ -89,7 +89,7 @@ fn phase_read_only(db: &Db<impl kyzo::Storage>, rows: usize, ops: usize) -> f64 
 
 /// `ops` alternating (point read, point update) pairs on existing keys —
 /// the bench lane's mixed-phase shape: every read is immediately preceded
-/// by a committed write to the SAME relation, so the relation's watermark
+/// by a committed write to the SAME relation, so the relation's generation
 /// never holds still between reads.
 fn phase_mixed(db: &Db<impl kyzo::Storage>, rows: usize, ops: usize) -> f64 {
     let t0 = Instant::now();

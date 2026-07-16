@@ -42,10 +42,9 @@ mod gazetteer_hostile;
 pub(crate) mod hnsw;
 pub(crate) mod lsh;
 /// Columnar current-state segments: rebuildable typed-column mirrors of a
-/// relation's plain scan. Runtime watermark equality freshness was
-/// demolished (story #305). `#[allow(dead_code)]` covers surfaces whose
-/// callers are severed until freshness is re-seated.
-#[allow(dead_code)]
+/// relation's plain scan. Freshness is [`projection::Generation::classify`]
+/// at the segment seam (story #305 T5) — [`projection::Sealed`] vs
+/// [`projection::Stale`], never watermark equality or Option-as-staleness.
 pub(crate) mod segments;
 // sparse has no `db.rs` surface yet (see the block comment above); its
 // in-file tests keep it live under test, so a plain `allow` covers it.
