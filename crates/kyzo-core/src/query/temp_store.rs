@@ -284,7 +284,9 @@ impl MeetLayout {
 
     /// The meet values of a head tuple: its projection onto the aggregated
     /// positions, in head order (aligned one-to-one with `meets`), each
-    /// wrapped as [`MeetAccum::Value`].
+    /// wrapped as [`MeetAccum::Value`]. Production admit folds through
+    /// `init_val` instead; this stays for layout round-trip tests only.
+    #[cfg(test)]
     fn project_vals(&self, row: &[DataValue]) -> Vec<MeetAccum> {
         self.val_positions
             .iter()

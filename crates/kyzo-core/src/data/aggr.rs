@@ -1126,9 +1126,7 @@ impl MeetAggrObj for MeetAggrMin {
         }
         // A materialized Empty (`Null` result) must not linger as a
         // candidate — Min never accumulates Null.
-        if matches!(left, MeetAccum::Empty)
-            || matches!(left, MeetAccum::Value(DataValue::Null))
-        {
+        if matches!(left, MeetAccum::Empty) || matches!(left, MeetAccum::Value(DataValue::Null)) {
             *left = right.clone();
             return Ok(true);
         }
@@ -1211,9 +1209,7 @@ impl MeetAggrObj for MeetAggrMax {
             return Ok(false);
         }
         // Same as Min: Null is never a Max candidate, only Empty is empty.
-        if matches!(left, MeetAccum::Empty)
-            || matches!(left, MeetAccum::Value(DataValue::Null))
-        {
+        if matches!(left, MeetAccum::Empty) || matches!(left, MeetAccum::Value(DataValue::Null)) {
             *left = right.clone();
             return Ok(true);
         }
