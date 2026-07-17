@@ -132,14 +132,11 @@ impl LevelBoundKey {
     pub(crate) fn push_exclusive_sentinel(&mut self) {
         self.0.push(0xFF);
     }
-}
 
-impl std::ops::Deref for LevelBoundKey {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] { &self.0 }
-}
-impl AsRef<[u8]> for LevelBoundKey {
-    fn as_ref(&self) -> &[u8] { &self.0 }
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 
@@ -379,12 +376,13 @@ impl NormalLevel {
     }
 
     fn bounds(&self, lower: &LevelBoundKey, upper: &LevelBoundKey, upper_inclusive: bool) -> (usize, usize) {
-        let (lower, upper) = (lower.0.to_vec(), upper.0.to_vec());
+        let lower = lower.as_bytes();
+        let upper = upper.as_bytes();
         let mut lo = 0usize;
         let mut hi = self.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if self.row_at(mid) < lower.as_slice() {
+            if self.row_at(mid) < lower {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -396,9 +394,9 @@ impl NormalLevel {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let below = if upper_inclusive {
-                self.row_at(mid) <= upper.as_slice()
+                self.row_at(mid) <= upper
             } else {
-                self.row_at(mid) < upper.as_slice()
+                self.row_at(mid) < upper
             };
             if below {
                 lo = mid + 1;
@@ -424,7 +422,7 @@ pub(crate) struct MeetLevel {
 impl MeetLevel {
     fn find(&self, group_key: &[u8]) -> Option<&(Box<OwnBareKey>, Vec<MeetAccum>)> {
         self.groups
-            .binary_search_by(|(k, _)| k.as_ref().as_bytes().cmp(group_key))
+            .binary_search_by(|(k, _)| k.as_bytes().cmp(group_key))
             .ok()
             .map(|i| &self.groups[i])
     }
@@ -550,7 +548,7 @@ impl EpochStore {
                 levels
                     .iter()
                     .rev()
-                    .any(|l| l.find(group.as_ref().as_bytes()).is_some())
+                    .any(|l| l.find(group.as_bytes()).is_some())
             }
         }
     }
@@ -584,7 +582,7 @@ impl EpochStore {
                     let existing = levels
                         .iter()
                         .rev()
-                        .find_map(|l| l.find(row_bytes.as_ref().as_bytes()).map(|i| l.row_flags_at(i)));
+                        .find_map(|l| l.find(row_bytes.as_bytes()).map(|i| l.row_flags_at(i)));
                     match existing {
                         None => {
                             if S::RECORDING {
@@ -627,7 +625,7 @@ impl EpochStore {
                 let mut level = MeetLevel::default();
                 let mut admitted = 0usize;
                 for (group, incoming) in new.by_group {
-                    let folded = match levels.iter().rev().find_map(|l| l.find(group.as_ref().as_bytes())) {
+                    let folded = match levels.iter().rev().find_map(|l| l.find(group.as_bytes())) {
                         None => Some(incoming),
                         Some((_, target)) => {
                             let mut probe = target.clone();
@@ -982,8 +980,8 @@ fn meet_ranged<'s>(
     upper_inclusive: bool,
 ) -> Result<Box<dyn Iterator<Item = TupleInIter<'s>> + 's>, TempStoreCorruptRefuse> {
     let within = move |row: &TupleInIter<'_>| -> bool {
-        row.cmp_bare(&lower) != Ordering::Less
-            && match row.cmp_bare(&upper) {
+        row.cmp_bare(lower.as_bytes()) != Ordering::Less
+            && match row.cmp_bare(upper.as_bytes()) {
                 Ordering::Less => true,
                 Ordering::Equal => upper_inclusive,
                 Ordering::Greater => false,
@@ -1033,7 +1031,7 @@ fn meet_ranged<'s>(
                 // stream rather than panic.
                 let (k, v) = winner?;
                 Some(TupleInIter::new_meet_suffix(
-                    k.as_ref().as_bytes(),
+                    k.as_bytes(),
                     v.as_slice(),
                     LimiterSkip::Include,
                 ))
@@ -1061,7 +1059,7 @@ fn meet_ranged<'s>(
             let newer: Vec<&'s MeetLevel> = all.iter().skip(idx + 1).copied().collect();
             rows.into_iter().filter_map(move |row| {
                 let group = spec.layout.borrow_key(row.as_slice());
-                let owned_by_newer = newer.iter().any(|nl| nl.find(group.as_ref().as_bytes()).is_some());
+                let owned_by_newer = newer.iter().any(|nl| nl.find(group.as_bytes()).is_some());
                 if owned_by_newer {
                     None
                 } else {

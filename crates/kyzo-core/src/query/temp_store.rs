@@ -95,7 +95,6 @@
 //! Only the seam lives here. Witness construction and ceiling checks land
 //! with eval's port.
 
-use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -155,18 +154,6 @@ impl OwnBareKey {
 
     pub(crate) fn decode_tuple(&self) -> Result<Tuple, TempStoreCorruptRefuse> {
         decode_tuple_bare(self.as_bytes()).map_err(TempStoreCorruptRefuse)
-    }
-}
-
-impl AsRef<[u8]> for OwnBareKey {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Borrow<[u8]> for OwnBareKey {
-    fn borrow(&self) -> &[u8] {
-        &self.0
     }
 }
 
@@ -556,7 +543,7 @@ impl MeetAggrStore {
         // Admissibility BEFORE this fold: a group absent from the out-store
         // contributes nothing to the barrier yet, so it is not admissible.
         let was_admissible = match self.by_group.get(group_key.as_ref()) {
-            Some(vals) => total.would_admit(group_key.as_ref().as_bytes(), vals.as_slice())?,
+            Some(vals) => total.would_admit(group_key.as_bytes(), vals.as_slice())?,
             None => false,
         };
         self.meet_put(tuple)?;
@@ -565,7 +552,7 @@ impl MeetAggrStore {
             .by_group
             .get(group_key.as_ref())
             .ok_or(MeetPutResidentInvariant)?;
-        let now_admissible = total.would_admit(group_key.as_ref().as_bytes(), now_vals.as_slice())?;
+        let now_admissible = total.would_admit(group_key.as_bytes(), now_vals.as_slice())?;
         Ok(now_admissible && !was_admissible)
     }
     /// Build a meet store from a rule head's aggregation spec: one entry
