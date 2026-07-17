@@ -205,7 +205,7 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
         .collect();
     let width = rows[0].len();
     let n_rows = rows.len();
-    let columns = crate::query::batch::ColumnBatch::from_rows(rows, width);
+    let columns = crate::query::batch::ColumnBatch::from_rows(rows, width)?;
     let sel = crate::query::vm::eval_pred_batched(
         pred,
         &columns,

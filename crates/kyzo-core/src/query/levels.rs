@@ -63,27 +63,35 @@ struct LevelArenaOverflow {
 /// stored side at all — a probe value is encoded once per call, not once
 /// per row visited.
 /// Flattened row-byte arena for a normal query level.
+/// Field is private: arbitrary `Vec<u8>` is not a level arena (P028).
+/// Mint empty via [`Self::new`]; grow only via [`Self::append_encoded`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
-pub(crate) struct LevelArenaBytes(pub(crate) Vec<u8>);
+pub(crate) struct LevelArenaBytes(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<LevelArenaBytes>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<LevelArenaBytes>() == std::mem::align_of::<Vec<u8>>());
 
 impl std::ops::Deref for LevelArenaBytes {
     type Target = [u8];
-    fn deref(&self) -> &[u8] { &self.0 }
-}
-impl std::ops::DerefMut for LevelArenaBytes {
-    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
 }
 impl AsRef<[u8]> for LevelArenaBytes {
-    fn as_ref(&self) -> &[u8] { &self.0 }
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
 }
 impl LevelArenaBytes {
     /// Empty arena — the only open mint beside appending encoded row bytes.
     pub(crate) fn new() -> Self {
         Self(Vec::new())
+    }
+
+    /// Append row bytes already produced by the bare tuple encode door.
+    pub(crate) fn append_encoded(&mut self, row: &[u8]) {
+        self.0.extend_from_slice(row);
     }
 }
 
@@ -117,14 +125,32 @@ impl AsRef<[u8]> for LevelBoundKey {
 }
 
 
+/// Whether a sealed normal-level row is an epoch admission or a
+/// flag-refresh shadow (P027). Bare `bool` refresh is unrepresentable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum FlagRefresh {
+    /// Admitted this epoch — visible to delta iteration.
+    #[default]
+    Admitted,
+    /// Present only to carry a refreshed limiter flag; invisible to delta.
+    Refresh,
+}
+
+impl FlagRefresh {
+    #[inline]
+    pub(crate) fn hides_from_delta(self) -> bool {
+        matches!(self, Self::Refresh)
+    }
+}
+
 /// Per-row skip/refresh flags for a sealed normal level. Limiter disposition
 /// is [`LimiterSkip`] (P093); compiled-position / peeked-iterator expects
-/// are `INVARIANT(...)` at the seal (P095). Refresh is a named field —
+/// are `INVARIANT(...)` at the seal (P095). Refresh is [`FlagRefresh`] —
 /// never an anonymous `(bool, bool)` soup.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RowFlags {
     pub(crate) skip: LimiterSkip,
-    pub(crate) refresh: bool,
+    pub(crate) refresh: FlagRefresh,
 }
 
 /// Non-empty sealed-level stack (P030): `bottom` is always present, so an
@@ -251,7 +277,7 @@ impl NormalLevel {
     /// already minted at derivation. Refuses when the arena end would
     /// overflow the `u32` offset encoding.
     fn push(&mut self, row: Box<[u8]>, flags: RowFlags) -> Result<()> {
-        self.values.0.extend_from_slice(&row);
+        self.values.append_encoded(&row);
         let end = u32::try_from(self.values.len()).map_or_else(
             |_| {
                 bail!(LevelArenaOverflow {
@@ -269,7 +295,7 @@ impl NormalLevel {
     /// source level, so this one copy per compacted row is the cost of
     /// dropping the shadowed copy).
     fn push_from(&mut self, other: &NormalLevel, i: usize, flags: RowFlags) -> Result<()> {
-        self.values.0.extend_from_slice(other.row_at(i));
+        self.values.append_encoded(other.row_at(i));
         let end = u32::try_from(self.values.len()).map_or_else(
             |_| {
                 bail!(LevelArenaOverflow {
@@ -550,7 +576,7 @@ impl EpochStore {
                                 row_bytes,
                                 RowFlags {
                                     skip,
-                                    refresh: false,
+                                    refresh: FlagRefresh::Admitted,
                                 },
                             )?;
                             admitted += 1;
@@ -562,7 +588,7 @@ impl EpochStore {
                                 row_bytes,
                                 RowFlags {
                                     skip,
-                                    refresh: true,
+                                    refresh: FlagRefresh::Refresh,
                                 },
                             )?;
                         }
@@ -622,7 +648,7 @@ impl EpochStore {
         match &self.kind {
             LevelKind::Normal(levels) => {
                 let l = levels.last();
-                (0..l.len()).any(|i| !l.row_flags_at(i).refresh)
+                (0..l.len()).any(|i| !l.row_flags_at(i).refresh.hides_from_delta())
             }
             LevelKind::Meet { levels, .. } => !levels.last().groups.is_empty(),
         }
@@ -815,7 +841,7 @@ fn normal_merge_next<'s>(
         }
         let l = cursors[win_ci].0;
         let flags = l.row_flags_at(win_row);
-        if delta_only && flags.refresh {
+        if delta_only && flags.refresh.hides_from_delta() {
             continue;
         }
         return Some(TupleInIter::new_bytes(l.row_at(win_row), flags.skip));
@@ -860,7 +886,7 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
                                 b,
                                 RowFlags {
                                     skip: flags.skip,
-                                    refresh: false,
+                                    refresh: FlagRefresh::Admitted,
                                 },
                             )?;
                             a += 1;

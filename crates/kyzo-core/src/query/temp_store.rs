@@ -251,6 +251,23 @@ impl RegularTempStore {
 // MeetAggrStore
 // ─────────────────────────────────────────────────────────────────────────
 
+/// A proven index into a rule head — minted only from
+/// `aggr.iter().enumerate()` at layout / eval rule-set construction.
+/// Bare `usize` head positions are not admitted on the Meet path (P101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct HeadPos(usize);
+
+impl HeadPos {
+    /// Door used when the enumerate index is already a head position.
+    pub(crate) fn from_index(i: usize) -> Self {
+        Self(i)
+    }
+
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
+}
+
 /// The positional layout of a meet-aggregation head, resolved once at
 /// construction from the head's per-position aggregation signature. It is
 /// the constructed proof that carries *where* the grouping keys and the
@@ -259,18 +276,18 @@ impl RegularTempStore {
 /// sites.
 ///
 /// `key_positions` are the head positions with no aggregation (the grouping
-/// key), `val_positions` the meet-aggregated positions — both in ascending
-/// head order, and together a partition of `0..arity`. Upstream cozo (and
-/// the store this replaces) required the aggregated positions to form a
-/// *suffix* so the group key was a byte prefix of the encoded tuple; this
-/// layout groups by the projection onto `key_positions` **wherever they
-/// sit** — position 0, interleaved, or split across the head — matching the
-/// oracle's full positional meet semantics (see the divergence note in
-/// `query/laws.rs`).
+/// key), `val_positions` the meet-aggregated positions — both [`HeadPos`]
+/// in ascending head order, and together a partition of `0..arity`.
+/// Upstream cozo (and the store this replaces) required the aggregated
+/// positions to form a *suffix* so the group key was a byte prefix of the
+/// encoded tuple; this layout groups by the projection onto
+/// `key_positions` **wherever they sit** — position 0, interleaved, or
+/// split across the head — matching the oracle's full positional meet
+/// semantics (see the divergence note in `query/laws.rs`).
 #[derive(Debug, Clone)]
 pub(crate) struct MeetLayout {
-    key_positions: Vec<usize>,
-    val_positions: Vec<usize>,
+    key_positions: Vec<HeadPos>,
+    val_positions: Vec<HeadPos>,
     arity: usize,
 }
 
@@ -285,9 +302,9 @@ impl MeetLayout {
         let mut val_positions = Vec::new();
         for (i, a) in aggrs.iter().enumerate() {
             if a.is_aggregated() {
-                val_positions.push(i);
+                val_positions.push(HeadPos::from_index(i));
             } else {
-                key_positions.push(i);
+                key_positions.push(HeadPos::from_index(i));
             }
         }
         Self {
@@ -301,7 +318,10 @@ impl MeetLayout {
     /// non-aggregated positions, in head order. `row` must cover every
     /// grouping position (a full head tuple does).
     fn project_key(&self, row: &[DataValue]) -> Tuple {
-        self.key_positions.iter().map(|i| row[*i].clone()).collect()
+        self.key_positions
+            .iter()
+            .map(|p| row[p.get()].clone())
+            .collect()
     }
 
     /// The meet values of a head tuple: its projection onto the aggregated
@@ -312,7 +332,7 @@ impl MeetLayout {
     fn project_vals(&self, row: &[DataValue]) -> Vec<MeetAccum> {
         self.val_positions
             .iter()
-            .map(|i| MeetAccum::from_derived(row[*i].clone()))
+            .map(|p| MeetAccum::from_derived(row[p.get()].clone()))
             .collect()
     }
 
@@ -326,7 +346,7 @@ impl MeetLayout {
     pub(crate) fn is_suffix(&self) -> bool {
         self.key_positions
             .iter()
-            .copied()
+            .map(|p| p.get())
             .eq(0..self.key_positions.len())
     }
 
@@ -359,11 +379,11 @@ impl MeetLayout {
             "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
         );
         let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
-        for (slot, i) in self.key_positions.iter().enumerate() {
-            row[*i] = key[slot].clone();
+        for (slot, p) in self.key_positions.iter().enumerate() {
+            row[p.get()] = key[slot].clone();
         }
-        for (slot, i) in self.val_positions.iter().enumerate() {
-            row[*i] = vals[slot].to_value();
+        for (slot, p) in self.val_positions.iter().enumerate() {
+            row[p.get()] = vals[slot].to_value();
         }
         row
     }
@@ -539,8 +559,9 @@ impl MeetAggrStore {
             Some(vals) => {
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    let incoming =
-                        MeetAccum::from_derived(tuple[self.layout.val_positions[i]].clone());
+                    let incoming = MeetAccum::from_derived(
+                        tuple[self.layout.val_positions[i].get()].clone(),
+                    );
                     changed |= op.update(&mut vals[i], &incoming)?;
                 }
                 Ok(changed)
@@ -553,8 +574,9 @@ impl MeetAggrStore {
                 let mut vals: Vec<MeetAccum> =
                     self.meets.iter().map(|(_, op)| op.init_val()).collect();
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    let incoming =
-                        MeetAccum::from_derived(tuple[self.layout.val_positions[i]].clone());
+                    let incoming = MeetAccum::from_derived(
+                        tuple[self.layout.val_positions[i].get()].clone(),
+                    );
                     op.update(&mut vals[i], &incoming)?;
                 }
                 self.by_group.insert(key.into_boxed_slice(), vals);
@@ -1305,8 +1327,11 @@ mod tests {
         let max_aggr = parse_aggr("max").unwrap();
         let spec = vec![aggr_slot(min_aggr), plain(), aggr_slot(max_aggr)];
         let layout = MeetLayout::from_signature(&spec);
-        assert_eq!(layout.key_positions, vec![1]);
-        assert_eq!(layout.val_positions, vec![0, 2]);
+        assert_eq!(layout.key_positions, vec![HeadPos::from_index(1)]);
+        assert_eq!(
+            layout.val_positions,
+            vec![HeadPos::from_index(0), HeadPos::from_index(2)]
+        );
 
         let row: Tuple = Tuple::from_vec(vec![
             DataValue::from(2i64),

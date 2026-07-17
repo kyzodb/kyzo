@@ -347,7 +347,7 @@ mod tests {
             .cloned()
             .map(crate::data::value::Tuple::from_vec)
             .collect();
-        let batch = ColumnBatch::from_rows(owned_rows, width);
+        let batch = ColumnBatch::from_rows(owned_rows, width).expect("test rows uniform width");
         let sel = Selection::all(rows.len());
         let batched = eval_expr_batched(expr, &batch, &sel);
         // Row oracle: first error in row order wins; otherwise all values.

@@ -197,7 +197,7 @@ use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
 use crate::query::temp_store::{
-    AdmissionSink, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
+    AdmissionSink, HeadPos, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
 };
 
 /// One head position's aggregation slot — the shape carried through
@@ -723,23 +723,6 @@ pub(crate) trait FixedRuleEval: Send + Sync {
 // The evaluable program tier
 // ─────────────────────────────────────────────────────────────────────────
 
-/// A proven index into a rule head — minted only from
-/// `aggr.iter().enumerate()` at [`EvalRuleSet`] construction. Bare `usize`
-/// head positions are not admitted on the Meet path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct HeadPos(usize);
-
-impl HeadPos {
-    /// Door used when the enumerate index is already a head position.
-    pub(crate) fn from_index(i: usize) -> Self {
-        Self(i)
-    }
-
-    pub(crate) fn get(self) -> usize {
-        self.0
-    }
-}
-
 /// How a rule set's head aggregates — the classification that picks its
 /// store and its evaluation schedule. (Distinct from
 /// `data::aggr::AggrKind`, which classifies one *aggregation*; this
@@ -970,16 +953,22 @@ impl WitnessTable {
 /// owned by its own rule set; consumed at the sequential merge barrier.
 type PendingWitnesses = BTreeMap<Tuple, (usize, Vec<Tuple>)>;
 
+/// How a pending-witness map is keyed for one store at the merge barrier.
+/// Meet groups project onto [`HeadPos`]s; regular stores key on the full
+/// tuple. An `Option` residual for Meet key positions is unrepresentable (P025).
+enum WitnessKeyMode<'a> {
+    FullTuple,
+    MeetGroup(&'a [HeadPos]),
+}
+
 /// The [`AdmissionSink`] that binds pending witnesses to admitted tuples
-/// at the merge barrier. `key_positions` is `Some` for a meet store — its
-/// pending map is keyed by the group (the projection of the head tuple
-/// onto its non-aggregated positions, wherever they sit), matching the
-/// per-group witness boundary documented on the seam — and `None` for a
-/// regular one (whose witnesses key on the full tuple).
+/// at the merge barrier. Meet stores key pending maps by the group
+/// (projection onto non-aggregated head positions); regular stores key on
+/// the full tuple — selected by [`WitnessKeyMode`], never an Option.
 struct WitnessBinder<'a> {
     store: &'a MagicSymbol,
     pending: &'a PendingWitnesses,
-    key_positions: Option<&'a [HeadPos]>,
+    key_mode: WitnessKeyMode<'a>,
     table: &'a mut WitnessTable,
 }
 
@@ -987,13 +976,13 @@ impl AdmissionSink for WitnessBinder<'_> {
     const RECORDING: bool = true;
     fn admit(&mut self, tuple: TupleInIter<'_>) {
         let full = tuple.into_tuple();
-        let derivation = match self.key_positions {
-            None => self.pending.get(&full).cloned(),
+        let derivation = match self.key_mode {
+            WitnessKeyMode::FullTuple => self.pending.get(&full).cloned(),
             // Project the admitted head tuple onto the grouping positions to
             // recover the group key the pending map was recorded under — the
             // same projection eval used at derivation and the store used to
             // fold, so a non-suffix layout binds exactly as a suffix one.
-            Some(positions) => self
+            WitnessKeyMode::MeetGroup(positions) => self
                 .pending
                 .get(&project_positions(full.as_slice(), positions))
                 .cloned(),
@@ -1284,17 +1273,19 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
             let epoch_store = store_of_mut(stores, &name)?;
             let admitted = match witnesses.as_deref_mut() {
                 Some(table) => {
-                    let key_positions = match defs.get(&name) {
+                    let key_mode = match defs.get(&name) {
                         Some(EvalDefinition::Rules(rule_set)) => match &rule_set.kind {
-                            HeadAggrKind::Meet { key_positions } => Some(key_positions.as_slice()),
-                            HeadAggrKind::None | HeadAggrKind::Normal => None,
+                            HeadAggrKind::Meet { key_positions } => {
+                                WitnessKeyMode::MeetGroup(key_positions.as_slice())
+                            }
+                            HeadAggrKind::None | HeadAggrKind::Normal => WitnessKeyMode::FullTuple,
                         },
-                        _ => None,
+                        _ => WitnessKeyMode::FullTuple,
                     };
                     let mut binder = WitnessBinder {
                         store: &name,
                         pending: &pending,
-                        key_positions,
+                        key_mode,
                         table,
                     };
                     epoch_store.merge_in(out, &mut binder)?

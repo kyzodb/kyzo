@@ -230,7 +230,7 @@ impl UnificationRA {
                 let width = rows.first().map_or(0, |r| r.len());
                 let owned_rows: Vec<Tuple> =
                     rows.iter().map(|r| Tuple::from_vec(r.to_vec())).collect();
-                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width);
+                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width)?;
                 let values = crate::query::vm::eval_expr_batched(
                     &ra.expr,
                     &columns,
