@@ -145,22 +145,20 @@ fn hbase_metadata(dim: usize) -> StoredRelationMetadata {
 }
 
 fn hmanifest(dim: usize, distance: HnswDistance) -> HnswIndexManifest {
-    HnswIndexManifest {
-        base_relation: SmartString::from("corpus"),
-        index_name: SmartString::from("by_v"),
-        vec_dim: dim,
-        dtype: VecElementType::F32,
-        vec_fields: vec![1],
+    HnswIndexManifest::admit(
+        SmartString::from("corpus"),
+        SmartString::from("by_v"),
+        dim,
+        VecElementType::F32,
+        vec![1],
         distance,
-        ef_construction: 32,
-        m_neighbours: 16,
-        m_max: 16,
-        m_max0: 32,
-        level_multiplier: 1.0 / (16f64).ln(),
-        index_filter: None,
-        extend_candidates: false,
-        keep_pruned_connections: false,
-    }
+        32,
+        16,
+        None,
+        false,
+        false,
+    )
+    .expect("harness manifest admits")
 }
 
 /// A real base relation + HNSW index on a real fjall store, populated. Mirrors

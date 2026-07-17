@@ -1440,10 +1440,11 @@ impl<T: WriteTx> SessionTx<T> {
                 )))
             }
             IndexKind::Hnsw(manifest) => {
+                // Manifest holds typed Expr substance; fill binding indices
+                // against the base frame — never re-parse source text.
                 let filter = manifest
-                    .index_filter
-                    .as_deref()
-                    .map(|src| Self::compile_row_expr(base, src))
+                    .index_filter()
+                    .map(|expr| Self::compile_row_extractor(base, expr))
                     .transpose()?;
                 IndexCtx::Hnsw {
                     idx,
@@ -1838,39 +1839,26 @@ impl<T: WriteTx> SessionTx<T> {
                 })?;
             vec_fields.push(*pos);
         }
-        if let Some(src) = &cfg.index_filter {
-            // Prove the filter now; the ctx re-compiles it per session.
-            Self::compile_row_expr(&base, src)?;
+        if let Some(filter) = &cfg.index_filter {
+            // Prove the typed filter binds against the base frame now; the
+            // manifest stores that same Expr substance (not source text).
+            Self::compile_row_extractor(&base, filter)?;
         }
-        // `m_max0` reaches the STORED HNSW manifest; `m_neighbours` is a
-        // user-declared count with no upper bound, so this doubling is a
-        // checked multiply — an overflow is a typed refusal, never a wrapped
-        // graph parameter baked into the index.
-        let m_max0 = cfg.m_neighbours.checked_mul(2).ok_or_else(|| {
-            IndexLifecycleError(format!(
-                "HNSW m_neighbours overflow: {} * 2 exceeds usize",
-                cfg.m_neighbours
-            ))
-        })?;
-        let manifest = crate::engines::hnsw::HnswIndexManifest {
-            base_relation: cfg.base_relation.clone(),
-            index_name: cfg.index_name.clone(),
-            vec_dim: cfg.vec_dim,
-            dtype: cfg.dtype,
+        // Admit-only mint: private fields, MNeighbours (m >= 2), derived
+        // m_max / m_max0 / level_multiplier — illegal descriptions refuse here.
+        let manifest = crate::engines::hnsw::HnswIndexManifest::admit(
+            cfg.base_relation.clone(),
+            cfg.index_name.clone(),
+            cfg.vec_dim,
+            cfg.dtype,
             vec_fields,
-            distance: cfg.distance,
-            ef_construction: cfg.ef_construction,
-            m_neighbours: cfg.m_neighbours,
-            // The standard HNSW derivations (the original's constants):
-            // layer-0 keeps twice the neighbours; the level multiplier is
-            // 1/ln(m) so expected layer occupancy decays geometrically.
-            m_max: cfg.m_neighbours,
-            m_max0,
-            level_multiplier: 1.0 / (cfg.m_neighbours as f64).ln(),
-            index_filter: cfg.index_filter.clone(),
-            extend_candidates: cfg.extend_candidates,
-            keep_pruned_connections: cfg.keep_pruned_connections,
-        };
+            cfg.distance,
+            cfg.ef_construction,
+            cfg.m_neighbours,
+            cfg.index_filter.clone(),
+            cfg.extend_candidates,
+            cfg.keep_pruned_connections,
+        )?;
         let idx_meta = crate::engines::hnsw::hnsw_index_metadata(&base.metadata);
         let idx_ref = IndexRef {
             name: cfg.index_name.clone(),

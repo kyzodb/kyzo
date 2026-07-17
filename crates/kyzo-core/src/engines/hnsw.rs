@@ -209,7 +209,8 @@ use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smartstring::SmartString;
+use serde::{Deserialize, Deserializer};
+use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
@@ -258,35 +259,76 @@ impl ProjectionKind for Hnsw {
 // The manifest: the index's persisted description.
 // ---------------------------------------------------------------------------
 
+/// Neighbour degree `m` for HNSW graph construction. Proven `m >= 2` so
+/// `1/ln(m)` (the level multiplier) is always finite — `m = 1` would yield
+/// `Inf` and an unusable layer geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
+#[serde(transparent)]
+pub(crate) struct MNeighbours(usize);
+
+impl MNeighbours {
+    /// Admit a neighbour degree, or refuse `m < 2` typed.
+    pub(crate) fn new(m: usize) -> Result<Self> {
+        if m < 2 {
+            bail!(HnswManifestRefused(format!(
+                "m_neighbours must be >= 2 (got {m}); m=1 yields an infinite level multiplier"
+            )));
+        }
+        Ok(Self(m))
+    }
+
+    /// The proven neighbour degree.
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
+
+    /// Standard HNSW level multiplier `1/ln(m)`. Finite by construction.
+    pub(crate) fn level_multiplier(self) -> f64 {
+        1.0 / (self.0 as f64).ln()
+    }
+}
+
+/// Typed refusal when [`HnswIndexManifest::admit`] (or [`MNeighbours::new`])
+/// is given an illegal description — zero dimension, empty identity fields,
+/// empty vec field list, non-positive `ef`, or `m < 2`.
+#[derive(Debug, Error, Diagnostic)]
+#[error("HNSW manifest refused: {0}")]
+#[diagnostic(code(hnsw::manifest_refused))]
+pub(crate) struct HnswManifestRefused(pub(crate) String);
+
 /// The persisted description of one HNSW index. Serialized (msgpack, struct
 /// maps) as the payload of the base relation's `IndexKind::Hnsw` catalog
 /// entry — **its wire form is an on-disk format**, pinned by the
 /// pinned-bytes test below; changing it is a migration decision.
 ///
+/// Fields are private; [`admit`](Self::admit) is the sole mint (decode also
+/// routes through it). Illegal descriptions — `vec_dim = 0`, empty required
+/// names/fields, `m < 2` — are unconstructible outside this module.
+///
 /// Distance semantics (see the module docs, loudly): `L2` is SQUARED
 /// Euclidean; `Cosine` is NaN-free by construction because ingest
 /// normalizes (see [`IndexVec`]); `InnerProduct` is `1 - a·b`.
-#[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde_derive::Serialize)]
 pub(crate) struct HnswIndexManifest {
-    pub(crate) base_relation: SmartString<smartstring::LazyCompact>,
-    pub(crate) index_name: SmartString<smartstring::LazyCompact>,
-    pub(crate) vec_dim: usize,
-    pub(crate) dtype: VecElementType,
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    vec_dim: usize,
+    dtype: VecElementType,
     /// Positions (into the base relation's full tuple, keys then non-keys)
     /// of the indexed vector fields.
-    pub(crate) vec_fields: Vec<usize>,
-    pub(crate) distance: HnswDistance,
-    pub(crate) ef_construction: usize,
-    pub(crate) m_neighbours: usize,
-    pub(crate) m_max: usize,
-    pub(crate) m_max0: usize,
-    pub(crate) level_multiplier: f64,
-    /// Filter source text, re-parsed and compiled by the lifecycle tier
-    /// (inherited convention; the parse tier's "parsed substance with
-    /// provenance" redesign will absorb it).
-    pub(crate) index_filter: Option<String>,
-    pub(crate) extend_candidates: bool,
-    pub(crate) keep_pruned_connections: bool,
+    vec_fields: Vec<usize>,
+    distance: HnswDistance,
+    ef_construction: usize,
+    m_neighbours: MNeighbours,
+    m_max: usize,
+    m_max0: usize,
+    level_multiplier: f64,
+    /// Compiled/typed row filter substance — never raw source text. Binding
+    /// indices are filled by the lifecycle tier at first use
+    /// (`compile_row_extractor`); the catalog holds the parsed Expr.
+    index_filter: Option<Expr>,
+    extend_candidates: bool,
+    keep_pruned_connections: bool,
 }
 
 /// A fixed, pinned seed for HNSW level assignment. Deriving each vector's
@@ -317,7 +359,119 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Wire DTO for deserialize-then-admit. Derived fields (`m_max`, `m_max0`,
+/// `level_multiplier`) are ignored; [`HnswIndexManifest::admit`] recomputes
+/// them from the proven `m_neighbours`.
+#[derive(serde_derive::Deserialize)]
+struct HnswIndexManifestDe {
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    vec_dim: usize,
+    dtype: VecElementType,
+    vec_fields: Vec<usize>,
+    distance: HnswDistance,
+    ef_construction: usize,
+    m_neighbours: usize,
+    #[allow(dead_code)]
+    m_max: usize,
+    #[allow(dead_code)]
+    m_max0: usize,
+    #[allow(dead_code)]
+    level_multiplier: f64,
+    index_filter: Option<Expr>,
+    extend_candidates: bool,
+    keep_pruned_connections: bool,
+}
+
+impl<'de> Deserialize<'de> for HnswIndexManifest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let de = HnswIndexManifestDe::deserialize(deserializer)?;
+        Self::admit(
+            de.base_relation,
+            de.index_name,
+            de.vec_dim,
+            de.dtype,
+            de.vec_fields,
+            de.distance,
+            de.ef_construction,
+            de.m_neighbours,
+            de.index_filter,
+            de.extend_candidates,
+            de.keep_pruned_connections,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
 impl HnswIndexManifest {
+    /// Sole mint for an HNSW index description. Refuses `vec_dim = 0`, empty
+    /// `base_relation` / `index_name` / `vec_fields`, non-positive
+    /// `ef_construction`, and `m_neighbours < 2` (via [`MNeighbours`]).
+    /// Derives `m_max`, `m_max0`, and `level_multiplier` from the proven `m`.
+    pub(crate) fn admit(
+        base_relation: SmartString<LazyCompact>,
+        index_name: SmartString<LazyCompact>,
+        vec_dim: usize,
+        dtype: VecElementType,
+        vec_fields: Vec<usize>,
+        distance: HnswDistance,
+        ef_construction: usize,
+        m_neighbours: usize,
+        index_filter: Option<Expr>,
+        extend_candidates: bool,
+        keep_pruned_connections: bool,
+    ) -> Result<Self> {
+        if base_relation.is_empty() {
+            bail!(HnswManifestRefused(
+                "base_relation must be non-empty".into()
+            ));
+        }
+        if index_name.is_empty() {
+            bail!(HnswManifestRefused("index_name must be non-empty".into()));
+        }
+        if vec_dim == 0 {
+            bail!(HnswManifestRefused("vec_dim must be > 0".into()));
+        }
+        if vec_fields.is_empty() {
+            bail!(HnswManifestRefused(
+                "vec_fields must be non-empty".into()
+            ));
+        }
+        if ef_construction == 0 {
+            bail!(HnswManifestRefused(
+                "ef_construction must be > 0".into()
+            ));
+        }
+        let m = MNeighbours::new(m_neighbours)?;
+        let m_max0 = m.get().checked_mul(2).ok_or_else(|| {
+            HnswManifestRefused(format!(
+                "HNSW m_neighbours overflow: {} * 2 exceeds usize",
+                m.get()
+            ))
+        })?;
+        Ok(Self {
+            base_relation,
+            index_name,
+            vec_dim,
+            dtype,
+            vec_fields,
+            distance,
+            ef_construction,
+            m_neighbours: m,
+            m_max: m.get(),
+            m_max0,
+            level_multiplier: m.level_multiplier(),
+            index_filter,
+            extend_candidates,
+            keep_pruned_connections,
+        })
+    }
+
+    /// The typed index filter substance, if any.
+    pub(crate) fn index_filter(&self) -> Option<&Expr> {
+        self.index_filter.as_ref()
+    }
+
     /// Draw the (non-positive) layer for a vector: geometric in the standard
     /// HNSW way, `-floor(-ln(u) * level_multiplier)`, but with `u` derived
     /// DETERMINISTICALLY from the vector's identity and the pinned
@@ -2838,22 +2992,20 @@ mod tests {
     }
 
     fn manifest(distance: HnswDistance) -> HnswIndexManifest {
-        HnswIndexManifest {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
-            vec_dim: 2,
-            dtype: VecElementType::F32,
-            vec_fields: vec![1],
+        HnswIndexManifest::admit(
+            SmartString::from("vecs"),
+            SmartString::from("by_v"),
+            2,
+            VecElementType::F32,
+            vec![1],
             distance,
-            ef_construction: 16,
-            m_neighbours: 8,
-            m_max: 8,
-            m_max0: 16,
-            level_multiplier: 1.0 / (8f64).ln(),
-            index_filter: None,
-            extend_candidates: false,
-            keep_pruned_connections: false,
-        }
+            16,
+            8,
+            None,
+            false,
+            false,
+        )
+        .expect("canonical test manifest admits")
     }
 
     fn vec2(x: f64, y: f64) -> DataValue {
@@ -2949,7 +3101,8 @@ mod tests {
         let mut m = manifest(HnswDistance::L2);
         m.vec_dim = dim;
         m.ef_construction = 200;
-        m.m_neighbours = 16;
+        let m16 = MNeighbours::new(16).unwrap();
+        m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
         // `manifest()`'s default (`1/ln(8)`) is sized for its own m=8 tests;
@@ -2958,7 +3111,7 @@ mod tests {
         // `tombstone_fix_preserves_recall_at_10k` already reset it — this
         // call sat at the m=8 default, over-deepening the hierarchy relative
         // to the bench parameters this harness claims to mirror).
-        m.level_multiplier = 1.0 / (16f64).ln();
+        m.level_multiplier = m16.level_multiplier();
 
         let mut tx = db.write_tx().unwrap();
         let base = create_relation(
@@ -3025,10 +3178,11 @@ mod tests {
         let mut m = manifest(HnswDistance::L2);
         m.vec_dim = dim;
         m.ef_construction = 200;
-        m.m_neighbours = 16;
+        let m16 = MNeighbours::new(16).unwrap();
+        m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
-        m.level_multiplier = 1.0 / (16f64).ln();
+        m.level_multiplier = m16.level_multiplier();
 
         let mut setup_tx = db.write_tx().unwrap();
         let base = create_relation(
@@ -3139,10 +3293,11 @@ mod tests {
             let mut m = manifest(HnswDistance::L2);
             m.vec_dim = dim;
             m.ef_construction = 200;
-            m.m_neighbours = 16;
+            let m16 = MNeighbours::new(16).unwrap();
+            m.m_neighbours = m16;
             m.m_max = 16;
             m.m_max0 = 32;
-            m.level_multiplier = 1.0 / (16f64).ln();
+            m.level_multiplier = m16.level_multiplier();
 
             let mut tx = db.write_tx().unwrap();
             let base = create_relation(
@@ -3387,10 +3542,11 @@ mod tests {
         let mut m = manifest(HnswDistance::L2);
         m.vec_dim = dim;
         m.ef_construction = 200;
-        m.m_neighbours = 16;
+        let m16 = MNeighbours::new(16).unwrap();
+        m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
-        m.level_multiplier = 1.0 / (16f64).ln();
+        m.level_multiplier = m16.level_multiplier();
 
         let mut tx = db.write_tx().unwrap();
         let base = create_relation(

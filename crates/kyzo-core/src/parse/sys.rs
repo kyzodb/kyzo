@@ -416,8 +416,12 @@ impl BuildMinHashLshConfig for MinHashLshConfigBuilder<Set> {
 /// every `HnswIndexConfig` value is proven complete: `vec_dim`,
 /// `ef_construction`, and `m_neighbours` are always present, never a
 /// sentinel checked after assembly.
+///
+/// `index_filter` is the parsed typed predicate substance (or `None`) — never
+/// raw source text. The mutation tier stores that same substance on the
+/// persisted [`crate::engines::hnsw::HnswIndexManifest`].
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HnswIndexConfig {
     pub base_relation: SmartString<LazyCompact>,
     pub index_name: SmartString<LazyCompact>,
@@ -427,7 +431,7 @@ pub struct HnswIndexConfig {
     pub distance: HnswDistance,
     pub ef_construction: usize,
     pub m_neighbours: usize,
-    pub index_filter: Option<String>,
+    pub index_filter: Option<Expr>,
     pub extend_candidates: bool,
     pub keep_pruned_connections: bool,
     _built: Built,
@@ -449,7 +453,7 @@ pub struct HnswConfigBuilder<Dim, Ef, M> {
     dtype: VecElementType,
     vec_fields: Vec<SmartString<LazyCompact>>,
     distance: HnswDistance,
-    index_filter: Option<String>,
+    index_filter: Option<Expr>,
     extend_candidates: bool,
     keep_pruned_connections: bool,
     _required: PhantomData<(Dim, Ef, M)>,
@@ -516,7 +520,7 @@ impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
         self.vec_fields = vec_fields;
         self
     }
-    pub fn filter(mut self, index_filter: Option<String>) -> Self {
+    pub fn filter(mut self, index_filter: Option<Expr>) -> Self {
         self.index_filter = index_filter;
         self
     }
@@ -1191,10 +1195,12 @@ pub(crate) fn parse_sys(
                                             val_span,
                                         )
                                     })?;
+                                // `m >= 2`: m=1 makes `1/ln(m)` infinite (the
+                                // persisted MNeighbours newtype refuses it too).
                                 ensure!(
-                                    v > 0,
+                                    v >= 2,
                                     IndexOptionError(
-                                        format!("Invalid m_neighbours: {v}"),
+                                        format!("Invalid m_neighbours: {v} (must be >= 2)"),
                                         val_span,
                                     )
                                 );
@@ -1232,7 +1238,9 @@ pub(crate) fn parse_sys(
                                 }
                             }
                             "filter" => {
-                                index_filter = Some(opt_val.as_str().to_string());
+                                let mut ex = build_expr(opt_val, param_pool)?;
+                                ex.partial_eval()?;
+                                index_filter = Some(ex);
                             }
                             "extend_candidates" => {
                                 extend_candidates = opt_val.as_str().trim() == "true";
