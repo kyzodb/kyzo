@@ -84,7 +84,8 @@ use miette::Result;
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{ReadTx, WriteTx};
+use crate::storage::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
+use crate::data::value::data_value_any;
 
 /// One session's temp keyspace: an ordered map with the kernel's
 /// transaction interface. "Transaction" is honorary — the map IS the
@@ -93,7 +94,8 @@ use crate::storage::{ReadTx, WriteTx};
 /// transaction).
 #[derive(Debug)]
 pub(crate) struct TempTx {
-    map: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
+    map: Option<BTreeMap<Vec<u8>, Vec<u8>>>,
     /// This session-store's system stamp: logical time from a
     /// process-wide monotone counter. The temp keyspace is private
     /// session state, so stamps need no wall-clock meaning, and logical
@@ -105,7 +107,7 @@ impl Default for TempTx {
     fn default() -> Self {
         static TEMP_CLOCK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
         TempTx {
-            map: BTreeMap::new(),
+            map: Some(BTreeMap::new()),
             stamp: ValidityTs::from_raw(
                 TEMP_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
             ),
@@ -114,19 +116,27 @@ impl Default for TempTx {
 }
 
 impl TempTx {
+    fn open_map(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> {
+        self.map.as_ref().expect("TempTx used after commit/abort")
+    }
+
+    fn open_map_mut(&mut self) -> &mut BTreeMap<Vec<u8>, Vec<u8>> {
+        self.map.as_mut().expect("TempTx used after commit/abort")
+    }
+
     /// Whether nothing has ever been written (used by tests/diagnostics).
     pub(crate) fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.open_map().is_empty()
     }
 }
 
 impl ReadTx for TempTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        Ok(self.map.get(key).map(Slice::from))
+        Ok(self.open_map().get(key).map(Slice::from))
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        Ok(self.map.contains_key(key))
+        Ok(self.open_map().contains_key(key))
     }
 
     fn range_scan<'a>(
@@ -140,7 +150,7 @@ impl ReadTx for TempTx {
             return Box::new(std::iter::empty());
         }
         Box::new(
-            self.map
+            self.open_map()
                 .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
                 .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
@@ -166,7 +176,7 @@ impl ReadTx for TempTx {
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
         Box::new(
-            self.map
+            self.open_map()
                 .iter()
                 .map(|(k, v)| Ok((Slice::from(k), Slice::from(v)))),
         )
@@ -200,7 +210,7 @@ impl OpenSkipCursor for TempTx {
 
     fn open_skip_cursor<'c>(&'c self, _lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
         TempSkipCursor {
-            map: &self.map,
+            map: self.open_map(),
             upper: upper.to_vec(),
         }
     }
@@ -212,12 +222,12 @@ impl WriteTx for TempTx {
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.map.insert(key.to_vec(), val.to_vec());
+        self.open_map_mut().insert(key.to_vec(), val.to_vec());
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.map.remove(key);
+        self.open_map_mut().remove(key);
         Ok(())
     }
 
@@ -226,26 +236,42 @@ impl WriteTx for TempTx {
             return Ok(()); // the kernel's degenerate-bounds contract
         }
         let doomed: Vec<Vec<u8>> = self
-            .map
+            .open_map()
             .range::<[u8], _>((Bound::Included(lower), Bound::Excluded(upper)))
             .map(|(k, _)| k.clone())
             .collect();
+        let map = self.open_map_mut();
         for k in doomed {
-            self.map.remove(&k);
+            map.remove(&k);
         }
         Ok(())
     }
 
     /// Vacuous: a temp store's transaction IS the session's lifetime. The
     /// method exists because the species contract requires it; consuming
-    /// self here would only ever be called by generic code that is about
+    /// Open here would only ever be called by generic code that is about
     /// to drop the store anyway.
-    fn commit(self) -> Result<()> {
-        Ok(())
+    fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
+        let _ = self.map.take().expect("TempTx commit after spend");
+        Ok(Committed)
     }
 
-    fn commit_durable(self) -> Result<()> {
-        Ok(())
+    fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
+        let _ = self.map.take().expect("TempTx commit_durable after spend");
+        Ok(Committed)
+    }
+
+    fn abort(mut self) -> Aborted {
+        let _ = self.map.take().expect("TempTx abort after spend");
+        Aborted
+    }
+}
+
+impl Drop for TempTx {
+    fn drop(&mut self) {
+        if self.map.is_some() && !std::thread::panicking() {
+            panic!("Open WriteTx dropped without commit() or abort(self)");
+        }
     }
 }
 
@@ -254,7 +280,7 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{DataValue, Validity, ValiditySlot, ValidityTs};
     use crate::data::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(7).expect("below cap");
@@ -262,7 +288,9 @@ mod tests {
     /// A bitemporal key: `[int x, valid(ts), sys(ts)]` under `REL`, slot
     /// flags pinned to assert (the row's polarity lives in the value).
     fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
-        let slot = |ts: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), true));
+        let slot = |ts: i64| {
+            DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(ts), true))
+        };
         vec![DataValue::from(x), slot(valid_ts), slot(sys_ts)]
             .encode_as_key(REL)
             .to_vec()
@@ -296,7 +324,7 @@ mod tests {
                 let x = tup[0].get_int().expect("int key column");
                 let version_ts = match &tup[1] {
                     DataValue::Validity(v) => v.timestamp().raw(),
-                    other => panic!("expected a valid-instant slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected a valid-instant slot, got {other:?}"),
                 };
                 (x, version_ts)
             })

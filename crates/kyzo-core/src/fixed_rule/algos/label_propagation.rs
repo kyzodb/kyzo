@@ -38,7 +38,9 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::rng::SeededRng;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    GraphAlgorithmInvariantError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct LabelPropagation;
 
@@ -54,7 +56,9 @@ impl FixedRule for LabelPropagation {
         let max_iter = payload.pos_integer_option("max_iter", Some(10))?;
         // Determinism: the shuffled scan order and random tie-break are
         // seeded from this option (fixed default), never from OS entropy.
-        let seed = payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))? as u64;
+        let seed = SeededRng::seed_from_i64(
+            payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
+        );
         let (graph, indices, _inv_indices) = edges.as_directed_weighted_graph(undirected, true)?;
         let labels = label_propagation(&graph, max_iter, seed, cancel)?;
         for (idx, label) in labels.into_iter().enumerate() {
@@ -104,10 +108,11 @@ fn label_propagation(
                 .take_while(|(_, score)| *score == max_score)
                 .map(|(l, _)| l)
                 .collect_vec();
-            // Structural: `take_while` keeps at least the first element
-            // (its score equals `max_score` by definition), so the
-            // candidate list is never empty.
-            let new_label = *candidate_labels.choose(&mut rng).unwrap();
+            // INVARIANT(label_candidates): `take_while` keeps at least the
+            // first element (score equals `max_score`), so never empty.
+            let new_label = *candidate_labels
+                .choose(&mut rng)
+                .ok_or_else(|| GraphAlgorithmInvariantError::refuse("label_candidates"))?;
             if new_label != labels[*node as usize] {
                 changed = true;
                 labels[*node as usize] = new_label;

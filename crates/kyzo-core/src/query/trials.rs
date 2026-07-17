@@ -22,8 +22,7 @@
 //!   stratified negation, normal aggregation, and meet aggregation in every
 //!   positional layout the landed [`crate::query::eval::EvalRuleSet`] now
 //!   accepts — suffix, position-0, and interleaved (grouping columns between
-//!   meet columns), the capability that replaced the retired `MeetNotSuffix`
-//!   refusal — plus mutual recursion, a non-self-healing two-delta join, and
+//!   meet columns) — plus mutual recursion, a non-self-healing two-delta join, and
 //!   opaque fixed rules, over generated fact sets in the thousands. Per seed,
 //!   under a **finite**
 //!   [`Budget`] (an unbudgeted random recursive program can legitimately
@@ -68,9 +67,9 @@ use std::sync::Arc;
 
 use miette::Result;
 
-use crate::data::aggr::{MeetAggrObj, parse_aggr};
+use crate::data::aggr::{MeetAccum, MeetAggr, parse_aggr};
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::program::{MagicSymbol, StoreLifetimes};
+use crate::data::program::{HeadAggrSlot, MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -86,7 +85,7 @@ use crate::query::laws::{
     resolve, resolve_relation, unify,
 };
 use crate::query::levels::EpochStore;
-use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::query::temp_store::{RegularTempStore, TupleInIter, collect_materialized};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — the splitmix64 of storage/sim.rs, transcribed so the campaign
@@ -102,6 +101,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -200,12 +200,9 @@ impl ModelBody {
                 .get(&muggle(rel))
                 .expect("harness: IDB store present");
             if use_delta {
-                store
-                    .delta_all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect()
+                collect_materialized(store.delta_all_iter().expect("harness: store iter"))
             } else {
-                store.all_iter().map(TupleInIter::into_tuple).collect()
+                collect_materialized(store.all_iter().expect("harness: store iter"))
             }
         } else {
             self.facts
@@ -227,13 +224,16 @@ impl ModelBody {
                 .expect("harness: IDB store present");
             store
                 .prefix_iter(probe)
+                .expect("harness: store iter")
                 .next()
-                .is_some_and(|t| t.into_tuple() == *probe)
+                .is_some_and(|t| t.try_into_tuple().ok() == Some(probe.clone()))
         } else {
             self.facts.get(rel).is_some_and(|set| set.contains(probe))
         }
     }
 }
+
+impl crate::query::eval::seal::Sealed for ModelBody {}
 
 impl RuleBody for ModelBody {
     fn for_each_derivation(
@@ -247,15 +247,15 @@ impl RuleBody for ModelBody {
             .body
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.negated)
+            .filter(|(_, l)| !l.is_negated())
             .collect();
-        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
+        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.is_negated()));
 
         let mut frontier: Vec<(Bindings, Vec<Tuple>)> = vec![(Bindings::new(), Vec::new())];
         for (body_pos, l) in ordered {
-            let is_delta = !l.negated && delta_from == Some(AtomOccurrence(body_pos));
+            let is_delta = !l.is_negated() && delta_from == Some(AtomOccurrence(body_pos));
             let mut next = Vec::new();
-            if l.negated {
+            if l.is_negated() {
                 for (bound, premises) in &frontier {
                     let probe = ground(&l.args, bound);
                     if !self.negated_probe_hits(stores, l.rel, &probe) {
@@ -317,12 +317,13 @@ impl FixedRuleEval for ModelFixed {
             .iter()
             .map(|rel| {
                 if self.idb.contains(rel) {
-                    stores
-                        .get(&muggle(rel))
-                        .expect("harness: fixed input store present")
-                        .all_iter()
-                        .map(TupleInIter::into_tuple)
-                        .collect()
+                    collect_materialized(
+                        stores
+                            .get(&muggle(rel))
+                            .expect("harness: fixed input store present")
+                            .all_iter()
+                            .expect("harness: store iter"),
+                    )
                 } else {
                     self.facts.get(rel).cloned().unwrap_or_default()
                 }
@@ -355,12 +356,12 @@ fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
         for l in &rule.body {
             let forcing = if class.has_aggr {
                 if class.is_meet && l.rel == head {
-                    l.negated
+                    l.is_negated()
                 } else {
                     true
                 }
             } else {
-                l.negated || fixed_heads.contains(l.rel) || is_meet(l.rel)
+                l.is_negated() || fixed_heads.contains(l.rel) || is_meet(l.rel)
             };
             edges.push((head, l.rel, forcing));
         }
@@ -587,11 +588,7 @@ fn real_eval(
         budget,
         None,
     )?;
-    Ok(outcome
-        .store
-        .all_iter()
-        .map(TupleInIter::into_tuple)
-        .collect())
+    Ok(collect_materialized(outcome.store.all_iter()?))
 }
 
 fn generous_budget() -> Budget {
@@ -622,7 +619,10 @@ fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
     }
 }
 fn named(name: &str) -> HeadAggr {
-    Some((parse_aggr(name).expect("real aggregation"), vec![]))
+    HeadAggrSlot::Aggregated {
+        aggr: parse_aggr(name).expect("real aggregation"),
+        args: vec![],
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -655,9 +655,8 @@ struct GenParams {
     fixed_rule: bool,
     meet_op: &'static str,
     /// Emit the 2-column meet `m` with its aggregated column at position 0
-    /// (grouping node at position 1) — a non-suffix layout, exercising the
-    /// positional MeetAggrStore that replaced the retired `MeetNotSuffix`
-    /// refusal. `false` keeps the classic suffix layout.
+    /// (grouping node at position 1) — a non-suffix positional layout.
+    /// `false` keeps the classic suffix layout.
     meet_pos0: bool,
     /// Also emit a 3-column *interleaved* meet `mi(min(Lo), K, max(Hi))`: two
     /// meet columns split apart by a grouping column at position 1.
@@ -770,19 +769,18 @@ fn generate(seed: u64) -> Generated {
     // Meet recursion `m` over `seed(node, val)`, propagating the folded value
     // along edges. The same fixpoint in two head layouts, chosen by seed:
     //   suffix — head m(group, agg), aggr [None, meet]  (classic)
-    //   pos0   — head m(agg, group), aggr [meet, None]  (non-suffix; the
-    //            positional MeetAggrStore that replaced MeetNotSuffix)
+    //   pos0   — head m(agg, group), aggr [meet, None]  (non-suffix positional)
     if p.meet_pos0 {
         rules.push(Rule::aggregated(
             "m",
             vec![y(), x()],
-            vec![named(p.meet_op), None],
+            vec![named(p.meet_op), HeadAggrSlot::Plain],
             vec![lit("seed", vec![x(), y()], false)],
         ));
         rules.push(Rule::aggregated(
             "m",
             vec![z(), y()],
-            vec![named(p.meet_op), None],
+            vec![named(p.meet_op), HeadAggrSlot::Plain],
             vec![
                 lit("edge", vec![x(), y()], false),
                 lit("m", vec![z(), x()], false),
@@ -792,13 +790,13 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "m",
             vec![x(), y()],
-            vec![None, named(p.meet_op)],
+            vec![HeadAggrSlot::Plain, named(p.meet_op)],
             vec![lit("seed", vec![x(), y()], false)],
         ));
         rules.push(Rule::aggregated(
             "m",
             vec![y(), z()],
-            vec![None, named(p.meet_op)],
+            vec![HeadAggrSlot::Plain, named(p.meet_op)],
             vec![
                 lit("edge", vec![x(), y()], false),
                 lit("m", vec![x(), z()], false),
@@ -832,13 +830,13 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "mi",
             vec![lo.clone(), k.clone(), hi.clone()],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![lit("seed3", vec![k.clone(), lo.clone(), hi.clone()], false)],
         ));
         rules.push(Rule::aggregated(
             "mi",
             vec![lo.clone(), t.clone(), hi.clone()],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![
                 lit("edge", vec![s.clone(), t], false),
                 lit("mi", vec![lo, s, hi], false),
@@ -928,7 +926,7 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "reach_count",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit("path", vec![x(), y()], false)],
         ));
     }
@@ -936,7 +934,7 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "bulk_sum",
             vec![x(), y()],
-            vec![None, named("sum")],
+            vec![HeadAggrSlot::Plain, named("sum")],
             vec![lit("item", vec![x(), y()], false)],
         ));
     }
@@ -1048,11 +1046,7 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
             Some(&mut table),
         )
         .expect("evaluates");
-        let rows = outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect();
+        let rows = collect_materialized(outcome.store.all_iter()?)?;
         (rows, render_witnesses(&table))
     })
 }
@@ -1178,6 +1172,7 @@ fn determinism_campaign() {
     let mut failures: Vec<(u64, String)> = Vec::new();
     for i in 0..count {
         // splitmix64 the index so consecutive seeds are unrelated.
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         if let Err(f) = run_seed(seed) {
             failures.push((seed, format!("{f:?}")));
@@ -1257,7 +1252,7 @@ fn reconstruct(
     let w = witnesses.get(&(rel.to_string(), tuple.clone()))?;
     let (rule_idx, premise_rows) = w.derivation.as_ref()?;
     let rule = &per_head[rel][*rule_idx];
-    let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
+    let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
     // The witness records exactly one premise row per positive literal, in
     // body order — the order `ModelBody` grounds them.
     if positives.len() != premise_rows.len() {
@@ -1339,13 +1334,13 @@ fn verify(
             if rule.head_rel != *rel {
                 return Err(format!("rule head '{}' ≠ claimed '{rel}'", rule.head_rel));
             }
-            if rule.body.iter().any(|l| l.negated) {
+            if rule.body.iter().any(|l| l.is_negated()) {
                 return Err(format!(
                     "boundary: rule for '{rel}' has a negated premise, not \
                      independently checkable from a proof tree"
                 ));
             }
-            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
+            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
             if positives.len() != premises.len() {
                 return Err(format!(
                     "'{rel}': {} premises for {} positive body literals",
@@ -1463,11 +1458,7 @@ fn run_with_witnesses(
         Some(&mut table),
     )
     .expect("evaluates");
-    let rows = outcome
-        .store
-        .all_iter()
-        .map(TupleInIter::into_tuple)
-        .collect();
+    let rows = collect_materialized(outcome.store.all_iter()?)?;
     (
         rows,
         index_witnesses(&table),
@@ -1909,8 +1900,8 @@ fn program_grid(history: &[Event], axis: Axis) -> Vec<i64> {
         .iter()
         .flat_map(|e| {
             let c = match axis {
-                Axis::Valid => e.valid,
-                Axis::Sys => e.sys,
+                Axis::Valid => e.valid(),
+                Axis::Sys => e.sys(),
             };
             [c - 1, c, c + 1]
         })
@@ -1935,13 +1926,14 @@ fn grid_differential_over_generated_temporal_programs() {
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0x7E57_A105_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let hist = gen_temporal_histories(&mut rng, &params);
         let program = temporal_program(&mut rng, &hist);
 
         for (&rel, history) in &program.histories {
-            let keys: BTreeSet<&Tuple> = history.iter().map(|e| &e.key).collect();
+            let keys: BTreeSet<&Tuple> = history.iter().map(|e| e.key()).collect();
             for key in keys {
                 let valid_grid = program_grid(history, Axis::Valid);
                 let sys_grid = program_grid(history, Axis::Sys);
@@ -1968,7 +1960,7 @@ fn grid_differential_over_generated_temporal_programs() {
                         cases += 1;
                     }
                 }
-                for &fixed_valid in &[history.first().map(|e| e.valid).unwrap_or(0), 0] {
+                for &fixed_valid in &[history.first().map(|e| e.valid()).unwrap_or(0), 0] {
                     let ivs = derive_intervals(history, key, Axis::Sys, fixed_valid);
                     for &sys_pt in &sys_grid {
                         let direct = resolve(
@@ -2066,6 +2058,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xD1FF_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let key: Tuple = Tuple::from_vec(vec![v(0)]);
@@ -2089,13 +2082,13 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let bc = diff(&history, b, c);
         let ac = diff(&history, a, c);
         assert_eq!(
-            compose(&ab, &bc),
+            compose(&ab, &bc).expect("unit net"),
             ac,
             "seed {seed}: valid axis a={av} b={bv} c={cv}"
         );
         cases += 1;
 
-        let fixed_valid = history.first().map(|e| e.valid).unwrap_or(0);
+        let fixed_valid = history.first().map(|e| e.valid()).unwrap_or(0);
         let (asys, bsys, csys) = ordered_triple(&mut rng, params.coord_span);
         let a = AsOf {
             valid: fixed_valid,
@@ -2113,7 +2106,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let bc = diff(&history, b, c);
         let ac = diff(&history, a, c);
         assert_eq!(
-            compose(&ab, &bc),
+            compose(&ab, &bc).expect("unit net"),
             ac,
             "seed {seed}: sys axis a={asys} b={bsys} c={csys}"
         );
@@ -2152,8 +2145,8 @@ fn near_coordinate(rng: &mut Rng, history: &[Event]) -> AsOf {
     let events: Vec<&Event> = history.iter().collect();
     let e = rng.one_of(&events);
     AsOf {
-        valid: nudge(rng, e.valid),
-        sys: nudge(rng, e.sys),
+        valid: nudge(rng, e.valid()),
+        sys: nudge(rng, e.sys()),
     }
 }
 
@@ -2167,6 +2160,7 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0x9A5D_6E1B_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let mut history = Vec::new();
@@ -2251,26 +2245,27 @@ fn per_literal_asof_pushdown_matches_independent_single_coordinate_resolution() 
 fn resolve_erase_as_retract_bug(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
     let mut instants: Vec<i64> = history
         .iter()
-        .filter(|e| &e.key == key && e.valid <= at.valid)
-        .map(|e| e.valid)
+        .filter(|e| e.key() == key && e.valid() <= at.valid)
+        .map(|e| e.valid())
         .collect();
     instants.sort_unstable();
     instants.dedup();
     for instant in instants.into_iter().rev() {
         let governing = history
             .iter()
-            .filter(|e| &e.key == key && e.valid == instant && e.sys <= at.sys)
-            .max_by_key(|e| e.sys);
-        match governing.map(|e| e.polarity) {
-            Some(ClaimPolarity::Assert) => {
-                let e = governing.expect("just matched Some");
-                let mut t = e.key.clone();
-                t.extend(e.payload.iter().cloned());
+            .filter(|e| e.key() == key && e.valid() == instant && e.sys() <= at.sys)
+            .max_by_key(|e| e.sys());
+        match governing {
+            Some(Event::Assert {
+                key: k, payload, ..
+            }) => {
+                let mut t = k.clone();
+                t.extend(payload.iter().cloned());
                 return Some(t);
             }
             // BUG: Erase should fall through (continue the loop, `{}`),
             // not settle absent like Retract.
-            Some(ClaimPolarity::Retract) | Some(ClaimPolarity::Erase) => return None,
+            Some(Event::Retract { .. }) | Some(Event::Erase { .. }) => return None,
             None => {}
         }
     }
@@ -2332,6 +2327,7 @@ fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
 
     let mut caught_without_erase = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history_no_erase(&mut rng, &key, &params);
@@ -2346,6 +2342,7 @@ fn mutant_dropping_erase_from_generation_blinds_the_campaign() {
 
     let mut caught_with_erase = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xE1A5_E000_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params); // the real generator
@@ -2373,10 +2370,10 @@ fn derive_intervals_abs_sort_bug(
 ) -> Vec<Interval> {
     let mut breaks: Vec<i64> = history
         .iter()
-        .filter(|e| &e.key == key)
+        .filter(|e| e.key() == key)
         .map(|e| match axis {
-            Axis::Valid => e.valid,
-            Axis::Sys => e.sys,
+            Axis::Valid => e.valid(),
+            Axis::Sys => e.sys(),
         })
         .collect();
     breaks.sort_unstable_by_key(|b| b.unsigned_abs()); // BUG: magnitude, not ascending
@@ -2459,6 +2456,7 @@ fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
 
     let mut caught_nonneg_only = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history_nonneg(&mut rng, &key, &params);
@@ -2473,6 +2471,7 @@ fn mutant_skipping_negative_coordinates_blinds_the_campaign() {
 
     let mut caught_with_negatives = false;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xA65_5169_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params); // the real generator
@@ -2502,10 +2501,10 @@ fn derive_intervals_short_end_bug(
 ) -> Vec<Interval> {
     let mut breaks: Vec<i64> = history
         .iter()
-        .filter(|e| &e.key == key)
+        .filter(|e| e.key() == key)
         .map(|e| match axis {
-            Axis::Valid => e.valid,
-            Axis::Sys => e.sys,
+            Axis::Valid => e.valid(),
+            Axis::Sys => e.sys(),
         })
         .collect();
     breaks.sort_unstable();
@@ -2583,6 +2582,7 @@ fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end
     let mut caught_without_ticks = 0usize;
     let mut caught_with_ticks = 0usize;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0x9BAD_E1D0_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let params = gen_temporal_params(&mut rng);
         let history = gen_temporal_history(&mut rng, &key, &params);
@@ -2590,8 +2590,8 @@ fn mutant_weakening_the_grid_to_stored_coordinates_only_blinds_it_to_a_short_end
         // The mutated grid: stored coordinates only, no ±1, no extremes.
         let mut stored_only: Vec<i64> = history
             .iter()
-            .filter(|e| e.key == key)
-            .map(|e| e.valid)
+            .filter(|e| *e.key() == key)
+            .map(|e| e.valid())
             .collect();
         stored_only.sort_unstable();
         stored_only.dedup();
@@ -2821,21 +2821,21 @@ fn reachability_program(rng: &mut Rng, fx: &ReachabilityFixture) -> Program {
         Rule::aggregated(
             "deg",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit_at("hedge", vec![x(), y()], fx.c_edge)],
         ),
         // m(X,V) :- hseed(X,V) @c_seed.
         Rule::aggregated(
             "m",
             vec![x(), y()],
-            vec![None, named(fx.meet_op)],
+            vec![HeadAggrSlot::Plain, named(fx.meet_op)],
             vec![lit_at("hseed", vec![x(), y()], fx.c_seed)],
         ),
         // m(Y,Z) :- hedge(X,Y) @c_edge, m(X,Z).
         Rule::aggregated(
             "m",
             vec![y(), z()],
-            vec![None, named(fx.meet_op)],
+            vec![HeadAggrSlot::Plain, named(fx.meet_op)],
             vec![
                 lit_at("hedge", vec![x(), y()], fx.c_edge),
                 lit("m", vec![x(), z()], false),
@@ -2919,9 +2919,9 @@ fn expected_meet(
     meet_op: &str,
 ) -> BTreeSet<Tuple> {
     let aggregation = parse_aggr(meet_op).expect("real aggregation");
-    let mut acc: BTreeMap<DataValue, DataValue> = BTreeMap::new();
+    let mut acc: BTreeMap<DataValue, MeetAccum> = BTreeMap::new();
     for row in seeds {
-        acc.insert(row[0].clone(), row[1].clone());
+        acc.insert(row[0].clone(), MeetAccum::from_derived(row[1].clone()));
     }
     let mut steps = 0usize;
     loop {
@@ -2942,8 +2942,7 @@ fn expected_meet(
                     changed = true;
                 }
                 Some(mut cur) => {
-                    let op: Box<dyn MeetAggrObj> =
-                        aggregation.meet_op().expect("meet-capable aggregation");
+                    let op: MeetAggr = aggregation.meet_op().expect("meet-capable aggregation");
                     if op.update(&mut cur, &val).expect("meet update") {
                         acc.insert(b.clone(), cur);
                         changed = true;
@@ -2956,7 +2955,7 @@ fn expected_meet(
         }
     }
     acc.into_iter()
-        .map(|(k, val)| vec![k, val])
+        .map(|(k, val)| vec![k, val.to_value()])
         .map(Tuple::from_vec)
         .collect()
 }
@@ -2966,6 +2965,7 @@ fn temporal_negation_recursion_and_both_aggregation_families_match_independent_r
     let mut cases = 0usize;
     let seeds = 400u64;
     for seed in 0..seeds {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = Rng::new(0xF00D_BA11_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let fx = gen_reachability_fixture(&mut rng);
         let program = reachability_program(&mut rng, &fx);

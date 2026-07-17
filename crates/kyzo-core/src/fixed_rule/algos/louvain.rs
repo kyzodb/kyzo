@@ -31,7 +31,9 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct CommunityDetectionLouvain;
 
@@ -84,16 +86,16 @@ fn louvain(
     max_iter: usize,
     cancel: CancelFlag,
 ) -> Result<Vec<Vec<u32>>> {
-    let mut current = graph;
+    let mut current_graph = graph;
     let mut collected = vec![];
-    while current.node_count() > 2 {
-        let (node2comm, new_graph) = louvain_step(current, delta, max_iter, cancel.clone())?;
-        if new_graph.node_count() == current.node_count() {
+    while current_graph.node_count() > 2 {
+        let (node2comm, new_graph) = louvain_step(current_graph, delta, max_iter, cancel.clone())?;
+        if new_graph.node_count() == current_graph.node_count() {
             break;
         }
+        let idx = collected.len();
         collected.push((node2comm, new_graph));
-        // Structural: the push above makes `collected` non-empty.
-        current = &collected.last().unwrap().1;
+        current_graph = &collected[idx].1;
     }
     Ok(collected.into_iter().map(|(a, _)| a).collect_vec())
 }
@@ -366,8 +368,8 @@ mod tests {
     /// scan, before any `calculate_delta` work for that node.
     #[test]
     fn cancellation_stops_node_scan() {
-        let cancel = CancelFlag::default();
-        cancel.cancel();
+        let (auth, cancel) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let s = |v: &str| DataValue::from(v);
         let err = run_fixed_rule(
             &CommunityDetectionLouvain,

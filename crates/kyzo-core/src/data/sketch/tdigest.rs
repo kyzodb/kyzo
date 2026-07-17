@@ -47,6 +47,7 @@ use std::io::Write;
 use miette::{Result, bail, ensure};
 
 use crate::data::value::{DataValue, Num};
+use crate::data::value::data_value_any;
 
 /// The compression parameter δ. Larger is more accurate and larger; 100 is
 /// the common default (≈ 1% rank error mid-distribution, better at tails).
@@ -64,13 +65,14 @@ struct Centroid {
 }
 
 /// A finalized t-digest: sorted centroids plus the exact min and max (kept
-/// separately so the extreme quantiles are exact anchors).
+/// separately so the extreme quantiles are exact anchors). Empty digests
+/// hold [`None`] for min/max — never `f64::NAN` as an absence sentinel.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct TDigest {
     compression: f64,
     centroids: Vec<Centroid>,
-    min: f64,
-    max: f64,
+    min: Option<f64>,
+    max: Option<f64>,
     count: f64,
 }
 
@@ -98,7 +100,7 @@ impl TDigest {
         for v in values {
             match v {
                 DataValue::Num(n) => nums.push(n.to_f64()),
-                other => bail!("t-digest requires numeric values, got {other:?}"),
+                other @ (data_value_any!()) => bail!("t-digest requires numeric values, got {other:?}"),
             }
         }
         Ok(Self::from_sorted_weighted(sort_floats(nums), compression))
@@ -112,14 +114,14 @@ impl TDigest {
             return Self {
                 compression,
                 centroids: vec![],
-                min: f64::NAN,
-                max: f64::NAN,
+                min: None,
+                max: None,
                 count: 0.0,
             };
         }
         let total: f64 = sorted.iter().map(|(_, w)| *w).sum();
-        let min = sorted.first().unwrap().0;
-        let max = sorted.last().unwrap().0;
+        let min = Some(sorted.first().unwrap().0);
+        let max = Some(sorted.last().unwrap().0);
 
         let mut centroids: Vec<Centroid> = Vec::new();
         let mut weight_so_far = 0.0f64;
@@ -162,15 +164,15 @@ impl TDigest {
 
     /// The estimated value at quantile `q ∈ [0, 1]`. Interpolates between
     /// centroid centers in rank space, with the exact min and max as the
-    /// `q = 0` and `q = 1` anchors. A pure function of the digest. `NaN` for
-    /// an empty digest.
-    pub(crate) fn quantile(&self, q: f64) -> f64 {
-        if self.centroids.is_empty() {
-            return f64::NAN;
-        }
+    /// `q = 0` and `q = 1` anchors. A pure function of the digest.
+    /// Empty digests return [`None`] — never `f64::NAN` as absence.
+    pub(crate) fn quantile(&self, q: f64) -> Option<f64> {
+        let (Some(min), Some(max)) = (self.min, self.max) else {
+            return None;
+        };
         let q = q.clamp(0.0, 1.0);
         if self.centroids.len() == 1 {
-            return self.centroids[0].mean;
+            return Some(self.centroids[0].mean);
         }
         let target = q * self.count;
 
@@ -179,19 +181,19 @@ impl TDigest {
         // increasing; values non-decreasing — so interpolation is monotone.
         // Walk until the bracketing pair around `target` is found.
         let mut prev_rank = 0.0f64;
-        let mut prev_val = self.min;
+        let mut prev_val = min;
         let mut cum = 0.0f64;
         for c in &self.centroids {
             let center = cum + c.weight / 2.0;
             if target <= center {
-                return interpolate(target, prev_rank, prev_val, center, c.mean);
+                return Some(interpolate(target, prev_rank, prev_val, center, c.mean));
             }
             prev_rank = center;
             prev_val = c.mean;
             cum += c.weight;
         }
         // Between the last centroid center and the max anchor.
-        interpolate(target, prev_rank, prev_val, self.count, self.max)
+        Some(interpolate(target, prev_rank, prev_val, self.count, max))
     }
 
     /// Merge shard digests under the canonical policy: pool all centroids as
@@ -227,21 +229,36 @@ impl TDigest {
                 .then(a.1.partial_cmp(&b.1).unwrap())
         });
         let mut merged = Self::from_sorted_weighted(pooled, self.compression);
-        merged.min = self.min.min(other.min);
-        merged.max = self.max.max(other.max);
+        merged.min = match (self.min, other.min) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        merged.max = match (self.max, other.max) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
         Ok(merged)
     }
 
     /// Serialize to the portable stored form: tag, compression, count, min,
     /// max, centroid count, then `(mean, weight)` pairs — all `f64`/`u64`
     /// little-endian, so the bytes are identical on every platform.
+    /// Empty digests omit min/max on the wire (zeroed layout slots only);
+    /// absence is [`Option::None`] in memory and `centroids.is_empty()` on
+    /// decode — never `f64::NAN`.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(1 + 8 * 4 + 8 + self.centroids.len() * 16);
         out.write_all(&[FORMAT_TAG]).unwrap();
         out.write_all(&self.compression.to_le_bytes()).unwrap();
         out.write_all(&self.count.to_le_bytes()).unwrap();
-        out.write_all(&self.min.to_le_bytes()).unwrap();
-        out.write_all(&self.max.to_le_bytes()).unwrap();
+        // Layout reserves min/max slots; empty digests leave them zeroed.
+        // Semantic absence is empty centroids / Option::None — not a float sentinel.
+        let min_wire = self.min.unwrap_or(0.0);
+        let max_wire = self.max.unwrap_or(0.0);
+        out.write_all(&min_wire.to_le_bytes()).unwrap();
+        out.write_all(&max_wire.to_le_bytes()).unwrap();
         out.write_all(&(self.centroids.len() as u64).to_le_bytes())
             .unwrap();
         for c in &self.centroids {
@@ -266,8 +283,8 @@ impl TDigest {
         ensure!(body.len() >= 40, "t-digest header truncated");
         let compression = f64::from_le_bytes(body[0..8].try_into().unwrap());
         let count = f64::from_le_bytes(body[8..16].try_into().unwrap());
-        let min = f64::from_le_bytes(body[16..24].try_into().unwrap());
-        let max = f64::from_le_bytes(body[24..32].try_into().unwrap());
+        let min_raw = f64::from_le_bytes(body[16..24].try_into().unwrap());
+        let max_raw = f64::from_le_bytes(body[24..32].try_into().unwrap());
         let n = u64::from_le_bytes(body[32..40].try_into().unwrap()) as usize;
         let rest = &body[40..];
         ensure!(
@@ -275,13 +292,18 @@ impl TDigest {
             "t-digest centroid bytes {} do not match count {n}",
             rest.len()
         );
-        let centroids = rest
+        let centroids: Vec<Centroid> = rest
             .chunks_exact(16)
             .map(|c| Centroid {
                 mean: f64::from_le_bytes(c[0..8].try_into().unwrap()),
                 weight: f64::from_le_bytes(c[8..16].try_into().unwrap()),
             })
             .collect();
+        let (min, max) = if centroids.is_empty() {
+            (None, None)
+        } else {
+            (Some(min_raw), Some(max_raw))
+        };
         Ok(Self {
             compression,
             centroids,
@@ -345,7 +367,7 @@ mod tests {
         let digest = digest_of(data.iter().copied(), 100.0);
 
         for &q in &[0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999] {
-            let est = digest.quantile(q);
+            let est = digest.quantile(q).expect("non-empty digest");
             let got_rank = exact_rank(&data, est);
             let err = (got_rank - q).abs();
             // Generous relative to the ~1/δ = 1% mid guarantee; tails tighter.
@@ -366,8 +388,27 @@ mod tests {
     #[test]
     fn extremes_are_exact() {
         let digest = digest_of((0..1000).map(|i| i as f64 * 0.5), 100.0);
-        assert_eq!(digest.quantile(0.0), 0.0);
-        assert_eq!(digest.quantile(1.0), 999.0 * 0.5);
+        assert_eq!(digest.quantile(0.0), Some(0.0));
+        assert_eq!(digest.quantile(1.0), Some(999.0 * 0.5));
+    }
+
+    /// Empty digest: quantile and wire use typed absence — never NaN.
+    #[test]
+    fn empty_has_no_nan_absence() {
+        let empty = TDigest::from_values(&[], 100.0).unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(empty.min, None);
+        assert_eq!(empty.max, None);
+        assert_eq!(empty.quantile(0.5), None);
+        let bytes = empty.to_bytes();
+        let min_bits = f64::from_le_bytes(bytes[1 + 16..1 + 24].try_into().unwrap()).to_bits();
+        let max_bits = f64::from_le_bytes(bytes[1 + 24..1 + 32].try_into().unwrap()).to_bits();
+        assert_ne!(min_bits, f64::NAN.to_bits());
+        assert_ne!(max_bits, f64::NAN.to_bits());
+        let round = TDigest::from_bytes(&bytes).unwrap();
+        assert_eq!(round.min, None);
+        assert_eq!(round.max, None);
+        assert_eq!(round.quantile(0.0), None);
     }
 
     /// The centroid count stays bounded by the compression, not the input
@@ -458,7 +499,7 @@ mod tests {
         // and the aggregation never depends on it. Both must still give
         // usable quantiles close to the true median of the combined data.
         for d in [&left, &right] {
-            assert!(d.quantile(0.5).is_finite());
+            assert!(d.quantile(0.5).is_some_and(f64::is_finite));
         }
     }
 

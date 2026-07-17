@@ -26,7 +26,10 @@
 
 use super::DataValue;
 use super::Tuple;
-use super::arena::BulkSpendAuthority;
+use super::admission::{
+    Admission, BulkSpendAuthority, Denial, DomainCtx, NestId, NestedAdmission, NestedDomainCtx,
+    SpendAdmission,
+};
 use super::canonical::CanonicalBytes;
 use super::cell::{Minted, Value};
 use super::code::{Code, StampedCode};
@@ -65,29 +68,80 @@ macro_rules! assert_not_impl {
 // beside the builders they guard, never re-spelled.
 pub(crate) use assert_not_impl;
 
-// Code is identity ONLY: no order. It cannot be compared, so no read path
-// can sneak an ordering out of a bare handle — order is the observer's
-// through resolved bytes, never the code's.
+// Code is identity ONLY: no order and no inherent equality/hash. Value
+// order is the observer's through resolved bytes. Handle identity /
+// identity-order under a proven context are `Admission::same_handle` /
+// `Admission::cmp_identity` — `code_a == code_b` must not compile.
 assert_not_impl!(Code: PartialOrd);
 assert_not_impl!(Code: Ord);
+assert_not_impl!(Code: PartialEq);
+assert_not_impl!(Code: Eq);
+assert_not_impl!(Code: std::hash::Hash);
 
 // The 16-byte cell exposes no semantic equality or order TRAIT: comparison
-// is `try_cmp_storage` (locality-only) and identity is `same_word`
-// (physical), both explicit methods. A derived `Ord`/`Eq` would silently
-// deref or misjudge; it must not exist.
+// is `try_cmp_storage` (locality-only) and `same_word` under `&Admission`.
+// A derived `Ord`/`Eq` would silently deref or misjudge; it must not exist.
 assert_not_impl!(Value: PartialOrd);
 assert_not_impl!(Value: Ord);
 assert_not_impl!(Value: PartialEq);
 assert_not_impl!(Value: Eq);
+
+// Admission/Denial vocabulary: one discipline, opposite directions.
+// Thin aliases DomainCtx / DomainCtxRefusal name the same types.
+const _: fn() = || {
+    fn admission_is_domain_ctx(a: Admission) -> DomainCtx {
+        a
+    }
+    fn denial_is_refusal(d: Denial) -> super::admission::DomainCtxRefusal {
+        d
+    }
+    fn nested_alias(n: NestedAdmission<'static>) -> NestedDomainCtx<'static> {
+        n
+    }
+    fn spend_alias(s: SpendAdmission) -> BulkSpendAuthority {
+        s
+    }
+    let _ = (
+        admission_is_domain_ctx,
+        denial_is_refusal,
+        nested_alias,
+        spend_alias,
+    );
+};
+
+// An admission token cannot be conjured empty — only from_observer /
+// prove_shared / plane-internal `at`. Durable re-checkable fact: Copy.
+// Coexisting-arena form: deliberately unbranded (see Admission docs /
+// code.rs measurement); nest brands are NestedDomainCtx under
+// Frame/Snapshot::with_nested_ctx.
+assert_not_impl!(Admission: Default);
+assert_not_impl!(DomainCtx: Default);
+assert_not_impl!(Denial: Default);
+
+// Nest-branded admission cannot be conjured empty either — only the
+// with_nested_ctx doors mint one (and HRTB keeps `'id` from escaping).
+assert_not_impl!(NestedDomainCtx<'static>: Default);
+assert_not_impl!(NestedAdmission<'static>: Default);
+
+// Durable fact tokens are Copy (re-checkable, not consumable permission).
+const _: fn() = || {
+    fn needs_copy<T: Copy>() {}
+    needs_copy::<Admission>();
+    needs_copy::<DomainCtx>();
+    needs_copy::<NestId<'static>>();
+    needs_copy::<NestedDomainCtx<'static>>();
+    needs_copy::<Denial>();
+};
 
 // A stamped code cannot be conjured: no `Default`. Its only mints are
 // `Arena::intern` and `EpochRemap::apply`, both demanding the arena's
 // private mint token.
 assert_not_impl!(StampedCode: Default);
 
-// The bulk-spend authority is one-per-admission and non-duplicable: no
-// `Clone`, no `Copy`, no `Default`. Its only mint is
-// `Domain::admit_to` (plane-internal), and it is spent by reference.
+// Consumable permission: one-per-admission, move-only consume-on-spend.
+// No `Clone`/`Copy`/`Default` — duplication would forge a second spend.
+// Reuse after `resolve_raw`/`cmp_raw`/`open_pass` is a move error (E0382);
+// these absence proofs are the static half of that refusal.
 assert_not_impl!(BulkSpendAuthority: Clone);
 assert_not_impl!(BulkSpendAuthority: Copy);
 assert_not_impl!(BulkSpendAuthority: Default);

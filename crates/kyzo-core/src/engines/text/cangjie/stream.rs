@@ -36,13 +36,14 @@ impl<'a> crate::engines::text::tokenizer::TokenStream for CangjieTokenStream<'a>
             let current_word = self.result[self.index];
             let offset_to = self.offset_from + current_word.len();
 
-            self.token = Token {
-                offset_from: self.offset_from,
+            self.token = Token::new(
+                self.offset_from,
                 offset_to,
-                position: self.index,
-                text: current_word.to_string(),
-                position_length: self.result.len(),
-            };
+                self.index,
+                current_word.to_string(),
+                self.result.len(),
+            )
+            .expect("offset_to is offset_from + word len");
 
             self.index += 1;
             self.offset_from = offset_to;

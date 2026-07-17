@@ -70,8 +70,8 @@ impl std::error::Error for ResonanceError {}
 
 /// Run the resonance gate. `only`, if given, runs a single named check
 /// (`derive_bypass`, `panic_lint`, `copy_detector`, `dead_code_ratchet`,
-/// `agreement_registry`, `allocation_admission`, `boundary_closure`) — what
-/// the bite-proof harness uses.
+/// `agreement_registry`, `allocation_admission`, `boundary_closure`,
+/// `unchecked_arith`) — what the bite-proof harness uses.
 pub fn run(only: Option<&str>) -> Result<(), ResonanceError> {
     let root = fsutil::repo_root().map_err(ResonanceError::RepoRoot)?;
     let files = fsutil::walk_engine_sources(&root).map_err(ResonanceError::SourceScan)?;
@@ -121,6 +121,18 @@ pub fn run(only: Option<&str>) -> Result<(), ResonanceError> {
     }
     if want("boundary_closure") && !run_boundary_closure(&files) {
         failing_checks.push("boundary_closure");
+    }
+    if want("unchecked_arith") {
+        match run_unchecked_arith(&files, &root) {
+            Ok(true) => {}
+            Ok(false) => failing_checks.push("unchecked_arith"),
+            Err(source) => {
+                return Err(ResonanceError::CheckConfig {
+                    check: "unchecked_arith",
+                    source,
+                });
+            }
+        }
     }
 
     if failing_checks.is_empty() {
@@ -255,6 +267,51 @@ fn run_boundary_closure(files: &[fsutil::SourceFile]) -> bool {
         violations.len()
     );
     ok
+}
+
+fn run_unchecked_arith(
+    files: &[fsutil::SourceFile],
+    root: &std::path::Path,
+) -> Result<bool, anyhow::Error> {
+    println!("== check: unchecked-arith named-invariant ratchet ==");
+    let baseline = checks::unchecked_arith::load_baseline(root)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let examples = checks::unchecked_arith::walk_examples(root)?;
+    let mut violations = checks::unchecked_arith::check(files);
+    violations.extend(checks::unchecked_arith::check(&examples));
+    violations.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    for v in &violations {
+        println!(
+            "FAIL {}:{}: `{}` lacks an adjacent `// INVARIANT(Name): …` proof \
+             (unchecked arithmetic requires a named invariant at the same rung as unsafe)",
+            v.file, v.line, v.method
+        );
+    }
+    let n = violations.len();
+    if n > baseline {
+        eprintln!(
+            "FAIL unchecked-arith: {n} uncommented site(s) exceeds baseline {baseline} \
+             (crates/xtask/unchecked-arith-baseline.json)"
+        );
+        println!(
+            "check: unchecked-arith FAIL ({n} uncommented, baseline {baseline})"
+        );
+        return Ok(false);
+    }
+    if n < baseline {
+        eprintln!(
+            "RATCHET IMPROVED unchecked-arith: {n} < baseline {baseline} — tighten \
+             crates/xtask/unchecked-arith-baseline.json to {n}"
+        );
+        println!(
+            "check: unchecked-arith FAIL (baseline stale: {n} < {baseline})"
+        );
+        return Ok(false);
+    }
+    println!(
+        "check: unchecked-arith PASS ({n} uncommented; baseline {baseline})"
+    );
+    Ok(true)
 }
 
 fn run_agreement_registry(

@@ -339,6 +339,7 @@ fn seeded_fuzz_against_independent_reference() {
         state ^= state >> 12;
         state ^= state << 25;
         state ^= state >> 27;
+        // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
         let mut r = state.wrapping_mul(0x2545F4914F6CDD1D);
         let n = 1 + (r % 9) as usize;
         r /= 9;

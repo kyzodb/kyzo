@@ -20,8 +20,10 @@
  *   check site, including inside rule iteration ([`InterruptTicker`]),
  *   which closes the original's unkillable-scan gap (poison was checked
  *   once per rule, after the whole scan) and retires the sleeper thread.
- *   Poison survives only as the user-kill flag folded into the same
- *   sites. Refusals are typed: [`LimitExceeded`] and [`Killed`].
+ *   Poison survives as the cancel lifecycle
+ *   ([`crate::fixed_rule::CancelFlag`] shared with fixed rules; request via
+ *   consuming [`crate::fixed_rule::CancelAuthority::cancel`]). Refusals are
+ *   typed: [`LimitExceeded`] and [`crate::fixed_rule::Cancelled`].
  * - **No unbounded fixpoint exists.** The epoch loop is
  *   `0..budget.epoch_ceiling`; exhausting it without a fixpoint is a
  *   deterministic [`LimitExceeded`] refusal.
@@ -63,7 +65,7 @@
  *      classification is a typed [`EvalInvariantError`].
  *   9. eval.rs:430  `normal_op.as_mut().unwrap().set(..)` — gone: the
  *      landed aggregation API mints live ops per group
- *      (`Aggregation::normal_op(args) -> Result<Box<dyn NormalAggrObj>>`),
+ *      (`Aggregation::normal_op(args) -> Result<NormalAggr>`),
  *      there is no `Option` field to unwrap.
  *  10. eval.rs:439  the vacant-entry twin of 9 — gone the same way.
  *  11. eval.rs:467-470  `a.as_ref().unwrap()` + `normal_op.unwrap()` for
@@ -74,24 +76,24 @@
  *      empty rule sets, so the signature accessor is structurally total.
  *
  * Documented deviations from the original, beyond the ratified ones:
- *   D1. Limiter skip-flags are recorded only for the entry rule
- *       (`should_check_limit`); the original's incremental path called
- *       `should_skip_next` for every rule, flagging tuples in non-entry
- *       stores. Those flags were dead (only the entry store's flags are
- *       read) but misleading; the initial path already gated them.
+ *   D1. Limiter skip dispositions (`LimiterSkip`) are recorded only for
+ *       the entry rule (`should_check_limit`); the original's incremental
+ *       path called `should_skip_next` for every rule, flagging tuples in
+ *       non-entry stores. Those flags were dead (only the entry store's
+ *       flags are read) but misleading; the initial path already gated them.
+ *       The pre-runtime `NoStoredInputs` placeholder is gone (P090) — fixed
+ *       rules read stored inputs through `SessionView`, never that seam.
  *   D2. The incremental limiter path deduplicates against the epoch's own
  *       out-store (`!out.exists(&item)`) exactly as the original's initial
  *       path did. The original's incremental path did not, so a tuple
  *       re-derived twice within one epoch double-counted toward `:limit`
  *       and could early-stop the entry rule short of the requested rows.
- *   D3. An all-meet head whose aggregated positions are not a suffix is
- *       refused at [`EvalRuleSet::new`] with a typed error. The original
- *       silently demoted that shape to a *normal* aggregation and froze it
- *       after epoch 0, dropping recursive derivations (see the oracle's
- *       divergence note in `query/laws.rs`). Full oracle parity (evaluating
- *       such heads inside recursion) requires `MeetAggrStore` to grow
- *       positional grouping; until then the shape is a loud refusal, never
- *       a wrong answer.
+ *   D3. RETIRED. An all-meet head whose aggregated positions are not a
+ *       suffix used to be refused at [`EvalRuleSet::new`]. The landed
+ *       [`HeadAggrKind::Meet`] carries grouping [`HeadPos`]s wherever they
+ *       sit, and [`MeetAggrStore`]/[`MeetLayout`] group positionally —
+ *       the shape the original silently demoted (wrong answers) now
+ *       constructs and evaluates. Comments are not a second law (P096).
  *   D4. Delta iteration walks the rule's own `contained_rules()` keys
  *       instead of the whole store map filtered by `contained_rules` — the
  *       same set in the same canonical (BTreeMap) order, with a typed error
@@ -152,7 +154,7 @@
 //!   point a function of the data alone. Non-entry rules never advance the
 //!   counter, so the parallel batch reads it stably.
 //!
-//! The deadline and the user-kill flag are *interrupts*, not deterministic
+//! The deadline and the cancel poll are *interrupts*, not deterministic
 //! dimensions: they are checked at every barrier and (unlike the original)
 //! inside rule iteration, so no scan is unkillable, but *when* they fire
 //! depends on the wall clock and the user.
@@ -186,20 +188,22 @@ use miette::{Diagnostic, Result};
 use rayon::prelude::*;
 use thiserror::Error;
 
-use crate::data::aggr::{Aggregation, NormalAggrObj};
-use crate::data::program::MagicSymbol;
+use crate::data::aggr::{Aggregation, NormalAggr};
+use crate::data::program::{HeadAggrSlot, MagicSymbol};
 use crate::data::span::SourceSpan;
+use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
 use crate::query::temp_store::{
-    AdmissionSink, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
+    AdmissionSink, HeadPos, MeetAggrStore, RegularTempStore, TempStore, TempStoreCorruptRefuse,
+    TupleInIter, collect_materialized,
 };
 
-/// One head position's aggregation, if any — the shape carried through
+/// One head position's aggregation slot — the shape carried through
 /// every program tier (see `MagicInlineRule::aggr` in `data/program.rs`).
-type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+type HeadAggr = HeadAggrSlot;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Refusals and invariants
@@ -261,19 +265,12 @@ pub(crate) struct LimitExceeded {
     pub(crate) ceiling: u64,
     /// The rule whose in-flight materialization crossed the ceiling
     /// (mid-epoch dimension only); `None` for the barrier dimensions.
-    pub(crate) rule: Option<String>,
+    pub(crate) rule: Option<MagicSymbol>,
     /// The offending rule's source span, so the diagnostic points back at
     /// the query text. `None` for the barrier dimensions.
     #[label("this rule's in-flight derivations crossed the budget ceiling")]
     pub(crate) span: Option<SourceSpan>,
 }
-
-/// The user killed the query. The flag is *read* at the same check sites
-/// as the deadline — the original's `Poison`, minus its sleeper thread.
-#[derive(Debug, Error, Diagnostic)]
-#[error("query killed")]
-#[diagnostic(code(eval::killed))]
-pub(crate) struct Killed;
 
 /// A cross-stage invariant that construction should have made impossible
 /// (e.g. "every referenced rule has a store"). Surfaced as an error, never
@@ -300,14 +297,14 @@ struct Deadline {
 /// epoch ceiling is not optional — no unbounded fixpoint exists in KyzoDB.
 ///
 /// Deterministic dimensions (`epoch_ceiling`, `derived_tuple_ceiling`) are
-/// checked at epoch barriers only. The deadline and the kill flag are
+/// checked at epoch barriers only. The deadline and the cancel poll are
 /// checked at every barrier *and* inside rule iteration.
 #[derive(Debug, Clone)]
 pub(crate) struct Budget {
     epoch_ceiling: NonZeroU32,
     derived_tuple_ceiling: Option<u64>,
     deadline: Option<Deadline>,
-    kill: Option<Arc<AtomicBool>>,
+    cancel: Option<crate::fixed_rule::CancelFlag>,
 }
 
 impl Budget {
@@ -320,7 +317,7 @@ impl Budget {
             epoch_ceiling,
             derived_tuple_ceiling: None,
             deadline: None,
-            kill: None,
+            cancel: None,
         }
     }
 
@@ -356,22 +353,22 @@ impl Budget {
         self
     }
 
-    /// Attach the user-kill flag (the session sets it; eval only reads).
-    pub(crate) fn with_kill_flag(mut self, kill: Arc<AtomicBool>) -> Self {
-        self.kill = Some(kill);
+    /// Attach the cancel poll (session arms
+    /// [`crate::fixed_rule::CancelAuthority`]; eval only reads via
+    /// [`crate::fixed_rule::CancelFlag::check`]).
+    pub(crate) fn with_cancel(mut self, cancel: crate::fixed_rule::CancelFlag) -> Self {
+        self.cancel = Some(cancel);
         self
     }
 
-    /// The interrupt check: user kill, then deadline. Called at every
+    /// The interrupt check: user cancel, then deadline. Called at every
     /// epoch barrier and, via [`InterruptTicker`], inside rule iteration.
     /// `pub(crate)` (story #80): `laws.rs`'s naive oracle calls this
     /// directly at its own barrier points (visibility only; the check
     /// itself is unchanged).
     pub(crate) fn check_interrupt(&self) -> Result<()> {
-        if let Some(kill) = &self.kill
-            && kill.load(Ordering::Relaxed)
-        {
-            return Err(Killed.into());
+        if let Some(cancel) = &self.cancel {
+            cancel.check()?;
         }
         if let Some(deadline) = &self.deadline {
             let elapsed = deadline.started.elapsed();
@@ -396,7 +393,7 @@ impl Budget {
     fn ticker<'a>(&'a self, baseline: u64, rule: &'a MagicSymbol) -> InterruptTicker<'a> {
         InterruptTicker {
             budget: self,
-            countdown: INTERRUPT_STRIDE,
+            countdown: InterruptCountdown::fresh(),
             baseline,
             ceiling: self.derived_tuple_ceiling,
             rule,
@@ -406,11 +403,40 @@ impl Budget {
 
 /// How many derivations may pass between interrupt checks inside a rule's
 /// iteration. Small enough that no scan is unkillable for long; large
-/// enough that the check does not dominate the loop.
-const INTERRUPT_STRIDE: u32 = 64;
+/// enough that the check does not dominate the loop. NonZero by construction
+/// — wrap-through-zero is unrepresentable.
+const INTERRUPT_STRIDE: std::num::NonZeroU32 = std::num::NonZeroU32::new(64).unwrap();
+
+/// Proven mid-epoch interrupt stride counter: starts at [`INTERRUPT_STRIDE`]
+/// and resets there after each poll. [`NonZeroU32`] makes wrap-through-zero
+/// unrepresentable — never an unnamed wrapping `u32` countdown (P097).
+#[derive(Debug, Clone, Copy)]
+struct InterruptCountdown(std::num::NonZeroU32);
+
+impl InterruptCountdown {
+    fn fresh() -> Self {
+        Self(INTERRUPT_STRIDE)
+    }
+
+    /// Count one derivation. Returns `true` when the stride elapsed and the
+    /// interrupt/spend guard must run.
+    fn tick(&mut self) -> bool {
+        match std::num::NonZeroU32::new(self.0.get() - 1) {
+            None => {
+                // Was 1: stride elapsed.
+                *self = Self::fresh();
+                true
+            }
+            Some(next) => {
+                self.0 = next;
+                false
+            }
+        }
+    }
+}
 
 /// The in-iteration interrupt-and-spend site: `tick` once per derivation;
-/// every [`INTERRUPT_STRIDE`]th tick reads the kill flag and the deadline
+/// every [`INTERRUPT_STRIDE`]th tick reads the cancel poll and the deadline
 /// (closing the original's unkillable-scan gap — it checked poison once per
 /// rule, *after* the scan finished) **and** enforces the mid-epoch
 /// derived-tuple ceiling.
@@ -497,7 +523,7 @@ const INTERRUPT_STRIDE: u32 = 64;
 /// host.
 struct InterruptTicker<'a> {
     budget: &'a Budget,
-    countdown: u32,
+    countdown: InterruptCountdown,
     /// Globally admitted total as of this epoch's barrier (fixed snapshot).
     baseline: u64,
     /// The derived-tuple ceiling, mirrored from the budget; `None` disables
@@ -515,9 +541,7 @@ impl InterruptTicker<'_> {
     /// Non-perturbation section). Every [`INTERRUPT_STRIDE`]th call polls the
     /// interrupt and enforces the mid-epoch ceiling.
     fn tick(&mut self, in_flight: usize) -> Result<()> {
-        self.countdown -= 1;
-        if self.countdown == 0 {
-            self.countdown = INTERRUPT_STRIDE;
+        if self.countdown.tick() {
             self.budget.check_interrupt()?;
             if let Some(ceiling) = self.ceiling {
                 let spent = self.baseline.saturating_add(in_flight as u64);
@@ -527,7 +551,7 @@ impl InterruptTicker<'_> {
                         dimension: BudgetDimension::InFlightDerivations,
                         spent,
                         ceiling,
-                        rule: Some(symb.name.to_string()),
+                        rule: Some(self.rule.clone()),
                         span: Some(symb.span),
                     }
                     .into());
@@ -595,7 +619,15 @@ pub(crate) enum PremiseSource {
     /// The literal reads a base (ground-fact) relation, by name. The rows
     /// are attested by the body that read them; the independent
     /// certificate checker re-verifies membership from the model.
-    Fact(String),
+    Fact(Symbol),
+}
+
+/// Private supertrait seal for [`RuleBody`]: only types this crate admits
+/// (via an explicit `impl seal::Sealed`) can implement the eval seam.
+/// Crate visibility alone is not the seal — when the crate splits, an open
+/// `pub(crate)` trait would reopen.
+pub(crate) mod seal {
+    pub trait Sealed {}
 }
 
 /// One rule body, as eval consumes it: a generator of satisfying head
@@ -603,6 +635,9 @@ pub(crate) enum PremiseSource {
 /// tier's relational-algebra plans plug in (bindings in, tuples out,
 /// `delta_from` threaded to the stored-rule scans); the differential tests
 /// implement it over the oracle's rule model.
+///
+/// Sealed: [`seal::Sealed`] is a private supertrait — no type outside the
+/// admitted set can implement this seam.
 ///
 /// Contract:
 /// - `delta_from: Some(k)` means every occurrence of store `k` in the body
@@ -627,7 +662,7 @@ pub(crate) enum PremiseSource {
 ///   the body alone (the landed stores iterate in canonical order; stored
 ///   relations scan in key order). The limiter's early-stop point depends
 ///   on it.
-pub(crate) trait RuleBody: Send + Sync {
+pub(crate) trait RuleBody: Send + Sync + seal::Sealed {
     /// `delta_from: Some(occ)` means the ONE body-atom occurrence `occ`
     /// reads that store's delta instead of its total; every other
     /// occurrence — including another occurrence of the SAME store name —
@@ -690,8 +725,10 @@ pub(crate) trait FixedRuleEval: Send + Sync {
 /// How a rule set's head aggregates — the classification that picks its
 /// store and its evaluation schedule. (Distinct from
 /// `data::aggr::AggrKind`, which classifies one *aggregation*; this
-/// classifies a whole rule set.)
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+/// classifies a whole rule set.) Meet owns its grouping-key positions; a
+/// freestanding `kind` beside an empty-for-other-modes `meet_key_positions`
+/// field is unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadAggrKind {
     /// No aggregation: a plain rule set, re-derived every epoch it has
     /// changed dependencies.
@@ -701,25 +738,23 @@ pub(crate) enum HeadAggrKind {
     /// strictly below, so epoch 0 already sees the fixpoint beneath.
     Normal,
     /// All aggregated positions are meet (semilattice) forms: folded into
-    /// a [`MeetAggrStore`] *inside* recursion, epoch by epoch.
-    Meet,
+    /// a [`MeetAggrStore`] *inside* recursion, epoch by epoch. The head
+    /// positions that are grouping keys (the non-aggregated positions, in
+    /// head order) travel with the variant — eval's copy of the store's
+    /// [`MeetLayout`] key positions, used to key per-group provenance
+    /// witnesses.
+    Meet { key_positions: Vec<HeadPos> },
 }
 
 /// The rules of one head, ready to evaluate. Construction proves what the
 /// original re-derived (or unwrapped) downstream: the rule set is
 /// non-empty and every rule shares one aggregation signature. A meet head's
-/// grouping positions may sit anywhere in the head — the landed
-/// [`MeetAggrStore`] groups positionally — so there is no suffix
-/// restriction to check (the retired `MeetNotSuffix` refusal).
+/// grouping positions may sit anywhere in the head — [`MeetAggrStore`]
+/// groups positionally via [`MeetLayout`].
 #[derive(Debug)]
 pub(crate) struct EvalRuleSet<R> {
     aggr: Vec<HeadAggr>,
     kind: HeadAggrKind,
-    /// For a Meet head: the head positions that are grouping keys (the
-    /// non-aggregated positions, in head order). Empty for non-meet heads.
-    /// This is eval's copy of the store's [`MeetLayout`] key positions,
-    /// used to key per-group provenance witnesses.
-    meet_key_positions: Vec<usize>,
     bodies: Vec<R>,
 }
 
@@ -740,35 +775,28 @@ impl<R> EvalRuleSet<R> {
         if bodies.is_empty() {
             return Err(RuleSetShapeError::Empty);
         }
-        let has_aggr = aggr.iter().any(Option::is_some);
+        let has_aggr = aggr.iter().any(|a| a.is_aggregated());
         let all_meet = aggr
             .iter()
-            .flatten()
+            .filter_map(|a| a.as_aggregated())
             .all(|(aggregation, _)| aggregation.is_meet());
+        // MeetAggrStore groups positionally: key positions are every
+        // non-aggregated head slot, wherever they sit.
         let kind = match (has_aggr, all_meet) {
             (false, _) => HeadAggrKind::None,
             (true, false) => HeadAggrKind::Normal,
-            (true, true) => HeadAggrKind::Meet,
-        };
-        // The landed MeetAggrStore groups positionally, so the grouping
-        // positions are simply the non-aggregated ones, wherever they sit —
-        // no suffix restriction (the retired `MeetNotSuffix` refusal, which
-        // the original needed because its store keyed by a byte prefix and
-        // silently demoted non-suffix heads to a frozen normal aggregation,
-        // dropping recursive derivations).
-        let meet_key_positions = if kind == HeadAggrKind::Meet {
-            aggr.iter()
-                .enumerate()
-                .filter(|(_, a)| a.is_none())
-                .map(|(i, _)| i)
-                .collect()
-        } else {
-            Vec::new()
+            (true, true) => HeadAggrKind::Meet {
+                key_positions: aggr
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| !a.is_aggregated())
+                    .map(|(i, _)| HeadPos::from_index(i))
+                    .collect(),
+            },
         };
         Ok(Self {
             aggr,
             kind,
-            meet_key_positions,
             bodies,
         })
     }
@@ -924,30 +952,36 @@ impl WitnessTable {
 /// owned by its own rule set; consumed at the sequential merge barrier.
 type PendingWitnesses = BTreeMap<Tuple, (usize, Vec<Tuple>)>;
 
+/// How a pending-witness map is keyed for one store at the merge barrier.
+/// Meet groups project onto [`HeadPos`]s; regular stores key on the full
+/// tuple. An `Option` residual for Meet key positions is unrepresentable (P025).
+enum WitnessKeyMode<'a> {
+    FullTuple,
+    MeetGroup(&'a [HeadPos]),
+}
+
 /// The [`AdmissionSink`] that binds pending witnesses to admitted tuples
-/// at the merge barrier. `key_positions` is `Some(meet_key_positions)` for
-/// a meet store — its pending map is keyed by the group (the projection of
-/// the head tuple onto its non-aggregated positions, wherever they sit),
-/// matching the per-group witness boundary documented on the seam — and
-/// `None` for a regular one (whose witnesses key on the full tuple).
+/// at the merge barrier. Meet stores key pending maps by the group
+/// (projection onto non-aggregated head positions); regular stores key on
+/// the full tuple — selected by [`WitnessKeyMode`], never an Option.
 struct WitnessBinder<'a> {
     store: &'a MagicSymbol,
     pending: &'a PendingWitnesses,
-    key_positions: Option<&'a [usize]>,
+    key_mode: WitnessKeyMode<'a>,
     table: &'a mut WitnessTable,
 }
 
 impl AdmissionSink for WitnessBinder<'_> {
     const RECORDING: bool = true;
-    fn admit(&mut self, tuple: TupleInIter<'_>) {
-        let full = tuple.into_tuple();
-        let derivation = match self.key_positions {
-            None => self.pending.get(&full).cloned(),
+    fn admit(&mut self, tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse> {
+        let full = tuple.try_into_tuple()?;
+        let derivation = match self.key_mode {
+            WitnessKeyMode::FullTuple => self.pending.get(&full).cloned(),
             // Project the admitted head tuple onto the grouping positions to
             // recover the group key the pending map was recorded under — the
             // same projection eval used at derivation and the store used to
             // fold, so a non-suffix layout binds exactly as a suffix one.
-            Some(positions) => self
+            WitnessKeyMode::MeetGroup(positions) => self
                 .pending
                 .get(&project_positions(full.as_slice(), positions))
                 .cloned(),
@@ -957,6 +991,7 @@ impl AdmissionSink for WitnessBinder<'_> {
             tuple: full,
             derivation,
         });
+        Ok(())
     }
 }
 
@@ -1038,7 +1073,9 @@ pub(crate) fn stratified_evaluate_with_stores<R: RuleBody, F: FixedRuleEval>(
         }
         for (name, def) in &stratum.defs {
             let store = match def {
-                EvalDefinition::Rules(rule_set) if rule_set.kind == HeadAggrKind::Meet => {
+                EvalDefinition::Rules(rule_set)
+                    if matches!(rule_set.kind, HeadAggrKind::Meet { .. }) =>
+                {
                     EpochStore::new_meet(&rule_set.aggr)?
                 }
                 EvalDefinition::Rules(rule_set) => EpochStore::new_normal(rule_set.arity()),
@@ -1099,7 +1136,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
         // writes go to the fresh out-store it returns.
         let execution = |(name, def): (&MagicSymbol, &EvalDefinition<R, F>)| -> Result<_> {
             let (engaged_limiter, out, pending) = match def {
-                EvalDefinition::Rules(rule_set) => match rule_set.kind {
+                EvalDefinition::Rules(rule_set) => match &rule_set.kind {
                     HeadAggrKind::None => {
                         if epoch == 0 {
                             initial_plain_eval(
@@ -1143,7 +1180,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                             )
                         }
                     }
-                    HeadAggrKind::Meet => {
+                    HeadAggrKind::Meet { key_positions } => {
                         if epoch == 0 {
                             initial_meet_eval(
                                 name,
@@ -1152,6 +1189,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                                 budget,
                                 epoch_baseline,
                                 recording,
+                                key_positions,
                             )?
                         } else {
                             incremental_meet_eval(
@@ -1161,6 +1199,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                                 budget,
                                 epoch_baseline,
                                 recording,
+                                key_positions,
                             )?
                         }
                     }
@@ -1234,18 +1273,19 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
             let epoch_store = store_of_mut(stores, &name)?;
             let admitted = match witnesses.as_deref_mut() {
                 Some(table) => {
-                    let key_positions = match defs.get(&name) {
-                        Some(EvalDefinition::Rules(rule_set))
-                            if rule_set.kind == HeadAggrKind::Meet =>
-                        {
-                            Some(rule_set.meet_key_positions.as_slice())
-                        }
-                        _ => None,
+                    let key_mode = match defs.get(&name) {
+                        Some(EvalDefinition::Rules(rule_set)) => match &rule_set.kind {
+                            HeadAggrKind::Meet { key_positions } => {
+                                WitnessKeyMode::MeetGroup(key_positions.as_slice())
+                            }
+                            HeadAggrKind::None | HeadAggrKind::Normal => WitnessKeyMode::FullTuple,
+                        },
+                        _ => WitnessKeyMode::FullTuple,
                     };
                     let mut binder = WitnessBinder {
                         store: &name,
                         pending: &pending,
-                        key_positions,
+                        key_mode,
                         table,
                     };
                     epoch_store.merge_in(out, &mut binder)?
@@ -1314,7 +1354,7 @@ fn note_pending(
     )
 )]
 pub(crate) struct ProvenanceUnsupported {
-    pub(crate) store: String,
+    pub(crate) store: MagicSymbol,
     pub(crate) reason: &'static str,
 }
 
@@ -1363,6 +1403,15 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
     let ceiling = derivation_ceiling.get();
     let mut spent: u64 = 0;
 
+    // Pre-declare every retained store tuple so stratified re-derive may
+    // admit edges whose rule-premises appear later in enumeration order
+    // (P104: premises must be known at add_derivation).
+    for (name, store) in stores {
+        for t in store.all_iter()? {
+            graph.declare((PremiseSource::Rule(name.clone()), t.try_into_tuple()?));
+        }
+    }
+
     for stratum in &program.strata {
         for (name, def) in &stratum.defs {
             let rule_set = match def {
@@ -1370,12 +1419,10 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 // The collapse boundary: aggregated and fixed-rule stores
                 // ground out. (An absent store here is fine — nothing can
                 // premise it without tripping the liveness refusal below.)
-                _ => {
+                EvalDefinition::Rules(_) | EvalDefinition::Fixed { .. } => {
                     if let Some(store) = stores.get(name) {
-                        for t in store.all_iter() {
-                            graph
-                                .facts
-                                .insert((PremiseSource::Rule(name.clone()), t.into_tuple()));
+                        for t in store.all_iter()? {
+                            graph.add_fact((PremiseSource::Rule(name.clone()), t.try_into_tuple()?));
                         }
                     }
                     continue;
@@ -1389,13 +1436,13 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 let sources = body
                     .premise_sources()
                     .ok_or_else(|| ProvenanceUnsupported {
-                        store: name.as_plain_symbol().name.to_string(),
+                        store: name.clone(),
                         reason: "a rule body does not attribute its premises",
                     })?;
                 for dep in body.contained_rules().values() {
                     if !stores.contains_key(dep) {
                         return Err(ProvenanceUnsupported {
-                            store: dep.as_plain_symbol().name.to_string(),
+                            store: dep.clone(),
                             reason: "a premised store was not retained to the final stratum",
                         }
                         .into());
@@ -1425,9 +1472,9 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         if let PremiseSource::Rule(sym) = src {
                             let dep = store_of(stores, sym)?;
                             let present = dep
-                                .prefix_iter(&row)
+                                .prefix_iter(&row)?
                                 .next()
-                                .is_some_and(|t| t.into_tuple() == row);
+                                .is_some_and(|t| t.try_into_tuple().ok() == Some(row.clone()));
                             if !present {
                                 return Err(EvalInvariantError(
                                     "a premise row is missing from its attributed store",
@@ -1435,11 +1482,11 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                                 .into());
                             }
                         } else {
-                            graph.facts.insert((src.clone(), row.clone()));
+                            graph.add_fact((src.clone(), row.clone()));
                         }
                         premise_nodes.push((src.clone(), row));
                     }
-                    graph.derivations.push(Derivation {
+                    graph.add_derivation(Derivation {
                         head: (
                             PremiseSource::Rule(name.clone()),
                             Tuple::from_vec(head.into_owned()),
@@ -1447,7 +1494,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         label: rule_n,
                         weight,
                         premises: premise_nodes,
-                    });
+                    })?;
                     Ok(ControlFlow::Continue(()))
                 })?;
             }
@@ -1461,8 +1508,8 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
 /// positions are listed. For a meet head this is the grouping key — eval's
 /// mirror of the store's [`MeetAggrStore`] layout projection, so the two
 /// agree on a group's identity whatever positions the meet columns occupy.
-fn project_positions(row: &[DataValue], positions: &[usize]) -> Tuple {
-    positions.iter().map(|i| row[*i].clone()).collect()
+fn project_positions(row: &[DataValue], positions: &[HeadPos]) -> Tuple {
+    positions.iter().map(|p| row[p.get()].clone()).collect()
 }
 
 /// Epoch 0 for a plain (non-aggregating) rule set. Returns
@@ -1620,10 +1667,10 @@ fn initial_meet_eval<R: RuleBody>(
     budget: &Budget,
     baseline: u64,
     recording: bool,
+    key_positions: &[HeadPos],
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
     let mut out = MeetAggrStore::new(rule_set.aggr.clone())?;
     let mut pending = PendingWitnesses::new();
-    let key_positions = rule_set.meet_key_positions.as_slice();
     let mut ticker = budget.ticker(baseline, rule_symb);
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
@@ -1645,20 +1692,9 @@ fn initial_meet_eval<R: RuleBody>(
         })?;
         budget.check_interrupt()?;
     }
-    if out.is_empty() && rule_set.aggr.iter().all(Option::is_some) {
-        let identity: Tuple = rule_set
-            .aggr
-            .iter()
-            .flatten()
-            .map(|(aggregation, _)| -> Result<DataValue> {
-                let op = aggregation.meet_op().ok_or(EvalInvariantError(
-                    "a Meet-classified head holds a non-meet aggregation",
-                ))?;
-                Ok(op.init_val())
-            })
-            .collect::<Result<_>>()?;
+    if out.is_empty() && rule_set.aggr.iter().all(|a| a.is_aggregated()) {
         // No pending entry: the identity row's witness is `None` by design.
-        out.meet_put(identity.as_slice())?;
+        out.seed_identity()?;
     }
     Ok((false, out.wrap(), pending))
 }
@@ -1674,10 +1710,10 @@ fn incremental_meet_eval<R: RuleBody>(
     budget: &Budget,
     baseline: u64,
     recording: bool,
+    key_positions: &[HeadPos],
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
     let mut out = MeetAggrStore::new(rule_set.aggr.clone())?;
     let mut pending = PendingWitnesses::new();
-    let key_positions = rule_set.meet_key_positions.as_slice();
     let mut ticker = budget.ticker(baseline, rule_symb);
     // The rule's running total, against which a re-derivation counts as
     // in-flight ONLY if the barrier would actually admit it. This is the
@@ -1744,25 +1780,25 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     let key_indices: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_specs: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
         .filter_map(|(i, a)| {
-            a.as_ref()
-                .map(|(aggregation, args)| (i, aggregation, args.as_slice()))
+            a.as_aggregated()
+                .map(|(aggregation, args)| (i, aggregation, args))
         })
         .collect();
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>> {
         val_specs
             .iter()
             .map(|(_, aggregation, args)| aggregation.normal_op(args))
             .collect()
     };
 
-    let mut aggr_work: BTreeMap<Tuple, Vec<Box<dyn NormalAggrObj>>> = BTreeMap::new();
+    let mut aggr_work: BTreeMap<Tuple, Vec<NormalAggr>> = BTreeMap::new();
     let mut ticker = budget.ticker(baseline, rule_symb);
     for body in &rule_set.bodies {
         body.for_each_derivation(stores, None, false, &mut |item, _premises| {
@@ -1873,10 +1909,11 @@ mod tests {
         Term::Var("Z")
     }
     fn named(name: &str) -> HeadAggr {
-        Some((
-            parse_aggr(name).unwrap_or_else(|| panic!("real aggregation exists: {name}")),
-            vec![],
-        ))
+        HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name)
+                .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
+            args: vec![],
+        }
     }
 
     // ── the differential harness: the oracle's rule model as a RuleBody ──
@@ -1977,12 +2014,9 @@ mod tests {
             if self.idb.contains(rel) {
                 let store = store_of(stores, &muggle(rel))?;
                 Ok(if use_delta {
-                    store
-                        .delta_all_iter()
-                        .map(TupleInIter::into_tuple)
-                        .collect()
+                    collect_materialized(store.delta_all_iter()?)
                 } else {
-                    store.all_iter().map(TupleInIter::into_tuple).collect()
+                    collect_materialized(store.all_iter()?)
                 })
             } else {
                 Ok(self
@@ -2006,7 +2040,7 @@ mod tests {
                 // wrong question for negation).
                 let store = store_of(stores, &muggle(rel))?;
                 Ok(store
-                    .prefix_iter(probe)
+                    .prefix_iter(probe)?
                     .next()
                     .is_some_and(|t| t == probe.as_slice()[..]))
             } else {
@@ -2049,7 +2083,7 @@ mod tests {
                 return f(Cow::Owned(head.into_vec()), arg);
             }
             let (body_pos, l) = ordered[idx];
-            if l.negated {
+            if l.is_negated() {
                 let probe = ground(&l.args, bound);
                 if self.negated_probe_hits(stores, l.rel, &probe)? {
                     return Ok(ControlFlow::Continue(()));
@@ -2098,6 +2132,8 @@ mod tests {
         }
     }
 
+    impl crate::query::eval::seal::Sealed for ModelBody {}
+
     impl RuleBody for ModelBody {
         fn for_each_derivation(
             &self,
@@ -2110,9 +2146,9 @@ mod tests {
                 .body
                 .iter()
                 .enumerate()
-                .filter(|(_, l)| !l.negated)
+                .filter(|(_, l)| !l.is_negated())
                 .collect();
-            ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
+            ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.is_negated()));
             let mut premises: Vec<Tuple> = Vec::new();
             // The driver ignores the break/continue verdict: a break here
             // just means the visitor stopped early, which is fine at the top.
@@ -2154,10 +2190,9 @@ mod tests {
                 .iter()
                 .map(|rel| -> Result<BTreeSet<Tuple>> {
                     if self.idb.contains(rel) {
-                        Ok(store_of(stores, &muggle(rel))?
-                            .all_iter()
-                            .map(TupleInIter::into_tuple)
-                            .collect())
+                        Ok(collect_materialized(
+                            store_of(stores, &muggle(rel))?.all_iter()?,
+                        ))
                     } else {
                         Ok(self.facts.get(rel).cloned().unwrap_or_default())
                     }
@@ -2190,10 +2225,10 @@ mod tests {
         per_head
             .into_iter()
             .map(|(rel, rules)| {
-                let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
+                let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
                 let is_meet = has_aggr
                     && rules.iter().all(|r| {
-                        r.aggr.iter().all(|a| match a {
+                        r.aggr.iter().all(|a| match a.as_aggregated() {
                             None => true,
                             Some((aggregation, _)) => aggregation.is_meet(),
                         })
@@ -2216,12 +2251,12 @@ mod tests {
             for l in &rule.body {
                 let forcing = if class.has_aggr {
                     if class.is_meet && l.rel == head {
-                        l.negated
+                        l.is_negated()
                     } else {
                         true
                     }
                 } else {
-                    l.negated || fixed_heads.contains(l.rel) || is_meet(l.rel)
+                    l.is_negated() || fixed_heads.contains(l.rel) || is_meet(l.rel)
                 };
                 edges.push((head, l.rel, forcing));
             }
@@ -2411,11 +2446,7 @@ mod tests {
             budget,
             None,
         )?;
-        Ok(outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect())
+        Ok(collect_materialized(outcome.store.all_iter()?))
     }
 
     /// Relation arities derived from the MODEL alone (rule heads and
@@ -2547,13 +2578,13 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![y(), z()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![x(), z()], false),
@@ -2564,24 +2595,24 @@ mod tests {
 
     /// The mirror image of [`meet_reach_rules`]: the exact same meet
     /// recursion, but with the meet column at position **0** and the
-    /// grouping node at position 1 — a non-suffix layout the retired
-    /// `MeetNotSuffix` refusal used to reject and the suffix-prefix store
-    /// could not represent. `m[val, node]` reads back as "node → folded
-    /// value", so the recursive body reads `m[z, x]` (value first, node
-    /// second). The oracle groups by position, so `assert_matches_oracle`
-    /// judges this against the same fixpoint as the suffix form.
+    /// grouping node at position 1 — a non-suffix layout
+    /// [`MeetAggrStore`] represents via positional [`MeetLayout`].
+    /// `m[val, node]` reads back as "node → folded value", so the recursive
+    /// body reads `m[z, x]` (value first, node second). The oracle groups
+    /// by position, so `assert_matches_oracle` judges this against the same
+    /// fixpoint as the suffix form.
     fn meet_reach_rules_pos0(aggr_name: &str) -> Vec<Rule> {
         vec![
             Rule::aggregated(
                 "m",
                 vec![y(), x()],
-                vec![named(aggr_name), None],
+                vec![named(aggr_name), HeadAggrSlot::Plain],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![z(), y()],
-                vec![named(aggr_name), None],
+                vec![named(aggr_name), HeadAggrSlot::Plain],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![z(), x()], false),
@@ -2640,7 +2671,7 @@ mod tests {
         rules.push(Rule::aggregated(
             "reach_count",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit("path", vec![x(), y()], false)],
         ));
         assert_matches_oracle(&Program {
@@ -2793,7 +2824,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "g",
             vec![Term::Var("V"), Term::Var("K"), Term::Var("V")],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![lit("obs", vec![Term::Var("K"), Term::Var("V")], false)],
         )];
         assert_matches_oracle(&Program {
@@ -2823,7 +2854,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![Term::Var("Lo"), Term::Var("K"), Term::Var("Hi")],
-                vec![named("min"), None, named("max")],
+                vec![named("min"), HeadAggrSlot::Plain, named("max")],
                 vec![lit(
                     "seed",
                     vec![Term::Var("K"), Term::Var("Lo"), Term::Var("Hi")],
@@ -2833,7 +2864,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![Term::Var("Lo"), Term::Var("T"), Term::Var("Hi")],
-                vec![named("min"), None, named("max")],
+                vec![named("min"), HeadAggrSlot::Plain, named("max")],
                 vec![
                     lit("edge", vec![Term::Var("S"), Term::Var("T")], false),
                     lit(
@@ -3082,7 +3113,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             // m(x, min w) :- m(x, _), m(w', w), edge(w', x): node x adopts
@@ -3090,7 +3121,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), z()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![
                     lit("m", vec![x(), y()], false),
                     lit("m", vec![Term::Var("W"), z()], false),
@@ -3307,7 +3338,7 @@ mod tests {
             rules.push(Rule::aggregated(
                 "reach_count",
                 vec![x(), y()],
-                vec![None, named("count")],
+                vec![HeadAggrSlot::Plain, named("count")],
                 vec![lit("path", vec![x(), y()], false)],
             ));
         }
@@ -3429,11 +3460,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = outcome
-                    .store
-                    .all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect();
+                let rows = collect_materialized(outcome.store.all_iter()?)?;
                 let witnesses = table
                     .entries()
                     .iter()
@@ -3489,11 +3516,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = outcome
-                    .store
-                    .all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect();
+                let rows = collect_materialized(outcome.store.all_iter()?)?;
                 let witnesses = table
                     .entries()
                     .iter()
@@ -3628,6 +3651,8 @@ mod tests {
             }
         }
     }
+    impl crate::query::eval::seal::Sealed for CrossProduct {}
+
     impl RuleBody for CrossProduct {
         fn for_each_derivation(
             &self,
@@ -3658,7 +3683,7 @@ mod tests {
         emitted: Arc<AtomicUsize>,
     ) -> EvalProgram<CrossProduct, NoFixed> {
         let body = CrossProduct::new(a, b, emitted);
-        let rule_set = EvalRuleSet::new(vec![None, None], vec![body]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain], vec![body]).unwrap();
         let mut stratum: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
         stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
         EvalProgram::from_execution_order(vec![stratum]).unwrap()
@@ -3778,7 +3803,7 @@ mod tests {
                 muggle("aaa"),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -3788,7 +3813,7 @@ mod tests {
                 muggle("bbb"),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -3801,7 +3826,7 @@ mod tests {
                 entry_symbol(),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(0, 0, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -3975,6 +4000,8 @@ mod tests {
             }
         }
     }
+    impl crate::query::eval::seal::Sealed for DistinctThenDup {}
+
     impl RuleBody for DistinctThenDup {
         fn for_each_derivation(
             &self,
@@ -4001,7 +4028,7 @@ mod tests {
     }
 
     fn single_stratum_program<B: RuleBody>(symb: MagicSymbol, body: B) -> EvalProgram<B, NoFixed> {
-        let rule_set = EvalRuleSet::new(vec![None, None], vec![body]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain], vec![body]).unwrap();
         let mut stratum: EvalStratum<B, NoFixed> = EvalStratum::default();
         stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
         EvalProgram::from_execution_order(vec![stratum]).unwrap()
@@ -4029,7 +4056,7 @@ mod tests {
             None,
         )
         .expect("exact-at-ceiling spend must COMPLETE, not refuse (kills `>=`)");
-        let rows = outcome.store.all_iter().count();
+        let rows = outcome.store.all_iter()?.count();
         assert_eq!(rows, CEILING as usize, "all exactly-ceiling rows survive");
     }
 
@@ -4083,7 +4110,7 @@ mod tests {
             muggle("s0"),
             EvalDefinition::Rules(
                 EvalRuleSet::new(
-                    vec![None, None],
+                    vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                     vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -4096,7 +4123,7 @@ mod tests {
             entry_symbol(),
             EvalDefinition::Rules(
                 EvalRuleSet::new(
-                    vec![None, None],
+                    vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                     vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -4173,7 +4200,7 @@ mod tests {
                 muggle("s0"),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -4215,7 +4242,7 @@ mod tests {
         let outcome =
             stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
                 .expect("a ceiling covering the true total must not refuse");
-        assert_eq!(outcome.store.all_iter().count(), 400);
+        assert_eq!(outcome.store.all_iter().unwrap().count(), 400);
     }
 
     /// F3 pin: the STREAMING harness bounds the killer shape. A 10_000×10_000
@@ -4275,15 +4302,21 @@ mod tests {
     }
 
     /// The unkillable-scan gap is closed: a rule mid-iteration observes
-    /// the kill flag and stops, long before its scan would finish. The
-    /// original checked poison once per rule, *after* the full scan.
+    /// a spent [`CancelAuthority`] and stops, long before its scan would
+    /// finish. The original checked poison once per rule, *after* the full
+    /// scan.
     #[test]
     fn kill_flag_interrupts_inside_rule_iteration() {
+        use crate::fixed_rule::{CancelAuthority, Cancelled};
+        use std::sync::Mutex;
+
         struct FloodBody {
             contained: BTreeMap<AtomOccurrence, MagicSymbol>,
-            kill: Arc<AtomicBool>,
+            auth: Mutex<Option<CancelAuthority>>,
             emitted: Arc<AtomicUsize>,
         }
+        impl crate::query::eval::seal::Sealed for FloodBody {}
+
         impl RuleBody for FloodBody {
             fn for_each_derivation(
                 &self,
@@ -4293,8 +4326,11 @@ mod tests {
                 f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
             ) -> Result<()> {
                 for i in 0..1_000_000i64 {
-                    if i == 10 {
-                        self.kill.store(true, Ordering::Relaxed);
+                    if i == 10
+                        && let Ok(mut slot) = self.auth.lock()
+                        && let Some(auth) = slot.take()
+                    {
+                        let _ = auth.cancel();
                     }
                     self.emitted.fetch_add(1, Ordering::Relaxed);
                     if f(Cow::Owned(vec![v(i)]), Premises::NotRequested)?.is_break() {
@@ -4307,20 +4343,20 @@ mod tests {
                 &self.contained
             }
         }
-        let kill = Arc::new(AtomicBool::new(false));
+        let (auth, cancel) = CancelAuthority::arm();
         let emitted = Arc::new(AtomicUsize::new(0));
         let body = FloodBody {
             contained: BTreeMap::new(),
-            kill: kill.clone(),
+            auth: Mutex::new(Some(auth)),
             emitted: emitted.clone(),
         };
-        let rule_set = EvalRuleSet::new(vec![None], vec![body]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain], vec![body]).unwrap();
         let mut stratum: EvalStratum<FloodBody, NoFixed> = EvalStratum::default();
         stratum
             .defs
             .insert(entry_symbol(), EvalDefinition::Rules(rule_set));
         let program = EvalProgram::from_execution_order(vec![stratum]).unwrap();
-        let budget = generous_budget().with_kill_flag(kill);
+        let budget = generous_budget().with_cancel(cancel);
         let err = stratified_evaluate(
             &program,
             &StoreLifetimes::default(),
@@ -4330,8 +4366,8 @@ mod tests {
         )
         .expect_err("killed");
         assert!(
-            err.downcast_ref::<Killed>().is_some(),
-            "typed Killed refusal"
+            err.downcast_ref::<Cancelled>().is_some(),
+            "typed Cancelled refusal"
         );
         let count = emitted.load(Ordering::Relaxed);
         assert!(
@@ -4381,17 +4417,9 @@ mod tests {
         )
         .expect("evaluates");
         assert!(outcome.limited, "the limiter engaged");
-        let returned: Vec<Tuple> = outcome
-            .store
-            .early_returned_iter()
-            .map(TupleInIter::into_tuple)
-            .collect();
+        let returned: Vec<Tuple> = collect_materialized(outcome.store.early_returned_iter()?)?;
         assert_eq!(returned.len(), 2, "limit rows, offset excluded");
-        let taken: Vec<Tuple> = outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect();
+        let taken: Vec<Tuple> = collect_materialized(outcome.store.all_iter()?)?;
         assert_eq!(taken.len(), 3, "take = limit + offset rows produced");
         for row in taken {
             assert!(
@@ -4454,7 +4482,7 @@ mod tests {
                 )
             })
             .collect();
-        let rule_set = EvalRuleSet::new(vec![None, None], bodies).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain], bodies).unwrap();
         let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum::default();
         stratum
             .defs
@@ -4474,10 +4502,8 @@ mod tests {
         )
         .expect("evaluates");
         assert!(outcome.limited, "the limiter engaged");
-        let rows: BTreeSet<Tuple> = outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
+        let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter()?)?
+            .into_iter()
             .collect();
         for row in &rows {
             assert!(oracle_closure.contains(row), "every row is a real answer");
@@ -4617,7 +4643,7 @@ mod tests {
 
     #[test]
     fn empty_rule_set_is_refused_at_construction() {
-        let refused = EvalRuleSet::<ModelBody>::new(vec![None], vec![]);
+        let refused = EvalRuleSet::<ModelBody>::new(vec![HeadAggrSlot::Plain], vec![]);
         assert!(matches!(refused, Err(RuleSetShapeError::Empty)));
     }
 
@@ -4640,11 +4666,12 @@ mod tests {
         // Meet at position 0, grouping at position 1 — the exact shape D3
         // used to reject.
         let rule_set =
-            EvalRuleSet::new(vec![named("min"), None], vec![body]).expect("no longer refused");
-        assert_eq!(rule_set.kind, HeadAggrKind::Meet);
+            EvalRuleSet::new(vec![named("min"), HeadAggrSlot::Plain], vec![body]).expect("no longer refused");
         assert_eq!(
-            rule_set.meet_key_positions,
-            vec![1],
+            rule_set.kind,
+            HeadAggrKind::Meet {
+                key_positions: vec![HeadPos::from_index(1)]
+            },
             "the grouping position is position 1, wherever the meet column sits"
         );
     }
@@ -4669,7 +4696,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "m",
             vec![y(), x()],
-            vec![named("min"), None],
+            vec![named("min"), HeadAggrSlot::Plain],
             vec![lit("obs", vec![x(), y()], false)],
         )];
         assert_matches_oracle(&Program {
@@ -4708,7 +4735,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "m",
             vec![y(), x()],
-            vec![named("min"), None],
+            vec![named("min"), HeadAggrSlot::Plain],
             vec![lit("obs", vec![x(), y()], false)],
         )];
         assert_matches_oracle(&Program {
@@ -4734,7 +4761,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "m",
             vec![y(), y()],
-            vec![named("min"), None],
+            vec![named("min"), HeadAggrSlot::Plain],
             vec![lit("obs", vec![x(), y()], false)],
         )];
         assert_matches_oracle(&Program {
@@ -4830,7 +4857,7 @@ mod tests {
         rules.push(Rule::aggregated(
             "w",
             vec![y(), x(), y()],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![lit("m", vec![y(), x()], false)],
         ));
         rules.push(Rule::plain(
@@ -4856,11 +4883,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = outcome
-                    .store
-                    .all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect();
+                let rows = collect_materialized(outcome.store.all_iter()?)?;
                 let witnesses = table
                     .entries()
                     .iter()
@@ -4898,7 +4921,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "m",
                 vec![y(), x()],
-                vec![named("min"), None],
+                vec![named("min"), HeadAggrSlot::Plain],
                 vec![lit("obs", vec![x(), y()], false)],
             )],
             facts,
@@ -4961,7 +4984,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "m",
                 vec![y(), x()],
-                vec![named("min"), None],
+                vec![named("min"), HeadAggrSlot::Plain],
                 vec![lit("obs", vec![x(), y()], false)],
             )],
             facts,
@@ -5026,6 +5049,8 @@ mod tests {
         struct GhostBody {
             contained: BTreeMap<AtomOccurrence, MagicSymbol>,
         }
+        impl crate::query::eval::seal::Sealed for GhostBody {}
+
         impl RuleBody for GhostBody {
             fn for_each_derivation(
                 &self,
@@ -5045,7 +5070,7 @@ mod tests {
         }
         let mut contained = BTreeMap::new();
         contained.insert(AtomOccurrence(0), muggle("ghost"));
-        let rule_set = EvalRuleSet::new(vec![None], vec![GhostBody { contained }]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain], vec![GhostBody { contained }]).unwrap();
         let mut stratum: EvalStratum<GhostBody, NoFixed> = EvalStratum::default();
         stratum
             .defs
@@ -5070,7 +5095,7 @@ mod tests {
         let body = ModelBody::new(vec![x()], vec![lit("d", vec![x()], false)], facts, idb);
         stratum.defs.insert(
             muggle("r"),
-            EvalDefinition::Rules(EvalRuleSet::new(vec![None], vec![body]).unwrap()),
+            EvalDefinition::Rules(EvalRuleSet::new(vec![HeadAggrSlot::Plain], vec![body]).unwrap()),
         );
         let err = EvalProgram::from_execution_order(vec![stratum]).expect_err("no entry");
         assert!(err.to_string().contains("no entry"), "got: {err}");

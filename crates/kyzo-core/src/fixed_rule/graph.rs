@@ -34,9 +34,9 @@ use miette::{Diagnostic, Result, ensure};
 use thiserror::Error;
 
 /// Refusal at the graph-size bound: node ids are dense `u32`s, so a
-/// fixed-rule graph holds at most 2^32 - 1 nodes (`u32::MAX` itself is
-/// reserved — the Dijkstra core uses it as the "no back-pointer"
-/// sentinel). The CozoDB original truncated silently (`len as u32`
+/// fixed-rule graph holds at most 2^32 - 1 nodes (the `max_id + 1`
+/// count must fit in `u32`; predecessor absence uses `Option`, not a
+/// reserved id). The CozoDB original truncated silently (`len as u32`
 /// wraps); KyzoDB refuses, typed.
 ///
 /// Honesty note on testability: hitting this bound for real needs ~4
@@ -67,8 +67,7 @@ pub(crate) fn checked_node_count(max_endpoint: Option<u32>) -> Result<u32> {
         Some(m) => {
             let count = m.checked_add(1);
             ensure!(count.is_some(), GraphTooLargeError);
-            // Structural: the `ensure!` above proved `is_some`.
-            Ok(count.unwrap())
+            Ok(count.ok_or(GraphTooLargeError)?)
         }
     }
 }

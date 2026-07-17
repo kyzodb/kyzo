@@ -140,3 +140,6 @@ required-features = ["bench-internals"]
 [[example]]
 name = "bulk_ingest_profile"
 required-features = ["bench-internals"]
+
+[lints]
+workspace = true

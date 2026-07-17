@@ -149,7 +149,7 @@ use crate::data::bitemporal::{
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{AsOf, Bound, DataValue, Interval, StoredValiditySlot, ValidityTs};
-use crate::data::value::{EncodedKey, Tuple, TupleT, decode_tuple_from_key};
+use crate::data::value::{StorageKey, Tuple, TupleT, decode_tuple_from_key};
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
@@ -189,7 +189,7 @@ impl SignedFact {
 pub(crate) fn compose(
     first: &BTreeSet<SignedFact>,
     second: &BTreeSet<SignedFact>,
-) -> BTreeSet<SignedFact> {
+) -> Result<BTreeSet<SignedFact>> {
     let mut tally: BTreeMap<&Tuple, i32> = BTreeMap::new();
     for patch in [first, second] {
         for fact in patch {
@@ -200,14 +200,22 @@ pub(crate) fn compose(
             *tally.entry(fact.tuple()).or_insert(0) += delta;
         }
     }
-    tally
-        .into_iter()
-        .filter_map(|(t, net)| match net {
-            0 => None,
-            n if n > 0 => Some(SignedFact::Plus(t.clone())),
-            _ => Some(SignedFact::Minus(t.clone())),
-        })
-        .collect()
+    let mut out = BTreeSet::new();
+    for (t, net) in tally {
+        match net {
+            0 => {}
+            1 => {
+                out.insert(SignedFact::Plus(t.clone()));
+            }
+            -1 => {
+                out.insert(SignedFact::Minus(t.clone()));
+            }
+            n => {
+                return Err(crate::query::laws::ComposeNetOutOfRange { net: n }.into());
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Interval derivation: `*rel{k, v} @spans iv[, sys]` — one output row per
@@ -227,8 +235,16 @@ pub(crate) struct SpansRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     /// The fixed system snapshot the sweep resolves against.
-    pub(crate) sys: i64,
+    pub(crate) sys: ValidityTs,
     pub(crate) span: SourceSpan,
+}
+
+/// How [`DeltaRA`] computes its signed patch — naive dual snapshot, or
+/// posting-index acceleration when compile resolved a temporal index.
+#[derive(Debug)]
+pub(crate) enum DeltaScan {
+    Naive,
+    Accelerated { posting: RelationHandle },
 }
 
 /// Axis-parameterized net diff: `*rel{k} @delta(a, b) sgn` (valid axis,
@@ -244,13 +260,11 @@ pub(crate) struct DeltaRA {
     pub(crate) from: AsOf,
     pub(crate) to: AsOf,
     pub(crate) span: SourceSpan,
-    /// The `IndexKind::Temporal` posting index attached to `storage`, if
-    /// the compile tier found and resolved one for this clause (`Valid`
-    /// axis only — see the module doc's "posting-index fast path"
-    /// section). `None` for every other case, including a fresh
-    /// relation with no posting index attached yet: `iter_batched` falls
-    /// back to the naive two-snapshot diff exactly as before this chunk.
-    pub(crate) posting: Option<RelationHandle>,
+    /// Scan strategy: [`DeltaScan::Accelerated`] when compile resolved an
+    /// `IndexKind::Temporal` posting for this clause (`Valid` axis only);
+    /// [`DeltaScan::Naive`] otherwise (including a fresh relation with no
+    /// posting index yet).
+    pub(crate) scan: DeltaScan,
 }
 
 /// `+1`: the fact holds at `to` but not at `from`.
@@ -259,9 +273,8 @@ const SIGN_PLUS: i64 = 1;
 const SIGN_MINUS: i64 = -1;
 
 /// One stored point-event, decoded from a raw bitemporal row without
-/// resolving it against any coordinate: the valid instant, the system
-/// version, the claim polarity, and (for [`ClaimPolarity::Assert`] only)
-/// the row's non-key payload columns.
+/// resolving it against any coordinate. Polarity is the discriminant; only
+/// an assertion owns a non-key payload.
 ///
 /// `pub(crate)` (story #80): `runtime/verify.rs`'s `::verify` oracle-feed
 /// needs a relation's FULL version history (every assert/retract/erase, not
@@ -269,12 +282,39 @@ const SIGN_MINUS: i64 = -1;
 /// as-of/validity queries — this is the one primitive that decodes raw
 /// bitemporal rows without resolving them, so it is reused, not
 /// re-derived, exactly as this module's own doc argues for itself.
-/// Visibility only; the decode logic is unchanged.
-pub(crate) struct RawVersion {
-    pub(crate) valid: i64,
-    pub(crate) sys: i64,
-    pub(crate) polarity: ClaimPolarity,
-    pub(crate) payload: Tuple,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RawVersion {
+    Assert {
+        valid: ValidityTs,
+        sys: ValidityTs,
+        payload: Tuple,
+    },
+    Retract {
+        valid: ValidityTs,
+        sys: ValidityTs,
+    },
+    Erase {
+        valid: ValidityTs,
+        sys: ValidityTs,
+    },
+}
+
+impl RawVersion {
+    pub(crate) fn valid(&self) -> ValidityTs {
+        match self {
+            RawVersion::Assert { valid, .. }
+            | RawVersion::Retract { valid, .. }
+            | RawVersion::Erase { valid, .. } => *valid,
+        }
+    }
+
+    pub(crate) fn sys(&self) -> ValidityTs {
+        match self {
+            RawVersion::Assert { sys, .. }
+            | RawVersion::Retract { sys, .. }
+            | RawVersion::Erase { sys, .. } => *sys,
+        }
+    }
 }
 
 /// The relation's whole keyspace, as raw byte bounds. Duplicates
@@ -304,10 +344,10 @@ pub(crate) fn decode_raw_version(
     val: &[u8],
     key_len: usize,
 ) -> Result<(Vec<u8>, Tuple, RawVersion)> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
         bail!("temporal scan over a key too short to carry its two time slots");
     }
-    let prefix_len = key.len() - EncodedKey::BITEMPORAL_TAIL_LEN;
+    let prefix_len = key.len() - StorageKey::BITEMPORAL_TAIL_LEN;
     let mut full = decode_tuple_from_key(key, key_len + 2)?;
     let sys_dv = full
         .pop()
@@ -334,19 +374,33 @@ pub(crate) fn decode_raw_version(
         );
     }
     let polarity = claim_polarity_of_value(val)?;
-    let mut row = full.clone();
-    extend_tuple_from_bitemporal_v(&mut row, val)?;
-    let payload: Tuple = row.drain(key_len..).collect();
-    Ok((
-        key[..prefix_len].to_vec(),
-        full,
-        RawVersion {
-            valid: valid_slot.timestamp().raw(),
-            sys: sys_slot.timestamp().raw(),
-            polarity,
-            payload,
-        },
-    ))
+    let valid = valid_slot.timestamp();
+    let sys = sys_slot.timestamp();
+    let version = match polarity {
+        ClaimPolarity::Assert => {
+            let mut row = full.clone();
+            extend_tuple_from_bitemporal_v(&mut row, val)?;
+            let payload: Tuple = row.drain(key_len..).collect();
+            RawVersion::Assert {
+                valid,
+                sys,
+                payload,
+            }
+        }
+        ClaimPolarity::Retract => {
+            // Still decode the value body so corruption refuses here, not
+            // later — then drop the columns; retract owns none.
+            let mut row = full.clone();
+            extend_tuple_from_bitemporal_v(&mut row, val)?;
+            RawVersion::Retract { valid, sys }
+        }
+        ClaimPolarity::Erase => {
+            let mut row = full.clone();
+            extend_tuple_from_bitemporal_v(&mut row, val)?;
+            RawVersion::Erase { valid, sys }
+        }
+    };
+    Ok((key[..prefix_len].to_vec(), full, version))
 }
 
 /// The governing tuple for one fact's already-collected version set, at
@@ -360,30 +414,32 @@ pub(crate) fn decode_raw_version(
 fn resolve_at(
     group: &[RawVersion],
     key: &[DataValue],
-    at_valid: i64,
-    at_sys: i64,
+    at_valid: ValidityTs,
+    at_sys: ValidityTs,
 ) -> Option<Tuple> {
+    // Chronological (raw) order — not ValidityTs seek order (Reverse).
+    let at_valid_raw = at_valid.raw();
+    let at_sys_raw = at_sys.raw();
     let mut instants: Vec<i64> = group
         .iter()
-        .map(|e| e.valid)
-        .filter(|v| *v <= at_valid)
+        .map(|e| e.valid().raw())
+        .filter(|v| *v <= at_valid_raw)
         .collect();
     instants.sort_unstable();
     instants.dedup();
     for instant in instants.into_iter().rev() {
         let governing = group
             .iter()
-            .filter(|e| e.valid == instant && e.sys <= at_sys)
-            .max_by_key(|e| e.sys);
-        match governing.map(|e| e.polarity) {
-            Some(ClaimPolarity::Assert) => {
-                let e = governing.expect("just matched Some");
+            .filter(|e| e.valid().raw() == instant && e.sys().raw() <= at_sys_raw)
+            .max_by_key(|e| e.sys().raw());
+        match governing {
+            Some(RawVersion::Assert { payload, .. }) => {
                 let mut tuple: Tuple = Tuple::from_vec(key.to_vec());
-                tuple.extend(e.payload.iter().cloned());
+                tuple.extend(payload.iter().cloned());
                 return Some(tuple);
             }
-            Some(ClaimPolarity::Retract) => return None,
-            Some(ClaimPolarity::Erase) | None => {}
+            Some(RawVersion::Retract { .. }) => return None,
+            Some(RawVersion::Erase { .. }) | None => {}
         }
     }
     None
@@ -396,8 +452,13 @@ fn resolve_at(
 /// coalescing is definitional (un-coalesced output is unrepresentable),
 /// exactly mirroring `laws::derive_intervals`. Returns one `key ++
 /// payload ++ Interval` row per maximal run.
-fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Result<Vec<Tuple>> {
-    let mut breaks: Vec<i64> = group.iter().map(|e| e.valid).collect();
+fn derive_group(
+    group: &[RawVersion],
+    key: &[DataValue],
+    fixed_sys: ValidityTs,
+) -> Result<Vec<Tuple>> {
+    // Chronological (raw) breakpoints — Interval bounds are i64 micros.
+    let mut breaks: Vec<i64> = group.iter().map(|e| e.valid().raw()).collect();
     breaks.sort_unstable();
     breaks.dedup();
 
@@ -405,13 +466,14 @@ fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Resu
     let mut i = 0;
     while i < breaks.len() {
         let start = breaks[i];
-        let Some(tuple) = resolve_at(group, key, start, fixed_sys) else {
+        let Some(tuple) = resolve_at(group, key, ValidityTs::from_raw(start), fixed_sys) else {
             i += 1;
             continue;
         };
         let mut j = i;
         while j + 1 < breaks.len()
-            && resolve_at(group, key, breaks[j + 1], fixed_sys).as_ref() == Some(&tuple)
+            && resolve_at(group, key, ValidityTs::from_raw(breaks[j + 1]), fixed_sys).as_ref()
+                == Some(&tuple)
         {
             j += 1;
         }
@@ -474,7 +536,7 @@ struct SpansScanBatches<'a> {
     /// over so each row is decoded exactly once.
     pending_key: Option<(Slice, Slice)>,
     key_len: usize,
-    sys_fixed: i64,
+    sys_fixed: ValidityTs,
     done: bool,
 }
 
@@ -488,8 +550,8 @@ impl<'a> SpansScanBatches<'a> {
         loop {
             let Some(next) = self.raw.next() else { break };
             let (k, v) = next?;
-            if k.len() < EncodedKey::BITEMPORAL_TAIL_LEN
-                || k[..k.len() - EncodedKey::BITEMPORAL_TAIL_LEN] != prefix[..]
+            if k.len() < StorageKey::BITEMPORAL_TAIL_LEN
+                || k[..k.len() - StorageKey::BITEMPORAL_TAIL_LEN] != prefix[..]
             {
                 self.pending_key = Some((k, v));
                 break;
@@ -557,13 +619,13 @@ impl DeltaRA {
     /// `SignedFact` shape this module's doc names, computed here through
     /// the production type rather than a bare sign column built ad hoc.
     /// Two routes to the same `BTreeSet<SignedFact>`: the posting-index
-    /// fast path when `self.posting` is attached (module doc's "posting-
+    /// fast path when [`DeltaScan::Accelerated`] (module doc's "posting-
     /// index fast path" section), the naive full-snapshot diff otherwise —
     /// see [`Self::patch_naive`]/[`Self::patch_via_posting`].
     pub(crate) fn iter_batched<'a>(&'a self, tx: &'a impl ReadTx) -> Result<BatchIter<'a>> {
-        let patch = match &self.posting {
-            Some(posting) => self.patch_via_posting(tx, posting)?,
-            None => self.patch_naive(tx)?,
+        let patch = match &self.scan {
+            DeltaScan::Accelerated { posting } => self.patch_via_posting(tx, posting)?,
+            DeltaScan::Naive => self.patch_naive(tx)?,
         };
         let mut rows: Vec<Tuple> = patch
             .into_iter()
@@ -628,8 +690,8 @@ impl DeltaRA {
         tx: &impl ReadTx,
         posting: &RelationHandle,
     ) -> Result<BTreeSet<SignedFact>> {
-        let from_valid = self.from.valid.raw();
-        let to_valid = self.to.valid.raw();
+        let from_valid = self.from.valid().raw();
+        let to_valid = self.to.valid().raw();
         let lo = from_valid.min(to_valid);
         let hi = from_valid.max(to_valid);
         let base_key_len = self.storage.metadata.keys.len();
@@ -651,7 +713,7 @@ impl DeltaRA {
                 to_patch.insert(SignedFact::Plus(t));
             }
         }
-        Ok(compose(&from_patch, &to_patch))
+        compose(&from_patch, &to_patch)
     }
 }
 
@@ -758,10 +820,7 @@ mod tests {
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
             name: name.into(),
-            typing: NullableColType {
-                coltype: ColType::Any,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Any),
             default_gen: None,
         }
     }
@@ -849,7 +908,7 @@ mod tests {
     fn spans_rows(
         db: &crate::storage::fjall::FjallStorage,
         handle: &RelationHandle,
-        sys: i64,
+        sys: ValidityTs,
     ) -> Vec<(i64, i64, i64, Option<i64>)> {
         let ra = SpansRA {
             bindings: vec![sym("k"), sym("val"), sym("iv")],
@@ -889,7 +948,7 @@ mod tests {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_single", 1);
         assert_at(&db, &h, 1, 10, 100);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
@@ -899,7 +958,7 @@ mod tests {
         let h = make_relation(&db, "spans_retract", 1);
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
     }
 
@@ -909,7 +968,7 @@ mod tests {
         let h = make_relation(&db, "spans_split", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
     }
 
@@ -919,7 +978,7 @@ mod tests {
         let h = make_relation(&db, "spans_idempotent", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 100);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
@@ -930,7 +989,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
         assert_at(&db, &h, 1, 30, 100);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
     }
 
@@ -939,7 +998,7 @@ mod tests {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_dangling_retract", 1);
         retract_at(&db, &h, 1, 10);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert!(rows.is_empty());
     }
 
@@ -952,7 +1011,7 @@ mod tests {
         assert_at(&db, &h, 1, 0, 100);
         assert_at(&db, &h, 1, 10, 200);
         erase_at(&db, &h, 1, 10);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         // Instant 10 is erased, so the payload is 100 throughout (the
         // instant-0 assert governs everywhere it would have fallen
         // through to) — one interval, not two.
@@ -965,7 +1024,7 @@ mod tests {
         let h = make_relation(&db, "spans_no_zero_width", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 10, 200); // same instant, later sys: corrects it
-        for (start, end, _, _) in spans_rows(&db, &h, i64::MAX)
+        for (start, end, _, _) in spans_rows(&db, &h, MAX_VALIDITY_TS)
             .into_iter()
             .map(|(k, val, s, e)| (s, e, k, val))
         {
@@ -981,7 +1040,7 @@ mod tests {
         let db2 = new_fjall_storage(tempfile_dir()).expect("storage");
         let h2 = make_relation(&db2, "spans_no_zero_width2", 1);
         assert_at(&db2, &h2, 1, 10, 100);
-        let rows = spans_rows(&db2, &h2, i64::MAX);
+        let rows = spans_rows(&db2, &h2, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
@@ -992,7 +1051,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 2, 5, 900);
         retract_at(&db, &h, 2, 15);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
             vec![(1, 100, 10, None), (2, 900, 5, Some(14))]
@@ -1005,7 +1064,7 @@ mod tests {
         from: AsOf,
         to: AsOf,
     ) -> Vec<(i64, i64, i64)> {
-        delta_rows_with_posting(db, handle, from, to, None)
+        delta_rows_with_posting(db, handle, from, to, DeltaScan::Naive)
     }
 
     fn delta_rows_with_posting(
@@ -1013,7 +1072,7 @@ mod tests {
         handle: &RelationHandle,
         from: AsOf,
         to: AsOf,
-        posting: Option<RelationHandle>,
+        scan: DeltaScan,
     ) -> Vec<(i64, i64, i64)> {
         let ra = DeltaRA {
             bindings: vec![sym("k"), sym("val"), sym("sgn")],
@@ -1021,7 +1080,7 @@ mod tests {
             from,
             to,
             span: sp(),
-            posting,
+            scan,
         };
         let rtx = db.read_tx().expect("read tx");
         let mut out = vec![];
@@ -1208,7 +1267,15 @@ mod tests {
         to: AsOf,
     ) {
         let naive = delta_rows(db, base, from, to);
-        let fast = delta_rows_with_posting(db, base, from, to, Some(idx.clone()));
+        let fast = delta_rows_with_posting(
+            db,
+            base,
+            from,
+            to,
+            DeltaScan::Accelerated {
+                posting: idx.clone(),
+            },
+        );
         assert_eq!(
             naive, fast,
             "fast path disagreed with the naive path at from={from:?} to={to:?}"

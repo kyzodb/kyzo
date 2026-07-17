@@ -23,10 +23,10 @@
 //!
 //! Exactly the two **idempotent** semirings whose fixpoints are finite:
 //!
-//! - [`Boolean`] — existence. Its support must equal the engine's set
+//! - [`BooleanAnn`] — existence. Its support must equal the engine's set
 //!   semantics (the evaluator's own fixpoint), proven by differential
 //!   against the sealed oracle (`query/provenance.rs`).
-//! - [`Tropical`] — min-plus over [`Cost`]: the cheapest derivation, where
+//! - [`TropicalAnn`] — min-plus over [`Cost`]: the cheapest derivation, where
 //!   a derivation tree's cost is the sum of its rule-application weights
 //!   (unit weights make it the number of rule firings). Weights are
 //!   [`NonZeroU64`], which is what makes certificate extraction
@@ -38,10 +38,10 @@
 //! relation has infinitely many derivation trees). They are a different
 //! fixpoint with their own annotation store, out of this split's scope —
 //! see the capability design's PA3 boundary. Nothing here silently
-//! degrades into them: the only implementations of [`Semiring`] in the
-//! tree are the two lawful ones, and the solver is armed with a pass
-//! ceiling ([`SolverBudget`]) so even a law-breaking implementation
-//! refuses (typed) instead of hanging.
+//! degrades into them: annotations are sealed products
+//! ([`BooleanAnn`] / [`TropicalAnn`]) so a kind mismatch does not compile,
+//! and the solver is armed with a pass ceiling ([`SolverBudget`]) so a
+//! non-stabilizing annotation chain refuses (typed) instead of hanging.
 //!
 //! ## Two-phase evaluation, and why it is sound
 //!
@@ -105,19 +105,39 @@ pub(crate) struct ProvenanceLimitExceeded {
     pub(crate) ceiling: u64,
 }
 
-/// A proof failed verification. The message names the first offending
+/// A proof failed verification. The variant names the first offending
 /// step; a certificate is all-or-nothing.
 #[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
-#[error("provenance certificate rejected: {0}")]
 #[diagnostic(code(provenance::bad_certificate))]
-pub(crate) struct BadCertificate(pub(crate) String);
+pub(crate) enum BadCertificate {
+    #[error("provenance certificate rejected: leaf is not a ground fact")]
+    NotGroundFact,
+    #[error("provenance certificate rejected: derivation index out of range")]
+    DerivationOutOfRange,
+    #[error("provenance certificate rejected: derivation head mismatch")]
+    HeadMismatch,
+    #[error("provenance certificate rejected: rule label mismatch")]
+    LabelMismatch,
+    #[error("provenance certificate rejected: premise arity mismatch")]
+    PremiseArityMismatch,
+    #[error("provenance certificate rejected: premise node mismatch")]
+    PremiseMismatch,
+    #[error("provenance certificate rejected: cost arithmetic overflows u64")]
+    CostOverflow,
+    #[error("provenance certificate rejected: claimed cost disagrees with verified cost")]
+    CostMismatch,
+}
 
 /// Certificate extraction was asked for an underivable tuple (annotation
 /// `0` / infinite cost), or for a node the graph does not contain.
 #[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
-#[error("no derivation to certify: {0}")]
 #[diagnostic(code(provenance::no_derivation))]
-pub(crate) struct NoDerivation(pub(crate) String);
+pub(crate) enum NoDerivation {
+    #[error("no derivation to certify: target has no finite-cost derivation")]
+    NoFiniteCost,
+    #[error("no derivation to certify: target is not in the graph")]
+    MissingNode,
+}
 
 /// A cross-stage invariant the graph construction should have made
 /// impossible (e.g. "a solved min cost is achieved by some edge").
@@ -128,10 +148,15 @@ pub(crate) struct NoDerivation(pub(crate) String);
 pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 
 // ─────────────────────────────────────────────────────────────────────────
-// The semiring interface
+// The semiring algebra (sealed enum — not an open trait)
 // ─────────────────────────────────────────────────────────────────────────
 
-/// A commutative semiring `(K, ⊕, ⊗, 0, 1)`, as the solver consumes it.
+/// Which commutative semiring annotates the derivation graph.
+///
+/// Exactly the two **idempotent** algebras whose fixpoints are finite.
+/// Counting/polynomial are refused at this door — they are not variants.
+/// Each variant's annotation is a sealed product type
+/// ([`BooleanAnn`] / [`TropicalAnn`]): kind mismatch does not compile.
 ///
 /// Laws (asserted on randomized values by the axiom tests in
 /// `query/provenance.rs`):
@@ -141,57 +166,19 @@ pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 ///   (`0 ⊗ a = 0`);
 /// - `⊗` distributes over `⊕`.
 ///
-/// **Solver contract beyond the axioms**: `⊕` must be idempotent
-/// (`a ⊕ a = a`) and every `⊕`-chain `a₀, a₀⊕a₁, …` must stabilize after
-/// finitely many strict changes — true of [`Boolean`] (one flip) and
-/// [`Tropical`] (a strictly decreasing `u64` chain is finite), and exactly
-/// what the counting/polynomial semirings violate over recursion. The
-/// solver's pass ceiling turns any violation into a typed refusal rather
-/// than divergence.
-pub(crate) trait Semiring {
-    /// The annotation domain. `Ord` is required for deterministic
-    /// rendering and for [`Tropical`]'s `min`; it is not otherwise load
-    /// bearing.
-    type Value: Clone + Eq + Ord + Debug + Send + Sync;
-
-    /// The additive identity: "no derivation".
-    fn zero(&self) -> Self::Value;
-    /// The multiplicative identity: "a ground fact".
-    fn one(&self) -> Self::Value;
-    /// `⊕`: combine alternative derivations. Total (never overflows for
-    /// the shipped semirings: `∨` and `min`).
-    fn plus(&self, a: &Self::Value, b: &Self::Value) -> Self::Value;
-    /// `⊗`: combine jointly-used premises. Fallible: [`Tropical`] refuses
-    /// (typed) on `u64` overflow.
-    fn times(&self, a: &Self::Value, b: &Self::Value) -> Result<Self::Value, SemiringOverflow>;
-    /// Lift one rule application's weight into the semiring: [`Boolean`]
-    /// ignores it (`1`), [`Tropical`] charges it.
-    fn lift_weight(&self, weight: NonZeroU64) -> Self::Value;
-}
-
-/// The boolean semiring `({⊥,⊤}, ∨, ∧, ⊥, ⊤)`: does a derivation exist.
-/// Its support is exactly the engine's set semantics — asserted by
-/// differential against the oracle, not by this comment.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Boolean;
-
-impl Semiring for Boolean {
-    type Value = bool;
-    fn zero(&self) -> bool {
-        false
-    }
-    fn one(&self) -> bool {
-        true
-    }
-    fn plus(&self, a: &bool, b: &bool) -> bool {
-        *a || *b
-    }
-    fn times(&self, a: &bool, b: &bool) -> Result<bool, SemiringOverflow> {
-        Ok(*a && *b)
-    }
-    fn lift_weight(&self, _weight: NonZeroU64) -> bool {
-        true
-    }
+/// **Solver contract beyond the axioms**: `⊕` is idempotent (`a ⊕ a = a`)
+/// and every `⊕`-chain stabilizes after finitely many strict changes —
+/// true of [`BooleanAnn`] (one flip) and [`TropicalAnn`] (a strictly
+/// decreasing `u64` chain is finite). The solver's pass ceiling turns any
+/// non-stabilizing chain into a typed refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Semiring {
+    /// `({⊥,⊤}, ∨, ∧, ⊥, ⊤)`: does a derivation exist. Support equals the
+    /// engine's set semantics — asserted by differential against the oracle.
+    Boolean,
+    /// `(ℕ∪{∞}, min, +, ∞, 0)`: cheapest derivation cost. Derivation
+    /// *depth* is deliberately not offered (min-max is not a semiring `⊗`).
+    Tropical,
 }
 
 /// A tropical annotation: the cost of the cheapest known derivation, or
@@ -204,38 +191,94 @@ pub(crate) enum Cost {
     Infinite,
 }
 
-/// The tropical (min-plus) semiring `(ℕ∪{∞}, min, +, ∞, 0)`: the cost of
-/// the cheapest derivation, where each rule application charges its
-/// weight. With unit weights the cost is the number of rule firings in
-/// the derivation tree. (Derivation *depth* would be a min-max algebra,
-/// not a semiring `⊗`; it is deliberately not offered.)
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Tropical;
+/// The algebra operations every sealed annotation product exposes. The
+/// associated value *is* the annotation — there is no independent
+/// `Annotation` enum that can disagree with its [`Semiring`].
+pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized {
+    fn zero() -> Self;
+    fn one() -> Self;
+    fn plus(self, other: Self) -> Self;
+    fn times(self, other: Self) -> Result<Self, SemiringOverflow>;
+    fn lift_weight(weight: NonZeroU64) -> Self;
+}
 
-impl Semiring for Tropical {
-    type Value = Cost;
-    fn zero(&self) -> Cost {
-        Cost::Infinite
+/// Sealed product: [`Semiring::Boolean`] × existence bit. Ops are total
+/// on this type alone — a tropical value cannot be passed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct BooleanAnn(bool);
+
+impl BooleanAnn {
+    pub(crate) fn new(present: bool) -> Self {
+        Self(present)
     }
-    fn one(&self) -> Cost {
-        Cost::Finite(0)
+
+    pub(crate) fn get(self) -> bool {
+        self.0
     }
-    fn plus(&self, a: &Cost, b: &Cost) -> Cost {
-        *a.min(b)
+}
+
+impl AnnAlgebra for BooleanAnn {
+    fn zero() -> Self {
+        Self(false)
     }
-    fn times(&self, a: &Cost, b: &Cost) -> Result<Cost, SemiringOverflow> {
-        match (a, b) {
-            (Cost::Infinite, _) | (_, Cost::Infinite) => Ok(Cost::Infinite),
-            (Cost::Finite(x), Cost::Finite(y)) => {
-                x.checked_add(*y).map(Cost::Finite).ok_or(SemiringOverflow {
-                    left: *x,
-                    right: *y,
-                })
-            }
+
+    fn one() -> Self {
+        Self(true)
+    }
+
+    fn plus(self, other: Self) -> Self {
+        Self(self.0 || other.0)
+    }
+
+    fn times(self, other: Self) -> Result<Self, SemiringOverflow> {
+        Ok(Self(self.0 && other.0))
+    }
+
+    fn lift_weight(_weight: NonZeroU64) -> Self {
+        Self(true)
+    }
+}
+
+/// Sealed product: [`Semiring::Tropical`] × [`Cost`]. Ops are total on
+/// this type alone — a boolean value cannot be passed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TropicalAnn(Cost);
+
+impl TropicalAnn {
+    pub(crate) fn new(cost: Cost) -> Self {
+        Self(cost)
+    }
+
+    pub(crate) fn cost(self) -> Cost {
+        self.0
+    }
+}
+
+impl AnnAlgebra for TropicalAnn {
+    fn zero() -> Self {
+        Self(Cost::Infinite)
+    }
+
+    fn one() -> Self {
+        Self(Cost::Finite(0))
+    }
+
+    fn plus(self, other: Self) -> Self {
+        Self(self.0.min(other.0))
+    }
+
+    fn times(self, other: Self) -> Result<Self, SemiringOverflow> {
+        match (self.0, other.0) {
+            (Cost::Infinite, _) | (_, Cost::Infinite) => Ok(Self(Cost::Infinite)),
+            (Cost::Finite(l), Cost::Finite(r)) => l
+                .checked_add(r)
+                .map(|s| Self(Cost::Finite(s)))
+                .ok_or(SemiringOverflow { left: l, right: r }),
         }
     }
-    fn lift_weight(&self, weight: NonZeroU64) -> Cost {
-        Cost::Finite(weight.get())
+
+    fn lift_weight(weight: NonZeroU64) -> Self {
+        Self(Cost::Finite(weight.get()))
     }
 }
 
@@ -245,7 +288,8 @@ impl Semiring for Tropical {
 
 /// One grounded rule application: `head ← premises`, by rule `label` of
 /// the head's rule set, charging `weight`. The graph is semiring-agnostic
-/// — one graph solves under [`Boolean`] and [`Tropical`] alike.
+/// — one graph solves under [`Semiring::Boolean`] and [`Semiring::Tropical`]
+/// alike.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Derivation<K> {
     pub(crate) head: K,
@@ -261,18 +305,37 @@ pub(crate) struct Derivation<K> {
     pub(crate) premises: Vec<K>,
 }
 
+/// Typed index into [`DerivationGraph::derivations`] — certificates name
+/// steps by this id, never a bare `usize` (P104).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct DerivationId(usize);
+
+impl DerivationId {
+    pub(crate) fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// The grounded derivation hypergraph of one completed evaluation: ground
 /// nodes (annotation `1`) and rule applications. Nodes are keyed by the
 /// caller (`K` is `(PremiseSource, Tuple)` for the engine pipeline).
+///
+/// DAG-by-construction (P104): edges are admitted only through
+/// [`Self::add_derivation`], which requires every premise already
+/// [`Self::declare`]d or [`Self::add_fact`]ed (or a prior head), refuses
+/// self-loops, and refuses any edge that would create a cycle. Free struct
+/// literals cannot forge an open or cyclic graph.
 #[derive(Debug)]
 pub(crate) struct DerivationGraph<K> {
     /// Ground nodes: EDB facts as attested by the rule bodies, plus the
     /// collapse boundary (tuples of aggregated / fixed-rule stores).
-    pub(crate) facts: BTreeSet<K>,
+    facts: BTreeSet<K>,
     /// Every grounded rule application, in enumeration order (canonical:
     /// stratum, then store, then rule index, then the body's own
     /// deterministic iteration order).
-    pub(crate) derivations: Vec<Derivation<K>>,
+    derivations: Vec<Derivation<K>>,
+    /// Nodes known for premise checks: facts ∪ declared ∪ derivation heads.
+    known: BTreeSet<K>,
 }
 
 // A hand-written `Default` (an empty graph). The derived one would demand
@@ -283,11 +346,92 @@ impl<K> Default for DerivationGraph<K> {
         Self {
             facts: BTreeSet::new(),
             derivations: Vec::new(),
+            known: BTreeSet::new(),
         }
     }
 }
 
 impl<K: Ord + Clone + Debug> DerivationGraph<K> {
+    /// Admit a ground fact (annotation `1`).
+    pub(crate) fn add_fact(&mut self, node: K) {
+        self.known.insert(node.clone());
+        self.facts.insert(node);
+    }
+
+    /// Declare a node known for premise checks without making it a ground
+    /// fact (annotation still starts at `0` until a derivation fires).
+    /// Used to pre-seat completed-store heads before stratified re-derive
+    /// admits edges in non-topo list order.
+    pub(crate) fn declare(&mut self, node: K) {
+        self.known.insert(node);
+    }
+
+    /// Admit one grounded rule application. Refuses a self-loop, any
+    /// premise not yet in [`Self::known`], or any edge that would create a
+    /// cycle (following premise→head edges, `head` must not already reach a
+    /// premise) — the graph stays a closed DAG by construction.
+    pub(crate) fn add_derivation(&mut self, d: Derivation<K>) -> Result<DerivationId> {
+        if d.premises.iter().any(|p| p == &d.head) {
+            return Err(ProvenanceInvariantError(
+                "a derivation premise equals its head (self-loop)",
+            )
+            .into());
+        }
+        for p in &d.premises {
+            if !self.known.contains(p) {
+                return Err(ProvenanceInvariantError(
+                    "a premise is neither a ground fact nor a derived head",
+                )
+                .into());
+            }
+            if self.reaches(&d.head, p) {
+                return Err(ProvenanceInvariantError(
+                    "admitting this derivation would create a cycle",
+                )
+                .into());
+            }
+        }
+        self.known.insert(d.head.clone());
+        let id = DerivationId(self.derivations.len());
+        self.derivations.push(d);
+        Ok(id)
+    }
+
+    /// Whether `from` can reach `to` following existing premise→head edges.
+    fn reaches(&self, from: &K, to: &K) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut stack = vec![from.clone()];
+        let mut seen = BTreeSet::new();
+        while let Some(n) = stack.pop() {
+            if !seen.insert(n.clone()) {
+                continue;
+            }
+            for d in &self.derivations {
+                if d.premises.iter().any(|p| p == &n) {
+                    if d.head == *to {
+                        return true;
+                    }
+                    stack.push(d.head.clone());
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn facts(&self) -> &BTreeSet<K> {
+        &self.facts
+    }
+
+    pub(crate) fn derivations(&self) -> &[Derivation<K>] {
+        &self.derivations
+    }
+
+    pub(crate) fn derivation(&self, id: DerivationId) -> Option<&Derivation<K>> {
+        self.derivations.get(id.0)
+    }
+
     /// Every node the graph mentions, in canonical order.
     pub(crate) fn nodes(&self) -> BTreeSet<K> {
         let mut nodes = self.facts.clone();
@@ -300,11 +444,7 @@ impl<K: Ord + Clone + Debug> DerivationGraph<K> {
         nodes
     }
 
-    /// Refuse (typed) any premise that is neither a ground fact nor the
-    /// head of some derivation: such a node would silently annotate to
-    /// `0` and zero out every edge through it — a silent gap this check
-    /// turns into a loud one. The engine builder calls this after
-    /// enumeration; hand-built graphs in tests may skip it deliberately.
+    /// Defense-in-depth closure check (construction already enforces this).
     pub(crate) fn check_closed(&self) -> Result<()> {
         let heads: BTreeSet<&K> = self.derivations.iter().map(|d| &d.head).collect();
         for d in &self.derivations {
@@ -346,22 +486,25 @@ impl SolverBudget {
 /// `ann(head) = ⊕ over derivations of (weight ⊗ ⊗ premises)`, with ground
 /// facts at `1` and everything else starting at `0`.
 ///
+/// `A` is the sealed product ([`BooleanAnn`] / [`TropicalAnn`]) — the
+/// algebra is fixed by the type parameter, so a kind mismatch cannot
+/// arise at the ops boundary.
+///
 /// Deterministic by construction: the pass order is the derivation list's
 /// order and the map is a `BTreeMap`; no iteration order depends on a
 /// hash or a thread schedule.
-pub(crate) fn solve<S: Semiring, K: Ord + Clone + Debug>(
-    semiring: &S,
+pub(crate) fn solve<A: AnnAlgebra, K: Ord + Clone + Debug>(
     graph: &DerivationGraph<K>,
     budget: &SolverBudget,
-) -> Result<BTreeMap<K, S::Value>> {
-    let mut ann: BTreeMap<K, S::Value> = graph
+) -> Result<BTreeMap<K, A>> {
+    let mut ann: BTreeMap<K, A> = graph
         .nodes()
         .into_iter()
         .map(|n| {
-            let v = if graph.facts.contains(&n) {
-                semiring.one()
+            let v = if graph.facts().contains(&n) {
+                A::one()
             } else {
-                semiring.zero()
+                A::zero()
             };
             (n, v)
         })
@@ -370,18 +513,18 @@ pub(crate) fn solve<S: Semiring, K: Ord + Clone + Debug>(
     let ceiling = budget.max_passes.get();
     for _pass in 0..ceiling {
         let mut changed = false;
-        for d in &graph.derivations {
-            let mut v = semiring.lift_weight(d.weight);
+        for d in graph.derivations() {
+            let mut v = A::lift_weight(d.weight);
             for p in &d.premises {
                 let pv = ann.get(p).ok_or(ProvenanceInvariantError(
                     "a premise vanished from the node set",
                 ))?;
-                v = semiring.times(&v, pv)?;
+                v = v.times(*pv)?;
             }
             let old = ann.get(&d.head).ok_or(ProvenanceInvariantError(
                 "a head vanished from the node set",
             ))?;
-            let new = semiring.plus(old, &v);
+            let new = old.plus(v);
             if new != *old {
                 ann.insert(d.head.clone(), new);
                 changed = true;
@@ -397,6 +540,12 @@ pub(crate) fn solve<S: Semiring, K: Ord + Clone + Debug>(
         ceiling: u64::from(ceiling),
     }
     .into())
+}
+
+/// Project a tropical annotation map to [`Cost`] values. The input type
+/// proves the map is tropical — no runtime kind check.
+pub(crate) fn as_cost_map<K: Ord + Clone>(ann: &BTreeMap<K, TropicalAnn>) -> BTreeMap<K, Cost> {
+    ann.iter().map(|(k, v)| (k.clone(), v.cost())).collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -415,13 +564,13 @@ pub(crate) fn solve<S: Semiring, K: Ord + Clone + Debug>(
 pub(crate) enum ProofNode<K> {
     /// A ground node: cost 0 by definition.
     Fact { node: K },
-    /// A rule application: `derivation` indexes [`DerivationGraph::derivations`],
-    /// `label` echoes its per-head rule index, `cost` is the claimed total
-    /// (weight plus children), and `premises` are the children in body
-    /// order.
+    /// A rule application: `derivation` is a [`DerivationId`] into the
+    /// graph, `label` echoes its per-head rule index, `cost` is the claimed
+    /// total (weight plus children), and `premises` are the children in
+    /// body order.
     Step {
         node: K,
-        derivation: usize,
+        derivation: DerivationId,
         label: usize,
         cost: u64,
         premises: Vec<ProofNode<K>>,
@@ -458,16 +607,16 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
     let target_cost = match costs.get(target) {
         Some(Cost::Finite(c)) => *c,
         Some(Cost::Infinite) => {
-            return Err(NoDerivation(format!("{target:?} has no finite-cost derivation")).into());
+            return Err(NoDerivation::NoFiniteCost.into());
         }
-        None => return Err(NoDerivation(format!("{target:?} is not in the graph")).into()),
+        None => return Err(NoDerivation::MissingNode.into()),
     };
-    if graph.facts.contains(target) {
+    if graph.facts().contains(target) {
         return Ok(ProofNode::Fact {
             node: target.clone(),
         });
     }
-    for (idx, d) in graph.derivations.iter().enumerate() {
+    for (idx, d) in graph.derivations().iter().enumerate() {
         if d.head != *target {
             continue;
         }
@@ -498,7 +647,7 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
                 .collect::<Result<Vec<_>>>()?;
             return Ok(ProofNode::Step {
                 node: target.clone(),
-                derivation: idx,
+                derivation: DerivationId(idx),
                 label: d.label,
                 cost: target_cost,
                 premises,
@@ -526,12 +675,10 @@ pub(crate) fn verify_proof<K: Ord + Clone + Debug>(
 ) -> Result<u64, BadCertificate> {
     match proof {
         ProofNode::Fact { node } => {
-            if graph.facts.contains(node) {
+            if graph.facts().contains(node) {
                 Ok(0)
             } else {
-                Err(BadCertificate(format!(
-                    "leaf {node:?} is not a ground fact"
-                )))
+                Err(BadCertificate::NotGroundFact)
             }
         }
         ProofNode::Step {
@@ -541,46 +688,30 @@ pub(crate) fn verify_proof<K: Ord + Clone + Debug>(
             cost,
             premises,
         } => {
-            let d = graph.derivations.get(*derivation).ok_or_else(|| {
-                BadCertificate(format!("derivation index {derivation} out of range"))
-            })?;
+            let d = graph
+                .derivation(*derivation)
+                .ok_or(BadCertificate::DerivationOutOfRange)?;
             if d.head != *node {
-                return Err(BadCertificate(format!(
-                    "derivation {derivation} derives {:?}, not {node:?}",
-                    d.head
-                )));
+                return Err(BadCertificate::HeadMismatch);
             }
             if d.label != *label {
-                return Err(BadCertificate(format!(
-                    "derivation {derivation} is rule {}, certificate claims {label}",
-                    d.label
-                )));
+                return Err(BadCertificate::LabelMismatch);
             }
             if d.premises.len() != premises.len() {
-                return Err(BadCertificate(format!(
-                    "derivation {derivation} has {} premises, certificate carries {}",
-                    d.premises.len(),
-                    premises.len()
-                )));
+                return Err(BadCertificate::PremiseArityMismatch);
             }
             let mut total: u64 = d.weight.get();
             for (want, child) in d.premises.iter().zip(premises) {
                 if child.node() != want {
-                    return Err(BadCertificate(format!(
-                        "premise mismatch: derivation {derivation} wants {want:?}, \
-                         certificate supplies {:?}",
-                        child.node()
-                    )));
+                    return Err(BadCertificate::PremiseMismatch);
                 }
                 let child_cost = verify_proof(child, graph)?;
                 total = total
                     .checked_add(child_cost)
-                    .ok_or_else(|| BadCertificate("cost arithmetic overflows u64".to_string()))?;
+                    .ok_or(BadCertificate::CostOverflow)?;
             }
             if total != *cost {
-                return Err(BadCertificate(format!(
-                    "claimed cost {cost} ≠ verified cost {total} at {node:?}"
-                )));
+                return Err(BadCertificate::CostMismatch);
             }
             Ok(total)
         }

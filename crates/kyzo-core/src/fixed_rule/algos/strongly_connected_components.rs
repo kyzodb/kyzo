@@ -40,7 +40,10 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    graph_node_value, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
+    FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
+};
 
 pub(crate) struct StronglyConnectedComponent {
     strong: bool,
@@ -66,9 +69,9 @@ impl FixedRule for StronglyConnectedComponent {
         let tarjan = TarjanSccG::new(graph).run(cancel)?;
         for (grp_id, cc) in tarjan.iter().enumerate() {
             for idx in cc {
-                // Structural: Tarjan only emits node ids the graph handed
-                // it, and `indices` has an entry per graph node.
-                let val = indices.get(*idx as usize).unwrap();
+                // INVARIANT(scc_index): Tarjan only emits node ids the graph
+                // handed it, and `indices` has an entry per graph node.
+                let val = graph_node_value(&indices, *idx)?.clone();
                 let tuple = vec![val.clone(), DataValue::from(grp_id as i64)];
                 out.put(Tuple::from_vec(tuple))?;
             }
@@ -84,9 +87,8 @@ impl FixedRule for StronglyConnectedComponent {
             let nodes = nodes.ensure_min_len(1)?;
             for tuple in nodes.iter()? {
                 let tuple = tuple?;
-                // Structural: `ensure_min_len(1)` proved every tuple has a
-                // first column.
-                let node = tuple.into_iter().next().unwrap();
+                // INVARIANT(scc_node_col): `ensure_min_len(1)` proved a first column.
+                let node = tuple_into_first_column(tuple)?;
                 if !inv_indices.contains_key(&node) {
                     inv_indices.insert(node.clone(), u32::MAX);
                     let tuple = vec![node, DataValue::from(counter)];
@@ -171,8 +173,10 @@ impl TarjanSccG {
             // so the cursor walk is linear, not quadratic, in degree.
             match self.graph.out_neighbor(at, cursor) {
                 Some(to) => {
-                    // Structural: a `last()` that matched above still exists.
-                    frames.last_mut().unwrap().1 += 1;
+                    let frame = frames
+                        .last_mut()
+                        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("scc_frame"))?;
+                    frame.1 += 1;
                     if self.ids[to as usize].is_none() {
                         self.open(to);
                         frames.push((to, 0));
@@ -182,7 +186,7 @@ impl TarjanSccG {
                 }
                 None => {
                     frames.pop();
-                    // Structural: `ids[at]` was set to `Some` by `open`.
+                    // INVARIANT(scc_ids_open): `ids[at]` was set to `Some` by `open`.
                     if self.ids[at as usize] == Some(self.low[at as usize]) {
                         let label = self.low[at as usize];
                         while let Some(node) = self.stack.pop() {
@@ -276,8 +280,8 @@ mod tests {
     #[test]
     fn cancellation_inside_dfs() {
         let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (1, 0, ())]).unwrap();
-        let flag = CancelFlag::default();
-        flag.cancel();
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(TarjanSccG::new(graph).run(flag).is_err());
     }
 }

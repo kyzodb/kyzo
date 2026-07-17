@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BatchFilter, PlanInvariantError, RelAlgebra};
-use crate::data::expr::{Bytecode, Expr};
+use crate::data::expr::Expr;
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -94,14 +94,16 @@ impl ReorderRA {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// FilteredRA: bytecode predicate filters
+// FilteredRA: Expr predicate filters
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Keep only tuples satisfying every compiled predicate.
+///
+/// One owner for residual filters: binding indices are filled in place
+/// (`fill_binding_indices_and_compile`); evaluation reads the same field.
 pub(crate) struct FilteredRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,
 }
@@ -131,7 +133,6 @@ impl FilteredRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&parent_bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()));
         }
         Ok(())
     }
@@ -150,9 +151,8 @@ impl FilteredRA {
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
         Ok(Box::new(BatchFilter {
             parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
-            filters: &self.filters_bytecodes,
+            filters: &self.filters,
             eliminate_indices,
-            stack: vec![],
         }))
     }
 }
@@ -161,15 +161,23 @@ impl FilteredRA {
 // UnificationRA: computed columns
 // ─────────────────────────────────────────────────────────────────────────
 
+/// How a computed column attaches to each parent tuple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnificationKind {
+    /// One output row: `binding = expr`.
+    Single,
+    /// One output row per list element: `binding in expr`.
+    Spread,
+}
+
 /// Append one computed column per tuple (`binding = expr`), or — when
-/// `is_multi` (`binding in expr`) — one output tuple per element of the
-/// list `expr` evaluates to.
+/// [`UnificationKind::Spread`] (`binding in expr`) — one output tuple per
+/// element of the list `expr` evaluates to.
 pub(crate) struct UnificationRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) binding: Symbol,
     pub(crate) expr: Expr,
-    pub(crate) expr_bytecode: Vec<Bytecode>,
-    pub(crate) is_multi: bool,
+    pub(crate) kind: UnificationKind,
     pub(crate) to_eliminate: BTreeSet<Symbol>,
     pub(crate) span: SourceSpan,
 }
@@ -184,7 +192,6 @@ impl UnificationRA {
             .map(|(a, b)| (b, a))
             .collect();
         self.expr.fill_binding_indices(&parent_bindings)?;
-        self.expr_bytecode = self.expr.compile()?;
         Ok(())
     }
 
@@ -202,8 +209,8 @@ impl UnificationRA {
 
     /// Batched unification: ONE columnar evaluation of the bound
     /// expression per parent batch, then rows extend positionally. The
-    /// spread form (`is_multi`) flattens each row's list result in row
-    /// order, exactly like the row path.
+    /// [`UnificationKind::Spread`] form flattens each row's list result in
+    /// row order, exactly like the row path.
     pub(crate) fn iter_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
@@ -223,11 +230,11 @@ impl UnificationRA {
                 let width = rows.first().map_or(0, |r| r.len());
                 let owned_rows: Vec<Tuple> =
                     rows.iter().map(|r| Tuple::from_vec(r.to_vec())).collect();
-                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width);
+                let columns = crate::query::batch::ColumnBatch::from_rows(owned_rows, width)?;
                 let values = crate::query::vm::eval_expr_batched(
                     &ra.expr,
                     &columns,
-                    &crate::query::batch::Selection::all(rows.len()),
+                    &crate::query::batch::Selection::all(rows.len())?,
                 )?;
                 let mut out = Batch::new();
                 let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {
@@ -236,7 +243,8 @@ impl UnificationRA {
                     out.push(eliminate_from_tuple(ret, &eliminate_indices));
                     Ok(())
                 };
-                if ra.is_multi {
+                match ra.kind {
+                    UnificationKind::Spread => {
                     for (row, list) in rows.iter().zip(values) {
                         let items = list.get_slice().ok_or_else(|| {
                             #[derive(Debug, Error, Diagnostic)]
@@ -251,9 +259,11 @@ impl UnificationRA {
                             emit(row, item.clone())?;
                         }
                     }
-                } else {
-                    for (row, v) in rows.iter().zip(values) {
-                        emit(row, v)?;
+                    }
+                    UnificationKind::Single => {
+                        for (row, v) in rows.iter().zip(values) {
+                            emit(row, v)?;
+                        }
                     }
                 }
                 Ok(out)

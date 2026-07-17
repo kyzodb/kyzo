@@ -36,11 +36,12 @@ use smartstring::SmartString;
 
 use crate::DataValue;
 use crate::data::aggr::parse_aggr;
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::OP_GT;
 use crate::data::program::{
-    InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
-    MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
+    HeadAggrSlot, InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram,
+    MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes,
+    StratifiedMagicProgram,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -91,10 +92,7 @@ fn v(i: i64) -> DataValue {
 fn col(name: &str) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype: ColType::Any,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Any),
         default_gen: None,
     }
 }
@@ -117,7 +115,7 @@ fn rel_atom(name: &str, args: &[Symbol]) -> MagicAtom {
 fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
     MagicInlineRule {
         head: head.to_vec(),
-        aggr: vec![None; head.len()],
+        aggr: (0..head.len()).map(|_| HeadAggrSlot::Plain).collect(),
         body,
     }
 }
@@ -636,7 +634,7 @@ pub fn scan_filter(
         args: Box::new([
             Expr::Binding {
                 var: c1.clone(),
-                tuple_pos: None,
+                tuple_pos: BindingPos::Unresolved,
             },
             Expr::Const {
                 val: v(threshold),
@@ -686,7 +684,13 @@ pub fn aggregation(backend: Backend, n: usize, groups: usize, seed: u64, tmp: &P
     let count = parse_aggr("count").expect("count aggr exists");
     let agg_rule = MagicInlineRule {
         head: vec![g.clone(), x.clone()],
-        aggr: vec![None, Some((count, vec![]))],
+        aggr: vec![
+            HeadAggrSlot::Plain,
+            HeadAggrSlot::Aggregated {
+                aggr: count,
+                args: vec![],
+            },
+        ],
         body: vec![rel_atom("nums", &[g.clone(), x.clone()])],
     };
     let program = program_of(vec![

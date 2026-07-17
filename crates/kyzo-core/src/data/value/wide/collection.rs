@@ -18,6 +18,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::data::value::data_value_any;
     use super::super::super::DataValue;
     use super::super::super::canonical::{Datum, decode, encode};
     use super::super::super::number::Num;
@@ -37,7 +38,7 @@ mod tests {
                 assert!(matches!(&items[1], DataValue::List(l)
                     if matches!(&l[0], DataValue::Num(n) if *n == Num::int(2))));
             }
-            other => panic!("wrong shape: {other:?}"),
+            other @ (data_value_any!()) => panic!("wrong shape: {other:?}"),
         }
     }
 }

@@ -21,12 +21,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use miette::Result;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode_pred};
+use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
+    backtrace_predecessor, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    NodeNotFoundError,
 };
 
 pub(crate) struct Bfs;
@@ -45,20 +46,16 @@ impl FixedRule for Bfs {
         let mut condition = payload.expr_option("condition", None)?;
         let binding_map = nodes.get_binding_map(0);
         condition.fill_binding_indices(&binding_map)?;
-        let condition_bytecode = condition.compile()?;
-        let condition_span = condition.span();
         let binding_indices = condition.binding_indices()?;
         let skip_query_nodes = binding_indices.is_subset(&BTreeSet::from([0]));
 
         let mut visited: BTreeSet<DataValue> = Default::default();
         let mut backtrace: BTreeMap<DataValue, DataValue> = Default::default();
         let mut found: Vec<(DataValue, DataValue)> = vec![];
-        let mut stack = vec![];
 
         'outer: for node_tuple in starting_nodes.iter()? {
             let node_tuple = node_tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(bfs_start_col): `ensure_min_len(1)` proved a first column.
             let starting_node = &node_tuple[0];
             if visited.contains(starting_node) {
                 continue;
@@ -95,12 +92,7 @@ impl FixedRule for Bfs {
                             })??
                     };
 
-                    if eval_bytecode_pred(
-                        &condition_bytecode,
-                        &cand_tuple,
-                        &mut stack,
-                        condition_span,
-                    )? {
+                    if condition.eval_pred(&cand_tuple)? {
                         found.push((starting_node.clone(), to_node.clone()));
                         if found.len() >= limit {
                             break 'outer;
@@ -117,10 +109,10 @@ impl FixedRule for Bfs {
             let mut current = ending.clone();
             while current != starting {
                 route.push(current.clone());
-                // Structural: `ending` was reached from `starting`, and
-                // every visited node except the start got a backtrace
+                // INVARIANT(bfs_pred): `ending` was reached from `starting`,
+                // and every visited node except the start got a backtrace
                 // entry when it was discovered.
-                current = backtrace.get(&current).unwrap().clone();
+                current = backtrace_predecessor(&backtrace, &current, "bfs_pred")?;
             }
             route.push(starting.clone());
             route.reverse();

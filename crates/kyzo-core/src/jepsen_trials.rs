@@ -100,6 +100,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -266,8 +267,8 @@ fn run_txn<S: Storage>(storage: &S, plan: &[PlannedOp], write_id_ctr: &AtomicU64
             }
         }
         match tx.commit() {
-            Ok(()) => return CommittedTxn { ops, stamp },
-            Err(e) if e.downcast_ref::<ConflictError>().is_some() => continue,
+            Ok(_committed) => return CommittedTxn { ops, stamp },
+            Err(e) if e.is_conflict() => continue,
             Err(e) => panic!("unexpected commit error (not a SSI conflict): {e:?}"),
         }
     }
@@ -560,6 +561,7 @@ fn single_node_serializability_campaign_under_synthetic_cpu_pressure() {
         let count = seed_count();
         let mut failures: Vec<(u64, String)> = Vec::new();
         for i in 0..count {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
             if let Err(f) = run_seed(seed) {
                 failures.push((seed, f));
@@ -601,6 +603,7 @@ fn single_node_serializability_campaign() {
     let count = seed_count();
     let mut failures: Vec<(u64, String)> = Vec::new();
     for i in 0..count {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         if let Err(f) = run_seed(seed) {
             failures.push((seed, f));

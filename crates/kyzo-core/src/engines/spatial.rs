@@ -94,6 +94,14 @@
 //! - **Lifecycle tier**: `::spatial create/drop` — create the index relation
 //!   from [`spatial_index_metadata`], record `lat_field`/`lon_field`, backfill
 //!   via [`spatial_put`], attach the manifest keeping `indices` sorted by name.
+//!
+//! ## Projection kind (story #305)
+//!
+//! [`Spatial`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through that machine; there is no bespoke per-engine seal or
+//! freshness protocol. Relation-backed [`spatial_put`] /
+//! [`spatial_range_query`] / [`spatial_knn`] remain the kernel curve algorithms.
 
 use std::collections::BinaryHeap;
 
@@ -106,9 +114,29 @@ use thiserror::Error;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, ScanBound, Tuple};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// Geospatial index as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed curve maintenance and search ([`spatial_put`],
+/// [`Spatial::range_query`], [`Spatial::knn`]) are the kernel algorithms —
+/// not a second build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); range/knn are UFCS
+/// aliases into that door.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Spatial;
+
+impl ProjectionKind for Spatial {}
 
 // ---------------------------------------------------------------------------
 // Format constants (on-disk).
@@ -194,18 +222,18 @@ pub(crate) struct CoordNotNumber {
 // ---------------------------------------------------------------------------
 
 /// A coordinate ADMITTED to the index: finite, `lat ∈ [-90,90]`,
-/// `lon ∈ [-180,180]`. **This constructor is the NaN/range guard** — there is no
-/// other way to build a `GeoPoint`, so an ill-formed coordinate is
-/// unrepresentable past [`admit`](Self::admit) (the `IndexVec::admit` pattern).
+/// `lon ∈ [-180,180]`. Fields are private; [`admit`](Self::admit) is the sole
+/// constructor — NaN / out-of-range cannot be forged by struct literal or field
+/// write outside this module (the `IndexVec::admit` pattern).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GeoPoint {
-    pub(crate) lat: f64,
-    pub(crate) lon: f64,
+    lat: f64,
+    lon: f64,
 }
 
 impl GeoPoint {
     /// Admit a coordinate, or refuse it typed: [`NonFiniteCoord`] or
-    /// [`GeoCoordOutOfRange`].
+    /// [`GeoCoordOutOfRange`]. The only way to construct a [`GeoPoint`].
     pub(crate) fn admit(lat: f64, lon: f64) -> Result<Self> {
         if !lat.is_finite() {
             bail!(NonFiniteCoord { what: "lat" });
@@ -226,6 +254,16 @@ impl GeoPoint {
             });
         }
         Ok(GeoPoint { lat, lon })
+    }
+
+    /// Admitted latitude.
+    pub(crate) fn lat(&self) -> f64 {
+        self.lat
+    }
+
+    /// Admitted longitude.
+    pub(crate) fn lon(&self) -> f64 {
+        self.lon
     }
 
     /// The point's quantized cell (`q_lat`, `q_lon`), each in `[0, 2³²)`.
@@ -330,10 +368,7 @@ pub(crate) struct SpatialIndexManifest {
 pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("curve"),
-        typing: NullableColType {
-            coltype: ColType::Bytes,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Bytes),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -343,10 +378,7 @@ pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRel
             default_gen: None,
         });
     }
-    let coord = || NullableColType {
-        coltype: ColType::Float,
-        nullable: false,
-    };
+    let coord = || NullableColType::required(ColType::Float);
     let non_keys = vec![
         ColumnDef {
             name: SmartString::from("lat"),
@@ -414,12 +446,15 @@ pub(crate) fn spatial_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
-    let val = vec![DataValue::from(point.lat), DataValue::from(point.lon)];
+    let val = vec![
+        DataValue::from(point.lat()),
+        DataValue::from(point.lon()),
+    ];
     let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
     let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
     tx.put(&key_bytes, &val_bytes)
@@ -440,7 +475,7 @@ pub(crate) fn spatial_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let point = extract_point(tuple, manifest)?;
@@ -454,20 +489,22 @@ pub(crate) fn spatial_del<T: WriteTx>(
 // ---------------------------------------------------------------------------
 
 /// A non-wrapping lat/lon query box, both corners admitted and ordered
-/// (`lat_lo ≤ lat_hi`, `lon_lo ≤ lon_hi`). A box crossing the antimeridian is
-/// refused at admission ([`AntimeridianBoxRefused`]).
+/// (`lat_lo ≤ lat_hi`, `lon_lo ≤ lon_hi`). Fields are private; [`admit`](Self::admit)
+/// is the sole constructor. A box crossing the antimeridian is refused at
+/// admission ([`AntimeridianBoxRefused`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct BoundingBox {
-    pub(crate) lat_lo: f64,
-    pub(crate) lat_hi: f64,
-    pub(crate) lon_lo: f64,
-    pub(crate) lon_hi: f64,
+    lat_lo: f64,
+    lat_hi: f64,
+    lon_lo: f64,
+    lon_hi: f64,
 }
 
 impl BoundingBox {
     /// Admit a query box, or refuse it typed. Both corners go through
     /// [`GeoPoint::admit`]; `lat_lo ≤ lat_hi` and `lon_lo ≤ lon_hi` are required
     /// (a `lon_lo > lon_hi` box would wrap the antimeridian and is refused).
+    /// The only way to construct a [`BoundingBox`].
     pub(crate) fn admit(lat_lo: f64, lon_lo: f64, lat_hi: f64, lon_hi: f64) -> Result<Self> {
         GeoPoint::admit(lat_lo, lon_lo)?;
         GeoPoint::admit(lat_hi, lon_hi)?;
@@ -486,6 +523,26 @@ impl BoundingBox {
             lon_lo,
             lon_hi,
         })
+    }
+
+    /// Admitted lower latitude bound.
+    pub(crate) fn lat_lo(&self) -> f64 {
+        self.lat_lo
+    }
+
+    /// Admitted upper latitude bound.
+    pub(crate) fn lat_hi(&self) -> f64 {
+        self.lat_hi
+    }
+
+    /// Admitted lower longitude bound.
+    pub(crate) fn lon_lo(&self) -> f64 {
+        self.lon_lo
+    }
+
+    /// Admitted upper longitude bound.
+    pub(crate) fn lon_hi(&self) -> f64 {
+        self.lon_hi
     }
 
     /// Whether an exact point lies within this box (inclusive). The precise
@@ -606,10 +663,10 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         bail!(IndexRowCorrupt::new(
             index_name,
             row,
-            format!(
-                "spatial posting has {} columns, expected {expected_len}",
-                row.len()
-            ),
+            IndexCorruptReason::WrongColumnCount {
+                found: row.len(),
+                expected: expected_len,
+            },
         ));
     }
     // The curve column must be exactly the 8 bytes it was stored as.
@@ -618,21 +675,21 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         _ => bail!(IndexRowCorrupt::new(
             index_name,
             row,
-            "spatial posting curve column is not 8 bytes",
+            IndexCorruptReason::SpatialCurveNot8Bytes,
         )),
     }
     let lat = row[base_key_len + 1].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             index_name,
             row,
-            "spatial posting lat is not a number",
+            IndexCorruptReason::SpatialLatNotNumber,
         ))
     })?;
     let lon = row[base_key_len + 2].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             index_name,
             row,
-            "spatial posting lon is not a number",
+            IndexCorruptReason::SpatialLonNotNumber,
         ))
     })?;
     Ok(Posting {
@@ -653,7 +710,7 @@ fn fetch_base(
         miette!(IndexRowCorrupt::new(
             &idx.name,
             src_key,
-            "spatial index references a base row that does not exist",
+            IndexCorruptReason::BaseRowMissing,
         ))
     })
 }
@@ -695,9 +752,8 @@ fn scan_box(
     Ok(out)
 }
 
-/// Bounding-box search: the base rows whose point lies in `bbox`, in canonical
-/// ascending `(curve, src_key)` order.
-pub(crate) fn spatial_range_query(
+/// Bounding-box search body.
+fn spatial_range_query_body(
     tx: &impl ReadTx,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -713,12 +769,98 @@ pub(crate) fn spatial_range_query(
 // k-nearest-neighbour by expanding ring.
 // ---------------------------------------------------------------------------
 
+/// Whether spatial k-NN appends the distance column (P038 — sum, not bool).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum SpatialBindDistance {
+    #[default]
+    Omit,
+    Append,
+}
+
 /// The parameters of one k-NN query.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct KnnParams {
     pub(crate) k: usize,
     /// Append the angular great-circle distance (radians) as a trailing `Float`.
-    pub(crate) bind_distance: bool,
+    pub(crate) bind_distance: SpatialBindDistance,
+}
+
+/// One spatial relation-backed search — [`RelationIndexSearch::Request`] for
+/// [`Spatial`] (P103). Range and k-NN share the trait door as variants.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SpatialSearchRequest<'a> {
+    Range {
+        base: &'a RelationHandle,
+        idx: &'a RelationHandle,
+        bbox: &'a BoundingBox,
+    },
+    Knn {
+        base: &'a RelationHandle,
+        idx: &'a RelationHandle,
+        query: &'a GeoPoint,
+        params: &'a KnnParams,
+    },
+}
+
+impl RelationIndexSearch for Spatial {
+    type Request<'a> = SpatialSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<crate::data::value::SearchHits> {
+        match request {
+            SpatialSearchRequest::Range { base, idx, bbox } => {
+                crate::engines::admit_relation_search_hits(spatial_range_query_body(
+                    tx, base, idx, bbox,
+                )?)
+            }
+            SpatialSearchRequest::Knn {
+                base,
+                idx,
+                query,
+                params,
+            } => crate::engines::admit_relation_search_hits(spatial_knn_body(
+                tx, base, idx, query, params,
+            )?),
+        }
+    }
+}
+
+impl Spatial {
+    /// Relation-backed bounding-box search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103).
+    pub(crate) fn range_query(
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        bbox: &BoundingBox,
+    ) -> Result<crate::data::value::SearchHits> {
+        Self::search_relation(
+            tx,
+            SpatialSearchRequest::Range { base, idx, bbox },
+        )
+    }
+
+    /// Relation-backed k-NN — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103).
+    pub(crate) fn knn(
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        query: &GeoPoint,
+        params: &KnnParams,
+    ) -> Result<crate::data::value::SearchHits> {
+        Self::search_relation(
+            tx,
+            SpatialSearchRequest::Knn {
+                base,
+                idx,
+                query,
+                params,
+            },
+        )
+    }
 }
 
 /// The angular great-circle distance (radians) between two points given in
@@ -751,10 +893,10 @@ struct RingBox {
 }
 
 fn ring_box(p: &GeoPoint, half: f64) -> Result<RingBox> {
-    let raw_lat_lo = p.lat - half;
-    let raw_lat_hi = p.lat + half;
-    let raw_lon_lo = p.lon - half;
-    let raw_lon_hi = p.lon + half;
+    let raw_lat_lo = p.lat() - half;
+    let raw_lat_hi = p.lat() + half;
+    let raw_lon_lo = p.lon() - half;
+    let raw_lon_hi = p.lon() + half;
 
     let at_south = raw_lat_lo <= LAT_MIN;
     let at_north = raw_lat_hi >= LAT_MAX;
@@ -788,17 +930,17 @@ fn inner_radius(p: &GeoPoint, ring: &RingBox) -> f64 {
     let mut r = f64::INFINITY;
     // Latitude edges are exact meridian arcs.
     if !ring.at_south {
-        r = r.min((p.lat - b.lat_lo) * DEG_TO_RAD);
+        r = r.min((p.lat() - b.lat_lo()) * DEG_TO_RAD);
     }
     if !ring.at_north {
-        r = r.min((b.lat_hi - p.lat) * DEG_TO_RAD);
+        r = r.min((b.lat_hi() - p.lat()) * DEG_TO_RAD);
     }
     // Longitude edges: cross-track distance to the meridian great circle is a
     // safe under-estimate of the distance to the meridian segment.
     if !ring.full_lon {
-        let cos_lat = f64::cos(p.lat * DEG_TO_RAD);
-        let x_lo = f64::asin(f64::sin((p.lon - b.lon_lo) * DEG_TO_RAD) * cos_lat);
-        let x_hi = f64::asin(f64::sin((b.lon_hi - p.lon) * DEG_TO_RAD) * cos_lat);
+        let cos_lat = f64::cos(p.lat() * DEG_TO_RAD);
+        let x_lo = f64::asin(f64::sin((p.lon() - b.lon_lo()) * DEG_TO_RAD) * cos_lat);
+        let x_hi = f64::asin(f64::sin((b.lon_hi() - p.lon()) * DEG_TO_RAD) * cos_lat);
         r = r.min(x_lo).min(x_hi);
     }
     r
@@ -835,7 +977,7 @@ const KNN_SEED_HALF_DEG: f64 = 1.0;
 /// nearest first, ties broken by `src_key`, each optionally extended by its
 /// angular distance (radians). Exact — the curve only decides which rows to
 /// re-score.
-pub(crate) fn spatial_knn(
+fn spatial_knn_body(
     tx: &impl ReadTx,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -855,7 +997,7 @@ pub(crate) fn spatial_knn(
             if !seen.insert(posting.src_key.clone()) {
                 continue; // already scored in an inner ring
             }
-            let dist = angular_distance(query.lat, query.lon, posting.lat, posting.lon);
+            let dist = angular_distance(query.lat(), query.lon(), posting.lat, posting.lon);
             best.push(Candidate {
                 dist: OrderedFloat(dist),
                 src_key: posting.src_key,
@@ -887,7 +1029,7 @@ pub(crate) fn spatial_knn(
         .into_iter()
         .map(|c| {
             let mut row = fetch_base(tx, base, idx, c.src_key.as_slice())?;
-            if params.bind_distance {
+            if matches!(params.bind_distance, SpatialBindDistance::Append) {
                 row.push(DataValue::from(c.dist.0));
             }
             Ok(row)
@@ -914,6 +1056,7 @@ mod tests {
     struct Rng(u64);
     impl Rng {
         fn next_u64(&mut self) -> u64 {
+            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
             self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = self.0;
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -937,10 +1080,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1031,8 +1171,10 @@ mod tests {
 
     fn range_ids(db: &impl Storage, f: &Fixture, bbox: &BoundingBox) -> Vec<i64> {
         let rtx = db.read_tx().unwrap();
-        spatial_range_query(&rtx, &f.base, &f.idx, bbox)
-            .unwrap()
+        crate::engines::search_rows(
+            Spatial::range_query(&rtx, &f.base, &f.idx, bbox).unwrap(),
+        )
+        .unwrap()
             .iter()
             .map(|t| t[0].get_int().unwrap())
             .collect()
@@ -1040,21 +1182,24 @@ mod tests {
 
     fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Vec<(i64, f64)> {
         let rtx = db.read_tx().unwrap();
-        spatial_knn(
+        crate::engines::search_rows(
+            Spatial::knn(
             &rtx,
             &f.base,
             &f.idx,
             q,
             &KnnParams {
                 k,
-                bind_distance: true,
+                bind_distance: SpatialBindDistance::Append,
             },
         )
+        .unwrap(),
+        )
         .unwrap()
-        .iter()
-        .map(|t| {
-            (
-                t[0].get_int().unwrap(),
+            .iter()
+            .map(|t| {
+                (
+                    t[0].get_int().unwrap(),
                 t.last().unwrap().get_float().unwrap(),
             )
         })
@@ -1078,7 +1223,7 @@ mod tests {
     fn naive_knn(points: &[(i64, f64, f64)], q: &GeoPoint, k: usize) -> Vec<i64> {
         let mut scored: Vec<(f64, i64)> = points
             .iter()
-            .map(|(id, lat, lon)| (angular_distance(q.lat, q.lon, *lat, *lon), *id))
+            .map(|(id, lat, lon)| (angular_distance(q.lat(), q.lon(), *lat, *lon), *id))
             .collect();
         scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
         scored.into_iter().take(k).map(|(_, id)| id).collect()
@@ -1486,7 +1631,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0).unwrap();
-        let err = spatial_range_query(&rtx, &f.base, &f.idx, &bbox)
+        let err = Spatial::range_query(&rtx, &f.base, &f.idx, &bbox)
             .expect_err("corrupt posting must error, not panic");
         assert!(
             err.downcast_ref::<crate::engines::IndexRowCorrupt>()

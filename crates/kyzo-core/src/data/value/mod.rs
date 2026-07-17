@@ -33,96 +33,80 @@
 //! There is deliberately no bottom/sentinel variant: scan bounds are the
 //! codec's bound vocabulary (the empty byte string sorts below every
 //! encoding), never members of the value domain.
+//!
+//! ## Production host doors (P112)
+//!
+//! - [`canonical::encode_owned`] / [`decode`] — storage and expression currency.
+//! - [`SearchHits::admit_decoded`] — engine→query search-hit admission, wired
+//!   through [`crate::engines::admit_relation_search_hits`].
+//! - [`string::MintedStr`] — compile-time absence proofs in [`proofs`]
+//!   (every build); RA columnar lane lands in story #120.
+//! - [`exec`] is `#[cfg(test)]` only (zero production references until #120).
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+pub mod admission;
 pub mod arena;
+pub mod arity;
 mod bytes_qty;
 pub mod canonical;
 pub mod cell;
 pub mod code;
 pub mod column;
+#[cfg(test)]
 pub mod exec;
 pub mod number;
 pub mod prefix;
 pub(crate) mod proofs;
 pub mod row;
+pub(crate) mod search_hits;
 pub mod string;
 pub mod tag;
 pub mod wide;
 
+pub use admission::{Admission, Denial};
+pub use arity::Arity;
 pub use canonical::{DecodeError, append_canonical, decode, encode_owned};
-pub use number::{Num, NumRepr};
+pub use number::{Num, NumRepr, NumericOrd};
 pub use row::{
-    EncodedKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
+    TupleKey, StorageKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
     scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
+pub(crate) use search_hits::SearchHits;
 pub use tag::Tag;
 pub use wide::interval::{Bound, Interval};
 pub use wide::json::{Json, JsonNum, JsonObj};
 pub use wide::regex::{CompiledRegexV1, RegexFlags, RegexSource};
 pub use wide::validity::{
-    AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValidityTs,
+    AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValiditySeekBound,
+    ValiditySlot, ValidityTs,
 };
-
-/// A vector value: f64 components held in canonical identity form
-/// (constructed through [`Vector::new`], which applies Num's float law to
-/// every component: `-0.0 → +0.0`, one canonical NaN). Identity is
-/// dimensionality + exact component bits — lawful because the bits are
-/// normalized at the door.
-#[derive(Clone, Debug)]
-pub struct Vector(Vec<f64>);
-
-impl Vector {
-    pub fn new(components: Vec<f64>) -> Vector {
-        Vector(
-            components
-                .into_iter()
-                .map(|c| Num::float(c).as_float().expect("float stays float"))
-                .collect(),
-        )
-    }
-
-    pub fn as_slice(&self) -> &[f64] {
-        &self.0
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl PartialEq for Vector {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.len() == other.0.len()
-            && self
-                .0
-                .iter()
-                .zip(other.0.iter())
-                .all(|(a, b)| a.to_bits() == b.to_bits())
-    }
-}
-
-impl Eq for Vector {}
-
-impl std::hash::Hash for Vector {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_usize(self.0.len());
-        for c in &self.0 {
-            state.write_u64(c.to_bits());
-        }
-    }
-}
+pub use wide::{Vector, VectorComponent, VectorDimension};
 
 /// The engine-facing UUID value (16 bytes; identity and order are the
-/// bytes, per the uuid face's law).
+/// bytes, per the uuid face's law). Field is private — construction and
+/// reads go through the accessors so the wrapper stays the only door.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct UuidWrapper(pub uuid::Uuid);
+#[repr(transparent)]
+pub struct UuidWrapper(uuid::Uuid);
+
+const _: () = assert!(std::mem::size_of::<UuidWrapper>() == std::mem::size_of::<uuid::Uuid>());
+const _: () = assert!(std::mem::align_of::<UuidWrapper>() == std::mem::align_of::<uuid::Uuid>());
+
+impl UuidWrapper {
+    pub fn new(uuid: uuid::Uuid) -> UuidWrapper {
+        UuidWrapper(uuid)
+    }
+
+    pub fn get(self) -> uuid::Uuid {
+        self.0
+    }
+
+    pub fn as_uuid(&self) -> &uuid::Uuid {
+        &self.0
+    }
+}
 
 /// The logical owned value: the engine's currency across parsing,
 /// expression evaluation, and materialization. See the module docs for
@@ -142,9 +126,31 @@ pub enum DataValue {
     /// Canonical set form by construction: `BTreeSet` under the storage
     /// order.
     Set(BTreeSet<DataValue>),
-    Validity(Validity),
+    Validity(ValiditySlot),
     Interval(Interval),
 }
+
+/// Exhaustive [`DataValue`] or-pattern for refuse / default arms under
+/// `clippy::wildcard_enum_match_arm`. Prefer specific arms above; a newly
+/// added variant omitted here makes those matches non-exhaustive.
+macro_rules! data_value_any {
+    () => {
+        DataValue::Null
+            | DataValue::Bool(_)
+            | DataValue::Num(_)
+            | DataValue::Str(_)
+            | DataValue::Bytes(_)
+            | DataValue::Uuid(_)
+            | DataValue::Regex(_)
+            | DataValue::Json(_)
+            | DataValue::Vector(_)
+            | DataValue::List(_)
+            | DataValue::Set(_)
+            | DataValue::Validity(_)
+            | DataValue::Interval(_)
+    };
+}
+pub(crate) use data_value_any;
 
 impl DataValue {
     /// The value's kind: the cross-type order authority.
@@ -167,86 +173,86 @@ impl DataValue {
     }
 
     pub fn uuid(u: uuid::Uuid) -> DataValue {
-        DataValue::Uuid(UuidWrapper(u))
+        DataValue::Uuid(UuidWrapper::new(u))
     }
 
     /// The integer, for `Num` values holding the int representation.
     pub fn get_int(&self) -> Option<i64> {
-        match self {
-            // Coercing numeric read: an integral in-range float yields its
-            // int value (a `3.0` written into an `Int` column is `3`). Use
-            // `Num::as_int` for the pure "is an Int representation" test.
-            DataValue::Num(n) => n.to_int_coerced(),
-            _ => None,
-        }
+        // Coercing numeric read: an integral in-range float yields its
+        // int value (a `3.0` written into an `Int` column is `3`). Use
+        // `Num::as_int` for the pure "is an Int representation" test.
+        let DataValue::Num(n) = self else {
+            return None;
+        };
+        n.to_int_coerced()
     }
 
     /// The numeric value as f64 (ints promote losslessly where they can;
     /// this is a NUMERIC read, not an identity claim).
     pub fn get_float(&self) -> Option<f64> {
-        match self {
-            DataValue::Num(n) => Some(match n.as_float() {
-                Some(f) => f,
-                None => n.as_int().expect("Num is int or float") as f64,
-            }),
-            _ => None,
-        }
+        let DataValue::Num(n) = self else {
+            return None;
+        };
+        Some(match n.as_float() {
+            Some(f) => f,
+            None => n.as_int().expect("Num is int or float") as f64,
+        })
     }
 
     pub fn get_str(&self) -> Option<&str> {
-        match self {
-            DataValue::Str(s) => Some(s),
-            _ => None,
-        }
+        let DataValue::Str(s) = self else {
+            return None;
+        };
+        Some(s)
     }
 
     pub fn get_bytes(&self) -> Option<&[u8]> {
-        match self {
-            DataValue::Bytes(b) => Some(b),
-            _ => None,
-        }
+        let DataValue::Bytes(b) = self else {
+            return None;
+        };
+        Some(b)
     }
 
     pub fn get_bool(&self) -> Option<bool> {
-        match self {
-            DataValue::Bool(b) => Some(*b),
-            _ => None,
-        }
+        let DataValue::Bool(b) = self else {
+            return None;
+        };
+        Some(*b)
     }
 
     pub fn get_slice(&self) -> Option<&[DataValue]> {
-        match self {
-            DataValue::List(l) => Some(l),
-            _ => None,
-        }
+        let DataValue::List(l) = self else {
+            return None;
+        };
+        Some(l)
     }
 
     pub fn get_interval(&self) -> Option<Interval> {
-        match self {
-            DataValue::Interval(iv) => Some(*iv),
-            _ => None,
-        }
+        let DataValue::Interval(iv) = self else {
+            return None;
+        };
+        Some(*iv)
     }
 
     pub fn get_validity(&self) -> Option<Validity> {
-        match self {
-            DataValue::Validity(v) => Some(*v),
-            _ => None,
-        }
+        let DataValue::Validity(v) = self else {
+            return None;
+        };
+        v.as_validity()
     }
 
     pub fn get_json(&self) -> Option<&Json> {
-        match self {
-            DataValue::Json(j) => Some(j),
-            _ => None,
-        }
+        let DataValue::Json(j) = self else {
+            return None;
+        };
+        Some(j)
     }
 
     pub fn get_vector(&self) -> Option<&Vector> {
-        match self {
-            DataValue::Vector(v) => Some(v),
-            _ => None,
-        }
+        let DataValue::Vector(v) = self else {
+            return None;
+        };
+        Some(v)
     }
 }
 
@@ -320,15 +326,17 @@ impl Ord for DataValue {
                 .then_with(|| a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
             (DataValue::Json(a), DataValue::Json(b)) => json_storage_cmp(a, b),
             (DataValue::Vector(a), DataValue::Vector(b)) => {
-                a.0.len().cmp(&b.0.len()).then_with(|| {
-                    for (x, y) in a.0.iter().zip(b.0.iter()) {
-                        let c = Num::float(*x).cmp(&Num::float(*y));
-                        if c != Ordering::Equal {
-                            return c;
+                a.dimension()
+                    .cmp(&b.dimension())
+                    .then_with(|| {
+                        for (x, y) in a.components().zip(b.components()) {
+                            let c = Num::float(x.get()).cmp(&Num::float(y.get()));
+                            if c != Ordering::Equal {
+                                return c;
+                            }
                         }
-                    }
-                    Ordering::Equal
-                })
+                        Ordering::Equal
+                    })
             }
             (DataValue::List(a), DataValue::List(b)) => {
                 for (x, y) in a.iter().zip(b.iter()) {
@@ -449,7 +457,7 @@ impl std::fmt::Display for DataValue {
                 }
                 write!(f, "'")
             }
-            DataValue::Uuid(u) => write!(f, "uuid(\"{}\")", u.0),
+            DataValue::Uuid(u) => write!(f, "uuid(\"{}\")", u.get()),
             DataValue::Regex(r) => write!(
                 f,
                 "regex({:?}, flags={:#04x})",
@@ -459,11 +467,11 @@ impl std::fmt::Display for DataValue {
             DataValue::Json(_) => write!(f, "json(…)"),
             DataValue::Vector(v) => {
                 write!(f, "vec[")?;
-                for (i, c) in v.as_slice().iter().enumerate() {
+                for (i, c) in v.components().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{c:?}")?;
+                    write!(f, "{:?}", c.get())?;
                 }
                 write!(f, "]")
             }
@@ -679,11 +687,11 @@ pub fn decode_values_all(bytes: &[u8]) -> Result<Vec<DataValue>, DecodeError> {
 /// prefix): key columns plus, for bitemporal keys, the two validity
 /// slots. Total.
 pub fn decode_tuple_from_key(key: &[u8], size_hint: usize) -> Result<Tuple, DecodeError> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN {
         return Err(DecodeError::Truncated);
     }
     let mut out = Tuple::with_capacity(size_hint);
-    let mut at = EncodedKey::RELATION_PREFIX_LEN;
+    let mut at = StorageKey::RELATION_PREFIX_LEN;
     while at < key.len() {
         let (v, used) = canonical::decode_one(&key[at..])?;
         out.push(v);
@@ -754,10 +762,10 @@ pub fn extend_tuple_from_v(tuple: &mut Tuple, val: &[u8]) -> Result<(), DecodeEr
 /// Decode a stored relation key's columns into a scratch tuple (the
 /// batch reader's zero-fresh-allocation path).
 pub fn decode_key_into(key: &[u8], out: &mut Tuple) -> Result<(), DecodeError> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN {
+    if key.len() < StorageKey::RELATION_PREFIX_LEN {
         return Err(DecodeError::Truncated);
     }
-    let mut at = EncodedKey::RELATION_PREFIX_LEN;
+    let mut at = StorageKey::RELATION_PREFIX_LEN;
     while at < key.len() {
         let (v, used) = canonical::decode_one(&key[at..])?;
         out.push(v);
@@ -857,6 +865,7 @@ mod facade_tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
 
@@ -896,15 +905,16 @@ mod facade_tests {
                 RegexSource::validated(RegexFlags::NONE, ["a", "b+", ""][rng.below(3)].into())
                     .expect("valid"),
             ),
-            9 => DataValue::Vector(Vector::new(
+            9 => DataValue::Vector(Vector::try_new(
                 (0..rng.below(3))
                     .map(|_| f64::from_bits(rng.next()))
                     .collect(),
-            )),
-            10 => DataValue::Validity(Validity::new(
-                ValidityTs::from_raw(rng.next() as i64),
-                rng.next().is_multiple_of(2),
-            )),
+            ).unwrap()),
+            10 => {
+                let ts = ValidityTs::from_raw(rng.next() as i64);
+                let is_assert = rng.next().is_multiple_of(2);
+                DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
+            }
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
                 Interval::EMPTY
             } else {
@@ -943,12 +953,12 @@ mod facade_tests {
     #[test]
     fn identity_laws_flow_through_the_facade() {
         assert_eq!(
-            DataValue::Vector(Vector::new(vec![0.0])),
-            DataValue::Vector(Vector::new(vec![-0.0]))
+            DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![-0.0]).unwrap())
         );
         assert_eq!(
-            DataValue::Vector(Vector::new(vec![f64::NAN])),
-            DataValue::Vector(Vector::new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]))
+            DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]).unwrap())
         );
         let a: DataValue = DataValue::Set(
             [DataValue::from(2i64), DataValue::from(1i64)]
@@ -1018,7 +1028,7 @@ mod facade_tests {
     #[test]
     fn decode_tuple_is_exact_and_total() {
         let vals = [DataValue::from(7i64), DataValue::from("x"), DataValue::Null];
-        let key = EncodedKey::from_values(&vals);
+        let key = TupleKey::from_values(&vals);
         let back = decode_tuple(key.as_bytes(), 3).expect("lawful");
         assert_eq!(back.as_slice(), &vals);
         assert!(decode_tuple(key.as_bytes(), 2).is_err());

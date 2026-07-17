@@ -31,6 +31,7 @@ const SEED: u64 = 0xC0FF_EE15_2026;
 const DIM: usize = 32;
 
 fn splitmix64(state: &mut u64) -> u64 {
+    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

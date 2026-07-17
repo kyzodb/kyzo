@@ -37,14 +37,16 @@ use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode};
+use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::rng::SeededRng;
 use crate::fixed_rule::{
-    BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
+    GraphAlgorithmInvariantError, BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput,
+    FixedRulePayload, NodeNotFoundError,
 };
+use crate::data::value::data_value_any;
 
 pub(crate) struct RandomWalk;
 
@@ -62,27 +64,24 @@ impl FixedRule for RandomWalk {
         let steps = payload.pos_integer_option("steps", None)?;
         // Determinism: each step's neighbor pick is seeded from this option
         // (fixed default), never from OS entropy.
-        let seed = payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))? as u64;
+        let seed = SeededRng::seed_from_i64(
+            payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
+        );
 
         let mut maybe_weight = payload.expr_option("weight", None).ok();
-        let mut maybe_weight_bytecode = None;
         if let Some(weight) = &mut maybe_weight {
             let mut nodes_binding = nodes.get_binding_map(0);
             let nodes_arity = nodes.arity()?;
             let edges_binding = edges.get_binding_map(nodes_arity);
             nodes_binding.extend(edges_binding);
             weight.fill_binding_indices(&nodes_binding)?;
-            maybe_weight_bytecode = Some((weight.compile()?, weight.span()));
         }
-        let maybe_weight_bytecode = maybe_weight_bytecode;
-        let mut stack = vec![];
 
         let mut counter = 0i64;
         let mut rng = SeededRng::new(seed);
         for start_node in starting.iter()? {
             let start_node = start_node?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(walk_start_col): `ensure_min_len(1)` proved a first column.
             let start_node_key = &start_node.as_slice()[0];
             let starting_tuple =
                 nodes
@@ -97,37 +96,37 @@ impl FixedRule for RandomWalk {
                 let mut current_tuple = starting_tuple.clone();
                 let mut path = vec![start_node_key.clone()];
                 for _ in 0..steps {
-                    // Structural: `nodes.ensure_min_len(1)` proved every
-                    // `nodes` tuple (which `current_tuple` always is) has
+                    // INVARIANT(walk_node_col): `nodes.ensure_min_len(1)` proved
+                    // every `nodes` tuple (which `current_tuple` always is) has
                     // a first column.
                     let cur_node_key = &current_tuple.as_slice()[0];
                     let candidate_steps: Vec<_> = edges.prefix_iter(cur_node_key)?.try_collect()?;
                     if candidate_steps.is_empty() {
                         break;
                     }
-                    let next_step = if let Some((weight_expr, span)) = &maybe_weight_bytecode {
+                    let next_step = if let Some(weight_expr) = &maybe_weight {
                         let weights: Vec<_> = candidate_steps
                             .iter()
                             .map(|t| -> Result<f64> {
                                 let mut cand = current_tuple.clone();
                                 cand.extend(t.iter().cloned());
-                                Ok(match eval_bytecode(weight_expr, &cand, &mut stack)? {
+                                Ok(match weight_expr.eval(&cand)? {
                                     DataValue::Num(n) => {
                                         let f = n.to_f64();
                                         ensure!(
                                             f >= 0.,
                                             BadExprValueError(
                                                 DataValue::from(f),
-                                                *span,
+                                                weight_expr.span(),
                                                 "'weight' must evaluate to a non-negative number"
                                                     .to_string()
                                             )
                                         );
                                         f
                                     }
-                                    v => bail!(BadExprValueError(
+                                    v @ (data_value_any!()) => bail!(BadExprValueError(
                                         v,
-                                        *span,
+                                        weight_expr.span(),
                                         "'weight' must evaluate to a non-negative number"
                                             .to_string()
                                     )),
@@ -143,7 +142,7 @@ impl FixedRule for RandomWalk {
                                 DataValue::List(
                                     weights.iter().map(|w| DataValue::from(*w)).collect(),
                                 ),
-                                *span,
+                                weight_expr.span(),
                                 format!(
                                     "'weight' must yield a samplable distribution \
                                      (at least one positive weight): {err}"
@@ -152,9 +151,12 @@ impl FixedRule for RandomWalk {
                         })?;
                         &candidate_steps[dist.sample(&mut rng)]
                     } else {
-                        // Structural: `candidate_steps` was checked
-                        // non-empty above, so `choose` cannot yield `None`.
-                        candidate_steps.choose(&mut rng).unwrap()
+                        // INVARIANT(walk_candidates): checked non-empty above.
+                        candidate_steps
+                            .choose(&mut rng)
+                            .ok_or_else(|| {
+                                GraphAlgorithmInvariantError::refuse("walk_candidates")
+                            })?
                     };
                     let next_node = &next_step.as_slice()[1];
                     path.push(next_node.clone());

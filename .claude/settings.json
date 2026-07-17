@@ -33,15 +33,6 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-bash-guard.sh"
           }
         ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/focus-gate.sh"
-          }
-        ]
       }
     ],
     "PostToolUse": [
@@ -60,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '%s\\n' '[BUILD GATE] Before you act, classify this prompt. If it asks you to write or modify CODE — engine or host source, a story/task implementation, or a system design — you MUST fully re-read .claude/skills/ontology-first-construction/SKILL.md with the Read tool first and construct only from that fresh re-read. If it asks you to write or modify PROMPT-LAYER text — agent prompts, skills, hooks, monitors, stories, or epics — you MUST fully re-read .claude/skills/spec-authority/SKILL.md instead. Prompt engineering is not code construction; do not apply the ontology skill to it. Being already in context is not an exception. If the prompt asks for neither, disregard this notice.'"
+            "command": "printf '%s\\n' '[BUILD GATE] Before you act, classify this prompt. If it asks you to write or modify CODE — engine or host source, a story/task implementation, or a system design — you MUST fully re-read .claude/skills/ontology-first-construction/SKILL.md with the Read tool first and construct only from that fresh re-read. Being already in context is not an exception. If the prompt asks for neither, disregard this notice.'"
           }
         ]
       }

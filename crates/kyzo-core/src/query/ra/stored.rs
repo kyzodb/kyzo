@@ -18,11 +18,11 @@
 
 use super::{StoredRowTooShortError, TupleIter};
 use crate::Tuple;
-use crate::data::expr::{Bytecode, Expr, compute_bounds};
+use crate::data::expr::{Expr, compute_bounds};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{AsOf, DataValue, ScanBound};
-use crate::engines::segments::{Segment, SegmentEngine, Segments};
+use crate::engines::segments::{Segment, SegmentEngine, SegmentMiss, Segments};
 use crate::query::batch_ops::refine_batch;
 use crate::query::batch_ops::{
     Batch, BatchIter, BatchScanFilter, BatchTupleFilter, conjunction_pred,
@@ -46,8 +46,8 @@ use std::sync::Arc;
 pub(crate) struct StoredRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
+    /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
     pub(crate) span: SourceSpan,
 }
 
@@ -62,7 +62,6 @@ impl StoredRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()));
         }
         Ok(())
     }
@@ -113,33 +112,34 @@ impl StoredRA {
     }
 
     /// The session's current-state segment for this relation at THIS
-    /// snapshot's witness — served if valid, built and installed on a
-    /// STABLE miss (the build pays the same storage scan the read would
-    /// have paid, plus one dense flatten; every subsequent scan at the
-    /// same witness skips LSM iteration and memcmp decode entirely).
+    /// snapshot's generation — served if [`Generation::classify`] keeps
+    /// the sealed handle, built and installed on a STABLE miss (the build
+    /// pays the same storage scan the read would have paid, plus one dense
+    /// flatten; every subsequent scan at the same generation skips LSM
+    /// iteration and memcmp decode entirely).
     ///
     /// `None` on any decline: either [`Segment::build`]'s (the relation is
-    /// too large for the `u32` offset encoding — needs ~4.3 billion values
-    /// in one relation to reach at all) or
+    /// too large for the `u32` offset encoding) or
     /// [`SegmentEngine::should_build`]'s (this miss hasn't yet proven the
-    /// witness is holding still — see that method's doc for why this
-    /// matters for a write-interleaved caller). Either way the caller
-    /// falls back to an unsegmented scan or point probe, which pays no
-    /// more than the scan a build would have paid anyway.
+    /// generation is holding still). Either way the caller falls back to
+    /// an unsegmented scan or point probe. That `Option` is acceleration
+    /// availability — not staleness (`get` answers staleness as
+    /// [`SegmentMiss::Stale`]).
     fn segment_at(&self, tx: &impl ReadTx, engine: &SegmentEngine) -> Result<Option<Arc<Segment>>> {
-        let witness = engine.witness_after_snapshot(tx, self.storage.id);
-        if let Some(seg) = engine.get(self.storage.id, witness) {
-            return Ok(Some(seg));
+        let live = engine.generation_after_snapshot(tx, self.storage.id);
+        match engine.get(self.storage.id, live) {
+            Ok(handle) => return Ok(Some(handle.arc())),
+            Err(SegmentMiss::Absent) | Err(SegmentMiss::Stale(_)) => {}
         }
-        if !engine.should_build(self.storage.id, witness) {
+        if !engine.should_build(self.storage.id, live) {
             return Ok(None);
         }
         let mut rows = Vec::new();
         for t in self.storage.scan_all(tx) {
             rows.push(t?);
         }
-        Ok(Segment::build(rows.into_iter(), witness)
-            .map(|seg| engine.install(self.storage.id, seg)))
+        Ok(Segment::build(rows.into_iter())
+            .map(|seg| engine.install(self.storage.id, seg, live).arc()))
     }
 
     /// Batched form of [`prefix_join`](Self::prefix_join) (which dispatches
@@ -153,23 +153,14 @@ impl StoredRA {
     /// the plain (unbounded) prefix case both become a binary search over
     /// the dense decoded buffer instead of a bitemporal seek — see
     /// [`segment_at`](Self::segment_at) for the once-per-instantiation
-    /// witness/build (so the probe loop itself pays zero synchronization)
+    /// generation/build (so the probe loop itself pays zero synchronization)
     /// and `engines/segments.rs`'s module docs for why a served segment is
     /// current-state-sound. The BOUNDED prefix case (residual filter bounds
-    /// on trailing key columns) stays on the storage scan: on the workload
-    /// that motivated this conversion (`tc.kz`'s recursive join, which
-    /// carries no residual filters) it is cold, so converting it now would
-    /// spend risk on a path this pass has no evidence for. A `TempStore` or
+    /// on trailing key columns) stays on the storage scan. A `TempStore` or
     /// as-of (`StoredWithValidity`) right side never reaches here — a
     /// segment is a current-state-only acceleration structure, and
     /// [`StoredWithValidityRA::prefix_join_batched`] has its own probe with
     /// no segment argument at all.
-    ///
-    /// Every match this relation's storage decodes is already an owned
-    /// `Tuple` (the storage layer's own decode boundary, unavoidable and
-    /// identical on both paths); what this saves is the left row's
-    /// `Tuple` and the joined row's intermediate `Tuple` — both now
-    /// written once, straight into the output batch.
     pub(crate) fn prefix_join_batched<'a>(
         &'a self,
         tx: &'a impl ReadTx,
@@ -187,11 +178,11 @@ impl StoredRA {
 
         let key_len = self.storage.metadata.keys.len();
 
-        // Witnessed/built once here, not per probe: the same discipline
+        // Classified/built once here, not per probe: the same discipline
         // `iter_batched`'s full-scan dispatch uses, so the soundness
-        // argument (served segment ⇒ witness equality ⇒ no intervening
+        // argument (served segment ⇒ generation classify Ok ⇒ no intervening
         // write) is established once per plan-node instantiation and the
-        // hot probe loop below never touches the watermark again.
+        // hot probe loop below never touches the generation counter again.
         let seg = match (self.storage.keyspace_kind, segments) {
             (KeyspaceKind::Facts, Segments(Some(engine))) => self.segment_at(tx, engine)?,
             _ => None,
@@ -206,13 +197,15 @@ impl StoredRA {
                             .map(|&i| left_row[i].clone())
                             .collect();
                         for i in seg.prefix_range(&prefix) {
-                            let found = seg.row(i);
+                            let Some(found) = seg.row(i) else {
+                                continue;
+                            };
                             let mut matches = true;
                             for (lk, rk) in left_join_indices.iter().zip(right_join_indices.iter())
                             {
                                 let found_val = found.get(*rk).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        self.storage.name.to_string(),
+                                        Symbol::new(self.storage.name.clone(), self.span),
                                         *rk,
                                         found.len(),
                                         self.span,
@@ -248,7 +241,7 @@ impl StoredRA {
                                     {
                                         let found_val = found.get(*rk).ok_or_else(|| {
                                             StoredRowTooShortError(
-                                                self.storage.name.to_string(),
+                                                Symbol::new(self.storage.name.clone(), self.span),
                                                 *rk,
                                                 found.len(),
                                                 self.span,
@@ -300,7 +293,9 @@ impl StoredRA {
                                     .collect();
                                 let s = s.clone();
                                 let range = s.prefix_range(&prefix);
-                                Box::new(range.map(move |i| Ok(Tuple::from_vec(s.row(i).to_vec()))))
+                                Box::new(range.filter_map(move |i| {
+                                    s.row(i).map(|r| Ok(Tuple::from_vec(r.to_vec())))
+                                }))
                             }
                             None => self.storage.scan_prefix_projected(
                                 tx,
@@ -315,12 +310,60 @@ impl StoredRA {
         Ok(Box::new(PrefixProbeBatchJoin {
             left,
             probe,
-            filters_bytecodes: &self.filters_bytecodes,
+            filters: &self.filters,
             eliminate_indices,
             cur: None,
             active: None,
-            stack: vec![],
         }))
+    }
+}
+
+/// Serves a relation's full current-state scan from its segment: dense
+/// row runs copied straight into batches, residual filters applied through
+/// the standard refinement — observationally identical to the storage scan.
+struct SegmentScanBatches {
+    seg: Arc<Segment>,
+    next_row: usize,
+    pred: Option<Expr>,
+    done: bool,
+}
+
+impl Iterator for SegmentScanBatches {
+    type Item = Result<Batch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.done {
+                return None;
+            }
+            if self.next_row >= self.seg.len() {
+                self.done = true;
+                return None;
+            }
+            let mut out = Batch::new();
+            while self.next_row < self.seg.len() && !out.is_full() {
+                let Some(row) = self.seg.row(self.next_row) else {
+                    self.done = true;
+                    return None;
+                };
+                if let Err(e) = out.push_with(|buf| {
+                    buf.extend_from_slice(row);
+                    Ok(())
+                }) {
+                    self.done = true;
+                    return Some(Err(e));
+                }
+                self.next_row += 1;
+            }
+            match refine_batch(&self.pred, out) {
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(e));
+                }
+                Ok(b) if b.is_empty() => continue,
+                Ok(b) => return Some(Ok(b)),
+            }
+        }
     }
 }
 
@@ -337,8 +380,8 @@ impl StoredRA {
 pub(crate) struct StoredWithValidityRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
+    /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
     pub(crate) as_of: AsOf,
     pub(crate) span: SourceSpan,
 }
@@ -365,7 +408,6 @@ impl StoredWithValidityRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()));
         }
         Ok(())
     }
@@ -428,58 +470,11 @@ impl StoredWithValidityRA {
         Ok(Box::new(PrefixProbeBatchJoin {
             left,
             probe,
-            filters_bytecodes: &self.filters_bytecodes,
+            filters: &self.filters,
             eliminate_indices,
             cur: None,
             active: None,
-            stack: vec![],
         }))
-    }
-}
-
-/// Serves a relation's full current-state scan from its segment: dense
-/// row runs copied straight into batches, residual filters applied through
-/// the standard refinement — observationally identical to the storage scan.
-struct SegmentScanBatches {
-    seg: Arc<Segment>,
-    next_row: usize,
-    pred: Option<Expr>,
-    done: bool,
-}
-
-impl Iterator for SegmentScanBatches {
-    type Item = Result<Batch>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.done {
-                return None;
-            }
-            if self.next_row >= self.seg.len() {
-                self.done = true;
-                return None;
-            }
-            let mut out = Batch::new();
-            while self.next_row < self.seg.len() && !out.is_full() {
-                let row = self.seg.row(self.next_row);
-                if let Err(e) = out.push_with(|buf| {
-                    buf.extend_from_slice(row);
-                    Ok(())
-                }) {
-                    self.done = true;
-                    return Some(Err(e));
-                }
-                self.next_row += 1;
-            }
-            match refine_batch(&self.pred, out) {
-                Err(e) => {
-                    self.done = true;
-                    return Some(Err(e));
-                }
-                Ok(b) if b.is_empty() => continue,
-                Ok(b) => return Some(Ok(b)),
-            }
-        }
     }
 }
 
@@ -517,10 +512,7 @@ mod segment_gate_tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -567,7 +559,6 @@ mod segment_gate_tests {
             bindings: vec![sym("k"), sym("v")],
             storage: handle.clone(),
             filters: vec![],
-            filters_bytecodes: vec![],
             span: sp(),
         }
     }
@@ -578,7 +569,7 @@ mod segment_gate_tests {
         let mut out = Vec::new();
         for b in ra.iter_batched(tx, segments).unwrap() {
             let b = b.unwrap();
-            out.extend((0..b.len()).map(|i| b.row(i).to_vec()));
+            out.extend((0..b.len()).map(|i| b.row(i).expect("i < batch.len()").to_vec()));
         }
         out
     }
@@ -619,21 +610,21 @@ mod segment_gate_tests {
             put(&db, &handle, &engine, 0, i);
 
             let rtx = db.read_tx().unwrap();
-            let witness = engine.witness_after_snapshot(&rtx, handle.id);
+            let live = engine.generation_after_snapshot(&rtx, handle.id);
             assert_eq!(
                 rows(&ra, &rtx, Segments(Some(&engine))),
                 vec![vec![v(0), v(i)]],
                 "iteration {i}: a gated-out read must still answer correctly"
             );
-            // Checked AFTER the read, at THIS read's own witness (no
+            // Checked AFTER the read, at THIS read's own generation (no
             // intervening write yet) — this is what actually proves the
             // read just performed did not build. A pre-read check here
-            // would pass vacuously: `get`'s witness-equality filter already
-            // guarantees a PRIOR iteration's segment (built at a now-stale
-            // witness) can never serve, regardless of whether the gate
+            // would pass vacuously: `get`'s classify filter already
+            // guarantees a PRIOR iteration's segment (sealed at a now-stale
+            // generation) can never serve, regardless of whether the gate
             // itself is behaving.
             assert!(
-                engine.get(handle.id, witness).is_none(),
+                matches!(engine.get(handle.id, live), Err(SegmentMiss::Absent)),
                 "iteration {i}: a write-interleaved read must never have just built a segment"
             );
         }
@@ -641,7 +632,7 @@ mod segment_gate_tests {
 
     /// (b) a read-only run's gate crosses threshold at exactly the
     /// documented point: the first miss declines (not yet proven stable),
-    /// the second miss at the SAME witness builds and installs, and every
+    /// the second miss at the SAME generation builds and installs, and every
     /// read after that — including the one that triggered the build —
     /// answers correctly.
     #[test]
@@ -657,17 +648,17 @@ mod segment_gate_tests {
         let expected: Vec<Vec<DataValue>> = (0..5i64).map(|k| vec![v(k), v(k * 10)]).collect();
 
         let rtx = db.read_tx().unwrap();
-        let witness = engine.witness_after_snapshot(&rtx, handle.id);
+        let live = engine.generation_after_snapshot(&rtx, handle.id);
 
         assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
         assert!(
-            engine.get(handle.id, witness).is_none(),
+            matches!(engine.get(handle.id, live), Err(SegmentMiss::Absent)),
             "first miss must decline to build"
         );
 
         assert_eq!(rows(&ra, &rtx, Segments(Some(&engine))), expected);
         assert!(
-            engine.get(handle.id, witness).is_some(),
+            engine.get(handle.id, live).is_ok(),
             "second stable miss (no intervening write) must build and install"
         );
 
@@ -700,17 +691,17 @@ mod segment_gate_tests {
         put(&db, &handle, &engine, 2, 20);
 
         let rtx2 = db.read_tx().unwrap();
-        let witness2 = engine.witness_after_snapshot(&rtx2, handle.id);
+        let live2 = engine.generation_after_snapshot(&rtx2, handle.id);
         let expected2 = vec![vec![v(1), v(10)], vec![v(2), v(20)]];
         assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
         assert!(
-            engine.get(handle.id, witness2).is_none(),
-            "the first miss at the post-write witness must decline, not inherit the pre-write count"
+            matches!(engine.get(handle.id, live2), Err(SegmentMiss::Absent)),
+            "the first miss at the post-write generation must decline, not inherit the pre-write count"
         );
         assert_eq!(rows(&ra, &rtx2, Segments(Some(&engine))), expected2);
         assert!(
-            engine.get(handle.id, witness2).is_some(),
-            "the second miss at the post-write witness builds normally"
+            engine.get(handle.id, live2).is_ok(),
+            "the second miss at the post-write generation builds normally"
         );
     }
 

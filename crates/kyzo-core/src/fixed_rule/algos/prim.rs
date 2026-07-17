@@ -56,8 +56,7 @@ impl FixedRule for MinimumSpanningTreePrim {
 
                     EmptyStarting(rel.span())
                 })??;
-                // Structural: `ensure_min_len(1)` proved every tuple has a
-                // first column.
+                // INVARIANT(prim_start_col): `ensure_min_len(1)` proved a first column.
                 let dv = &tuple.as_slice()[0];
                 *inv_indices.get(dv).ok_or_else(|| {
                     #[derive(Debug, Error, Diagnostic)]

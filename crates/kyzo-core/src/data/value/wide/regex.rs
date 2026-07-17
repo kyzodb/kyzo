@@ -41,7 +41,11 @@
 /// constants are typed `RegexFlags`, composed with [`RegexFlags::union`]
 /// and probed with [`RegexFlags::contains`] — no loose `u8` bit passing.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
 pub struct RegexFlags(u8);
+
+const _: () = assert!(std::mem::size_of::<RegexFlags>() == std::mem::size_of::<u8>());
+const _: () = assert!(std::mem::align_of::<RegexFlags>() == std::mem::align_of::<u8>());
 
 impl RegexFlags {
     pub const NONE: RegexFlags = RegexFlags(0);
@@ -87,10 +91,52 @@ pub struct RegexSource {
     pattern: String,
 }
 
-/// The typed refusal for patterns that do not parse under KyzoRegexV1
-/// with their flags.
+/// Why a pattern failed under KyzoRegexV1 with its flags.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct InvalidRegex(pub String);
+pub enum RegexParseRefusal {
+    /// `regex_syntax` rejected the pattern under the active flags.
+    Syntax { pattern: String },
+    /// The regex engine refused to compile an already syntax-valid source.
+    Compile { pattern: String },
+}
+
+impl std::fmt::Display for RegexParseRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegexParseRefusal::Syntax { pattern } => {
+                write!(f, "invalid regex {pattern:?}")
+            }
+            RegexParseRefusal::Compile { pattern } => {
+                write!(f, "regex compile failed for {pattern:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RegexParseRefusal {}
+
+/// The typed refusal for patterns that do not parse under KyzoRegexV1
+/// with their flags. Private payload — inspect via [`InvalidRegex::reason`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct InvalidRegex(RegexParseRefusal);
+
+impl InvalidRegex {
+    pub fn reason(&self) -> &RegexParseRefusal {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for InvalidRegex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for InvalidRegex {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
 
 impl RegexSource {
     /// The writer door: validate `(flags, pattern)` under KyzoRegexV1 —
@@ -106,7 +152,7 @@ impl RegexSource {
             .unicode(!flags.contains(RegexFlags::UNICODE_DISABLED));
         match parser.build().parse(&pattern) {
             Ok(_) => Ok(RegexSource { flags, pattern }),
-            Err(e) => Err(InvalidRegex(e.to_string())),
+            Err(_) => Err(InvalidRegex(RegexParseRefusal::Syntax { pattern })),
         }
     }
 
@@ -130,7 +176,11 @@ impl RegexSource {
             .unicode(!self.flags.contains(RegexFlags::UNICODE_DISABLED))
             .build()
             .map(CompiledRegexV1)
-            .map_err(|e| InvalidRegex(e.to_string()))
+            .map_err(|_| {
+                InvalidRegex(RegexParseRefusal::Compile {
+                    pattern: self.pattern.clone(),
+                })
+            })
     }
 
     pub fn flags(&self) -> RegexFlags {

@@ -31,7 +31,7 @@
  *    `make_fixed` factory produces. It assembles a rule's payload (in-memory
  *    rule inputs from the epoch stores, stored-relation inputs through the
  *    session view), brands the output with the manifest arity, and shares
- *    the budget's kill flag as the rule's [`CancelFlag`]. This is what lets
+ *    the budget's cancel poll as the rule's [`CancelFlag`]. This is what lets
  *    a query APPLY a fixed rule, including the `Constant` rule behind every
  *    `<- [[…]]` inline datum.
  *
@@ -57,7 +57,7 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::program::{
     BodyNormalizer, InputAtom, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom,
     InputRuleApplyAtom, MagicFixedRuleApply, MagicSymbol, NormalFormAtom, NormalFormInlineRule,
@@ -360,7 +360,7 @@ fn do_disjunctive_normal_form(
                 normalize_relation_apply(r, true, symb_gen)
             }
             // NNF proved negation sits only on applications.
-            _ => bail!(CompileInvariantError("negation not in normal form")),
+            InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Conjunction { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => bail!(CompileInvariantError("negation not in normal form")),
         },
         InputAtom::Unification { inner } => vec![vec![NormalFormAtom::Unification(inner)]],
         InputAtom::Search { inner } => vec![vec![NormalFormAtom::Search(Box::new(
@@ -409,14 +409,18 @@ fn convert_named_field_relation(
         .collect();
     for k in args.keys() {
         if !fields.contains(k) {
-            bail!(NamedFieldNotFound(name.to_string(), k.to_string(), span));
+            bail!(NamedFieldNotFound(
+                name.clone(),
+                Symbol::new(k.clone(), span),
+                span
+            ));
         }
     }
     let mut new_args = vec![];
     for col_def in metadata.keys.iter().chain(metadata.non_keys.iter()) {
         let arg = args.remove(&col_def.name).unwrap_or_else(|| Expr::Binding {
             var: symb_gen.next_ignored(span),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         });
         new_args.push(arg);
     }
@@ -455,7 +459,7 @@ fn normalize_args(
                         binding: dup.clone(),
                         expr: Expr::Binding {
                             var,
-                            tuple_pos: None,
+                            tuple_pos: BindingPos::Unresolved,
                         },
                         one_many_unif: false,
                         span: dup.span,
@@ -463,7 +467,7 @@ fn normalize_args(
                     out_args.push(dup);
                 }
             }
-            expr => {
+            expr @ Expr::Const { .. } | expr @ Expr::Apply { .. } | expr @ Expr::UnboundApply { .. } | expr @ Expr::Cond { .. } | expr @ Expr::Lazy { .. } => {
                 let span = expr.span();
                 let kw = symb_gen.next(span);
                 out_args.push(kw.clone());
@@ -697,7 +701,7 @@ fn convert_to_well_ordered_rule(rule: NormalFormInlineRule) -> Result<NormalForm
 /// It assembles the payload (in-memory rule inputs from the epoch stores,
 /// stored-relation inputs through the session view), brands the output store
 /// with the manifest arity (never a caller-supplied one), and shares the
-/// budget's kill flag as the rule's [`CancelFlag`] so a cancelled query stops
+/// budget's cancel poll as the rule's [`CancelFlag`] so a cancelled query stops
 /// the rule too. This is the concrete `F` that `bind_for_eval`'s `make_fixed`
 /// factory produces — the seam that lets a stored/derived query APPLY a fixed
 /// rule (including the `Constant` rule behind every `<- [[…]]` inline datum).

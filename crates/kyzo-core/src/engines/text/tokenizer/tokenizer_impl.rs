@@ -19,15 +19,17 @@ use std::ops::{Deref, DerefMut};
 use crate::engines::text::tokenizer::empty_tokenizer::EmptyTokenizer;
 
 /// Token
-#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, serde_derive::Serialize, Eq, PartialEq)]
 pub(crate) struct Token {
     /// Offset (byte index) of the first character of the token.
-    /// Offsets shall not be modified by token filters.
-    pub(crate) offset_from: usize,
+    /// Offsets shall not be modified by token filters. Private so
+    /// `offset_from > offset_to` is unrepresentable outside [`Self::set_offsets`]
+    /// / [`Self::new`].
+    offset_from: usize,
     /// Offset (byte index) of the last character of the token + 1.
     /// The text that generated the token should be obtained by
-    /// &text[token.offset_from..token.offset_to]
-    pub(crate) offset_to: usize,
+    /// &text[token.offset_from()..token.offset_to()]
+    offset_to: usize,
     /// Position, expressed in number of tokens.
     pub(crate) position: usize,
     /// Actual text content of the token.
@@ -45,6 +47,72 @@ impl Default for Token {
             text: String::with_capacity(200),
             position_length: 1,
         }
+    }
+}
+
+impl Token {
+    /// Mint a token with a proven offset range (`from <= to`).
+    /// `None` refuses `from > to` — never an assert.
+    pub(crate) fn new(
+        offset_from: usize,
+        offset_to: usize,
+        position: usize,
+        text: String,
+        position_length: usize,
+    ) -> Option<Self> {
+        if offset_from > offset_to {
+            return None;
+        }
+        Some(Token {
+            offset_from,
+            offset_to,
+            position,
+            text,
+            position_length,
+        })
+    }
+
+    /// Set both offsets under the range law. `false` refuses `from > to`.
+    pub(crate) fn set_offsets(&mut self, from: usize, to: usize) -> bool {
+        if from > to {
+            return false;
+        }
+        self.offset_from = from;
+        self.offset_to = to;
+        true
+    }
+
+    pub(crate) fn offset_from(&self) -> usize {
+        self.offset_from
+    }
+
+    pub(crate) fn offset_to(&self) -> usize {
+        self.offset_to
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Token {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde_derive::Deserialize)]
+        struct Raw {
+            offset_from: usize,
+            offset_to: usize,
+            position: usize,
+            text: String,
+            position_length: usize,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Token::new(
+            raw.offset_from,
+            raw.offset_to,
+            raw.position,
+            raw.text,
+            raw.position_length,
+        )
+        .ok_or_else(|| serde::de::Error::custom("token offset_from > offset_to"))
     }
 }
 
@@ -332,18 +400,12 @@ mod test {
 
     #[test]
     fn clone() {
-        let t1 = Token {
-            position: 1,
-            offset_from: 2,
-            offset_to: 3,
-            text: "abc".to_string(),
-            position_length: 1,
-        };
+        let t1 = Token::new(2, 3, 1, "abc".to_string(), 1).expect("lawful");
         let t2 = t1.clone();
 
         assert_eq!(t1.position, t2.position);
-        assert_eq!(t1.offset_from, t2.offset_from);
-        assert_eq!(t1.offset_to, t2.offset_to);
+        assert_eq!(t1.offset_from(), t2.offset_from());
+        assert_eq!(t1.offset_to(), t2.offset_to());
         assert_eq!(t1.text, t2.text);
     }
 }

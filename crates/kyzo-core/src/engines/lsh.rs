@@ -86,6 +86,14 @@
 //! predicate is the caller's (Datalog's) job — the coherence thesis: fusion
 //! and ranking are joins and score expressions, not API surface.
 //!
+//! ## Projection kind (story #305)
+//!
+//! [`Lsh`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through that machine; there is no bespoke per-engine seal or
+//! freshness protocol. Relation-backed [`lsh_put`] / [`lsh_search`] remain
+//! the kernel MinHash algorithms.
+//!
 //! ## Seams
 //!
 //! - **Lifecycle tier**: `::lsh create/drop` — creates both relations from
@@ -94,9 +102,9 @@
 //!   manifest (`IndexKind::Lsh`, naming the inverse relation) keeping
 //!   `indices` sorted by name, and keys the tokenizer cache by FULL index
 //!   handle name (see the header block).
-//! - **`FtsIndexConfig` dedup** (recorded obligation): the declared-config
-//!   type is duplicated between `parse/sys.rs` and `fts/mod.rs`; the
-//!   lifecycle tier unifies them when it lands — one concept, one name.
+//! - **`FtsIndexConfig` singularity** (story #305 T4, discharged): one
+//!   declared-config spelling — [`crate::parse::sys::FtsIndexConfig`] —
+//!   consumed by both parse and mutation; the engines/text twin is gone.
 
 use std::cmp::min;
 use std::collections::BTreeSet;
@@ -107,15 +115,36 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
-use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple, append_canonical};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+use crate::data::value::data_value_any;
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// MinHash-LSH as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed signature maintenance and candidate search ([`lsh_put`],
+/// [`Lsh::search_index`]) are the kernel algorithms — not a second
+/// build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); [`Lsh::search_index`]
+/// is the UFCS alias into that door.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Lsh;
+
+impl ProjectionKind for Lsh {}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.
@@ -125,6 +154,52 @@ use crate::storage::{ReadTx, WriteTx};
 /// struct maps) as the payload of the base relation's `IndexKind::Lsh`
 /// catalog entry — **its wire form is an on-disk format**, pinned by the
 /// pinned-bytes test below; changing it is a migration decision.
+/// Stored MinHash permutation seed bytes for an LSH index.
+///
+/// Prefer [`Self::from_perms`] at mint sites. `From<Vec<u8>>` is gone so an
+/// arbitrary byte vector is not type-equal to a permutation payload; the
+/// length law is re-proven by [`HashPermutations::from_bytes`] on read.
+/// Field is private — mint only via [`Self::from_perms`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
+#[repr(transparent)]
+pub(crate) struct LshPermutationBytes(Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<LshPermutationBytes>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<LshPermutationBytes>() == std::mem::align_of::<Vec<u8>>());
+
+impl LshPermutationBytes {
+    /// Encode live permutation seeds for the catalog payload (always
+    /// length-lawful: `4 * n_perms` bytes).
+    pub(crate) fn from_perms(perms: &HashPermutations) -> Self {
+        Self(perms.to_bytes())
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Test-only: truncate the payload so [`HashPermutations::from_bytes`]
+    /// refuses — exercises the corrupt-manifest path without forging via
+    /// a public `Vec` field.
+    #[cfg(test)]
+    pub(crate) fn corrupt_truncate_last_byte_for_test(&mut self) {
+        let _ = self.0.pop();
+    }
+}
+
+impl std::ops::Deref for LshPermutationBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl AsRef<[u8]> for LshPermutationBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+
 #[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct MinHashLshIndexManifest {
     pub(crate) base_relation: SmartString<LazyCompact>,
@@ -155,7 +230,7 @@ pub(crate) struct MinHashLshIndexManifest {
     /// portable across architectures and toolchains, and pinned by
     /// `signature_bytes_are_pinned_and_portable`. Changing the element encoding
     /// or the hash is an on-disk-format migration.
-    pub(crate) perms: Vec<u8>,
+    pub(crate) perms: LshPermutationBytes,
 }
 
 impl MinHashLshIndexManifest {
@@ -163,11 +238,11 @@ impl MinHashLshIndexManifest {
     /// catalog payload and may be corrupt (the original truncated odd
     /// lengths silently).
     pub(crate) fn get_hash_perms(&self) -> Result<HashPermutations> {
-        HashPermutations::from_bytes(&self.perms).map_err(|reason| {
+        HashPermutations::from_bytes(self.perms.as_bytes()).map_err(|reason| {
             miette!(IndexRowCorrupt::new(
                 &self.index_name,
                 &[],
-                format!("stored LSH permutations: {reason}"),
+                IndexCorruptReason::LshPermutations(reason),
             ))
         })
     }
@@ -178,10 +253,7 @@ impl MinHashLshIndexManifest {
 pub(crate) fn lsh_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("hash"),
-        typing: NullableColType {
-            coltype: ColType::Bytes,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Bytes),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -208,16 +280,10 @@ pub(crate) fn lsh_inv_index_metadata(base: &StoredRelationMetadata) -> StoredRel
         keys: base.keys.clone(),
         non_keys: vec![ColumnDef {
             name: SmartString::from("minhash"),
-            typing: NullableColType {
-                coltype: ColType::List {
-                    eltype: Box::new(NullableColType {
-                        coltype: ColType::Bytes,
-                        nullable: false,
-                    }),
-                    len: None,
-                },
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::List {
+                eltype: Box::new(NullableColType::required(ColType::Bytes)),
+                len: None,
+            }),
             default_gen: None,
         }],
     }
@@ -242,6 +308,7 @@ pub(crate) const DEFAULT_PERM_SEED: u64 = 0x4c53_485f_5045_524d; // "LSH_PERM"
 /// the drawn permutations on every target.
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
+    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -249,10 +316,46 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Named refusal when persisted permutation bytes fail the length law.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub(crate) enum LshPermutationDecodeRefused {
+    #[error("permutation byte length {len} is not a multiple of 4")]
+    #[diagnostic(code(index::lsh::permutation_bytes))]
+    LengthNotMultipleOfFour { len: usize },
+}
+
+/// Named refusal when band arithmetic or an indexed value shape is illegal.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub(crate) enum LshManifestRefused {
+    #[error(
+        "LSH manifest corrupt: {n_bands} bands of {n_rows_in_band} rows do not fit a signature of {sig_len} hashes"
+    )]
+    #[diagnostic(code(index::lsh::band_arithmetic))]
+    BandArithmeticMismatch {
+        n_bands: usize,
+        n_rows_in_band: usize,
+        sig_len: usize,
+    },
+    #[error("LSH manifest corrupt: {n_bands} bands exceed the u16 band tag")]
+    #[diagnostic(code(index::lsh::too_many_bands))]
+    TooManyBands { n_bands: usize },
+}
+
+/// Named refusal when a put/search value is not a list or string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub(crate) enum LshValueRefused {
+    #[error("cannot put value into an LSH index (need list or string)")]
+    #[diagnostic(code(index::lsh::put_unsupported))]
+    PutUnsupported,
+    #[error("cannot search for value in an LSH index (need list or string)")]
+    #[diagnostic(code(index::lsh::search_unsupported))]
+    SearchUnsupported,
+}
+
 /// The per-index hash seeds ("permutations"): one 32-bit seed per signature
-/// position.
+/// position. Inner vec is private — mint via [`Self::new`] / [`Self::from_bytes`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HashPermutations(pub(crate) Vec<u32>);
+pub(crate) struct HashPermutations(Vec<u32>);
 
 impl HashPermutations {
     /// Draw `n_perms` permutation seeds DETERMINISTICALLY from `seed` (the
@@ -272,6 +375,16 @@ impl HashPermutations {
         Self(perms)
     }
 
+    /// Borrow the seed words.
+    pub(crate) fn as_slice(&self) -> &[u32] {
+        &self.0
+    }
+
+    /// Seed count (= signature width).
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
     /// The persisted form: each seed as EXPLICIT little-endian bytes (the
     /// ratified format fix; the original reinterpreted the `Vec<u32>`'s
     /// memory, persisting whatever the machine's endianness was).
@@ -286,9 +399,11 @@ impl HashPermutations {
     /// The inverse of [`to_bytes`](Self::to_bytes). Safe and fallible: a
     /// length that is not a multiple of 4 is corrupt, not silently
     /// truncated (and the original's unaligned `*const u32` read was UB).
-    pub(crate) fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, String> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, LshPermutationDecodeRefused> {
         if !bytes.len().is_multiple_of(4) {
-            return Err(format!("length {} is not a multiple of 4", bytes.len()));
+            return Err(LshPermutationDecodeRefused::LengthNotMultipleOfFour {
+                len: bytes.len(),
+            });
         }
         Ok(Self(
             bytes
@@ -297,12 +412,18 @@ impl HashPermutations {
                 .collect(),
         ))
     }
+
+    #[cfg(test)]
+    fn from_seeds_for_test(seeds: Vec<u32>) -> Self {
+        Self(seeds)
+    }
 }
 
 /// A MinHash signature: for each permutation seed, the minimum 32-bit hash
-/// over the input's elements.
+/// over the input's elements. Inner vec is private — mint via [`Self::new`] /
+/// [`Self::init`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HashValues(pub(crate) Vec<u32>);
+pub(crate) struct HashValues(Vec<u32>);
 
 /// The canonical, PORTABLE byte encoding of one indexed element (a list
 /// member): its memcmp encoding — the pinned on-disk value order — rather than
@@ -330,6 +451,16 @@ fn ngram_bytes(tokens: &[SmartString<LazyCompact>]) -> Vec<u8> {
 }
 
 impl HashValues {
+    #[cfg(test)]
+    fn from_hashes_for_test(hashes: Vec<u32>) -> Self {
+        Self(hashes)
+    }
+
+    #[cfg(test)]
+    fn as_slice(&self) -> &[u32] {
+        &self.0
+    }
+
     pub(crate) fn new(values: impl Iterator<Item = Vec<u8>>, perms: &HashPermutations) -> Self {
         let mut ret = Self::init(perms);
         ret.update(values, perms);
@@ -337,7 +468,7 @@ impl HashValues {
     }
 
     pub(crate) fn init(perms: &HashPermutations) -> Self {
-        Self(vec![u32::MAX; perms.0.len()])
+        Self(vec![u32::MAX; perms.len()])
     }
 
     /// Fold each element's CANONICAL bytes (see [`element_bytes`] /
@@ -397,15 +528,14 @@ impl HashValues {
         n_rows_in_band: usize,
     ) -> Result<Vec<Vec<u8>>> {
         if n_bands * n_rows_in_band != self.0.len() {
-            bail!(
-                "LSH manifest corrupt: {} bands of {} rows do not fit a signature of {} hashes",
+            bail!(LshManifestRefused::BandArithmeticMismatch {
                 n_bands,
                 n_rows_in_band,
-                self.0.len()
-            );
+                sig_len: self.0.len(),
+            });
         }
         if n_bands > u16::MAX as usize {
-            bail!("LSH manifest corrupt: {n_bands} bands exceed the u16 band tag");
+            bail!(LshManifestRefused::TooManyBands { n_bands });
         }
         let bytes = self.to_bytes();
         let chunk_size = n_rows_in_band * 4;
@@ -491,18 +621,24 @@ fn decode_inv_chunks(
             .into_iter()
             .map(|chunk| match chunk {
                 DataValue::Bytes(b) => Ok(b),
-                other => Err(miette!(IndexRowCorrupt::new(
-                    &inv_idx.name,
-                    key,
-                    format!("inverse LSH row holds a non-bytes chunk: {other:?}"),
-                ))),
+                other @ (data_value_any!()) => {
+                    let _ = other;
+                    Err(miette!(IndexRowCorrupt::new(
+                        &inv_idx.name,
+                        key,
+                        IndexCorruptReason::LshInvChunkNotBytes,
+                    )))
+                }
             })
             .collect(),
-        other => bail!(IndexRowCorrupt::new(
-            &inv_idx.name,
-            key,
-            format!("inverse LSH row is not a list of chunks: {other:?}"),
-        )),
+        other => {
+            let _ = other;
+            bail!(IndexRowCorrupt::new(
+                &inv_idx.name,
+                key,
+                IndexCorruptReason::LshInvNotChunkList,
+            ))
+        }
     }
 }
 
@@ -524,7 +660,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &inv_idx.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let key_part = &tuple[..key_len];
@@ -570,8 +706,7 @@ pub(crate) fn lsh_del<T: WriteTx>(
 pub(crate) fn lsh_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[Bytecode],
-    stack: &mut Vec<DataValue>,
+    extractor: &Expr,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -584,7 +719,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let inv_key_part = &tuple[..key_len];
@@ -592,7 +727,7 @@ pub(crate) fn lsh_put<T: WriteTx>(
         let chunks = decode_inv_chunks(found, inv_idx, inv_key_part)?;
         lsh_del(tx, tuple, Some(chunks), idx, inv_idx)?;
     }
-    let to_index = eval_bytecode(extractor, tuple, stack)?;
+    let to_index = extractor.eval(tuple)?;
     let min_hash = match &to_index {
         DataValue::Null => return Ok(()),
         DataValue::List(l) => HashValues::new(l.iter().map(element_bytes), perms),
@@ -600,7 +735,10 @@ pub(crate) fn lsh_put<T: WriteTx>(
             let n_grams = tokenizer.unique_ngrams(s, manifest.n_gram);
             HashValues::new(n_grams.iter().map(|t| ngram_bytes(t)), perms)
         }
-        _ => bail!("cannot put value {to_index:?} into an LSH index"),
+        data_value_any!() => {
+            let _ = to_index;
+            bail!(LshValueRefused::PutUnsupported)
+        }
     };
     let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
 
@@ -645,6 +783,43 @@ pub(crate) struct LshSearchParams {
     pub(crate) k: Option<usize>,
 }
 
+/// One LSH relation-backed candidate search — [`RelationIndexSearch::Request`]
+/// for [`Lsh`] (P103).
+#[derive(Clone, Copy)]
+pub(crate) struct LshSearchRequest<'a> {
+    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) q: &'a DataValue,
+    pub(crate) manifest: &'a MinHashLshIndexManifest,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a LshSearchParams,
+    pub(crate) filter_code: &'a Option<Expr>,
+    pub(crate) perms: &'a HashPermutations,
+    pub(crate) tokenizer: &'a TextAnalyzer,
+}
+
+impl RelationIndexSearch for Lsh {
+    type Request<'a> = LshSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(lsh_search_body(
+            request.cancel,
+            tx,
+            request.q,
+            request.manifest,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_code,
+            request.perms,
+            request.tokenizer,
+        )?)
+    }
+}
+
 /// Candidate near-duplicates of `q`: base rows whose stored signature
 /// shares at least one band with `q`'s, in deterministic base-key order,
 /// optionally filtered and truncated to `k`.
@@ -652,8 +827,42 @@ pub(crate) struct LshSearchParams {
 /// This returns a candidate SET, not a similarity ranking (see the module
 /// docs). A `Null` query yields no candidates. `perms`/`tokenizer` follow
 /// the same caller contracts as [`lsh_put`].
+impl Lsh {
+    /// Relation-backed LSH candidate search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `lsh_search`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn search_index(
+        cancel: &crate::fixed_rule::CancelFlag,
+        tx: &impl ReadTx,
+        q: &DataValue,
+        manifest: &MinHashLshIndexManifest,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &LshSearchParams,
+        filter_code: &Option<Expr>,
+        perms: &HashPermutations,
+        tokenizer: &TextAnalyzer,
+    ) -> Result<crate::data::value::SearchHits> {
+        Self::search_relation(
+            tx,
+            LshSearchRequest {
+                cancel,
+                q,
+                manifest,
+                base,
+                idx,
+                params,
+                filter_code,
+                perms,
+                tokenizer,
+            },
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lsh_search(
+fn lsh_search_body(
     cancel: &crate::fixed_rule::CancelFlag,
     tx: &impl ReadTx,
     q: &DataValue,
@@ -661,8 +870,7 @@ pub(crate) fn lsh_search(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &LshSearchParams,
-    stack: &mut Vec<DataValue>,
-    filter_code: &Option<(Vec<Bytecode>, SourceSpan)>,
+    filter_code: &Option<Expr>,
     perms: &HashPermutations,
     tokenizer: &TextAnalyzer,
 ) -> Result<Vec<Tuple>> {
@@ -673,7 +881,10 @@ pub(crate) fn lsh_search(
             let n_grams = tokenizer.unique_ngrams(s, manifest.n_gram);
             HashValues::new(n_grams.iter().map(|t| ngram_bytes(t)), perms)
         }
-        _ => bail!("cannot search for value {q:?} in an LSH index"),
+        data_value_any!() => {
+            let _ = q;
+            bail!(LshValueRefused::SearchUnsupported)
+        }
     };
     let chunks = min_hash.band_chunks(manifest.n_bands, manifest.n_rows_in_band)?;
     // Collect EVERY colliding candidate into a BTreeSet (sorted by base key),
@@ -696,7 +907,7 @@ pub(crate) fn lsh_search(
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
                     ks.as_slice(),
-                    "empty LSH posting"
+                    IndexCorruptReason::LshEmptyPosting,
                 ));
             }
             found_tuples.insert(Tuple::from_vec(ks.as_slice()[1..].to_vec()));
@@ -708,11 +919,11 @@ pub(crate) fn lsh_search(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 key.as_slice(),
-                "LSH index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
-        if let Some((filter_code, span)) = filter_code
-            && !eval_bytecode_pred(filter_code, &orig_tuple, stack, *span)?
+        if let Some(filter_code) = filter_code
+            && !filter_code.eval_pred(&orig_tuple)?
         {
             continue;
         }
@@ -742,12 +953,20 @@ mod tests {
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 
+    macro_rules! lsh_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(
+                Lsh::search_index($($arg),*).unwrap()
+            ).unwrap()
+        };
+    }
+
     /// The ratified LE format, byte for byte: known seeds encode to their
     /// little-endian bytes on EVERY platform, and decoding asserts the
     /// same layout.
     #[test]
     fn permutation_bytes_are_little_endian_and_round_trip() {
-        let perms = HashPermutations(vec![1, 0x0102_0304, u32::MAX]);
+        let perms = HashPermutations::from_seeds_for_test(vec![1, 0x0102_0304, u32::MAX]);
         let bytes = perms.to_bytes();
         assert_eq!(
             bytes,
@@ -759,13 +978,13 @@ mod tests {
             "explicit little-endian, independent of the host"
         );
         let back = HashPermutations::from_bytes(&bytes).unwrap();
-        assert_eq!(back.0, perms.0, "round trip");
+        assert_eq!(back.as_slice(), perms.as_slice(), "round trip");
 
         // A length that is not a multiple of 4 is corrupt, not truncated.
         assert!(HashPermutations::from_bytes(&bytes[..7]).is_err());
         // And through the manifest it is the typed corruption error.
         let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4);
-        m.perms.pop();
+        m.perms.corrupt_truncate_last_byte_for_test();
         let err = m.get_hash_perms().unwrap_err();
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
     }
@@ -774,7 +993,7 @@ mod tests {
     /// arithmetic is checked instead of sliced blind.
     #[test]
     fn band_chunks_are_little_endian_and_checked() {
-        let sig = HashValues(vec![0x0102_0304, 5, 6, 7]);
+        let sig = HashValues::from_hashes_for_test(vec![0x0102_0304, 5, 6, 7]);
         let chunks = sig.band_chunks(2, 2).unwrap();
         assert_eq!(chunks.len(), 2);
         assert_eq!(
@@ -834,13 +1053,19 @@ mod tests {
         let perms = HashPermutations::new(20000, DEFAULT_PERM_SEED);
         let mut m1 = HashValues::new(int_bytes(&[1, 2, 3, 4, 5, 6]).into_iter(), &perms);
         let m2 = HashValues::new(int_bytes(&[4, 3, 2, 1, 5, 6]).into_iter(), &perms);
-        assert_eq!(m1.0, m2.0, "same set (any order) ⇒ same signature");
+        assert_eq!(
+            m1.as_slice(),
+            m2.as_slice(),
+            "same set (any order) ⇒ same signature"
+        );
         assert_eq!(m1.jaccard(&m2), 1.0);
         m1.update(int_bytes(&[7, 8, 9]).into_iter(), &perms);
         assert!(m1.jaccard(&m2) < 1.0);
         assert_eq!(
-            perms.0,
-            HashPermutations::from_bytes(&perms.to_bytes()).unwrap().0
+            perms.as_slice(),
+            HashPermutations::from_bytes(&perms.to_bytes())
+                .unwrap()
+                .as_slice()
         );
     }
 
@@ -851,10 +1076,18 @@ mod tests {
     fn permutations_are_seeded_and_deterministic() {
         let a = HashPermutations::new(64, DEFAULT_PERM_SEED);
         let b = HashPermutations::new(64, DEFAULT_PERM_SEED);
-        assert_eq!(a.0, b.0, "same seed ⇒ byte-identical permutations");
+        assert_eq!(
+            a.as_slice(),
+            b.as_slice(),
+            "same seed ⇒ byte-identical permutations"
+        );
         let c = HashPermutations::new(64, DEFAULT_PERM_SEED ^ 1);
-        assert_ne!(a.0, c.0, "a different seed draws a different projection");
-        assert_eq!(a.0.len(), 64);
+        assert_ne!(
+            a.as_slice(),
+            c.as_slice(),
+            "a different seed draws a different projection"
+        );
+        assert_eq!(a.len(), 64);
     }
 
     /// Portability + pin (obligation): a fixed input under fixed seeds produces
@@ -885,13 +1118,14 @@ mod tests {
             "element encoding drifted from the hand-derived canonical format"
         );
 
-        let perms = HashPermutations(vec![10, 20, 30]);
+        let perms = HashPermutations::from_seeds_for_test(vec![10, 20, 30]);
         // The signature is the seeded-xxHash32 MinHash of the FORMAT-VERIFIED
         // element bytes above -- so this pin catches drift in the MinHash
         // algorithm, the encoding drift having already been caught.
         let sig = HashValues::new(hand_derived.into_iter(), &perms);
         assert_eq!(
-            sig.0, PINNED_SIGNATURE,
+            sig.as_slice(),
+            &PINNED_SIGNATURE,
             "the MinHash signature wire value drifted; this is an on-disk \
              format event (the hash algorithm changed), not a test to bump"
         );
@@ -911,7 +1145,7 @@ mod tests {
         // A manifest whose permutations come from the seeded draw.
         let seeded_manifest = || {
             let perms = HashPermutations::new(64, DEFAULT_PERM_SEED);
-            manifest_with_perms(perms.0, 16)
+            manifest_with_perms(perms.as_slice().to_vec(), 16)
         };
         let rows: Vec<(i64, &str)> = vec![
             (1, "the quick brown fox jumps over the lazy dog"),
@@ -949,12 +1183,11 @@ mod tests {
             )
             .unwrap();
             let tokenizer = m.tokenizer.build(&m.filters).unwrap();
-            let extractor = vec![Bytecode::Binding {
+            let extractor = Expr::Binding {
                 var: Symbol::new("v", SourceSpan(0, 0)),
-                tuple_pos: Some(1),
-            }];
+                tuple_pos: BindingPos::Resolved(1),
+            };
             let perms = m.get_hash_perms().unwrap();
-            let mut stack = vec![];
             for (k, text) in &rows {
                 let row = vec![DataValue::from(*k), DataValue::from(*text)];
                 base.put_fact(
@@ -965,8 +1198,7 @@ mod tests {
                 )
                 .unwrap();
                 lsh_put(
-                    &mut tx, &row, &extractor, &mut stack, &tokenizer, &base, &idx, &inv, &m,
-                    &perms,
+                    &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &m, &perms,
                 )
                 .unwrap();
             }
@@ -997,10 +1229,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1036,16 +1265,15 @@ mod tests {
             extractor: crate::parse::parse_expressions("v", &std::collections::BTreeMap::new())
                 .unwrap(),
             n_gram: 3,
-            tokenizer: TokenizerConfig {
-                name: SmartString::from("Simple"),
-                args: vec![],
-            },
+            tokenizer: TokenizerConfig::admit("Simple", vec![]).unwrap(),
             filters: vec![],
             num_perm: perm_seeds.len(),
             n_bands: params.b,
             n_rows_in_band: params.r,
             threshold: 0.5,
-            perms: HashPermutations(perm_seeds).to_bytes(),
+            perms: LshPermutationBytes::from_perms(&HashPermutations::from_seeds_for_test(
+                perm_seeds,
+            )),
         }
     }
 
@@ -1054,6 +1282,7 @@ mod tests {
     /// overwhelming probability (1 - (1 - 0.75^4)^16 ≈ 0.998), and the
     /// fixed seeds make the outcome the SAME on every run.
     fn test_manifest() -> MinHashLshIndexManifest {
+        // INVARIANT(test_perm_mix): fixture permutation tags use modular golden-ratio mix.
         manifest_with_perms((0u32..64).map(|i| i.wrapping_mul(2654435761)).collect(), 16)
     }
 
@@ -1063,7 +1292,7 @@ mod tests {
         inv: RelationHandle,
         manifest: MinHashLshIndexManifest,
         tokenizer: TextAnalyzer,
-        extractor: Vec<Bytecode>,
+        extractor: Expr,
     }
 
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
@@ -1093,12 +1322,11 @@ mod tests {
         .unwrap();
         let tokenizer = manifest.tokenizer.build(&manifest.filters).unwrap();
         // The compiled extractor: project the text column (position 1).
-        let extractor = vec![Bytecode::Binding {
+        let extractor = Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
-            tuple_pos: Some(1),
-        }];
+            tuple_pos: BindingPos::Resolved(1),
+        };
         let perms = manifest.get_hash_perms().unwrap();
-        let mut stack = vec![];
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
@@ -1109,8 +1337,7 @@ mod tests {
             )
             .unwrap();
             lsh_put(
-                &mut tx, &row, &extractor, &mut stack, &tokenizer, &base, &idx, &inv, &manifest,
-                &perms,
+                &mut tx, &row, &extractor, &tokenizer, &base, &idx, &inv, &manifest, &perms,
             )
             .unwrap();
         }
@@ -1140,10 +1367,9 @@ mod tests {
             ],
         );
         let perms = f.manifest.get_hash_perms().unwrap();
-        let mut stack = vec![];
 
         let rtx = db.read_tx().unwrap();
-        let hits = lsh_search(
+        let hits = lsh_rows!(
             &CancelFlag::default(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1151,12 +1377,10 @@ mod tests {
             &f.base,
             &f.idx,
             &LshSearchParams { k: None },
-            &mut stack,
             &None,
             &perms,
             &f.tokenizer,
-        )
-        .unwrap();
+        );
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert!(keys.contains(&1), "the row itself is a candidate");
         assert!(keys.contains(&2), "the near-duplicate collides");
@@ -1165,7 +1389,7 @@ mod tests {
 
         // A Null query yields nothing; a non-indexable query is an error.
         assert!(
-            lsh_search(
+            Lsh::search_index(
                 &CancelFlag::default(),
                 &rtx,
                 &DataValue::Null,
@@ -1173,7 +1397,6 @@ mod tests {
                 &f.base,
                 &f.idx,
                 &LshSearchParams { k: None },
-                &mut stack,
                 &None,
                 &perms,
                 &f.tokenizer,
@@ -1182,7 +1405,7 @@ mod tests {
             .is_empty()
         );
         assert!(
-            lsh_search(
+            Lsh::search_index(
                 &CancelFlag::default(),
                 &rtx,
                 &DataValue::from(42),
@@ -1190,7 +1413,6 @@ mod tests {
                 &f.base,
                 &f.idx,
                 &LshSearchParams { k: None },
-                &mut stack,
                 &None,
                 &perms,
                 &f.tokenizer,
@@ -1210,7 +1432,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = lsh_search(
+        let hits = lsh_rows!(
             &CancelFlag::default(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1218,12 +1440,10 @@ mod tests {
             &f.base,
             &f.idx,
             &LshSearchParams { k: None },
-            &mut stack,
             &None,
             &perms,
             &f.tokenizer,
-        )
-        .unwrap();
+        );
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert!(!keys.contains(&1), "deleted row withdrawn");
         assert!(keys.contains(&2), "the near-duplicate remains");
@@ -1249,7 +1469,6 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let f = setup(&db, &[(1, "some indexed text here")]);
         let perms = f.manifest.get_hash_perms().unwrap();
-        let mut stack = vec![];
 
         // Overwrite the inverse row's value with a wrong-shaped (but
         // well-formed) tuple: a string where the chunk list belongs.
@@ -1280,7 +1499,6 @@ mod tests {
             &mut tx,
             &row,
             &f.extractor,
-            &mut stack,
             &f.tokenizer,
             &f.base,
             &f.idx,

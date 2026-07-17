@@ -50,9 +50,16 @@ impl SeededRng {
         SeededRng { state: seed }
     }
 
+    /// Bit-cast an `i64` option into the seed domain (P080: no truncating
+    /// numeric cast — two's-complement reinterprets negatives into `u64`).
+    pub(crate) fn seed_from_i64(seed: i64) -> u64 {
+        u64::from_ne_bytes(seed.to_ne_bytes())
+    }
+
     /// One splitmix64 step: mirrors `storage::sim::SimRng::next_u64`.
     #[inline]
     fn step(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -122,7 +129,7 @@ mod tests {
     #[test]
     fn negative_seed_wraps_to_u64() {
         let from_neg1: Vec<u64> = {
-            let mut r = SeededRng::new((-1i64) as u64);
+            let mut r = SeededRng::new(SeededRng::seed_from_i64(-1i64));
             (0..4).map(|_| r.next_u64()).collect()
         };
         let from_max: Vec<u64> = {

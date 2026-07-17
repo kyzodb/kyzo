@@ -140,10 +140,10 @@ use miette::{Context, Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
 use crate::data::aggr::Aggregation;
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::program::{
-    DeltaAxis, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed, MagicSymbol,
-    StratifiedMagicProgram, ValidityClause,
+    DeltaAxis, HeadAggrSlot, MagicAtom, MagicFixedRuleApply, MagicInlineRule, MagicRulesOrFixed,
+    MagicSymbol, StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
@@ -154,15 +154,15 @@ use crate::query::eval::{
 };
 use crate::query::levels::EpochStore;
 use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
-use crate::query::temp_store::RegularTempStore;
+use crate::query::temp_store::{RegularTempStore, TupleInIter};
 use crate::runtime::relation::{
     AccessLevel, IndexKind, IndexPositionUse, InsufficientAccessLevel, RelationHandle, get_relation,
 };
 use crate::storage::ReadTx;
 
-/// One head position's aggregation, if any — the same shape carried by
+/// One head position's aggregation slot — the same shape carried by
 /// every program tier (`MagicInlineRule::aggr`) and by eval's rule sets.
-type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+type HeadAggr = HeadAggrSlot;
 
 /// One compiled stratum: each rule store's definition, ready to bind to a
 /// transaction and evaluate. A whole program is `Vec<CompiledProgram>` in
@@ -213,7 +213,7 @@ pub(crate) struct CompiledInlineRules {
     "Every definition of a rule must apply the same aggregation (with the \
      same arguments) to each head position."
 ))]
-pub(crate) struct RulesetHeadAggrMismatch(String, #[label] SourceSpan);
+pub(crate) struct RulesetHeadAggrMismatch(MagicSymbol, #[label] SourceSpan);
 
 impl CompiledInlineRules {
     /// Mint from `(signature, plan)` pairs, refusing an empty set and any
@@ -232,7 +232,7 @@ impl CompiledInlineRules {
         for (other_aggr, rule) in iter {
             ensure!(
                 other_aggr == aggr,
-                RulesetHeadAggrMismatch(name.to_string(), name.as_plain_symbol().span)
+                RulesetHeadAggrMismatch(name.clone(), name.as_plain_symbol().span)
             );
             rules.push(rule);
         }
@@ -303,7 +303,7 @@ impl MagicInlineRule {
                 MagicAtom::Rule(rule) | MagicAtom::NegatedRule(rule) => {
                     coll.insert(occurrence, rule.name.clone());
                 }
-                _ => {}
+                MagicAtom::Relation(_) | MagicAtom::Predicate(_) | MagicAtom::NegatedRelation(_) | MagicAtom::Unification(_) | MagicAtom::Search(_) => {}
             }
         }
         coll
@@ -313,13 +313,13 @@ impl MagicInlineRule {
 #[derive(Debug, Error, Diagnostic)]
 #[error("Requested rule {0} not found")]
 #[diagnostic(code(eval::rule_not_found))]
-struct RuleNotFound(String, #[label] SourceSpan);
+struct RuleNotFound(MagicSymbol, #[label] SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Arity mismatch for rule application {0}")]
 #[diagnostic(code(eval::rule_arity_mismatch))]
 #[diagnostic(help("Required arity: {1}, number of arguments given: {2}"))]
-struct ArityMismatch(String, usize, usize, #[label] SourceSpan);
+struct ArityMismatch(Symbol, usize, usize, #[label] SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Symbol '{0}' in rule head is unbound")]
@@ -327,7 +327,7 @@ struct ArityMismatch(String, usize, usize, #[label] SourceSpan);
 #[diagnostic(help(
     "Note that symbols occurring only in negated positions are not considered bound"
 ))]
-struct UnboundSymbolInRuleHead(String, #[label] SourceSpan);
+struct UnboundSymbolInRuleHead(Symbol, #[label] SourceSpan);
 
 /// Compile every stratum of a proven program into executable plans.
 ///
@@ -453,7 +453,7 @@ pub(crate) fn compile_magic_rule_body(
                 let occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
                     RuleNotFound(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.clone(),
                         rule_app.name.as_plain_symbol().span,
                     )
                 })?;
@@ -461,7 +461,7 @@ pub(crate) fn compile_magic_rule_body(
                 ensure!(
                     *store_arity == rule_app.args.len(),
                     ArityMismatch(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.as_plain_symbol().clone(),
                         *store_arity,
                         rule_app.args.len(),
                         rule_app.span
@@ -504,7 +504,7 @@ pub(crate) fn compile_magic_rule_body(
                 ensure!(
                     store.arity() == rel_app.args.len(),
                     ArityMismatch(
-                        rel_app.name.to_string(),
+                        rel_app.name.clone(),
                         store.arity(),
                         rel_app.args.len(),
                         rel_app.span
@@ -567,7 +567,9 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.posting = Some(idx_store);
+                            delta.scan = crate::query::ra::temporal::DeltaScan::Accelerated {
+                                posting: idx_store,
+                            };
                         }
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret = ret.join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
@@ -664,11 +666,11 @@ pub(crate) fn compile_magic_rule_body(
                                     vec![
                                         Expr::Binding {
                                             var: left,
-                                            tuple_pos: None,
+                                            tuple_pos: BindingPos::Unresolved,
                                         },
                                         Expr::Binding {
                                             var: right,
-                                            tuple_pos: None,
+                                            tuple_pos: BindingPos::Unresolved,
                                         },
                                     ],
                                     rel_app.span,
@@ -687,14 +689,14 @@ pub(crate) fn compile_magic_rule_body(
                 let negated_occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
                     RuleNotFound(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.clone(),
                         rule_app.name.as_plain_symbol().span,
                     )
                 })?;
                 ensure!(
                     *store_arity == rule_app.args.len(),
                     ArityMismatch(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.as_plain_symbol().clone(),
                         *store_arity,
                         rule_app.args.len(),
                         rule_app.span
@@ -737,7 +739,7 @@ pub(crate) fn compile_magic_rule_body(
                 ensure!(
                     store.arity() == rel_app.args.len(),
                     ArityMismatch(
-                        rel_app.name.to_string(),
+                        rel_app.name.clone(),
                         store.arity(),
                         rel_app.args.len(),
                         rel_app.span
@@ -794,7 +796,9 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.posting = Some(idx_store);
+                            delta.scan = crate::query::ra::temporal::DeltaScan::Accelerated {
+                                posting: idx_store,
+                            };
                         }
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
@@ -845,11 +849,11 @@ pub(crate) fn compile_magic_rule_body(
                             vec![
                                 Expr::Binding {
                                     var: b.clone(),
-                                    tuple_pos: None,
+                                    tuple_pos: BindingPos::Unresolved,
                                 },
                                 Expr::Binding {
                                     var: fresh.clone(),
-                                    tuple_pos: None,
+                                    tuple_pos: BindingPos::Unresolved,
                                 },
                             ],
                             sa.span,
@@ -862,8 +866,6 @@ pub(crate) fn compile_magic_rule_body(
                 ret = RelAlgebra::Search(Box::new(SearchRA {
                     parent: Box::new(ret),
                     atom: *sa,
-                    query_bytecode: vec![],
-                    filter_bytecode: None,
                 }));
                 for f in post_filters {
                     ret = ret.filter(f)?;
@@ -876,7 +878,7 @@ pub(crate) fn compile_magic_rule_body(
                             vec![
                                 Expr::Binding {
                                     var: u.binding.clone(),
-                                    tuple_pos: None,
+                                    tuple_pos: BindingPos::Unresolved,
                                 },
                                 u.expr.clone(),
                             ],
@@ -887,7 +889,7 @@ pub(crate) fn compile_magic_rule_body(
                             vec![
                                 Expr::Binding {
                                     var: u.binding.clone(),
-                                    tuple_pos: None,
+                                    tuple_pos: BindingPos::Unresolved,
                                 },
                                 u.expr.clone(),
                             ],
@@ -897,7 +899,16 @@ pub(crate) fn compile_magic_rule_body(
                     ret = ret.filter(expr)?;
                 } else {
                     seen_variables.insert(u.binding.clone());
-                    ret = ret.unify(u.binding.clone(), u.expr.clone(), u.one_many_unif, u.span);
+                    ret = ret.unify(
+                        u.binding.clone(),
+                        u.expr.clone(),
+                        if u.one_many_unif {
+                            crate::query::ra::UnificationKind::Spread
+                        } else {
+                            crate::query::ra::UnificationKind::Single
+                        },
+                        u.span,
+                    );
                 }
             }
         }
@@ -919,7 +930,7 @@ pub(crate) fn compile_magic_rule_body(
         // symbol; an empty difference would mean the subset invariant
         // broke (the original `unwrap`ped it away).
         match ret_vars_set.difference(&cur_ret_set).next() {
-            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.to_string(), unbound.span)),
+            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.clone(), unbound.span)),
             None => bail!(PlanInvariantError(
                 "plan frame disagrees with the rule head without an unbound head symbol"
             )),
@@ -959,6 +970,8 @@ pub(crate) struct CompiledRuleBody<'a, T> {
     tx: &'a T,
     segments: Segments<'a>,
 }
+
+impl<T: ReadTx> crate::query::eval::seal::Sealed for CompiledRuleBody<'_, T> {}
 
 impl<T: ReadTx> RuleBody for CompiledRuleBody<'_, T> {
     fn for_each_derivation(
@@ -1132,10 +1145,7 @@ mod tests {
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype: ColType::Any,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Any),
             default_gen: None,
         }
     }
@@ -1212,7 +1222,7 @@ mod tests {
     fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
         MagicInlineRule {
             head: head.to_vec(),
-            aggr: vec![None; head.len()],
+            aggr: (0..head.len()).map(|_| HeadAggrSlot::Plain).collect(),
             body,
         }
     }
@@ -1274,7 +1284,13 @@ mod tests {
         .expect("binds");
         let outcome = stratified_evaluate(&program, &lifetimes, RowLimit::default(), &budget, None)
             .expect("evaluates");
-        outcome.store.all_iter().map(|t| t.into_tuple()).collect()
+        outcome
+            .store
+            .all_iter()
+            .expect("test store iter")
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("test store rows")
     }
 
     fn rows(data: &[&[i64]]) -> BTreeSet<Tuple> {
@@ -1687,7 +1703,13 @@ mod tests {
         let min_aggr = parse_aggr("min").expect("min exists");
         let with_aggr = MagicInlineRule {
             head: vec![x.clone(), y.clone()],
-            aggr: vec![None, Some((min_aggr, vec![]))],
+            aggr: vec![
+                HeadAggrSlot::Plain,
+                HeadAggrSlot::Aggregated {
+                    aggr: min_aggr,
+                    args: vec![],
+                },
+            ],
             body: vec![rel_atom("edge", &[x.clone(), y.clone()])],
         };
         let without_aggr = plain_rule(
@@ -1752,10 +1774,10 @@ mod tests {
                 per_head.entry(rule.head_rel).or_default().push(rule);
             }
             for (rel, rules) in per_head {
-                let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
+                let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
                 let is_meet = has_aggr
                     && rules.iter().all(|r| {
-                        r.aggr.iter().all(|a| match a {
+                        r.aggr.iter().all(|a| match a.as_aggregated() {
                             None => true,
                             Some((aggregation, _)) => aggregation.is_meet(),
                         })
@@ -1771,12 +1793,12 @@ mod tests {
             for l in &rule.body {
                 let forcing = if has_aggr {
                     if head_meet && l.rel == head {
-                        l.negated
+                        l.is_negated()
                     } else {
                         true
                     }
                 } else {
-                    l.negated || is_meet(l.rel)
+                    l.is_negated() || is_meet(l.rel)
                 };
                 edges.push((head, l.rel, forcing));
             }
@@ -1831,7 +1853,7 @@ mod tests {
                 }
             }
         }
-        let atom = match (idb.contains(l.rel), l.negated) {
+        let atom = match (idb.contains(l.rel), l.is_negated()) {
             (true, false) => rule_atom(l.rel, &args),
             (true, true) => neg_rule_atom(l.rel, &args),
             (false, false) => rel_atom(l.rel, &args),
@@ -1876,10 +1898,10 @@ mod tests {
                     // Positives first, then negatives: negation is safe
                     // only over bound variables (the reorder tier's job in
                     // the real pipeline).
-                    for l in r.body.iter().filter(|l| !l.negated) {
+                    for l in r.body.iter().filter(|l| !l.is_negated()) {
                         literal_atoms(l, &idb, &mut const_serial, &mut body);
                     }
-                    for l in r.body.iter().filter(|l| l.negated) {
+                    for l in r.body.iter().filter(|l| l.is_negated()) {
                         literal_atoms(l, &idb, &mut const_serial, &mut body);
                     }
                     let head_syms: Vec<Symbol> = r
@@ -2105,7 +2127,10 @@ mod tests {
     /// epoch) and now runs two independent per-occurrence delta passes.
     #[test]
     fn differential_meet_self_join_through_ra() {
-        let named = |name: &str| Some((parse_aggr(name).expect("aggr exists"), vec![]));
+        let named = |name: &str| HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name).expect("aggr exists"),
+            args: vec![],
+        };
         let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
         facts.insert(
             "seed",
@@ -2120,7 +2145,7 @@ mod tests {
                 Rule::aggregated(
                     "m",
                     vec![tx(), ty()],
-                    vec![None, named("min")],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![lit("seed", vec![tx(), ty()], false)],
                 ),
                 // m(x, min w) :- m(x, _), m(w', w), edge(w', x): node x
@@ -2128,7 +2153,7 @@ mod tests {
                 Rule::aggregated(
                     "m",
                     vec![tx(), tz()],
-                    vec![None, named("min")],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![
                         lit("m", vec![tx(), ty()], false),
                         lit("m", vec![Term::Var("W"), tz()], false),
@@ -2145,7 +2170,10 @@ mod tests {
     /// through the MeetAggrStore, RA-backed.
     #[test]
     fn differential_meet_aggregation_in_recursion() {
-        let named = |name: &str| Some((parse_aggr(name).expect("aggr exists"), vec![]));
+        let named = |name: &str| HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name).expect("aggr exists"),
+            args: vec![],
+        };
         let mut facts = edge_facts(&[(1, 2), (2, 3), (3, 1)]);
         facts.insert(
             "seed",
@@ -2159,13 +2187,13 @@ mod tests {
                 Rule::aggregated(
                     "m",
                     vec![tx(), ty()],
-                    vec![None, named("min")],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![lit("seed", vec![tx(), ty()], false)],
                 ),
                 Rule::aggregated(
                     "m",
                     vec![ty(), tz()],
-                    vec![None, named("min")],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![
                         lit("edge", vec![tx(), ty()], false),
                         lit("m", vec![tx(), tz()], false),
@@ -2181,7 +2209,10 @@ mod tests {
     /// first column, folded once over the fixpoint beneath.
     #[test]
     fn differential_normal_aggregation() {
-        let named = |name: &str| Some((parse_aggr(name).expect("aggr exists"), vec![]));
+        let named = |name: &str| HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name).expect("aggr exists"),
+            args: vec![],
+        };
         assert_ra_matches_oracle(&Program {
             rules: vec![
                 Rule::plain(
@@ -2200,7 +2231,7 @@ mod tests {
                 Rule::aggregated(
                     "outdeg",
                     vec![tx(), ty()],
-                    vec![None, named("count")],
+                    vec![HeadAggrSlot::Plain, named("count")],
                     vec![lit("path", vec![tx(), ty()], false)],
                 ),
             ],
@@ -2250,7 +2281,7 @@ mod tests {
         let (x, y) = (sym("x"), sym("y"));
         let rule = MagicInlineRule {
             head: vec![x.clone()],
-            aggr: vec![None],
+            aggr: vec![HeadAggrSlot::Plain],
             body: vec![
                 rule_atom("a", &[x.clone(), y.clone()]),     // occurrence 0
                 neg_rule_atom("a", &[y.clone(), x.clone()]), // occurrence 1 (negated)
@@ -2281,7 +2312,7 @@ mod tests {
         let (x, y, z) = (sym("x"), sym("y"), sym("z"));
         let rule = MagicInlineRule {
             head: vec![x.clone(), z.clone()],
-            aggr: vec![None, None],
+            aggr: vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
             body: vec![
                 rule_atom("pt", &[x.clone(), y.clone()]),
                 rule_atom("pt", &[y, z]),
@@ -2589,7 +2620,7 @@ mod tests {
             args: Box::new([
                 Expr::Binding {
                     var: col,
-                    tuple_pos: None,
+                    tuple_pos: BindingPos::Unresolved,
                 },
                 Expr::Const {
                     val: v(k),
@@ -2617,11 +2648,11 @@ mod tests {
                     args: Box::new([
                         Expr::Binding {
                             var: c0.clone(),
-                            tuple_pos: None,
+                            tuple_pos: BindingPos::Unresolved,
                         },
                         Expr::Binding {
                             var: c1.clone(),
-                            tuple_pos: None,
+                            tuple_pos: BindingPos::Unresolved,
                         },
                     ]),
                     span: sp(),
@@ -2632,11 +2663,11 @@ mod tests {
                     args: Box::new([
                         Expr::Binding {
                             var: c0.clone(),
-                            tuple_pos: None,
+                            tuple_pos: BindingPos::Unresolved,
                         },
                         Expr::Binding {
                             var: c1.clone(),
-                            tuple_pos: None,
+                            tuple_pos: BindingPos::Unresolved,
                         },
                     ]),
                     span: sp(),
@@ -2715,11 +2746,11 @@ mod tests {
                                 args: Box::new([
                                     Expr::Binding {
                                         var: c0,
-                                        tuple_pos: None,
+                                        tuple_pos: BindingPos::Unresolved,
                                     },
                                     Expr::Binding {
                                         var: c1,
-                                        tuple_pos: None,
+                                        tuple_pos: BindingPos::Unresolved,
                                     },
                                 ]),
                                 span: sp(),
@@ -2852,6 +2883,7 @@ mod tests {
     /// A tiny deterministic LCG — a seeded random-graph campaign without a
     /// proptest harness, so it runs in the always-on suite under caps.
     fn lcg(state: &mut u64) -> u64 {
+        // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
         *state = state
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
@@ -2865,6 +2897,7 @@ mod tests {
         // oracle for every one. This is the mini-campaign the vectorization
         // ascent's mutation test sabotages.
         for seed in 0u64..120 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut st = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
             let n_verts = 3 + (lcg(&mut st) % 8) as i64; // 3..10 vertices
             let n_edges = 2 + (lcg(&mut st) % 14) as usize; // 2..15 edges

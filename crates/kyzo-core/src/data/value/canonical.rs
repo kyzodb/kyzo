@@ -62,7 +62,6 @@
 //! (`as_bytes`), and its derived `Ord` is exactly the storage total
 //! order. [`decode`] is total over arbitrary bytes: a typed error, never
 //! a panic, never trust.
-#![allow(dead_code)] // #119 codec test-helpers (Datum/encode variants) are target-split; #120-era cleanup
 
 use super::number::{Num, NumDecodeError};
 use super::prefix::prefix4;
@@ -70,13 +69,17 @@ use super::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
 use super::wide::interval::{Hi, Interval, Lo};
 use super::wide::json::{Json, JsonNum, JsonObj, fnv1a64};
 use super::wide::regex::{RegexFlags, RegexSource};
-use super::wide::validity::{Validity, ValidityTs};
+use super::wide::validity::{Validity, ValiditySlot, ValidityTs};
 use super::{DataValue, UuidWrapper, Vector};
 
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
 /// `Ord`/`Eq` are the storage total order over values, byte for byte.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct CanonicalBytes(Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<CanonicalBytes>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<CanonicalBytes>() == std::mem::align_of::<Vec<u8>>());
 
 impl CanonicalBytes {
     pub fn as_bytes(&self) -> &[u8] {
@@ -119,8 +122,9 @@ pub enum Datum<'a> {
     /// executability is `CompiledRegexV1`'s claim, never this variant's.
     Regex(&'a RegexSource),
     Json(&'a Json),
-    /// Components pass through Num's float law at encode.
-    Vector(&'a [f64]),
+    /// Proven vector (dimension already admitted); components pass through
+    /// Num's float law at encode. Bare `&[f64]` is not a mint surface.
+    Vector(&'a Vector),
     Validity(Validity),
     Interval(Interval),
 }
@@ -330,7 +334,7 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
         }
         DataValue::Uuid(u) => {
             out.push(Tag::Uuid.byte());
-            out.extend_from_slice(u.0.as_bytes());
+            out.extend_from_slice(u.as_uuid().as_bytes());
         }
         DataValue::Regex(r) => {
             out.push(Tag::Regex.byte());
@@ -346,14 +350,9 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
         }
         DataValue::Vector(vec) => {
             out.push(Tag::Vector.byte());
-            let components = vec.as_slice();
-            assert!(
-                components.len() <= u32::MAX as usize,
-                "vector dimension exceeds u32"
-            );
-            out.extend_from_slice(&(components.len() as u32).to_be_bytes());
-            for &c in components {
-                Num::float(c).encode_key(out);
+            out.extend_from_slice(&vec.dimension().get().to_be_bytes());
+            for c in vec.components() {
+                Num::float(c.get()).encode_key(out);
             }
         }
         DataValue::List(items) => {
@@ -475,15 +474,11 @@ fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
             let h = fnv1a64(&out[start..]);
             out.extend_from_slice(&h.to_be_bytes());
         }
-        Datum::Vector(components) => {
+        Datum::Vector(vec) => {
             out.push(Tag::Vector.byte());
-            assert!(
-                components.len() <= u32::MAX as usize,
-                "vector dimension exceeds u32"
-            );
-            out.extend_from_slice(&(components.len() as u32).to_be_bytes());
-            for &c in components {
-                Num::float(c).encode_key(out);
+            out.extend_from_slice(&vec.dimension().get().to_be_bytes());
+            for c in vec.components() {
+                Num::float(c.get()).encode_key(out);
             }
         }
         Datum::Validity(v) => {
@@ -597,6 +592,8 @@ pub enum DecodeError {
     BadPolarity,
     /// A vector component that is not a float-representation Num key.
     VectorComponentNotFloat,
+    /// Vector dimension count exceeds the wire `u32` limit.
+    VectorDimensionOverflow,
     BadJsonMarker(u8),
     /// Object keys not strictly ascending and unique.
     JsonNotCanonical,
@@ -635,7 +632,7 @@ pub fn decode(bytes: &[u8]) -> Result<DataValue, DecodeError> {
 }
 
 /// Decode ONE canonical value from the front of `bytes`, returning it
-/// and the bytes consumed (plane-internal: `EncodedKey` splitting).
+/// and the bytes consumed (plane-internal: `StorageKey` splitting).
 pub(super) fn decode_one(bytes: &[u8]) -> Result<(DataValue, usize), DecodeError> {
     decode_at(bytes, 0)
 }
@@ -674,7 +671,10 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
             }
             let mut u = [0u8; 16];
             u.copy_from_slice(&body[..16]);
-            Ok((DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(u))), 17))
+            Ok((
+                DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u))),
+                17,
+            ))
         }
         Tag::List => {
             let (items, used) = decode_sequence(body, depth)?;
@@ -750,7 +750,8 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 .into_iter()
                 .map(|n| n.as_float().expect("validated float component"))
                 .collect();
-            Ok((DataValue::Vector(Vector::new(floats)), 1 + used))
+            let vector = Vector::try_new(floats).ok_or(DecodeError::VectorDimensionOverflow)?;
+            Ok((DataValue::Vector(vector), 1 + used))
         }
         Tag::Validity => {
             let ts_bytes = body.get(..8).ok_or(DecodeError::Truncated)?;
@@ -766,7 +767,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 None => return Err(DecodeError::Truncated),
             };
             Ok((
-                DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), is_assert)),
+                DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(ts), is_assert)),
                 10,
             ))
         }
@@ -948,6 +949,7 @@ mod tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
 
@@ -1015,15 +1017,17 @@ mod tests {
                 .cmp(&b.flags().bits())
                 .then(a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
             (DataValue::Json(x), DataValue::Json(y)) => semantic_json_cmp(x, y),
-            (DataValue::Vector(x), DataValue::Vector(y)) => x.len().cmp(&y.len()).then_with(|| {
-                for (i, j) in x.as_slice().iter().zip(y.as_slice().iter()) {
-                    let c = Num::float(*i).cmp(&Num::float(*j));
-                    if c != Ordering::Equal {
-                        return c;
+            (DataValue::Vector(x), DataValue::Vector(y)) => {
+                x.dimension().cmp(&y.dimension()).then_with(|| {
+                    for (i, j) in x.components().zip(y.components()) {
+                        let c = Num::float(i.get()).cmp(&Num::float(j.get()));
+                        if c != Ordering::Equal {
+                            return c;
+                        }
                     }
-                }
-                Ordering::Equal
-            }),
+                    Ordering::Equal
+                })
+            }
             (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
             (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
             _ => unreachable!("tags equal"),
@@ -1143,7 +1147,7 @@ mod tests {
             DataValue::Bytes(vec![0x00, 0x00]),
             DataValue::Bytes(vec![0x00, 0xFF]),
             DataValue::Bytes(vec![0xFF]),
-            DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(U1))),
+            DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(U1))),
             DataValue::List(vec![]),
         ];
         out.extend(nums.iter().map(|&n| DataValue::Num(n)));
@@ -1183,18 +1187,20 @@ mod tests {
             ])
             .expect("lawful"),
         )));
-        out.push(DataValue::Vector(Vector::new(vec![])));
-        out.push(DataValue::Vector(Vector::new(vec![0.0])));
-        out.push(DataValue::Vector(Vector::new(vec![-1.5, f64::NAN])));
-        out.push(DataValue::Validity(Validity::new(
-            ValidityTs::from_raw(0),
-            true,
-        )));
-        out.push(DataValue::Validity(Validity::new(
-            ValidityTs::from_raw(0),
-            false,
-        )));
-        out.push(DataValue::Validity(Validity::new(
+        out.push(DataValue::Vector(Vector::try_new(vec![]).unwrap()));
+        out.push(DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()));
+        out.push(DataValue::Vector(Vector::try_new(vec![-1.5, f64::NAN]).unwrap()));
+        out.push(DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(0), true)
+                .expect("non-reserved")
+                .into(),
+        ));
+        out.push(DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(0), false)
+                .expect("retract admits every tick")
+                .into(),
+        ));
+        out.push(DataValue::Validity(ValiditySlot::from_stored(
             ValidityTs::from_raw(i64::MAX),
             true,
         )));
@@ -1336,7 +1342,10 @@ mod tests {
         );
         // Vector storage order is dimension-first: fewer dimensions sort
         // before more, regardless of component values.
-        assert!(encode(Datum::Vector(&[9e300])) < encode(Datum::Vector(&[0.0, 0.0])));
+        assert!(
+            encode(Datum::Vector(&Vector::try_new(vec![9e300]).unwrap()))
+                < encode(Datum::Vector(&Vector::try_new(vec![0.0, 0.0]).unwrap()))
+        );
     }
 
     /// Randomized order embedding + round-trip: generated scalars and
@@ -1390,7 +1399,7 @@ mod tests {
             5 => {
                 let mut u = [0u8; 16];
                 u[0] = rng.next() as u8;
-                DataValue::Uuid(UuidWrapper(uuid::Uuid::from_bytes(u)))
+                DataValue::Uuid(UuidWrapper::new(uuid::Uuid::from_bytes(u)))
             }
             6 => {
                 let len = rng.below(4);
@@ -1409,14 +1418,15 @@ mod tests {
             }
             9 => {
                 let len = rng.below(3);
-                DataValue::Vector(Vector::new(
+                DataValue::Vector(Vector::try_new(
                     (0..len).map(|_| f64::from_bits(rng.next())).collect(),
-                ))
+                ).unwrap())
             }
-            10 => DataValue::Validity(Validity::new(
-                ValidityTs::from_raw(rng.next() as i64),
-                rng.next().is_multiple_of(2),
-            )),
+            10 => {
+                let ts = ValidityTs::from_raw(rng.next() as i64);
+                let is_assert = rng.next().is_multiple_of(2);
+                DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
+            }
             _ => DataValue::Json(random_json(rng, 0)),
         }
     }
@@ -1478,14 +1488,13 @@ mod tests {
         let re_a = RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid");
         assert_eq!(hex(&encode(Datum::Regex(&re_a))), "3000610000");
         assert_eq!(
-            hex(&encode(Datum::Vector(&[1.0]))),
+            hex(&encode(Datum::Vector(&Vector::try_new(vec![1.0]).unwrap()))),
             "400000000103043980000000000000000001"
         );
         assert_eq!(
-            hex(&encode(Datum::Validity(Validity::new(
-                ValidityTs::from_raw(0),
-                true
-            )))),
+            hex(&encode(Datum::Validity(
+                Validity::new(ValidityTs::from_raw(0), true).expect("non-reserved")
+            ))),
             "587fffffffffffffff00"
         );
         assert_eq!(hex(&encode(Datum::Interval(Interval::EMPTY))), "6001");
@@ -1509,6 +1518,7 @@ mod tests {
         assert_eq!(value_hex, "4c186100000501");
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in value_span {
+            // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
             h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
         }
         assert_eq!(&bytes[bytes.len() - 8..], h.to_be_bytes());

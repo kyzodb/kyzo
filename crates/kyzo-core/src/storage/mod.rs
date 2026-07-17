@@ -16,9 +16,12 @@
 //!
 //! Transactions are two species of one genus, expressed as two traits: a
 //! [`ReadTx`] is one consistent snapshot and *cannot* write — the operations
-//! do not exist on it; a [`WriteTx`] extends reading with a conflict-tracked
-//! write set, and committing **consumes** it, so a committed transaction is
-//! not an invalid state to guard against but a value that no longer exists.
+//! do not exist on it; a [`WriteTx`] is the **Open** phase of a write
+//! transaction — put/del exist only there. [`WriteTx::commit`] and
+//! [`WriteTx::abort`] are consuming verbs: Open is spent and the successor is
+//! [`Committed`] or [`Aborted`]. Use-after-commit/abort cannot compile —
+//! the Open type has disappeared. There is no `finished` flag and no
+//! Drop-as-abort; dropping an unfinished Open is a drop-bomb.
 //!
 //! ## Concurrency economics, stated plainly
 //!
@@ -195,6 +198,17 @@ pub(crate) mod verify;
 /// deterministic backends use logical time and need no floor).
 pub(crate) struct SystemClock(std::sync::atomic::AtomicI64);
 
+/// Typed refusal when [`SystemClock::stamp`] cannot mint another stamp.
+/// Identity is the variant — never a process abort at `i64::MAX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub(crate) enum SystemClockRefuse {
+    /// Stamp space is `i64`; the floor is already `i64::MAX`, so
+    /// `last + 1` would wrap. Refuse rather than abort the process.
+    #[error("INVARIANT(SystemClock): system timestamp space exhausted at i64::MAX")]
+    #[diagnostic(code(storage::system_clock::stamp_space_exhausted))]
+    StampSpaceExhausted,
+}
+
 impl SystemClock {
     /// A clock that will never mint at or below `floor`.
     pub(crate) fn new(floor: i64) -> Self {
@@ -203,17 +217,24 @@ impl SystemClock {
 
     /// Mint the next stamp: strictly greater than every stamp minted
     /// before it, and equal to the wall clock whenever the wall clock is
-    /// ahead.
-    pub(crate) fn stamp(&self, now_micros: i64) -> ValidityTs {
+    /// ahead. Refuses with [`SystemClockRefuse::StampSpaceExhausted`] when
+    /// the floor is already `i64::MAX` — never panics, never wraps.
+    pub(crate) fn stamp(&self, now_micros: i64) -> std::result::Result<ValidityTs, SystemClockRefuse> {
         use std::sync::atomic::Ordering;
         let mut last = self.0.load(Ordering::Relaxed);
         loop {
-            let next = now_micros.max(last + 1);
+            // INVARIANT(SystemClock): stamp space is i64; refuse rather than
+            // wrap when the floor is already i64::MAX.
+            let after_last = match last.checked_add(1) {
+                Some(n) => n,
+                None => return Err(SystemClockRefuse::StampSpaceExhausted),
+            };
+            let next = now_micros.max(after_last);
             match self
                 .0
                 .compare_exchange_weak(last, next, Ordering::AcqRel, Ordering::Relaxed)
             {
-                Ok(_) => return ValidityTs::from_raw(next),
+                Ok(_) => return Ok(ValidityTs::from_raw(next)),
                 Err(observed) => last = observed,
             }
         }
@@ -236,7 +257,11 @@ impl SystemClock {
 /// garbage. Any change to the encoding is a migration and must bump
 /// [`FormatVersion::CURRENT`] (see .claude/rules/memcmp.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
 pub struct FormatVersion(u16);
+
+const _: () = assert!(std::mem::size_of::<FormatVersion>() == std::mem::size_of::<u16>());
+const _: () = assert!(std::mem::align_of::<FormatVersion>() == std::mem::align_of::<u16>());
 
 impl FormatVersion {
     /// The format this build reads and writes. v3 is the bitemporal
@@ -265,7 +290,12 @@ impl FormatVersion {
     /// sealed catalog door only. A v4 store's values are unreadable under
     /// v5's decoder, so the stamp turns any pre-existing store into a
     /// refuse-to-open rather than a silent misread.
-    pub const CURRENT: FormatVersion = FormatVersion(5);
+    ///
+    /// v6: catalog constraints and triggers persist sealed InputProgram
+    /// substance (msgpack), not re-parseable source strings; decode admits
+    /// each program through `InputProgram::new`. A v5 catalog row that
+    /// stored `source` text is unreadable under v6's decoder.
+    pub const CURRENT: FormatVersion = FormatVersion(6);
 
     /// The stored representation: ASCII decimal.
     pub fn as_bytes(self) -> Vec<u8> {
@@ -303,11 +333,13 @@ impl fmt::Display for FormatVersion {
 /// second committer (first-committer-wins). A commit with an empty write set
 /// still never aborts.
 ///
-/// **Retryable**: rerun the whole transaction. This is a typed error so the
-/// engine can distinguish it programmatically (via `Report::downcast_ref`)
-/// from fatal conditions like corruption or IO failure — retry-on-conflict
-/// is a control-flow decision, not a string match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// **Retryable**: rerun the whole transaction. Prefer matching
+/// [`CommitFailure::Conflict`] on the commit outcome, or feeding
+/// [`CommitFailure`] / [`ConflictError`] into [`retry::RetryError`] via
+/// [`From`]. Conflict vs fatal in that channel is decided by variant only —
+/// never by diagnostic code or string identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, miette::Diagnostic)]
+#[diagnostic(code(storage::conflict))]
 pub struct ConflictError;
 
 impl fmt::Display for ConflictError {
@@ -320,7 +352,104 @@ impl fmt::Display for ConflictError {
 }
 
 impl std::error::Error for ConflictError {}
-impl miette::Diagnostic for ConflictError {}
+
+/// Proof that an Open write transaction committed. Carries no Open methods —
+/// use-after-commit is a type error, not a runtime guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub struct Committed;
+
+/// Proof that an Open write transaction aborted without applying its writes.
+/// Carries no Open methods — use-after-abort is a type error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub struct Aborted;
+
+/// Backend-sourced IO error as `std::error::Error`. Variant identity lives on
+/// the outer [`CommitIo`] (or attempt-op) enum — not in a formatted string.
+#[derive(Debug)]
+pub struct BackendIoError(Box<dyn std::error::Error + Send + Sync>);
+
+impl BackendIoError {
+    /// Box any backend error as a commit/op source.
+    pub fn from_error(e: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(e))
+    }
+}
+
+impl fmt::Display for BackendIoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for BackendIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+/// Structured IO refusal during commit (or `commit_durable`'s fsync).
+///
+/// For [`WriteTx::commit_durable`]: if the commit applied and only the fsync
+/// failed, the transaction IS committed (visible, process-crash durable) —
+/// [`Self::FjallSync`] / [`Self::SimInjectedFsyncAfterCommit`] report the
+/// durability shortfall, not a rollback.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[diagnostic(code(storage::commit_io))]
+pub enum CommitIo {
+    /// fjall optimistic commit returned a non-conflict substrate error.
+    #[error("fjall commit failed")]
+    FjallCommit(#[source] BackendIoError),
+
+    /// fjall `PersistMode::SyncAll` after a successful commit failed.
+    #[error("fjall sync failed")]
+    FjallSync(#[source] BackendIoError),
+
+    /// Simulator injected an fsync failure (empty write set / pre-apply).
+    #[error("sim: injected fsync failure")]
+    SimInjectedFsync,
+
+    /// Simulator injected an fsync failure after the commit applied.
+    #[error("sim: injected fsync failure (commit applied, not power-cut durable)")]
+    SimInjectedFsyncAfterCommit,
+}
+
+/// Structured corruption refusal detected while committing.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[diagnostic(code(storage::commit_corruption))]
+pub enum CommitCorruption {
+    /// On-disk or internal corruption observed at commit time.
+    #[error("storage corruption during commit")]
+    Detected,
+}
+
+/// Closed commit refusal: conflict, IO, or corruption — never an erased
+/// `Result<()>` / stringly dispatch. The Open transaction is spent either way.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+pub enum CommitFailure {
+    /// SSI conflict — discard the write set; retry on a fresh Open snapshot.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Conflict(#[from] ConflictError),
+
+    /// Storage IO failed during commit (or during `commit_durable`'s fsync).
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Io(#[from] CommitIo),
+
+    /// On-disk or internal corruption detected while committing.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Corruption(#[from] CommitCorruption),
+}
+
+impl CommitFailure {
+    /// Whether this refusal is the retryable concurrent-writer case.
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, Self::Conflict(_))
+    }
+}
 
 mod sealed {
     /// One backend by decree (see .claude/rules/storage.md): these traits are
@@ -452,7 +581,7 @@ pub trait ReadTx: sealed::Sealed + Sync {
 
     /// Bitemporal as-of scan: among keys differing only in their two
     /// trailing time slots (valid instant outer, system version inner —
-    /// [`EncodedKey::BITEMPORAL_TAIL_LEN`](crate::data::value::EncodedKey)),
+    /// [`StorageKey::BITEMPORAL_TAIL_LEN`](crate::data::value::StorageKey)),
     /// resolve each fact to what the record said at the [`AsOf`]
     /// coordinate, and yield only facts whose governing
     /// row asserts them. A row's polarity (assert / retract / erase) is
@@ -485,18 +614,18 @@ pub trait ReadTx: sealed::Sealed + Sync {
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a>;
 }
 
-/// The write-transaction species: everything a [`ReadTx`] can do — seeing
-/// the transaction's own writes, conflict-tracked — plus mutation and
-/// commit.
+/// The **Open** write-transaction species: everything a [`ReadTx`] can do —
+/// seeing the transaction's own writes, conflict-tracked — plus mutation.
+/// Open / [`Committed`] / [`Aborted`] are three types; there is no flag.
 ///
-/// MVCC semantics: `commit` must fail with [`ConflictError`] — discarding
-/// all of the transaction's changes — if anything this transaction READ (a
-/// point read or a scanned range) or WROTE (a `put` or `del` key) was
-/// modified concurrently by a committed transaction. Reads and writes are
-/// the conflict surface (contract v2 — see the module docs' history): a
-/// write-write race aborts its second committer, first-committer-wins. A
-/// commit with an empty write set never aborts — a read-only `WriteTx`
-/// commit certifies nothing.
+/// MVCC semantics: `commit` must fail with [`CommitFailure::Conflict`] —
+/// discarding all of the transaction's changes — if anything this
+/// transaction READ (a point read or a scanned range) or WROTE (a `put` or
+/// `del` key) was modified concurrently by a committed transaction. Reads
+/// and writes are the conflict surface (contract v2 — see the module docs'
+/// history): a write-write race aborts its second committer,
+/// first-committer-wins. A commit with an empty write set never aborts — a
+/// read-only Open commit certifies nothing.
 ///
 /// Consequence for engine code: insert-if-absent / uniqueness races on a
 /// key are detected by the write itself — the losing racer aborts with the
@@ -532,10 +661,11 @@ pub trait WriteTx: ReadTx {
     /// empty" protection must pass forward bounds.
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()>;
 
-    /// Commit, consuming the transaction: there is no committed-but-alive
-    /// state. Durability: survives a process crash; for power-cut durability
-    /// use [`commit_durable`](Self::commit_durable) or [`Storage::sync`].
-    fn commit(self) -> Result<()>
+    /// Commit, consuming Open into [`Committed`] (or a closed
+    /// [`CommitFailure`]). Durability: survives a process crash; for
+    /// power-cut durability use [`commit_durable`](Self::commit_durable) or
+    /// [`Storage::sync`].
+    fn commit(self) -> std::result::Result<Committed, CommitFailure>
     where
         Self: Sized;
 
@@ -545,10 +675,15 @@ pub trait WriteTx: ReadTx {
     ///
     /// Failure semantics: if the commit applies but the fsync then fails,
     /// the transaction IS committed — visible, process-crash durable, not
-    /// yet power-cut durable. The error reports the durability shortfall,
-    /// not a rollback; callers needing all-or-nothing durability must treat
-    /// it accordingly.
-    fn commit_durable(self) -> Result<()>
+    /// yet power-cut durable. The error is [`CommitFailure::Io`], reporting
+    /// the durability shortfall, not a rollback.
+    fn commit_durable(self) -> std::result::Result<Committed, CommitFailure>
+    where
+        Self: Sized;
+
+    /// Abort, consuming Open into [`Aborted`] without applying writes.
+    /// Named — not Drop-as-abort.
+    fn abort(self) -> Aborted
     where
         Self: Sized;
 }

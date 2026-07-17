@@ -27,6 +27,11 @@
 //!
 //! [`StoredRelationMetadata`] is a stored relation's whole schema — its key
 //! columns and its dependent columns, each a named, typed [`ColumnDef`].
+//!
+//! Input-to-stored schema compatibility is proved whole at construction
+//! ([`CompatibleInputSchema::prove`]): the constructor either yields a
+//! branded proof or refuses the whole schema. There is no column-by-column
+//! approval API — per-column checks are private internals of that proof.
 
 use std::fmt::{Display, Formatter};
 
@@ -43,6 +48,7 @@ use crate::data::functions::to_json;
 use crate::data::value::{DataValue, NumRepr, Validity, ValidityTs, Vector};
 
 use crate::data::json::{json_from_serde, serde_from_json};
+use crate::data::value::data_value_any;
 
 /// Schema vocabulary: a vector column's declared element width. Stored
 /// vector VALUES are always f64 canonical (format v1); `F32` columns
@@ -56,10 +62,82 @@ pub(crate) enum VecElementType {
     F64,
 }
 
+/// Whether a column admits Null — a closed sum, not an open bool poke.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
+pub enum ColNullability {
+    Required,
+    Optional,
+}
+
+impl ColNullability {
+    pub fn from_bool(nullable: bool) -> ColNullability {
+        if nullable {
+            ColNullability::Optional
+        } else {
+            ColNullability::Required
+        }
+    }
+
+    pub fn is_nullable(self) -> bool {
+        matches!(self, ColNullability::Optional)
+    }
+}
+
+/// Column typing: private fields; nullability only via [`ColNullability`].
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct NullableColType {
-    pub coltype: ColType,
-    pub nullable: bool,
+    coltype: ColType,
+    /// Wire key stays `nullable` (bool); in-memory authority is [`ColNullability`].
+    #[serde(rename = "nullable", with = "col_nullability_as_bool")]
+    nullability: ColNullability,
+}
+
+mod col_nullability_as_bool {
+    use super::ColNullability;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        v: &ColNullability,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        v.is_nullable().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<ColNullability, D::Error> {
+        bool::deserialize(deserializer).map(ColNullability::from_bool)
+    }
+}
+
+impl NullableColType {
+    /// Typed door: nullability is a sum, not an unbound bool pair.
+    pub fn new(coltype: ColType, nullability: ColNullability) -> NullableColType {
+        NullableColType {
+            coltype,
+            nullability,
+        }
+    }
+
+    pub fn required(coltype: ColType) -> NullableColType {
+        Self::new(coltype, ColNullability::Required)
+    }
+
+    pub fn optional(coltype: ColType) -> NullableColType {
+        Self::new(coltype, ColNullability::Optional)
+    }
+
+    pub fn coltype(&self) -> &ColType {
+        &self.coltype
+    }
+
+    pub fn nullability(&self) -> ColNullability {
+        self.nullability
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.nullability.is_nullable()
+    }
 }
 
 impl Display for NullableColType {
@@ -105,10 +183,43 @@ impl Display for NullableColType {
                 f.write_str("Json")?;
             }
         }
-        if self.nullable {
+        if self.is_nullable() {
             f.write_str("?")?;
         }
         Ok(())
+    }
+}
+
+/// Proven list / vector length on a column schema — the only length
+/// type [`ColType`] may carry.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, serde_derive::Deserialize, serde_derive::Serialize)]
+pub struct ColLen(usize);
+
+impl ColLen {
+    pub fn new(n: usize) -> ColLen {
+        ColLen(n)
+    }
+
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for ColLen {
+    fn from(n: usize) -> ColLen {
+        ColLen(n)
+    }
+}
+
+impl From<ColLen> for usize {
+    fn from(n: ColLen) -> usize {
+        n.0
+    }
+}
+
+impl Display for ColLen {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
     }
 }
 
@@ -123,11 +234,11 @@ pub enum ColType {
     Uuid,
     List {
         eltype: Box<NullableColType>,
-        len: Option<usize>,
+        len: Option<ColLen>,
     },
     Vec {
         eltype: VecElementType,
-        len: usize,
+        len: ColLen,
     },
     Tuple(Vec<NullableColType>),
     Validity,
@@ -147,8 +258,57 @@ pub(crate) struct StoredRelationMetadata {
     pub(crate) non_keys: Vec<ColumnDef>,
 }
 
+/// Write shape that decides which stored columns an input must satisfy.
+/// Variants are constructed by the mutation tier (unlanded) and by tests
+/// that exercise [`CompatibleInputSchema::prove`].
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[allow(dead_code)]
+pub(crate) enum RelationWriteShape {
+    /// Full put: every stored key and non-key must be provided (or defaulted).
+    Put,
+    /// Removal or update: only stored keys must be provided (or defaulted).
+    RemoveOrUpdate,
+}
+
+/// Branded proof that an input schema is compatible with a stored schema
+/// for one [`RelationWriteShape`]. The type *is* the certificate — mint it
+/// only through [`CompatibleInputSchema::prove`], which constructs whole
+/// or refuses whole.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct CompatibleInputSchema {
+    _private: (),
+}
+
+impl CompatibleInputSchema {
+    /// Prove that `input` may write against `stored` under `shape`.
+    ///
+    /// All column obligations are discharged inside this constructor: either
+    /// every obligation holds and a proof is returned, or the whole schema
+    /// is refused. Callers never approve columns one at a time.
+    pub(crate) fn prove(
+        stored: &StoredRelationMetadata,
+        input: &StoredRelationMetadata,
+        shape: RelationWriteShape,
+    ) -> Result<Self> {
+        for col in input.keys.iter().chain(input.non_keys.iter()) {
+            stored.require_compatible_column(col)?;
+        }
+        for col in &stored.keys {
+            input.require_provides(col)?;
+        }
+        if matches!(shape, RelationWriteShape::Put) {
+            for col in &stored.non_keys {
+                input.require_provides(col)?;
+            }
+        }
+        Ok(Self { _private: () })
+    }
+}
+
 impl StoredRelationMetadata {
-    pub(crate) fn satisfied_by_required_col(&self, col: &ColumnDef) -> Result<()> {
+    /// Private whole-proof helper: this schema provides `col` (by name) or
+    /// `col` carries a default. Not a public approval surface.
+    fn require_provides(&self, col: &ColumnDef) -> Result<()> {
         for target in self.keys.iter().chain(self.non_keys.iter()) {
             if target.name == col.name {
                 return Ok(());
@@ -164,14 +324,17 @@ impl StoredRelationMetadata {
         }
         Ok(())
     }
-    pub(crate) fn compatible_with_col(&self, col: &ColumnDef) -> Result<()> {
+
+    /// Private whole-proof helper: `col` names a column here with compatible
+    /// typing (`Any?` remains a wildcard). Not a public approval surface.
+    fn require_compatible_column(&self, col: &ColumnDef) -> Result<()> {
         for target in self.keys.iter().chain(self.non_keys.iter()) {
             if target.name == col.name {
                 #[derive(Debug, Error, Diagnostic)]
                 #[error("requested column {0} has typing {1}, but the requested typing is {2}")]
                 #[diagnostic(code(eval::col_type_mismatch))]
                 struct IncompatibleTyping(String, NullableColType, NullableColType);
-                if (!col.typing.nullable || col.typing.coltype != ColType::Any)
+                if (!col.typing.is_nullable() || *col.typing.coltype() != ColType::Any)
                     && target.typing != col.typing
                 {
                     bail!(IncompatibleTyping(
@@ -207,7 +370,7 @@ impl NullableColType {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn coerce(&self, data: DataValue, cur_vld: ValidityTs) -> Result<DataValue> {
         if matches!(data, DataValue::Null) {
-            return if self.nullable {
+            return if self.is_nullable() {
                 Ok(data)
             } else {
                 #[derive(Debug, Error, Diagnostic)]
@@ -234,7 +397,7 @@ impl NullableColType {
         Ok(match &self.coltype {
             ColType::Any => match data {
                 DataValue::Set(s) => DataValue::List(s.into_iter().collect_vec()),
-                d => d,
+                d @ (data_value_any!()) => d,
             },
             ColType::Bool => DataValue::from(data.get_bool().ok_or_else(make_err)?),
             ColType::Int => DataValue::from(data.get_int().ok_or_else(make_err)?),
@@ -258,7 +421,7 @@ impl NullableColType {
                         .map_err(|e| BadBase64EncodedString(e.to_string()))?;
                     DataValue::Bytes(b)
                 }
-                _ => bail!(make_err()),
+                data_value_any!() => bail!(make_err()),
             },
             ColType::Uuid => match data {
                 u @ DataValue::Uuid(_) => u,
@@ -267,12 +430,15 @@ impl NullableColType {
                 DataValue::Str(ref s) => {
                     DataValue::uuid(uuid::Uuid::try_parse(s).map_err(|_| make_err())?)
                 }
-                _ => bail!(make_err()),
+                data_value_any!() => bail!(make_err()),
             },
             ColType::List { eltype, len } => {
                 if let DataValue::List(l) = data {
                     if let Some(expected) = len {
-                        ensure!(*expected == l.len(), BadListLength(self.clone(), l.len()))
+                        ensure!(
+                            expected.get() == l.len(),
+                            BadListLength(self.clone(), l.len())
+                        )
                     }
                     DataValue::List(
                         l.into_iter()
@@ -285,7 +451,7 @@ impl NullableColType {
             }
             ColType::Vec { eltype, len } => match &data {
                 DataValue::List(l) => {
-                    if l.len() != *len {
+                    if l.len() != len.get() {
                         bail!(BadListLength(self.clone(), l.len()))
                     }
                     let collected: Vec<f64> = l
@@ -299,17 +465,19 @@ impl NullableColType {
                                 .ok_or_else(make_err)
                         })
                         .try_collect()?;
-                    DataValue::Vector(Vector::new(collected))
+                    DataValue::Vector(
+                        Vector::try_new(collected).ok_or_else(|| make_err())?,
+                    )
                 }
                 DataValue::Vector(arr) => {
-                    if *len != arr.len() {
+                    if len.get() != arr.len() {
                         bail!(make_err())
                     }
                     // The declared element type is a precision constraint on
                     // the f64-canonical components, not a storage variant.
                     if matches!(eltype, VecElementType::F32)
                         && arr
-                            .as_slice()
+                            .to_f64s()
                             .iter()
                             .any(|&f| (f as f32 as f64) != f && !f.is_nan())
                     {
@@ -330,7 +498,7 @@ impl NullableColType {
                         VecElementType::F32 => {
                             // Division form: the multiplication form wraps in
                             // release on a pathological declared length.
-                            if bytes.len() / size_of::<f32>() != *len
+                            if bytes.len() / size_of::<f32>() != len.get()
                                 || !bytes.len().is_multiple_of(size_of::<f32>())
                             {
                                 bail!(make_err())
@@ -344,7 +512,7 @@ impl NullableColType {
                                 .collect()
                         }
                         VecElementType::F64 => {
-                            if bytes.len() / size_of::<f64>() != *len
+                            if bytes.len() / size_of::<f64>() != len.get()
                                 || !bytes.len().is_multiple_of(size_of::<f64>())
                             {
                                 bail!(make_err())
@@ -356,9 +524,11 @@ impl NullableColType {
                                 .collect()
                         }
                     };
-                    DataValue::Vector(Vector::new(collected))
+                    DataValue::Vector(
+                        Vector::try_new(collected).ok_or_else(|| make_err())?,
+                    )
                 }
-                _ => bail!(make_err()),
+                data_value_any!() => bail!(make_err()),
             },
             ColType::Tuple(typ) => {
                 if let DataValue::List(l) = data {
@@ -382,8 +552,17 @@ impl NullableColType {
                 match data {
                     vld @ DataValue::Validity(_) => vld,
                     DataValue::Str(s) => match &s as &str {
-                        "ASSERT" => DataValue::Validity(Validity::new(cur_vld, true)),
-                        "RETRACT" => DataValue::Validity(Validity::new(cur_vld, false)),
+                        "ASSERT" => {
+                            let Some(v) = Validity::new(cur_vld, true) else {
+                                bail!(InvalidValidity(DataValue::Str("ASSERT".into())));
+                            };
+                            DataValue::Validity(v.into())
+                        }
+                        "RETRACT" => DataValue::Validity(
+                            Validity::new(cur_vld, false)
+                                .expect("retract admits every tick")
+                                .into(),
+                        ),
                         s => {
                             let (is_assert, ts_str) = match s.strip_prefix('~') {
                                 None => (true, s),
@@ -405,10 +584,11 @@ impl NullableColType {
                                 bail!(InvalidValidity(DataValue::Str(s.into())))
                             }
 
-                            DataValue::Validity(Validity::new(
-                                ValidityTs::from_raw(microseconds),
-                                is_assert,
-                            ))
+                            DataValue::Validity(
+                                Validity::new(ValidityTs::from_raw(microseconds), is_assert)
+                                    .expect("reserved filtered above")
+                                    .into(),
+                            )
                         }
                     },
                     DataValue::List(l) => {
@@ -419,15 +599,16 @@ impl NullableColType {
                                 if ts == i64::MAX || ts == i64::MIN {
                                     bail!(InvalidValidity(DataValue::List(l)))
                                 }
-                                return Ok(DataValue::Validity(Validity::new(
-                                    ValidityTs::from_raw(ts),
-                                    is_assert,
-                                )));
+                                return Ok(DataValue::Validity(
+                                    Validity::new(ValidityTs::from_raw(ts), is_assert)
+                                        .expect("reserved filtered above")
+                                        .into(),
+                                ));
                             }
                         }
                         bail!(InvalidValidity(DataValue::List(l)))
                     }
-                    v => bail!(InvalidValidity(v)),
+                    v @ (data_value_any!()) => bail!(InvalidValidity(v)),
                 }
             }
             ColType::Json => {
@@ -453,7 +634,7 @@ impl NullableColType {
                         json!(b)
                     }
                     DataValue::Uuid(u) => {
-                        json!(u.0.as_bytes())
+                        json!(u.as_uuid().as_bytes())
                     }
                     DataValue::Regex(r) => {
                         json!(r.pattern())
@@ -474,7 +655,7 @@ impl NullableColType {
                     }
                     DataValue::Vector(v) => {
                         let mut arr = Vec::with_capacity(v.len());
-                        for el in v.as_slice() {
+                        for el in v.to_f64s() {
                             arr.push(json!(el));
                         }
                         arr.into()

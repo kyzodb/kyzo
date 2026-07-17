@@ -42,19 +42,17 @@
 
 use kyzo::DataValue;
 use kyzo::fuzz_api::{
-    MAX_RELATION_ID, fuzz_decode_fact_payload, fuzz_decode_relation_handle_id, interval_bounds,
+    MAX_RELATION_ID, finite_interval_is_ordered, fuzz_decode_fact_payload, fuzz_decode_relation_handle_id,
 };
 use libfuzzer_sys::fuzz_target;
 
 /// Check the bypass-detecting law on every `DataValue`, recursing into
 /// `List`/`Set` so an interval nested inside a composite is caught too.
 fn check_value(v: &DataValue) {
-    if let Some((start, end)) = interval_bounds(v) {
-        assert!(
-            start < end,
-            "smart-constructor bypass: decoded Interval({start}, {end}) with start >= end"
-        );
-    }
+    assert!(
+        finite_interval_is_ordered(v),
+        "smart-constructor bypass: decoded Interval violates start < end"
+    );
     match v {
         DataValue::List(items) => items.iter().for_each(check_value),
         DataValue::Set(items) => items.iter().for_each(check_value),

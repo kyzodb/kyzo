@@ -46,3 +46,9 @@ lto = "thin"
 inherits = "release"
 overflow-checks = true
 debug-assertions = true
+
+# Panic-lint rung (joined here from e:panic-discipline's table): sealed-enum
+# matches must name remaining variants — a hurried `_` silently absorbs new
+# refusal/kind arms. Packages opt in with `[lints] workspace = true`.
+[workspace.lints.clippy]
+wildcard_enum_match_arm = "deny"

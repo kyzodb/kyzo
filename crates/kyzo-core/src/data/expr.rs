@@ -8,28 +8,33 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): `Op` carries a `deterministic` flag that gates constant
- * folding, deserialized expressions and bytecode re-prove their arity, the
- * eval loop and serde visitors return errors where the original panicked,
- * and `expr2bytecode` (expression compilation) is relocated here from the
- * original's `parse/expr.rs`. `eval_to_const` also accepts closed
- * deterministic constructs the original refused (e.g. a Cond of constants)
- * — accept-more only; no valid original program changes meaning.
+ * folding; deserialized expressions re-prove their arity; the eval loop
+ * and serde visitors return errors where the original panicked.
+ * `eval_to_const` also accepts closed deterministic constructs the
+ * original refused (e.g. a Cond of constants) — accept-more only; no
+ * valid original program changes meaning.
+ *
+ * DEMOLITION (story #301): the second, independently-written evaluator
+ * (bytecode compile/interpret path) is deleted outright. `Expr::eval`
+ * (the tree walker) is the one remaining expression-semantics owner.
+ * Every former bytecode call site across the engine is left broken,
+ * intentionally: T2 rebuilds each one on `Expr::eval` directly.
  */
 
-//! Expressions, and the operations and bytecode that give them meaning.
+//! Expressions, and the operations that give them meaning.
 //!
-//! Three essences live here:
+//! Two essences live here:
 //!
 //! - [`Expr`] is the language's expression tree: what a KyzoScript
 //!   expression *is* after parsing — bindings, constants, applications, and
-//!   conditionals, each carrying its source span.
+//!   conditionals, each carrying its source span. It is evaluated directly
+//!   by walking the tree ([`Expr::eval`]) — the one expression-semantics
+//!   owner.
 //! - [`Op`] is a total function over values. Applied to arguments of any
 //!   shape it returns a value or an error — never panics; errors are values.
 //!   Each op also states, as data, whether it is *deterministic*: whether the
 //!   same arguments always yield the same result. That single bit is what
 //!   licenses (or forbids) constant folding.
-//! - [`Bytecode`] is the expression tree's compiled form: a flat program for
-//!   a small stack machine, evaluated without recursion in the row loop.
 //!
 //! The load-bearing law: by the time an op body runs, its argument slice has
 //! the arity the op declared. The parser proves this at build time
@@ -55,133 +60,7 @@ use crate::data::relation::NullableColType;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound};
-
-/// One instruction of the compiled expression form: a stack-machine program
-/// produced by `expr2bytecode` from a validated [`Expr`].
-///
-/// The compiler guarantees stack discipline (every `Apply` has its `arity`
-/// operands on the stack, every jump targets an instruction boundary, the
-/// program nets exactly one value). Deserialized bytecode is *claimed*
-/// discipline, not proven — so the evaluator checks its stack operations and
-/// reports corruption as an error, never a panic.
-#[derive(Clone, PartialEq, Eq, serde_derive::Serialize, Debug)]
-pub enum Bytecode {
-    /// push 1
-    Binding {
-        var: Symbol,
-        tuple_pos: Option<usize>,
-    },
-    /// push 1
-    Const {
-        val: DataValue,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    /// pop n, push 1
-    Apply {
-        op: &'static Op,
-        arity: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    /// pop 1
-    JumpIfFalse {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    /// pop 1
-    JumpIfTrue {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    /// peek: jump keeping the value when it is non-null, else pop it and
-    /// fall through (the coalesce step)
-    JumpNotNull {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    /// unchanged
-    Goto {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-}
-
-/// Wire twin of [`Bytecode`]: what serde may construct before the arity law
-/// has been re-proven. Field-for-field identical to the real enum, so the
-/// serialized format is unchanged from the derived one.
-#[derive(serde_derive::Deserialize)]
-enum BytecodeDe {
-    Binding {
-        var: Symbol,
-        tuple_pos: Option<usize>,
-    },
-    Const {
-        val: DataValue,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    Apply {
-        op: &'static Op,
-        arity: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    JumpIfFalse {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    JumpIfTrue {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    JumpNotNull {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-    Goto {
-        jump_to: usize,
-        #[serde(skip)]
-        span: SourceSpan,
-    },
-}
-
-impl BytecodeDe {
-    fn into_checked(self) -> std::result::Result<Bytecode, ArityMismatchError> {
-        Ok(match self {
-            BytecodeDe::Binding { var, tuple_pos } => Bytecode::Binding { var, tuple_pos },
-            BytecodeDe::Const { val, span } => Bytecode::Const { val, span },
-            BytecodeDe::Apply { op, arity, span } => {
-                if !op.arity_matches(arity) {
-                    return Err(ArityMismatchError(op.name, arity, op.arity_requirement()));
-                }
-                Bytecode::Apply { op, arity, span }
-            }
-            BytecodeDe::JumpIfFalse { jump_to, span } => Bytecode::JumpIfFalse { jump_to, span },
-            BytecodeDe::JumpIfTrue { jump_to, span } => Bytecode::JumpIfTrue { jump_to, span },
-            BytecodeDe::JumpNotNull { jump_to, span } => Bytecode::JumpNotNull { jump_to, span },
-            BytecodeDe::Goto { jump_to, span } => Bytecode::Goto { jump_to, span },
-        })
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Bytecode {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        BytecodeDe::deserialize(deserializer)?
-            .into_checked()
-            .map_err(D::Error::custom)
-    }
-}
+use crate::data::value::data_value_any;
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("The variable '{0}' is unbound")]
@@ -199,15 +78,6 @@ pub(crate) struct TupleTooShortError(
     #[label] pub(crate) SourceSpan,
 );
 
-/// A bytecode program that violates stack discipline or jumps out of range.
-/// Compiled programs cannot produce this; it is reachable only through
-/// deserialized bytecode — which the law says must error, never abort.
-#[derive(Error, Diagnostic, Debug)]
-#[error("Corrupt bytecode: {0}")]
-#[diagnostic(code(eval::corrupt_bytecode))]
-#[diagnostic(help("This is definitely a bug or corrupt stored program. Please report it."))]
-struct CorruptBytecodeError(&'static str);
-
 /// Deserialized data applied an op to an argument count the op does not
 /// accept. Rejected at the serde boundary so no op body ever sees it.
 #[derive(Error, Diagnostic, Debug)]
@@ -215,252 +85,20 @@ struct CorruptBytecodeError(&'static str);
 #[diagnostic(code(eval::deserialized_arity_mismatch))]
 struct ArityMismatchError(&'static str, usize, String);
 
-/// Compile a validated [`Expr`] into a [`Bytecode`] program.
-///
-/// Relocated from the CozoDB original's `parse/expr.rs`: compiling an
-/// expression to its stack-machine form is the expression's own domain, not
-/// the parser's — moving it here removes the data tier's only forward
-/// dependency on the parse tier.
-///
-/// The compiler establishes the stack discipline the evaluator relies on:
-/// every `Apply` is emitted after exactly its `arity` operand programs,
-/// every jump targets an instruction boundary, and the whole program nets
-/// exactly one value.
-pub(crate) fn expr2bytecode(expr: &Expr, collector: &mut Vec<Bytecode>) -> Result<()> {
-    match expr {
-        Expr::Binding { var, tuple_pos } => collector.push(Bytecode::Binding {
-            var: var.clone(),
-            tuple_pos: *tuple_pos,
-        }),
-        Expr::Const { val, span } => collector.push(Bytecode::Const {
-            val: val.clone(),
-            span: *span,
-        }),
-        Expr::Apply { op, args, span } => {
-            let arity = args.len();
-            for arg in args.iter() {
-                expr2bytecode(arg, collector)?;
-            }
-            collector.push(Bytecode::Apply {
-                op,
-                arity,
-                span: *span,
-            })
-        }
-        Expr::Lazy { op, args, span } => {
-            // Short-circuit via jumps, derived from the connective's
-            // declaration: a boolean-decided form (`deciding_bool`) jumps
-            // out on its deciding value and nets the decision constant;
-            // Coalesce jumps out keeping the first non-null value itself.
-            match op.deciding_bool() {
-                Some(deciding) => {
-                    // Each argument's jump carries THAT ARGUMENT's span:
-                    // the type refusal for a non-boolean argument reports
-                    // where the offending argument is, exactly as the tree
-                    // evaluator's `Decision::Refused` arm does.
-                    let jump = |jump_to: usize, span: SourceSpan| -> Bytecode {
-                        if deciding {
-                            Bytecode::JumpIfTrue { jump_to, span }
-                        } else {
-                            Bytecode::JumpIfFalse { jump_to, span }
-                        }
-                    };
-                    let mut decided_jumps = vec![];
-                    for arg in args.iter() {
-                        expr2bytecode(arg, collector)?;
-                        collector.push(jump(0, arg.span()));
-                        decided_jumps.push((collector.len() - 1, arg.span()));
-                    }
-                    collector.push(Bytecode::Const {
-                        val: op.identity(),
-                        span: *span,
-                    });
-                    collector.push(Bytecode::Goto {
-                        jump_to: collector.len() + 2,
-                        span: *span,
-                    });
-                    let decided_target = collector.len();
-                    for (pos, arg_span) in decided_jumps {
-                        collector[pos] = jump(decided_target, arg_span);
-                    }
-                    collector.push(Bytecode::Const {
-                        val: DataValue::from(deciding),
-                        span: *span,
-                    });
-                }
-                None => {
-                    let mut done_jumps = vec![];
-                    for arg in args.iter() {
-                        expr2bytecode(arg, collector)?;
-                        collector.push(Bytecode::JumpNotNull {
-                            jump_to: 0,
-                            span: *span,
-                        });
-                        done_jumps.push(collector.len() - 1);
-                    }
-                    collector.push(Bytecode::Const {
-                        val: op.identity(),
-                        span: *span,
-                    });
-                    let end = collector.len();
-                    for pos in done_jumps {
-                        collector[pos] = Bytecode::JumpNotNull {
-                            jump_to: end,
-                            span: *span,
-                        };
-                    }
-                }
-            }
-        }
-        Expr::Cond { clauses, span } => {
-            let mut return_jump_pos = vec![];
-            for (cond, val) in clauses {
-                // +1
-                expr2bytecode(cond, collector)?;
-                // -1
-                collector.push(Bytecode::JumpIfFalse {
-                    jump_to: 0,
-                    span: *span,
-                });
-                let false_jump_amend_pos = collector.len() - 1;
-                // +1 in this branch
-                expr2bytecode(val, collector)?;
-                collector.push(Bytecode::Goto {
-                    jump_to: 0,
-                    span: *span,
-                });
-                return_jump_pos.push(collector.len() - 1);
-                collector[false_jump_amend_pos] = Bytecode::JumpIfFalse {
-                    jump_to: collector.len(),
-                    span: *span,
-                };
-            }
-            let total_len = collector.len();
-            for pos in return_jump_pos {
-                collector[pos] = Bytecode::Goto {
-                    jump_to: total_len,
-                    span: *span,
-                }
-            }
-        }
-        Expr::UnboundApply { op, span, .. } => {
-            bail!(NoImplementationError(*span, op.to_string()));
-        }
-    }
-    Ok(())
+/// Binding position in a tuple — unresolved until [`Expr::fill_binding_indices`],
+/// then resolved. Replaces `Option<usize>` so the phase is a named sum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+pub enum BindingPos {
+    Unresolved,
+    Resolved(usize),
 }
 
-pub fn eval_bytecode_pred(
-    bytecodes: &[Bytecode],
-    bindings: impl AsRef<[DataValue]>,
-    stack: &mut Vec<DataValue>,
-    span: SourceSpan,
-) -> Result<bool> {
-    match eval_bytecode(bytecodes, bindings, stack)? {
-        DataValue::Bool(b) => Ok(b),
-        v => bail!(PredicateTypeError(span, v)),
-    }
-}
-
-pub fn eval_bytecode(
-    bytecodes: &[Bytecode],
-    bindings: impl AsRef<[DataValue]>,
-    stack: &mut Vec<DataValue>,
-) -> Result<DataValue> {
-    stack.clear();
-    let mut pointer = 0;
-    loop {
-        if pointer == bytecodes.len() {
-            break;
+impl BindingPos {
+    pub fn resolved(self) -> Option<usize> {
+        match self {
+            BindingPos::Resolved(i) => Some(i),
+            BindingPos::Unresolved => None,
         }
-        // Compiled jumps always land on instruction boundaries; a pointer
-        // past the end can only come from corrupt deserialized bytecode.
-        let current_instruction = bytecodes
-            .get(pointer)
-            .ok_or(CorruptBytecodeError("jump beyond the end of the program"))?;
-        match current_instruction {
-            Bytecode::Binding { var, tuple_pos, .. } => match tuple_pos {
-                None => {
-                    bail!(UnboundVariableError(var.name.to_string(), var.span))
-                }
-                Some(i) => {
-                    let val = bindings
-                        .as_ref()
-                        .get(*i)
-                        .ok_or_else(|| {
-                            TupleTooShortError(
-                                var.name.to_string(),
-                                *i,
-                                bindings.as_ref().len(),
-                                var.span,
-                            )
-                        })?
-                        .clone();
-                    stack.push(val);
-                    pointer += 1;
-                }
-            },
-            Bytecode::Const { val, .. } => {
-                stack.push(val.clone());
-                pointer += 1;
-            }
-            Bytecode::Apply { op, arity, span } => {
-                // Compiler-produced programs always have `arity` operands on
-                // the stack here; checked because deserialized bytecode is
-                // only claimed, not proven.
-                let frame_start = stack.len().checked_sub(*arity).ok_or(CorruptBytecodeError(
-                    "application consumes more values than the stack holds",
-                ))?;
-                let args_frame = &stack[frame_start..];
-                let result = apply_op(op, args_frame)
-                    .map_err(|err| EvalRaisedError(*span, err.to_string()))?;
-                stack.truncate(frame_start);
-                stack.push(result);
-                pointer += 1;
-            }
-            Bytecode::JumpIfFalse { jump_to, span } => {
-                let val = stack
-                    .pop()
-                    .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
-                let cond = val.get_bool().ok_or(PredicateTypeError(*span, val))?;
-                if cond {
-                    pointer += 1;
-                } else {
-                    pointer = *jump_to;
-                }
-            }
-            Bytecode::JumpIfTrue { jump_to, span } => {
-                let val = stack
-                    .pop()
-                    .ok_or(CorruptBytecodeError("conditional jump on an empty stack"))?;
-                let cond = val.get_bool().ok_or(PredicateTypeError(*span, val))?;
-                if cond {
-                    pointer = *jump_to;
-                } else {
-                    pointer += 1;
-                }
-            }
-            Bytecode::JumpNotNull { jump_to, .. } => {
-                let val = stack
-                    .last()
-                    .ok_or(CorruptBytecodeError("coalesce jump on an empty stack"))?;
-                if *val == DataValue::Null {
-                    stack.pop();
-                    pointer += 1;
-                } else {
-                    pointer = *jump_to;
-                }
-            }
-            Bytecode::Goto { jump_to, .. } => {
-                pointer = *jump_to;
-            }
-        }
-    }
-    // A compiled program nets exactly one value; an empty stack here means
-    // the bytecode was corrupt, and corruption is an error, not an abort.
-    match stack.pop() {
-        Some(val) => Ok(val),
-        None => bail!(CorruptBytecodeError("program left no value on the stack")),
     }
 }
 
@@ -473,15 +111,10 @@ pub enum Expr {
         /// The variable name to bind
         var: Symbol,
         /// When executing in the context of a tuple, the position of the
-        /// binding within the tuple.
-        ///
-        /// Two-phase: `None` between parsing and `fill_binding_indices`,
-        /// `Some` afterwards, and evaluation errors on `None`. A typestate
-        /// split (unresolved vs. resolved expression) would put that law in
-        /// the types; it spans the whole program representation, so it is
-        /// deliberately deferred to the program-tier port, not redesigned
-        /// here.
-        tuple_pos: Option<usize>,
+        /// binding within the tuple — [`BindingPos::Unresolved`] between
+        /// parsing and [`Expr::fill_binding_indices`], then
+        /// [`BindingPos::Resolved`].
+        tuple_pos: BindingPos,
     },
     /// Constant expression containing a value
     Const {
@@ -583,8 +216,8 @@ impl LazyOp {
         }
     }
     /// THE truth table. Every machine that evaluates a lazy connective —
-    /// the tree evaluator, the constant folder, the bytecode compiler —
-    /// derives from this single declaration.
+    /// the tree evaluator and the constant folder — derives from this
+    /// single declaration.
     pub(crate) fn decide(self, val: &DataValue) -> Decision {
         match self {
             LazyOp::And => match val.get_bool() {
@@ -606,16 +239,6 @@ impl LazyOp {
             }
         }
     }
-    /// The boolean that decides the form, when the connective is decided
-    /// by a boolean at all (`None` for Coalesce, which is decided by
-    /// non-nullness and needs its own jump shape).
-    fn deciding_bool(self) -> Option<bool> {
-        match self {
-            LazyOp::And => Some(false),
-            LazyOp::Or => Some(true),
-            LazyOp::Coalesce => None,
-        }
-    }
 }
 
 /// Wire twin of [`Expr`]: what serde may construct before the arity law has
@@ -627,7 +250,7 @@ impl LazyOp {
 enum ExprDe {
     Binding {
         var: Symbol,
-        tuple_pos: Option<usize>,
+        tuple_pos: BindingPos,
     },
     Const {
         val: DataValue,
@@ -651,6 +274,12 @@ enum ExprDe {
         #[serde(skip)]
         span: SourceSpan,
     },
+    Lazy {
+        op: LazyOp,
+        args: Box<[Expr]>,
+        #[serde(skip)]
+        span: SourceSpan,
+    },
 }
 
 impl ExprDe {
@@ -670,6 +299,7 @@ impl ExprDe {
             }
             ExprDe::UnboundApply { op, args, span } => Expr::UnboundApply { op, args, span },
             ExprDe::Cond { clauses, span } => Expr::Cond { clauses, span },
+            ExprDe::Lazy { op, args, span } => Expr::Lazy { op, args, span },
         })
     }
 }
@@ -766,11 +396,6 @@ pub(crate) struct PredicateTypeError(#[label] pub(crate) SourceSpan, pub(crate) 
 pub(crate) struct EvalRaisedError(#[label] pub(crate) SourceSpan, #[help] pub(crate) String);
 
 impl Expr {
-    pub(crate) fn compile(&self) -> Result<Vec<Bytecode>> {
-        let mut collector = vec![];
-        expr2bytecode(self, &mut collector)?;
-        Ok(collector)
-    }
     pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Expr::Binding { var, .. } => var.span,
@@ -830,7 +455,7 @@ impl Expr {
                 args,
                 ..
             } => args.to_vec(),
-            v => vec![v.clone()],
+            v @ Expr::Binding { .. } | v @ Expr::Const { .. } | v @ Expr::Apply { .. } | v @ Expr::UnboundApply { .. } | v @ Expr::Cond { .. } | v @ Expr::Lazy { .. } => vec![v.clone()],
         }
     }
     pub(crate) fn fill_binding_indices(
@@ -847,7 +472,7 @@ impl Expr {
                 let found_idx = *binding_map
                     .get(var)
                     .ok_or_else(|| BadBindingError(var.to_string(), var.span))?;
-                *tuple_pos = Some(found_idx)
+                *tuple_pos = BindingPos::Resolved(found_idx)
             }
             Expr::Const { .. } => {}
             Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
@@ -875,7 +500,7 @@ impl Expr {
     fn do_binding_indices(&self, coll: &mut BTreeSet<usize>) -> Result<()> {
         match self {
             Expr::Binding { tuple_pos, .. } => {
-                if let Some(idx) = tuple_pos {
+                if let BindingPos::Resolved(idx) = tuple_pos {
                     coll.insert(*idx);
                 }
             }
@@ -983,7 +608,7 @@ impl Expr {
             // into a single per-query number. If per-query-constant semantics
             // is ever wanted for `now()`, that is an engine decision to make
             // deliberately later, not a side effect of folding.
-            if all_evaluated && op.deterministic {
+            if all_evaluated && op.is_deterministic() {
                 let result = self.eval(vec![])?;
                 *self = Expr::Const { val: result, span };
             }
@@ -1038,10 +663,10 @@ impl Expr {
     pub(crate) fn eval(&self, bindings: impl AsRef<[DataValue]>) -> Result<DataValue> {
         match self {
             Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
-                None => {
+                BindingPos::Unresolved => {
                     bail!(UnboundVariableError(var.name.to_string(), var.span))
                 }
-                Some(i) => Ok(bindings
+                BindingPos::Resolved(i) => Ok(bindings
                     .as_ref()
                     .get(*i)
                     .ok_or_else(|| {
@@ -1090,6 +715,14 @@ impl Expr {
             Expr::UnboundApply { op, span, .. } => {
                 bail!(NoImplementationError(*span, op.to_string()));
             }
+        }
+    }
+    /// Evaluate as a predicate: `true`/`false`, or a typed refusal when the
+    /// value is not a boolean.
+    pub(crate) fn eval_pred(&self, bindings: impl AsRef<[DataValue]>) -> Result<bool> {
+        match self.eval(bindings)? {
+            DataValue::Bool(b) => Ok(b),
+            v @ (data_value_any!()) => bail!(PredicateTypeError(self.span(), v)),
         }
     }
     pub(crate) fn extract_bound(&self, target: &Symbol) -> Result<ValueRange> {
@@ -1225,7 +858,7 @@ impl Expr {
                     for field in args.iter() {
                         match field {
                             Expr::Binding { var, .. } => collected.push(var.name.clone()),
-                            _ => {
+                            Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                                 return Err(InvalidFieldsError(
                                     format!("`{field}` is not a plain variable"),
                                     field.span(),
@@ -1238,7 +871,7 @@ impl Expr {
                 }
             }
             Expr::Binding { var, .. } => Ok(vec![var.name.clone()]),
-            _ => Err(InvalidFieldsError(
+            Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => Err(InvalidFieldsError(
                 format!("`{self}` is not a variable or list"),
                 self.span(),
             )
@@ -1320,6 +953,9 @@ impl Default for ValueRange {
 /// compile-time fact about the operation, declared once in `define_op!` so
 /// the name, the implementing function, the arity, and the determinism claim
 /// cannot drift apart.
+///
+/// `vararg` / `deterministic` are private — sealed at [`Op::define`] (via
+/// `define_op!`). Hot-path reads of name / arity / body stay `pub(crate)`.
 #[derive(Clone)]
 pub struct Op {
     /// The const's own name (`"OP_ADD"`); `define_op!` stringifies it, so
@@ -1329,11 +965,11 @@ pub struct Op {
     /// without, it is exact.
     pub(crate) min_arity: usize,
     /// Whether the op accepts more than `min_arity` arguments.
-    pub(crate) vararg: bool,
+    vararg: bool,
     /// Same arguments ⇒ same result. `false` for the clock and randomness
     /// ops; a `false` here forbids constant folding, so the op evaluates
     /// per row at runtime.
-    pub(crate) deterministic: bool,
+    deterministic: bool,
     /// The implementation. Total: returns a value or an error for any
     /// argument slice satisfying the declared arity; never panics.
     pub(crate) inner: fn(&[DataValue]) -> Result<DataValue>,
@@ -1351,13 +987,13 @@ pub(crate) fn op_display_name(name: &'static str) -> String {
 }
 
 /// THE enforced checkpoint every row-path op application routes through —
-/// the bytecode VM's `Apply` instruction and the tree-walking `Expr::Apply`
-/// arm alike. Calls the op, then refuses a `NaN` float or vector-lane
-/// result the same way regardless of whether the op remembered its own
-/// `no_nan` guard: the per-op guards in `data/functions.rs` stay as a
-/// belt-and-suspenders first line (they carry a more specific domain
-/// diagnosis before the result even exists), but no op — present or
-/// future — can bypass this backstop and hand a poison value to a caller.
+/// the tree-walking `Expr::Apply` arm. Calls the op, then refuses a `NaN`
+/// float or vector-lane result the same way regardless of whether the op
+/// remembered its own `no_nan` guard: the per-op guards in
+/// `data/functions.rs` stay as a belt-and-suspenders first line (they carry
+/// a more specific domain diagnosis before the result even exists), but no
+/// op — present or future — can bypass this backstop and hand a poison
+/// value to a caller.
 pub(crate) fn apply_op(op: &Op, args: &[DataValue]) -> Result<DataValue> {
     let result = (op.inner)(args)?;
     if crate::data::functions::result_has_nan(&result) {
@@ -1593,11 +1229,40 @@ pub(crate) fn get_op(name: &str) -> Option<&'static Op> {
 }
 
 impl Op {
+    /// The sole mint for a built-in op — used by `define_op!` and by
+    /// test-only synthetic ops. Keeps name / arity / determinism / body
+    /// welded together at one door.
+    pub(crate) const fn define(
+        name: &'static str,
+        min_arity: usize,
+        vararg: bool,
+        deterministic: bool,
+        inner: fn(&[DataValue]) -> Result<DataValue>,
+    ) -> Op {
+        Op {
+            name,
+            min_arity,
+            vararg,
+            deterministic,
+            inner,
+        }
+    }
+
+    /// Whether this op accepts more than [`Self::min_arity`] arguments.
+    pub(crate) const fn is_vararg(&self) -> bool {
+        self.vararg
+    }
+
+    /// Whether same arguments always yield the same result (foldable).
+    pub(crate) const fn is_deterministic(&self) -> bool {
+        self.deterministic
+    }
+
     /// Whether `n` arguments satisfy this op's declared arity: at least
     /// `min_arity` when vararg, exactly `min_arity` otherwise. The parser
     /// and the serde boundary both enforce arity through this one predicate.
     pub(crate) fn arity_matches(&self, n: usize) -> bool {
-        if self.vararg {
+        if self.is_vararg() {
             n >= self.min_arity
         } else {
             n == self.min_arity
@@ -1606,7 +1271,7 @@ impl Op {
 
     /// Human phrasing of the arity law, for diagnostics.
     pub(crate) fn arity_requirement(&self) -> String {
-        if self.vararg {
+        if self.is_vararg() {
             format!("at least {}", self.min_arity)
         } else {
             format!("exactly {}", self.min_arity)

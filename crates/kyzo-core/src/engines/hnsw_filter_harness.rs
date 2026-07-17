@@ -30,12 +30,14 @@ use super::*;
 
 use proptest::prelude::*;
 
+use crate::data::expr::BindingPos;
 use crate::data::functions::{OP_GE, OP_LT, OP_MOD};
 use crate::data::program::InputRelationHandle;
 use crate::data::symb::Symbol;
 use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
 use crate::storage::Storage;
 use crate::storage::fjall::new_fjall_storage;
+use crate::data::value::data_value_any;
 
 // ---------------------------------------------------------------------------
 // Local schema helpers (the draft's live in `mod tests`; kept private there).
@@ -44,10 +46,7 @@ use crate::storage::fjall::new_fjall_storage;
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype,
-            nullable: false,
-        },
+        typing: NullableColType::required(coltype),
         default_gen: None,
     }
 }
@@ -79,6 +78,7 @@ fn input_handle(name: &str, metadata: StoredRelationMetadata) -> InputRelationHa
 /// One splitmix64 step — same house PRNG as the engine's level seed, so the
 /// generated corpus is byte-reproducible across platforms.
 fn splitmix(state: &mut u64) -> u64 {
+    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -100,7 +100,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
     (0..n)
         .map(|k| {
             let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))]
+            vec![DataValue::from(k), DataValue::Vector(Vector::try_new(comps).unwrap())]
         })
         .map(Tuple::from_vec)
         .collect()
@@ -109,7 +109,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
 fn seeded_query(dim: usize, seed: u64) -> Vector {
     let mut state = seed ^ 0x0F0F_F0F0_DEAD_BEEF;
     let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-    Vector::new(comps)
+    Vector::try_new(comps).unwrap()
 }
 
 /// A deterministic (Fisher–Yates, splitmix-seeded) permutation of `rows` — the
@@ -136,29 +136,27 @@ fn hbase_metadata(dim: usize) -> StoredRelationMetadata {
             "v",
             ColType::Vec {
                 eltype: VecElementType::F32,
-                len: dim,
+                len: ColLen::new(dim),
             },
         )],
     }
 }
 
 fn hmanifest(dim: usize, distance: HnswDistance) -> HnswIndexManifest {
-    HnswIndexManifest {
-        base_relation: SmartString::from("corpus"),
-        index_name: SmartString::from("by_v"),
-        vec_dim: dim,
-        dtype: VecElementType::F32,
-        vec_fields: vec![1],
+    HnswIndexManifest::admit(
+        SmartString::from("corpus"),
+        SmartString::from("by_v"),
+        dim,
+        VecElementType::F32,
+        vec![1],
         distance,
-        ef_construction: 32,
-        m_neighbours: 16,
-        m_max: 16,
-        m_max0: 32,
-        level_multiplier: 1.0 / (16f64).ln(),
-        index_filter: None,
-        extend_candidates: false,
-        keep_pruned_connections: false,
-    }
+        32,
+        16,
+        None,
+        false,
+        false,
+    )
+    .expect("harness manifest admits")
 }
 
 /// A real base relation + HNSW index on a real fjall store, populated. Mirrors
@@ -183,7 +181,6 @@ fn hsetup(
         KeyspaceKind::AlgorithmState,
     )
     .unwrap();
-    let mut stack = vec![];
     for r in rows {
         base.put_fact(
             &mut tx,
@@ -192,7 +189,7 @@ fn hsetup(
             SourceSpan(0, 0),
         )
         .unwrap();
-        hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap();
+        hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap();
     }
     tx.commit().unwrap();
     (base, idx, m)
@@ -234,68 +231,60 @@ impl FilterSpec {
         }
     }
 
-    /// Compiled bytecode over the ENGINE's appended output row. Binding
+    /// Expr filter over the ENGINE's appended output row. Binding
     /// `tuple_pos = 0` is the key column `k`, at position 0 (base keys first).
-    fn bytecode(&self) -> (Vec<Bytecode>, SourceSpan) {
+    fn filter_expr(&self) -> Expr {
         let span = SourceSpan(0, 0);
         let k = Symbol::new("k", span);
-        let code = match *self {
-            FilterSpec::LessThan { threshold } => vec![
-                Bytecode::Binding {
-                    var: k,
-                    tuple_pos: Some(0),
-                },
-                Bytecode::Const {
-                    val: DataValue::from(threshold),
-                    span,
-                },
-                Bytecode::Apply {
-                    op: &OP_LT,
-                    arity: 2,
-                    span,
-                },
-            ],
-            FilterSpec::ModLessThan { modulus, accept } => vec![
-                Bytecode::Binding {
-                    var: k,
-                    tuple_pos: Some(0),
-                },
-                Bytecode::Const {
-                    val: DataValue::from(modulus),
-                    span,
-                },
-                Bytecode::Apply {
-                    op: &OP_MOD,
-                    arity: 2,
-                    span,
-                },
-                Bytecode::Const {
-                    val: DataValue::from(accept),
-                    span,
-                },
-                Bytecode::Apply {
-                    op: &OP_LT,
-                    arity: 2,
-                    span,
-                },
-            ],
-            FilterSpec::AtLeast { threshold } => vec![
-                Bytecode::Binding {
-                    var: k,
-                    tuple_pos: Some(0),
-                },
-                Bytecode::Const {
-                    val: DataValue::from(threshold),
-                    span,
-                },
-                Bytecode::Apply {
-                    op: &OP_GE,
-                    arity: 2,
-                    span,
-                },
-            ],
+        let binding = Expr::Binding {
+            var: k,
+            tuple_pos: BindingPos::Resolved(0),
         };
-        (code, span)
+        match *self {
+            FilterSpec::LessThan { threshold } => Expr::Apply {
+                op: &OP_LT,
+                args: Box::new([
+                    binding,
+                    Expr::Const {
+                        val: DataValue::from(threshold),
+                        span,
+                    },
+                ]),
+                span,
+            },
+            FilterSpec::ModLessThan { modulus, accept } => Expr::Apply {
+                op: &OP_LT,
+                args: Box::new([
+                    Expr::Apply {
+                        op: &OP_MOD,
+                        args: Box::new([
+                            binding,
+                            Expr::Const {
+                                val: DataValue::from(modulus),
+                                span,
+                            },
+                        ]),
+                        span,
+                    },
+                    Expr::Const {
+                        val: DataValue::from(accept),
+                        span,
+                    },
+                ]),
+                span,
+            },
+            FilterSpec::AtLeast { threshold } => Expr::Apply {
+                op: &OP_GE,
+                args: Box::new([
+                    binding,
+                    Expr::Const {
+                        val: DataValue::from(threshold),
+                        span,
+                    },
+                ]),
+                span,
+            },
+        }
     }
 
     /// True selectivity over a concrete corpus — VERIFIES the sweep generator
@@ -354,7 +343,7 @@ fn brute_force_filtered_knn(
             let key = r[0].get_int().unwrap();
             let v = match &r.as_slice()[1] {
                 DataValue::Vector(v) => v.clone(),
-                _ => panic!("row vector"),
+                data_value_any!() => panic!("row vector"),
             };
             let vv = IndexVec::admit(&v, manifest).expect("row admits");
             (OrderedFloat(qv.dist(&vv, manifest.distance)), key)
@@ -392,10 +381,12 @@ fn knn_params_p2(k: usize, ef: usize) -> HnswKnnParams {
         k,
         ef,
         radius: None,
-        bind_field: false,
-        bind_field_idx: false,
-        bind_distance: true,
-        bind_vector: false,
+        bind: crate::engines::hnsw::HnswBindPack {
+            field: crate::engines::hnsw::HnswBindSlot::Omit,
+            field_idx: crate::engines::hnsw::HnswBindSlot::Omit,
+            distance: crate::engines::hnsw::HnswBindSlot::Append,
+            vector: crate::engines::hnsw::HnswBindSlot::Omit,
+        },
     }
 }
 
@@ -414,9 +405,8 @@ fn filtered_search(
     filter: &FilterSpec,
 ) -> Vec<Tuple> {
     let params = knn_params_p2(k, ef);
-    let fb = Some(filter.bytecode());
-    let mut stack = vec![];
-    hnsw_knn(
+    let fb = Some(filter.filter_expr());
+    Hnsw::knn(
         tx,
         q,
         manifest,
@@ -424,9 +414,10 @@ fn filtered_search(
         idx,
         &params,
         &fb,
-        &mut stack,
         &crate::fixed_rule::CancelFlag::default(),
     )
+    .unwrap()
+    .materialize_all_tuples()
     .unwrap()
 }
 
@@ -443,9 +434,8 @@ fn selected_plan(
     filter: &FilterSpec,
 ) -> Option<SearchPlan> {
     let params = knn_params_p2(k, ef);
-    let fb = filter.bytecode();
-    let mut stack = vec![];
-    hnsw_knn_selected_plan(tx, q, manifest, base, idx, &params, &fb, &mut stack).unwrap()
+    let fb = filter.filter_expr();
+    hnsw_knn_selected_plan(tx, q, manifest, base, idx, &params, &fb).unwrap()
 }
 
 /// The PINNED draft post-filter baseline (measured in Phase 1, before the
@@ -500,27 +490,27 @@ fn oracle_is_exact_and_total_ordered() {
     let rows: Vec<Tuple> = vec![
         Tuple::from_vec(vec![
             DataValue::from(0),
-            DataValue::Vector(Vector::new(vec![3.0, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![3.0, 0.0]).unwrap()),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(1),
-            DataValue::Vector(Vector::new(vec![0.1, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![0.1, 0.0]).unwrap()),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(2),
-            DataValue::Vector(Vector::new(vec![1.0, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![1.0, 0.0]).unwrap()),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::new(vec![0.2, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![0.2, 0.0]).unwrap()),
         ]),
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         Tuple::from_vec(vec![
             DataValue::from(4),
-            DataValue::Vector(Vector::new(vec![-1.0, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![-1.0, 0.0]).unwrap()),
         ]),
     ];
-    let q = Vector::new(vec![0.0, 0.0]);
+    let q = Vector::try_new(vec![0.0, 0.0]).unwrap();
     let even = FilterSpec::ModLessThan {
         modulus: 2,
         accept: 1,
@@ -752,19 +742,10 @@ fn fallback_is_load_bearing_and_exact() {
     let f = filter_at_selectivity(0.90, true); // many matches, so graph would normally fill
     let truth = brute_force_filtered_knn(&q, P2_K, &f, &rows, &m);
     let params = knn_params_p2(P2_K, P2_EF);
-    let fb = f.bytecode();
+    let fb = f.filter_expr();
     let starved = SearchPlan::Graph { ef2: 1 };
-
-    let mut s1 = vec![];
-    let no_fb = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, &mut s1, starved, false,
-    )
-    .unwrap();
-    let mut s2 = vec![];
-    let with_fb = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, &mut s2, starved, true,
-    )
-    .unwrap();
+    let no_fb = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, starved, false).unwrap();
+    let with_fb = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, starved, true).unwrap();
 
     assert!(
         no_fb.len() < P2_K,
@@ -868,7 +849,7 @@ fn engine_ordering_is_total_under_ties() {
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
             Tuple::from_vec(vec![
                 DataValue::from(i),
-                DataValue::Vector(Vector::new(comps)),
+                DataValue::Vector(Vector::try_new(comps).unwrap()),
             ])
         })
         .collect();
@@ -876,7 +857,7 @@ fn engine_ordering_is_total_under_ties() {
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
     let rtx = db.read_tx().unwrap();
-    let q = Vector::new(vec![0.0f64; dim]);
+    let q = Vector::try_new(vec![0.0f64; dim]).unwrap();
     // A filter that passes every row: (k mod 1) < 1 is always true.
     let f = FilterSpec::ModLessThan {
         modulus: 1,
@@ -933,13 +914,10 @@ fn min_k_matches_law_generative() {
             matches!(plan, SearchPlan::Graph { .. }),
             "pinned band precondition: selector must pick Graph, got {plan:?}"
         );
-        let fb = pinned_f.bytecode();
+        let fb = pinned_f.filter_expr();
         let params = knn_params_p2(P2_K, pinned_ef);
-        let mut stack = vec![];
-        let partial = hnsw_knn_forced(
-            &rtx, &q, &m, &base, &idx, &params, &fb, &mut stack, plan, false,
-        )
-        .unwrap();
+        let partial =
+            hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false).unwrap();
         assert!(
             !partial.is_empty() && partial.len() < P2_K,
             "pinned band precondition: the raw graph walk must be a NON-EMPTY \
@@ -1050,7 +1028,7 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
             };
             Tuple::from_vec(vec![
                 DataValue::from(k),
-                DataValue::Vector(Vector::new(v.clone())),
+                DataValue::Vector(Vector::try_new(v.clone()).unwrap()),
             ])
         })
         .collect();
@@ -1137,12 +1115,8 @@ fn graph_walk_alone_crosses_to_disconnected_matches_without_fallback() {
     // finish the job.
     let plan = SearchPlan::Graph { ef2: P2_EF * 4 };
     let params = knn_params_p2(P2_K, P2_EF);
-    let fb = f.bytecode();
-    let mut stack = vec![];
-    let hits = hnsw_knn_forced(
-        &rtx, &q, &m, &base, &idx, &params, &fb, &mut stack, plan, false,
-    )
-    .unwrap();
+    let fb = f.filter_expr();
+    let hits = hnsw_knn_forced(&rtx, &q, &m, &base, &idx, &params, &fb, plan, false).unwrap();
     let ekeys = keys_of(&hits);
 
     assert_eq!(
@@ -1204,8 +1178,8 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
     assert_eq!(f.true_match_count(&rows), rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
-    let mut stack = vec![];
-    let unfiltered = hnsw_knn(
+    let unfiltered = crate::engines::search_rows(
+        Hnsw::knn(
         &rtx,
         &q,
         &m,
@@ -1213,8 +1187,9 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
         &idx,
         &params,
         &None,
-        &mut stack,
         &crate::fixed_rule::CancelFlag::default(),
+    )
+    .unwrap(),
     )
     .unwrap();
     let filtered = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);
@@ -1404,7 +1379,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
             Tuple::from_vec(vec![
                 DataValue::from(i),
-                DataValue::Vector(Vector::new(comps)),
+                DataValue::Vector(Vector::try_new(comps).unwrap()),
             ])
         })
         .collect();
@@ -1415,7 +1390,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     // Every row is EXACTLY equidistant (squared L2 = 1.0, bit-exact) from the
     // all-zero query, so only the `(distance, encoded-key)` tie-break decides
     // the k survivors.
-    let q = Vector::new(vec![0.0f64; dim]);
+    let q = Vector::try_new(vec![0.0f64; dim]).unwrap();
     // Even keys only (`k mod 2 == 0 < 1`): a genuine filter (not
     // all-matching), ~half the corpus — enough matches (~2000) to force the
     // Graph plan, not Scan.

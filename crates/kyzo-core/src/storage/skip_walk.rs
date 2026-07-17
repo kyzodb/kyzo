@@ -140,6 +140,7 @@ use crate::data::bitemporal::{
 };
 use crate::data::value::AsOf;
 use crate::data::value::Tuple;
+use crate::data::value::data_value_any;
 
 /// A single positioned cursor, repositioned forward by [`Self::seek`]
 /// rather than rebuilt. `target` is always non-decreasing across calls on
@@ -254,7 +255,7 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{DataValue, Validity, ValiditySlot, ValidityTs};
     use crate::data::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(9).expect("below cap");
@@ -330,8 +331,8 @@ mod tests {
         ValidityTs::from_raw(t)
     }
 
-    fn slot(t: i64) -> Validity {
-        Validity::new(vts(t), true)
+    fn slot(t: i64) -> ValiditySlot {
+        ValiditySlot::from_stored(vts(t), true)
     }
 
     /// A bitemporal key: `[int fact, valid(ts), sys(ts)]` under `REL`,
@@ -365,7 +366,7 @@ mod tests {
             .iter()
             .map(|t| match &t[0] {
                 DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                other => panic!("non-integer fact column: {other:?}"),
+                other @ (data_value_any!()) => panic!("non-integer fact column: {other:?}"),
             })
             .collect()
     }
@@ -439,6 +440,7 @@ mod tests {
     fn skip_walk_matches_independent_oracle_over_2000_seeded_histories() {
         let mut state: u64 = 0x5EED_9E52_5E15_C0DE;
         let mut next = move |m: usize| -> usize {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);

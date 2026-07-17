@@ -15,9 +15,8 @@
  *   `query/normalize.rs`'s `SessionView` (the runtime tier's query-time
  *   view) now implements it for real, so both in-memory inputs
  *   (`EpochStore`-backed) and stored/validity reads work in production.
- *   [`NoStoredInputs`] is the pre-runtime placeholder it superseded, kept
- *   only for its own regression test. No algorithm sees the seam — they
- *   consume [`FixedRulePayload`] /
+ *   The pre-runtime `NoStoredInputs` placeholder is gone (P090). No
+ *   algorithm sees the seam — they consume [`FixedRulePayload`] /
  *   [`FixedRuleInputRelation`] exactly as before (one lifetime instead of
  *   the original's two, since the `SessionTx<'b>` lifetime is erased by
  *   the trait object).
@@ -28,10 +27,10 @@
  *   constructed with the arity the rule declared: every `put` is checked,
  *   for every rule, and a mismatch is a typed error, not corrupt rows
  *   downstream ("SimpleFixedRule's check made universal").
- * - **`Poison` becomes [`CancelFlag`]**, defined here (the original's
- *   lived in `runtime/db.rs`). Same substance (an `Arc<AtomicBool>`
- *   checked cooperatively); it is the integration point where the ratified
- *   budget/deadline design (story #3) attaches when the runtime lands.
+ * - **`Poison` becomes the cancel lifecycle** ([`CancelAuthority`] +
+ *   [`CancelFlag`] + consuming [`Cancelled`]), defined here (the original's
+ *   lived in `runtime/db.rs`). The budget/deadline path shares the same
+ *   poll handle; cancellation is a typestate, not a free `AtomicBool`.
  * - **The `graph` crate is replaced** by the inline CSR in
  *   `fixed_rule/graph.rs` (see the decision record there), and the graph
  *   builders return errors by straightforward `Result` flow instead of
@@ -72,17 +71,22 @@
 //!   relations through the [`StoredInputSource`] seam when the runtime
 //!   tier lands.
 //! - [`FixedRuleOutput`], the arity-branded writer `run` fills.
-//! - [`CancelFlag`], the cooperative cancellation check every long-running
-//!   algorithm polls.
+//! - [`CancelAuthority`] / [`CancelFlag`] / [`Cancelled`], the cooperative
+//!   cancellation lifecycle every long-running algorithm polls.
 //! - [`DEFAULT_FIXED_RULES`], the registry of the built-ins declared in
 //!   `algos/` (graph algorithms) and `utilities/`.
 //! - [`SimpleFixedRule`], the reduced-boilerplate wrapper for user-defined
-//!   rules over realized [`NamedRows`].
+//!   rules over realized [`NamedRows`] — named [`SimpleRuleBody`] owner
+//!   types only (P083: no `Fn`/`dyn Fn` body).
+//!
+//! **P112.** Production host door is `FixedRule::run` (via
+//! `runtime/db.rs` / `SessionFixedRule`). No module-level
+//! `allow(dead_code)` on `fixed_rule` in `lib.rs`; unused residual symbols
+//! warn rather than hide behind a blanket.
 
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, ensure};
@@ -92,7 +96,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::program::{
     FixedRuleOptionNotFoundError, MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicSymbol,
-    WrongFixedRuleOptionError,
+    WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -103,7 +107,8 @@ use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;
 use crate::query::eval::{BudgetDimension, LimitExceeded};
 use crate::query::levels::EpochStore;
-use crate::query::temp_store::RegularTempStore;
+use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::data::value::data_value_any;
 
 pub(crate) mod algos;
 pub(crate) mod graph;
@@ -122,51 +127,101 @@ pub(crate) mod utilities;
 pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
 // ─────────────────────────────────────────────────────────────────────────
-// Cancellation
+// Cancellation lifecycle
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Private shared cancel publish cell: a one-shot latch (`OnceLock`), not
+/// an `AtomicBool` stop-bit. Cancellation is minted only through
+/// [`CancelAuthority::arm`] / [`CancelAuthority::cancel`].
+struct CancelCell(OnceLock<()>);
+
+/// Typestate proof that cancellation was requested (via
+/// [`CancelAuthority::cancel`]) or observed (via [`CancelFlag::check`]).
+///
+/// Consuming [`CancelAuthority::cancel`] is the only door that requests
+/// stop; shared mutable `AtomicBool` lifecycle bits are not part of the
+/// surface (S337-08 / P114).
 #[derive(Debug, Error, Diagnostic)]
 #[error("Running query is killed before completion")]
 #[diagnostic(code(eval::killed))]
 #[diagnostic(help("A query may be killed by timeout, or explicit command"))]
-pub(crate) struct QueryCancelledError;
+pub struct Cancelled;
 
-/// Cooperative cancellation: a shared flag that long-running fixed rules
-/// (and, once the runtime lands, the whole evaluator) poll via
-/// [`Self::check`], which refuses with a typed error once the flag is set.
+/// Authority to request cancellation. Paired with [`CancelFlag`] by
+/// [`Self::arm`]. [`Self::cancel`] consumes the authority and yields
+/// [`Cancelled`] — one authority, one request.
+pub struct CancelAuthority {
+    cell: Arc<CancelCell>,
+}
+
+impl CancelAuthority {
+    /// Arm a paired authority + poll handle that share one cancel cell.
+    pub fn arm() -> (Self, CancelFlag) {
+        let cell = Arc::new(CancelCell(OnceLock::new()));
+        (
+            Self {
+                cell: Arc::clone(&cell),
+            },
+            CancelFlag { cell },
+        )
+    }
+
+    /// Spend this authority: publish cancellation and return the
+    /// [`Cancelled`] proof. Every subsequent [`CancelFlag::check`] on the
+    /// paired poll handle refuses. `OnceLock` publish is the synchronization
+    /// edge (no `Relaxed` `AtomicBool`).
+    pub fn cancel(self) -> Cancelled {
+        let _ = self.cell.0.set(());
+        Cancelled
+    }
+}
+
+/// Cooperative poll handle for long-running fixed rules (and the budget
+/// interrupt path). Clone into algorithms; cannot request cancel — that
+/// is [`CancelAuthority`]'s job (species pair).
 ///
-/// This is the CozoDB original's `Poison` (`runtime/db.rs`), re-homed to
-/// the payload tier because it is self-contained and every algorithm needs
-/// it now. It is also the designated integration point for story #3's
-/// ratified budget design: the runtime's kill switch, query timeouts, and
-/// the deadline half of `Budget` all act by setting this flag, so a rule
-/// that honors `check` honors all of them for free.
-#[derive(Clone, Default)]
-pub struct CancelFlag(pub(crate) Arc<AtomicBool>);
+/// This is the CozoDB original's `Poison` (`runtime/db.rs`), re-homed here
+/// and joined to the budget lifecycle: the session arms one
+/// [`CancelAuthority`], clones the [`CancelFlag`] into fixed rules /
+/// search / [`Budget`], and spends the authority to kill.
+#[derive(Clone)]
+pub struct CancelFlag {
+    cell: Arc<CancelCell>,
+}
+
+impl Default for CancelFlag {
+    /// Inert poll handle: never observes cancellation (no authority is
+    /// retained). Prefer [`CancelAuthority::arm`] when cancel must be
+    /// requestable.
+    fn default() -> Self {
+        Self::inert()
+    }
+}
 
 impl std::fmt::Debug for CancelFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CancelFlag({})", self.0.load(Ordering::Relaxed))
+        write!(f, "CancelFlag({})", self.cell.0.get().is_some())
     }
 }
 
 impl CancelFlag {
-    /// Refuses with a typed error if cancellation has been requested.
+    /// Inert poll handle that never observes cancellation.
+    pub fn inert() -> Self {
+        Self {
+            cell: Arc::new(CancelCell(OnceLock::new())),
+        }
+    }
+
+    /// Refuses with [`Cancelled`] if cancellation has been requested.
     /// Poll this at least once per unit of unbounded work (per node
     /// visited, per edge relaxed) — a loop that never checks is a loop
     /// that cannot be killed.
     #[inline(always)]
     pub fn check(&self) -> Result<()> {
-        if self.0.load(Ordering::Relaxed) {
-            bail!(QueryCancelledError)
+        if self.cell.0.get().is_some() {
+            bail!(Cancelled)
         }
         Ok(())
-    }
-
-    /// Request cancellation: every subsequent `check` on any clone of this
-    /// flag refuses.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
     }
 }
 
@@ -178,9 +233,9 @@ impl CancelFlag {
 /// `MagicFixedRuleRuleArg::Stored` input: arity lookup and (validity-
 /// aware) scans. `query/normalize.rs`'s `SessionView` implements this in
 /// production, so a fixed rule reading a stored (including historical)
-/// relation runs for real; [`NoStoredInputs`] is the superseded pre-runtime
-/// placeholder, kept only for its own regression test. Algorithms never see
-/// this trait — it exists so their code is final now.
+/// relation runs for real. The condemned pre-runtime `NoStoredInputs`
+/// placeholder is demolished (P090). Algorithms never see this trait — it
+/// exists so their code is final now.
 pub(crate) trait StoredInputSource {
     fn stored_arity(&self, name: &Symbol) -> Result<usize>;
     /// Scan the whole relation, as-of `as_of` if given.
@@ -192,55 +247,6 @@ pub(crate) trait StoredInputSource {
         prefix: &DataValue,
         as_of: Option<AsOf>,
     ) -> Result<TupleIter<'a>>;
-}
-
-/// [`NoStoredInputs`]'s refusal. In production, `SessionView` serves
-/// stored/validity reads for real and this error never fires; it is
-/// reachable only through the pre-runtime placeholder's own test.
-#[derive(Debug, Error, Diagnostic)]
-#[error("Stored relation '{name}' is not available to fixed rules yet")]
-#[diagnostic(code(algo::stored_input_unavailable))]
-#[diagnostic(help(
-    "this refusal is the pre-runtime StoredInputSource placeholder \
-     (NoStoredInputs); the live runtime tier serves stored reads instead"
-))]
-pub(crate) struct StoredInputUnavailable {
-    name: String,
-    #[label]
-    span: SourceSpan,
-}
-
-/// The pre-runtime [`StoredInputSource`] placeholder: every stored read
-/// refuses, typed. Superseded in production by `query/normalize.rs`'s
-/// `SessionView`, which implements the trait for real; kept here only for
-/// its own regression test (`fixed_rule_stored_input_is_a_refusing_seam`).
-pub(crate) struct NoStoredInputs;
-
-impl NoStoredInputs {
-    fn refuse<T>(&self, name: &Symbol) -> Result<T> {
-        Err(StoredInputUnavailable {
-            name: name.to_string(),
-            span: name.span,
-        }
-        .into())
-    }
-}
-
-impl StoredInputSource for NoStoredInputs {
-    fn stored_arity(&self, name: &Symbol) -> Result<usize> {
-        self.refuse(name)
-    }
-    fn stored_scan_all<'a>(&'a self, name: &Symbol, _as_of: Option<AsOf>) -> Result<TupleIter<'a>> {
-        self.refuse(name)
-    }
-    fn stored_scan_prefix<'a>(
-        &'a self,
-        name: &Symbol,
-        _prefix: &DataValue,
-        _as_of: Option<AsOf>,
-    ) -> Result<TupleIter<'a>> {
-        self.refuse(name)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -296,7 +302,11 @@ impl<'a> FixedRuleInputRelation<'a> {
                         name.as_plain_symbol().span,
                     )
                 })?;
-                Box::new(store.all_iter().map(|t| Ok(t.into_tuple())))
+                Box::new(
+                    store
+                        .all_iter()?
+                        .map(|t| t.try_into_tuple().map_err(Into::into)),
+                )
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
                 self.stored.stored_scan_all(name, *as_of)?
@@ -314,7 +324,11 @@ impl<'a> FixedRuleInputRelation<'a> {
                     )
                 })?;
                 let t: Tuple = Tuple::from_vec(vec![prefix.clone()]);
-                Box::new(store.prefix_iter(&t).map(|t| Ok(t.into_tuple())))
+                Box::new(
+                    store
+                        .prefix_iter(&t)?
+                        .map(|t| t.try_into_tuple().map_err(Into::into)),
+                )
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
                 self.stored.stored_scan_prefix(name, prefix, *as_of)?
@@ -429,9 +443,9 @@ impl<'a> FixedRuleInputRelation<'a> {
 /// Mints the next dense node id at the intern site, refusing with the
 /// typed [`GraphTooLargeError`] at the 2^32-node bound — the CozoDB
 /// original's `indices.len() as u32` silently truncated there, aliasing
-/// the 2^32-th node onto id 0. The cap is `u32::MAX - 1`: `u32::MAX`
-/// itself stays reserved as the Dijkstra core's "no back-pointer"
-/// sentinel.
+/// the 2^32-th node onto id 0. The cap is `u32::MAX` mintable ids
+/// (`0..=u32::MAX - 1`); predecessor absence uses `Option` (P078), so
+/// `u32::MAX` is no longer reserved as a sentinel.
 ///
 /// The bound is untestable at scale (it would take ~4 billion interned
 /// values); it is factored into this function precisely so a unit test
@@ -439,7 +453,8 @@ impl<'a> FixedRuleInputRelation<'a> {
 /// honesty note on [`GraphTooLargeError`].
 fn checked_node_id(interned_so_far: usize) -> Result<u32> {
     ensure!(interned_so_far < u32::MAX as usize, GraphTooLargeError);
-    Ok(interned_so_far as u32)
+    u32::try_from(interned_so_far)
+        .map_err(|_| GraphAlgorithmInvariantError::refuse("node_id_fit"))
 }
 
 impl<'a> FixedRulePayload<'a> {
@@ -471,9 +486,9 @@ impl<'a> FixedRulePayload<'a> {
             None => match default {
                 Some(ex) => Ok(ex),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -485,19 +500,19 @@ impl<'a> FixedRulePayload<'a> {
         match self.manifest.options.get(name) {
             Some(ex) => match ex.clone().eval_to_const()? {
                 DataValue::Str(s) => Ok(s),
-                _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                data_value_any!() => Err(WrongFixedRuleOptionError {
+                    name: Symbol::new(name, ex.span()),
                     span: ex.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
-                    help: "a string is required".to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
+                    help: WrongFixedRuleOptionHelp::StringRequired,
                 }
                 .into()),
             },
             None => match default {
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
                 Some(s) => Ok(s.to_string()),
@@ -509,9 +524,9 @@ impl<'a> FixedRulePayload<'a> {
     pub fn option_span(&self, name: &str) -> Result<SourceSpan> {
         match self.manifest.options.get(name) {
             None => Err(FixedRuleOptionNotFoundError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.manifest.span),
                 span: self.manifest.span,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
             }
             .into()),
             Some(v) => Ok(v.span()),
@@ -524,26 +539,26 @@ impl<'a> FixedRulePayload<'a> {
                 Ok(DataValue::Num(n)) => match n.as_int() {
                     Some(i) => Ok(i),
                     None => Err(FixedRuleOptionNotFoundError {
-                        name: name.to_string(),
+                        name: Symbol::new(name, self.manifest.span),
                         span: self.manifest.span,
-                        rule_name: self.manifest.fixed_handle.name.to_string(),
+                        rule_name: self.manifest.fixed_handle.name.clone(),
                     }
                     .into()),
                 },
                 _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, v.span()),
                     span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
-                    help: "an integer is required".to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
+                    help: WrongFixedRuleOptionHelp::IntegerRequired,
                 }
                 .into()),
             },
             None => match default {
                 Some(v) => Ok(v),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -555,13 +570,22 @@ impl<'a> FixedRulePayload<'a> {
         ensure!(
             i > 0,
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
-                help: "a positive integer is required".to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
+                help: WrongFixedRuleOptionHelp::PositiveIntegerRequired,
             }
         );
-        Ok(i as usize)
+        let span = self.option_span(name).unwrap_or(self.manifest.span);
+        usize::try_from(i).map_err(|_| {
+            WrongFixedRuleOptionError {
+                name: Symbol::new(name, span),
+                span,
+                rule_name: self.manifest.fixed_handle.name.clone(),
+                help: WrongFixedRuleOptionHelp::PositiveIntegerFitsUsizeRequired,
+            }
+            .into()
+        })
     }
     /// Extract a non-negative integer option
     pub fn non_neg_integer_option(&self, name: &str, default: Option<usize>) -> Result<usize> {
@@ -569,13 +593,22 @@ impl<'a> FixedRulePayload<'a> {
         ensure!(
             i >= 0,
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
-                help: "a non-negative integer is required".to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
+                help: WrongFixedRuleOptionHelp::NonNegIntegerRequired,
             }
         );
-        Ok(i as usize)
+        let span = self.option_span(name).unwrap_or(self.manifest.span);
+        usize::try_from(i).map_err(|_| {
+            WrongFixedRuleOptionError {
+                name: Symbol::new(name, span),
+                span,
+                rule_name: self.manifest.fixed_handle.name.clone(),
+                help: WrongFixedRuleOptionHelp::NonNegIntegerFitsUsizeRequired,
+            }
+            .into()
+        })
     }
     /// Extract a floating point option
     pub fn float_option(&self, name: &str, default: Option<f64>) -> Result<f64> {
@@ -586,19 +619,19 @@ impl<'a> FixedRulePayload<'a> {
                     Ok(f)
                 }
                 _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, v.span()),
                     span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
-                    help: "a floating number is required".to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
+                    help: WrongFixedRuleOptionHelp::FloatRequired,
                 }
                 .into()),
             },
             None => match default {
                 Some(v) => Ok(v),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -610,10 +643,10 @@ impl<'a> FixedRulePayload<'a> {
         ensure!(
             (0. ..=1.).contains(&f),
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
-                help: "a number between 0. and 1. is required".to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
+                help: WrongFixedRuleOptionHelp::UnitIntervalRequired,
             }
         );
         Ok(f)
@@ -624,19 +657,19 @@ impl<'a> FixedRulePayload<'a> {
             Some(v) => match v.clone().eval_to_const() {
                 Ok(DataValue::Bool(b)) => Ok(b),
                 _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, v.span()),
                     span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
-                    help: "a boolean value is required".to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
+                    help: WrongFixedRuleOptionHelp::BoolRequired,
                 }
                 .into()),
             },
             None => match default {
                 Some(v) => Ok(v),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -699,12 +732,35 @@ struct OutputSpendGuard {
     /// Globally admitted total as of this stratum's epoch-0 barrier.
     baseline: u64,
     ceiling: u64,
-    countdown: u32,
+    /// Remaining puts until the next ceiling check (P097: proven stride).
+    stride_left: OutputStrideLeft,
 }
 
 /// Rows a fixed rule may `put` between mid-run ceiling checks — harmonized
-/// with `query::eval`'s `INTERRUPT_STRIDE`.
+/// with `query::eval`'s `INTERRUPT_STRIDE`. Non-zero by construction.
 const OUTPUT_STRIDE: u32 = 64;
+
+/// Countdown to the next mid-run ceiling check (P097).
+struct OutputStrideLeft(u32);
+
+impl OutputStrideLeft {
+    fn fresh() -> Self {
+        Self(OUTPUT_STRIDE)
+    }
+
+    /// Tick one put; returns true when a ceiling check is due.
+    fn tick(&mut self) -> bool {
+        // INVARIANT(output_stride): `OUTPUT_STRIDE >= 1`, so reset never
+        // installs a zero countdown that would skip checks forever.
+        self.0 -= 1;
+        if self.0 == 0 {
+            self.0 = OUTPUT_STRIDE;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 impl FixedRuleOutput {
     /// Brand a fresh output store with the rule's declared arity (the
@@ -739,7 +795,7 @@ impl FixedRuleOutput {
             guard: ceiling.map(|ceiling| OutputSpendGuard {
                 baseline,
                 ceiling,
-                countdown: OUTPUT_STRIDE,
+                stride_left: OutputStrideLeft::fresh(),
             }),
         }
     }
@@ -757,9 +813,7 @@ impl FixedRuleOutput {
             }
         );
         if let Some(guard) = self.guard.as_mut() {
-            guard.countdown -= 1;
-            if guard.countdown == 0 {
-                guard.countdown = OUTPUT_STRIDE;
+            if guard.stride_left.tick() {
                 // Distinct rows materialized so far (the store dedups), the
                 // same quantity the barrier will admit — so this never
                 // refuses an output the barrier would have accepted.
@@ -781,8 +835,9 @@ impl FixedRuleOutput {
     }
 
     /// Surrender the filled store to the evaluator (which merges it into
-    /// the rule's `EpochStore` at the epoch barrier).
-    #[allow(dead_code)] // consumed by eval when the query tier lands
+    /// the rule's `EpochStore` at the epoch barrier). Called by the
+    /// fixed-rule harness after `run` and by normalize when wiring a
+    /// fixed rule into an epoch.
     pub(crate) fn into_store(self) -> RegularTempStore {
         self.store
     }
@@ -841,16 +896,14 @@ mod fixed_rule_output_budget_tests {
 
 /// Trait for an implementation of an algorithm or a utility
 pub trait FixedRule: Send + Sync {
-    /// Called to initialize the options given.
-    /// Will always be called once, before anything else.
-    /// You can mutate the options if you need to.
-    /// The default implementation does nothing.
+    /// Consuming option normalize (P086). Called once before `arity`/`run`.
+    /// Returns the (possibly rewritten) options map; the default is identity.
     fn init_options(
         &self,
-        _options: &mut BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: BTreeMap<SmartString<LazyCompact>, Expr>,
         _span: SourceSpan,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<BTreeMap<SmartString<LazyCompact>, Expr>> {
+        Ok(options)
     }
     /// You must return the row width of the returned relation and it must be accurate.
     /// This function may be called multiple times.
@@ -879,25 +932,135 @@ pub trait FixedRule: Send + Sync {
 // needs is declared here).
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Private seal: any private field blocks struct-literal minting outside
+/// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]
+/// (P082).
+#[derive(Debug, Clone, Default)]
+struct NamedRowsSeal;
+
 /// The rows of a relation, together with its header names.
+///
+/// Sole door: [`Self::try_new`] proves every row's width equals
+/// `headers.len()`. Payload fields are private; the private
+/// [`NamedRowsSeal`] blocks struct-literal minting outside this module
+/// (P082). Read via [`Self::headers`] / [`Self::rows`] / [`Self::next`];
+/// consume via [`Self::into_parts`] / [`Self::into_rows`] /
+/// [`Self::with_next`]. Illegal (misaligned) NamedRows are unconstructible.
 #[derive(Debug, Clone, Default)]
 pub struct NamedRows {
-    /// The headers
-    pub headers: Vec<String>,
-    /// The rows
-    pub rows: Vec<Tuple>,
-    /// Contains the next named rows, if exists
-    pub next: Option<Box<NamedRows>>,
+    headers: Vec<String>,
+    rows: Vec<Tuple>,
+    next: Option<Box<NamedRows>>,
+    _seal: NamedRowsSeal,
+}
+
+/// Header↔row width mismatch at the [`NamedRows`] door (P082).
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "NamedRows arity mismatch: header width {header_arity}, row {row_index} has width {row_arity}"
+)]
+#[diagnostic(code(fixed_rule::named_rows_arity))]
+pub struct NamedRowsArityError {
+    pub header_arity: usize,
+    pub row_index: usize,
+    pub row_arity: usize,
 }
 
 impl NamedRows {
-    /// create a named rows with the given headers and rows
-    pub fn new(headers: Vec<String>, rows: Vec<Tuple>) -> Self {
-        Self {
+    /// Sole door: every row's width equals `headers.len()`.
+    pub fn try_new(
+        headers: Vec<String>,
+        rows: Vec<Tuple>,
+    ) -> std::result::Result<Self, NamedRowsArityError> {
+        let header_arity = headers.len();
+        for (row_index, row) in rows.iter().enumerate() {
+            let row_arity = row.len();
+            if row_arity != header_arity {
+                return Err(NamedRowsArityError {
+                    header_arity,
+                    row_index,
+                    row_arity,
+                });
+            }
+        }
+        Ok(Self {
             headers,
             rows,
             next: None,
+            _seal: NamedRowsSeal,
+        })
+    }
+
+    /// One-cell `status: OK` — header/row widths match by construction (P082).
+    pub(crate) fn status_ok() -> Self {
+        Self {
+            headers: vec!["status".to_string()],
+            rows: vec![Tuple::from_vec(vec![DataValue::from("OK")])],
+            next: None,
+            _seal: NamedRowsSeal,
         }
+    }
+
+    /// `::verify` directive result — three columns by construction (P082).
+    pub(crate) fn verify_status_row(
+        status: impl Into<DataValue>,
+        summary: impl Into<DataValue>,
+        detail: impl Into<DataValue>,
+    ) -> Self {
+        Self {
+            headers: vec![
+                "status".to_string(),
+                "summary".to_string(),
+                "detail".to_string(),
+            ],
+            rows: vec![Tuple::from_vec(vec![
+                status.into(),
+                summary.into(),
+                detail.into(),
+            ])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
+    /// Alias of [`Self::try_new`] — typed refuse, never panic (P082).
+    pub fn new(
+        headers: Vec<String>,
+        rows: Vec<Tuple>,
+    ) -> std::result::Result<Self, NamedRowsArityError> {
+        Self::try_new(headers, rows)
+    }
+
+    /// Header names.
+    pub fn headers(&self) -> &[String] {
+        &self.headers
+    }
+
+    /// Result rows.
+    pub fn rows(&self) -> &[Tuple] {
+        &self.rows
+    }
+
+    /// Follow-on page, when present.
+    pub fn next(&self) -> Option<&NamedRows> {
+        self.next.as_deref()
+    }
+
+    /// Consume into headers, rows, and optional follow-on page.
+    pub fn into_parts(self) -> (Vec<String>, Vec<Tuple>, Option<Box<NamedRows>>) {
+        (self.headers, self.rows, self.next)
+    }
+
+    /// Consume into the row vector only.
+    pub fn into_rows(self) -> Vec<Tuple> {
+        self.rows
+    }
+
+    /// Attach a follow-on page (pagination chain). Does not re-prove arity —
+    /// the page was already admitted through [`Self::try_new`].
+    pub fn with_next(mut self, next: Option<Box<NamedRows>>) -> Self {
+        self.next = next;
+        self
     }
 
     /// Encode this result set as a self-contained Arrow IPC stream (story
@@ -925,42 +1088,116 @@ impl IntoIterator for NamedRows {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// SimpleFixedRule
+// SimpleFixedRule — named body owner only (P083: no Fn / dyn Fn)
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Simple wrapper for custom fixed rule. You have less control than implementing [FixedRule] directly,
-/// but implementation is simpler.
-pub struct SimpleFixedRule {
-    return_arity: usize,
-    rule: Box<
-        dyn Fn(Vec<NamedRows>, BTreeMap<String, DataValue>) -> Result<NamedRows>
-            + Send
-            + Sync
-            + 'static,
-    >,
+/// Named body for a simple fixed rule. Prefer a named [`FixedRule`] impl for
+/// production algorithms; this trait is the reduced door for host rules that
+/// already work over realized [`NamedRows`]. Bodies are named types only —
+/// there is no `Fn` blanket impl (P083).
+pub trait SimpleRuleBody: Send + Sync + 'static {
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows>;
 }
 
-impl SimpleFixedRule {
+/// Channel-backed simple-rule body: one named owner (P083).
+struct ChannelRuleBody {
+    db2app: SyncSender<(
+        Vec<NamedRows>,
+        BTreeMap<String, DataValue>,
+        SyncSender<Result<NamedRows>>,
+    )>,
+}
+
+impl SimpleRuleBody for ChannelRuleBody {
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        let (app2db_sender, app2db_receiver) = sync_channel(0);
+        self.db2app
+            .send((inputs, options, app2db_sender))
+            .map_err(|_| DisconnectedChannelRule)?;
+        app2db_receiver
+            .recv()
+            .map_err(|_| DisconnectedChannelRule)?
+    }
+}
+
+/// Named body: emit no rows under the declared headers (empty relation).
+pub struct EmptyNamedRowsBody;
+
+impl SimpleRuleBody for EmptyNamedRowsBody {
+    fn apply(
+        &self,
+        _inputs: Vec<NamedRows>,
+        _options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        Ok(NamedRows::try_new(vec![], vec![])?)
+    }
+}
+
+/// Named body: forward the first input relation unchanged.
+pub struct IdentityNamedRowsBody;
+
+impl SimpleRuleBody for IdentityNamedRowsBody {
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        _options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        let input = inputs
+            .into_iter()
+            .next()
+            .ok_or_else(|| miette::miette!("IdentityNamedRowsBody requires one input relation"))?;
+        let (headers, rows, next) = input.into_parts();
+        Ok(NamedRows::try_new(headers, rows)?.with_next(next))
+    }
+}
+
+/// Named body: deliberately emit a one-column row under a mismatched
+/// arity declaration — used to pin the universal writer check.
+pub struct MismatchedArityBody;
+
+impl SimpleRuleBody for MismatchedArityBody {
+    fn apply(
+        &self,
+        _inputs: Vec<NamedRows>,
+        _options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        Ok(NamedRows::try_new(
+            vec!["a".to_string()],
+            vec![Tuple::from_vec(vec![DataValue::from(1i64)])],
+        )?)
+    }
+}
+
+/// Simple wrapper for custom fixed rule. You have less control than implementing [FixedRule] directly,
+/// but implementation is simpler. The body is a named [`SimpleRuleBody`] —
+/// never a closure / `Fn` owner (P083).
+pub struct SimpleFixedRule<B> {
+    return_arity: usize,
+    body: B,
+}
+
+impl<B: SimpleRuleBody> SimpleFixedRule<B> {
     /// Construct a SimpleFixedRule.
     ///
     /// * `return_arity`: The return arity of this rule.
-    /// * `rule`:  The rule implementation as a closure.
-    //    The first argument is a vector of input relations, realized into NamedRows,
-    //    and the second argument is a JSON object of passed in options.
-    //    The returned NamedRows is the return relation of the application of this rule.
-    //    Every row of the returned relation must have length equal to `return_arity`.
-    pub fn new<R>(return_arity: usize, rule: R) -> Self
-    where
-        R: Fn(Vec<NamedRows>, BTreeMap<String, DataValue>) -> Result<NamedRows>
-            + Send
-            + Sync
-            + 'static,
-    {
+    /// * `body`: A named [`SimpleRuleBody`] (not a closure).
+    pub fn new(return_arity: usize, body: B) -> Self {
         Self {
             return_arity,
-            rule: Box::new(rule),
+            body,
         }
     }
+}
+
+impl SimpleFixedRule<ChannelRuleBody> {
     /// Construct a SimpleFixedRule that uses channels for communication.
     /// (The original returned `crossbeam` channel halves; a std rendezvous
     /// channel — `sync_channel(0)` ≡ crossbeam's `bounded(0)` — carries the
@@ -968,7 +1205,7 @@ impl SimpleFixedRule {
     pub fn rule_with_channel(
         return_arity: usize,
     ) -> (
-        Self,
+        impl FixedRule,
         Receiver<(
             Vec<NamedRows>,
             BTreeMap<String, DataValue>,
@@ -977,17 +1214,11 @@ impl SimpleFixedRule {
     ) {
         let (db2app_sender, db2app_receiver) = sync_channel(0);
         (
-            Self {
+            SimpleFixedRule {
                 return_arity,
-                rule: Box::new(move |inputs, options| -> Result<NamedRows> {
-                    let (app2db_sender, app2db_receiver) = sync_channel(0);
-                    db2app_sender
-                        .send((inputs, options, app2db_sender))
-                        .map_err(|_| DisconnectedChannelRule)?;
-                    app2db_receiver
-                        .recv()
-                        .map_err(|_| DisconnectedChannelRule)?
-                }),
+                body: ChannelRuleBody {
+                    db2app: db2app_sender,
+                },
             },
             db2app_receiver,
         )
@@ -999,7 +1230,7 @@ impl SimpleFixedRule {
 #[diagnostic(code(algo::channel_rule_disconnected))]
 struct DisconnectedChannelRule;
 
-impl FixedRule for SimpleFixedRule {
+impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
     fn arity(
         &self,
         _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
@@ -1027,7 +1258,7 @@ impl FixedRule for SimpleFixedRule {
         let input_arity = payload.manifest.rule_args.len();
         let inputs: Vec<_> = (0..input_arity)
             .map(|i| -> Result<_> {
-                // Structural: `i < rule_args.len()`, so the index resolves.
+                // INVARIANT(simple_input_index): `i < rule_args.len()`.
                 let input = payload.get_input(i)?;
                 let rows: Vec<_> = input.iter()?.try_collect()?;
                 let mut headers = input
@@ -1041,11 +1272,11 @@ impl FixedRule for SimpleFixedRule {
                 for i in l..m {
                     headers.push(format!("_{i}"));
                 }
-                Ok(NamedRows::new(headers, rows))
+                Ok(NamedRows::try_new(headers, rows)?)
             })
             .try_collect()?;
-        let results: NamedRows = (self.rule)(inputs, options)?;
-        for row in results.rows {
+        let results: NamedRows = self.body.apply(inputs, options)?;
+        for row in results {
             // The row-width check the original performed here per rule is
             // now `out`'s own contract, enforced for every fixed rule.
             out.put(row)?;
@@ -1069,7 +1300,7 @@ pub(crate) struct CannotDetermineArity(
 
 /// The name under which a fixed rule is registered. (Re-homed here from
 /// its seam declaration in `data/program.rs`.)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct FixedRuleHandle {
     pub(crate) name: Symbol,
 }
@@ -1241,6 +1472,113 @@ pub(crate) struct NodeNotFoundError {
     pub(crate) span: SourceSpan,
 }
 
+/// Typed refusal when a fixed-rule internal proof fails — sealed options
+/// or buffered state the rule already constructed, never a user-input shape
+/// error (those are refused earlier at option/input boundaries).
+#[derive(Debug, Error, Diagnostic)]
+#[error("Fixed-rule invariant violated: {invariant}")]
+#[diagnostic(code(algo::fixed_rule_invariant_violation))]
+#[diagnostic(help(
+    "The fixed rule reached an internal state its proofs rule out — \
+     likely a bug in option sealing or the algorithm"
+))]
+pub(crate) struct FixedRuleInvariantError {
+    invariant: &'static str,
+}
+
+impl FixedRuleInvariantError {
+    pub(crate) fn refuse(invariant: &'static str) -> miette::Report {
+        Self { invariant }.into()
+    }
+}
+
+/// Typed refusal when a graph algorithm's internal proof fails — corrupt
+/// graph state or a broken algorithm invariant, never a user input shape
+/// error (those are refused earlier at the input boundary).
+#[derive(Debug, Error, Diagnostic)]
+#[error("Graph algorithm invariant violated: {invariant}")]
+#[diagnostic(code(algo::graph_invariant_violation))]
+#[diagnostic(help(
+    "The fixed-rule graph algorithm reached an internal state its proofs \
+     rule out — likely corrupt graph data or a bug in the algorithm"
+))]
+pub(crate) struct GraphAlgorithmInvariantError {
+    invariant: &'static str,
+}
+
+impl GraphAlgorithmInvariantError {
+    pub(crate) fn refuse(invariant: &'static str) -> miette::Report {
+        Self { invariant }.into()
+    }
+}
+
+/// Refuse with [`GraphAlgorithmInvariantError`] at a named proof site.
+pub(crate) fn refuse_graph_invariant<T>(invariant: &'static str) -> Result<T> {
+    Err(GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// First column of a tuple the input boundary already proved non-empty.
+pub(crate) fn tuple_first_column(tuple: &Tuple) -> Result<&DataValue> {
+    tuple
+        .as_slice()
+        .first()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("tuple_first_column"))
+}
+
+/// First column of an owned tuple (consumes the head value).
+pub(crate) fn tuple_into_first_column(tuple: Tuple) -> Result<DataValue> {
+    tuple
+        .into_iter()
+        .next()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("tuple_first_column"))
+}
+
+/// Dense node id → interned value; `indices` has one entry per graph node.
+pub(crate) fn graph_node_value(indices: &[DataValue], node: u32) -> Result<&DataValue> {
+    indices
+        .get(node as usize)
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("graph_node_index"))
+}
+
+/// Backtrace predecessor for route reconstruction.
+pub(crate) fn backtrace_predecessor(
+    backtrace: &BTreeMap<DataValue, DataValue>,
+    current: &DataValue,
+    invariant: &'static str,
+) -> Result<DataValue> {
+    backtrace
+        .get(current)
+        .cloned()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// Predecessor in a dense `Option<u32>` table (Dijkstra path walk).
+pub(crate) fn path_predecessor(
+    back_pointers: &[Option<u32>],
+    current: u32,
+    invariant: &'static str,
+) -> Result<u32> {
+    back_pointers[current as usize]
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// Edmonds–Karp BFS parent on the augmenting path.
+pub(crate) fn ek_bfs_parent(
+    prev: &[Option<(u32, usize)>],
+    node: u32,
+    invariant: &'static str,
+) -> Result<(u32, usize)> {
+    prev[node as usize].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// The sole element of a set whose length is already known to be 1.
+pub(crate) fn btree_set_only_element(set: &BTreeSet<u32>, invariant: &'static str) -> Result<u32> {
+    set.iter()
+        .copied()
+        .next()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
 #[derive(Error, Diagnostic, Debug)]
 #[error("Unacceptable value {0:?} encountered")]
 #[diagnostic(code(algo::unacceptable_value))]
@@ -1277,9 +1615,8 @@ impl MagicFixedRuleRuleArg {
 
 /// Runs fixed rules without a database: builds a [`MagicFixedRuleApply`]
 /// over in-memory inputs, executes `run`, and returns the output rows in
-/// canonical order. The stored-input seam stays closed
-/// ([`NoStoredInputs`]), which is exactly the point: everything except
-/// stored-relation arguments is testable before the runtime lands.
+/// canonical order. Stored-relation arguments are refused by the harness
+/// double [`HarnessStoredClosed`] (not a production placeholder — P090).
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
@@ -1298,6 +1635,50 @@ pub(crate) mod tests_support {
                 rows,
                 arity,
             }
+        }
+    }
+
+    /// Test-only stored-input double: every stored read refuses. Not the
+    /// demolished production `NoStoredInputs` seam (P090) — harness door only.
+    pub(crate) struct HarnessStoredClosed;
+
+    #[derive(Debug, Error, Diagnostic)]
+    #[error("test harness has no stored relation '{name}'")]
+    #[diagnostic(code(algo::harness_stored_closed))]
+    struct HarnessStoredClosedError {
+        name: String,
+        #[label]
+        span: SourceSpan,
+    }
+
+    impl HarnessStoredClosed {
+        fn refuse<T>(&self, name: &Symbol) -> Result<T> {
+            Err(HarnessStoredClosedError {
+                name: Symbol::new(name, name.span),
+                span: name.span,
+            }
+            .into())
+        }
+    }
+
+    impl StoredInputSource for HarnessStoredClosed {
+        fn stored_arity(&self, name: &Symbol) -> Result<usize> {
+            self.refuse(name)
+        }
+        fn stored_scan_all<'a>(
+            &'a self,
+            name: &Symbol,
+            _as_of: Option<AsOf>,
+        ) -> Result<TupleIter<'a>> {
+            self.refuse(name)
+        }
+        fn stored_scan_prefix<'a>(
+            &'a self,
+            name: &Symbol,
+            _prefix: &DataValue,
+            _as_of: Option<AsOf>,
+        ) -> Result<TupleIter<'a>> {
+            self.refuse(name)
         }
     }
 
@@ -1321,7 +1702,7 @@ pub(crate) mod tests_support {
         mut options: BTreeMap<SmartString<LazyCompact>, Expr>,
     ) -> Result<PreparedFixedRule> {
         let span = SourceSpan::default();
-        rule.init_options(&mut options, span)?;
+        options = rule.init_options(options, span)?;
         let mut stores = BTreeMap::new();
         let mut rule_args = vec![];
         for (i, input) in inputs.into_iter().enumerate() {
@@ -1369,14 +1750,17 @@ pub(crate) mod tests_support {
             let payload = FixedRulePayload {
                 manifest: &self.manifest,
                 stores: &self.stores,
-                stored: &NoStoredInputs,
+                stored: &HarnessStoredClosed,
             };
             let mut out = FixedRuleOutput::new(self.arity, SourceSpan::default());
             rule.run(payload, &mut out, cancel)?;
             let store = out.into_store().wrap();
             let mut collected = EpochStore::new_normal(self.arity);
             collected.merge_in(store, &mut ())?;
-            Ok(collected.all_iter().map(|t| t.into_tuple()).collect_vec())
+            Ok(collected
+                .all_iter()?
+                .map(TupleInIter::try_into_tuple)
+                .collect::<Result<Vec<_>, _>>()?)
         }
     }
 
@@ -1466,25 +1850,14 @@ mod tests {
     }
 
     /// `SimpleFixedRule` rides the universal check: its rows are
-    /// width-checked by the writer.
+    /// width-checked by the writer. Bodies are named types (P083).
     #[test]
     fn simple_fixed_rule_arity_check_is_universal() {
-        let rule = SimpleFixedRule::new(2, |_inputs, _opts| {
-            Ok(NamedRows::new(
-                vec!["a".to_string()],
-                vec![Tuple::from_vec(vec![DataValue::from(1i64)])], // width 1, declared 2
-            ))
-        });
+        let rule = SimpleFixedRule::new(2, MismatchedArityBody);
         let res = run_fixed_rule(&rule, vec![], BTreeMap::new(), CancelFlag::default());
         assert!(res.is_err());
 
-        let rule = SimpleFixedRule::new(1, |inputs, _opts| {
-            // Identity over the single input.
-            Ok(NamedRows::new(
-                vec!["a".to_string()],
-                inputs.into_iter().next().unwrap().rows,
-            ))
-        });
+        let rule = SimpleFixedRule::new(1, IdentityNamedRowsBody);
         let got = run_fixed_rule(
             &rule,
             vec![TestInput::new(
@@ -1499,9 +1872,11 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// The stored-input seam refuses, typed, until the runtime lands.
+    /// Harness stored-input double refuses stored args (P090: production
+    /// placeholder gone; this pins the test door only).
     #[test]
-    fn stored_inputs_refuse_before_runtime() {
+    fn harness_stored_inputs_refuse() {
+        use tests_support::HarnessStoredClosed;
         let span = SourceSpan::default();
         let arg = MagicFixedRuleRuleArg::Stored {
             name: Symbol::new("some_relation", span),
@@ -1510,16 +1885,16 @@ mod tests {
             span,
         };
         let stores = BTreeMap::new();
-        let err = arg.arity(&stores, &NoStoredInputs).unwrap_err();
-        assert!(err.to_string().contains("not available"), "{err}");
+        let err = arg.arity(&stores, &HarnessStoredClosed).unwrap_err();
+        assert!(err.to_string().contains("test harness"), "{err}");
     }
 
-    /// Cancellation is honored mid-run: a pre-set flag makes a graph
-    /// traversal return the typed refusal instead of completing.
+    /// Cancellation is honored mid-run: a spent [`CancelAuthority`] makes a
+    /// graph traversal return the typed refusal instead of completing.
     #[test]
     fn cancellation_is_honored_mid_run() {
-        let cancel = CancelFlag::default();
-        cancel.cancel();
+        let (auth, cancel) = CancelAuthority::arm();
+        let _ = auth.cancel();
         // A graph with an edge, so BFS enters its per-edge loop where the
         // flag is polled.
         let res = run_fixed_rule(
@@ -1578,9 +1953,9 @@ mod tests {
         let (rule, receiver) = SimpleFixedRule::rule_with_channel(1);
         let handle = std::thread::spawn(move || {
             let (inputs, _opts, reply) = receiver.recv().unwrap();
-            let rows = inputs.into_iter().next().unwrap().rows;
+            let (_headers, rows, _next) = inputs.into_iter().next().unwrap().into_parts();
             reply
-                .send(Ok(NamedRows::new(vec!["x".to_string()], rows)))
+                .send(Ok(NamedRows::try_new(vec!["x".to_string()], rows).unwrap()))
                 .unwrap();
         });
         let got = run_fixed_rule(
@@ -1603,11 +1978,10 @@ mod tests {
     /// end-to-end (it needs ~4B distinct node values), so this pins the
     /// boundary arithmetic of the factored check:
     ///   - 0 interned                → id 0
-    ///   - u32::MAX - 1 interned     → id u32::MAX - 1 (the last mintable;
-    ///     u32::MAX stays free as the Dijkstra back-pointer sentinel)
-    ///   - u32::MAX interned         → GraphTooLargeError (`as u32` would
-    ///     collided with the u32::MAX Dijkstra sentinel; the wrap
-    ///     to id 0 happens one node later)
+    ///   - u32::MAX - 1 interned     → id u32::MAX - 1 (last mintable id;
+    ///     CSR `max_id + 1` must still fit in `u32`)
+    ///   - u32::MAX interned         → GraphTooLargeError (would mint id
+    ///     `u32::MAX`, making `node_count` overflow)
     #[test]
     fn intern_site_refuses_at_u32_bound() {
         assert_eq!(checked_node_id(0).unwrap(), 0);
@@ -1988,13 +2362,14 @@ mod tests {
     /// path for a genuinely heterogeneous column.
     #[test]
     fn to_arrow_ipc_encodes_a_real_result_set() {
-        let named = NamedRows::new(
+        let named = NamedRows::try_new(
             vec!["n".into(), "name".into()],
             vec![
                 Tuple::from_vec(vec![DataValue::from(1), s("a")]),
                 Tuple::from_vec(vec![DataValue::from(2), s("b")]),
             ],
-        );
+        )
+        .unwrap();
         let bytes = named
             .to_arrow_ipc()
             .expect("uniformly-typed columns encode");
@@ -2003,17 +2378,37 @@ mod tests {
 
     #[test]
     fn to_arrow_ipc_refuses_a_heterogeneous_column() {
-        let named = NamedRows::new(
+        let named = NamedRows::try_new(
             vec!["mixed".into()],
             vec![
                 Tuple::from_vec(vec![DataValue::from(1)]),
                 Tuple::from_vec(vec![s("x")]),
             ],
-        );
+        )
+        .unwrap();
         let err = named.to_arrow_ipc().unwrap_err();
         assert!(
             err.to_string().contains("more than one non-null kind"),
             "{err}"
         );
+    }
+
+    /// `try_new` proves header↔row arity (P082).
+    #[test]
+    fn named_rows_try_new_proves_arity() {
+        assert!(
+            NamedRows::try_new(
+                vec!["a".into(), "b".into()],
+                vec![Tuple::from_vec(vec![DataValue::from(1)])],
+            )
+            .is_err()
+        );
+        let ok = NamedRows::try_new(
+            vec!["a".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(1)])],
+        )
+        .unwrap();
+        assert_eq!(ok.headers().len(), 1);
+        assert_eq!(ok.rows().len(), 1);
     }
 }

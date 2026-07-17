@@ -104,6 +104,15 @@
 //! zero/all-match filters, determinism, and a recall table against ground
 //! truth).
 //!
+//! ## Projection kind (story #305)
+//!
+//! [`Hnsw`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+//! [`Sealed`](crate::engines::projection::Sealed); there is no bespoke
+//! per-engine seal or freshness protocol. Relation-backed [`hnsw_put`] /
+//! [`hnsw_knn`] remain the kernel graph algorithms.
+//!
 //! ## Seams
 //!
 //! - **RA operator tier** (`query/ra.rs`): drives [`hnsw_knn`] per parent
@@ -200,53 +209,140 @@ use miette::{Diagnostic, Result, bail, miette};
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use rustc_hash::{FxHashMap, FxHashSet};
-use smartstring::SmartString;
+use serde::{Deserialize, Deserializer};
+use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, eval_bytecode_pred};
+use crate::data::expr::Expr;
 use crate::data::relation::VecElementType;
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use crate::data::relation::{
+    ColLen, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
+};
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
-use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
-use crate::engines::IndexRowCorrupt;
+use crate::data::value::{
+    DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, append_canonical,
+    decode_tuple_from_key, encode_owned,
+};
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+use crate::data::value::data_value_any;
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// HNSW as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed graph maintenance and knn ([`hnsw_put`], [`Hnsw::knn`])
+/// are the kernel algorithms — not a second build/seal/freshness protocol.
+/// Search is owned by [`RelationIndexSearch::search_relation`] (P103);
+/// [`Hnsw::knn`] is the UFCS alias into that door.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Hnsw;
+
+impl ProjectionKind for Hnsw {}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.
 // ---------------------------------------------------------------------------
+
+/// Neighbour degree `m` for HNSW graph construction. Proven `m >= 2` so
+/// `1/ln(m)` (the level multiplier) is always finite — `m = 1` would yield
+/// `Inf` and an unusable layer geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
+#[serde(transparent)]
+pub(crate) struct MNeighbours(usize);
+
+impl MNeighbours {
+    /// Admit a neighbour degree, or refuse `m < 2` typed.
+    pub(crate) fn new(m: usize) -> Result<Self> {
+        if m < 2 {
+            bail!(HnswManifestRefused::MTooSmall { got: m });
+        }
+        Ok(Self(m))
+    }
+
+    /// The proven neighbour degree.
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
+
+    /// Standard HNSW level multiplier `1/ln(m)`. Finite by construction.
+    pub(crate) fn level_multiplier(self) -> f64 {
+        1.0 / (self.0 as f64).ln()
+    }
+}
+
+/// Typed refusal when [`HnswIndexManifest::admit`] (or [`MNeighbours::new`])
+/// is given an illegal description — zero dimension, empty identity fields,
+/// empty vec field list, non-positive `ef`, or `m < 2`.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum HnswManifestRefused {
+    #[error(
+        "HNSW manifest refused: m_neighbours must be >= 2 (got {got}); m=1 yields an infinite level multiplier"
+    )]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    MTooSmall { got: usize },
+    #[error("HNSW manifest refused: base_relation must be non-empty")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    EmptyBaseRelation,
+    #[error("HNSW manifest refused: index_name must be non-empty")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    EmptyName,
+    #[error("HNSW manifest refused: vec_dim must be > 0")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    ZeroDim,
+    #[error("HNSW manifest refused: vec_fields must be non-empty")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    EmptyVecFields,
+    #[error("HNSW manifest refused: ef_construction must be > 0")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    ZeroEfConstruction,
+    #[error("HNSW manifest refused: HNSW m_neighbours overflow: {m} * 2 exceeds usize")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    MNeighboursOverflow { m: usize },
+}
 
 /// The persisted description of one HNSW index. Serialized (msgpack, struct
 /// maps) as the payload of the base relation's `IndexKind::Hnsw` catalog
 /// entry — **its wire form is an on-disk format**, pinned by the
 /// pinned-bytes test below; changing it is a migration decision.
 ///
+/// Fields are private; [`admit`](Self::admit) is the sole mint (decode also
+/// routes through it). Illegal descriptions — `vec_dim = 0`, empty required
+/// names/fields, `m < 2` — are unconstructible outside this module.
+///
 /// Distance semantics (see the module docs, loudly): `L2` is SQUARED
 /// Euclidean; `Cosine` is NaN-free by construction because ingest
 /// normalizes (see [`IndexVec`]); `InnerProduct` is `1 - a·b`.
-#[derive(Debug, Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde_derive::Serialize)]
 pub(crate) struct HnswIndexManifest {
-    pub(crate) base_relation: SmartString<smartstring::LazyCompact>,
-    pub(crate) index_name: SmartString<smartstring::LazyCompact>,
-    pub(crate) vec_dim: usize,
-    pub(crate) dtype: VecElementType,
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    vec_dim: usize,
+    dtype: VecElementType,
     /// Positions (into the base relation's full tuple, keys then non-keys)
     /// of the indexed vector fields.
-    pub(crate) vec_fields: Vec<usize>,
-    pub(crate) distance: HnswDistance,
-    pub(crate) ef_construction: usize,
-    pub(crate) m_neighbours: usize,
-    pub(crate) m_max: usize,
-    pub(crate) m_max0: usize,
-    pub(crate) level_multiplier: f64,
-    /// Filter source text, re-parsed and compiled by the lifecycle tier
-    /// (inherited convention; the parse tier's "parsed substance with
-    /// provenance" redesign will absorb it).
-    pub(crate) index_filter: Option<String>,
-    pub(crate) extend_candidates: bool,
-    pub(crate) keep_pruned_connections: bool,
+    vec_fields: Vec<usize>,
+    distance: HnswDistance,
+    ef_construction: usize,
+    m_neighbours: MNeighbours,
+    m_max: usize,
+    m_max0: usize,
+    level_multiplier: f64,
+    /// Compiled/typed row filter substance — never raw source text. Binding
+    /// indices are filled by the lifecycle tier at first use
+    /// (`compile_row_extractor`); the catalog holds the parsed Expr.
+    index_filter: Option<Expr>,
+    extend_candidates: bool,
+    keep_pruned_connections: bool,
 }
 
 /// A fixed, pinned seed for HNSW level assignment. Deriving each vector's
@@ -269,6 +365,7 @@ const HNSW_LEVEL_SEED: u64 = 0x484e_5357_5f4c_564c; // "HNSW_LVL"
 /// the derived level is portable.
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
+    // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -276,7 +373,111 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Wire DTO for deserialize-then-admit. Derived fields (`m_max`, `m_max0`,
+/// `level_multiplier`) are ignored; [`HnswIndexManifest::admit`] recomputes
+/// them from the proven `m_neighbours`.
+#[derive(serde_derive::Deserialize)]
+struct HnswIndexManifestDe {
+    base_relation: SmartString<LazyCompact>,
+    index_name: SmartString<LazyCompact>,
+    vec_dim: usize,
+    dtype: VecElementType,
+    vec_fields: Vec<usize>,
+    distance: HnswDistance,
+    ef_construction: usize,
+    m_neighbours: usize,
+    #[allow(dead_code)]
+    m_max: usize,
+    #[allow(dead_code)]
+    m_max0: usize,
+    #[allow(dead_code)]
+    level_multiplier: f64,
+    index_filter: Option<Expr>,
+    extend_candidates: bool,
+    keep_pruned_connections: bool,
+}
+
+impl<'de> Deserialize<'de> for HnswIndexManifest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let de = HnswIndexManifestDe::deserialize(deserializer)?;
+        Self::admit(
+            de.base_relation,
+            de.index_name,
+            de.vec_dim,
+            de.dtype,
+            de.vec_fields,
+            de.distance,
+            de.ef_construction,
+            de.m_neighbours,
+            de.index_filter,
+            de.extend_candidates,
+            de.keep_pruned_connections,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
 impl HnswIndexManifest {
+    /// Sole mint for an HNSW index description. Refuses `vec_dim = 0`, empty
+    /// `base_relation` / `index_name` / `vec_fields`, non-positive
+    /// `ef_construction`, and `m_neighbours < 2` (via [`MNeighbours`]).
+    /// Derives `m_max`, `m_max0`, and `level_multiplier` from the proven `m`.
+    pub(crate) fn admit(
+        base_relation: SmartString<LazyCompact>,
+        index_name: SmartString<LazyCompact>,
+        vec_dim: usize,
+        dtype: VecElementType,
+        vec_fields: Vec<usize>,
+        distance: HnswDistance,
+        ef_construction: usize,
+        m_neighbours: usize,
+        index_filter: Option<Expr>,
+        extend_candidates: bool,
+        keep_pruned_connections: bool,
+    ) -> Result<Self> {
+        if base_relation.is_empty() {
+            bail!(HnswManifestRefused::EmptyBaseRelation);
+        }
+        if index_name.is_empty() {
+            bail!(HnswManifestRefused::EmptyName);
+        }
+        if vec_dim == 0 {
+            bail!(HnswManifestRefused::ZeroDim);
+        }
+        if vec_fields.is_empty() {
+            bail!(HnswManifestRefused::EmptyVecFields);
+        }
+        if ef_construction == 0 {
+            bail!(HnswManifestRefused::ZeroEfConstruction);
+        }
+        let m = MNeighbours::new(m_neighbours)?;
+        let m_max0 = m
+            .get()
+            .checked_mul(2)
+            .ok_or(HnswManifestRefused::MNeighboursOverflow { m: m.get() })?;
+        Ok(Self {
+            base_relation,
+            index_name,
+            vec_dim,
+            dtype,
+            vec_fields,
+            distance,
+            ef_construction,
+            m_neighbours: m,
+            m_max: m.get(),
+            m_max0,
+            level_multiplier: m.level_multiplier(),
+            index_filter,
+            extend_candidates,
+            keep_pruned_connections,
+        })
+    }
+
+    /// The typed index filter substance, if any.
+    pub(crate) fn index_filter(&self) -> Option<&Expr> {
+        self.index_filter.as_ref()
+    }
+
     /// Draw the (non-positive) layer for a vector: geometric in the standard
     /// HNSW way, `-floor(-ln(u) * level_multiplier)`, but with `u` derived
     /// DETERMINISTICALLY from the vector's identity and the pinned
@@ -330,10 +531,7 @@ impl HnswIndexManifest {
 pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys: Vec<ColumnDef> = vec![ColumnDef {
         name: SmartString::from("layer"),
-        typing: NullableColType {
-            coltype: ColType::Int,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Int),
         default_gen: None,
     }];
     for prefix in ["fr", "to"] {
@@ -344,18 +542,12 @@ pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelati
         }
         keys.push(ColumnDef {
             name: SmartString::from(format!("{prefix}__field")),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         });
         keys.push(ColumnDef {
             name: SmartString::from(format!("{prefix}__sub_idx")),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         });
     }
@@ -365,26 +557,17 @@ pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelati
             // bottom-layer (canary). Declared Any so the metadata matches
             // reality; HnswRow is the real schema of this column.
             name: SmartString::from("dist"),
-            typing: NullableColType {
-                coltype: ColType::Any,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Any),
             default_gen: None,
         },
         ColumnDef {
             name: SmartString::from("hash"),
-            typing: NullableColType {
-                coltype: ColType::Bytes,
-                nullable: true,
-            },
+            typing: NullableColType::optional(ColType::Bytes),
             default_gen: None,
         },
         ColumnDef {
             name: SmartString::from("ignore_link"),
-            typing: NullableColType {
-                coltype: ColType::Bool,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Bool),
             default_gen: None,
         },
     ];
@@ -423,6 +606,12 @@ pub(crate) struct VectorDimMismatch {
     pub(crate) got: usize,
 }
 
+/// Admitted component count exceeds the wire `u32` dimension bound.
+#[derive(Debug, Error, Diagnostic)]
+#[error("vector dimension exceeds the wire u32 bound")]
+#[diagnostic(code(index::hnsw::dimension_exceeds_u32))]
+pub(crate) struct VectorDimensionExceedsU32;
+
 // ---------------------------------------------------------------------------
 // VectorId: which vector of which base row.
 // ---------------------------------------------------------------------------
@@ -459,6 +648,15 @@ impl VectorId {
     }
 }
 
+/// A caller asked for a cached vector that was never [`ensure`](VectorCache::ensure)d —
+/// internal invariant broken, typed refuse (not a string `miette!`).
+#[derive(Debug, Error, Diagnostic)]
+#[error("internal invariant broken: HNSW vector cache miss for {id:?}")]
+#[diagnostic(code(index::hnsw::vector_cache_miss))]
+pub(crate) struct HnswVectorCacheMiss {
+    pub(crate) id: VectorId,
+}
+
 // ---------------------------------------------------------------------------
 // HnswRow: the index relation's row schema, as a sum type.
 // ---------------------------------------------------------------------------
@@ -479,6 +677,142 @@ const CANARY_LAYER: i64 = 1;
 /// | Canary | `[1, Null × (2·base_key_len + 4)]`        | `[Int bottom_layer, Bytes key, false]` |
 ///
 /// where `id…` is `tuple_key…, Int field, Int sub` (`-1` = whole field).
+/// SHA-256 content hash of a stored vector (HNSW change-detection payload).
+/// Field is private — mint only via [`Self::from_sha256_digest`].
+/// Stored wire reclaim routes through that same door after length proof.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct VecContentHash(Vec<u8>);
+
+const SHA256_DIGEST_LEN: usize = 32;
+
+const _: () = assert!(std::mem::size_of::<VecContentHash>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<VecContentHash>() == std::mem::align_of::<Vec<u8>>());
+
+impl VecContentHash {
+    /// Mint from the [`IndexVec::content_hash`] door (always 32 bytes).
+    /// The sole `Self(bytes)` constructor — produced and stored paths both
+    /// enter here.
+    fn from_sha256_digest(bytes: Vec<u8>) -> Self {
+        debug_assert_eq!(bytes.len(), SHA256_DIGEST_LEN);
+        Self(bytes)
+    }
+
+    /// Stored node-row hash: length must be exactly 32, then mint only via
+    /// [`Self::from_sha256_digest`] (length alone is not a parallel forge).
+    fn from_stored(
+        bytes: Vec<u8>,
+        index_name: &str,
+        tuple: &[DataValue],
+    ) -> Result<Self> {
+        if bytes.len() != SHA256_DIGEST_LEN {
+            bail!(IndexRowCorrupt::new(
+                index_name,
+                tuple,
+                IndexCorruptReason::HnswNodeHashWrongLength {
+                    found: bytes.len(),
+                },
+            ));
+        }
+        Ok(Self::from_sha256_digest(bytes))
+    }
+
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+
+/// Canary entry key bytes for an HNSW index row.
+/// Mint only via [`Self::from_storage_key`] (encode door). Stored reclaim
+/// proves wire shape through the storage-key decode inverse, then enters
+/// that same door — never a length-only `Vec<u8>` forge.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[repr(transparent)]
+pub(crate) struct HnswEntryKey(Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<HnswEntryKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<HnswEntryKey>() == std::mem::align_of::<Vec<u8>>());
+
+impl HnswEntryKey {
+    /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
+    fn from_storage_key(key: StorageKey) -> Self {
+        Self(key.0)
+    }
+
+    /// Wire decode of the canary entry-key payload: prove relation-prefix +
+    /// canonical column encodings (encode-door inverse), then mint only via
+    /// [`Self::from_storage_key`].
+    fn from_stored(
+        bytes: Vec<u8>,
+        index_name: &str,
+        tuple: &[DataValue],
+    ) -> Result<Self> {
+        let key = Self::claim_storage_key(bytes, index_name, tuple)?;
+        Ok(Self::from_storage_key(key))
+    }
+
+    /// Admit foreign bytes only when they decode as a lawful [`StorageKey`].
+    fn claim_storage_key(
+        bytes: Vec<u8>,
+        index_name: &str,
+        tuple: &[DataValue],
+    ) -> Result<StorageKey> {
+        match RelationId::raw_decode(&bytes) {
+            Ok(_) => {}
+            Err(DecodeError::Truncated) => {
+                bail!(IndexRowCorrupt::new(
+                    index_name,
+                    tuple,
+                    IndexCorruptReason::HnswCanaryEntryKeyTooShort {
+                        found: bytes.len(),
+                    },
+                ));
+            }
+            Err(err) => {
+                bail!(IndexRowCorrupt::new(
+                    index_name,
+                    tuple,
+                    IndexCorruptReason::DecodeFailed(err),
+                ));
+            }
+        }
+        decode_tuple_from_key(&bytes, 0).map_err(|err| {
+            IndexRowCorrupt::new(index_name, tuple, IndexCorruptReason::DecodeFailed(err))
+        })?;
+        Ok(StorageKey(bytes))
+    }
+
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+
+/// Ranked-hit key bytes during HNSW search (layer-0 node key encoding).
+/// Mint only via [`Self::from_storage_key`] (encode door).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[repr(transparent)]
+pub(crate) struct HnswHitKey(Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<HnswHitKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<HnswHitKey>() == std::mem::align_of::<Vec<u8>>());
+
+impl HnswHitKey {
+    /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
+    fn from_storage_key(key: StorageKey) -> Self {
+        Self(key.0)
+    }
+
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HnswRow {
     /// A vector's presence at one layer (the original's "self-loop" row):
@@ -488,7 +822,7 @@ pub(crate) enum HnswRow {
         layer: i64,
         at: VectorId,
         degree: usize,
-        vec_hash: Vec<u8>,
+        vec_hash: VecContentHash,
     },
     /// A directed link between two vectors at one layer. `ignore_link` is
     /// the tombstone the shrink pass leaves instead of deleting a link a
@@ -527,7 +861,7 @@ pub(crate) enum HnswRow {
     /// removal is a concurrency-semantics decision, not a port decision).
     Canary {
         bottom_layer: i64,
-        entry_key: Vec<u8>,
+        entry_key: HnswEntryKey,
     },
 }
 
@@ -575,7 +909,7 @@ impl HnswRow {
                 degree, vec_hash, ..
             } => Tuple::from_vec(vec![
                 DataValue::from(*degree as i64),
-                DataValue::Bytes(vec_hash.clone()),
+                DataValue::Bytes(vec_hash.as_bytes().to_vec()),
                 DataValue::from(false),
             ]),
             HnswRow::Edge {
@@ -590,7 +924,7 @@ impl HnswRow {
                 entry_key,
             } => Tuple::from_vec(vec![
                 DataValue::from(*bottom_layer),
-                DataValue::Bytes(entry_key.clone()),
+                DataValue::Bytes(entry_key.as_bytes().to_vec()),
                 DataValue::from(false),
             ]),
         }
@@ -622,12 +956,22 @@ impl HnswRow {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                format!("expected {expected_len} columns, found {}", tuple.len()),
+                IndexCorruptReason::WrongColumnCount {
+                    found: tuple.len(),
+                    expected: expected_len,
+                },
             ));
         }
         let int_at = |i: usize, what: &str| -> Result<i64> {
             tuple[i].get_int().ok_or_else(|| {
-                IndexRowCorrupt::new(index_name, tuple, format!("{what} is not an integer")).into()
+                IndexRowCorrupt::new(
+                    index_name,
+                    tuple,
+                    IndexCorruptReason::HnswNotInteger {
+                        what: what.to_string(),
+                    },
+                )
+                .into()
             })
         };
         let layer = int_at(0, "layer")?;
@@ -638,7 +982,7 @@ impl HnswRow {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "canary row with non-Null key slots",
+                    IndexCorruptReason::HnswCanaryNonNullKeys,
                 ));
             }
             let bottom_layer = int_at(2 * kl + 5, "canary bottom layer")?;
@@ -646,29 +990,29 @@ impl HnswRow {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "canary entry key is not bytes",
+                    IndexCorruptReason::HnswCanaryEntryNotBytes,
                 ));
             };
             return Ok(HnswRow::Canary {
                 bottom_layer,
-                entry_key: entry_key.clone(),
+                entry_key: HnswEntryKey::from_stored(entry_key.clone(), index_name, tuple)?,
             });
         }
         if layer > 0 {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                format!("layer {layer} is out of range (layers are <= 0; 1 is the canary)"),
+                IndexCorruptReason::HnswLayerOutOfRange { layer },
             ));
         }
 
-        let vector_id_at = |start: usize, side: &str| -> Result<VectorId> {
+        let vector_id_at = |start: usize, side: &'static str| -> Result<VectorId> {
             let field = int_at(start + kl, &format!("{side} field"))?;
             if field < 0 {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    format!("{side} field is negative"),
+                    IndexCorruptReason::HnswNegativeField { side },
                 ));
             }
             let sub = match int_at(start + kl + 1, &format!("{side} sub-index"))? {
@@ -677,7 +1021,7 @@ impl HnswRow {
                 s => bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    format!("{side} sub-index {s} is out of range"),
+                    IndexCorruptReason::HnswSubOutOfRange { side, sub: s },
                 )),
             };
             Ok(VectorId {
@@ -693,7 +1037,7 @@ impl HnswRow {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                "ignore_link is not a boolean",
+                IndexCorruptReason::HnswIgnoreLinkNotBool,
             ));
         };
 
@@ -703,35 +1047,35 @@ impl HnswRow {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "node degree is negative",
+                    IndexCorruptReason::HnswNodeDegreeNegative,
                 ));
             }
             let DataValue::Bytes(vec_hash) = &tuple[2 * kl + 6] else {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "node vector hash is not bytes",
+                    IndexCorruptReason::HnswNodeHashNotBytes,
                 ));
             };
             Ok(HnswRow::Node {
                 layer,
                 at: fr,
                 degree: degree as usize,
-                vec_hash: vec_hash.clone(),
+                vec_hash: VecContentHash::from_stored(vec_hash.clone(), index_name, tuple)?,
             })
         } else {
             let dist = tuple[2 * kl + 5].get_float().ok_or_else(|| {
                 miette!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "edge distance is not a number",
+                    IndexCorruptReason::HnswEdgeDistanceNotNumber,
                 ))
             })?;
             if tuple[2 * kl + 6] != DataValue::Null {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "edge hash slot is not Null",
+                    IndexCorruptReason::HnswEdgeHashNotNull,
                 ));
             }
             Ok(HnswRow::Edge {
@@ -788,8 +1132,8 @@ impl IndexVec {
         // through f32 precision (the graph's stored working precision
         // until #122's quantized residency owns this decision).
         let mut components: Vec<f64> = match manifest.dtype {
-            VecElementType::F32 => v.as_slice().to_vec(),
-            VecElementType::F64 => v.as_slice().to_vec(),
+            VecElementType::F32 => v.to_f64s(),
+            VecElementType::F64 => v.to_f64s(),
         };
         if !components.iter().all(|x| x.is_finite()) {
             bail!(NonFiniteVectorRefused);
@@ -808,16 +1152,18 @@ impl IndexVec {
                 bail!(ZeroVectorRefused);
             }
         }
-        Ok(IndexVec(Vector::new(components)))
+        Ok(IndexVec(
+            Vector::try_new(components).ok_or(VectorDimensionExceedsU32)?,
+        ))
     }
 
     /// Content hash of the admitted vector (change detection on re-put):
     /// SHA-256 over the vector's canonical value encoding — the one byte
     /// form, hashed by a pinned algorithm.
-    fn content_hash(&self) -> Vec<u8> {
+    fn content_hash(&self) -> VecContentHash {
         use sha2::Digest;
         let bytes = encode_owned(&DataValue::Vector(self.0.clone()));
-        sha2::Sha256::digest(bytes.as_bytes()).to_vec()
+        VecContentHash::from_sha256_digest(sha2::Sha256::digest(bytes.as_bytes()).to_vec())
     }
 
     /// The distance between two admitted vectors under `metric`. Total: a
@@ -825,16 +1171,76 @@ impl IndexVec {
     /// manifest's [`admit`](Self::admit), which pins `dtype`) is computed
     /// in `f64` rather than being an error path. See the type docs for the
     /// per-metric NaN analysis.
+    ///
+    /// Dimension arrives at runtime from the index schema; this method is the
+    /// **one** dynamic-dim dispatch seam over `f64` slices. Common widths
+    /// hang monomorphized kernels behind that seam (see [`dist_dispatch`]).
     pub(crate) fn dist(&self, other: &Self, metric: HnswDistance) -> f64 {
         #[cfg(test)]
         probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
-        let (a, b) = (self.0.as_slice(), other.0.as_slice());
-        match metric {
-            HnswDistance::L2 => a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum(),
-            // Unit vectors by construction: plain dot product.
-            HnswDistance::Cosine | HnswDistance::InnerProduct => {
-                1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
+        let (a, b) = (self.0.to_f64s(), other.0.to_f64s());
+        debug_assert_eq!(a.len(), b.len(), "IndexVec pair must share dimension");
+        dist_dispatch(&a, &b, metric)
+    }
+}
+
+/// ONE dynamic-dim dispatch over runtime `f64` slices: match length once,
+/// then enter a const-generic kernel. Arbitrary dims fall through to the
+/// slice iterator path — schema `dim` stays a runtime value.
+#[inline]
+fn dist_dispatch(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
+    match a.len() {
+        2 => dist_kernel::<2>(a, b, metric),
+        3 => dist_kernel::<3>(a, b, metric),
+        4 => dist_kernel::<4>(a, b, metric),
+        8 => dist_kernel::<8>(a, b, metric),
+        16 => dist_kernel::<16>(a, b, metric),
+        32 => dist_kernel::<32>(a, b, metric),
+        64 => dist_kernel::<64>(a, b, metric),
+        128 => dist_kernel::<128>(a, b, metric),
+        256 => dist_kernel::<256>(a, b, metric),
+        384 => dist_kernel::<384>(a, b, metric),
+        512 => dist_kernel::<512>(a, b, metric),
+        768 => dist_kernel::<768>(a, b, metric),
+        1024 => dist_kernel::<1024>(a, b, metric),
+        1536 => dist_kernel::<1536>(a, b, metric),
+        _ => dist_kernel_dyn(a, b, metric),
+    }
+}
+
+/// Monomorphized distance kernel for a statically-known dimension `D`.
+/// Called only after [`dist_dispatch`] has matched `a.len() == D`.
+#[inline]
+fn dist_kernel<const D: usize>(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
+    debug_assert_eq!(a.len(), D);
+    debug_assert_eq!(b.len(), D);
+    match metric {
+        HnswDistance::L2 => {
+            let mut sum = 0.0f64;
+            for i in 0..D {
+                let d = a[i] - b[i];
+                sum += d * d;
             }
+            sum
+        }
+        // Unit vectors by construction for Cosine: plain dot product.
+        HnswDistance::Cosine | HnswDistance::InnerProduct => {
+            let mut sum = 0.0f64;
+            for i in 0..D {
+                sum += a[i] * b[i];
+            }
+            1.0 - sum
+        }
+    }
+}
+
+/// Fallback kernel for dimensions outside the monomorphized set.
+#[inline]
+fn dist_kernel_dyn(a: &[f64], b: &[f64], metric: HnswDistance) -> f64 {
+    match metric {
+        HnswDistance::L2 => a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum(),
+        HnswDistance::Cosine | HnswDistance::InnerProduct => {
+            1.0 - a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
         }
     }
 }
@@ -873,17 +1279,14 @@ impl<'m> VectorCache<'m> {
             bail!(IndexRowCorrupt::new(
                 &base.name,
                 id.tuple_key.as_slice(),
-                "HNSW index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ));
         };
         let mut field = tuple.get(id.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &base.name,
                 tuple.as_slice(),
-                format!(
-                    "HNSW index references field {} beyond the row's arity",
-                    id.field
-                ),
+                IndexCorruptReason::HnswFieldBeyondArity { field: id.field },
             ))
         })?;
         if let Some(sub) = id.sub {
@@ -893,14 +1296,14 @@ impl<'m> VectorCache<'m> {
                         miette!(IndexRowCorrupt::new(
                             &base.name,
                             tuple.as_slice(),
-                            format!("HNSW index references list element {sub} beyond the list"),
+                            IndexCorruptReason::HnswListElementBeyondList { sub },
                         ))
                     })?;
                 }
-                _ => bail!(IndexRowCorrupt::new(
+                data_value_any!() => bail!(IndexRowCorrupt::new(
                     &base.name,
                     tuple.as_slice(),
-                    "HNSW index expects a list of vectors at this field",
+                    IndexCorruptReason::HnswExpectsListOfVectors,
                 )),
             }
         }
@@ -910,10 +1313,10 @@ impl<'m> VectorCache<'m> {
                 self.cache.insert(id.clone(), admitted);
                 Ok(())
             }
-            _ => bail!(IndexRowCorrupt::new(
+            data_value_any!() => bail!(IndexRowCorrupt::new(
                 &base.name,
                 tuple.as_slice(),
-                "HNSW index expects a vector at this field",
+                IndexCorruptReason::HnswExpectsVector,
             )),
         }
     }
@@ -921,9 +1324,10 @@ impl<'m> VectorCache<'m> {
     /// A cached vector. Callers [`ensure`](Self::ensure) first; a miss is
     /// an internal-invariant error (typed, not the original's `unwrap`).
     fn get(&self, id: &VectorId) -> Result<&IndexVec> {
-        self.cache
+        Ok(self
+            .cache
             .get(id)
-            .ok_or_else(|| miette!("internal invariant broken: HNSW vector cache miss for {id:?}"))
+            .ok_or_else(|| HnswVectorCacheMiss { id: id.clone() })?)
     }
 
     fn v_dist(&self, q: &IndexVec, id: &VectorId) -> Result<f64> {
@@ -981,7 +1385,7 @@ fn entry_point(
                 HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                     &idx.name,
                     row.as_slice(),
-                    "canary row found below the canary layer",
+                    IndexCorruptReason::HnswCanaryBelowCanaryLayer,
                 )),
             }
         }
@@ -1029,7 +1433,7 @@ fn neighbours(
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "canary row inside a neighbour prefix",
+                IndexCorruptReason::HnswCanaryInsideNeighbourPrefix,
             )),
         }
     }
@@ -1216,7 +1620,7 @@ fn put_fresh_at_levels(
     tx: &mut impl WriteTx,
     idx: &RelationHandle,
     base_key_len: usize,
-    vec_hash: &[u8],
+    vec_hash: VecContentHash,
     at: &VectorId,
     bottom_layer: i64,
     top_layer: i64,
@@ -1226,12 +1630,10 @@ fn put_fresh_at_levels(
     // artifact of construction order; recording the real key is
     // deliberate.)
     let entry_key = idx
-        .encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?
-        .as_bytes()
-        .to_vec();
+        .encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?;
     HnswRow::Canary {
         bottom_layer,
-        entry_key,
+        entry_key: HnswEntryKey::from_storage_key(entry_key),
     }
     .write(tx, idx, base_key_len)?;
     for layer in bottom_layer..=top_layer {
@@ -1239,7 +1641,7 @@ fn put_fresh_at_levels(
             layer,
             at: at.clone(),
             degree: 0,
-            vec_hash: vec_hash.to_vec(),
+            vec_hash: vec_hash.clone(),
         }
         .write(tx, idx, base_key_len)?;
     }
@@ -1259,10 +1661,10 @@ fn read_node_row(
         None => Ok(None),
         Some(row) => match HnswRow::decode(row.as_slice(), base.metadata.keys.len(), &idx.name)? {
             node @ HnswRow::Node { .. } => Ok(Some(node)),
-            _ => bail!(IndexRowCorrupt::new(
+            HnswRow::Edge { .. } | HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "node key decoded to a non-node row",
+                IndexCorruptReason::HnswNonNodeRow,
             )),
         },
     }
@@ -1299,7 +1701,7 @@ fn neighbours_tagged(
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "canary row inside a neighbour prefix",
+                IndexCorruptReason::HnswCanaryInsideNeighbourPrefix,
             )),
         }
     }
@@ -1478,7 +1880,7 @@ fn put_vector<T: WriteTx>(
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         // The first vector in the index.
         let layer = manifest.random_level(at);
-        return put_fresh_at_levels(tx, idx, base_key_len, &vec_hash, at, layer, 0);
+        return put_fresh_at_levels(tx, idx, base_key_len, vec_hash.clone(), at, layer, 0);
     };
 
     cache.ensure(tx, base, &ep_id)?;
@@ -1494,7 +1896,7 @@ fn put_vector<T: WriteTx>(
             tx,
             idx,
             base_key_len,
-            &vec_hash,
+            vec_hash.clone(),
             at,
             target_layer,
             bottom_layer - 1,
@@ -1563,7 +1965,7 @@ fn put_vector<T: WriteTx>(
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
                     node_key(layer, neighbour).as_slice(),
-                    "edge target has no node row at its layer",
+                    IndexCorruptReason::HnswEdgeTargetMissingNode,
                 ));
             };
             let mut new_degree = degree + 1;
@@ -1630,7 +2032,7 @@ fn remove_vec<T: WriteTx>(
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
                     node_key(layer, &neighbour).as_slice(),
-                    "neighbour of a removed vector has no node row",
+                    IndexCorruptReason::HnswNeighbourMissingNode,
                 ));
             };
             // Saturating: the removal walk counts ignored links, the
@@ -1654,17 +2056,14 @@ fn remove_vec<T: WriteTx>(
             idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::default())?;
         match entry_point(tx, base, idx)? {
             Some((bottom_layer, ep_id)) => {
-                let entry_key = idx
-                    .encode_key_for_store(
-                        node_key(bottom_layer, &ep_id).as_slice(),
-                        SourceSpan::default(),
-                    )?
-                    .as_bytes()
-                    .to_vec();
+                let entry_key = idx.encode_key_for_store(
+                    node_key(bottom_layer, &ep_id).as_slice(),
+                    SourceSpan::default(),
+                )?;
                 let val = idx.encode_val_only_for_store(
                     HnswRow::Canary {
                         bottom_layer,
-                        entry_key,
+                        entry_key: HnswEntryKey::from_storage_key(entry_key),
                     }
                     .val_tuple()
                     .as_slice(),
@@ -1701,12 +2100,11 @@ pub(crate) fn hnsw_put<T: WriteTx>(
     manifest: &HnswIndexManifest,
     base: &RelationHandle,
     idx: &RelationHandle,
-    filter: Option<&[Bytecode]>,
-    stack: &mut Vec<DataValue>,
+    filter: Option<&Expr>,
     tuple: &[DataValue],
 ) -> Result<bool> {
     if let Some(code) = filter
-        && !eval_bytecode_pred(code, tuple, stack, SourceSpan::default())?
+        && !code.eval_pred(tuple)?
     {
         hnsw_remove(tx, base, idx, tuple)?;
         return Ok(false);
@@ -1716,7 +2114,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     // Extract, then ADMIT everything before writing anything: a refused
@@ -1728,7 +2126,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             miette!(IndexRowCorrupt::new(
                 &base.name,
                 tuple,
-                format!("manifest vector field {field} beyond the row's arity"),
+                IndexCorruptReason::HnswManifestFieldBeyondArity { field: *field },
             ))
         })?;
         match val {
@@ -1756,7 +2154,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             }
             // Non-vector values (including Null) are simply not indexed,
             // matching the original.
-            _ => {}
+            data_value_any!() => {}
         }
     }
     if extracted.is_empty() {
@@ -1785,7 +2183,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let mut prefix = Tuple::with_capacity(key_len + 1);
@@ -1807,7 +2205,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "canary row inside a vector's layer-0 prefix",
+                IndexCorruptReason::HnswCanaryInsideLayer0Prefix,
             )),
         }
     }
@@ -1817,9 +2215,35 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     Ok(())
 }
 
+/// Whether one optional HNSW output column is appended (P038 — sum, not bool).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum HnswBindSlot {
+    #[default]
+    Omit,
+    Append,
+}
+
+impl HnswBindSlot {
+    #[inline]
+    pub(crate) fn append(self) -> bool {
+        matches!(self, HnswBindSlot::Append)
+    }
+}
+
+/// Which optional HNSW output columns to append — the **one** bind encoding
+/// (P038). Dual bool packs are gone; the RA tier maps the same presence to
+/// `own_bindings` symbols at construction; the engine only reads this pack.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HnswBindPack {
+    pub(crate) field: HnswBindSlot,
+    pub(crate) field_idx: HnswBindSlot,
+    pub(crate) distance: HnswBindSlot,
+    pub(crate) vector: HnswBindSlot,
+}
+
 /// The parameters of one k-nearest-neighbours search. The RA operator tier
-/// constructs this from the resolved search atom; the `bind_*` flags say
-/// which extra output columns to append (the tier maps them to bindings).
+/// constructs this from the resolved search atom; [`Self::bind`] says which
+/// extra output columns to append.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HnswKnnParams {
     pub(crate) k: usize,
@@ -1829,10 +2253,40 @@ pub(crate) struct HnswKnnParams {
     /// Maximum distance **in the metric's own units** — for `L2` that is
     /// the SQUARED Euclidean distance (see the module docs, loudly).
     pub(crate) radius: Option<f64>,
-    pub(crate) bind_field: bool,
-    pub(crate) bind_field_idx: bool,
-    pub(crate) bind_distance: bool,
-    pub(crate) bind_vector: bool,
+    pub(crate) bind: HnswBindPack,
+}
+
+/// One HNSW relation-backed k-NN invocation — [`RelationIndexSearch::Request`]
+/// for [`Hnsw`] (P103).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HnswSearchRequest<'a> {
+    pub(crate) q: &'a Vector,
+    pub(crate) manifest: &'a HnswIndexManifest,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a HnswKnnParams,
+    pub(crate) filter_expr: &'a Option<Expr>,
+    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+}
+
+impl RelationIndexSearch for Hnsw {
+    type Request<'a> = HnswSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(hnsw_knn_body(
+            tx,
+            request.q,
+            request.manifest,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_expr,
+            request.cancel,
+        )?)
+    }
 }
 
 /// k-nearest-neighbours search. Returns matching base-relation rows,
@@ -1867,16 +2321,45 @@ pub(crate) struct HnswKnnParams {
 /// The query vector is admitted like any inserted vector: dimension
 /// checked, non-finite refused, and — under cosine — the zero vector
 /// refused typed and the query normalized.
+impl Hnsw {
+    /// Relation-backed k-NN — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `hnsw_knn`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn knn(
+        tx: &impl ReadTx,
+        q: &Vector,
+        manifest: &HnswIndexManifest,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &HnswKnnParams,
+        filter_expr: &Option<Expr>,
+        cancel: &crate::fixed_rule::CancelFlag,
+    ) -> Result<crate::data::value::SearchHits> {
+        Self::search_relation(
+            tx,
+            HnswSearchRequest {
+                q,
+                manifest,
+                base,
+                idx,
+                params,
+                filter_expr,
+                cancel,
+            },
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn hnsw_knn(
+fn hnsw_knn_body(
     tx: &impl ReadTx,
     q: &Vector,
     manifest: &HnswIndexManifest,
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter_bytecode: &Option<(Vec<Bytecode>, SourceSpan)>,
-    stack: &mut Vec<DataValue>,
+    filter_expr: &Option<Expr>,
     cancel: &crate::fixed_rule::CancelFlag,
 ) -> Result<Vec<Tuple>> {
     let q = IndexVec::admit(q, manifest)?;
@@ -1887,8 +2370,8 @@ pub(crate) fn hnsw_knn(
     // unfiltered search keeps the plain graph walk below, whose result-ordering
     // tail (the `(distance, encoded-key)` tie-break) the operator tier owns;
     // this branch is deliberately kept OUT of that site.
-    if let Some(filter) = filter_bytecode {
-        return hnsw_knn_filtered(cancel, tx, &q, manifest, base, idx, params, filter, stack);
+    if let Some(filter) = filter_expr {
+        return hnsw_knn_filtered(cancel, tx, &q, manifest, base, idx, params, filter);
     }
 
     let mut cache = VectorCache::new(manifest);
@@ -1945,14 +2428,14 @@ pub(crate) fn hnsw_knn(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 cand.tuple_key.as_slice(),
-                "HNSW index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
 
         // Appended-column order is this function's contract with the RA
         // tier (the original guarded it with a "!!!" comment): field,
         // field_idx, distance, vector.
-        if params.bind_field {
+        if params.bind.field.append() {
             let name = if cand.field < key_len {
                 base.metadata.keys[cand.field].name.clone()
             } else {
@@ -1963,7 +2446,7 @@ pub(crate) fn hnsw_knn(
                         miette!(IndexRowCorrupt::new(
                             &idx.name,
                             cand_tuple.as_slice(),
-                            "indexed field beyond the base relation's arity",
+                            IndexCorruptReason::HnswIndexedFieldBeyondRelationArity,
                         ))
                     })?
                     .name
@@ -1971,21 +2454,21 @@ pub(crate) fn hnsw_knn(
             };
             cand_tuple.push(DataValue::Str(name.to_string()));
         }
-        if params.bind_field_idx {
+        if params.bind.field_idx.append() {
             cand_tuple.push(match cand.sub {
                 None => DataValue::Null,
                 Some(s) => DataValue::from(s as i64),
             });
         }
-        if params.bind_distance {
+        if params.bind.distance.append() {
             cand_tuple.push(DataValue::from(distance));
         }
-        if params.bind_vector {
+        if params.bind.vector.append() {
             let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
                 miette!(IndexRowCorrupt::new(
                     &idx.name,
                     cand_tuple.as_slice(),
-                    "indexed field beyond the base row's arity",
+                    IndexCorruptReason::HnswIndexedFieldBeyondRowArity,
                 ))
             })?;
             let vec = match cand.sub {
@@ -1997,14 +2480,14 @@ pub(crate) fn hnsw_knn(
                             miette!(IndexRowCorrupt::new(
                                 &idx.name,
                                 cand_tuple.as_slice(),
-                                "indexed list element beyond the stored list",
+                                IndexCorruptReason::HnswIndexedListElementBeyondList,
                             ))
                         })?
                         .clone(),
-                    _ => bail!(IndexRowCorrupt::new(
+                    data_value_any!() => bail!(IndexRowCorrupt::new(
                         &idx.name,
                         cand_tuple.as_slice(),
-                        "indexed field is not a list of vectors",
+                        IndexCorruptReason::HnswIndexedFieldNotListOfVectors,
                     )),
                 },
             };
@@ -2071,7 +2554,7 @@ enum SearchPlan {
 /// path). `key` is the memcmp encoding of the entry's layer-0 node key.
 struct Ranked {
     dist: OrderedFloat<f64>,
-    key: Vec<u8>,
+    key: HnswHitKey,
     tuple: Tuple,
 }
 
@@ -2097,11 +2580,10 @@ impl PartialOrd for Ranked {
 /// The `(distance, encoded-key)` total order over a vector's identity — the
 /// tie-break key. The layer-0 node key is a stable, memcmp-ordered encoding of
 /// the `VectorId`.
-fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<Vec<u8>> {
-    Ok(idx
-        .encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?
-        .as_bytes()
-        .to_vec())
+fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<HnswHitKey> {
+    Ok(HnswHitKey::from_storage_key(
+        idx.encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?,
+    ))
 }
 
 /// Keep the `k` smallest `Ranked` in a bounded max-heap (the max is the worst
@@ -2142,10 +2624,10 @@ fn build_cand_tuple(
         miette!(IndexRowCorrupt::new(
             &idx.name,
             cand.tuple_key.as_slice(),
-            "HNSW index references a base row that does not exist",
+            IndexCorruptReason::BaseRowMissing,
         ))
     })?;
-    if params.bind_field {
+    if params.bind.field.append() {
         let name = if cand.field < key_len {
             base.metadata.keys[cand.field].name.clone()
         } else {
@@ -2156,7 +2638,7 @@ fn build_cand_tuple(
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
                         cand_tuple.as_slice(),
-                        "indexed field beyond the base relation's arity",
+                        IndexCorruptReason::HnswIndexedFieldBeyondRelationArity,
                     ))
                 })?
                 .name
@@ -2164,21 +2646,21 @@ fn build_cand_tuple(
         };
         cand_tuple.push(DataValue::Str(name.to_string()));
     }
-    if params.bind_field_idx {
+    if params.bind.field_idx.append() {
         cand_tuple.push(match cand.sub {
             None => DataValue::Null,
             Some(s) => DataValue::from(s as i64),
         });
     }
-    if params.bind_distance {
+    if params.bind.distance.append() {
         cand_tuple.push(DataValue::from(distance));
     }
-    if params.bind_vector {
+    if params.bind.vector.append() {
         let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 cand_tuple.as_slice(),
-                "indexed field beyond the base row's arity",
+                IndexCorruptReason::HnswIndexedFieldBeyondRowArity,
             ))
         })?;
         let vec = match cand.sub {
@@ -2190,14 +2672,14 @@ fn build_cand_tuple(
                         miette!(IndexRowCorrupt::new(
                             &idx.name,
                             cand_tuple.as_slice(),
-                            "indexed list element beyond the stored list",
+                            IndexCorruptReason::HnswIndexedListElementBeyondList,
                         ))
                     })?
                     .clone(),
-                _ => bail!(IndexRowCorrupt::new(
+                data_value_any!() => bail!(IndexRowCorrupt::new(
                     &idx.name,
                     cand_tuple.as_slice(),
-                    "indexed field is not a list of vectors",
+                    IndexCorruptReason::HnswIndexedFieldNotListOfVectors,
                 )),
             },
         };
@@ -2217,8 +2699,7 @@ fn admit_candidate(
     params: &HnswKnnParams,
     cand: &VectorId,
     distance: f64,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
 ) -> Result<Option<Tuple>> {
     if let Some(r) = params.radius
         && distance > r
@@ -2226,7 +2707,7 @@ fn admit_candidate(
         return Ok(None);
     }
     let cand_tuple = build_cand_tuple(tx, base, idx, params, cand, distance)?;
-    if eval_bytecode_pred(&filter.0, &cand_tuple, stack, filter.1)? {
+    if filter.eval_pred(&cand_tuple)? {
         Ok(Some(cand_tuple))
     } else {
         Ok(None)
@@ -2277,8 +2758,7 @@ fn select_strategy(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
 ) -> Result<SearchPlan> {
     let mut n: usize = 0;
@@ -2303,7 +2783,7 @@ fn select_strategy(
     for id in &reservoir {
         cache.ensure(tx, base, id)?;
         let d = cache.v_dist(q, id)?;
-        if admit_candidate(tx, base, idx, params, id, d, filter, stack)?.is_some() {
+        if admit_candidate(tx, base, idx, params, id, d, filter)?.is_some() {
             pass += 1;
         }
     }
@@ -2342,8 +2822,7 @@ fn scan_filtered(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
     let mut heap: BinaryHeap<Ranked> = BinaryHeap::new();
@@ -2353,7 +2832,7 @@ fn scan_filtered(
         let id = id?;
         cache.ensure(tx, base, &id)?;
         let d = cache.v_dist(q, &id)?;
-        if let Some(tuple) = admit_candidate(tx, base, idx, params, &id, d, filter, stack)? {
+        if let Some(tuple) = admit_candidate(tx, base, idx, params, &id, d, filter)? {
             let key = id_order_key(idx, &id)?;
             push_topk(
                 &mut heap,
@@ -2384,8 +2863,7 @@ fn graph_search_layer0(
     idx: &RelationHandle,
     seeds: &[VectorId],
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
     visit_cap: usize,
 ) -> Result<BinaryHeap<Ranked>> {
@@ -2398,7 +2876,7 @@ fn graph_search_layer0(
             cache.ensure(tx, base, id)?;
             let d = cache.v_dist(q, id)?;
             candidates.push(id.clone(), Reverse(Beam::of(d, id)));
-            if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter, stack)? {
+            if let Some(tuple) = admit_candidate(tx, base, idx, params, id, d, filter)? {
                 let key = id_order_key(idx, id)?;
                 push_topk(
                     &mut results,
@@ -2441,9 +2919,7 @@ fn graph_search_layer0(
                 candidates.push(neighbour.clone(), Reverse(Beam::of(nd, &neighbour)));
             }
             // Visibility: seat only if it passes the filter (+radius).
-            if let Some(tuple) =
-                admit_candidate(tx, base, idx, params, &neighbour, nd, filter, stack)?
-            {
+            if let Some(tuple) = admit_candidate(tx, base, idx, params, &neighbour, nd, filter)? {
                 let key = id_order_key(idx, &neighbour)?;
                 push_topk(
                     &mut results,
@@ -2473,8 +2949,7 @@ fn graph_filtered(
     bottom_layer: i64,
     ef2: usize,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     cache: &mut VectorCache<'_>,
 ) -> Result<Vec<Tuple>> {
     let mut found_nn: PriorityQueue<VectorId, Beam> = PriorityQueue::new();
@@ -2488,7 +2963,7 @@ fn graph_filtered(
     let seeds: Vec<VectorId> = found_nn.iter().map(|(id, _)| id.clone()).collect();
     let visit_cap = ef2.saturating_mul(manifest.m_max0.max(1)).saturating_mul(4);
     let results = graph_search_layer0(
-        tx, q, ef2, base, idx, &seeds, params, filter, stack, cache, visit_cap,
+        tx, q, ef2, base, idx, &seeds, params, filter, cache, visit_cap,
     )?;
     Ok(drain_sorted(results, params.k))
 }
@@ -2507,8 +2982,7 @@ fn hnsw_knn_filtered(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
 ) -> Result<Vec<Tuple>> {
     if params.k == 0 {
         return Ok(vec![]);
@@ -2517,13 +2991,9 @@ fn hnsw_knn_filtered(
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         return Ok(vec![]);
     };
-    let plan = select_strategy(
-        tx, q, manifest, base, idx, params, filter, stack, &mut cache,
-    )?;
+    let plan = select_strategy(tx, q, manifest, base, idx, params, filter, &mut cache)?;
     match plan {
-        SearchPlan::Scan => {
-            scan_filtered(cancel, tx, q, base, idx, params, filter, stack, &mut cache)
-        }
+        SearchPlan::Scan => scan_filtered(cancel, tx, q, base, idx, params, filter, &mut cache),
         SearchPlan::Graph { ef2 } => {
             let hits = graph_filtered(
                 tx,
@@ -2536,13 +3006,12 @@ fn hnsw_knn_filtered(
                 ef2,
                 params,
                 filter,
-                stack,
                 &mut cache,
             )?;
             if hits.len() < params.k {
                 // Hard fallback: the exact scan finds every match the graph walk
                 // could not reach, upholding min(k, M).
-                scan_filtered(cancel, tx, q, base, idx, params, filter, stack, &mut cache)
+                scan_filtered(cancel, tx, q, base, idx, params, filter, &mut cache)
             } else {
                 Ok(hits)
             }
@@ -2561,8 +3030,7 @@ fn hnsw_knn_selected_plan(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
 ) -> Result<Option<SearchPlan>> {
     let q = IndexVec::admit(q, manifest)?;
     let mut cache = VectorCache::new(manifest);
@@ -2570,7 +3038,7 @@ fn hnsw_knn_selected_plan(
         return Ok(None);
     }
     Ok(Some(select_strategy(
-        tx, &q, manifest, base, idx, params, filter, stack, &mut cache,
+        tx, &q, manifest, base, idx, params, filter, &mut cache,
     )?))
 }
 
@@ -2586,8 +3054,7 @@ fn hnsw_knn_forced(
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &HnswKnnParams,
-    filter: &(Vec<Bytecode>, SourceSpan),
-    stack: &mut Vec<DataValue>,
+    filter: &Expr,
     plan: SearchPlan,
     fallback: bool,
 ) -> Result<Vec<Tuple>> {
@@ -2599,9 +3066,7 @@ fn hnsw_knn_forced(
         return Ok(vec![]);
     };
     match plan {
-        SearchPlan::Scan => {
-            scan_filtered(cancel, tx, &q, base, idx, params, filter, stack, &mut cache)
-        }
+        SearchPlan::Scan => scan_filtered(cancel, tx, &q, base, idx, params, filter, &mut cache),
         SearchPlan::Graph { ef2 } => {
             let hits = graph_filtered(
                 tx,
@@ -2614,11 +3079,10 @@ fn hnsw_knn_forced(
                 ef2,
                 params,
                 filter,
-                stack,
                 &mut cache,
             )?;
             if fallback && hits.len() < params.k {
-                scan_filtered(cancel, tx, &q, base, idx, params, filter, stack, &mut cache)
+                scan_filtered(cancel, tx, &q, base, idx, params, filter, &mut cache)
             } else {
                 Ok(hits)
             }
@@ -2637,6 +3101,13 @@ mod tests {
 
     use super::*;
     use crate::data::program::InputRelationHandle;
+    use crate::data::value::{TupleT, encode_key_with_suffix};
+
+    macro_rules! knn_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
+        };
+    }
     use crate::data::symb::Symbol;
     use crate::fixed_rule::CancelFlag;
     use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
@@ -2646,10 +3117,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -2681,33 +3149,31 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: 2,
+                    len: ColLen::new(2),
                 },
             )],
         }
     }
 
     fn manifest(distance: HnswDistance) -> HnswIndexManifest {
-        HnswIndexManifest {
-            base_relation: SmartString::from("vecs"),
-            index_name: SmartString::from("by_v"),
-            vec_dim: 2,
-            dtype: VecElementType::F32,
-            vec_fields: vec![1],
+        HnswIndexManifest::admit(
+            SmartString::from("vecs"),
+            SmartString::from("by_v"),
+            2,
+            VecElementType::F32,
+            vec![1],
             distance,
-            ef_construction: 16,
-            m_neighbours: 8,
-            m_max: 8,
-            m_max0: 16,
-            level_multiplier: 1.0 / (8f64).ln(),
-            index_filter: None,
-            extend_candidates: false,
-            keep_pruned_connections: false,
-        }
+            16,
+            8,
+            None,
+            false,
+            false,
+        )
+        .expect("canonical test manifest admits")
     }
 
     fn vec2(x: f64, y: f64) -> DataValue {
-        DataValue::Vector(Vector::new(vec![x, y]))
+        DataValue::Vector(Vector::try_new(vec![x, y]).unwrap())
     }
 
     fn row(k: i64, x: f64, y: f64) -> Tuple {
@@ -2734,7 +3200,6 @@ mod tests {
             KeyspaceKind::AlgorithmState,
         )
         .unwrap();
-        let mut stack = vec![];
         for r in rows {
             base.put_fact(
                 &mut tx,
@@ -2743,7 +3208,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
         }
         tx.commit().unwrap();
         (base, idx, m)
@@ -2754,10 +3219,12 @@ mod tests {
             k,
             ef: 32,
             radius: None,
-            bind_field: false,
-            bind_field_idx: false,
-            bind_distance: true,
-            bind_vector: false,
+            bind: HnswBindPack {
+                field: HnswBindSlot::Omit,
+                field_idx: HnswBindSlot::Omit,
+                distance: HnswBindSlot::Append,
+                vector: HnswBindSlot::Omit,
+            },
         }
     }
 
@@ -2771,7 +3238,7 @@ mod tests {
             let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
             v.push(unit * 2.0 - 1.0);
         }
-        DataValue::Vector(Vector::new(v))
+        DataValue::Vector(Vector::try_new(v).unwrap())
     }
 
     /// Build an `n`-vector index inside ONE write transaction (mirrors the
@@ -2793,14 +3260,15 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: dim,
+                    len: ColLen::new(dim),
                 },
             )],
         };
         let mut m = manifest(HnswDistance::L2);
         m.vec_dim = dim;
         m.ef_construction = 200;
-        m.m_neighbours = 16;
+        let m16 = MNeighbours::new(16).unwrap();
+        m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
         // `manifest()`'s default (`1/ln(8)`) is sized for its own m=8 tests;
@@ -2809,7 +3277,7 @@ mod tests {
         // `tombstone_fix_preserves_recall_at_10k` already reset it — this
         // call sat at the m=8 default, over-deepening the hierarchy relative
         // to the bench parameters this harness claims to mirror).
-        m.level_multiplier = 1.0 / (16f64).ln();
+        m.level_multiplier = m16.level_multiplier();
 
         let mut tx = db.write_tx().unwrap();
         let base = create_relation(
@@ -2827,7 +3295,6 @@ mod tests {
 
         probe::reset();
         let mut state = seed;
-        let mut stack = vec![];
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
@@ -2839,7 +3306,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
         }
         let elapsed = t0.elapsed().as_secs_f64();
         let snap = probe::snapshot();
@@ -2870,17 +3337,18 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: dim,
+                    len: ColLen::new(dim),
                 },
             )],
         };
         let mut m = manifest(HnswDistance::L2);
         m.vec_dim = dim;
         m.ef_construction = 200;
-        m.m_neighbours = 16;
+        let m16 = MNeighbours::new(16).unwrap();
+        m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
-        m.level_multiplier = 1.0 / (16f64).ln();
+        m.level_multiplier = m16.level_multiplier();
 
         let mut setup_tx = db.write_tx().unwrap();
         let base = create_relation(
@@ -2899,7 +3367,6 @@ mod tests {
 
         probe::reset();
         let mut state = seed;
-        let mut stack = vec![];
         let t0 = std::time::Instant::now();
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
@@ -2912,7 +3379,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
             tx.commit().unwrap();
         }
         let elapsed = t0.elapsed().as_secs_f64();
@@ -2985,17 +3452,18 @@ mod tests {
                     "v",
                     ColType::Vec {
                         eltype: VecElementType::F32,
-                        len: dim,
+                        len: ColLen::new(dim),
                     },
                 )],
             };
             let mut m = manifest(HnswDistance::L2);
             m.vec_dim = dim;
             m.ef_construction = 200;
-            m.m_neighbours = 16;
+            let m16 = MNeighbours::new(16).unwrap();
+            m.m_neighbours = m16;
             m.m_max = 16;
             m.m_max0 = 32;
-            m.level_multiplier = 1.0 / (16f64).ln();
+            m.level_multiplier = m16.level_multiplier();
 
             let mut tx = db.write_tx().unwrap();
             let base = create_relation(
@@ -3011,7 +3479,6 @@ mod tests {
             )
             .unwrap();
             let mut state = 0xA5A5_1234_0000_0000u64;
-            let mut stack = vec![];
             for k in 0..n {
                 let v = probe_vec(dim, &mut state);
                 let r = vec![DataValue::from(k as i64), v];
@@ -3022,9 +3489,7 @@ mod tests {
                     SourceSpan(0, 0),
                 )
                 .unwrap();
-                assert!(
-                    hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap()
-                );
+                assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
             }
 
             // Every row in the index relation, decoded — a full unfiltered
@@ -3236,17 +3701,18 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: dim,
+                    len: ColLen::new(dim),
                 },
             )],
         };
         let mut m = manifest(HnswDistance::L2);
         m.vec_dim = dim;
         m.ef_construction = 200;
-        m.m_neighbours = 16;
+        let m16 = MNeighbours::new(16).unwrap();
+        m.m_neighbours = m16;
         m.m_max = 16;
         m.m_max0 = 32;
-        m.level_multiplier = 1.0 / (16f64).ln();
+        m.level_multiplier = m16.level_multiplier();
 
         let mut tx = db.write_tx().unwrap();
         let base = create_relation(
@@ -3263,14 +3729,13 @@ mod tests {
         .unwrap();
 
         let mut state = 0x9EC4_11AA_0000_0000u64;
-        let mut stack = vec![];
         let mut stored: Vec<Vec<f64>> = Vec::with_capacity(n);
         for k in 0..n {
             let v = probe_vec(dim, &mut state);
             let DataValue::Vector(ref arr) = v else {
                 unreachable!()
             };
-            stored.push(arr.as_slice().to_vec());
+            stored.push(arr.to_f64s());
             let r = vec![DataValue::from(k as i64), v];
             base.put_fact(
                 &mut tx,
@@ -3279,7 +3744,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, r.as_slice()).unwrap());
+            assert!(hnsw_put(&mut tx, &m, &base, &idx, None, r.as_slice()).unwrap());
         }
         tx.commit().unwrap();
 
@@ -3297,7 +3762,7 @@ mod tests {
 
             // Independent oracle: brute-force squared L2 over every stored
             // vector, sorted, top-k ids.
-            let qa = q_vec.as_slice();
+            let qa = q_vec.to_f64s(); let qa = qa.as_slice();
             let mut truth: Vec<(f64, i64)> = stored
                 .iter()
                 .enumerate()
@@ -3316,8 +3781,8 @@ mod tests {
             truth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
-            let mut engine_stack = vec![];
-            let hits = hnsw_knn(
+            let hits = crate::engines::search_rows(
+                Hnsw::knn(
                 &rtx,
                 q_vec,
                 &m,
@@ -3327,14 +3792,12 @@ mod tests {
                     k,
                     ef: 64,
                     radius: None,
-                    bind_field: false,
-                    bind_field_idx: false,
-                    bind_distance: false,
-                    bind_vector: false,
+                    bind: HnswBindPack::default(),
                 },
                 &None,
-                &mut engine_stack,
                 &CancelFlag::default(),
+            )
+            .unwrap(),
             )
             .unwrap();
             let engine_ids: FxHashSet<i64> =
@@ -3370,9 +3833,8 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![0.9, 0.1]);
-        let mut stack = vec![];
-        let hits = hnsw_knn(
+        let q = Vector::try_new(vec![0.9, 0.1]).unwrap();
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3380,10 +3842,8 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &mut stack,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         // Hand-computed squared distances from (0.9, 0.1):
         //   k=2 (1,0): 0.01 + 0.01 = 0.02   <- nearest
         //   k=1 (0,0): 0.81 + 0.01 = 0.82
@@ -3400,23 +3860,12 @@ mod tests {
         // Radius is in squared units too: 0.5 keeps only (1,0).
         let mut p = knn_params(4);
         p.radius = Some(0.5);
-        let hits = hnsw_knn(
-            &rtx,
-            &q,
-            &m,
-            &base,
-            &idx,
-            &p,
-            &None,
-            &mut stack,
-            &CancelFlag::default(),
-        )
-        .unwrap();
+        let hits = knn_rows!(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default());
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(2));
 
         // k larger than the index: everything comes back, still ordered.
-        let hits = hnsw_knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3424,10 +3873,8 @@ mod tests {
             &idx,
             &knn_params(10),
             &None,
-            &mut stack,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(hits.len(), 4);
         assert_eq!(
             hits.iter()
@@ -3451,9 +3898,8 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::Cosine, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![2.0, 0.0]);
-        let mut stack = vec![];
-        let hits = hnsw_knn(
+        let q = Vector::try_new(vec![2.0, 0.0]).unwrap();
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3461,10 +3907,8 @@ mod tests {
             &idx,
             &knn_params(3),
             &None,
-            &mut stack,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(
             hits.iter()
                 .map(|t| t[0].get_int().unwrap())
@@ -3489,9 +3933,7 @@ mod tests {
         // Insert refusal.
         let mut tx = db.write_tx().unwrap();
         let zero = row(9, 0.0, 0.0);
-        let mut stack = vec![];
-        let err =
-            hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, zero.as_slice()).unwrap_err();
+        let err = hnsw_put(&mut tx, &m, &base, &idx, None, zero.as_slice()).unwrap_err();
         assert!(
             err.downcast_ref::<ZeroVectorRefused>().is_some(),
             "typed refusal, got: {err:?}"
@@ -3500,15 +3942,14 @@ mod tests {
 
         // Query refusal.
         let rtx = db.read_tx().unwrap();
-        let err = hnsw_knn(
+        let err = Hnsw::knn(
             &rtx,
-            &Vector::new(vec![0.0, 0.0]),
+            &Vector::try_new(vec![0.0, 0.0]).unwrap(),
             &m,
             &base,
             &idx,
             &knn_params(1),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .unwrap_err();
@@ -3543,49 +3984,20 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-        assert!(
-            hnsw_put(
-                &mut tx,
-                &m2,
-                &base2,
-                &idx2,
-                None,
-                &mut stack,
-                zrow.as_slice()
-            )
-            .unwrap()
-        );
+        assert!(hnsw_put(&mut tx, &m2, &base2, &idx2, None, zrow.as_slice()).unwrap());
         tx.commit().unwrap();
 
         // Non-finite components are refused under every metric.
         let mut tx = db.write_tx().unwrap();
         let nan_row = row(2, f64::NAN, 0.0);
-        let err = hnsw_put(
-            &mut tx,
-            &m2,
-            &base2,
-            &idx2,
-            None,
-            &mut stack,
-            nan_row.as_slice(),
-        )
-        .unwrap_err();
+        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, nan_row.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<NonFiniteVectorRefused>().is_some());
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
+            DataValue::Vector(Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap()),
         ];
-        let err = hnsw_put(
-            &mut tx,
-            &m2,
-            &base2,
-            &idx2,
-            None,
-            &mut stack,
-            bad_dim.as_slice(),
-        )
-        .unwrap_err();
+        let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
     }
 
@@ -3603,9 +4015,8 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![1.0, 0.0]);
-        let mut stack = vec![];
-        let hits = hnsw_knn(
+        let q = Vector::try_new(vec![1.0, 0.0]).unwrap();
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3613,10 +4024,8 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &mut stack,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(1));
         drop(rtx);
@@ -3626,7 +4035,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = hnsw_knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3634,10 +4043,8 @@ mod tests {
             &idx,
             &knn_params(2),
             &None,
-            &mut stack,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert!(hits.is_empty(), "empty index yields empty results");
         assert_eq!(
             idx.scan_all(&rtx).count(),
@@ -3653,22 +4060,9 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let rows = vec![row(1, 0.0, 0.0), row(2, 1.0, 0.0)];
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
-
-        let mut stack = vec![];
         // Unchanged put.
         let mut tx = db.write_tx().unwrap();
-        assert!(
-            hnsw_put(
-                &mut tx,
-                &m,
-                &base,
-                &idx,
-                None,
-                &mut stack,
-                rows[0].as_slice()
-            )
-            .unwrap()
-        );
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, rows[0].as_slice()).unwrap());
         tx.commit().unwrap();
 
         // Changed vector: base row rewritten, index follows.
@@ -3681,12 +4075,12 @@ mod tests {
             SourceSpan(0, 0),
         )
         .unwrap();
-        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, &mut stack, moved.as_slice()).unwrap());
+        assert!(hnsw_put(&mut tx, &m, &base, &idx, None, moved.as_slice()).unwrap());
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![4.0, 4.0]);
-        let hits = hnsw_knn(
+        let q = Vector::try_new(vec![4.0, 4.0]).unwrap();
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3694,10 +4088,8 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &mut stack,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(hits[0][0], DataValue::from(1), "found at its new position");
     }
 
@@ -3714,8 +4106,8 @@ mod tests {
             prop_assume!(bx.abs() + by.abs() > 1e-3);
             let na = (ax * ax + ay * ay).sqrt();
             let nb = (bx * bx + by * by).sqrt();
-            let a = Vector::new(vec![ax / na, ay / na]);
-            let b = Vector::new(vec![bx / nb, by / nb]);
+            let a = Vector::try_new(vec![ax / na, ay / na]).unwrap();
+            let b = Vector::try_new(vec![bx / nb, by / nb]).unwrap();
             for m in [&m_cos, &m_l2, &m_ip] {
                 let va = IndexVec::admit(&a, m).unwrap();
                 let vb = IndexVec::admit(&b, m).unwrap();
@@ -3748,7 +4140,7 @@ mod tests {
                 layer: -2,
                 at: at.clone(),
                 degree: 3,
-                vec_hash: vec![1, 2, 3],
+                vec_hash: VecContentHash::from_sha256_digest(vec![1u8; 32]),
             },
             HnswRow::Edge {
                 layer: 0,
@@ -3759,7 +4151,9 @@ mod tests {
             },
             HnswRow::Canary {
                 bottom_layer: -3,
-                entry_key: vec![9, 9],
+                entry_key: HnswEntryKey::from_storage_key(
+                    [DataValue::from(42i64)].encode_as_key(RelationId::SYSTEM),
+                ),
             },
         ];
         for row in rows {
@@ -3774,7 +4168,7 @@ mod tests {
             layer: 0,
             at: at.clone(),
             degree: 0,
-            vec_hash: vec![],
+            vec_hash: VecContentHash::from_sha256_digest(vec![0u8; 32]),
         };
         let k = node.key_tuple(kl);
         assert_eq!(k.len(), 2 * kl + 5);
@@ -3786,7 +4180,11 @@ mod tests {
         );
         let c = HnswRow::Canary {
             bottom_layer: 0,
-            entry_key: vec![],
+            entry_key: HnswEntryKey::from_storage_key(encode_key_with_suffix(
+                RelationId::SYSTEM,
+                &[],
+                &[],
+            )),
         }
         .key_tuple(kl);
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));
@@ -3846,9 +4244,8 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![0.5, 0.5]);
-        let mut stack = vec![];
-        let err = hnsw_knn(
+        let q = Vector::try_new(vec![0.5, 0.5]).unwrap();
+        let err = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -3856,7 +4253,6 @@ mod tests {
             &idx,
             &knn_params(1),
             &None,
-            &mut stack,
             &CancelFlag::default(),
         )
         .expect_err("corrupt rows must be errors, not panics");
@@ -3973,9 +4369,8 @@ mod tests {
             let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect();
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
-            let q = Vector::new(vec![1.0, 0.0]);
-            let mut stack = vec![];
-            let hits = hnsw_knn(
+            let q = Vector::try_new(vec![1.0, 0.0]).unwrap();
+            let hits = knn_rows!(
                 &rtx,
                 &q,
                 &m,
@@ -3983,10 +4378,8 @@ mod tests {
                 &idx,
                 &knn_params(3),
                 &None,
-                &mut stack,
                 &CancelFlag::default(),
-            )
-            .unwrap();
+            );
             // Every hit is at distance 0 (identical vectors).
             for h in &hits {
                 assert!(h[2].get_float().unwrap().abs() < 1e-9, "all equidistant");

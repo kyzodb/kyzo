@@ -25,14 +25,14 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode};
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::{
-    BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
-    FixedRulePayload, NodeNotFoundError,
+    backtrace_predecessor, BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation,
+    FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
 
 pub(crate) struct ShortestPathAStar;
@@ -59,8 +59,8 @@ impl FixedRule for ShortestPathAStar {
             for goal in goals.iter()? {
                 let goal = goal?;
                 let (cost, path) = astar(&start, &goal, edges, nodes, &heuristic, cancel.clone())?;
-                // Structural: `ensure_min_len(1)` on `starting`/`goals`
-                // proved every tuple has a first column.
+                // INVARIANT(astar_endpoint_col): `ensure_min_len(1)` on
+                // `starting`/`goals` proved a first column.
                 out.put(Tuple::from_vec(vec![
                     start[0].clone(),
                     goal[0].clone(),
@@ -91,17 +91,14 @@ fn astar(
     heuristic: &Expr,
     cancel: CancelFlag,
 ) -> Result<(f64, Vec<DataValue>)> {
-    // Structural: the caller's `ensure_min_len(1)` on `starting`/`goals`
-    // proved every tuple has a first column.
+    // INVARIANT(astar_endpoint_col): caller's `ensure_min_len(1)` proved a first column.
     let start_node = &starting.as_slice()[0];
     let goal_node = &goal.as_slice()[0];
-    let heuristic_bytecode = heuristic.compile()?;
-    let mut stack = vec![];
-    let mut eval_heuristic = |node: &Tuple| -> Result<f64> {
+    let eval_heuristic = |node: &Tuple| -> Result<f64> {
         let mut v = node.clone();
         v.extend(goal.iter().cloned());
         let t = v;
-        let cost_val = eval_bytecode(&heuristic_bytecode, &t, &mut stack)?;
+        let cost_val = heuristic.eval(&t)?;
         let cost = cost_val.get_float().ok_or_else(|| {
             BadExprValueError(
                 cost_val,
@@ -130,10 +127,10 @@ fn astar(
             let mut current = node;
             let mut ret = vec![];
             while current != *start_node {
-                // Structural: every non-start node popped from the open set
-                // was inserted into `back_trace` when it was first relaxed,
-                // so walking predecessors from the goal cannot miss.
-                let prev = back_trace.get(&current).unwrap().clone();
+                // INVARIANT(astar_pred): every non-start node popped from
+                // the open set was inserted into `back_trace` when first
+                // relaxed, so walking predecessors from the goal cannot miss.
+                let prev = backtrace_predecessor(&back_trace, &current, "astar_pred")?;
                 ret.push(current);
                 current = prev;
             }
@@ -220,7 +217,7 @@ mod tests {
     fn heuristic_guided_route() {
         let h_binding = Expr::Binding {
             var: Symbol::new("h", SourceSpan::default()),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         };
         let got = run_fixed_rule(
             &ShortestPathAStar,

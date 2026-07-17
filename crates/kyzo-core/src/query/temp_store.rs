@@ -24,13 +24,10 @@
  * so the argument lists in the constructor spec are carried for eval's
  * interface and ignored here. A `MeetAggrStore` groups by the head's
  * non-aggregated positions **wherever they sit** (a constructed
- * `MeetLayout` proof), not only when they form a prefix as upstream cozo
- * required — full oracle positional-meet parity (`query/laws.rs`), which
- * retires the `MeetNotSuffix` refusal removed from `query/eval.rs`. It
- * keeps two views — `by_group` for the fold/delta (group-key order) and
- * `by_row` for the head-tuple-ordered scans joins issue — because for a
- * non-suffix layout those orders differ. The delta propagation in
- * `MeetAggrStore`
+ * `MeetLayout` proof) — full oracle positional-meet parity
+ * (`query/laws.rs`). Fold/delta authority is solely `by_group`; head-tuple
+ * order for joins is derived via [`MeetLayout::interleave`] at scan time
+ * (P036 — no `by_row` twin). The delta propagation in `MeetAggrStore`
  * rides the *corrected* `MeetAggrObj::update` changed-flag contract — the
  * original's inverted `and`/`or` flags could announce "unchanged" on
  * exactly the update that changed a value and reach a premature fixpoint;
@@ -62,8 +59,10 @@
 //!
 //! The three stores:
 //!
-//! - [`RegularTempStore`]: a set of tuples (plus a per-tuple limiter-skip
-//!   flag for early-returned entry rules).
+//! - [`RegularTempStore`]: a set of tuples (plus a per-tuple [`LimiterSkip`]
+//!   disposition — named Include/PastLimit, never a bare `bool` (P093) — for
+//!   early-returned entry rules). Own-byte keys are [`OwnBareKey`]
+//!   sealed at the encode door (P094); foreign bytes are unrepresentable.
 //! - [`MeetAggrStore`]: grouped tuples folded through meet (semilattice)
 //!   aggregations as they arrive; recursion through such aggregations is
 //!   sound because the fold is idempotent, associative, and monotone in
@@ -97,15 +96,66 @@
 //! with eval's port.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 
 use itertools::Itertools;
-use miette::{Result, miette};
+use miette::{Diagnostic, Result, ensure, miette};
+use thiserror::Error;
 
-use crate::data::aggr::{Aggregation, MeetAggrObj};
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
+use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
-use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
+use crate::data::value::{DecodeError, Tuple, decode_tuple_bare, encode_tuple_bare};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Own-bytes row keys (P094)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Bare-encoded row bytes minted only via [`Self::encode`]. Foreign slices
+/// are unrepresentable — [`TempStoreCorruptRefuse`] is the decode refusal.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OwnBareKey(Box<[u8]>);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("temp store row bytes failed bare decode")]
+#[diagnostic(code(query::temp_store_corrupt))]
+pub(crate) struct TempStoreCorruptRefuse(#[source] DecodeError);
+
+/// `meet_put` must leave the folded group resident — typed refuse if not.
+#[derive(Debug, Error, Diagnostic)]
+#[error("meet_put did not leave the group resident")]
+#[diagnostic(code(query::meet_put_resident), help("This is a bug. Please report it."))]
+struct MeetPutResidentInvariant;
+
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum TempStoreAccessRefuse {
+    #[error(transparent)]
+    Corrupt(#[from] TempStoreCorruptRefuse),
+    #[error("head position {idx} out of range")]
+    Position { idx: usize },
+}
+
+impl Debug for OwnBareKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("OwnBareKey").field(&self.0).finish()
+    }
+}
+
+impl OwnBareKey {
+    /// Mint from a value slice through the bare encode door.
+    pub(crate) fn encode(values: &[DataValue]) -> Box<Self> {
+        Box::new(Self(encode_tuple_bare(values).into_boxed_slice()))
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub(crate) fn decode_tuple(&self) -> Result<Tuple, TempStoreCorruptRefuse> {
+        decode_tuple_bare(self.as_bytes()).map_err(TempStoreCorruptRefuse)
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // The admission seam
@@ -138,24 +188,45 @@ pub(crate) trait AdmissionSink {
     /// with its *current* (post-update) aggregate value — matching the
     /// provenance boundary that a meet aggregation's witness is per group,
     /// not per contributing row.
-    fn admit(&mut self, tuple: TupleInIter<'_>);
+    fn admit(&mut self, tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse>;
 }
 
 /// Recording off: the default state, compiled away.
 impl AdmissionSink for () {
     const RECORDING: bool = false;
     #[inline(always)]
-    fn admit(&mut self, _tuple: TupleInIter<'_>) {}
+    fn admit(&mut self, _tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse> {
+        Ok(())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // RegularTempStore
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Per-tuple limiter disposition in a [`RegularTempStore`].
+///
+/// Named token (not a bare `bool`): a row either participates in the entry
+/// rule's returned set, or was derived past `:limit` and joins only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) enum LimiterSkip {
+    /// Within `:limit` — joins and early-returned rows.
+    #[default]
+    Include,
+    /// Past `:limit` — joins only; filtered from [`EpochStore::early_returned_iter`].
+    PastLimit,
+}
+
+impl LimiterSkip {
+    #[inline]
+    pub(crate) fn excludes_from_return(self) -> bool {
+        matches!(self, Self::PastLimit)
+    }
+}
+
 /// A store holding temp data during evaluation of queries: a set of tuples,
-/// each with a limiter-skip flag (`true` = the tuple was derived past an
-/// entry rule's `:limit` and participates in joins but not in the returned
-/// rows; see [`EpochStore::early_returned_iter`]).
+/// each with a [`LimiterSkip`] disposition (past `:limit` rows join but are
+/// not returned; see [`EpochStore::early_returned_iter`]).
 /// The public interface is used in custom implementations of
 /// fixed rules (algorithms/utilities).
 ///
@@ -171,7 +242,7 @@ impl AdmissionSink for () {
 /// representation-only, not a semantic change.
 #[derive(Default, Debug)]
 pub struct RegularTempStore {
-    pub(crate) inner: BTreeMap<Box<[u8]>, bool>,
+    pub(crate) inner: BTreeMap<Box<OwnBareKey>, LimiterSkip>,
 }
 
 /// The value-part placeholder for a [`TupleInIter::Values`] whose whole
@@ -191,9 +262,9 @@ impl RegularTempStore {
     /// Tests if a key already exists in the store. A slice probe: the
     /// eval seam dedups batch-resident rows without minting them.
     pub fn exists(&self, key: &[DataValue]) -> bool {
-        self.inner.contains_key(encode_tuple_bare(key).as_slice())
+        let probe = OwnBareKey::encode(key);
+        self.inner.contains_key(probe.as_ref())
     }
-
     /// The number of distinct tuples materialized so far. On the plain and
     /// normal-aggregation paths the out-store holds only genuinely-new,
     /// deduped tuples (the caller filters each derivation against the running
@@ -215,20 +286,37 @@ impl RegularTempStore {
 
     /// Add a tuple to the store.
     pub fn put(&mut self, tuple: Tuple) {
-        self.inner.insert(
-            encode_tuple_bare(tuple.as_slice()).into_boxed_slice(),
-            false,
-        );
+        self.inner
+            .insert(OwnBareKey::encode(tuple.as_slice()), LimiterSkip::Include);
     }
     pub(crate) fn put_with_skip(&mut self, tuple: Tuple) {
-        self.inner
-            .insert(encode_tuple_bare(tuple.as_slice()).into_boxed_slice(), true);
+        self.inner.insert(
+            OwnBareKey::encode(tuple.as_slice()),
+            LimiterSkip::PastLimit,
+        );
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // MeetAggrStore
 // ─────────────────────────────────────────────────────────────────────────
+
+/// A proven index into a rule head — minted only from
+/// `aggr.iter().enumerate()` at layout / eval rule-set construction.
+/// Bare `usize` head positions are not admitted on the Meet path (P101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct HeadPos(usize);
+
+impl HeadPos {
+    /// Door used when the enumerate index is already a head position.
+    pub(crate) fn from_index(i: usize) -> Self {
+        Self(i)
+    }
+
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
+}
 
 /// The positional layout of a meet-aggregation head, resolved once at
 /// construction from the head's per-position aggregation signature. It is
@@ -238,34 +326,35 @@ impl RegularTempStore {
 /// sites.
 ///
 /// `key_positions` are the head positions with no aggregation (the grouping
-/// key), `val_positions` the meet-aggregated positions — both in ascending
-/// head order, and together a partition of `0..arity`. Upstream cozo (and
-/// the store this replaces) required the aggregated positions to form a
-/// *suffix* so the group key was a byte prefix of the encoded tuple; this
-/// layout groups by the projection onto `key_positions` **wherever they
-/// sit** — position 0, interleaved, or split across the head — matching the
-/// oracle's full positional meet semantics (see the divergence note in
-/// `query/laws.rs`).
+/// key), `val_positions` the meet-aggregated positions — both [`HeadPos`]
+/// in ascending head order, and together a partition of `0..arity`.
+/// Upstream cozo (and the store this replaces) required the aggregated
+/// positions to form a *suffix* so the group key was a byte prefix of the
+/// encoded tuple; this layout groups by the projection onto
+/// `key_positions` **wherever they sit** — position 0, interleaved, or
+/// split across the head — matching the oracle's full positional meet
+/// semantics (see the divergence note in `query/laws.rs`).
 #[derive(Debug, Clone)]
 pub(crate) struct MeetLayout {
-    key_positions: Vec<usize>,
-    val_positions: Vec<usize>,
+    key_positions: Vec<HeadPos>,
+    val_positions: Vec<HeadPos>,
     arity: usize,
 }
 
 impl MeetLayout {
-    /// Build from the head signature: `None` positions group, `Some`
-    /// positions aggregate. Total over any signature — the partition of
-    /// `0..arity` is exhaustive, so `interleave` never leaves a `Null`.
-    fn from_signature(aggrs: &[Option<(Aggregation, Vec<DataValue>)>]) -> Self {
+    /// Build from the head signature: [`HeadAggrSlot::Plain`] positions
+    /// group, [`HeadAggrSlot::Aggregated`] positions aggregate. Total over
+    /// any signature — the partition of `0..arity` is exhaustive, so
+    /// `interleave` never leaves a `Null`.
+    fn from_signature(aggrs: &[HeadAggrSlot]) -> Self {
         let arity = aggrs.len();
         let mut key_positions = Vec::new();
         let mut val_positions = Vec::new();
         for (i, a) in aggrs.iter().enumerate() {
-            if a.is_none() {
-                key_positions.push(i);
+            if a.is_aggregated() {
+                val_positions.push(HeadPos::from_index(i));
             } else {
-                val_positions.push(i);
+                key_positions.push(HeadPos::from_index(i));
             }
         }
         Self {
@@ -279,28 +368,35 @@ impl MeetLayout {
     /// non-aggregated positions, in head order. `row` must cover every
     /// grouping position (a full head tuple does).
     fn project_key(&self, row: &[DataValue]) -> Tuple {
-        self.key_positions.iter().map(|i| row[*i].clone()).collect()
+        self.key_positions
+            .iter()
+            .map(|p| row[p.get()].clone())
+            .collect()
     }
 
     /// The meet values of a head tuple: its projection onto the aggregated
-    /// positions, in head order (aligned one-to-one with `meets`).
-    fn project_vals(&self, row: &[DataValue]) -> Tuple {
-        self.val_positions.iter().map(|i| row[*i].clone()).collect()
+    /// positions, in head order (aligned one-to-one with `meets`), each
+    /// wrapped as [`MeetAccum::Value`]. Production admit folds through
+    /// `init_val` instead; this stays for layout round-trip tests only.
+    #[cfg(test)]
+    fn project_vals(&self, row: &[DataValue]) -> Vec<MeetAccum> {
+        self.val_positions
+            .iter()
+            .map(|p| MeetAccum::from_derived(row[p.get()].clone()))
+            .collect()
     }
 
     /// Whether the aggregated positions form a *suffix* — equivalently, the
     /// grouping positions are exactly the prefix `0..key_positions.len()`.
     /// When true, a head tuple is byte-for-byte `group_key ++ folded_vals`,
     /// so the group map alone reconstructs every row in head-tuple order (a
-    /// distinct group has a distinct key, and the key is the head prefix)
-    /// and the `by_row` mirror is redundant. This is the pre-fork store's
-    /// layout — the only shape that existed before positional grouping — so
-    /// a suffix store skips the mirror entirely and keeps that footprint;
-    /// only a genuinely non-suffix layout pays for `by_row`.
+    /// distinct group has a distinct key, and the key is the head prefix).
+    /// Non-suffix layouts derive head-tuple order from `by_group` via
+    /// [`Self::interleave`] at scan time — never a stored twin (P036).
     pub(crate) fn is_suffix(&self) -> bool {
         self.key_positions
             .iter()
-            .copied()
+            .map(|p| p.get())
             .eq(0..self.key_positions.len())
     }
 
@@ -312,30 +408,34 @@ impl MeetLayout {
     /// (row is `DataValue`s, not bytes) — the zero-alloc suffix borrow the
     /// previous `Cow`-returning form had is traded for a smaller resident
     /// key, one encode per fold instead of zero.
-    pub(crate) fn borrow_key(&self, row: &[DataValue]) -> Vec<u8> {
+    pub(crate) fn borrow_key(&self, row: &[DataValue]) -> Box<OwnBareKey> {
         if self.is_suffix() {
-            encode_tuple_bare(&row[..self.key_positions.len()])
+            OwnBareKey::encode(&row[..self.key_positions.len()])
         } else {
-            encode_tuple_bare(self.project_key(row).as_slice())
+            OwnBareKey::encode(self.project_key(row).as_slice())
         }
     }
 
-    /// Rebuild the logical head tuple from a group key's bytes and its
-    /// folded meet values — the inverse of the two projections (the key
-    /// decodes back through [`decode_tuple_bare`]; the fold values were
-    /// never bytes, per this module's doc). Every position is either a key
-    /// or a value position (they partition `0..arity`), so no `Null`
-    /// placeholder survives.
-    pub(crate) fn interleave(&self, key: &[u8], vals: &[DataValue]) -> Tuple {
-        let key = decode_tuple_bare(key).expect("this store's own bytes decode");
+    /// Rebuild the logical head tuple from a group key and its folded meet
+    /// values — the inverse of the two projections. Every position is
+    /// either a key or a value position (they partition `0..arity`), so no
+    /// `Null` placeholder survives. [`MeetAccum::Empty`] materializes as
+    /// [`DataValue::Null`] (result meaning "no input"), distinct from the
+    /// in-fold Empty state.
+    pub(crate) fn interleave(
+        &self,
+        key: &OwnBareKey,
+        vals: &[MeetAccum],
+    ) -> Result<Tuple, TempStoreCorruptRefuse> {
+        let key = key.decode_tuple()?;
         let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
-        for (slot, i) in self.key_positions.iter().enumerate() {
-            row[*i] = key[slot].clone();
+        for (slot, p) in self.key_positions.iter().enumerate() {
+            row[p.get()] = key[slot].clone();
         }
-        for (slot, i) in self.val_positions.iter().enumerate() {
-            row[*i] = vals[slot].clone();
+        for (slot, p) in self.val_positions.iter().enumerate() {
+            row[p.get()] = vals[slot].to_value();
         }
-        row
+        Ok(row)
     }
 }
 
@@ -357,38 +457,17 @@ impl MeetLayout {
 /// replaces.
 pub(crate) struct MeetAggrStore {
     /// Group key bytes ([`encode_tuple_bare`], story #77 — same footprint
-    /// argument as [`RegularTempStore`]) → folded meet values (projection
-    /// onto the aggregated positions, in head order). The fold/delta
-    /// authority, iterated in canonical group-key order at the merge
-    /// barrier so admissions stay schedule-independent. The VALUES stay
-    /// `DataValue`-typed — not because every meet kind NEEDS typed
-    /// computation: byte-backing wins where a value is only ever COMPARED
-    /// (the key, and — since memcomparable order embeds value order — the
-    /// order-based `min`/`max` folds too), and loses nothing where it is.
-    /// `set union/intersection`, `bitand/bitor`, and tropical `min-cost`
-    /// genuinely need decode to compute (no byte-level union or bitwise
-    /// op exists), so SOME meet kinds have no byte path regardless. Given
-    /// that, one typed value representation serving every kind uniformly
-    /// beats a bytes-for-min/max-only special case for a fold that is not
-    /// this store's hot path (the hot path is the key comparison, already
-    /// byte-native) — a marginal win traded for less code, not a wall.
-    pub(crate) by_group: BTreeMap<Box<[u8]>, Tuple>,
-    /// The current logical head tuples — each the [`MeetLayout::interleave`]
-    /// of a group key with its folded values — kept in canonical head-tuple
-    /// order for the range/prefix scans joins issue (`query/ra.rs`).
-    ///
-    /// Materialized **only for a non-suffix layout**, where head-tuple order
-    /// and group-key order genuinely differ. For that case it is a pure
-    /// mirror of `by_group`: every mutation updates both, so it is always
-    /// exactly `{ interleave(k, v) : (k, v) ∈ by_group }`. For a suffix
-    /// layout it stays empty — the group key is a head prefix, so `by_group`
-    /// alone scans in head-tuple order (see [`MeetLayout::is_suffix`]) and
-    /// the mirror would only duplicate the fold authority's memory.
-    by_row: BTreeSet<Tuple>,
+    /// argument as [`RegularTempStore`]) → folded meet accumulators
+    /// (projection onto the aggregated positions, in head order). The
+    /// fold/delta authority, iterated in canonical group-key order at the
+    /// merge barrier so admissions stay schedule-independent. Accumulators
+    /// are [`MeetAccum`] — `Empty | Value(v)` — so a domain `Null` is never
+    /// the empty sentinel.
+    pub(crate) by_group: BTreeMap<Box<OwnBareKey>, Vec<MeetAccum>>,
     /// The meet operations, one per aggregated head position, in head
     /// order, resolved at construction. (The original stored `Option`s and
     /// unwrapped per row.)
-    pub(crate) meets: Vec<(Aggregation, Box<dyn MeetAggrObj>)>,
+    pub(crate) meets: Vec<(Aggregation, MeetAggr)>,
     pub(crate) layout: MeetLayout,
 }
 
@@ -429,7 +508,7 @@ impl MeetAggrStore {
     #[cfg(test)]
     pub(crate) fn exists(&self, key: &[DataValue]) -> bool {
         let group_key = self.layout.borrow_key(key);
-        self.by_group.contains_key(group_key.as_slice())
+        self.by_group.contains_key(group_key.as_ref())
     }
     /// Fold `tuple` into `self` (the epoch's fresh out-store) exactly as
     /// [`Self::meet_put`], and report whether *this fold made the group newly
@@ -463,43 +542,45 @@ impl MeetAggrStore {
         let group_key = self.layout.borrow_key(tuple);
         // Admissibility BEFORE this fold: a group absent from the out-store
         // contributes nothing to the barrier yet, so it is not admissible.
-        let was_admissible = match self.by_group.get(group_key.as_slice()) {
-            Some(vals) => total.would_admit(&group_key, vals.as_slice())?,
+        let was_admissible = match self.by_group.get(group_key.as_ref()) {
+            Some(vals) => total.would_admit(group_key.as_bytes(), vals.as_slice())?,
             None => false,
         };
         self.meet_put(tuple)?;
         // After folding, the group is certainly resident in the out-store.
         let now_vals = self
             .by_group
-            .get(group_key.as_slice())
-            .expect("meet_put inserts or updates the group");
-        let now_admissible = total.would_admit(&group_key, now_vals.as_slice())?;
+            .get(group_key.as_ref())
+            .ok_or(MeetPutResidentInvariant)?;
+        let now_admissible = total.would_admit(group_key.as_bytes(), now_vals.as_slice())?;
         Ok(now_admissible && !was_admissible)
     }
     /// Build a meet store from a rule head's aggregation spec: one entry
-    /// per head position, `None` for grouping positions, `Some` for
-    /// aggregated ones. Compilation only routes rules whose aggregations
-    /// are all meets here (`Aggregation::is_meet`); a normal-only
-    /// aggregation in the spec is an engine bug and is refused with an
-    /// error rather than unwrapped. The argument lists are part of eval's
-    /// aggregation-spec shape but meet forms take no arguments (see
-    /// `data/aggr.rs`), so they are ignored.
-    pub(crate) fn new(aggrs: Vec<Option<(Aggregation, Vec<DataValue>)>>) -> Result<Self> {
+    /// per head position, [`HeadAggrSlot::Plain`] for grouping positions,
+    /// [`HeadAggrSlot::Aggregated`] for aggregated ones. Compilation only
+    /// routes rules whose aggregations are all meets here
+    /// (`Aggregation::is_meet`); a normal-only aggregation in the spec is
+    /// an engine bug and is refused with an error rather than unwrapped.
+    /// The argument lists are part of eval's aggregation-spec shape but
+    /// meet forms take no arguments (see `data/aggr.rs`), so they are
+    /// ignored.
+    pub(crate) fn new(aggrs: Vec<HeadAggrSlot>) -> Result<Self> {
         let layout = MeetLayout::from_signature(&aggrs);
         let mut meets = Vec::new();
-        for (aggr, _args) in aggrs.into_iter().flatten() {
-            let op = aggr.meet_op().ok_or_else(|| {
-                miette!(
-                    "internal invariant violated: normal-only aggregation '{}' \
-                     routed to a meet store",
-                    aggr.name
-                )
-            })?;
-            meets.push((aggr, op));
+        for a in aggrs {
+            if let HeadAggrSlot::Aggregated { aggr, args: _ } = a {
+                let op = aggr.meet_op().ok_or_else(|| {
+                    miette!(
+                        "internal invariant violated: normal-only aggregation '{}' \
+                         routed to a meet store",
+                        aggr.name
+                    )
+                })?;
+                meets.push((aggr, op));
+            }
         }
         Ok(Self {
             by_group: Default::default(),
-            by_row: Default::default(),
             meets,
             layout,
         })
@@ -519,41 +600,53 @@ impl MeetAggrStore {
     /// batch-resident row folds in without being minted, and only a NEW
     /// group allocates (its key and values).
     pub(crate) fn meet_put(&mut self, tuple: &[DataValue]) -> Result<bool> {
-        let materialize = !self.layout.is_suffix();
         // The grouping projection, encoded once (story #77: `borrow_key` is
         // always an encode now, never a zero-alloc slice borrow — see its
         // doc), and fold incoming values straight from `tuple` by position
         // so no `incoming` tuple is built either way.
         let key = self.layout.borrow_key(tuple);
-        match self.by_group.get_mut(key.as_slice()) {
+        match self.by_group.get_mut(key.as_ref()) {
             Some(vals) => {
-                // Snapshot the pre-fold values only when the row mirror
-                // needs the old row to retract (F2b): a no-change put never
-                // materializes the interleaved clone.
-                let old_vals = materialize.then(|| vals.clone());
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
-                    changed |= op.update(&mut vals[i], &tuple[self.layout.val_positions[i]])?;
-                }
-                if changed && materialize {
-                    let old_vals = old_vals.expect("materialize implies a snapshot");
-                    let old_row = self.layout.interleave(&key, old_vals.as_slice());
-                    let new_row = self.layout.interleave(&key, vals.as_slice());
-                    self.by_row.remove(&old_row);
-                    self.by_row.insert(new_row);
+                    let incoming = MeetAccum::from_derived(
+                        tuple[self.layout.val_positions[i].get()].clone(),
+                    );
+                    changed |= op.update(&mut vals[i], &incoming)?;
                 }
                 Ok(changed)
             }
             None => {
-                let vals = self.layout.project_vals(tuple);
-                if materialize {
-                    self.by_row
-                        .insert(self.layout.interleave(&key, vals.as_slice()));
+                // Fold the first row through each meet's identity — never
+                // install `Value(v)` raw. A Null first input must run the
+                // same skip/absorb path as every later row (Min/Max skip
+                // Null and stay Empty; Intersection takes Null as data).
+                let mut vals: Vec<MeetAccum> =
+                    self.meets.iter().map(|(_, op)| op.init_val()).collect();
+                for (i, (_aggr, op)) in self.meets.iter().enumerate() {
+                    let incoming = MeetAccum::from_derived(
+                        tuple[self.layout.val_positions[i].get()].clone(),
+                    );
+                    op.update(&mut vals[i], &incoming)?;
                 }
-                self.by_group.insert(key.into_boxed_slice(), vals);
+                self.by_group.insert(key, vals);
                 Ok(true)
             }
         }
+    }
+
+    /// Seed the all-aggregated empty-head identity row: each meet's
+    /// [`MeetAggrObj::init_val`] stored as a typed accumulator (so
+    /// [`MeetAccum::Empty`] stays Empty, never `Value(Null)`).
+    pub(crate) fn seed_identity(&mut self) -> Result<bool> {
+        ensure!(
+            self.is_empty(),
+            "seed_identity requires an empty meet store"
+        );
+        let vals: Vec<MeetAccum> = self.meets.iter().map(|(_, op)| op.init_val()).collect();
+        let key = OwnBareKey::encode(&[]);
+        self.by_group.insert(key, vals);
+        Ok(true)
     }
 }
 
@@ -583,34 +676,31 @@ impl TempStore {}
 /// ([`RegularTempStore`]/`NormalLevel`'s whole row, `MeetAggrStore`/
 /// `MeetLevel`'s group-key projection, `query/levels.rs`) — pure
 /// comparison data, never computed on, so the footprint cut applies to
-/// both. Meet's FOLDED VALUES stay `DataValue`-typed uniformly across
-/// every meet kind — see [`MeetAggrStore`]'s doc for the precise
-/// reasoning (byte-backing wins on comparison, not computation; `min`/
-/// `max` could go either way since memcomparable order embeds value
-/// order, but one typed representation for every kind beats a
-/// bytes-for-order-only special case on a fold that isn't this store's
-/// hot path). One enum keeps every consumer (`AdmissionSink`, the RA join
+/// both. Meet's FOLDED VALUES are [`MeetAccum`] (`Empty | Value`) so a
+/// domain `Null` is never the empty sentinel; iteration materializes
+/// via [`MeetAccum::to_value`]. One enum keeps every consumer
+/// (`AdmissionSink`, the RA join
 /// probes, the provenance/trials iteration surfaces) working over ONE
 /// type regardless of which
 /// store produced the row and which layout (suffix or interleaved) it
-/// used. The consequence: `get`/`into_tuple`/iteration now return OWNED
+/// used. The consequence: `try_get`/`try_into_tuple`/iteration return OWNED
 /// `DataValue`s, never `&'a DataValue` — a byte-backed key has nothing to
-/// reference; decoding produces a value, not a borrow. Checked against
-/// every non-test consumer in the tree: all but one already only used
-/// `.into_tuple()` (whose signature is unchanged), and the one exception
-/// (`query/ra/temp.rs`'s filter-less join arm) already had a
-/// materialize-first fallback one branch away for the filtered case.
-#[derive(Copy, Clone, Debug)]
+/// reference; decoding produces a value, not a borrow. Byte-backed rows
+/// were sealed at an encode door before reaching this view.
+#[derive(Clone, Debug)]
 pub(crate) enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole
     /// row in `key` — a regular row has no separate value region.
-    Bytes { key: &'a [u8], skip: bool },
+    Bytes {
+        key: &'a [u8],
+        skip: LimiterSkip,
+    },
     /// A meet store's SUFFIX-layout row: group-key bytes (the row's own
-    /// head prefix — no interleave needed) + folded meet values, typed.
+    /// head prefix — no interleave needed) + folded meet accumulators.
     MeetSuffix {
         key: &'a [u8],
-        val: &'a [DataValue],
-        skip: bool,
+        val: &'a [MeetAccum],
+        skip: LimiterSkip,
     },
     /// A meet store's INTERLEAVED-layout row: [`MeetLayout::interleave`]
     /// has already rebuilt the full logical row as `DataValue`s (the key
@@ -619,7 +709,13 @@ pub(crate) enum TupleInIter<'a> {
     Values {
         key: &'a [DataValue],
         val: &'a [DataValue],
-        skip: bool,
+        skip: LimiterSkip,
+    },
+    /// Owned head tuple — interleaved meet scans derive this from `groups`
+    /// / `by_group` so no stored `by_row` twin is required (P036).
+    Owned {
+        row: Tuple,
+        skip: LimiterSkip,
     },
 }
 
@@ -627,62 +723,82 @@ impl<'a> TupleInIter<'a> {
     /// Construct a view over an already-interleaved (key-part, value-part,
     /// skip) triple — the non-suffix meet path, where `key`/`val` are
     /// `DataValue` projections of a fully rebuilt logical row.
-    pub(crate) fn new(key: &'a [DataValue], val: &'a [DataValue], skip: bool) -> Self {
+    pub(crate) fn new(
+        key: &'a [DataValue],
+        val: &'a [DataValue],
+        skip: LimiterSkip,
+    ) -> Self {
         TupleInIter::Values { key, val, skip }
     }
+    /// Owned head-tuple view (interleaved meet derive-at-scan).
+    pub(crate) fn owned(row: Tuple, skip: LimiterSkip) -> Self {
+        TupleInIter::Owned { row, skip }
+    }
     /// Construct a view over one regular store's row bytes.
-    pub(crate) fn new_bytes(key: &'a [u8], skip: bool) -> Self {
+    pub(crate) fn new_bytes(key: &'a [u8], skip: LimiterSkip) -> Self {
         TupleInIter::Bytes { key, skip }
     }
     /// Construct a view over a suffix-layout meet store's group-key bytes
-    /// plus its typed folded values.
-    pub(crate) fn new_meet_suffix(key: &'a [u8], val: &'a [DataValue], skip: bool) -> Self {
+    /// plus its typed folded accumulators.
+    pub(crate) fn new_meet_suffix(
+        key: &'a [u8],
+        val: &'a [MeetAccum],
+        skip: LimiterSkip,
+    ) -> Self {
         TupleInIter::MeetSuffix { key, val, skip }
     }
 }
 
 impl TupleInIter<'_> {
-    /// Structural guarantee: callers index by positions of the rule head
-    /// this store was built for (`idx < EpochStore::arity`), which is
-    /// compiled knowledge, not data — the `expect`s cannot fire on user
-    /// data.
-    pub(crate) fn get(self, idx: usize) -> DataValue {
+    pub(crate) fn try_get(&self, idx: usize) -> Result<DataValue, TempStoreAccessRefuse> {
         match self {
-            TupleInIter::Bytes { key, .. } => {
-                bare_nth(key, idx).expect("compiled position within this row's arity")
-            }
+            TupleInIter::Bytes { key, .. } => bare_nth(key, idx)?
+                .ok_or(TempStoreAccessRefuse::Position { idx }),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_tuple_bare(key).expect("this store's own bytes decode");
+                let key = decode_row_bare(key)?;
                 key.get(idx)
                     .cloned()
-                    .or_else(|| val.get(idx - key.len()).cloned())
-                    .expect("compiled position within this row's arity")
+                    .or_else(|| val.get(idx - key.len()).map(|a| a.to_value()))
+                    .ok_or(TempStoreAccessRefuse::Position { idx })
             }
             TupleInIter::Values { key, val, .. } => key
                 .get(idx)
                 .or_else(|| val.get(idx - key.len()))
                 .cloned()
-                .expect("compiled position within this row's arity"),
+                .ok_or(TempStoreAccessRefuse::Position { idx }),
+            TupleInIter::Owned { row, .. } => row
+                .get(idx)
+                .cloned()
+                .ok_or(TempStoreAccessRefuse::Position { idx }),
         }
     }
     pub(crate) fn should_skip(&self) -> bool {
         match self {
             TupleInIter::Bytes { skip, .. }
             | TupleInIter::MeetSuffix { skip, .. }
-            | TupleInIter::Values { skip, .. } => *skip,
+            | TupleInIter::Values { skip, .. }
+            | TupleInIter::Owned { skip, .. } => skip.excludes_from_return(),
         }
     }
-    pub(crate) fn into_tuple(self) -> Tuple {
+    pub(crate) fn try_into_tuple(self) -> Result<Tuple, TempStoreCorruptRefuse> {
         match self {
-            TupleInIter::Bytes { key, .. } => {
-                decode_tuple_bare(key).expect("this store's own bytes decode")
-            }
+            TupleInIter::Owned { row, .. } => Ok(row),
+            other => other.try_materialize(),
+        }
+    }
+
+    fn try_materialize(&self) -> Result<Tuple, TempStoreCorruptRefuse> {
+        match self {
+            TupleInIter::Bytes { key, .. } => decode_row_bare(key),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let mut key = decode_tuple_bare(key).expect("this store's own bytes decode");
-                key.extend(val.iter().cloned());
-                key
+                let mut key = decode_row_bare(key)?;
+                key.extend(val.iter().map(|a| a.to_value()));
+                Ok(key)
             }
-            TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cloned().collect(),
+            TupleInIter::Values { key, val, .. } => {
+                Ok(key.iter().chain(val.iter()).cloned().collect())
+            }
+            TupleInIter::Owned { row, .. } => Ok(row.clone()),
         }
     }
     /// Total comparison against a plain slice, through `DataValue`'s total
@@ -700,8 +816,8 @@ impl TupleInIter<'_> {
             TupleInIter::Bytes { key, .. } => (*key).cmp(probe),
             TupleInIter::MeetSuffix { key, val, .. } => {
                 let mut full = key.to_vec();
-                for v in val.iter() {
-                    crate::data::value::append_canonical(&mut full, v);
+                for a in val.iter() {
+                    crate::data::value::append_canonical(&mut full, &a.to_value());
                 }
                 full.as_slice().cmp(probe)
             }
@@ -710,6 +826,10 @@ impl TupleInIter<'_> {
                 for v in key.iter().chain(val.iter()) {
                     crate::data::value::append_canonical(&mut full, v);
                 }
+                full.as_slice().cmp(probe)
+            }
+            TupleInIter::Owned { row, .. } => {
+                let full = encode_tuple_bare(row.as_slice());
                 full.as_slice().cmp(probe)
             }
         }
@@ -722,30 +842,52 @@ impl TupleInIter<'_> {
                 (*key).cmp(probe.as_slice())
             }
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_tuple_bare(key).expect("this store's own bytes decode");
-                key.iter().chain(val.iter()).cmp(other.iter())
+                let key = match decode_row_bare(key) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        let probe = encode_tuple_bare(other);
+                        return (*key).cmp(probe.as_slice());
+                    }
+                };
+                key.iter()
+                    .cloned()
+                    .chain(val.iter().map(|a| a.to_value()))
+                    .cmp(other.iter().cloned())
             }
             TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cmp(other.iter()),
+            TupleInIter::Owned { row, .. } => row.iter().cmp(other.iter()),
         }
     }
 }
 
-/// The `idx`-th self-delimiting value in `bytes`, walking from the start
-/// (bare-encoded rows carry no per-column offset table: one contiguous,
-/// self-delimiting region is the whole point). `None` if fewer than
-/// `idx + 1` values are present.
-fn bare_nth(bytes: &[u8], idx: usize) -> Option<DataValue> {
+/// Decode bare row bytes; refuse corrupt encodings.
+fn decode_row_bare(bytes: &[u8]) -> Result<Tuple, TempStoreCorruptRefuse> {
+    decode_tuple_bare(bytes).map_err(TempStoreCorruptRefuse)
+}
+
+/// The `idx`-th self-delimiting value in `bytes`, walking from the start.
+fn bare_nth(bytes: &[u8], idx: usize) -> Result<Option<DataValue>, TempStoreCorruptRefuse> {
     let mut remaining = bytes;
     for _ in 0..idx {
-        let (_, next) = DataValue::decode_from_key(remaining).ok()?;
+        let (_, next) = DataValue::decode_from_key(remaining).map_err(TempStoreCorruptRefuse)?;
         remaining = next;
     }
-    let (val, _) = DataValue::decode_from_key(remaining).ok()?;
-    Some(val)
+    if remaining.is_empty() {
+        return Ok(None);
+    }
+    let (val, _) = DataValue::decode_from_key(remaining).map_err(TempStoreCorruptRefuse)?;
+    Ok(Some(val))
+}
+
+/// Materialize every view in a store scan.
+pub(crate) fn collect_materialized<'a>(
+    iter: impl IntoIterator<Item = TupleInIter<'a>>,
+) -> Result<Vec<Tuple>, TempStoreCorruptRefuse> {
+    iter.into_iter().map(TupleInIter::try_into_tuple).collect()
 }
 
 impl<'a> IntoIterator for TupleInIter<'a> {
-    type Item = DataValue;
+    type Item = Result<DataValue, TempStoreCorruptRefuse>;
     type IntoIter = TupleInIterIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -760,6 +902,7 @@ impl<'a> IntoIterator for TupleInIter<'a> {
                 TupleInIter::Values { key, val, .. } => {
                     TupleInIterState::Values { key, val, idx: 0 }
                 }
+                TupleInIter::Owned { row, .. } => TupleInIterState::Owned { row, idx: 0 },
             },
         }
     }
@@ -772,12 +915,16 @@ enum TupleInIterState<'a> {
     /// values always precede the meet-suffix value's in head order.
     MeetSuffix {
         key_remaining: &'a [u8],
-        val: &'a [DataValue],
+        val: &'a [MeetAccum],
         val_idx: usize,
     },
     Values {
         key: &'a [DataValue],
         val: &'a [DataValue],
+        idx: usize,
+    },
+    Owned {
+        row: Tuple,
         idx: usize,
     },
 }
@@ -788,7 +935,10 @@ pub(crate) struct TupleInIterIterator<'a> {
 
 impl PartialEq for TupleInIter<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.into_iter().eq(*other)
+        matches!(
+            (self.try_materialize(), other.try_materialize()),
+            (Ok(a), Ok(b)) if a == b
+        )
     }
 }
 
@@ -796,7 +946,12 @@ impl Eq for TupleInIter<'_> {}
 
 impl Ord for TupleInIter<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.into_iter().cmp(*other)
+        match (self.try_materialize(), other.try_materialize()) {
+            (Ok(a), Ok(b)) => a.cmp(&b),
+            (Err(_), Ok(_)) => Ordering::Less,
+            (Ok(_), Err(_)) => Ordering::Greater,
+            (Err(_), Err(_)) => Ordering::Equal,
+        }
     }
 }
 
@@ -808,7 +963,7 @@ impl PartialOrd for TupleInIter<'_> {
 
 impl PartialEq<[DataValue]> for TupleInIter<'_> {
     fn eq(&self, other: &'_ [DataValue]) -> bool {
-        self.into_iter().eq(other.iter().cloned())
+        matches!(self.try_materialize(), Ok(row) if row.as_slice() == other)
     }
 }
 
@@ -819,7 +974,7 @@ impl PartialOrd<[DataValue]> for TupleInIter<'_> {
 }
 
 impl Iterator for TupleInIterIterator<'_> {
-    type Item = DataValue;
+    type Item = Result<DataValue, TempStoreCorruptRefuse>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.state {
@@ -827,10 +982,12 @@ impl Iterator for TupleInIterIterator<'_> {
                 if remaining.is_empty() {
                     return None;
                 }
-                let (val, next) =
-                    DataValue::decode_from_key(remaining).expect("this store's own bytes decode");
+                let (val, next) = match DataValue::decode_from_key(remaining) {
+                    Ok(pair) => pair,
+                    Err(e) => return Some(Err(TempStoreCorruptRefuse(e))),
+                };
                 *remaining = next;
-                Some(val)
+                Some(Ok(val))
             }
             TupleInIterState::MeetSuffix {
                 key_remaining,
@@ -838,14 +995,16 @@ impl Iterator for TupleInIterIterator<'_> {
                 val_idx,
             } => {
                 if !key_remaining.is_empty() {
-                    let (v, next) = DataValue::decode_from_key(key_remaining)
-                        .expect("this store's own bytes decode");
+                    let (v, next) = match DataValue::decode_from_key(key_remaining) {
+                        Ok(pair) => pair,
+                        Err(e) => return Some(Err(TempStoreCorruptRefuse(e))),
+                    };
                     *key_remaining = next;
-                    return Some(v);
+                    return Some(Ok(v));
                 }
-                let ret = val.get(*val_idx)?.clone();
+                let ret = val.get(*val_idx)?.to_value();
                 *val_idx += 1;
-                Some(ret)
+                Some(Ok(ret))
             }
             TupleInIterState::Values { key, val, idx } => {
                 let ret = match key.get(*idx) {
@@ -853,7 +1012,12 @@ impl Iterator for TupleInIterIterator<'_> {
                     None => val.get(*idx - key.len())?.clone(),
                 };
                 *idx += 1;
-                Some(ret)
+                Some(Ok(ret))
+            }
+            TupleInIterState::Owned { row, idx } => {
+                let ret = row.get(*idx)?.clone();
+                *idx += 1;
+                Some(Ok(ret))
             }
         }
     }
@@ -878,26 +1042,45 @@ mod tests {
         Tuple::from_vec(vec![DataValue::from(group), val])
     }
 
+    fn plain() -> HeadAggrSlot {
+        HeadAggrSlot::Plain
+    }
+
+    fn aggr_slot(a: Aggregation) -> HeadAggrSlot {
+        HeadAggrSlot::Aggregated {
+            aggr: a,
+            args: vec![],
+        }
+    }
+
     /// A recording sink: collects every admission, in the order reported.
     #[derive(Default)]
     struct Recorder(Vec<Tuple>);
 
     impl AdmissionSink for Recorder {
         const RECORDING: bool = true;
-        fn admit(&mut self, tuple: TupleInIter<'_>) {
-            self.0.push(tuple.into_tuple());
+        fn admit(&mut self, tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse> {
+            self.0.push(tuple.try_into_tuple()?);
+            Ok(())
         }
     }
 
     fn all(store: &EpochStore) -> Vec<Tuple> {
-        store.all_iter().map(TupleInIter::into_tuple).collect_vec()
+        store
+            .all_iter()
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     fn delta(store: &EpochStore) -> Vec<Tuple> {
         store
             .delta_all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect_vec()
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     // ── total/delta discipline ───────────────────────────────────────────
@@ -1005,7 +1188,7 @@ mod tests {
     #[test]
     fn meet_delta_regression_changed_flag_drives_delta() {
         let or_aggr = parse_aggr("or").unwrap();
-        let spec = vec![None, Some((or_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(or_aggr)];
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
         // Epoch 0: g starts false.
@@ -1056,7 +1239,7 @@ mod tests {
     #[test]
     fn meet_put_changed_flag() {
         let or_aggr = parse_aggr("or").unwrap();
-        let spec = vec![None, Some((or_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(or_aggr)];
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(store.is_empty());
         // New group: changed.
@@ -1080,7 +1263,7 @@ mod tests {
         assert!(!store.is_empty());
 
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![None, Some((min_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(min_aggr)];
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(
             store
@@ -1106,21 +1289,21 @@ mod tests {
     fn meet_store_rejects_normal_aggregation() {
         let count = parse_aggr("count").unwrap();
         assert!(!count.is_meet());
-        let res = MeetAggrStore::new(vec![None, Some((count, vec![]))]);
+        let res = MeetAggrStore::new(vec![plain(), aggr_slot(count)]);
         assert!(res.is_err());
     }
 
     // ── iteration surface ────────────────────────────────────────────────
 
-    /// Meet stores fold per group but iterate whole head tuples (the
-    /// `by_row` view); prefix iteration and indexed access see one logical
-    /// tuple. For this suffix layout the group key is a prefix, so scans
-    /// look like a regular store — the non-suffix cases below prove the
-    /// same surface holds when the group key is not a prefix.
+    /// Meet stores fold per group but iterate whole head tuples (derived
+    /// from `by_group` via interleave); prefix iteration and indexed access
+    /// see one logical tuple. For this suffix layout the group key is a
+    /// prefix, so scans look like a regular store — the non-suffix cases
+    /// below prove the same surface holds when the group key is not a prefix.
     #[test]
     fn meet_iteration_spans_key_and_value() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![None, Some((min_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(min_aggr)];
         let mut store = EpochStore::new_meet(&spec).unwrap();
         assert_eq!(store.arity, 2);
 
@@ -1136,16 +1319,18 @@ mod tests {
 
         let got = store
             .prefix_iter(&Tuple::from_vec(vec![DataValue::from("b")]))
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
 
         // Indexed access crosses the key/value seam.
-        let row = store.all_iter().next().unwrap();
-        assert_eq!(row.get(0), DataValue::from("a"));
-        assert_eq!(row.get(1), DataValue::from(4i64));
+        let row = store.all_iter().unwrap().next().unwrap();
+        assert_eq!(row.try_get(0).unwrap(), DataValue::from("a"));
+        assert_eq!(row.try_get(1).unwrap(), DataValue::from(4i64));
 
-        // Bounded range scans over the whole head tuple in `by_row`.
+        // Bounded range scans over the whole head tuple (derived order).
         let bounds = |group: &str, v: i64| {
             vec![
                 ScanBound::Value(DataValue::from(group)),
@@ -1156,13 +1341,17 @@ mod tests {
         let upper = bounds("b", 2); // exactly (b, 2)
         let got = store
             .range_iter(&lower, &upper, true)
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
         let got = store
             .range_iter(&lower, &upper, false)
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert!(got.is_empty());
     }
 
@@ -1181,15 +1370,19 @@ mod tests {
         assert_eq!(all(&store).len(), 2);
         let returned = store
             .early_returned_iter()
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(returned, vec![t(&[1])]);
 
         // Delta iteration honors the same store (first epoch: via total).
         let d = store
             .delta_prefix_iter(&Tuple::from_vec(vec![DataValue::from(2i64)]))
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(d, vec![t(&[2])]);
     }
 
@@ -1198,7 +1391,7 @@ mod tests {
     fn kind_mismatch_is_error_not_panic() {
         let mut store = EpochStore::new_normal(1);
         let min_aggr = parse_aggr("min").unwrap();
-        let meet_out = MeetAggrStore::new(vec![Some((min_aggr, vec![]))]).unwrap();
+        let meet_out = MeetAggrStore::new(vec![aggr_slot(min_aggr)]).unwrap();
         assert!(store.merge_in(meet_out.wrap(), &mut ()).is_err());
     }
 
@@ -1219,10 +1412,13 @@ mod tests {
     fn meet_layout_projection_round_trips_interleaved() {
         let min_aggr = parse_aggr("min").unwrap();
         let max_aggr = parse_aggr("max").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None, Some((max_aggr, vec![]))];
+        let spec = vec![aggr_slot(min_aggr), plain(), aggr_slot(max_aggr)];
         let layout = MeetLayout::from_signature(&spec);
-        assert_eq!(layout.key_positions, vec![1]);
-        assert_eq!(layout.val_positions, vec![0, 2]);
+        assert_eq!(layout.key_positions, vec![HeadPos::from_index(1)]);
+        assert_eq!(
+            layout.val_positions,
+            vec![HeadPos::from_index(0), HeadPos::from_index(2)]
+        );
 
         let row: Tuple = Tuple::from_vec(vec![
             DataValue::from(2i64),
@@ -1234,10 +1430,15 @@ mod tests {
         assert_eq!(key, Tuple::from_vec(vec![DataValue::from("g")]));
         assert_eq!(
             vals,
-            Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from(9i64)])
+            vec![
+                MeetAccum::from_derived(DataValue::from(2i64)),
+                MeetAccum::from_derived(DataValue::from(9i64)),
+            ]
         );
         assert_eq!(
-            layout.interleave(&encode_tuple_bare(key.as_slice()), vals.as_slice()),
+            layout
+                .interleave(&OwnBareKey::encode(key.as_slice()), vals.as_slice())
+                .unwrap(),
             row,
             "interleave is the exact inverse of the two projections"
         );
@@ -1250,7 +1451,7 @@ mod tests {
     #[test]
     fn meet_put_and_scan_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // group "a": min(4, 2, 9) = 2 ; group "b": 5.
         assert!(
@@ -1276,7 +1477,7 @@ mod tests {
 
         let mut store = EpochStore::new_meet(&spec).unwrap();
         store.merge_in(out.wrap(), &mut ()).unwrap();
-        // by_row (head-tuple) order: (2,"a") < (5,"b") on position 0.
+        // Head-tuple order (derived from by_group): (2,"a") < (5,"b") on position 0.
         assert_eq!(
             all(&store),
             vec![
@@ -1285,21 +1486,21 @@ mod tests {
             ]
         );
         // Indexed access spans the whole logical tuple.
-        let row = store.all_iter().next().unwrap();
-        assert_eq!(row.get(0), DataValue::from(2i64));
-        assert_eq!(row.get(1), DataValue::from("a"));
+        let row = store.all_iter().unwrap().next().unwrap();
+        assert_eq!(row.try_get(0).unwrap(), DataValue::from(2i64));
+        assert_eq!(row.try_get(1).unwrap(), DataValue::from("a"));
     }
 
     /// The determinism-critical seam: for a non-suffix layout the group-key
     /// order and the head-tuple order genuinely differ, and admissions are
     /// reported in **group-key** order (the `by_group` iteration the merge
     /// barrier and provenance witnesses depend on), while the scan surface
-    /// (`by_row`) stays in head-tuple order. A store that admitted in row
-    /// order would reorder every witness table.
+    /// (derived via interleave) stays in head-tuple order. A store that
+    /// admitted in row order would reorder every witness table.
     #[test]
     fn meet_admissions_follow_group_key_order_not_row_order_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // Group "a" holds value 9, group "z" holds value 1. Group-key order
         // is a < z; head-tuple (value-first) order is (1,z) < (9,a) — the
@@ -1333,12 +1534,12 @@ mod tests {
     /// The changed-flag delta discipline holds at a non-suffix layout too:
     /// a genuinely lower value at position 0 changes the group and is the
     /// delta (carrying the updated value); a non-improving value changes
-    /// nothing and yields an empty delta (the fixpoint). The incremental
-    /// path keeps `by_group` and `by_row` in lockstep across the update.
+    /// nothing and yields an empty delta (the fixpoint). The scan surface
+    /// stays the interleave of `by_group` across the update.
     #[test]
     fn meet_merge_delta_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
         let mut out0 = MeetAggrStore::new(spec.clone()).unwrap();
@@ -1370,69 +1571,47 @@ mod tests {
 
     // ── adversarial reviewer attacks (adopted from the hostile pass) ──────
     //
-    // The reviewer's `rev_*` store tests, adopted verbatim except this one
-    // helper: F2 (their own memory finding) makes `by_row` exist only for a
-    // non-suffix layout, so the raw-field mirror law holds only there. The
-    // helper therefore checks the exposed scan surface (which must equal the
-    // interleave of `by_group` in *both* regimes — this strengthens the
-    // original) plus the raw `by_row` invariant per regime.
+    // P036: no by_row twin. The scan surface of a sealed meet store must
+    // equal `{ interleave(k, v) : (k, v) ∈ groups }` in head-tuple order
+    // for every regime; the out-store's by_group is the sole authority.
 
-    /// The mirror law, regime-aware: the scan surface is exactly
-    /// `{ interleave(k, v) : (k, v) ∈ by_group }`, materialized in `by_row`
-    /// for a non-suffix layout and reconstructed from `by_group` (with
-    /// `by_row` left empty) for a suffix layout.
-    fn rev_assert_lockstep(store: &MeetAggrStore) {
-        let derived: BTreeSet<Tuple> = store
-            .by_group
-            .iter()
-            .map(|(k, v)| store.layout.interleave(k, v.as_slice()))
-            .collect();
-        if store.layout.is_suffix() {
-            assert!(
-                store.by_row.is_empty(),
-                "a suffix layout must not materialize the by_row mirror (F2)"
-            );
-        } else {
-            assert_eq!(
-                store.by_row, derived,
-                "by_row diverged from the interleave of by_group"
-            );
-        }
-    }
-
-    fn rev_lockstep_of(store: &EpochStore) {
-        // The mirror invariant, per level: every interleaved meet level's
-        // `by_row` is exactly its groups interleaved, sorted.
+    /// Scan surface equals the interleave of every sealed meet level's groups
+    /// (newest owner wins per group key).
+    fn rev_assert_scan_from_groups(store: &EpochStore) {
         let LevelKind::Meet { spec, levels } = &store.kind else {
-            panic!("expected meet stores")
-        };
-        for level in levels {
-            if spec.layout.is_suffix() {
-                assert!(level.by_row.is_empty(), "suffix layouts keep no mirror");
-                continue;
-            }
-            let mut derived: Vec<Tuple> = level
-                .groups
-                .iter()
-                .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
-                .collect();
-            derived.sort();
-            assert_eq!(
-                level.by_row, derived,
-                "by_row diverged from the interleave of groups"
+            // #[cfg(test)] helper — wrong kind is a test bug, not a product path.
+            assert!(
+                false,
+                "rev_assert_scan_from_groups: expected meet EpochStore"
             );
+            return;
+        };
+        let mut by_group: BTreeMap<Box<OwnBareKey>, Tuple> = BTreeMap::new();
+        for level in levels.iter() {
+            for (k, v) in &level.groups {
+                by_group.insert(
+                    k.clone(),
+                    spec.layout.interleave(k.as_ref(), v.as_slice()).unwrap(),
+                );
+            }
         }
+        let mut derived: Vec<Tuple> = by_group.into_values().collect();
+        derived.sort();
+        assert_eq!(
+            all(store),
+            derived,
+            "scan surface diverged from interleave of groups (P036)"
+        );
     }
 
     /// ATTACK 2a/2c: drive a non-suffix meet EpochStore through every
     /// mutation path — put (vacant, changed, unchanged), fast-path swap,
     /// incremental merge (vacant, changed, unchanged), empty-epoch merge —
-    /// asserting the two views stay in lockstep at every step, and that the
-    /// delta view (epoch turnover) is lockstep too.
+    /// asserting the scan surface stays the interleave of groups.
     #[test]
     fn rev_meet_views_lockstep_through_all_paths() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
 
         // meet_put: vacant, changed, unchanged.
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
@@ -1440,27 +1619,23 @@ mod tests {
             out.meet_put(vg(DataValue::from(9i64), "a").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
         assert!(
             out.meet_put(vg(DataValue::from(4i64), "a").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
         assert!(
             !out.meet_put(vg(DataValue::from(7i64), "a").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
         assert!(
             out.meet_put(vg(DataValue::from(1i64), "z").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
 
         // Fast-path swap into an empty total (use_total_for_delta epoch).
         let mut store = EpochStore::new_meet(&spec).unwrap();
         store.merge_in(out.wrap(), &mut ()).unwrap();
-        rev_lockstep_of(&store);
+        rev_assert_scan_from_groups(&store);
 
         // Incremental merge: one changed group, one unchanged, one vacant.
         let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
@@ -1471,7 +1646,7 @@ mod tests {
         out1.meet_put(vg(DataValue::from(8i64), "q").as_slice())
             .unwrap(); // vacant
         store.merge_in(out1.wrap(), &mut ()).unwrap();
-        rev_lockstep_of(&store);
+        rev_assert_scan_from_groups(&store);
         assert_eq!(
             all(&store),
             vec![
@@ -1490,13 +1665,13 @@ mod tests {
             "delta carries exactly the changed + new groups"
         );
 
-        // Empty epoch: fixpoint; totals untouched, delta empty, lockstep.
+        // Empty epoch: fixpoint; totals untouched, delta empty.
         let out2 = MeetAggrStore::new(spec.clone()).unwrap();
         store.merge_in(out2.wrap(), &mut ()).unwrap();
-        rev_lockstep_of(&store);
+        rev_assert_scan_from_groups(&store);
         assert!(!store.has_delta());
 
-        // The stale old_row must be GONE from by_row (not shadowed).
+        // The stale old row must be GONE from the scan surface (not shadowed).
         assert_eq!(all(&store).len(), 3);
         assert!(!all(&store).contains(&vg(DataValue::from(4i64), "a")));
     }
@@ -1508,7 +1683,7 @@ mod tests {
     fn rev_meet_all_aggregated_single_group() {
         let min_aggr = parse_aggr("min").unwrap();
         let max_aggr = parse_aggr("max").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), Some((max_aggr, vec![]))];
+        let spec = vec![aggr_slot(min_aggr), aggr_slot(max_aggr)];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         assert!(out.meet_put(t(&[5, 5]).as_slice()).unwrap());
         assert!(out.meet_put(t(&[3, 9]).as_slice()).unwrap()); // min 3, max 9
@@ -1531,7 +1706,7 @@ mod tests {
     #[test]
     fn rev_meet_admissions_insertion_order_independent() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let rows: Vec<Tuple> = vec![
             vg(DataValue::from(9i64), "m"),
             vg(DataValue::from(1i64), "z"),
@@ -1572,8 +1747,12 @@ mod tests {
         let k1 = t(&[1]);
         let v1 = t(&[5]);
         let k2 = t(&[1, 5]);
-        let joined = TupleInIter::new(k1.as_slice(), v1.as_slice(), false);
-        let flat = TupleInIter::new(k2.as_slice(), empty_tuple_ref().as_slice(), false);
+        let joined = TupleInIter::new(k1.as_slice(), v1.as_slice(), LimiterSkip::Include);
+        let flat = TupleInIter::new(
+            k2.as_slice(),
+            empty_tuple_ref().as_slice(),
+            LimiterSkip::Include,
+        );
         assert_eq!(joined, flat);
         assert_eq!(joined.cmp(&flat), Ordering::Equal);
         assert_eq!(

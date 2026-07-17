@@ -2,19 +2,25 @@
   {
     "class": "unchecked-constructor",
     "file": "crates/kyzo-core/src/data/value/wide/validity.rs",
-    "contains": "pub fn from_raw(ts_micros: i64) -> ValidityTs",
+    "contains": "pub(crate) fn from_raw(ts_micros: i64) -> ValidityTs",
     "reason": "total boundary constructor: every i64 is a valid validity-timestamp micros value; parse-at-boundary, not an authority bypass"
   },
   {
     "class": "unchecked-constructor",
     "file": "crates/kyzo-core/src/data/value/arena.rs",
-    "contains": "fn forged_in_epoch_stamp_beyond_len_panics",
-    "reason": "named corruption/bypass TEST asserting that a forged stamp panics — it proves the door is shut, it is not a door"
+    "contains": "fn forged_in_epoch_stamp_beyond_len_refuses_typed",
+    "reason": "named corruption/bypass TEST asserting that a forged stamp refuses typed — it proves the door is shut, it is not a door"
   },
   {
     "class": "illegal-escape",
     "file": "crates/kyzo-core/src/data/value/row.rs",
-    "contains": "impl std::ops::Deref for EncodedKey",
-    "reason": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+    "contains": "impl std::ops::Deref for TupleKey",
+    "reason": "read-only &[u8] view: the one legal TupleKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+  },
+  {
+    "class": "illegal-escape",
+    "file": "crates/kyzo-core/src/data/value/row.rs",
+    "contains": "impl std::ops::Deref for StorageKey",
+    "reason": "read-only &[u8] view: the one legal StorageKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
   }
 ]

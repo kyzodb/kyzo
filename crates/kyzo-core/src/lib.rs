@@ -43,7 +43,7 @@
 //!   assert, retract, erase (`data::bitemporal::ClaimPolarity`) — rides in
 //!   the value, so one valid instant has exactly one system lineage and
 //!   retraction is a first-class assertion of absence.
-//! - [`EncodedKey`] — a fact's written form: relation prefix, memcomparable
+//! - [`StorageKey`] — a fact's written form: relation prefix, memcomparable
 //!   tuple bytes, and a fixed-width bitemporal tail (valid instant outer,
 //!   system version inner); the value side is FormatVersion 3's
 //!   self-describing tagged fields (`data::fact_payload`). Constructed only by encoders, so
@@ -157,15 +157,15 @@
 //! algorithms and utilities) that consumes whole input relations and fills a
 //! `FixedRuleOutput` branded with its declared arity — a lying arity is
 //! refused at the first wrong row, not fed as mis-shaped tuples into
-//! downstream joins. Long-running algorithms poll a `CancelFlag` — the single
-//! cooperative kill point for outside cancellation; the kill-switch and
-//! budget-deadline wiring that pulls it arrives with the unlanded session
-//! tier — and draw any randomness from a seeded PRNG, so the same
-//! facts and query answer identically run to run. (Full-text analysis lives
-//! with the engines: a `TokenizerConfig` is pure data in an index manifest,
-//! validated at definition time and re-checked fallibly at use time, because
-//! stored data is never trusted to be well-formed just because it was once
-//! written.)
+//! downstream joins. Long-running algorithms poll a `CancelFlag` from the
+//! cancel lifecycle (`CancelAuthority` → consuming `Cancelled`); the
+//! session arms one authority shared with the budget interrupt path —
+//! and draw any randomness from a seeded PRNG, so the same facts and
+//! query answer identically run to run. (Full-text analysis lives with
+//! the engines: a `TokenizerConfig` is pure data in an index manifest,
+//! validated at definition time and re-checked fallibly at use time,
+//! because stored data is never trusted to be well-formed just because
+//! it was once written.)
 //!
 //! # The enforcement ladder: compiler > constructor > test
 //!
@@ -218,18 +218,20 @@
 //! substrate everything else stands on. The **engine is live end to end**:
 //! the public surface is the kernel re-exports plus the [`Db`] session
 //! entrypoint below; the tiers between (parse, query, engines, runtime,
-//! fixed_rule) stay `pub(crate)` — internal organs, not API. Remaining
-//! `allow(dead_code)` attributes below mark either surface whose consuming
-//! operator has not landed yet (`format`, awaiting the LSP tier) or the
-//! residual unused items behind an already-landed tier (e.g. the provenance
-//! plumbing in `query::eval`, the `Script::Imperative` AST in `parse`); each
-//! module's own comment says which, and each attribute narrows or vanishes
-//! as its items gain a caller. What refuses *today*,
-//! typed and (where it has a source location) spanned: malformed query text
-//! (parser), unstratifiable programs (stratifier), budget exhaustion,
-//! fixed-rule arity mismatch, format-version mismatch, and transaction
-//! conflict. No claim here is aspirational; every type and law named above
-//! exists as named in the tree.
+//! fixed_rule) stay `pub(crate)` — internal organs, not API. `format`,
+//! `parse`, and `fixed_rule` carry no module-level `allow(dead_code)` —
+//! their host doors are real (`format_program` / `parse_script` /
+//! `FixedRule::run`); any unused residual is a rustc warning, not a
+//! blanket lie about a consumer that "lands later". The same P112 posture
+//! now applies to `query`, `runtime`, `engines`, and the value plane's
+//! production modules (`SearchHits::admit_decoded`, canonical encode/decode):
+//! module-level `allow(dead_code)` is gone; unlanded surfaces are
+//! `#[cfg(test)]`, wired, or left to warn honestly. What refuses
+//! *today*, typed and (where it has a source location) spanned: malformed
+//! query text (parser), unstratifiable programs (stratifier), budget
+//! exhaustion, fixed-rule arity mismatch, format-version mismatch, and
+//! transaction conflict. No claim here is aspirational; every type and law
+//! named above exists as named in the tree.
 
 // Zero `unsafe` is a compiler guarantee in this crate, not a convention;
 // CI checks that this attribute stays. `forbid`, not `deny`: the strongest
@@ -241,6 +243,11 @@
 // `cargo xtask unsafe` enforces that this lint stays and that no
 // `allow(unsafe_code)` appears anywhere in kyzo-core.
 #![forbid(unsafe_code)]
+// Joins the panic-lint rung: sealed discriminants are matched exhaustively
+// (workspace `[workspace.lints.clippy] wildcard_enum_match_arm = "deny"`).
+// No `allow(wildcard_enum_match_arm)` escapes — name the remaining variants
+// or use `if let` / `let else` for single-variant gates.
+#![deny(clippy::wildcard_enum_match_arm)]
 // The transaction traits return boxed iterator types by design; naming them
 // would not simplify the contract.
 #![allow(clippy::type_complexity)]
@@ -252,31 +259,37 @@
 
 pub(crate) mod capacity;
 pub(crate) mod data;
+// Engines production host doors: `runtime/mutate.rs` (fts/hnsw/lsh create/drop),
+// `query/search.rs` (`RelationIndexSearch::search_relation`),
+// `engines::admit_relation_search_hits` → `SearchHits::admit_decoded`.
+// Unlanded kind engines (gazetteer/sparse/spatial) are `#[cfg(test)]` until
+// their `db.rs` surface lands. No module-level `allow(dead_code)` (P112).
 pub(crate) mod engines;
-// The formatter's consumer (kyzo-lsp's format-on-save/format-document
-// request, story #92) lands later. Same dead-code posture as `parse`:
-// exercised in-file by its own property-test suite, dead in the lib build.
-#[allow(dead_code)]
+// Formatter host doors: `format::format_program` /
+// `format_program_with_comments` (P112). Exercised by the in-module
+// property suite and by parse's comment-meaning guardrail; kyzo-lsp
+// format-document will call the same doors. No module-level
+// `allow(dead_code)` — unused helpers warn honestly until that call site.
 pub(crate) mod format;
-// The fixed-rule tier's consumer (runtime/db.rs::compile_and_eval, via
-// `query/normalize.rs`'s `SessionFixedRule` bridging `MagicFixedRuleApply`
-// to `FixedRule::run`) has landed: registration, evaluation, and the
-// stored-input seam (`StoredInputSource`, served for real by
-// `SessionView`) all run in production. `#[allow(dead_code)]` stays for the
-// residual items no production path reaches yet (the pre-runtime
-// `NoStoredInputs`/`StoredInputUnavailable` placeholders it superseded,
-// kept live only by their own regression test — see `fixed_rule/mod.rs`).
-#[allow(dead_code)]
+// Fixed-rule production consumer landed (`runtime/db.rs` →
+// `SessionFixedRule` → `FixedRule::run`, plus `StoredInputSource` via
+// `SessionView`). No module-level `allow(dead_code)` (P112); residual
+// unused symbols warn rather than hide behind a blanket.
 pub(crate) mod fixed_rule;
-// The parse tier's production consumer (runtime/db.rs, via
-// `parse::parse_script`) has landed for the query and system genera, which
-// `run_script` executes. `#[allow(dead_code)]` stays because the
-// `Script::Imperative` genus is a typed refusal, never executed (see
-// `runtime/db.rs`'s own note), so that genus's AST fields stay dead in a
-// release build; the in-file tests exercise them regardless.
-#[allow(dead_code)]
+// Parse production consumer landed (`runtime/db.rs` via `parse_script`)
+// for query and system genera. `Script::Imperative` is a typed refusal at
+// execution (`ImperativeNotWired`); its AST is still constructed by the
+// parser and exercised in-file — no module-level `allow(dead_code)` (P112).
 pub(crate) mod parse;
+// Query production host doors: `runtime/db.rs::compile_and_eval` (compile,
+// magic, stratify, ra, eval, normalize, search, sort, batch_ops, vm) and
+// `runtime/verify.rs` (`laws::naive_eval_at_budgeted`). No module-level
+// `allow(dead_code)` (P112); unlanded oracle/eval surface warns honestly.
 pub(crate) mod query;
+// Runtime production host doors: `Db::run_script` / `compile_and_eval`,
+// `mutate` index create/drop, `relation` catalog, `callback` notifications,
+// and `constraint` enforcement at commit (P112). No module-level
+// `allow(dead_code)` (P112).
 pub(crate) mod runtime;
 pub(crate) mod storage;
 pub(crate) mod typestate;
@@ -290,8 +303,8 @@ mod jepsen_trials;
 pub use data::json::JsonData;
 pub use data::json::format_error_as_json;
 pub use data::value::{
-    AsOf, DataValue, EncodedKey, Num, RegexSource, RelationId, Tuple, TupleT, UuidWrapper,
-    Validity, ValidityTs, Vector, decode_tuple_from_key,
+    Arity, AsOf, DataValue, Num, RegexSource, RelationId, StorageKey, Tuple, TupleKey, TupleT,
+    UuidWrapper, Validity, ValidityTs, Vector, decode_tuple_from_key,
 };
 pub use storage::backup::{dump_storage, restore_storage};
 pub use storage::fjall::{
@@ -300,10 +313,17 @@ pub use storage::fjall::{
 };
 pub use storage::retry::retry_on_conflict;
 pub use storage::verify::{CorruptEntry, VerifyReport, verify_storage};
-pub use storage::{ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+pub use storage::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+
+/// Build→seal→query projection machine (story #305). Public so compile-fail
+/// proofs and later kind parameterizations share one crate-root door.
+pub use engines::projection::{
+    Generation, ProjectionBuilder, ProjectionKind, Sealed, Stale,
+};
 
 pub use fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleInputRelation, FixedRulePayload, NamedRows, SimpleFixedRule,
+    CancelAuthority, CancelFlag, Cancelled, EmptyNamedRowsBody, FixedRule, FixedRuleInputRelation,
+    FixedRulePayload, NamedRows, SimpleFixedRule, SimpleRuleBody,
 };
 pub use runtime::callback::{CallbackEvent, CallbackOp};
 pub use runtime::db::{Db, ScriptOptions};

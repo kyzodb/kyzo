@@ -42,7 +42,7 @@ use std::sync::Arc;
 use miette::Result;
 
 use crate::data::aggr::parse_aggr;
-use crate::data::program::{MagicSymbol, StoreLifetimes};
+use crate::data::program::{HeadAggrSlot, MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -57,10 +57,11 @@ use crate::query::laws::{
 };
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{
-    Boolean, Cost, Derivation, DerivationGraph, ProofNode, ProvenanceLimitExceeded, Semiring,
-    SemiringOverflow, SolverBudget, Tropical, extract_min_cost_proof, solve, verify_proof,
+    AnnAlgebra, BooleanAnn, Cost, Derivation, DerivationGraph, ProofNode, ProvenanceLimitExceeded,
+    SemiringOverflow, SolverBudget, TropicalAnn, as_cost_map, extract_min_cost_proof, solve,
+    verify_proof,
 };
-use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::query::temp_store::{RegularTempStore, TupleInIter, collect_materialized};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — splitmix64, one u64 seed and nothing else (replayable).
@@ -75,6 +76,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -166,12 +168,9 @@ impl ModelBody {
                 .get(&muggle(rel))
                 .expect("harness: IDB store present");
             if use_delta {
-                store
-                    .delta_all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect()
+                collect_materialized(store.delta_all_iter().expect("harness: store iter"))
             } else {
-                store.all_iter().map(TupleInIter::into_tuple).collect()
+                collect_materialized(store.all_iter().expect("harness: store iter"))
             }
         } else {
             self.facts
@@ -193,13 +192,16 @@ impl ModelBody {
                 .expect("harness: IDB store present");
             store
                 .prefix_iter(probe)
+                .expect("harness: store iter")
                 .next()
-                .is_some_and(|t| t.into_tuple() == *probe)
+                .is_some_and(|t| t.try_into_tuple().ok() == Some(probe.clone()))
         } else {
             self.facts.get(rel).is_some_and(|set| set.contains(probe))
         }
     }
 }
+
+impl crate::query::eval::seal::Sealed for ModelBody {}
 
 impl RuleBody for ModelBody {
     fn for_each_derivation(
@@ -213,18 +215,18 @@ impl RuleBody for ModelBody {
             .body
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.negated)
+            .filter(|(_, l)| !l.is_negated())
             .collect();
-        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
+        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.is_negated()));
 
         let mut frontier: Vec<(Bindings, Vec<Tuple>)> = vec![(Bindings::new(), Vec::new())];
         for (body_pos, l) in ordered {
             // This literal's OWN occurrence (its position in the original
             // body, stable across the positive/negated reordering above)
             // must match `delta_from` exactly.
-            let is_delta = !l.negated && delta_from == Some(AtomOccurrence(body_pos));
+            let is_delta = !l.is_negated() && delta_from == Some(AtomOccurrence(body_pos));
             let mut next = Vec::new();
-            if l.negated {
+            if l.is_negated() {
                 for (bound, premises) in &frontier {
                     let probe = ground(&l.args, bound);
                     if !self.negated_probe_hits(stores, l.rel, &probe) {
@@ -271,12 +273,15 @@ impl RuleBody for ModelBody {
         Some(
             self.body
                 .iter()
-                .filter(|l| !l.negated)
+                .filter(|l| !l.is_negated())
                 .map(|l| {
                     if self.idb.contains(l.rel) {
                         PremiseSource::Rule(muggle(l.rel))
                     } else {
-                        PremiseSource::Fact(l.rel.to_string())
+                        PremiseSource::Fact(crate::data::symb::Symbol::new(
+                            l.rel,
+                            crate::data::span::SourceSpan(0, 0),
+                        ))
                     }
                 })
                 .collect(),
@@ -287,6 +292,8 @@ impl RuleBody for ModelBody {
 /// A body that refuses to attribute: the negative control for the typed
 /// [`ProvenanceUnsupported`] refusal. Delegates evaluation to the model.
 struct UnattributedBody(ModelBody);
+
+impl crate::query::eval::seal::Sealed for UnattributedBody {}
 
 impl RuleBody for UnattributedBody {
     fn for_each_derivation(
@@ -306,8 +313,10 @@ impl RuleBody for UnattributedBody {
 }
 
 /// A fixed-rule type for the `EvalProgram` parameter; never constructed
-/// (these trials use inline rules only).
-struct NoFixed;
+/// (these trials use inline rules only). Uninhabited — "running" one is
+/// unrepresentable (`match *self {}`), never `unreachable!`.
+#[derive(Debug)]
+enum NoFixed {}
 
 impl FixedRuleEval for NoFixed {
     fn run(
@@ -317,7 +326,7 @@ impl FixedRuleEval for NoFixed {
         _budget: &Budget,
         _baseline: u64,
     ) -> Result<()> {
-        unreachable!("NoFixed is never installed in a program")
+        match *self {}
     }
 }
 
@@ -338,12 +347,12 @@ fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
         for l in &rule.body {
             let forcing = if class.has_aggr {
                 if class.is_meet && l.rel == head {
-                    l.negated
+                    l.is_negated()
                 } else {
                     true
                 }
             } else {
-                l.negated || is_meet(l.rel)
+                l.is_negated() || is_meet(l.rel)
             };
             edges.push((head, l.rel, forcing));
         }
@@ -537,7 +546,10 @@ fn run_pipeline(
     let mut rows: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     for rel in idb_of(model) {
         let store = stores.get(&muggle(rel)).expect("store retained");
-        rows.insert(rel, store.all_iter().map(TupleInIter::into_tuple).collect());
+        rows.insert(
+            rel,
+            collect_materialized(store.all_iter().expect("store retained"))?,
+        );
     }
     Ok(PipelineOutput { rows, graph })
 }
@@ -571,7 +583,10 @@ fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
     }
 }
 fn named(name: &str) -> HeadAggr {
-    Some((parse_aggr(name).expect("real aggregation"), vec![]))
+    HeadAggrSlot::Aggregated {
+        aggr: parse_aggr(name).expect("real aggregation"),
+        args: vec![],
+    }
 }
 
 fn gen_positive(seed: u64, small: bool) -> Program {
@@ -707,7 +722,7 @@ fn rule_instantiations(
     db: &BTreeMap<Rel, BTreeSet<Tuple>>,
 ) -> Vec<(Tuple, Vec<(Rel, Tuple)>)> {
     assert!(
-        rule.body.iter().all(|l| !l.negated),
+        rule.body.iter().all(|l| !l.is_negated()),
         "reference covers the positive fragment only"
     );
     let mut frontier: Vec<(Bindings, Vec<(Rel, Tuple)>)> = vec![(Bindings::new(), Vec::new())];
@@ -819,7 +834,7 @@ fn per_head_rules(model: &Program) -> BTreeMap<Rel, Vec<Rule>> {
 fn node_rel_name(node: &ProvNode) -> String {
     match &node.0 {
         PremiseSource::Rule(sym) => sym.as_plain_symbol().name.to_string(),
-        PremiseSource::Fact(name) => name.clone(),
+        PremiseSource::Fact(name) => name.name.to_string(),
     }
 }
 
@@ -840,7 +855,7 @@ fn verify_model_proof(
                 PremiseSource::Fact(name) => {
                     let is_fact = facts
                         .iter()
-                        .any(|(rel, rows)| *rel == name.as_str() && rows.contains(tuple));
+                        .any(|(rel, rows)| *rel == name.name.as_str() && rows.contains(tuple));
                     if is_fact {
                         Ok(0)
                     } else {
@@ -868,12 +883,12 @@ fn verify_model_proof(
             let rule = rules
                 .get(*label)
                 .ok_or_else(|| format!("rule index {label} out of range for '{rel_name}'"))?;
-            if rule.body.iter().any(|l| l.negated) {
+            if rule.body.iter().any(|l| l.is_negated()) {
                 return Err(format!(
                     "boundary: rule {label} of '{rel_name}' has a negated premise"
                 ));
             }
-            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
+            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
             if positives.len() != premises.len() {
                 return Err(format!(
                     "'{rel_name}': {} premises for {} positive body literals",
@@ -947,46 +962,50 @@ fn random_cost(rng: &mut Rng) -> Cost {
     }
 }
 
-fn assert_axioms<S: Semiring>(semiring: &S, a: &S::Value, b: &S::Value, c: &S::Value) {
-    let t = |x: &S::Value, y: &S::Value| semiring.times(x, y).expect("no overflow in axiom trial");
-    let p = |x: &S::Value, y: &S::Value| semiring.plus(x, y);
-    let zero = semiring.zero();
-    let one = semiring.one();
+fn assert_axioms<A: AnnAlgebra>(a: A, b: A, c: A) {
+    let t = |x: A, y: A| x.times(y).expect("no overflow in axiom trial");
+    let p = |x: A, y: A| x.plus(y);
+    let zero = A::zero();
+    let one = A::one();
     // ⊕: associative, commutative, identity, idempotent.
-    assert_eq!(p(&p(a, b), c), p(a, &p(b, c)), "⊕ associativity");
+    assert_eq!(p(p(a, b), c), p(a, p(b, c)), "⊕ associativity");
     assert_eq!(p(a, b), p(b, a), "⊕ commutativity");
-    assert_eq!(p(a, &zero), a.clone(), "⊕ identity");
-    assert_eq!(p(a, a), a.clone(), "⊕ idempotency (solver contract)");
+    assert_eq!(p(a, zero), a, "⊕ identity");
+    assert_eq!(p(a, a), a, "⊕ idempotency (solver contract)");
     // ⊗: associative, commutative, identity, annihilator.
-    assert_eq!(t(&t(a, b), c), t(a, &t(b, c)), "⊗ associativity");
+    assert_eq!(t(t(a, b), c), t(a, t(b, c)), "⊗ associativity");
     assert_eq!(t(a, b), t(b, a), "⊗ commutativity");
-    assert_eq!(t(a, &one), a.clone(), "⊗ identity");
-    assert_eq!(t(a, &zero), zero.clone(), "⊗ annihilator");
+    assert_eq!(t(a, one), a, "⊗ identity");
+    assert_eq!(t(a, zero), zero, "⊗ annihilator");
     // Distributivity.
-    assert_eq!(t(a, &p(b, c)), p(&t(a, b), &t(a, c)), "distributivity");
+    assert_eq!(t(a, p(b, c)), p(t(a, b), t(a, c)), "distributivity");
 }
 
 #[test]
 fn semiring_axioms_hold_on_randomized_values() {
     let mut rng = Rng::new(0x5EED_u64 ^ 0x51_3141);
     for _ in 0..2000 {
-        let (a, b, c) = (rng.chance(1, 2), rng.chance(1, 2), rng.chance(1, 2));
-        assert_axioms(&Boolean, &a, &b, &c);
+        let (a, b, c) = (
+            BooleanAnn::new(rng.chance(1, 2)),
+            BooleanAnn::new(rng.chance(1, 2)),
+            BooleanAnn::new(rng.chance(1, 2)),
+        );
+        assert_axioms(a, b, c);
     }
     for _ in 0..2000 {
         let (a, b, c) = (
-            random_cost(&mut rng),
-            random_cost(&mut rng),
-            random_cost(&mut rng),
+            TropicalAnn::new(random_cost(&mut rng)),
+            TropicalAnn::new(random_cost(&mut rng)),
+            TropicalAnn::new(random_cost(&mut rng)),
         );
-        assert_axioms(&Tropical, &a, &b, &c);
+        assert_axioms(a, b, c);
     }
 }
 
 #[test]
 fn tropical_overflow_is_a_typed_refusal() {
-    let err = Tropical
-        .times(&Cost::Finite(u64::MAX), &Cost::Finite(1))
+    let err = TropicalAnn::new(Cost::Finite(u64::MAX))
+        .times(TropicalAnn::new(Cost::Finite(1)))
         .expect_err("must refuse");
     assert_eq!(
         err,
@@ -997,30 +1016,31 @@ fn tropical_overflow_is_a_typed_refusal() {
     );
     // Infinity absorbs without overflow: ∞ ⊗ MAX is lawful.
     assert_eq!(
-        Tropical
-            .times(&Cost::Infinite, &Cost::Finite(u64::MAX))
+        TropicalAnn::new(Cost::Infinite)
+            .times(TropicalAnn::new(Cost::Finite(u64::MAX)))
             .unwrap(),
-        Cost::Infinite
+        TropicalAnn::new(Cost::Infinite)
     );
     // And the solver surfaces the refusal typed, not stringly.
-    let graph: DerivationGraph<u32> = DerivationGraph {
-        facts: BTreeSet::from([0u32]),
-        derivations: vec![
-            Derivation {
-                head: 1,
-                label: 0,
-                weight: NonZeroU64::new(u64::MAX).unwrap(),
-                premises: vec![0],
-            },
-            Derivation {
-                head: 2,
-                label: 0,
-                weight: NonZeroU64::new(2).unwrap(),
-                premises: vec![1, 1],
-            },
-        ],
-    };
-    let err = solve(&Tropical, &graph, &generous_solver()).expect_err("must refuse");
+    let mut graph: DerivationGraph<u32> = DerivationGraph::default();
+    graph.add_fact(0u32);
+    graph
+        .add_derivation(Derivation {
+            head: 1,
+            label: 0,
+            weight: NonZeroU64::new(u64::MAX).unwrap(),
+            premises: vec![0],
+        })
+        .unwrap();
+    graph
+        .add_derivation(Derivation {
+            head: 2,
+            label: 0,
+            weight: NonZeroU64::new(2).unwrap(),
+            premises: vec![1, 1],
+        })
+        .unwrap();
+    let err = solve::<TropicalAnn, _>(&graph, &generous_solver()).expect_err("must refuse");
     let refusal: &SemiringOverflow = err.downcast_ref().expect("typed SemiringOverflow");
     assert_eq!(refusal.right, u64::MAX);
 }
@@ -1032,12 +1052,14 @@ fn tropical_overflow_is_a_typed_refusal() {
 #[test]
 fn boolean_annotation_matches_naive_eval_byte_identical() {
     for i in 0..24u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         let model = gen_positive(seed, false);
         let oracle = naive_eval(&model).expect("oracle accepts the positive fragment");
         let out = run_pipeline(&model, "path", 2, generous_ceiling(), &unit_weight)
             .expect("pipeline runs");
-        let ann = solve(&Boolean, &out.graph, &generous_solver()).expect("solver runs");
+        let ann =
+            solve::<BooleanAnn, _>(&out.graph, &generous_solver()).expect("solver runs");
         for rel in idb_of(&model) {
             let oracle_rows = oracle.get(rel).cloned().unwrap_or_default();
             let engine_rows = &out.rows[rel];
@@ -1052,7 +1074,7 @@ fn boolean_annotation_matches_naive_eval_byte_identical() {
             for row in engine_rows {
                 assert_eq!(
                     ann.get(&rule_node(rel, row)),
-                    Some(&true),
+                    Some(&BooleanAnn::new(true)),
                     "seed {seed}: '{rel}' row {row:?} not boolean-derivable"
                 );
             }
@@ -1063,7 +1085,7 @@ fn boolean_annotation_matches_naive_eval_byte_identical() {
                 {
                     assert_eq!(
                         *value,
-                        oracle_rows.contains(tuple),
+                        BooleanAnn::new(oracle_rows.contains(tuple)),
                         "seed {seed}: '{rel}' node {tuple:?} annotation disagrees with the oracle"
                     );
                 }
@@ -1092,7 +1114,9 @@ fn check_tropical_against_reference(seed: u64, unit: bool) {
     let weight_fn = engine_weight_fn(&weights);
     let out =
         run_pipeline(&model, "path", 2, generous_ceiling(), &weight_fn).expect("pipeline runs");
-    let costs = solve(&Tropical, &out.graph, &generous_solver()).expect("solver runs");
+    let costs = as_cost_map(
+        &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("solver runs"),
+    );
     for rel in idb_of(&model) {
         for row in &out.rows[rel] {
             let want = reference
@@ -1119,6 +1143,7 @@ fn check_tropical_against_reference(seed: u64, unit: bool) {
 #[test]
 fn tropical_min_cost_matches_independent_reference_unit_weights() {
     for i in 0..12u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(i.wrapping_mul(0x517C_C1B7_2722_0A95)).next_u64();
         check_tropical_against_reference(seed, true);
     }
@@ -1127,6 +1152,7 @@ fn tropical_min_cost_matches_independent_reference_unit_weights() {
 #[test]
 fn tropical_min_cost_matches_independent_reference_random_weights() {
     for i in 0..12u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(i.wrapping_mul(0x2545_F491_4F6C_DD1D)).next_u64();
         check_tropical_against_reference(seed, false);
     }
@@ -1184,7 +1210,9 @@ fn certificate_fixture() -> CertificateFixture {
     // `weight_fn` borrows `weights`; release the borrow before the fixture
     // takes ownership of `weights` (the checker re-derives weights from it).
     drop(weight_fn);
-    let costs = solve(&Tropical, &out.graph, &generous_solver()).expect("solver runs");
+    let costs = as_cost_map(
+        &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("solver runs"),
+    );
     // The most expensive derivable path row: the deepest certificate.
     let target = out.rows["path"]
         .iter()
@@ -1312,8 +1340,11 @@ fn provenance_fingerprint(seed: u64, threads: usize) -> String {
         let weight_fn = engine_weight_fn(&weights);
         let out =
             run_pipeline(&model, "path", 2, generous_ceiling(), &weight_fn).expect("pipeline runs");
-        let bool_ann = solve(&Boolean, &out.graph, &generous_solver()).expect("boolean solves");
-        let costs = solve(&Tropical, &out.graph, &generous_solver()).expect("tropical solves");
+        let bool_ann =
+            solve::<BooleanAnn, _>(&out.graph, &generous_solver()).expect("boolean solves");
+        let costs = as_cost_map(
+            &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("tropical solves"),
+        );
         let proof = out.rows["path"].iter().next().map(|row| {
             extract_min_cost_proof(&out.graph, &costs, &rule_node("path", row))
                 .expect("certificate extracts")
@@ -1326,6 +1357,7 @@ fn provenance_fingerprint(seed: u64, threads: usize) -> String {
 #[test]
 fn provenance_is_deterministic_across_thread_counts() {
     for i in 0..3u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(0xD1CE ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         let baseline = provenance_fingerprint(seed, 1);
         assert!(!baseline.is_empty());
@@ -1353,13 +1385,13 @@ fn aggregation_boundary_collapses_to_ground_facts() {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![y(), z()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![x(), z()], false),
@@ -1395,12 +1427,14 @@ fn aggregation_boundary_collapses_to_ground_facts() {
         format!("{:?}", oracle["out"]),
         "the reader's fixpoint equals the oracle"
     );
-    let costs = solve(&Tropical, &out.graph, &generous_solver()).expect("solver runs");
+    let costs = as_cost_map(
+        &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("solver runs"),
+    );
     assert!(!out.rows["m"].is_empty());
     for row in &out.rows["m"] {
         // The meet store's tuples enter the graph as ground facts…
         assert!(
-            out.graph.facts.contains(&rule_node("m", row)),
+            out.graph.facts().contains(&rule_node("m", row)),
             "meet row {row:?} must be a collapse-boundary ground fact"
         );
         assert_eq!(costs[&rule_node("m", row)], Cost::Finite(0));
@@ -1433,7 +1467,11 @@ fn unattributed_body_is_refused_typed() {
         facts,
         idb,
     ));
-    let entry_set = EvalRuleSet::new(vec![None, None], vec![body]).expect("well-shaped rule set");
+    let entry_set = EvalRuleSet::new(
+        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
+        vec![body],
+    )
+    .expect("well-shaped rule set");
     let mut stratum = EvalStratum::default();
     stratum.defs.insert(
         entry_symbol(),
@@ -1530,23 +1568,26 @@ fn enumeration_ceiling_refusal_is_deterministic_across_threads() {
 
 #[test]
 fn solver_pass_ceiling_is_a_typed_refusal() {
-    // A 5-link chain listed in reverse order: each pass propagates one
-    // link, so 5 passes are needed (plus one to observe quiescence).
-    let chain: Vec<Derivation<u32>> = (1..=5u32)
-        .rev()
-        .map(|i| Derivation {
-            head: i,
-            label: 0,
-            weight: NonZeroU64::new(1).unwrap(),
-            premises: vec![i - 1],
-        })
-        .collect();
-    let graph = DerivationGraph {
-        facts: BTreeSet::from([0u32]),
-        derivations: chain,
-    };
-    let err = solve(
-        &Tropical,
+    // A 5-link chain listed in reverse-topo edge order: each pass
+    // propagates one link, so 5 passes are needed (plus one to observe
+    // quiescence). Nodes are declared first so add_derivation may admit
+    // reverse-topo list order while staying closed-by-construction.
+    let mut graph = DerivationGraph::default();
+    graph.add_fact(0u32);
+    for i in 1..=5u32 {
+        graph.declare(i);
+    }
+    for i in (1..=5u32).rev() {
+        graph
+            .add_derivation(Derivation {
+                head: i,
+                label: 0,
+                weight: NonZeroU64::new(1).unwrap(),
+                premises: vec![i - 1],
+            })
+            .unwrap();
+    }
+    let err = solve::<TropicalAnn, _>(
         &graph,
         &SolverBudget::new(NonZeroU32::new(2).unwrap()),
     )
@@ -1556,12 +1597,13 @@ fn solver_pass_ceiling_is_a_typed_refusal() {
     assert_eq!(refusal.dimension, "solver passes");
     assert_eq!(refusal.ceiling, 2);
     // With enough passes the same graph solves exactly.
-    let costs = solve(
-        &Tropical,
-        &graph,
-        &SolverBudget::new(NonZeroU32::new(6).unwrap()),
-    )
-    .expect("solves");
+    let costs = as_cost_map(
+        &solve::<TropicalAnn, _>(
+            &graph,
+            &SolverBudget::new(NonZeroU32::new(6).unwrap()),
+        )
+        .expect("solves"),
+    );
     for i in 0..=5u32 {
         assert_eq!(costs[&i], Cost::Finite(u64::from(i)));
     }
@@ -1569,16 +1611,15 @@ fn solver_pass_ceiling_is_a_typed_refusal() {
 
 #[test]
 fn open_graph_is_refused_by_the_closure_check() {
-    // A premise that is neither a fact nor any derivation's head would
-    // silently annotate to 0; check_closed turns that into a loud error.
-    let graph = DerivationGraph {
-        facts: BTreeSet::from([0u32]),
-        derivations: vec![Derivation {
-            head: 1,
-            label: 0,
-            weight: NonZeroU64::new(1).unwrap(),
-            premises: vec![99],
-        }],
-    };
-    assert!(graph.check_closed().is_err());
+    // A premise that is neither declared, a fact, nor a prior head is
+    // refused at add_derivation (DAG-by-construction).
+    let mut graph = DerivationGraph::default();
+    graph.add_fact(0u32);
+    let err = graph.add_derivation(Derivation {
+        head: 1,
+        label: 0,
+        weight: NonZeroU64::new(1).unwrap(),
+        premises: vec![99],
+    });
+    assert!(err.is_err());
 }

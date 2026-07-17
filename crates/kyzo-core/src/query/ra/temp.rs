@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::epoch_store_of;
-use crate::data::expr::{Bytecode, Expr, compute_bounds, eval_bytecode_pred};
+use crate::data::expr::{Expr, compute_bounds};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -49,8 +49,8 @@ pub(crate) struct TempStoreRA {
     /// the key `delta_from` compares against (`compile.rs`'s shared
     /// numbering, `atom_occurrences`).
     pub(crate) occurrence: AtomOccurrence,
+    /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
     pub(crate) span: SourceSpan,
 }
 
@@ -65,7 +65,6 @@ impl TempStoreRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push((e.compile()?, e.span()))
         }
         Ok(())
     }
@@ -80,9 +79,17 @@ impl TempStoreRA {
         let storage = epoch_store_of(stores, &self.storage_key)?;
         let scan_epoch = delta_rule == Some(self.occurrence);
         let it = if scan_epoch {
-            Left(storage.delta_all_iter().map(|t| Ok(t.into_tuple())))
+            Left(
+                storage
+                    .delta_all_iter()?
+                    .map(|t| t.try_into_tuple().map_err(Into::into)),
+            )
         } else {
-            Right(storage.all_iter().map(|t| Ok(t.into_tuple())))
+            Right(
+                storage
+                    .all_iter()?
+                    .map(|t| t.try_into_tuple().map_err(Into::into)),
+            )
         };
         Ok(Box::new(BatchTupleFilter {
             inner: it,
@@ -151,7 +158,6 @@ impl TempStoreRA {
             eliminate_indices,
             cur: None,
             active: None,
-            stack: vec![],
         }))
     }
 }
@@ -173,7 +179,6 @@ struct TempStorePrefixBatchJoin<'a> {
     cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     active: Option<Box<dyn Iterator<Item = TupleInIter<'a>> + 'a>>,
-    stack: Vec<DataValue>,
 }
 
 impl<'a> TempStorePrefixBatchJoin<'a> {
@@ -195,8 +200,11 @@ impl<'a> TempStorePrefixBatchJoin<'a> {
         }
     }
 
-    fn probe(&self, left_row: &[DataValue]) -> Box<dyn Iterator<Item = TupleInIter<'a>> + 'a> {
-        match &self.bounds {
+    fn probe(
+        &self,
+        left_row: &[DataValue],
+    ) -> Result<Box<dyn Iterator<Item = TupleInIter<'a>> + 'a>> {
+        Ok(match &self.bounds {
             Some((l_bound, u_bound)) => {
                 // Range-bounded probes carry residual filter bounds beyond
                 // the prefix: the merged bound tuples must own (the level
@@ -211,9 +219,9 @@ impl<'a> TempStorePrefixBatchJoin<'a> {
                 let upper: Vec<ScanBound> =
                     prefix_bounds().chain(u_bound.iter().cloned()).collect();
                 if self.scan_epoch {
-                    Box::new(self.storage.delta_range_iter(&lower, &upper, true))
+                    Box::new(self.storage.delta_range_iter(&lower, &upper, true)?)
                 } else {
-                    Box::new(self.storage.range_iter(&lower, &upper, true))
+                    Box::new(self.storage.range_iter(&lower, &upper, true)?)
                 }
             }
             // The plain prefix probe is zero-clone: cursors are built up
@@ -222,8 +230,8 @@ impl<'a> TempStorePrefixBatchJoin<'a> {
                 left_row,
                 &self.left_to_prefix_indices,
                 self.scan_epoch,
-            )),
-        }
+            )?),
+        })
     }
 }
 
@@ -245,15 +253,39 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                     }
                 }
                 let left_row = {
-                    let (b, idx) = self.cur.as_ref().unwrap();
-                    b.row(*idx)
+                    let Some((b, idx)) = self.cur.as_ref() else {
+                        return Some(Err(crate::query::ra::PlanInvariantError(
+                            "temp-store join left cursor missing after batch advance",
+                        )
+                        .into()));
+                    };
+                    match b.row(*idx) {
+                        Ok(r) => r,
+                        Err(e) => return Some(Err(e.into())),
+                    }
                 };
-                self.active = Some(self.probe(left_row));
+                match self.probe(left_row) {
+                    Ok(it) => self.active = Some(it),
+                    Err(e) => return Some(Err(e)),
+                }
             }
 
-            let (b, idx) = self.cur.as_ref().unwrap();
-            let left_row = b.row(*idx);
-            let active = self.active.as_mut().unwrap();
+            let Some((b, idx)) = self.cur.as_ref() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "temp-store join left cursor missing while probing",
+                )
+                .into()));
+            };
+            let left_row = match b.row(*idx) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e.into())),
+            };
+            let Some(active) = self.active.as_mut() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "temp-store join active probe missing after setup",
+                )
+                .into()));
+            };
             let mut exhausted = false;
             while out.len() < BATCH_ROWS {
                 match active.next() {
@@ -263,19 +295,26 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                     }
                     Some(found) => {
                         if self.inner.filters.is_empty() {
+                            let found_tuple = match found.try_into_tuple() {
+                                Ok(t) => t,
+                                Err(e) => return Some(Err(e.into())),
+                            };
                             if let Err(e) = push_joined_row(
                                 &mut out,
                                 left_row,
-                                found.into_iter(),
+                                found_tuple.into_iter(),
                                 &self.eliminate_indices,
                             ) {
                                 return Some(Err(e));
                             }
                         } else {
-                            let found_tuple = found.into_tuple();
+                            let found_tuple = match found.try_into_tuple() {
+                                Ok(t) => t,
+                                Err(e) => return Some(Err(e.into())),
+                            };
                             let mut keep = true;
-                            for (p, span) in self.inner.filters_bytecodes.iter() {
-                                match eval_bytecode_pred(p, &found_tuple, &mut self.stack, *span) {
+                            for p in self.inner.filters.iter() {
+                                match p.eval_pred(&found_tuple) {
                                     Ok(true) => {}
                                     Ok(false) => {
                                         keep = false;

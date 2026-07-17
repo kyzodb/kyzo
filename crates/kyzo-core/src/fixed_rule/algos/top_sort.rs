@@ -26,7 +26,9 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    graph_node_value, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct TopSort;
 
@@ -44,9 +46,9 @@ impl FixedRule for TopSort {
         let sorted = kahn_g(&graph, cancel)?;
 
         for (idx, val_id) in sorted.iter().enumerate() {
-            // Structural: `kahn_g` only emits ids of the graph's nodes,
+            // INVARIANT(top_sort_index): `kahn_g` only emits graph node ids,
             // and `indices` has an entry per node.
-            let val = indices.get(*val_id as usize).unwrap();
+            let val = graph_node_value(&indices, *val_id)?.clone();
             let tuple = Tuple::from_vec(vec![DataValue::from(idx as i64), val.clone()]);
             out.put(tuple)?;
         }

@@ -30,14 +30,51 @@ use smartstring::{LazyCompact, SmartString};
 
 /// One search term: the text, whether it is a prefix search, and its
 /// score booster.
+///
+/// Mint only through [`Self::new`]. Empty text is the canonical empty
+/// node (`is_prefix == false`, `booster == 0`); searchable terms require
+/// non-empty text and a finite positive booster.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FtsLiteral {
-    pub(crate) value: SmartString<LazyCompact>,
-    pub(crate) is_prefix: bool,
-    pub(crate) booster: OrderedFloat<f64>,
+    value: SmartString<LazyCompact>,
+    is_prefix: bool,
+    booster: OrderedFloat<f64>,
 }
 
 impl FtsLiteral {
+    /// Sole mint. Empty value is only the canonical empty node; non-empty
+    /// values require a finite positive booster.
+    pub(crate) fn new(
+        value: SmartString<LazyCompact>,
+        is_prefix: bool,
+        booster: OrderedFloat<f64>,
+    ) -> Option<Self> {
+        if value.is_empty() {
+            if is_prefix || booster != OrderedFloat(0.0) {
+                return None;
+            }
+        } else if !(booster.0.is_finite() && booster.0 > 0.0) {
+            return None;
+        }
+        Some(FtsLiteral {
+            value,
+            is_prefix,
+            booster,
+        })
+    }
+
+    pub(crate) fn value(&self) -> &str {
+        self.value.as_str()
+    }
+
+    pub(crate) fn is_prefix(&self) -> bool {
+        self.is_prefix
+    }
+
+    pub(crate) fn booster(&self) -> OrderedFloat<f64> {
+        self.booster
+    }
+
     /// Re-tokenize this literal through the index's analyzer, pushing the
     /// resulting terms into `coll`. Prefix literals pass through whole: a
     /// prefix search matches stored terms by byte prefix, so filtering or
@@ -50,20 +87,94 @@ impl FtsLiteral {
 
         let mut tokens = tokenizer.token_stream(&self.value);
         while let Some(t) = tokens.next() {
-            coll.push(FtsLiteral {
-                value: SmartString::from(&t.text),
-                is_prefix: false,
-                booster: self.booster,
-            })
+            if let Some(l) = FtsLiteral::new(
+                SmartString::from(&t.text),
+                false,
+                self.booster,
+            ) {
+                coll.push(l);
+            }
         }
     }
 }
 
+/// Non-empty Near literals. Empty proximity is unrepresentable through
+/// [`Self::admit`] / [`FtsExpr::near`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct NonEmptyFtsLiterals {
+    literals: Vec<FtsLiteral>,
+}
+
+impl NonEmptyFtsLiterals {
+    pub(crate) fn admit(literals: Vec<FtsLiteral>) -> Option<Self> {
+        if literals.is_empty() {
+            None
+        } else {
+            Some(Self { literals })
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[FtsLiteral] {
+        &self.literals
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.literals.len()
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<FtsLiteral> {
+        self.literals
+    }
+}
+
 /// A proximity group: literals that must occur within `distance` tokens.
+/// Literals are non-empty by construction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FtsNear {
-    pub(crate) literals: Vec<FtsLiteral>,
+    pub(crate) literals: NonEmptyFtsLiterals,
     pub(crate) distance: u32,
+}
+
+/// Non-empty And/Or children. Empty conjunction/disjunction is
+/// unrepresentable through [`Self::admit`] / [`FtsExpr::and`] /
+/// [`FtsExpr::or`]; [`FtsExpr::flatten`] never emits empty And/Or either
+/// (collapses to [`FtsExpr::empty_node`]).
+///
+/// Parser and engine mint only via [`FtsExpr::and`] / [`FtsExpr::or`] /
+/// [`NonEmptyFtsExprs::admit`] — empty And/Or cannot be written down.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct NonEmptyFtsExprs {
+    children: Vec<FtsExpr>,
+}
+
+impl NonEmptyFtsExprs {
+    pub(crate) fn admit(children: Vec<FtsExpr>) -> Option<Self> {
+        if children.is_empty() {
+            None
+        } else {
+            Some(Self { children })
+        }
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<FtsExpr> {
+        self.children
+    }
+
+    pub(crate) fn as_slice(&self) -> &[FtsExpr] {
+        &self.children
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.children.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &FtsExpr> {
+        self.children.iter()
+    }
+
+    pub(crate) fn push(&mut self, e: FtsExpr) {
+        self.children.push(e);
+    }
 }
 
 /// A parsed FTS query.
@@ -88,12 +199,45 @@ pub(crate) struct FtsNear {
 pub(crate) enum FtsExpr {
     Literal(FtsLiteral),
     Near(FtsNear),
-    And(Vec<FtsExpr>),
-    Or(Vec<FtsExpr>),
+    And(NonEmptyFtsExprs),
+    Or(NonEmptyFtsExprs),
     Not(Box<FtsExpr>, Box<FtsExpr>),
 }
 
 impl FtsExpr {
+    /// Canonical empty node (empty literal). Used when And/Or would otherwise
+    /// be empty after flatten/tokenize — empty And/Or is refused.
+    pub(crate) fn empty_node() -> Self {
+        FtsExpr::Literal(
+            FtsLiteral::new(SmartString::new(), false, OrderedFloat(0.0))
+                .expect("canonical empty literal"),
+        )
+    }
+
+    /// Conjunction door: refuses empty children (returns [`Self::empty_node`]).
+    pub(crate) fn and(children: Vec<FtsExpr>) -> Self {
+        match NonEmptyFtsExprs::admit(children) {
+            Some(n) => FtsExpr::And(n),
+            None => Self::empty_node(),
+        }
+    }
+
+    /// Disjunction door: refuses empty children (returns [`Self::empty_node`]).
+    pub(crate) fn or(children: Vec<FtsExpr>) -> Self {
+        match NonEmptyFtsExprs::admit(children) {
+            Some(n) => FtsExpr::Or(n),
+            None => Self::empty_node(),
+        }
+    }
+
+    /// Proximity door: refuses empty literals (returns [`Self::empty_node`]).
+    pub(crate) fn near(literals: Vec<FtsLiteral>, distance: u32) -> Self {
+        match NonEmptyFtsLiterals::admit(literals) {
+            Some(l) => FtsExpr::Near(FtsNear { literals: l, distance }),
+            None => Self::empty_node(),
+        }
+    }
+
     /// Rewrite every literal through the index's analyzer, then
     /// [`flatten`](Self::flatten). A literal that tokenizes to several terms
     /// becomes a conjunction of them; one that tokenizes to nothing (all
@@ -104,53 +248,52 @@ impl FtsExpr {
 
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            FtsExpr::Literal(l) => l.booster == 0. || l.value.is_empty(),
-            FtsExpr::Near(FtsNear { literals, .. }) => literals.is_empty(),
-            FtsExpr::And(v) => v.is_empty(),
-            FtsExpr::Or(v) => v.is_empty(),
+            FtsExpr::Literal(l) => l.value().is_empty(),
+            FtsExpr::Near(_) => false,
+            // NonEmptyFtsExprs is never empty by construction.
+            FtsExpr::And(_) | FtsExpr::Or(_) => false,
             FtsExpr::Not(lhs, _) => lhs.is_empty(),
         }
     }
 
     /// Collapse nested conjunctions/disjunctions and drop empty subtrees.
+    /// Never emits empty And/Or — all-empty collapses to [`Self::empty_node`].
     pub(crate) fn flatten(self) -> Self {
         match self {
             FtsExpr::And(exprs) => {
                 let mut flattened = vec![];
-                for e in exprs {
+                for e in exprs.into_vec() {
                     match e.flatten() {
-                        FtsExpr::And(es) => flattened.extend(es),
-                        e => {
+                        FtsExpr::And(es) => flattened.extend(es.into_vec()),
+                        e @ FtsExpr::Literal(_) | e @ FtsExpr::Near(_) | e @ FtsExpr::Or(_) | e @ FtsExpr::Not(..) => {
                             if !e.is_empty() {
                                 flattened.push(e)
                             }
                         }
                     }
                 }
-                if flattened.len() == 1 {
-                    // In bounds: length checked to be exactly 1.
-                    flattened.remove(0)
-                } else {
-                    FtsExpr::And(flattened)
+                match flattened.len() {
+                    0 => Self::empty_node(),
+                    1 => flattened.remove(0),
+                    _ => FtsExpr::and(flattened),
                 }
             }
             FtsExpr::Or(exprs) => {
                 let mut flattened = vec![];
-                for e in exprs {
+                for e in exprs.into_vec() {
                     match e.flatten() {
-                        FtsExpr::Or(es) => flattened.extend(es),
-                        e => {
+                        FtsExpr::Or(es) => flattened.extend(es.into_vec()),
+                        e @ FtsExpr::Literal(_) | e @ FtsExpr::Near(_) | e @ FtsExpr::And(_) | e @ FtsExpr::Not(..) => {
                             if !e.is_empty() {
                                 flattened.push(e)
                             }
                         }
                     }
                 }
-                if flattened.len() == 1 {
-                    // In bounds: length checked to be exactly 1.
-                    flattened.remove(0)
-                } else {
-                    FtsExpr::Or(flattened)
+                match flattened.len() {
+                    0 => Self::empty_node(),
+                    1 => flattened.remove(0),
+                    _ => FtsExpr::or(flattened),
                 }
             }
             FtsExpr::Not(lhs, rhs) => {
@@ -172,31 +315,29 @@ impl FtsExpr {
             FtsExpr::Literal(l) => {
                 let mut tokens = vec![];
                 l.tokenize(tokenizer, &mut tokens);
-                if tokens.len() == 1 {
-                    // In bounds: length checked to be exactly 1.
-                    FtsExpr::Literal(tokens.remove(0))
-                } else {
-                    FtsExpr::And(tokens.into_iter().map(FtsExpr::Literal).collect())
+                match tokens.len() {
+                    0 => Self::empty_node(),
+                    1 => FtsExpr::Literal(tokens.remove(0)),
+                    _ => FtsExpr::and(tokens.into_iter().map(FtsExpr::Literal).collect()),
                 }
             }
             FtsExpr::Near(FtsNear { literals, distance }) => {
                 let mut tokens = vec![];
-                for l in literals {
+                for l in literals.into_vec() {
                     l.tokenize(tokenizer, &mut tokens);
                 }
-                FtsExpr::Near(FtsNear {
-                    literals: tokens,
-                    distance,
-                })
+                FtsExpr::near(tokens, distance)
             }
-            FtsExpr::And(exprs) => FtsExpr::And(
+            FtsExpr::And(exprs) => FtsExpr::and(
                 exprs
+                    .into_vec()
                     .into_iter()
                     .map(|e| e.do_tokenize(tokenizer))
                     .collect(),
             ),
-            FtsExpr::Or(exprs) => FtsExpr::Or(
+            FtsExpr::Or(exprs) => FtsExpr::or(
                 exprs
+                    .into_vec()
                     .into_iter()
                     .map(|e| e.do_tokenize(tokenizer))
                     .collect(),
@@ -216,24 +357,18 @@ mod tests {
     use crate::engines::text::TokenizerConfig;
 
     fn lit(s: &str) -> FtsExpr {
-        FtsExpr::Literal(FtsLiteral {
-            value: s.into(),
-            is_prefix: false,
-            booster: 1.0.into(),
-        })
+        if s.is_empty() {
+            FtsExpr::empty_node()
+        } else {
+            FtsExpr::Literal(FtsLiteral::new(s.into(), false, 1.0.into()).unwrap())
+        }
     }
 
     fn analyzer(tk: &str, filters: &[(&str, Vec<DataValue>)]) -> TextAnalyzer {
-        let tk = TokenizerConfig {
-            name: tk.into(),
-            args: vec![],
-        };
+        let tk = TokenizerConfig::admit(tk, vec![]).expect("test tokenizer");
         let filters: Vec<_> = filters
             .iter()
-            .map(|(n, args)| TokenizerConfig {
-                name: (*n).into(),
-                args: args.clone(),
-            })
+            .map(|(n, args)| TokenizerConfig::admit(*n, args.clone()).expect("test filter"))
             .collect();
         tk.build(&filters).unwrap()
     }
@@ -241,30 +376,21 @@ mod tests {
     #[test]
     fn is_empty_edge_cases() {
         assert!(lit("").is_empty());
-        // A zero booster empties a literal even with text.
-        assert!(
-            FtsExpr::Literal(FtsLiteral {
-                value: "hello".into(),
-                is_prefix: false,
-                booster: 0.0.into(),
-            })
-            .is_empty()
-        );
-        assert!(FtsExpr::And(vec![]).is_empty());
-        assert!(FtsExpr::Or(vec![]).is_empty());
-        assert!(
-            FtsExpr::Near(FtsNear {
-                literals: vec![],
-                distance: 10
-            })
-            .is_empty()
-        );
+        // Zero booster with text is unrepresentable; only the empty node is empty.
+        assert!(FtsLiteral::new("hello".into(), false, 0.0.into()).is_none());
+        assert!(FtsExpr::empty_node().is_empty());
+        // Empty And/Or unrepresentable; doors yield empty_node.
+        assert!(NonEmptyFtsExprs::admit(vec![]).is_none());
+        assert!(FtsExpr::and(vec![]).is_empty());
+        assert!(FtsExpr::or(vec![]).is_empty());
+        assert!(NonEmptyFtsLiterals::admit(vec![]).is_none());
+        assert!(FtsExpr::near(vec![], 10).is_empty());
         // Not is empty iff its keep-side is empty.
         assert!(FtsExpr::Not(Box::new(lit("")), Box::new(lit("x"))).is_empty());
         assert!(!FtsExpr::Not(Box::new(lit("x")), Box::new(lit(""))).is_empty());
         // But And/Or containing only empties are NOT empty until flattened:
         // is_empty is shallow by design; flatten is the normalizer.
-        let shallow = FtsExpr::And(vec![lit("")]);
+        let shallow = FtsExpr::and(vec![lit("")]);
         assert!(!shallow.is_empty());
         assert!(shallow.flatten().is_empty());
     }
@@ -272,31 +398,33 @@ mod tests {
     #[test]
     fn flatten_collapses_nesting_and_drops_empties() {
         // And(And(a,b), c) → And(a,b,c)
-        let e = FtsExpr::And(vec![FtsExpr::And(vec![lit("a"), lit("b")]), lit("c")]);
+        let e = FtsExpr::and(vec![FtsExpr::and(vec![lit("a"), lit("b")]), lit("c")]);
         match e.flatten() {
             FtsExpr::And(v) => assert_eq!(v.len(), 3),
-            other => panic!("expected And, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Or(Or(a,b), Or(c,d)) → Or(a,b,c,d)
-        let e = FtsExpr::Or(vec![
-            FtsExpr::Or(vec![lit("a"), lit("b")]),
-            FtsExpr::Or(vec![lit("c"), lit("d")]),
+        let e = FtsExpr::or(vec![
+            FtsExpr::or(vec![lit("a"), lit("b")]),
+            FtsExpr::or(vec![lit("c"), lit("d")]),
         ]);
         match e.flatten() {
             FtsExpr::Or(v) => assert_eq!(v.len(), 4),
-            other => panic!("expected Or, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Not(..) => panic!("expected Or, got {other:?}"),
         }
         // Single-survivor collapse: And(a, "") → a
-        let e = FtsExpr::And(vec![lit("a"), lit("")]);
+        let e = FtsExpr::and(vec![lit("a"), lit("")]);
         assert_eq!(e.flatten(), lit("a"));
-        // All-empty collapse: Or("", "") → Or([]) (empty, not a panic)
-        let e = FtsExpr::Or(vec![lit(""), lit("")]);
-        assert!(e.flatten().is_empty());
+        // All-empty collapse: Or("", "") → empty_node (never empty Or)
+        let e = FtsExpr::or(vec![lit(""), lit("")]);
+        let flat = e.flatten();
+        assert!(flat.is_empty());
+        assert!(matches!(flat, FtsExpr::Literal(_)));
         // Not with empty rhs collapses to lhs.
         let e = FtsExpr::Not(Box::new(lit("keep")), Box::new(lit("")));
         assert_eq!(e.flatten(), lit("keep"));
         // Deep mixed nesting terminates and normalizes.
-        let e = FtsExpr::And(vec![FtsExpr::And(vec![FtsExpr::And(vec![FtsExpr::Or(
+        let e = FtsExpr::and(vec![FtsExpr::and(vec![FtsExpr::and(vec![FtsExpr::Or(
             vec![lit("x")],
         )])])]);
         assert_eq!(e.flatten(), lit("x"));
@@ -319,49 +447,37 @@ mod tests {
                 assert_eq!(v[0], lit("run"));
                 assert_eq!(v[1], lit("dog"));
             }
-            other => panic!("expected And, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // A literal that tokenizes to one term stays a literal.
         assert_eq!(lit("Running").tokenize(&an), lit("run"));
         // A literal that tokenizes to nothing flattens away inside And.
         let stop = analyzer("Simple", &[("Stopwords", vec![DataValue::from("en")])]);
-        let e = FtsExpr::And(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
+        let e = FtsExpr::and(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
         match &e {
             FtsExpr::And(v) => assert_eq!(v.len(), 2, "'the' must vanish: {v:?}"),
-            other => panic!("expected And, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Prefix literals pass through untouched.
-        let p = FtsExpr::Literal(FtsLiteral {
-            value: "Runni".into(),
-            is_prefix: true,
-            booster: 2.0.into(),
-        });
+        let p = FtsExpr::Literal(FtsLiteral::new("Runni".into(), true, 2.0.into()).unwrap());
         assert_eq!(p.clone().tokenize(&an), p);
         // Near re-tokenizes its members but keeps the distance.
-        let e = FtsExpr::Near(FtsNear {
-            literals: vec![
-                FtsLiteral {
-                    value: "Running".into(),
-                    is_prefix: false,
-                    booster: 1.0.into(),
-                },
-                FtsLiteral {
-                    value: "Dogs".into(),
-                    is_prefix: false,
-                    booster: 1.0.into(),
-                },
+        let e = FtsExpr::near(
+            vec![
+                FtsLiteral::new("Running".into(), false, 1.0.into()).unwrap(),
+                FtsLiteral::new("Dogs".into(), false, 1.0.into()).unwrap(),
             ],
-            distance: 3,
-        })
+            3,
+        )
         .tokenize(&an);
         match e {
             FtsExpr::Near(FtsNear { literals, distance }) => {
                 assert_eq!(distance, 3);
                 assert_eq!(literals.len(), 2);
-                assert_eq!(literals[0].value, "run");
-                assert_eq!(literals[1].value, "dog");
+                assert_eq!(literals.as_slice()[0].value(), "run");
+                assert_eq!(literals.as_slice()[1].value(), "dog");
             }
-            other => panic!("expected Near, got {other:?}"),
+            other @ FtsExpr::Literal(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected Near, got {other:?}"),
         }
     }
 }

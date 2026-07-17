@@ -28,7 +28,14 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 
 use super::{BoxTokenStream, Token, TokenFilter, TokenStream};
-use miette::{Result, bail};
+use miette::{Diagnostic, Result};
+use thiserror::Error;
+
+/// Named refusal when [`StopWordFilter::for_lang`] is given an unknown code.
+#[derive(Debug, Error, Diagnostic)]
+#[error("Unsupported language: {0}")]
+#[diagnostic(code(fts::stopwords_unsupported_lang))]
+pub(crate) struct UnsupportedStopwordLanguage(pub String);
 
 /// `TokenFilter` that removes stop words from a token stream
 #[derive(Clone)]
@@ -100,7 +107,9 @@ impl StopWordFilter {
             "vi" => stopwords::VI,
             "yo" => stopwords::YO,
             "zu" => stopwords::ZU,
-            _ => bail!("Unsupported language: {}", language),
+            _ => {
+                return Err(UnsupportedStopwordLanguage(language.to_string()).into());
+            }
         };
 
         Ok(Self::new(words.iter().map(|&word| word.to_owned())))

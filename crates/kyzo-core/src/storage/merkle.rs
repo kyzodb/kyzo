@@ -89,7 +89,11 @@ const EMPTY_TAG: u8 = 0x02;
 /// A 32-byte Merkle hash. Comparison is byte-exact; rendering is lowercase
 /// hex (for golden vectors and the eventual sys-op result column).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub(crate) struct MerkleHash(pub(crate) [u8; 32]);
+
+const _: () = assert!(std::mem::size_of::<MerkleHash>() == std::mem::size_of::<[u8; 32]>());
+const _: () = assert!(std::mem::align_of::<MerkleHash>() == std::mem::align_of::<[u8; 32]>());
 
 impl MerkleHash {
     /// Lowercase hex, 64 characters.
@@ -448,6 +452,7 @@ mod tests {
         shuffled.sort_by_key(|(k, _)| {
             let mut s = 0u64;
             for b in k {
+                // INVARIANT(djb2): classic djb2 string hash; wrap is the published mix.
                 s = s.wrapping_mul(131).wrapping_add(u64::from(*b));
             }
             s

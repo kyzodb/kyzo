@@ -498,7 +498,7 @@ pub(crate) fn dst_fault_campaign_kv_survives_crash(seeds: std::ops::Range<u64>) 
                     Op::Del(k) if !k.is_empty() && tx.del(&k).is_ok() => {
                         staged.remove(&k);
                     }
-                    _ => {}
+                    Op::Put(..) | Op::Del(_) | Op::DelRange(..) | Op::Get(_) | Op::Exists(_) | Op::Scan(..) | Op::ScanCount(..) | Op::Total => {}
                 }
             }
             if tx.commit().is_ok() {

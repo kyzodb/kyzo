@@ -18,19 +18,18 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::RelAlgebra;
-use crate::data::expr::{Bytecode, eval_bytecode};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
-use crate::data::value::DataValue;
-use crate::data::value::Tuple;
+use crate::data::value::data_value_any;
+use crate::data::value::{DataValue, SearchHits, Tag};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
+use crate::query::search::SearchConfig;
 use crate::storage::ReadTx;
 use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
-use std::fmt::Debug;
 use thiserror::Error;
 
 /// An index search driven once per parent row: the query expression is
@@ -43,15 +42,17 @@ use thiserror::Error;
 pub(crate) struct SearchRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) atom: crate::query::search::SearchAtom,
-    pub(crate) query_bytecode: Vec<Bytecode>,
-    pub(crate) filter_bytecode: Option<(Vec<Bytecode>, SourceSpan)>,
 }
 
-/// A search query expression evaluated to a value the engine cannot accept.
 #[derive(Debug, Error, Diagnostic)]
-#[error("the search query evaluated to {1}, which this index cannot search for")]
-#[diagnostic(code(query::search_query_type))]
-pub(crate) struct SearchQueryTypeError(#[label] pub(crate) SourceSpan, pub(crate) String);
+#[error("search query has wrong type for this index: expected {expected:?}, got {got:?}")]
+#[diagnostic(code(query::search_query_type_error))]
+pub(crate) struct SearchQueryTypeError {
+    pub(crate) expected: Tag,
+    pub(crate) got: Tag,
+    #[label]
+    pub(crate) span: SourceSpan,
+}
 
 impl SearchRA {
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
@@ -65,7 +66,6 @@ impl SearchRA {
             .map(|(i, b)| (b, i))
             .collect();
         self.atom.query.fill_binding_indices(&parent_frame)?;
-        self.query_bytecode = self.atom.query.compile()?;
         // The filter sees the FULL output frame: parent ++ own_bindings.
         if let Some(filter) = self.atom.filter.as_mut() {
             let mut names = self.parent.bindings_after_eliminate();
@@ -73,7 +73,6 @@ impl SearchRA {
             let full_frame: BTreeMap<_, _> =
                 names.into_iter().enumerate().map(|(i, b)| (b, i)).collect();
             filter.fill_binding_indices(&full_frame)?;
-            self.filter_bytecode = Some((filter.compile()?, filter.span()));
         }
         Ok(())
     }
@@ -93,7 +92,6 @@ impl SearchRA {
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
-        use crate::query::search::SearchConfig;
         let span = self.atom.span;
         let fts_n_total = match &self.atom.cfg {
             SearchConfig::Fts(c)
@@ -101,76 +99,55 @@ impl SearchRA {
             {
                 crate::engines::fts::fts_total_docs(tx, &c.base)?
             }
-            _ => 0,
+            SearchConfig::Hnsw(_) | SearchConfig::Fts(_) | SearchConfig::Lsh(_) => 0,
         };
 
-        let filter_code = self.filter_bytecode.clone();
-        let query_code = self.query_bytecode.clone();
+        let filter_expr = self.atom.filter.clone();
+        let query_expr = self.atom.query.clone();
         let cancel = self.atom.cancel.clone();
         let cfg = &self.atom.cfg;
-        let mut q_stack = vec![];
-        let mut e_stack = vec![];
 
-        let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {
+        let search = move |row: &[DataValue]| -> Result<SearchHits> {
             cancel.check()?;
-            let q = eval_bytecode(&query_code, row, &mut q_stack)?;
-            Ok(match cfg {
+            let q = query_expr.eval(row)?;
+            match cfg {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {
                         DataValue::Vector(v) => v,
-                        other => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
+                        other @ (data_value_any!()) => {
+                            bail!(SearchQueryTypeError {
+                                expected: Tag::Vector,
+                                got: other.tag(),
+                                span,
+                            })
+                        }
                     };
-                    crate::engines::hnsw::hnsw_knn(
-                        tx,
-                        v,
-                        &c.manifest,
-                        &c.base,
-                        &c.idx,
-                        &c.params,
-                        &filter_code,
-                        &mut e_stack,
-                        &self.atom.cancel,
-                    )?
+                    c.search_relation(tx, v, &filter_expr, &cancel)
                 }
                 SearchConfig::Fts(c) => {
                     let text = match &q {
-                        DataValue::Str(t) => t,
-                        other => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
+                        DataValue::Str(t) => t.as_str(),
+                        other @ (data_value_any!()) => {
+                            bail!(SearchQueryTypeError {
+                                expected: Tag::Str,
+                                got: other.tag(),
+                                span,
+                            })
+                        }
                     };
-                    crate::engines::fts::fts_search(
-                        &self.atom.cancel,
-                        tx,
-                        text,
-                        &c.base,
-                        &c.idx,
-                        &c.params,
-                        &filter_code,
-                        &mut e_stack,
-                        &c.analyzer,
-                        fts_n_total,
-                    )?
+                    c.search_relation(tx, text, &filter_expr, &cancel, fts_n_total)
                 }
-                SearchConfig::Lsh(c) => crate::engines::lsh::lsh_search(
-                    &self.atom.cancel,
-                    tx,
-                    &q,
-                    &c.manifest,
-                    &c.base,
-                    &c.idx,
-                    &c.params,
-                    &mut e_stack,
-                    &filter_code,
-                    &c.perms,
-                    &c.analyzer,
-                )?,
-            })
+                SearchConfig::Lsh(c) => {
+                    c.search_relation(tx, &q, &filter_expr, &cancel)
+                }
+            }
         };
 
         Ok(Box::new(SearchBatches {
             parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
             parent_batch: None,
             parent_row: 0,
-            hits: Vec::new(),
+            hits: SearchHits::empty(),
             hit_idx: 0,
             search: Box::new(search),
             pending_err: None,
@@ -183,9 +160,9 @@ struct SearchBatches<'a> {
     parent: BatchIter<'a>,
     parent_batch: Option<Batch>,
     parent_row: usize,
-    hits: Vec<Tuple>,
+    hits: SearchHits,
     hit_idx: usize,
-    search: Box<dyn FnMut(&[DataValue]) -> Result<Vec<Tuple>> + 'a>,
+    search: Box<dyn FnMut(&[DataValue]) -> Result<SearchHits> + 'a>,
     pending_err: Option<miette::Error>,
 }
 
@@ -199,14 +176,20 @@ impl SearchBatches<'_> {
             // Drain in-flight hits for the current parent row first.
             if self.hit_idx < self.hits.len() {
                 let Some(batch) = &self.parent_batch else {
-                    unreachable!("hits in flight imply a parent batch")
+                    return Err(crate::query::ra::PlanInvariantError(
+                        "hits in flight imply a parent batch",
+                    )
+                    .into());
                 };
-                let row = batch.row(self.parent_row);
+                let row = match batch.row(self.parent_row) {
+                    Ok(r) => r.to_vec(),
+                    Err(e) => return Err(e.into()),
+                };
                 while self.hit_idx < self.hits.len() {
-                    let hit = &self.hits[self.hit_idx];
+                    let hit = self.hits.materialize_hit(self.hit_idx)?;
                     out.push_with(|buf| {
-                        buf.extend_from_slice(row);
-                        buf.extend_from_slice(hit.as_slice());
+                        buf.extend_from_slice(&row);
+                        buf.extend(hit);
                         Ok(())
                     })?;
                     self.hit_idx += 1;
@@ -245,7 +228,10 @@ impl SearchBatches<'_> {
             let Some(batch) = &self.parent_batch else {
                 break;
             };
-            let row = batch.row(self.parent_row);
+            let row = match batch.row(self.parent_row) {
+                Ok(r) => r,
+                Err(e) => return Err(e.into()),
+            };
             match (self.search)(row) {
                 Ok(hits) => {
                     self.hits = hits;

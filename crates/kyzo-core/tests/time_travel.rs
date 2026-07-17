@@ -212,7 +212,18 @@ fn end_sentinel_never_leaks_through_interval_end() {
     for r in &out.rows {
         match &r[0] {
             DataValue::Null => {} // the open run — correct
-            other => {
+            other @ (DataValue::Bool(_)
+                | DataValue::Num(_)
+                | DataValue::Str(_)
+                | DataValue::Bytes(_)
+                | DataValue::Uuid(_)
+                | DataValue::Regex(_)
+                | DataValue::Json(_)
+                | DataValue::Vector(_)
+                | DataValue::List(_)
+                | DataValue::Set(_)
+                | DataValue::Validity(_)
+                | DataValue::Interval(_)) => {
                 assert_ne!(
                     other.get_int(),
                     Some(i64::MAX),

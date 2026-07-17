@@ -71,6 +71,14 @@
 //!   (the extraction from documents/embeddings is the caller's business, the
 //!   way the FTS extractor seam produces text).
 //!
+//! ## Projection kind (story #305)
+//!
+//! [`Sparse`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through that machine; there is no bespoke per-engine seal or
+//! freshness protocol. Relation-backed [`sparse_put`] / [`sparse_search`]
+//! remain the kernel inverted-list algorithms.
+//!
 //! ## Design reference — Qdrant (Apache-2.0)
 //!
 //! The scoring and storage design here follows the sparse-vector implementation
@@ -103,13 +111,33 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, eval_bytecode_pred};
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// Sparse-vector index as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed posting maintenance and search ([`sparse_put`],
+/// [`Sparse::search_index`]) are the kernel algorithms — not a second
+/// build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); [`Sparse::search_index`]
+/// is the UFCS alias into that door.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Sparse;
+
+impl ProjectionKind for Sparse {}
 
 // ---------------------------------------------------------------------------
 // Typed errors — the admission gate's refusals.
@@ -138,16 +166,40 @@ pub(crate) struct SparseDuplicateDimension {
     pub(crate) dim: u32,
 }
 
+/// An admitted sparse vector: finite non-negative weights, unique dimensions,
+/// sorted ascending by dimension. The only construction door is
+/// [`admit_sparse`] — a raw `Vec<(u32, f32)>` is never type-equal to this.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SparseVector {
+    pairs: Vec<(u32, f32)>,
+}
+
+impl SparseVector {
+    /// Whether this vector carries no dimensions.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+}
+
+impl IntoIterator for SparseVector {
+    type Item = (u32, f32);
+    type IntoIter = std::vec::IntoIter<(u32, f32)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.pairs.into_iter()
+    }
+}
+
 /// Validate and canonicalize a sparse vector: refuse NaN/infinite/negative
 /// weights ([`SparseWeightInvalid`]) and repeated dimensions
-/// ([`SparseDuplicateDimension`]), and return the pairs sorted by dimension
-/// ascending — the canonical memcmp order that fixes the summation order of
-/// every score (see the module docs).
+/// ([`SparseDuplicateDimension`]), and return a sealed [`SparseVector`] whose
+/// pairs are sorted by dimension ascending — the canonical memcmp order that
+/// fixes the summation order of every score (see the module docs).
 ///
 /// This is the engine's single admission gate: both [`sparse_put`] and
 /// [`sparse_search`] pass their input through it, so a weight that cannot
 /// participate in an honest dot product is unrepresentable downstream.
-fn admit_sparse(vector: &[(u32, f32)]) -> Result<Vec<(u32, f32)>> {
+fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
     let mut out = Vec::with_capacity(vector.len());
     for &(dim, weight) in vector {
         if !weight.is_finite() {
@@ -170,7 +222,7 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<Vec<(u32, f32)>> {
             bail!(SparseDuplicateDimension { dim: pair[0].0 });
         }
     }
-    Ok(out)
+    Ok(SparseVector { pairs: out })
 }
 
 // ---------------------------------------------------------------------------
@@ -186,10 +238,7 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<Vec<(u32, f32)>> {
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("dim"),
-        typing: NullableColType {
-            coltype: ColType::Int,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Int),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -201,10 +250,7 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
     }
     let non_keys = vec![ColumnDef {
         name: SmartString::from("weight"),
-        typing: NullableColType {
-            coltype: ColType::Float,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Float),
         default_gen: None,
     }];
     StoredRelationMetadata { keys, non_keys }
@@ -248,7 +294,7 @@ pub(crate) fn sparse_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let vector = admit_sparse(vector)?;
@@ -285,7 +331,7 @@ pub(crate) fn sparse_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let vector = admit_sparse(vector)?;
@@ -328,27 +374,35 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
         bail!(IndexRowCorrupt::new(
             idx_name,
             row,
-            format!(
-                "sparse posting has {} columns, expected {expected_len}",
-                row.len()
-            ),
+            IndexCorruptReason::WrongColumnCount {
+                found: row.len(),
+                expected: expected_len,
+            },
         ));
     }
     let weight = row[base_key_len + 1].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             idx_name,
             row,
-            "sparse posting weight is not a float",
+            IndexCorruptReason::SparseWeightNotFloat,
         ))
     })? as f32;
     if !weight.is_finite() || weight < 0.0 {
         bail!(IndexRowCorrupt::new(
             idx_name,
             row,
-            "sparse posting weight is not a finite non-negative float",
+            IndexCorruptReason::SparseWeightNotFiniteNonNeg,
         ));
     }
     Ok((Tuple::from_vec(row[1..=base_key_len].to_vec()), weight))
+}
+
+/// Whether sparse search appends the score column — the **one** bind encoding
+/// (P038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SparseBindScore {
+    Omit,
+    Append,
 }
 
 /// The parameters of one sparse search; the RA operator tier constructs this
@@ -358,7 +412,36 @@ pub(crate) struct SparseSearchParams {
     pub(crate) k: usize,
     /// Append the score as a trailing `Float` column (the RA tier maps it to a
     /// binding).
-    pub(crate) bind_score: bool,
+    pub(crate) bind_score: SparseBindScore,
+}
+
+/// One sparse relation-backed search — [`RelationIndexSearch::Request`] for
+/// [`Sparse`] (P103).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SparseSearchRequest<'a> {
+    pub(crate) query: &'a [(u32, f32)],
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a SparseSearchParams,
+    pub(crate) filter_code: &'a Option<Expr>,
+}
+
+impl RelationIndexSearch for Sparse {
+    type Request<'a> = SparseSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(sparse_search_body(
+            tx,
+            request.query,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_code,
+        )?)
+    }
 }
 
 /// Sparse dot-product search. Returns matching base-relation rows, highest
@@ -378,14 +461,38 @@ pub(crate) struct SparseSearchParams {
 /// document's score therefore accumulates in a FIXED order. Ties in score are
 /// broken by the document key's memcmp order — a total order, so the result is
 /// byte-identical across runs.
-pub(crate) fn sparse_search(
+impl Sparse {
+    /// Relation-backed sparse search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `sparse_search`.
+    pub(crate) fn search_index(
+        tx: &impl ReadTx,
+        query: &[(u32, f32)],
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &SparseSearchParams,
+        filter_code: &Option<Expr>,
+    ) -> Result<crate::data::value::SearchHits> {
+        Self::search_relation(
+            tx,
+            SparseSearchRequest {
+                query,
+                base,
+                idx,
+                params,
+                filter_code,
+            },
+        )
+    }
+}
+
+fn sparse_search_body(
     tx: &impl ReadTx,
     query: &[(u32, f32)],
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &SparseSearchParams,
-    filter_code: &Option<(Vec<Bytecode>, SourceSpan)>,
-    stack: &mut Vec<DataValue>,
+    filter_code: &Option<Expr>,
 ) -> Result<Vec<Tuple>> {
     let query = admit_sparse(query)?;
     if query.is_empty() {
@@ -445,14 +552,14 @@ pub(crate) fn sparse_search(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 doc_key.as_slice(),
-                "sparse index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
-        if params.bind_score {
+        if matches!(params.bind_score, SparseBindScore::Append) {
             cand.push(DataValue::from(score as f64));
         }
-        if let Some((code, span)) = filter_code
-            && !eval_bytecode_pred(code, &cand, stack, *span)?
+        if let Some(code) = filter_code
+            && !code.eval_pred(&cand)?
         {
             continue;
         }
@@ -476,13 +583,18 @@ mod tests {
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 
+    macro_rules! sparse_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(
+                Sparse::search_index($($arg),*).unwrap()
+            ).unwrap()
+        };
+    }
+
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -557,16 +669,14 @@ mod tests {
     fn params(k: usize) -> SparseSearchParams {
         SparseSearchParams {
             k,
-            bind_score: true,
+            bind_score: SparseBindScore::Append,
         }
     }
 
     /// Run a search and project `(key, score)`.
     fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, f32)> {
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
-        let hits =
-            sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None, &mut stack).unwrap();
+        let hits = sparse_rows!(&rtx, query, &f.base, &f.idx, &params(k), &None);
         hits.iter()
             .map(|t| {
                 (
@@ -730,8 +840,7 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let f = setup(&db, docs);
             let rtx = db.read_tx().unwrap();
-            let mut stack = vec![];
-            sparse_search(&rtx, query, &f.base, &f.idx, &params(10), &None, &mut stack).unwrap()
+            sparse_rows!(&rtx, query, &f.base, &f.idx, &params(10), &None)
         };
 
         let a = build_and_search();
@@ -761,17 +870,8 @@ mod tests {
         };
         let search_err = || -> miette::Report {
             let rtx = db.read_tx().unwrap();
-            let mut stack = vec![];
-            sparse_search(
-                &rtx,
-                &[(0, 1.0)],
-                &f.base,
-                &f.idx,
-                &params(1),
-                &None,
-                &mut stack,
-            )
-            .expect_err("corrupt posting must error, not panic")
+            Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &params(1), &None)
+                .expect_err("corrupt posting must error, not panic")
         };
 
         // (a) Garbage msgpack value: the scan's decode fails, still not a panic.
@@ -931,37 +1031,26 @@ mod tests {
         ];
         let f = setup(&db, docs);
         // Filter: tag == "keep". Column layout of the candidate: [k, tag, score].
-        let filter = vec![
-            Bytecode::Binding {
-                var: Symbol::new("tag", SourceSpan(0, 0)),
-                tuple_pos: Some(1),
-            },
-            Bytecode::Const {
-                val: DataValue::from("keep"),
-                span: SourceSpan(0, 0),
-            },
-            Bytecode::Apply {
-                op: &crate::data::functions::OP_EQ,
-                arity: 2,
-                span: SourceSpan(0, 0),
-            },
-        ];
+        let filter = Expr::Apply {
+            op: &crate::data::functions::OP_EQ,
+            args: Box::new([
+                Expr::Binding {
+                    var: Symbol::new("tag", SourceSpan(0, 0)),
+                    tuple_pos: BindingPos::Resolved(1),
+                },
+                Expr::Const {
+                    val: DataValue::from("keep"),
+                    span: SourceSpan(0, 0),
+                },
+            ]),
+            span: SourceSpan(0, 0),
+        };
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
         let p = SparseSearchParams {
             k: 10,
-            bind_score: true,
+            bind_score: SparseBindScore::Append,
         };
-        let hits = sparse_search(
-            &rtx,
-            &[(0, 1.0)],
-            &f.base,
-            &f.idx,
-            &p,
-            &Some((filter, SourceSpan(0, 0))),
-            &mut stack,
-        )
-        .unwrap();
+        let hits = sparse_rows!(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter));
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert_eq!(
             keys,

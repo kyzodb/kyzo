@@ -17,18 +17,19 @@
 //!
 //! Mechanics, stated plainly:
 //!
-//! - **Catalog storage.** The body is raw KyzoScript source, mirrored into
-//!   the catalog row ([`ConstraintRef`]) of *every* stored relation it
-//!   reads, so an FK fires both when a child appears and when its parent
-//!   disappears. Parsed once per session (the trigger convention; parsed
-//!   substances in the catalog are the Phase C end state).
+//! - **Catalog storage.** The body is a typed [`ConstraintRef`] substance
+//!   (sealed [`InputProgram`]), mirrored into the catalog row of
+//!   *every* stored relation it reads, so an FK fires both when a child
+//!   appears and when its parent disappears. The one door is
+//!   [`ConstraintRef::parse`]; the catalog persists `{ name, program }` and
+//!   deserializes the sealed body on decode — never re-parses source.
 //! - **Enforcement point.** The mutation pipeline notes the constraints of
 //!   every relation it touches ([`SessionTx::note_constraints`]); after the
 //!   top-level query and its whole trigger cascade have run — and before
 //!   commit — [`Db::enforce_constraints`] evaluates each noted constraint
-//!   once, read-only, against the transaction's own write set
-//!   (`WriteTx: ReadTx`, so post-write state is visible). A non-empty
-//!   result is a typed, spanned [`ConstraintViolation`] naming the
+//!   once from its compiled program, read-only, against the transaction's
+//!   own write set (`WriteTx: ReadTx`, so post-write state is visible). A
+//!   non-empty result is a typed, spanned [`ConstraintViolation`] naming the
 //!   constraint and its witness rows; the abort rolls the whole
 //!   transaction back.
 //! - **Budget-armed.** Constraint bodies evaluate under the session's
@@ -64,6 +65,7 @@
 //! guards the present instant only. This boundary is stated, not silently
 //! assumed.
 
+use std::num::NonZeroUsize;
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Diagnostic, Result, WrapErr, bail};
@@ -78,12 +80,13 @@ use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ValidityTs};
 use crate::fixed_rule::NamedRows;
-use crate::parse::parse_script;
-use crate::runtime::db::{Db, ScriptOptions, SessionTx};
+use crate::runtime::db::{Db, ScriptOptions, SessionTx, status_ok};
 use crate::runtime::relation::{
     AccessLevel, ConstraintRef, InsufficientAccessLevel, get_relation, list_relations,
     write_relation_row,
 };
+use crate::query::temp_store::TupleInIter;
+use crate::storage::retry::RetryError;
 use crate::storage::temp::TempTx;
 use crate::storage::{ReadTx, Storage, WriteTx};
 
@@ -94,7 +97,7 @@ pub(crate) const WITNESS_CAP: usize = 8;
 
 /// How many commit attempts a constraint catalog op replays on a typed
 /// conflict (the same policy as [`Db`]'s script path).
-const MAX_COMMIT_ATTEMPTS: usize = 32;
+const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 
 /// A transaction was denied: an integrity constraint's body is satisfiable
 /// against the post-write state. Carries the violating rows (the body's
@@ -293,7 +296,10 @@ impl<S: Storage> Db<S> {
             // committed-state segments must never serve them.
             crate::engines::segments::Segments::OFF,
         )?;
-        let mut rows: Vec<Tuple> = result.all_iter().map(|t| t.into_tuple()).collect();
+        let mut rows: Vec<Tuple> = result
+            .all_iter()?
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()?;
         rows.sort();
         rows.dedup();
         Ok(rows)
@@ -312,10 +318,9 @@ impl<S: Storage> Db<S> {
             return Ok(());
         }
         let pending = std::mem::take(&mut tx.pending_constraints);
-        let fixed = self.fixed_rules();
         let options = tx.options.clone();
-        for (name, source) in pending {
-            let program = tx.parsed_trigger(&source, &fixed, cur_vld)?;
+        for (name, constraint) in pending {
+            let program = constraint.program().clone();
             // Defensive purity re-check: the catalog row's bytes are a
             // claim, not a proof; a tampered body must not mutate.
             validate_constraint_purity(&name, program.out_opts())?;
@@ -325,12 +330,13 @@ impl<S: Storage> Db<S> {
             if !witnesses.is_empty() {
                 let total = witnesses.len();
                 let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
-                let span = SourceSpan(0, source.len());
+                let body = constraint.program().to_string();
+                let span = SourceSpan(0, body.len());
                 return Err(ConstraintViolation {
                     name: name.to_string(),
                     total,
                     witnesses: shown,
-                    body: source,
+                    body,
                     span,
                 }
                 .into());
@@ -351,10 +357,9 @@ impl<S: Storage> Db<S> {
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
         let fixed = self.fixed_rules();
-        let program =
-            parse_script(source, &BTreeMap::new(), &fixed, cur_vld)?.get_single_program()?;
-        validate_constraint_purity(&name.name, program.out_opts())?;
-        let read_set = stored_read_set(&program);
+        let constraint = ConstraintRef::parse(name.name.clone(), source, &fixed, cur_vld)?;
+        validate_constraint_purity(constraint.name(), constraint.program().out_opts())?;
+        let read_set = stored_read_set(constraint.program());
         if read_set.is_empty() {
             bail!(ConstraintReadsNothing(name.to_string()));
         }
@@ -365,15 +370,18 @@ impl<S: Storage> Db<S> {
         }
 
         crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
-            let mut tx = SessionTx::new_write(self.storage.write_tx()?, options.clone());
+            let mut tx = SessionTx::new_write(
+                crate::storage::retry::write_tx_attempt(&self.storage)?,
+                options.clone(),
+            );
 
             // Constraint names are one global namespace: scan the catalog.
-            for handle in list_relations(&tx.store)? {
-                if let Some(c) = handle.constraints.iter().find(|c| c.name == name.name) {
-                    bail!(ConstraintNameTaken(
-                        c.name.to_string(),
-                        handle.name.to_string()
-                    ));
+            for handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
+                if let Some(c) = handle.constraints.iter().find(|c| c.name() == &name.name) {
+                    return Err(RetryError::session(ConstraintNameTaken(
+                        c.name().to_string(),
+                        handle.name.to_string(),
+                    )));
                 }
             }
 
@@ -381,46 +389,47 @@ impl<S: Storage> Db<S> {
             // being. Full-state evaluation inside the creating transaction,
             // under the caller's budget.
             let witnesses = self
-                .eval_constraint_body(&tx.store, &tx.temp, program.clone(), cur_vld, options)
+                .eval_constraint_body(
+                    &tx.store,
+                    &tx.temp,
+                    constraint.program().clone(),
+                    cur_vld,
+                    options,
+                )
                 .wrap_err_with(|| {
                     format!("while checking integrity constraint '{name}' over existing data")
-                })?;
+                })
+                .map_err(RetryError::session_report)?;
             if !witnesses.is_empty() {
                 let total = witnesses.len();
                 let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
-                bail!(ConstraintRejectedOnCreation {
+                return Err(RetryError::session(ConstraintRejectedOnCreation {
                     name: name.to_string(),
                     total,
                     witnesses: shown,
                     body: source.to_string(),
                     span: SourceSpan(0, source.len()),
-                });
+                }));
             }
 
-            // Attach: the identical spec mirrored onto every relation the
-            // body reads, kept name-sorted. Requires the trigger rung of
+            // Attach: the identical substance mirrored onto every relation
+            // the body reads, kept name-sorted. Requires the trigger rung of
             // the access ladder on each.
             for rel in &read_set {
-                let mut handle = get_relation(&tx.store, rel)?;
+                let mut handle = get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
                 if handle.access_level < AccessLevel::Protected {
-                    bail!(InsufficientAccessLevel(
+                    return Err(RetryError::session(InsufficientAccessLevel(
                         handle.name.to_string(),
                         "create constraint".to_string(),
-                        handle.access_level
-                    ));
+                        handle.access_level,
+                    )));
                 }
-                handle.constraints.push(ConstraintRef {
-                    name: name.name.clone(),
-                    source: source.to_string(),
-                });
-                handle.constraints.sort_by(|a, b| a.name.cmp(&b.name));
-                write_relation_row(&mut tx.store, &handle)?;
+                handle.constraints.push(constraint.clone());
+                handle.constraints.sort_by(|a, b| a.name().cmp(b.name()));
+                write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
             }
             tx.store.commit()?;
-            Ok(NamedRows::new(
-                vec!["status".to_string()],
-                vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-            ))
+            Ok(status_ok())
         })
     }
 
@@ -434,33 +443,33 @@ impl<S: Storage> Db<S> {
     /// backdoor to lifting a denial that the relation's writers still rely on.
     pub(crate) fn sys_remove_constraint(&self, name: &Symbol) -> Result<NamedRows> {
         crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
-            let mut tx = SessionTx::new_write(self.storage.write_tx()?, ScriptOptions::default());
+            let mut tx = SessionTx::new_write(
+                crate::storage::retry::write_tx_attempt(&self.storage)?,
+                ScriptOptions::default(),
+            );
             let mut found = false;
-            for mut handle in list_relations(&tx.store)? {
+            for mut handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
                 let before = handle.constraints.len();
-                if handle.constraints.iter().any(|c| c.name == name.name)
+                if handle.constraints.iter().any(|c| c.name() == &name.name)
                     && handle.access_level < AccessLevel::Protected
                 {
-                    bail!(InsufficientAccessLevel(
+                    return Err(RetryError::session(InsufficientAccessLevel(
                         handle.name.to_string(),
                         "drop constraint".to_string(),
-                        handle.access_level
-                    ));
+                        handle.access_level,
+                    )));
                 }
-                handle.constraints.retain(|c| c.name != name.name);
+                handle.constraints.retain(|c| c.name() != &name.name);
                 if handle.constraints.len() != before {
                     found = true;
-                    write_relation_row(&mut tx.store, &handle)?;
+                    write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
                 }
             }
             if !found {
-                bail!(NoSuchConstraint(name.to_string()));
+                return Err(RetryError::session(NoSuchConstraint(name.to_string())));
             }
             tx.store.commit()?;
-            Ok(NamedRows::new(
-                vec!["status".to_string()],
-                vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-            ))
+            Ok(status_ok())
         })
     }
 
@@ -473,16 +482,16 @@ impl<S: Storage> Db<S> {
         for handle in list_relations(&tx.store)? {
             for c in &handle.constraints {
                 rows.push(Tuple::from_vec(vec![
-                    DataValue::from(c.name.as_str()),
+                    DataValue::from(c.name().as_str()),
                     DataValue::from(handle.name.as_str()),
-                    DataValue::from(c.source.as_str()),
+                    DataValue::from(c.program().to_string()),
                 ]));
             }
         }
-        Ok(NamedRows::new(
+        Ok(NamedRows::try_new(
             vec!["name".into(), "relation".into(), "source".into()],
             rows,
-        ))
+        )?)
     }
 }
 
@@ -499,7 +508,7 @@ mod tests {
 
     fn ints(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
-            .rows
+            .rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect();
@@ -575,11 +584,11 @@ mod tests {
         // Both relations carry the mirrored spec.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
         let attached: Vec<String> = listed
-            .rows
+            .rows()
             .iter()
             .map(|r| format!("{:?}|{:?}", r[0], r[1]))
             .collect();
-        assert_eq!(listed.rows.len(), 2, "mirrored onto child AND parent");
+        assert_eq!(listed.rows().len(), 2, "mirrored onto child AND parent");
         assert!(attached.iter().all(|s| s.contains("fk_child_parent")));
 
         // Child referencing an existing parent: commits.
@@ -637,7 +646,7 @@ mod tests {
 
         // Nothing was attached by the refused creation.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
-        assert!(listed.rows.is_empty());
+        assert!(listed.rows().is_empty());
 
         // Repair, create, and the constraint now enforces.
         db.run_script("?[k, v] <- [[1, 9]] :put scores {k, v}", no_params())
@@ -758,7 +767,7 @@ mod tests {
         let out = db
             .run_script("?[a, b] := *edge[a, b]", no_params())
             .unwrap();
-        assert_eq!(out.rows.len(), 4, "the guarded insert rolled back");
+        assert_eq!(out.rows().len(), 4, "the guarded insert rolled back");
 
         // The same insert under the default budget commits.
         db.run_script("?[a, b] <- [[9, 9]] :put edge {a, b}", no_params())
@@ -914,7 +923,7 @@ mod tests {
 
         // Exactly one attachment survives all the refusals.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
-        assert_eq!(listed.rows.len(), 1);
+        assert_eq!(listed.rows().len(), 1);
     }
 
     /// Destroying, renaming, or `:replace`-ing a relation that participates
@@ -994,7 +1003,7 @@ mod tests {
         );
         // And nothing was stripped — the constraint is still listed.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
-        assert_eq!(listed.rows.len(), 1, "the refused drop detached nothing");
+        assert_eq!(listed.rows().len(), 1, "the refused drop detached nothing");
 
         // Restore the rung, then the drop proceeds — the invariant can only
         // be removed at (or above) the rung that created it.
@@ -1005,7 +1014,7 @@ mod tests {
         assert!(
             db.run_script("::constraint list", no_params())
                 .unwrap()
-                .rows
+                .rows()
                 .is_empty()
         );
     }
@@ -1065,7 +1074,7 @@ mod tests {
         assert_eq!(
             db.run_script("?[x] := *s[x]", no_params())
                 .unwrap()
-                .rows
+                .rows()
                 .len(),
             0,
             "the aborted cascade kept nothing"

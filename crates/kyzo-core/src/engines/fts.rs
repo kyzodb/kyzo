@@ -76,6 +76,14 @@
 //! filter is present) suppresses the score-based truncation until after
 //! filtering, so `k` counts MATCHING rows. See its docs.
 //!
+//! ## Projection kind (story #305)
+//!
+//! [`Fts`] is this engine's `K` parameterization of the shared
+//! [`crate::engines::projection`] build→seal→query machine. Build→seal→query
+//! goes through that machine; there is no bespoke per-engine seal or
+//! freshness protocol. Relation-backed [`fts_put`] / [`fts_search`] remain
+//! the kernel inverted-index algorithms.
+//!
 //! ## Seams
 //!
 //! - **RA operator tier** (`query/ra.rs`): drives [`fts_search`] per parent
@@ -97,16 +105,37 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, eval_bytecode, eval_bytecode_pred};
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
+use crate::data::value::data_value_any;
+
+// ---------------------------------------------------------------------------
+// Projection kind — `K` of the shared build→seal→query machine (#305).
+// ---------------------------------------------------------------------------
+
+/// FTS as a projection kind: one `K` of
+/// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
+/// [`Sealed`](crate::engines::projection::Sealed).
+///
+/// Relation-backed posting maintenance and search ([`fts_put`],
+/// [`Fts::search_index`]) are the kernel algorithms — not a second
+/// build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); [`Fts::search_index`]
+/// is the UFCS alias into that door.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct Fts;
+
+impl ProjectionKind for Fts {}
 
 // ---------------------------------------------------------------------------
 // Scoring vocabulary.
@@ -153,10 +182,7 @@ pub(crate) struct FtsExtractorType {
 pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("word"),
-        typing: NullableColType {
-            coltype: ColType::String,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::String),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -166,15 +192,11 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
             default_gen: None,
         });
     }
-    let int_list = || NullableColType {
-        coltype: ColType::List {
-            eltype: Box::new(NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            }),
+    let int_list = || {
+        NullableColType::required(ColType::List {
+            eltype: Box::new(NullableColType::required(ColType::Int)),
             len: None,
-        },
-        nullable: false,
+        })
     };
     let non_keys = vec![
         ColumnDef {
@@ -194,10 +216,7 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
         },
         ColumnDef {
             name: SmartString::from("total_length"),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         },
     ];
@@ -210,15 +229,11 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
 
 /// Evaluate the extractor and return the document text, or `None` when the
 /// extraction is `Null` (a row with no text is simply not indexed).
-fn extract_text(
-    extractor: &[Bytecode],
-    tuple: &[DataValue],
-    stack: &mut Vec<DataValue>,
-) -> Result<Option<String>> {
-    match eval_bytecode(extractor, tuple, stack)? {
+fn extract_text(extractor: &Expr, tuple: &[DataValue]) -> Result<Option<String>> {
+    match extractor.eval(tuple)? {
         DataValue::Null => Ok(None),
         DataValue::Str(s) => Ok(Some(s)),
-        other => bail!(FtsExtractorType {
+        other @ (data_value_any!()) => bail!(FtsExtractorType {
             got: format!("{other:?}"),
         }),
     }
@@ -247,8 +262,7 @@ fn posting_key_scaffold(base_key_len: usize, tuple: &[DataValue]) -> Tuple {
 pub(crate) fn fts_put<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[Bytecode],
-    stack: &mut Vec<DataValue>,
+    extractor: &Expr,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -258,10 +272,10 @@ pub(crate) fn fts_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
-    let Some(text) = extract_text(extractor, tuple, stack)? else {
+    let Some(text) = extract_text(extractor, tuple)? else {
         return Ok(());
     };
 
@@ -276,8 +290,8 @@ pub(crate) fn fts_put<T: WriteTx>(
     while let Some(token) = token_stream.next() {
         let term = SmartString::<LazyCompact>::from(&token.text);
         let (fr, to, position) = collector.entry(term).or_default();
-        fr.push(DataValue::from(token.offset_from as i64));
-        to.push(DataValue::from(token.offset_to as i64));
+        fr.push(DataValue::from(token.offset_from() as i64));
+        to.push(DataValue::from(token.offset_to() as i64));
         position.push(DataValue::from(token.position as i64));
         count += 1;
     }
@@ -311,8 +325,7 @@ pub(crate) fn fts_put<T: WriteTx>(
 pub(crate) fn fts_del<T: WriteTx>(
     tx: &mut T,
     tuple: &[DataValue],
-    extractor: &[Bytecode],
-    stack: &mut Vec<DataValue>,
+    extractor: &Expr,
     tokenizer: &TextAnalyzer,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -322,10 +335,10 @@ pub(crate) fn fts_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
-    let Some(text) = extract_text(extractor, tuple, stack)? else {
+    let Some(text) = extract_text(extractor, tuple)? else {
         return Ok(());
     };
     let mut terms: FxHashSet<SmartString<LazyCompact>> = FxHashSet::default();
@@ -374,9 +387,9 @@ fn literal_postings(
     base_key_len: usize,
     literal: &FtsLiteral,
 ) -> Result<Vec<LiteralPostings>> {
-    let value = literal.value.as_str();
-    let scan: Box<dyn Iterator<Item = Result<Tuple>>> = if literal.is_prefix {
-        let mut upper = literal.value.clone();
+    let value = literal.value();
+    let scan: Box<dyn Iterator<Item = Result<Tuple>>> = if literal.is_prefix() {
+        let mut upper = SmartString::<LazyCompact>::from(value);
         upper.push(LARGEST_UTF_CHAR);
         idx.scan_bounded_prefix(
             tx,
@@ -403,17 +416,17 @@ fn literal_postings(
             bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                format!(
-                    "FTS posting has {} columns, expected {expected_len}",
-                    row.len()
-                ),
+                IndexCorruptReason::WrongColumnCount {
+                    found: row.len(),
+                    expected: expected_len,
+                },
             ));
         }
         let positions = row[position_col].get_slice().ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "FTS posting position column is not a list",
+                IndexCorruptReason::FtsPositionsNotList,
             ))
         })?;
         let positions = positions
@@ -423,7 +436,7 @@ fn literal_postings(
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
                         row.as_slice(),
-                        "FTS posting position is not an integer",
+                        IndexCorruptReason::FtsPositionNotInt,
                     ))
                 })
             })
@@ -472,18 +485,15 @@ fn eval_ast(
             let df = found.len();
             let mut res = FxHashMap::default();
             for lp in found {
-                let score = compute_score(lp.positions.len(), df, n_total, l.booster.0, score_kind);
+                let score = compute_score(lp.positions.len(), df, n_total, l.booster().0, score_kind);
                 res.insert(lp.doc_key, score);
             }
             res
         }
         FtsExpr::And(children) => {
+            // NonEmptyFtsExprs: at least one child.
             let mut iter = children.iter();
-            // An empty conjunction matches nothing (the parser's flatten drops
-            // empties; the engine still never unwraps an AST it did not build).
-            let Some(first) = iter.next() else {
-                return Ok(FxHashMap::default());
-            };
+            let first = iter.next().expect("NonEmptyFtsExprs");
             let mut res = eval_ast(tx, first, idx, base_key_len, score_kind, n_total)?;
             for child in iter {
                 let next = eval_ast(tx, child, idx, base_key_len, score_kind, n_total)?;
@@ -496,7 +506,7 @@ fn eval_ast(
         }
         FtsExpr::Or(children) => {
             let mut res: FxHashMap<Tuple, f64> = FxHashMap::default();
-            for child in children {
+            for child in children.iter() {
                 let next = eval_ast(tx, child, idx, base_key_len, score_kind, n_total)?;
                 for (k, v) in next {
                     res.entry(k)
@@ -508,7 +518,7 @@ fn eval_ast(
         }
         FtsExpr::Near(FtsNear { literals, distance }) => eval_near(
             tx,
-            literals,
+            literals.as_slice(),
             *distance,
             idx,
             base_key_len,
@@ -577,7 +587,7 @@ fn eval_near(
             })
             .collect();
     }
-    let booster: f64 = literals.iter().map(|l| l.booster.0).sum();
+    let booster: f64 = literals.iter().map(|l| l.booster().0).sum();
     let df = coll.len();
     Ok(coll
         .into_iter()
@@ -590,6 +600,13 @@ fn eval_near(
         .collect())
 }
 
+/// Whether FTS appends the score column — the **one** bind encoding (P038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FtsBindScore {
+    Omit,
+    Append,
+}
+
 /// The parameters of one FTS query; the RA operator tier constructs this from
 /// the resolved search atom.
 #[derive(Debug, Clone, Copy)]
@@ -598,7 +615,42 @@ pub(crate) struct FtsSearchParams {
     pub(crate) score_kind: FtsScoreKind,
     /// Append the score as a trailing `Float` column (the RA tier maps it to
     /// a binding).
-    pub(crate) bind_score: bool,
+    pub(crate) bind_score: FtsBindScore,
+}
+
+/// One FTS relation-backed search invocation — [`RelationIndexSearch::Request`]
+/// for [`Fts`] (P103).
+#[derive(Clone, Copy)]
+pub(crate) struct FtsSearchRequest<'a> {
+    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) query: &'a str,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a FtsSearchParams,
+    pub(crate) filter_code: &'a Option<Expr>,
+    pub(crate) tokenizer: &'a TextAnalyzer,
+    pub(crate) n_total: usize,
+}
+
+impl RelationIndexSearch for Fts {
+    type Request<'a> = FtsSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(fts_search_body(
+            request.cancel,
+            tx,
+            request.query,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_code,
+            request.tokenizer,
+            request.n_total,
+        )?)
+    }
 }
 
 /// Full-text search. Returns matching base-relation rows, highest score
@@ -621,16 +673,47 @@ pub(crate) struct FtsSearchParams {
 /// any base row is fetched.
 ///
 /// `n_total` is [`fts_total_docs`] when `score_kind` is `TfIdf`, else `0`.
+impl Fts {
+    /// Relation-backed full-text search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `fts_search`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn search_index(
+        cancel: &crate::fixed_rule::CancelFlag,
+        tx: &impl ReadTx,
+        query: &str,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &FtsSearchParams,
+        filter_code: &Option<Expr>,
+        tokenizer: &TextAnalyzer,
+        n_total: usize,
+    ) -> Result<crate::data::value::SearchHits> {
+        Self::search_relation(
+            tx,
+            FtsSearchRequest {
+                cancel,
+                query,
+                base,
+                idx,
+                params,
+                filter_code,
+                tokenizer,
+                n_total,
+            },
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fts_search(
+fn fts_search_body(
     cancel: &crate::fixed_rule::CancelFlag,
     tx: &impl ReadTx,
     query: &str,
     base: &RelationHandle,
     idx: &RelationHandle,
     params: &FtsSearchParams,
-    filter_code: &Option<(Vec<Bytecode>, SourceSpan)>,
-    stack: &mut Vec<DataValue>,
+    filter_code: &Option<Expr>,
     tokenizer: &TextAnalyzer,
     n_total: usize,
 ) -> Result<Vec<Tuple>> {
@@ -671,14 +754,14 @@ pub(crate) fn fts_search(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 doc_key.as_slice(),
-                "FTS index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
-        if params.bind_score {
+        if matches!(params.bind_score, FtsBindScore::Append) {
             cand.push(DataValue::from(score));
         }
-        if let Some((code, span)) = filter_code
-            && !eval_bytecode_pred(code, &cand, stack, *span)?
+        if let Some(code) = filter_code
+            && !code.eval_pred(&cand)?
         {
             continue;
         }
@@ -703,13 +786,18 @@ mod tests {
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 
+    macro_rules! fts_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(
+                Fts::search_index($($arg),*).unwrap()
+            ).unwrap()
+        };
+    }
+
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -744,30 +832,25 @@ mod tests {
     /// Simple whitespace-ish tokenizer, lowercased: the same analyzer used to
     /// build and to query.
     fn analyzer() -> TextAnalyzer {
-        TokenizerConfig {
-            name: SmartString::from("Simple"),
-            args: vec![],
-        }
-        .build(&[TokenizerConfig {
-            name: SmartString::from("Lowercase"),
-            args: vec![],
-        }])
-        .unwrap()
+        TokenizerConfig::admit("Simple", vec![])
+            .unwrap()
+            .build(&[TokenizerConfig::admit("Lowercase", vec![]).unwrap()])
+            .unwrap()
     }
 
     /// The compiled extractor: project the text column (position 1).
-    fn extractor() -> Vec<Bytecode> {
-        vec![Bytecode::Binding {
+    fn extractor() -> Expr {
+        Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
-            tuple_pos: Some(1),
-        }]
+            tuple_pos: BindingPos::Resolved(1),
+        }
     }
 
     struct Fixture {
         base: RelationHandle,
         idx: RelationHandle,
         analyzer: TextAnalyzer,
-        extractor: Vec<Bytecode>,
+        extractor: Expr,
     }
 
     fn setup(db: &impl Storage, rows: &[(i64, &str)]) -> Fixture {
@@ -787,7 +870,6 @@ mod tests {
             KeyspaceKind::AlgorithmState,
         )
         .unwrap();
-        let mut stack = vec![];
         for (k, text) in rows {
             let row = vec![DataValue::from(*k), DataValue::from(*text)];
             base.put_fact(
@@ -797,10 +879,7 @@ mod tests {
                 SourceSpan(0, 0),
             )
             .unwrap();
-            fts_put(
-                &mut tx, &row, &extractor, &mut stack, &analyzer, &base, &idx,
-            )
-            .unwrap();
+            fts_put(&mut tx, &row, &extractor, &analyzer, &base, &idx).unwrap();
         }
         tx.commit().unwrap();
         Fixture {
@@ -815,7 +894,7 @@ mod tests {
         FtsSearchParams {
             k,
             score_kind,
-            bind_score: true,
+            bind_score: FtsBindScore::Append,
         }
     }
 
@@ -826,8 +905,7 @@ mod tests {
         } else {
             0
         };
-        let mut stack = vec![];
-        let hits = fts_search(
+        let hits = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             q,
@@ -835,11 +913,9 @@ mod tests {
             &f.idx,
             &p,
             &None,
-            &mut stack,
             &f.analyzer,
             n,
-        )
-        .unwrap();
+        );
         hits.iter()
             .map(|t| {
                 (
@@ -1006,18 +1082,8 @@ mod tests {
         );
 
         let mut tx = db.write_tx().unwrap();
-        let mut stack = vec![];
         let row1 = vec![DataValue::from(1), DataValue::from("findme keep")];
-        fts_del(
-            &mut tx,
-            &row1,
-            &f.extractor,
-            &mut stack,
-            &f.analyzer,
-            &f.base,
-            &f.idx,
-        )
-        .unwrap();
+        fts_del(&mut tx, &row1, &f.extractor, &f.analyzer, &f.base, &f.idx).unwrap();
         tx.commit().unwrap();
 
         let got = run(&db, &f, "findme", params(10, FtsScoreKind::Tf));
@@ -1047,13 +1113,12 @@ mod tests {
         .unwrap();
         let a = analyzer();
         // Extractor projects the INT key column (position 0): not a string.
-        let bad_extractor = vec![Bytecode::Binding {
+        let bad_extractor = Expr::Binding {
             var: Symbol::new("k", SourceSpan(0, 0)),
-            tuple_pos: Some(0),
-        }];
+            tuple_pos: BindingPos::Resolved(0),
+        };
         let row = vec![DataValue::from(1), DataValue::from("text")];
-        let mut stack = vec![];
-        let err = fts_put(&mut tx, &row, &bad_extractor, &mut stack, &a, &base, &idx).unwrap_err();
+        let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx).unwrap_err();
         assert!(
             err.downcast_ref::<FtsExtractorType>().is_some(),
             "typed extractor error, got: {err:?}"
@@ -1084,8 +1149,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
-        let err = fts_search(
+        let err = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             "hello",
@@ -1093,7 +1157,6 @@ mod tests {
             &f.idx,
             &params(1, FtsScoreKind::Tf),
             &None,
-            &mut stack,
             &f.analyzer,
             0,
         )
@@ -1115,24 +1178,20 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let meta = base_meta();
         // Analyzer with a stopword filter: "the"/"a" tokenize away.
-        let a = TokenizerConfig {
-            name: SmartString::from("Simple"),
-            args: vec![],
-        }
-        .build(&[
-            TokenizerConfig {
-                name: SmartString::from("Lowercase"),
-                args: vec![],
-            },
-            TokenizerConfig {
-                name: SmartString::from("Stopwords"),
-                args: vec![DataValue::List(vec![
-                    DataValue::from("the"),
-                    DataValue::from("a"),
-                ])],
-            },
-        ])
-        .unwrap();
+        let a = TokenizerConfig::admit("Simple", vec![])
+            .unwrap()
+            .build(&[
+                TokenizerConfig::admit("Lowercase", vec![]).unwrap(),
+                TokenizerConfig::admit(
+                    "Stopwords",
+                    vec![DataValue::List(vec![
+                        DataValue::from("the"),
+                        DataValue::from("a"),
+                    ])],
+                )
+                .unwrap(),
+            ])
+            .unwrap();
         let ex = extractor();
         let mut tx = db.write_tx().unwrap();
         let base = create_relation(
@@ -1147,7 +1206,6 @@ mod tests {
             KeyspaceKind::AlgorithmState,
         )
         .unwrap();
-        let mut stack = vec![];
         let row = vec![DataValue::from(1), DataValue::from("the cat sat")];
         base.put_fact(
             &mut tx,
@@ -1156,12 +1214,12 @@ mod tests {
             SourceSpan(0, 0),
         )
         .unwrap();
-        fts_put(&mut tx, &row, &ex, &mut stack, &a, &base, &idx).unwrap();
+        fts_put(&mut tx, &row, &ex, &a, &base, &idx).unwrap();
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
         // "the" and "a" are stopwords: the query tokenizes to nothing.
-        let hits = fts_search(
+        let hits = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "the AND a",
@@ -1169,17 +1227,15 @@ mod tests {
             &idx,
             &params(10, FtsScoreKind::Tf),
             &None,
-            &mut stack,
             &a,
             0,
-        )
-        .unwrap();
+        );
         assert!(
             hits.is_empty(),
             "stopword-only query yields no hits, no error"
         );
         // "cat" survives tokenization and matches.
-        let hits = fts_search(
+        let hits = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1187,11 +1243,9 @@ mod tests {
             &idx,
             &params(10, FtsScoreKind::Tf),
             &None,
-            &mut stack,
             &a,
             0,
-        )
-        .unwrap();
+        );
         assert_eq!(hits.len(), 1);
     }
 
@@ -1208,32 +1262,29 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let f = setup(&db, &[(1, "cat sat")]);
         let rtx = db.read_tx().unwrap();
-        let mut stack = vec![];
         // Always-true filter: the constant `true`.
-        let filter = vec![Bytecode::Const {
+        let filter = Expr::Const {
             val: DataValue::from(true),
             span: SourceSpan(0, 0),
-        }];
+        };
         let p = params(0, FtsScoreKind::Tf);
-        let with_filter = fts_search(
+        let with_filter = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "cat",
             &f.base,
             &f.idx,
             &p,
-            &Some((filter, SourceSpan(0, 0))),
-            &mut stack,
+            &Some(filter),
             &f.analyzer,
             0,
-        )
-        .unwrap();
+        );
         assert!(
             with_filter.is_empty(),
             "k=0 + filter must return 0 rows, got {}",
             with_filter.len()
         );
-        let without = fts_search(
+        let without = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1241,11 +1292,9 @@ mod tests {
             &f.idx,
             &p,
             &None,
-            &mut stack,
             &f.analyzer,
             0,
-        )
-        .unwrap();
+        );
         assert!(without.is_empty(), "k=0 without filter returns 0 rows");
     }
 }

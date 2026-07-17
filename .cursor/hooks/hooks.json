@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|Bash|Shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/kyle/src/plan/scripts/kyzo_allowlist_guard.py"
+          }
+        ]
+      }
+    ]
+  }
+}

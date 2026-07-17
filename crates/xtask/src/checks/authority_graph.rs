@@ -32,7 +32,12 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
+use quote::ToTokens;
 use serde::Serialize;
+use syn::visit::{self, Visit};
+
+use crate::fsutil::span_line;
+use crate::synutil::mod_is_test_scope;
 
 pub const TOOL_VERSION: u32 = 1;
 
@@ -47,14 +52,14 @@ const LAYERS: &[(&str, &[&str])] = &[
 ];
 
 const LAYER_SPINE: &[(&str, &str)] = &[
-    ("value", "Tuple · Domain · ExecRows/ExecDedup · EncodedKey"),
+    ("value", "Tuple · Domain · ExecRows/ExecDedup · TupleKey/StorageKey"),
     (
         "runtime-catalog",
         "CatalogGeneration · RelationGeneration · IndexGeneration",
     ),
     (
         "storage",
-        "encoded-key / order integrity (consumes EncodedKey)",
+        "encoded-key / order integrity (consumes StorageKey)",
     ),
     ("engines", "ResidentIndexKey (rebuildable projections)"),
     ("query", "QueryDomainAdmission (admission into execution)"),
@@ -98,9 +103,15 @@ const EXPECTED: &[ExpectedNode] = &[
         conditional: false,
     },
     ExpectedNode {
-        name: "EncodedKey",
+        name: "TupleKey",
         layer: "value",
-        story: 119,
+        story: 303,
+        conditional: false,
+    },
+    ExpectedNode {
+        name: "StorageKey",
+        layer: "value",
+        story: 303,
         conditional: false,
     },
     ExpectedNode {
@@ -193,6 +204,24 @@ static GEN_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static GEN_STRUCT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bstruct\s+(\w+Generation)\b").unwrap());
+/// Per-projection freshness twin of the catalog generation authority (#135 /
+/// #301 T7): `Watermark` and raw integer freshness/watermark counters.
+static FRESHNESS_STRUCT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bstruct\s+Watermark\b").unwrap());
+static FRESHNESS_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^\s*(?:pub(?:\(\w+\))?\s+)?\w*(?:watermark|freshness)\w*\s*:\s*(?:u8|u16|u32|u64|u128|usize|i32|i64|AtomicU(?:32|64))\b",
+    )
+    .unwrap()
+});
+/// A second independently-written value encoder: pushing a `Tag::*.byte()`
+/// outside the one encoder seat (canonical + Num component).
+static ENCODER_TAG_PUSH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[^\w])(?:out\.)?push\(\s*Tag::\w+\.byte\(\)").unwrap());
+const ENCODER_SEAT: &[&str] = &[
+    "crates/kyzo-core/src/data/value/canonical.rs",
+    "crates/kyzo-core/src/data/value/number.rs",
+];
 static RAW_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\bfn\s+\w+\s*[(<][^)]*?\b([a-z]\w*_id)\s*:\s*(?:u8|u16|u32|u64|usize)\b").unwrap()
 });
@@ -233,6 +262,9 @@ enum FindingClass {
     DuplicateAuthority,
     DuplicateAuthorityAlias,
     DuplicateGenerationCounter,
+    EncoderTwin,
+    ErrorDowncast,
+    FreshnessTwin,
     IllegalEscape,
     LayerMismatch,
     MalformedDeclaration,
@@ -252,6 +284,9 @@ impl FindingClass {
             FindingClass::DuplicateAuthority => "duplicate-authority",
             FindingClass::DuplicateAuthorityAlias => "duplicate-authority-alias",
             FindingClass::DuplicateGenerationCounter => "duplicate-generation-counter",
+            FindingClass::EncoderTwin => "encoder-twin",
+            FindingClass::ErrorDowncast => "error-downcast",
+            FindingClass::FreshnessTwin => "freshness-twin",
             FindingClass::IllegalEscape => "illegal-escape",
             FindingClass::LayerMismatch => "layer-mismatch",
             FindingClass::MalformedDeclaration => "malformed-declaration",
@@ -776,6 +811,38 @@ fn scan_code(
             }
         }
 
+        if FRESHNESS_STRUCT_RE.is_match(cs) {
+            findings.push(Finding::new(
+                FindingClass::FreshnessTwin,
+                path.to_string(),
+                idx,
+                cs.to_string(),
+                "per-projection Watermark freshness twin of the catalog generation authority (#135 / #301 T7)"
+                    .to_string(),
+            ));
+        }
+        if FRESHNESS_FIELD_RE.is_match(&code) {
+            findings.push(Finding::new(
+                FindingClass::FreshnessTwin,
+                path.to_string(),
+                idx,
+                cs.to_string(),
+                "raw-integer freshness/watermark counter (catalog generations are the one validity authority, #135)"
+                    .to_string(),
+            ));
+        }
+
+        if ENCODER_TAG_PUSH_RE.is_match(cs) && !ENCODER_SEAT.iter().any(|p| path == *p) {
+            findings.push(Finding::new(
+                FindingClass::EncoderTwin,
+                path.to_string(),
+                idx,
+                cs.to_string(),
+                "Tag::*.byte() push outside the one value-encoder seat (canonical.rs + number.rs)"
+                    .to_string(),
+            ));
+        }
+
         if in_sensitive {
             let raw_id = RAW_ID_RE
                 .captures(cs)
@@ -812,6 +879,115 @@ fn scan_code(
             ));
         }
     }
+}
+
+/// Harness / panic-payload paths: Any downcasts here are not Report error recovery.
+fn path_skips_error_downcast(path: &str) -> bool {
+    path.ends_with("trials.rs")
+        || path.ends_with("fuzz_tests.rs")
+        || path.contains("jepsen")
+        || path.ends_with("/sim.rs")
+}
+
+fn attrs_mark_test_item(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("test")
+            || (a.path().is_ident("cfg")
+                && a.parse_args::<syn::Meta>()
+                    .map(|m| {
+                        m.path().is_ident("test")
+                            || m.to_token_stream().to_string().contains("test")
+                    })
+                    .unwrap_or(false))
+    })
+}
+
+fn turbofish_is_any_payload(args: &syn::AngleBracketedGenericArguments) -> bool {
+    let types: Vec<&syn::Type> = args
+        .args
+        .iter()
+        .filter_map(|a| match a {
+            syn::GenericArgument::Type(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    if types.len() != 1 {
+        return false;
+    }
+    match types[0] {
+        syn::Type::Path(p) if p.qself.is_none() && p.path.is_ident("String") => true,
+        syn::Type::Reference(r) => matches!(
+            r.elem.as_ref(),
+            syn::Type::Path(p) if p.qself.is_none() && p.path.is_ident("str")
+        ),
+        _ => false,
+    }
+}
+
+struct ErrorDowncastScanner<'a> {
+    path: &'a str,
+    findings: &'a mut Vec<Finding>,
+}
+
+impl<'ast> Visit<'ast> for ErrorDowncastScanner<'_> {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        if mod_is_test_scope(&node.ident, &node.attrs) {
+            return;
+        }
+        visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if attrs_mark_test_item(&node.attrs) {
+            return;
+        }
+        visit::visit_item_fn(self, node);
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        if attrs_mark_test_item(&node.attrs) {
+            return;
+        }
+        visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if node.method == "downcast_ref" {
+            let skip_payload = node
+                .turbofish
+                .as_ref()
+                .is_some_and(turbofish_is_any_payload);
+            if !skip_payload {
+                let lineno = span_line(&node.method.span());
+                self.findings.push(Finding::new(
+                    FindingClass::ErrorDowncast,
+                    self.path.to_string(),
+                    lineno,
+                    format!(".downcast_ref{}", quote_turbofish(node.turbofish.as_ref())),
+                    "Report.downcast_ref recovering typed errors in product code".to_string(),
+                ));
+            }
+        }
+        visit::visit_expr_method_call(self, node);
+    }
+}
+
+fn quote_turbofish(args: Option<&syn::AngleBracketedGenericArguments>) -> String {
+    match args {
+        Some(a) => a.to_token_stream().to_string().replace(' ', ""),
+        None => String::new(),
+    }
+}
+
+fn scan_error_downcasts(path: &str, text: &str, findings: &mut Vec<Finding>) {
+    if path_skips_error_downcast(path) {
+        return;
+    }
+    let Ok(file) = syn::parse_file(text) else {
+        return;
+    };
+    let mut scanner = ErrorDowncastScanner { path, findings };
+    scanner.visit_file(&file);
 }
 
 fn check_missing(nodes: &BTreeMap<String, Node>, findings: &mut Vec<Finding>) -> Vec<Planned> {
@@ -937,6 +1113,8 @@ fn run_scan(root: &Path, allowlist_path: &Path) -> anyhow::Result<(ScanOutput, V
     let (nodes, edges) = check_declarations(decls, &mut findings);
     for (rel, raw_lines) in &per_file {
         scan_code(rel, raw_lines, &nodes, &mut findings);
+        let text = raw_lines.join("\n");
+        scan_error_downcasts(rel, &text, &mut findings);
     }
     let planned = check_missing(&nodes, &mut findings);
 
@@ -1263,6 +1441,7 @@ pub fn self_test() -> Result<String, AuthorityError> {
             "type Tuple = Vec<DataValue>;\n\
              type ExecRows = Vec<u32>;\n\
              fn lookup(relation_id: u64) -> bool { relation_id == 0 }\n\
+             fn encode_twin(out: &mut Vec<u8>) { out.push(Tag::Null.byte()); }\n\
              struct Carrier {\n\
              \u{20}   payload: Vec<u8>,\n\
              \u{20}   owner_id: u32,\n\
@@ -1285,7 +1464,8 @@ pub fn self_test() -> Result<String, AuthorityError> {
             "/// @authority ResidentIndexKey\n\
              /// @layer value\n\
              /// @owns residency cache identity\n\
-             pub struct ResidentIndexKey;\n",
+             pub struct ResidentIndexKey;\n\
+             pub(crate) struct Watermark(u64);\n",
         ),
         (
             "crates/kyzo-core/src/runtime/catalog.rs",
@@ -1328,6 +1508,8 @@ pub fn self_test() -> Result<String, AuthorityError> {
         (FindingClass::BlobMeaning, 1),
         (FindingClass::SearchraDecodedTuples, 1),
         (FindingClass::DuplicateGenerationCounter, 2),
+        (FindingClass::EncoderTwin, 1),
+        (FindingClass::FreshnessTwin, 1),
         (FindingClass::StringTaxonomy, 1),
         (FindingClass::MalformedDeclaration, 1),
         (FindingClass::MissingAuthority, non_conditional_expected - 3),
@@ -1376,7 +1558,7 @@ pub fn self_test() -> Result<String, AuthorityError> {
 
     let total: u32 = counts.values().sum();
     Ok(format!(
-        "SELF-TEST OK — planted violations all detected (from_raw(Vec<u32>) ExecRows door, plan-cache generation counter, decoded Vec<Tuple> SearchRA path, Deref escape, duplicate Tuple alias, raw id, string taxonomy, blob field); clean fixtures stayed clean; {total} findings across {} classes",
+        "SELF-TEST OK — planted violations all detected (from_raw(Vec<u32>) ExecRows door, plan-cache generation counter, decoded Vec<Tuple> SearchRA path, Deref escape, duplicate Tuple alias, raw id, string taxonomy, blob field, encoder Tag push twin, Watermark freshness twin); clean fixtures stayed clean; {total} findings across {} classes",
         counts.len()
     ))
 }

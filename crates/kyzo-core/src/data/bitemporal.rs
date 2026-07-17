@@ -16,12 +16,62 @@
 //! kernel ([`check_key_for_bitemporal`]) and the value-side polarity
 //! ([`ClaimPolarity`]).
 
-use miette::{Result, bail};
+use miette::{Diagnostic, Result, bail};
+use thiserror::Error;
 
 use crate::data::value::{
-    AsOf, DataValue, EncodedKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
-    decode_tuple_from_key, decode_values_all,
+    AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValiditySlot, ValidityTs,
+    append_canonical, decode_tuple_from_key, decode_values_all,
 };
+use crate::data::value::data_value_any;
+
+/// Named refusals on the bitemporal decode / polarity path — never a bare
+/// `bail!(String)`.
+#[derive(Debug, Error, Diagnostic)]
+pub enum BitemporalDecodeError {
+    #[error("corrupt bitemporal value: shorter than its header and polarity byte")]
+    #[diagnostic(code(bitemporal::value_truncated))]
+    ValueTruncated,
+    #[error("corrupt bitemporal value: unknown polarity byte {0:#04x}")]
+    #[diagnostic(code(bitemporal::unknown_polarity))]
+    UnknownPolarity(u8),
+    #[error("bitemporal scan over a key too short to carry its two time slots")]
+    #[diagnostic(code(bitemporal::key_too_short))]
+    KeyTooShort,
+    #[error("bitemporal scan over a key without a valid-time slot")]
+    #[diagnostic(code(bitemporal::missing_valid_slot))]
+    MissingValidSlot,
+    #[error("bitemporal scan over a key with trailing bytes inside its valid-time slot")]
+    #[diagnostic(code(bitemporal::valid_slot_trailing))]
+    ValidSlotTrailing,
+    #[error("bitemporal scan over a key without a system-time slot")]
+    #[diagnostic(code(bitemporal::missing_sys_slot))]
+    MissingSysSlot,
+    #[error("bitemporal scan over a key with trailing bytes after its system-time slot")]
+    #[diagnostic(code(bitemporal::sys_slot_trailing))]
+    SysSlotTrailing,
+    #[error(
+        "bitemporal scan over a key with a retract flag in a time slot \
+         (polarity lives in the value; stored slot flags are pinned)"
+    )]
+    #[diagnostic(code(bitemporal::slot_retract_flag))]
+    SlotRetractFlag,
+    #[error("bitemporal key too short to carry its two time slots")]
+    #[diagnostic(code(bitemporal::stamp_key_too_short))]
+    StampKeyTooShort,
+    #[error("bitemporal key without a system-time slot")]
+    #[diagnostic(code(bitemporal::stamp_missing_sys))]
+    StampMissingSys,
+    #[error("bitemporal key with trailing bytes after its system-time slot")]
+    #[diagnostic(code(bitemporal::stamp_sys_trailing))]
+    StampSysTrailing,
+    #[error(
+        "bitemporal key with a retract flag in its system-time slot \
+         (polarity lives in the value; stored slot flags are pinned)"
+    )]
+    #[diagnostic(code(bitemporal::stamp_sys_retract))]
+    StampSysRetract,
+}
 
 /// Fact-payload format v1: a stored row VALUE opens directly with its
 /// polarity byte (no header precedes it); the non-key columns' canonical
@@ -69,13 +119,13 @@ impl ClaimPolarity {
 
 pub fn claim_polarity_of_value(val: &[u8]) -> Result<ClaimPolarity> {
     let Some(&byte) = val.get(VALUE_HEADER_LEN) else {
-        bail!("corrupt bitemporal value: shorter than its header and polarity byte");
+        bail!(BitemporalDecodeError::ValueTruncated);
     };
     match byte {
         POLARITY_ASSERT => Ok(ClaimPolarity::Assert),
         POLARITY_RETRACT => Ok(ClaimPolarity::Retract),
         POLARITY_ERASE => Ok(ClaimPolarity::Erase),
-        other => bail!("corrupt bitemporal value: unknown polarity byte {other:#04x}"),
+        other => bail!(BitemporalDecodeError::UnknownPolarity(other)),
     }
 }
 
@@ -85,51 +135,48 @@ pub fn check_key_for_bitemporal(
     as_of: AsOf,
     size_hint: Option<usize>,
 ) -> Result<(Option<Tuple>, Vec<u8>)> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
-        bail!("bitemporal scan over a key too short to carry its two time slots");
+    if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
+        bail!(BitemporalDecodeError::KeyTooShort);
     }
-    let valid_off = key.len() - EncodedKey::BITEMPORAL_TAIL_LEN;
-    let sys_off = key.len() - EncodedKey::VALIDITY_TAIL_LEN;
+    let valid_off = key.len() - StorageKey::BITEMPORAL_TAIL_LEN;
+    let sys_off = key.len() - StorageKey::VALIDITY_TAIL_LEN;
     let (valid_val, rest) = DataValue::decode_from_key(&key[valid_off..sys_off])?;
     let DataValue::Validity(valid) = valid_val else {
-        bail!("bitemporal scan over a key without a valid-time slot");
+        bail!(BitemporalDecodeError::MissingValidSlot);
     };
     if !rest.is_empty() {
-        bail!("bitemporal scan over a key with trailing bytes inside its valid-time slot");
+        bail!(BitemporalDecodeError::ValidSlotTrailing);
     }
     let (sys_val, rest) = DataValue::decode_from_key(&key[sys_off..])?;
     let DataValue::Validity(sys) = sys_val else {
-        bail!("bitemporal scan over a key without a system-time slot");
+        bail!(BitemporalDecodeError::MissingSysSlot);
     };
     if !rest.is_empty() {
-        bail!("bitemporal scan over a key with trailing bytes after its system-time slot");
+        bail!(BitemporalDecodeError::SysSlotTrailing);
     }
     if !valid.is_assert() || !sys.is_assert() {
-        bail!(
-            "bitemporal scan over a key with a retract flag in a time slot \
-             (polarity lives in the value; stored slot flags are pinned)"
-        );
+        bail!(BitemporalDecodeError::SlotRetractFlag);
     }
 
     // Bounds live in the claimed-bytes domain, exactly as in the
     // single-axis kernel: only the tails were proven above, and blessing
-    // the prefix into `EncodedKey` would launder unproven bytes into a
+    // the prefix into `StorageKey` would launder unproven bytes into a
     // type whose possession means provenance.
-    let splice_both = |v: Validity, s: Validity| -> Vec<u8> {
+    let splice_both = |v: ValiditySlot, s: ValiditySlot| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..valid_off]);
         append_canonical(&mut nxt, &DataValue::Validity(v));
         append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
-    let splice_sys = |s: Validity| -> Vec<u8> {
+    let splice_sys = |s: ValiditySlot| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..sys_off]);
         append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
 
-    if valid.timestamp() < as_of.valid {
+    if valid.timestamp() < as_of.valid() {
         // Instant newer than the valid coordinate (`Reverse` order:
         // smaller means later). Seek to the newest instant at or before
         // `valid_at`, landing directly at the newest system version at or
@@ -137,16 +184,16 @@ pub fn check_key_for_bitemporal(
         return Ok((
             None,
             splice_both(
-                Validity::new(as_of.valid, true),
-                Validity::new(as_of.sys, true),
+                ValiditySlot::from_stored(as_of.valid(), true),
+                ValiditySlot::from_stored(as_of.sys(), true),
             ),
         ));
     }
-    if sys.timestamp() < as_of.sys {
+    if sys.timestamp() < as_of.sys() {
         // Right instant, but this system version postdates the system
         // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
-        return Ok((None, splice_sys(Validity::new(as_of.sys, true))));
+        return Ok((None, splice_sys(ValiditySlot::from_stored(as_of.sys(), true))));
     }
     // This row IS the instant's governing version at sys_at. Its polarity
     // decides. TERMINAL_VALIDITY is the maximum slot encoding, so the
@@ -157,19 +204,19 @@ pub fn check_key_for_bitemporal(
         ClaimPolarity::Erase => {
             // Unrecorded at sys_at: this instant contributes nothing; the
             // scan falls onto the fact's next older instant.
-            Ok((None, splice_sys(TERMINAL_VALIDITY)))
+            Ok((None, splice_sys(TERMINAL_VALIDITY.into())))
         }
         ClaimPolarity::Retract => {
             // The fact is retracted from this instant on: absent at the
             // coordinates. Skip every older version of the fact.
-            Ok((None, splice_both(TERMINAL_VALIDITY, TERMINAL_VALIDITY)))
+            Ok((None, splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into())))
         }
         ClaimPolarity::Assert => {
             // A hit. Emit, then skip every older version of the fact.
             let decoded = decode_tuple_from_key(key, size_hint.unwrap_or(DEFAULT_SIZE_HINT))?;
             Ok((
                 Some(decoded),
-                splice_both(TERMINAL_VALIDITY, TERMINAL_VALIDITY),
+                splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into()),
             ))
         }
     }
@@ -187,29 +234,26 @@ pub fn check_key_for_bitemporal(
 /// `storage/backup.rs`) without re-deriving the whole resolution algebra
 /// `check_key_for_bitemporal` implements.
 pub(crate) fn system_stamp_of_key(key: &[u8]) -> Result<ValidityTs> {
-    if key.len() < EncodedKey::RELATION_PREFIX_LEN + EncodedKey::BITEMPORAL_TAIL_LEN {
-        bail!("bitemporal key too short to carry its two time slots");
+    if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
+        bail!(BitemporalDecodeError::StampKeyTooShort);
     }
-    let sys_off = key.len() - EncodedKey::VALIDITY_TAIL_LEN;
+    let sys_off = key.len() - StorageKey::VALIDITY_TAIL_LEN;
     let (sys_val, rest) = DataValue::decode_from_key(&key[sys_off..])?;
     let DataValue::Validity(sys) = sys_val else {
-        bail!("bitemporal key without a system-time slot");
+        bail!(BitemporalDecodeError::StampMissingSys);
     };
     if !rest.is_empty() {
-        bail!("bitemporal key with trailing bytes after its system-time slot");
+        bail!(BitemporalDecodeError::StampSysTrailing);
     }
     if !sys.is_assert() {
-        bail!(
-            "bitemporal key with a retract flag in its system-time slot \
-             (polarity lives in the value; stored slot flags are pinned)"
-        );
+        bail!(BitemporalDecodeError::StampSysRetract);
     }
     Ok(sys.timestamp())
 }
 
 pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()> {
     let Some(payload) = val.get(BITEMPORAL_VALUE_HEADER_LEN..) else {
-        bail!("corrupt bitemporal value: shorter than its header and polarity byte");
+        bail!(BitemporalDecodeError::ValueTruncated);
     };
     if payload.is_empty() {
         return Ok(());
@@ -231,15 +275,12 @@ mod tests {
     }
 
     fn zero_as_of() -> AsOf {
-        AsOf {
-            sys: vts(0),
-            valid: vts(0),
-        }
+        AsOf::at(vts(0), vts(0))
     }
 
-    fn slot(t: i64) -> Validity {
+    fn slot(t: i64) -> ValiditySlot {
         // Stored slot flags are pinned to assert; polarity lives in the value.
-        Validity::new(vts(t), true)
+        ValiditySlot::from_stored(vts(t), true)
     }
 
     fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
@@ -273,10 +314,7 @@ mod tests {
             let (ret, nxt) = check_key_for_bitemporal(
                 k,
                 *polarity,
-                AsOf {
-                    sys: vts(sys_at),
-                    valid: vts(valid_at),
-                },
+                AsOf::at(vts(sys_at), vts(valid_at)),
                 None,
             )?;
             bound = if nxt.as_slice() > k.as_slice() {
@@ -341,7 +379,18 @@ mod tests {
             .iter()
             .map(|t| match &t[0] {
                 DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                other => panic!("non-integer fact column: {other:?}"),
+                DataValue::Null
+                | DataValue::Bool(_)
+                | DataValue::Str(_)
+                | DataValue::Bytes(_)
+                | DataValue::Uuid(_)
+                | DataValue::Regex(_)
+                | DataValue::Json(_)
+                | DataValue::Vector(_)
+                | DataValue::List(_)
+                | DataValue::Set(_)
+                | DataValue::Validity(_)
+                | DataValue::Interval(_) => panic!("non-integer fact column"),
             })
             .collect()
     }
@@ -368,6 +417,7 @@ mod tests {
     fn bitemporal_skip_scan_matches_oracle() {
         let mut state: u64 = 0x5EED_B17E_44C0_FFEE;
         let mut next = move |m: usize| -> usize {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -458,7 +508,7 @@ mod tests {
         );
         let flagged = [
             DataValue::from(1i64),
-            DataValue::Validity(Validity::new(vts(10), false)),
+            DataValue::Validity(Validity::new(vts(10), false).expect("retract admits every tick").into()),
             DataValue::Validity(slot(5)),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))
@@ -470,8 +520,8 @@ mod tests {
         );
         let terminal = [
             DataValue::from(1i64),
-            DataValue::Validity(TERMINAL_VALIDITY),
-            DataValue::Validity(TERMINAL_VALIDITY),
+            DataValue::Validity(TERMINAL_VALIDITY.into()),
+            DataValue::Validity(TERMINAL_VALIDITY.into()),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))
         .as_bytes()
@@ -558,6 +608,7 @@ mod tests {
         use crate::query::laws;
         let mut state: u64 = 0xDEAD_BEEF_CAFE_F00D;
         let mut next = move |m: usize| -> usize {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -614,7 +665,18 @@ mod tests {
                     .into_iter()
                     .map(|t| match &t[0] {
                         DataValue::Num(n) => n.as_int().expect("int-domain column"),
-                        other => panic!("non-integer fact column: {other:?}"),
+                        DataValue::Null
+                        | DataValue::Bool(_)
+                        | DataValue::Str(_)
+                        | DataValue::Bytes(_)
+                        | DataValue::Uuid(_)
+                        | DataValue::Regex(_)
+                        | DataValue::Json(_)
+                        | DataValue::Vector(_)
+                        | DataValue::List(_)
+                        | DataValue::Set(_)
+                        | DataValue::Validity(_)
+                        | DataValue::Interval(_) => panic!("non-integer fact column"),
                     })
                     .collect();
                     assert_eq!(

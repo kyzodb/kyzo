@@ -12,8 +12,8 @@
 //! Every field in the heap that holds a byte count lives here.
 //! Raw `+`/`-`/`*` on these quantities is absent by design: the only
 //! arithmetic is through `checked_*` methods, so overflow is a typed
-//! refusal (via `Option` propagated to an `.expect()`) in every build
-//! profile — independent of the `overflow-checks` Cargo toggle.
+//! refusal (`Option` / [`super::arena::Denial`] at the heap door) in every
+//! build profile — independent of the `overflow-checks` Cargo toggle.
 //!
 //! The three kinds:
 //!
@@ -21,27 +21,33 @@
 //! - [`ByteOff`]: a stored byte offset within a chunk (the `off` field).
 //! - [`ChunkId`]: a chunk ordering index (the `chunk` field).
 
-// alive only within the value plane; other targets don't use it
-#![allow(dead_code)]
-
 /// A stored byte count: the length of a payload held in the arena heap.
 ///
 /// Raw arithmetic operators are absent; callers either use
 /// [`ByteLen::checked_add`] or extract to `usize` via [`ByteLen::as_usize`]
 /// for slice indexing (where the usize domain is safe).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub(super) struct ByteLen(u32);
+
+const _: () = assert!(std::mem::size_of::<ByteLen>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<ByteLen>() == std::mem::align_of::<u32>());
 
 impl ByteLen {
     pub(super) const ZERO: ByteLen = ByteLen(0);
 
-    /// Construct from a `usize`; panics if `n > u32::MAX`.
+    /// Construct from a `usize`; `None` if `n > u32::MAX`.
     ///
     /// This is the one construction point: every byte length that enters a
     /// `Span` passes through here, so the stored field can never silently
     /// truncate.
-    pub(super) fn from_usize(n: usize) -> ByteLen {
-        ByteLen(u32::try_from(n).expect("byte length exceeds u32 span space"))
+    pub(super) fn from_usize(n: usize) -> Option<ByteLen> {
+        u32::try_from(n).ok().map(ByteLen)
+    }
+
+    /// [`TryFrom`] door — same refusal as [`from_usize`].
+    pub(super) fn try_from_usize(n: usize) -> Result<ByteLen, ()> {
+        Self::from_usize(n).ok_or(())
     }
 
     /// Extract to `usize` for slice indexing (not for further stored-byte
@@ -56,7 +62,7 @@ impl ByteLen {
         self.0
     }
 
-    /// Checked addition: `None` on overflow (caller must `.expect()` or handle).
+    /// Checked addition: `None` on overflow (caller maps to [`super::arena::Denial`]).
     pub(super) fn checked_add(self, rhs: ByteLen) -> Option<ByteLen> {
         self.0.checked_add(rhs.0).map(ByteLen)
     }
@@ -67,14 +73,23 @@ impl ByteLen {
 /// Raw arithmetic operators are absent; use [`ByteOff::checked_add`] to
 /// advance by a [`ByteLen`], or [`ByteOff::as_usize`] for slice indexing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub(super) struct ByteOff(u32);
+
+const _: () = assert!(std::mem::size_of::<ByteOff>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<ByteOff>() == std::mem::align_of::<u32>());
 
 impl ByteOff {
     pub(super) const ZERO: ByteOff = ByteOff(0);
 
-    /// Construct from a `usize`; panics if `n > u32::MAX`.
-    pub(super) fn from_usize(n: usize) -> ByteOff {
-        ByteOff(u32::try_from(n).expect("byte offset exceeds u32 span space"))
+    /// Construct from a `usize`; `None` if `n > u32::MAX`.
+    pub(super) fn from_usize(n: usize) -> Option<ByteOff> {
+        u32::try_from(n).ok().map(ByteOff)
+    }
+
+    /// [`TryFrom`] door — same refusal as [`from_usize`].
+    pub(super) fn try_from_usize(n: usize) -> Result<ByteOff, ()> {
+        Self::from_usize(n).ok_or(())
     }
 
     /// Extract to `usize` for slice indexing.
@@ -93,12 +108,21 @@ impl ByteOff {
 /// Raw arithmetic operators are absent; use [`ChunkId::from_usize`] and
 /// [`ChunkId::as_usize`] at the boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub(super) struct ChunkId(u32);
 
+const _: () = assert!(std::mem::size_of::<ChunkId>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<ChunkId>() == std::mem::align_of::<u32>());
+
 impl ChunkId {
-    /// Construct from a `usize`; panics if `n > u32::MAX`.
-    pub(super) fn from_usize(n: usize) -> ChunkId {
-        ChunkId(u32::try_from(n).expect("heap chunk id space exhausted"))
+    /// Construct from a `usize`; `None` if `n > u32::MAX`.
+    pub(super) fn from_usize(n: usize) -> Option<ChunkId> {
+        u32::try_from(n).ok().map(ChunkId)
+    }
+
+    /// [`TryFrom`] door — same refusal as [`from_usize`].
+    pub(super) fn try_from_usize(n: usize) -> Result<ChunkId, ()> {
+        Self::from_usize(n).ok_or(())
     }
 
     pub(super) fn as_usize(self) -> usize {

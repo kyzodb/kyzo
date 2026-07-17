@@ -57,6 +57,7 @@ use flatbuffers::{FlatBufferBuilder, UOffsetT, WIPOffset};
 use miette::{Result, bail};
 
 use crate::data::value::{DataValue, NumRepr, Tuple};
+use crate::data::value::data_value_any;
 
 /// One export column, decided once from its values: a uniform typed
 /// vector when every value fits one of the four Arrow-mappable kinds,
@@ -89,7 +90,7 @@ impl ColumnVec {
                 },
                 DataValue::Bool(_) => Fit::Bool,
                 DataValue::Str(_) => Fit::Str,
-                _ => return ColumnVec::Mixed(values),
+                data_value_any!() => return ColumnVec::Mixed(values),
             };
             match fit {
                 None => fit = Some(this),
@@ -121,7 +122,7 @@ impl ColumnVec {
                     .into_iter()
                     .map(|v| match v {
                         DataValue::Str(s) => s,
-                        _ => unreachable!("uniform str column"),
+                        data_value_any!() => unreachable!("uniform str column"),
                     })
                     .collect(),
             ),
@@ -136,20 +137,59 @@ pub(crate) struct ColumnBatch {
     height: usize,
 }
 
+/// Wrong-width row refused by [`ColumnBatch::try_from_rows`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColumnBatchWidthError {
+    pub(crate) expected: usize,
+    pub(crate) got: usize,
+    pub(crate) row: usize,
+}
+
+impl std::fmt::Display for ColumnBatchWidthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ColumnBatch row {} has width {}, expected {}",
+            self.row, self.got, self.expected
+        )
+    }
+}
+
+impl std::error::Error for ColumnBatchWidthError {}
+
 impl ColumnBatch {
-    pub(crate) fn from_rows(rows: Vec<Tuple>, arity: usize) -> ColumnBatch {
+    /// Refuse rows whose width is not exactly `arity` — never silently
+    /// truncate with `.take(arity)`.
+    pub(crate) fn try_from_rows(
+        rows: Vec<Tuple>,
+        arity: usize,
+    ) -> std::result::Result<ColumnBatch, ColumnBatchWidthError> {
         let height = rows.len();
         let mut cols: Vec<Vec<DataValue>> =
             (0..arity).map(|_| Vec::with_capacity(height)).collect();
-        for row in rows {
-            for (i, v) in row.into_iter().enumerate().take(arity) {
+        for (row_i, row) in rows.into_iter().enumerate() {
+            if row.len() != arity {
+                return Err(ColumnBatchWidthError {
+                    expected: arity,
+                    got: row.len(),
+                    row: row_i,
+                });
+            }
+            for (i, v) in row.into_iter().enumerate() {
                 cols[i].push(v);
             }
         }
-        ColumnBatch {
+        Ok(ColumnBatch {
             columns: cols.into_iter().map(ColumnVec::from_values).collect(),
             height,
-        }
+        })
+    }
+
+    /// Convenience door for call sites that already prove row width.
+    pub(crate) fn from_rows(rows: Vec<Tuple>, arity: usize) -> ColumnBatch {
+        Self::try_from_rows(rows, arity).expect(
+            "INVARIANT(column_batch_width): every row width equals arity",
+        )
     }
 
     pub(crate) fn width(&self) -> usize {
@@ -252,10 +292,23 @@ fn push_struct_vector<'a>(
 /// plus enough type information to write its `Field`/`FieldNode`. Built by
 /// [`plan_column`], consumed by [`write_schema_message`] (type only) and
 /// [`write_record_batch_message`] (buffers).
+/// Arrow field nullability — never a bare `bool` on [`PlannedColumn`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrowNullability {
+    Required,
+    Optional,
+}
+
+impl ArrowNullability {
+    fn is_optional(self) -> bool {
+        matches!(self, ArrowNullability::Optional)
+    }
+}
+
 #[derive(Debug)]
 struct PlannedColumn {
     arrow_type: u8,
-    nullable: bool,
+    nullability: ArrowNullability,
     null_count: i64,
     /// In per-buffer order (validity, [offsets], values) — omitted
     /// (zero-length) when there is nothing to say, e.g. an all-valid
@@ -299,44 +352,50 @@ fn bool_bitpack(values: &[bool]) -> Vec<u8> {
 }
 /// Arrow's variable-length layout: an `i32` offsets buffer (one more entry
 /// than rows, `offsets[0] == 0`) plus the concatenated raw bytes.
-fn offsets_and_values<'a>(items: impl Iterator<Item = &'a [u8]>) -> (Vec<u8>, Vec<u8>) {
+/// Refuses when the cumulative byte length does not fit `i32`.
+fn offsets_and_values<'a>(items: impl Iterator<Item = &'a [u8]>) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut offsets = Vec::new();
     let mut values = Vec::new();
     let mut cur: i32 = 0;
     offsets.extend_from_slice(&cur.to_le_bytes());
     for item in items {
         values.extend_from_slice(item);
-        cur += item.len() as i32;
+        let len = i32::try_from(item.len()).map_err(|_| {
+            miette::miette!("Arrow offset: single value length exceeds i32::MAX")
+        })?;
+        cur = cur.checked_add(len).ok_or_else(|| {
+            miette::miette!("Arrow offset: cumulative values length exceeds i32::MAX")
+        })?;
         offsets.extend_from_slice(&cur.to_le_bytes());
     }
-    (offsets, values)
+    Ok((offsets, values))
 }
 
 fn plan_column(col: &ColumnVec) -> Result<PlannedColumn> {
     match col {
         ColumnVec::I64(v) => Ok(PlannedColumn {
             arrow_type: TYPE_INT,
-            nullable: false,
+            nullability: ArrowNullability::Required,
             null_count: 0,
             buffers: vec![Vec::new(), le_bytes_i64(v)],
         }),
         ColumnVec::F64(v) => Ok(PlannedColumn {
             arrow_type: TYPE_FLOATING_POINT,
-            nullable: false,
+            nullability: ArrowNullability::Required,
             null_count: 0,
             buffers: vec![Vec::new(), le_bytes_f64(v)],
         }),
         ColumnVec::Bool(v) => Ok(PlannedColumn {
             arrow_type: TYPE_BOOL,
-            nullable: false,
+            nullability: ArrowNullability::Required,
             null_count: 0,
             buffers: vec![Vec::new(), bool_bitpack(v)],
         }),
         ColumnVec::Str(v) => {
-            let (offsets, values) = offsets_and_values(v.iter().map(|s| s.as_bytes()));
+            let (offsets, values) = offsets_and_values(v.iter().map(|s| s.as_bytes()))?;
             Ok(PlannedColumn {
                 arrow_type: TYPE_UTF8,
-                nullable: false,
+                nullability: ArrowNullability::Required,
                 null_count: 0,
                 buffers: vec![Vec::new(), offsets, values],
             })
@@ -370,7 +429,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             DataValue::Bool(_) => Kind::Bool,
             DataValue::Str(_) => Kind::Str,
             DataValue::Bytes(_) => Kind::Binary,
-            other => bail!(
+            other @ (data_value_any!()) => bail!(
                 "Arrow export: column value {other:?} has no Arrow mapping in this encoder \
                  (supported: null, int, float, bool, str, bytes)"
             ),
@@ -398,7 +457,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let zeros = vec![0i64; values.len()];
             Ok(PlannedColumn {
                 arrow_type: TYPE_INT,
-                nullable: true,
+                nullability: ArrowNullability::Optional,
                 null_count: values.len() as i64,
                 buffers: vec![validity, le_bytes_i64(&zeros)],
             })
@@ -407,7 +466,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let vals: Vec<i64> = values.iter().map(|v| v.get_int().unwrap_or(0)).collect();
             Ok(PlannedColumn {
                 arrow_type: TYPE_INT,
-                nullable: true,
+                nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, le_bytes_i64(&vals)],
             })
@@ -417,12 +476,12 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 .iter()
                 .map(|v| match v {
                     DataValue::Num(n) => n.as_float().unwrap_or(0.0),
-                    _ => 0.0,
+                    data_value_any!() => 0.0,
                 })
                 .collect();
             Ok(PlannedColumn {
                 arrow_type: TYPE_FLOATING_POINT,
-                nullable: true,
+                nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, le_bytes_f64(&vals)],
             })
@@ -434,7 +493,7 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
                 .collect();
             Ok(PlannedColumn {
                 arrow_type: TYPE_BOOL,
-                nullable: true,
+                nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, bool_bitpack(&vals)],
             })
@@ -443,11 +502,11 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let empty = String::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
                 DataValue::Str(s) => s.as_bytes(),
-                _ => empty.as_bytes(),
-            }));
+                data_value_any!() => empty.as_bytes(),
+            }))?;
             Ok(PlannedColumn {
                 arrow_type: TYPE_UTF8,
-                nullable: true,
+                nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, offsets, data],
             })
@@ -456,11 +515,11 @@ fn plan_mixed_column(values: &[DataValue]) -> Result<PlannedColumn> {
             let empty: Vec<u8> = Vec::new();
             let (offsets, data) = offsets_and_values(values.iter().map(|v| match v {
                 DataValue::Bytes(b) => b.as_slice(),
-                _ => empty.as_slice(),
-            }));
+                data_value_any!() => empty.as_slice(),
+            }))?;
             Ok(PlannedColumn {
                 arrow_type: TYPE_BINARY,
-                nullable: true,
+                nullability: ArrowNullability::Optional,
                 null_count,
                 buffers: vec![validity, offsets, data],
             })
@@ -507,7 +566,7 @@ fn write_eos(out: &mut Vec<u8>) {
 fn build_field<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     name: &str,
-    nullable: bool,
+    nullability: ArrowNullability,
     arrow_type: u8,
 ) -> WIPOffset<UOffsetT> {
     let type_offset: WIPOffset<UOffsetT> = match arrow_type {
@@ -532,7 +591,7 @@ fn build_field<'a>(
     let name_offset = fbb.create_string(name);
     let field_start = fbb.start_table();
     fbb.push_slot_always(4, name_offset); // name
-    fbb.push_slot_always::<bool>(6, nullable); // nullable
+    fbb.push_slot_always::<bool>(6, nullability.is_optional()); // nullable
     fbb.push_slot_always::<u8>(8, arrow_type); // type_type
     fbb.push_slot_always(10, type_offset); // type_
     // slots 12 (dictionary), 14 (children), 16 (custom_metadata) omitted —
@@ -545,7 +604,9 @@ fn write_schema_message(fields: &[(&str, &PlannedColumn)]) -> Vec<u8> {
     let mut fbb = FlatBufferBuilder::new();
     let field_offsets: Vec<WIPOffset<UOffsetT>> = fields
         .iter()
-        .map(|(name, col)| build_field(&mut fbb, name, col.nullable, col.arrow_type))
+        .map(|(name, col)| {
+            build_field(&mut fbb, name, col.nullability, col.arrow_type)
+        })
         .collect();
     fbb.start_vector::<UOffsetT>(field_offsets.len());
     for off in field_offsets.iter().rev() {
@@ -675,7 +736,7 @@ mod tests {
     #[test]
     fn offsets_and_values_starts_at_zero_and_is_monotone() {
         let items: Vec<&[u8]> = vec![b"ab", b"", b"cde"];
-        let (offsets, values) = offsets_and_values(items.into_iter());
+        let (offsets, values) = offsets_and_values(items.into_iter()).unwrap();
         let off_i32: Vec<i32> = offsets
             .chunks_exact(4)
             .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
@@ -703,7 +764,7 @@ mod tests {
         let values = vec![v_int(1), DataValue::Null, v_int(3)];
         let planned = plan_mixed_column(&values).unwrap();
         assert_eq!(planned.arrow_type, TYPE_INT);
-        assert!(planned.nullable);
+        assert_eq!(planned.nullability, ArrowNullability::Optional);
         assert_eq!(planned.null_count, 1);
     }
 

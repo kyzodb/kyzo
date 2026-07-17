@@ -37,9 +37,17 @@
 
 use miette::Result;
 
-use crate::data::expr::{Decision, Expr};
+use crate::data::expr::{BindingPos, Decision, Expr};
 use crate::data::value::DataValue;
 use crate::query::batch::{ColumnBatch, ErrorMin, Selection};
+
+/// Selection indexes are `u32`; [`Selection::iter`] widens stored ids to
+/// `usize`. Narrowing is total — overflow is refused at [`Selection::all`].
+#[inline]
+fn row_sel(row: usize) -> u32 {
+    debug_assert!(u32::try_from(row).is_ok());
+    row as u32
+}
 
 /// A column of values ALIGNED TO A SELECTION: `values[i]` is the result
 /// for the `i`-th live row of the selection it was computed under. The
@@ -106,8 +114,7 @@ pub(crate) fn eval_pred_batched(
     for (v, row) in values.iter().zip(selection.iter()) {
         match v.get_bool() {
             Some(true) => {
-                #[allow(clippy::cast_possible_truncation)]
-                keep.push(row as u32);
+                keep.push(row_sel(row));
             }
             Some(false) => {}
             None => {
@@ -122,11 +129,11 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
     let node = state.node_id();
     match expr {
         Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
-            None => {
+            BindingPos::Unresolved => {
                 use crate::data::expr::UnboundVariableError;
                 Err(UnboundVariableError(var.name.to_string(), var.span).into())
             }
-            Some(i) => {
+            BindingPos::Resolved(i) => {
                 if *i >= state.batch.width() {
                     use crate::data::expr::TupleTooShortError;
                     return Err(TupleTooShortError(
@@ -177,8 +184,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                         use crate::data::functions::DomainError;
                         let span = *span;
                         let op_name = op_display_name(op.name);
-                        #[allow(clippy::cast_possible_truncation)]
-                        state.errors.offer(row as u32, apply_node, || {
+                        state.errors.offer(row_sel(row), apply_node, || {
                             EvalRaisedError(span, DomainError { op: op_name.into() }.to_string())
                                 .into()
                         });
@@ -188,8 +194,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                     Err(err) => {
                         use crate::data::expr::EvalRaisedError;
                         let span = *span;
-                        #[allow(clippy::cast_possible_truncation)]
-                        state.errors.offer(row as u32, apply_node, || {
+                        state.errors.offer(row_sel(row), apply_node, || {
                             EvalRaisedError(span, err.to_string()).into()
                         });
                         // The row is poisoned; its value is unobservable
@@ -220,23 +225,19 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                 for (i, row) in live.iter().enumerate() {
                     match op.decide(&vals.values[i]) {
                         Decision::Continue => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            still_live.push(row as u32);
+                            still_live.push(row_sel(row));
                         }
                         Decision::Decided(v) => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            decided.push((row as u32, v));
+                            decided.push((row_sel(row), v));
                         }
                         Decision::Refused => {
                             use crate::data::expr::PredicateTypeError;
                             let span = arg.span();
                             let val = vals.values[i].clone();
-                            #[allow(clippy::cast_possible_truncation)]
-                            state.errors.offer(row as u32, decide_node, || {
+                            state.errors.offer(row_sel(row), decide_node, || {
                                 PredicateTypeError(span, val).into()
                             });
-                            #[allow(clippy::cast_possible_truncation)]
-                            decided.push((row as u32, DataValue::Null));
+                            decided.push((row_sel(row), DataValue::Null));
                         }
                     }
                 }
@@ -244,8 +245,7 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
             }
             // Undecided rows net the identity.
             for row in live.iter() {
-                #[allow(clippy::cast_possible_truncation)]
-                decided.push((row as u32, op.identity()));
+                decided.push((row_sel(row), op.identity()));
             }
             decided.sort_by_key(|(r, _)| *r);
             debug_assert_eq!(decided.len(), sel.len());
@@ -270,23 +270,19 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                 for (i, row) in live.iter().enumerate() {
                     match cond_vals.values[i].get_bool() {
                         Some(true) => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            taken.push(row as u32);
+                            taken.push(row_sel(row));
                         }
                         Some(false) => {
-                            #[allow(clippy::cast_possible_truncation)]
-                            passed.push(row as u32);
+                            passed.push(row_sel(row));
                         }
                         None => {
                             use crate::data::expr::PredicateTypeError;
                             let span = cond.span();
                             let v = cond_vals.values[i].clone();
-                            #[allow(clippy::cast_possible_truncation)]
-                            state.errors.offer(row as u32, decide_node, || {
+                            state.errors.offer(row_sel(row), decide_node, || {
                                 PredicateTypeError(span, v).into()
                             });
-                            #[allow(clippy::cast_possible_truncation)]
-                            decided.push((row as u32, DataValue::Null));
+                            decided.push((row_sel(row), DataValue::Null));
                         }
                     }
                 }
@@ -294,15 +290,13 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
                 if !taken.is_empty() {
                     let arm = eval_node(val, &taken, state)?;
                     for (i, row) in taken.iter().enumerate() {
-                        #[allow(clippy::cast_possible_truncation)]
-                        decided.push((row as u32, arm.values[i].clone()));
+                        decided.push((row_sel(row), arm.values[i].clone()));
                     }
                 }
                 live = Selection::from_sorted(passed);
             }
             for row in live.iter() {
-                #[allow(clippy::cast_possible_truncation)]
-                decided.push((row as u32, DataValue::Null));
+                decided.push((row_sel(row), DataValue::Null));
             }
             decided.sort_by_key(|(r, _)| *r);
             debug_assert_eq!(decided.len(), sel.len());
@@ -333,7 +327,7 @@ mod tests {
     fn binding(pos: usize) -> Expr {
         Expr::Binding {
             var: crate::data::symb::Symbol::new(format!("c{pos}"), Default::default()),
-            tuple_pos: Some(pos),
+            tuple_pos: BindingPos::Resolved(pos),
         }
     }
     fn apply(op: &'static crate::data::expr::Op, args: Vec<Expr>) -> Expr {
@@ -353,8 +347,8 @@ mod tests {
             .cloned()
             .map(crate::data::value::Tuple::from_vec)
             .collect();
-        let batch = ColumnBatch::from_rows(owned_rows, width);
-        let sel = Selection::all(rows.len());
+        let batch = ColumnBatch::from_rows(owned_rows, width).expect("test rows uniform width");
+        let sel = Selection::all(rows.len()).expect("test batch fits u32");
         let batched = eval_expr_batched(expr, &batch, &sel);
         // Row oracle: first error in row order wins; otherwise all values.
         let mut oracle_vals = vec![];
@@ -453,6 +447,7 @@ mod tests {
         // differential. Deterministic LCG — no wall clock, no rand crate.
         let mut rng: u64 = 0x5EED_C011;
         fn next(rng: &mut u64) -> u64 {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             *rng = rng
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -467,7 +462,7 @@ mod tests {
                 },
                 1 | 2 => Expr::Binding {
                     var: crate::data::symb::Symbol::new("c", Default::default()),
-                    tuple_pos: Some((next(rng) % 2) as usize),
+                    tuple_pos: BindingPos::Resolved((next(rng) % 2) as usize),
                 },
                 3 => Expr::Apply {
                     op: if next(rng).is_multiple_of(2) {

@@ -36,6 +36,13 @@
 //! powers, with the small-cardinality linear-counting correction); the
 //! 64-bit hash makes the classic large-range correction unnecessary. Its
 //! relative standard error is `1.04 / sqrt(m)`.
+//!
+//! ## Register count is a const generic
+//!
+//! `M` (register count) is the type law — not a runtime-validated `Vec`
+//! length. Precision `p` is derived as `log2(M)`. Production sketches use
+//! [`DEFAULT_M`] (`2^DEFAULT_PRECISION`); tests pin other powers of two as
+//! `HyperLogLog::<{1 << p}>`.
 
 use std::io::Write;
 
@@ -52,41 +59,134 @@ const HASH_SEED: u64 = 0x48_4C_4C_5F_53_4B_54_31; // "HLL_SKT1"
 /// error of `1.04 / sqrt(m) ≈ 0.81%`. Pinned as part of the sketch format.
 pub(crate) const DEFAULT_PRECISION: u8 = 14;
 
+/// Default register count: `2^DEFAULT_PRECISION`. The production sketch type
+/// is [`HyperLogLog`] / [`HyperLogLog::<DEFAULT_M>`].
+pub(crate) const DEFAULT_M: usize = 1 << DEFAULT_PRECISION as usize;
+
 /// A byte tag leading the serialized form, so a stored sketch names its own
 /// format; bump on any layout change.
 const FORMAT_TAG: u8 = 0x01;
 
-/// A HyperLogLog over `2^precision` one-byte registers.
+/// One-byte register bank whose length `M` is the type law (`M = 2^p`).
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct HyperLogLog {
-    precision: u8,
-    registers: Vec<u8>,
-}
+#[repr(transparent)]
+pub(crate) struct HllRegisters<const M: usize>(Box<[u8; M]>);
 
-impl HyperLogLog {
-    /// An empty sketch at the given precision — the identity element of
-    /// [`Self::merge`]. `precision` must be in `4..=18` (the range over
-    /// which the register-index arithmetic and the estimator constants are
-    /// valid).
-    pub(crate) fn new(precision: u8) -> Result<Self> {
-        ensure!(
-            (4..=18).contains(&precision),
-            "HyperLogLog precision must be in 4..=18, got {precision}"
-        );
-        Ok(Self {
-            precision,
-            registers: vec![0u8; 1usize << precision],
-        })
+const _: () = assert!(
+    std::mem::size_of::<HllRegisters<16>>() == std::mem::size_of::<Box<[u8; 16]>>()
+);
+const _: () = assert!(
+    std::mem::align_of::<HllRegisters<16>>() == std::mem::align_of::<Box<[u8; 16]>>()
+);
+
+impl<const M: usize> HllRegisters<M> {
+    fn zeros() -> Self {
+        // Heap-allocate without a temporary `[u8; M]` on the stack (M can be
+        // up to 2^18).
+        let boxed: Box<[u8; M]> = vec![0u8; M]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("allocated length is M"));
+        Self(boxed)
     }
 
-    /// An empty sketch at [`DEFAULT_PRECISION`].
+    fn from_bytes(rest: &[u8]) -> Result<Self> {
+        ensure!(
+            rest.len() == M,
+            "HyperLogLog register length {} does not match const M={M}",
+            rest.len()
+        );
+        let boxed: Box<[u8; M]> = rest
+            .to_vec()
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("length checked equal to M"));
+        Ok(Self(boxed))
+    }
+}
+
+impl<const M: usize> std::ops::Deref for HllRegisters<M> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+impl<const M: usize> std::ops::DerefMut for HllRegisters<M> {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut()
+    }
+}
+
+/// Proven distinct-count estimate from a HyperLogLog.
+///
+/// The raw magnitude is private and mintable only inside this module via
+/// [`HyperLogLog::estimate`]. Bare `f64` is not a construction or return
+/// surface for the estimate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HllEstimate {
+    raw: f64,
+}
+
+impl HllEstimate {
+    fn mint(raw: f64) -> Self {
+        Self { raw }
+    }
+
+    /// Round to a non-negative integer distinct count.
+    pub(crate) fn round_count(self) -> i64 {
+        self.raw.round() as i64
+    }
+
+    /// Read the minted magnitude (relative-error arithmetic, tests).
+    /// Not a construction door.
+    pub(crate) fn as_f64(self) -> f64 {
+        self.raw
+    }
+}
+
+/// A HyperLogLog over `M = 2^p` one-byte registers. Register count is the
+/// const-generic type law; precision is `log2(M)`.
+///
+/// Defaults to [`DEFAULT_M`] so production call sites write `HyperLogLog`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct HyperLogLog<const M: usize = DEFAULT_M> {
+    registers: HllRegisters<M>,
+}
+
+impl HyperLogLog<DEFAULT_M> {
+    /// An empty sketch at [`DEFAULT_PRECISION`] / [`DEFAULT_M`].
     pub(crate) fn default_precision() -> Self {
-        // The default precision is a validated constant, so this cannot fail.
-        Self::new(DEFAULT_PRECISION).expect("DEFAULT_PRECISION is in range")
+        Self::new()
+    }
+}
+
+impl<const M: usize> HyperLogLog<M> {
+    /// Precision `p` such that `M = 2^p`. Const-evaluated; `M` must be a
+    /// power of two in `2^4..=2^18`.
+    pub(crate) const PRECISION: u8 = {
+        assert!(
+            M.is_power_of_two(),
+            "HyperLogLog register count M must be a power of two"
+        );
+        let p = M.trailing_zeros();
+        assert!(
+            p >= 4 && p <= 18,
+            "HyperLogLog precision must be in 4..=18"
+        );
+        p as u8
+    };
+
+    /// An empty sketch — the identity element of [`Self::merge`].
+    pub(crate) fn new() -> Self {
+        // Force the precision law to evaluate at monomorphization.
+        let _ = Self::PRECISION;
+        Self {
+            registers: HllRegisters::zeros(),
+        }
     }
 
     fn num_registers(&self) -> usize {
-        self.registers.len()
+        M
     }
 
     /// Fold one already-computed element hash into the sketch. The top `p`
@@ -94,7 +194,7 @@ impl HyperLogLog {
     /// zeros among the remaining bits (a sentinel bit bounds the rank so a
     /// register value always fits in a byte).
     fn add_hash(&mut self, h: u64) {
-        let p = self.precision as u32;
+        let p = Self::PRECISION as u32;
         let idx = (h >> (64 - p)) as usize;
         // Left-align the remaining 64-p bits; OR in a sentinel at bit p-1 so
         // that leading_zeros is at most 64-p and the rank at most 64-p+1.
@@ -112,15 +212,9 @@ impl HyperLogLog {
 
     /// Merge `other` into `self` by register-wise maximum — the semilattice
     /// join. Returns whether any register actually increased (the
-    /// changed-flag the meet-aggregation contract requires). Sketches must
-    /// share a precision.
-    pub(crate) fn merge(&mut self, other: &HyperLogLog) -> Result<bool> {
-        ensure!(
-            self.precision == other.precision,
-            "cannot merge HyperLogLog sketches of precision {} and {}",
-            self.precision,
-            other.precision
-        );
+    /// changed-flag the meet-aggregation contract requires). Same `M` is
+    /// required by the type — mismatched precision does not compile.
+    pub(crate) fn merge(&mut self, other: &HyperLogLog<M>) -> bool {
         let mut changed = false;
         for (l, r) in self.registers.iter_mut().zip(other.registers.iter()) {
             if *r > *l {
@@ -128,18 +222,18 @@ impl HyperLogLog {
                 changed = true;
             }
         }
-        Ok(changed)
+        changed
     }
 
     /// The estimated number of distinct elements seen. A pure function of
     /// the register bytes: equal sketches always return the same estimate.
-    pub(crate) fn estimate(&self) -> f64 {
+    pub(crate) fn estimate(&self) -> HllEstimate {
         let m = self.num_registers() as f64;
         let alpha = alpha(self.num_registers());
 
         let mut sum = 0.0f64;
         let mut zeros = 0usize;
-        for &r in &self.registers {
+        for &r in self.registers.iter() {
             sum += 2.0f64.powi(-(r as i32));
             if r == 0 {
                 zeros += 1;
@@ -150,15 +244,15 @@ impl HyperLogLog {
         // Small-range correction: when many registers are still empty the
         // raw estimate is biased, and linear counting is more accurate.
         if raw <= 2.5 * m && zeros != 0 {
-            m * (m / zeros as f64).ln()
+            HllEstimate::mint(m * (m / zeros as f64).ln())
         } else {
-            raw
+            HllEstimate::mint(raw)
         }
     }
 
     /// The estimate rounded to a non-negative integer count.
     pub(crate) fn estimate_count(&self) -> i64 {
-        self.estimate().round() as i64
+        self.estimate().round_count()
     }
 
     /// Serialize to the portable stored form: `[FORMAT_TAG, precision,
@@ -166,14 +260,15 @@ impl HyperLogLog {
     /// (the registers are single bytes; there is no word-size or endianness
     /// choice to make).
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(2 + self.registers.len());
-        out.write_all(&[FORMAT_TAG, self.precision]).unwrap();
+        let mut out = Vec::with_capacity(2 + M);
+        out.write_all(&[FORMAT_TAG, Self::PRECISION]).unwrap();
         out.write_all(&self.registers).unwrap();
         out
     }
 
-    /// Parse the stored form, validating the tag, precision, and length.
-    /// Corrupt bytes are an error, never a panic.
+    /// Parse the stored form, validating the tag and that wire precision /
+    /// length match this type's const `M`. Corrupt bytes are an error, never
+    /// a panic.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let [tag, precision, rest @ ..] = bytes else {
             bail!("HyperLogLog bytes too short: {} bytes", bytes.len());
@@ -183,19 +278,12 @@ impl HyperLogLog {
             "unknown HyperLogLog format tag {tag:#x}"
         );
         ensure!(
-            (4..=18).contains(precision),
-            "HyperLogLog precision out of range: {precision}"
-        );
-        let expected = 1usize << *precision;
-        ensure!(
-            rest.len() == expected,
-            "HyperLogLog register length {} does not match precision {} (expected {expected})",
-            rest.len(),
-            precision
+            *precision == Self::PRECISION,
+            "HyperLogLog precision {precision} does not match type precision {}",
+            Self::PRECISION
         );
         Ok(Self {
-            precision: *precision,
-            registers: rest.to_vec(),
+            registers: HllRegisters::from_bytes(rest)?,
         })
     }
 
@@ -230,9 +318,10 @@ mod tests {
     }
 
     /// Insert `n` distinct integers offset by `salt` into a fresh sketch.
-    fn sketch_of(n: i64, salt: i64, precision: u8) -> HyperLogLog {
-        let mut hll = HyperLogLog::new(precision).unwrap();
+    fn sketch_of<const M: usize>(n: i64, salt: i64) -> HyperLogLog<M> {
+        let mut hll = HyperLogLog::<M>::new();
         for i in 0..n {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             hll.add(&val(salt.wrapping_mul(1_000_003).wrapping_add(i)));
         }
         hll
@@ -246,14 +335,14 @@ mod tests {
     /// broken hash) moves the RMS immediately.
     #[test]
     fn accuracy_within_theoretical_bound() {
-        let precision = 14;
-        let se = std_error(precision);
+        const M: usize = 1 << 14;
+        let se = std_error(14);
         for &n in &[1_000i64, 10_000, 50_000] {
             const TRIALS: i64 = 24;
             let mut sq_sum = 0.0f64;
             let mut worst = 0.0f64;
             for salt in 0..TRIALS {
-                let est = sketch_of(n, salt + 1, precision).estimate();
+                let est = sketch_of::<M>(n, salt + 1).estimate().as_f64();
                 let rel = (est - n as f64) / n as f64;
                 sq_sum += rel * rel;
                 worst = worst.max(rel.abs());
@@ -278,7 +367,7 @@ mod tests {
     /// Small cardinalities use the linear-counting path; the estimate is
     /// near-exact there.
     fn count_distinct(n: i64) -> i64 {
-        sketch_of(n, 42, 14).estimate_count()
+        sketch_of::<{ 1 << 14 }>(n, 42).estimate_count()
     }
 
     #[test]
@@ -298,35 +387,36 @@ mod tests {
     /// pattern in `data/aggr.rs`.
     #[test]
     fn merge_is_a_semilattice() {
-        let x = sketch_of(3_000, 1, 12);
-        let y = sketch_of(5_000, 2, 12);
-        let z = sketch_of(2_000, 3, 12);
+        const M: usize = 1 << 12;
+        let x = sketch_of::<M>(3_000, 1);
+        let y = sketch_of::<M>(5_000, 2);
+        let z = sketch_of::<M>(2_000, 3);
 
         // Idempotent: merge(x, x) changes nothing and says so.
         let mut xx = x.clone();
-        assert!(!xx.merge(&x).unwrap(), "merge(x, x) reported a change");
+        assert!(!xx.merge(&x), "merge(x, x) reported a change");
         assert_eq!(xx, x, "merge(x, x) altered x");
 
         // Identity: merge(empty, x) == x.
-        let mut e = HyperLogLog::new(12).unwrap();
-        e.merge(&x).unwrap();
+        let mut e = HyperLogLog::<M>::new();
+        e.merge(&x);
         assert_eq!(e, x, "merge(empty, x) != x");
 
         // Commutative: merge(x, y) == merge(y, x).
         let mut xy = x.clone();
-        xy.merge(&y).unwrap();
+        xy.merge(&y);
         let mut yx = y.clone();
-        yx.merge(&x).unwrap();
+        yx.merge(&x);
         assert_eq!(xy, yx, "merge not commutative");
 
         // Associative: merge(merge(x, y), z) == merge(x, merge(y, z)).
         let mut lhs = x.clone();
-        lhs.merge(&y).unwrap();
-        lhs.merge(&z).unwrap();
+        lhs.merge(&y);
+        lhs.merge(&z);
         let mut yz = y.clone();
-        yz.merge(&z).unwrap();
+        yz.merge(&z);
         let mut rhs = x.clone();
-        rhs.merge(&yz).unwrap();
+        rhs.merge(&yz);
         assert_eq!(lhs, rhs, "merge not associative");
     }
 
@@ -335,16 +425,16 @@ mod tests {
     #[test]
     fn merge_estimates_union_cardinality() {
         // Two disjoint sets of 10_000 each: union is ~20_000.
-        let mut a = HyperLogLog::new(14).unwrap();
+        let mut a = HyperLogLog::<{ 1 << 14 }>::new();
         for i in 0..10_000 {
             a.add(&val(i));
         }
-        let mut b = HyperLogLog::new(14).unwrap();
+        let mut b = HyperLogLog::<{ 1 << 14 }>::new();
         for i in 10_000..20_000 {
             b.add(&val(i));
         }
-        a.merge(&b).unwrap();
-        let est = a.estimate();
+        a.merge(&b);
+        let est = a.estimate().as_f64();
         let rel = (est - 20_000.0).abs() / 20_000.0;
         assert!(
             rel < 3.0 * std_error(14),
@@ -357,11 +447,12 @@ mod tests {
     /// order-free — and the estimate is a pure function of those bytes.
     #[test]
     fn byte_identical_across_fold_orders() {
-        let mut ascending = HyperLogLog::new(12).unwrap();
+        const M: usize = 1 << 12;
+        let mut ascending = HyperLogLog::<M>::new();
         for i in 0..4_000i64 {
             ascending.add(&val(i * 7 % 4_000));
         }
-        let mut descending = HyperLogLog::new(12).unwrap();
+        let mut descending = HyperLogLog::<M>::new();
         for i in (0..4_000i64).rev() {
             descending.add(&val(i * 7 % 4_000));
         }
@@ -382,8 +473,10 @@ mod tests {
     /// a pinned-seed LCG (no OS entropy), so every run tests the same inputs.
     #[test]
     fn merge_order_never_changes_bytes_randomized() {
+        const M: usize = 1 << 10;
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
         let mut next = move || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -393,7 +486,7 @@ mod tests {
             // Four sketches over random multisets (with overlap and dups).
             let mut parts = Vec::new();
             for _ in 0..4 {
-                let mut h = HyperLogLog::new(10).unwrap();
+                let mut h = HyperLogLog::<M>::new();
                 let n = 200 + next() % 800;
                 for _ in 0..n {
                     h.add(&val((next() % 2_000) as i64));
@@ -404,11 +497,11 @@ mod tests {
 
             // Reference fold: order 0,1,2,3 plus the duplicate at the end.
             let fold = |order: &[usize]| {
-                let mut acc = HyperLogLog::new(10).unwrap();
+                let mut acc = HyperLogLog::<M>::new();
                 for &i in order {
-                    acc.merge(&parts[i]).unwrap();
+                    acc.merge(&parts[i]);
                 }
-                acc.merge(&parts[dup]).unwrap();
+                acc.merge(&parts[dup]);
                 acc.to_bytes()
             };
             let reference = fold(&[0, 1, 2, 3]);
@@ -438,15 +531,27 @@ mod tests {
     /// panicking.
     #[test]
     fn serialization_round_trips_and_rejects_corruption() {
-        let s = sketch_of(1234, 9, 10);
+        const M: usize = 1 << 10;
+        let s = sketch_of::<M>(1234, 9);
         let bytes = s.to_bytes();
-        assert_eq!(HyperLogLog::from_bytes(&bytes).unwrap(), s);
+        assert_eq!(HyperLogLog::<M>::from_bytes(&bytes).unwrap(), s);
 
-        assert!(HyperLogLog::from_bytes(&[]).is_err());
-        assert!(HyperLogLog::from_bytes(&[0x02, 10]).is_err(), "bad tag");
+        assert!(HyperLogLog::<M>::from_bytes(&[]).is_err());
+        assert!(
+            HyperLogLog::<M>::from_bytes(&[0x02, 10]).is_err(),
+            "bad tag"
+        );
+        // Wrong precision for this type (wire says 14, type is p=10).
+        assert!(
+            HyperLogLog::<M>::from_bytes(&[FORMAT_TAG, 14]).is_err(),
+            "precision mismatch"
+        );
         let mut wrong_len = bytes.clone();
         wrong_len.pop();
-        assert!(HyperLogLog::from_bytes(&wrong_len).is_err(), "bad length");
+        assert!(
+            HyperLogLog::<M>::from_bytes(&wrong_len).is_err(),
+            "bad length"
+        );
     }
 
     /// PINNED-LITERAL sketch bytes for a fixed input and seed: format or
@@ -471,7 +576,7 @@ mod tests {
             vec![0x10, 0x03, 0x04, 0x39, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
 
-        let mut hll = HyperLogLog::new(14).unwrap();
+        let mut hll = HyperLogLog::<DEFAULT_M>::new();
         for i in 0..1000i64 {
             hll.add(&val(i));
         }

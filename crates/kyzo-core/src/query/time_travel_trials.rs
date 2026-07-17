@@ -41,12 +41,12 @@ use std::num::NonZeroU32;
 use smartstring::SmartString;
 
 use crate::data::aggr::parse_aggr;
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::{OP_GE, OP_LE};
 use crate::data::program::{
-    DeltaAxis, InputAtom, InputInlineRulesOrFixed, InputRelationHandle, MagicAtom, MagicInlineRule,
-    MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol,
-    StoreLifetimes, StratifiedMagicProgram, ValidityClause,
+    DeltaAxis, HeadAggrSlot, InputAtom, InputInlineRulesOrFixed, InputRelationHandle, MagicAtom,
+    MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
+    MagicSymbol, StoreLifetimes, StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -59,10 +59,12 @@ use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::laws;
 use crate::query::ra::RelAlgebra;
 use crate::query::ra::temporal;
+use crate::query::temp_store::TupleInIter;
 use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
 use crate::storage::{Storage, WriteTx};
+use crate::data::value::data_value_any;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Plumbing (reconstructed from query/compile.rs's private test module).
@@ -98,10 +100,7 @@ fn generous_budget() -> Budget {
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype,
-            nullable: false,
-        },
+        typing: NullableColType::required(coltype),
         default_gen: None,
     }
 }
@@ -135,7 +134,7 @@ fn neg_rel_atom_at(name: &str, args: &[Symbol], at: Option<i64>) -> MagicAtom {
 fn binding(var: &str) -> Expr {
     Expr::Binding {
         var: sym(var),
-        tuple_pos: None,
+        tuple_pos: BindingPos::Unresolved,
     }
 }
 /// `var >= k` — a lower-bound predicate `compute_bounds` recognizes.
@@ -167,7 +166,7 @@ fn pred_le(var: &str, k: i64) -> MagicAtom {
     })
 }
 
-type HeadAggr = Option<(crate::data::aggr::Aggregation, Vec<DataValue>)>;
+type HeadAggr = HeadAggrSlot;
 
 fn inline_rule(head: &[Symbol], aggr: Vec<HeadAggr>, body: Vec<MagicAtom>) -> MagicInlineRule {
     MagicInlineRule {
@@ -177,7 +176,11 @@ fn inline_rule(head: &[Symbol], aggr: Vec<HeadAggr>, body: Vec<MagicAtom>) -> Ma
     }
 }
 fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
-    inline_rule(head, vec![None; head.len()], body)
+    inline_rule(
+        head,
+        (0..head.len()).map(|_| HeadAggrSlot::Plain).collect(),
+        body,
+    )
 }
 
 fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> StratifiedMagicProgram {
@@ -222,7 +225,13 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
         None,
     )
     .expect("evaluates");
-    outcome.store.all_iter().map(|t| t.into_tuple()).collect()
+    outcome
+        .store
+        .all_iter()
+        .expect("evaluates")
+        .map(TupleInIter::try_into_tuple)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("evaluates")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -456,6 +465,7 @@ impl BridgeRng {
         BridgeRng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -503,6 +513,7 @@ fn gen_versions(rng: &mut BridgeRng, n_keys: i64, n_events: usize) -> Vec<Versio
 fn naive_asof_cfg_matches_an_independent_reference_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xA50F_0FFE_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 20) as usize;
@@ -873,7 +884,16 @@ fn normal_aggregation_over_asof_read() {
             entry_symbol(),
             vec![inline_rule(
                 &[k0.clone(), val.clone()],
-                vec![Some((count, vec![])), Some((sum, vec![]))],
+                vec![
+                    HeadAggrSlot::Aggregated {
+                        aggr: count,
+                        args: vec![],
+                    },
+                    HeadAggrSlot::Aggregated {
+                        aggr: sum,
+                        args: vec![],
+                    },
+                ],
                 vec![rel_atom_at(
                     "hist",
                     &[k0.clone(), val.clone()],
@@ -890,7 +910,7 @@ fn normal_aggregation_over_asof_read() {
             .iter()
             .map(|r| match &r[1] {
                 DataValue::Num(_) => r[1].get_int().unwrap_or(0),
-                _ => 0,
+                data_value_any!() => 0,
             })
             .sum();
         let got = compile_and_run(&db, agg_program(at_i));
@@ -926,7 +946,10 @@ fn meet_aggregation_over_asof_read() {
             entry_symbol(),
             vec![inline_rule(
                 std::slice::from_ref(&val),
-                vec![Some((min, vec![]))],
+                vec![HeadAggrSlot::Aggregated {
+                    aggr: min,
+                    args: vec![],
+                }],
                 vec![rel_atom_at(
                     "hist",
                     &[k0.clone(), val.clone()],
@@ -1198,6 +1221,7 @@ fn asof_run_is_byte_identical_across_threads() {
 fn negation_over_asof_matches_the_independent_complement_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0x9E6A5F_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -1291,29 +1315,25 @@ fn negation_over_asof_non_prefix_join_matches_independent_complement() {
     assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(999)])]));
 }
 
-/// Fixed rules reading stored relations (validity-keyed or not) go through
-/// the `StoredInputSource` seam. In production `query/normalize.rs`'s
-/// `SessionView` implements it for real, so a fixed rule consuming a
-/// validity relation actually reads it. `NoStoredInputs` — exercised below
-/// — is the superseded pre-runtime placeholder that refuses every stored
-/// read with a typed, spanned `StoredInputUnavailable`; this test pins ONLY
-/// that placeholder's own behavior, not current production semantics.
+/// Fixed rules reading stored relations go through `StoredInputSource`.
+/// Production serves them via `query/normalize.rs`'s `SessionView`. The
+/// condemned `NoStoredInputs` placeholder is gone (P090); the fixed-rule
+/// test harness's `HarnessStoredClosed` is the only refusing double, and
+/// this trial pins that harness door (not a production residual).
 #[test]
-fn fixed_rule_stored_input_is_a_refusing_seam() {
-    use crate::fixed_rule::NoStoredInputs;
+fn fixed_rule_harness_stored_input_refuses() {
     use crate::fixed_rule::StoredInputSource;
+    use crate::fixed_rule::tests_support::HarnessStoredClosed;
 
-    let src = NoStoredInputs;
-    // As-of read of a (would-be) validity relation refuses, typed.
+    let src = HarnessStoredClosed;
     let err = src
         .stored_scan_all(&sym("hist"), Some(AsOf::current(vts(20))))
         .err()
-        .expect("NoStoredInputs must refuse an as-of stored scan");
+        .expect("harness stored double must refuse an as-of stored scan");
     assert!(
-        err.to_string().contains("not available to fixed rules"),
-        "expected StoredInputUnavailable, got: {err:?}"
+        err.to_string().contains("test harness"),
+        "expected HarnessStoredClosed refusal, got: {err:?}"
     );
-    // The non-as-of read refuses identically (the seam is total).
     assert!(src.stored_scan_all(&sym("hist"), None).is_err());
     assert!(src.stored_arity(&sym("hist")).is_err());
 }
@@ -1471,19 +1491,13 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
 
     // As the record stood at s1: the original claim.
     assert_eq!(
-        read_at(AsOf {
-            sys: s1,
-            valid: vts(150)
-        }),
+        read_at(AsOf::at(s1, vts(150))),
         BTreeSet::from([Tuple::from_vec(vec![v(1), s("original")])]),
         "before the correction was recorded, the original governs"
     );
     // As the record stands at s2 (and currently): the correction.
     assert_eq!(
-        read_at(AsOf {
-            sys: s2,
-            valid: vts(150)
-        }),
+        read_at(AsOf::at(s2, vts(150))),
         BTreeSet::from([Tuple::from_vec(vec![v(1), s("corrected")])]),
         "from the correction's stamp on, it governs"
     );
@@ -1494,11 +1508,7 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
     );
     // Valid-axis still resolves under both system cuts.
     assert!(
-        read_at(AsOf {
-            sys: s2,
-            valid: vts(50)
-        })
-        .is_empty(),
+        read_at(AsOf::at(s2, vts(50))).is_empty(),
         "before the valid instant, the fact does not hold at any system cut"
     );
 }
@@ -1711,6 +1721,7 @@ fn oracle_delta(events: &[laws::Event], from: laws::AsOf, to: laws::AsOf) -> BTr
 fn spans_engine_matches_the_unified_oracle_generatively() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0x5FA5FA_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -1815,6 +1826,7 @@ fn spans_composes_through_ordinary_rule_nesting() {
 fn delta_engine_matches_the_unified_oracle_generatively_both_axes() {
     let mut cases = 0usize;
     for seed in 0..300u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xDE17AD_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -1910,6 +1922,7 @@ fn delta_engine_matches_the_unified_oracle_generatively_both_axes() {
 #[test]
 fn delta_composition_law_holds_through_the_real_engine() {
     for seed in 0..80u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xC02EC0_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 3);
         let n_events = rng.range(2, 12) as usize;
@@ -1953,7 +1966,7 @@ fn delta_composition_law_holds_through_the_real_engine() {
             let ab = to_signed(run_delta(a, b));
             let bc = to_signed(run_delta(b, c));
             let ac = to_signed(run_delta(a, c));
-            let composed = laws::compose(&ab, &bc);
+            let composed = laws::compose(&ab, &bc).expect("unit net");
             assert_eq!(
                 composed, ac,
                 "seed {seed} a={a} b={b} c={c}: diff(a,c) != diff(a,b)⊕diff(b,c)"
@@ -1973,6 +1986,7 @@ fn delta_composition_law_holds_through_the_real_engine() {
 #[test]
 fn production_compose_matches_the_composition_law_on_real_engine_output() {
     for seed in 0..80u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xC0DE_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 3);
         let n_events = rng.range(2, 12) as usize;
@@ -2016,7 +2030,7 @@ fn production_compose_matches_the_composition_law_on_real_engine_output() {
             let ab = to_signed(run_delta(a, b));
             let bc = to_signed(run_delta(b, c));
             let ac = to_signed(run_delta(a, c));
-            let composed = temporal::compose(&ab, &bc);
+            let composed = temporal::compose(&ab, &bc).expect("unit net");
             assert_eq!(
                 composed, ac,
                 "seed {seed} a={a} b={b} c={c}: production compose diverged from diff(a,c)"
@@ -2238,7 +2252,7 @@ fn parsed_validity_clause(script: &str) -> ValidityClause {
             .validity
             .clone()
             .expect("expected a validity clause on the atom"),
-        other => panic!("expected a stored-relation atom, got {other:?}"),
+        other @ InputAtom::Rule { .. } | other @ InputAtom::NamedFieldRelation { .. } | other @ InputAtom::Predicate { .. } | other @ InputAtom::Negation { .. } | other @ InputAtom::Conjunction { .. } | other @ InputAtom::Disjunction { .. } | other @ InputAtom::Unification { .. } | other @ InputAtom::Search { .. } => panic!("expected a stored-relation atom, got {other:?}"),
     }
 }
 
@@ -2249,7 +2263,7 @@ fn spans_clause_parses_through_real_script_text() {
             assert_eq!(sys, MAX_VALIDITY_TS, "default sys is the current snapshot");
             assert_eq!(var.name, "iv");
         }
-        other => panic!("expected a Spans clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Delta { .. } => panic!("expected a Spans clause, got {other:?}"),
     }
 }
 
@@ -2260,7 +2274,7 @@ fn spans_clause_with_explicit_sys_parses_through_real_script_text() {
             assert_eq!(sys, vts(5));
             assert_eq!(var.name, "iv");
         }
-        other => panic!("expected a Spans clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Delta { .. } => panic!("expected a Spans clause, got {other:?}"),
     }
 }
 
@@ -2278,7 +2292,7 @@ fn delta_clause_parses_through_real_script_text() {
             assert_eq!(to, vts(10));
             assert_eq!(var.name, "sgn");
         }
-        other => panic!("expected a Delta clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Spans { .. } => panic!("expected a Delta clause, got {other:?}"),
     }
 }
 
@@ -2296,7 +2310,7 @@ fn delta_sys_clause_parses_through_real_script_text() {
             assert_eq!(to, vts(10));
             assert_eq!(var.name, "sgn");
         }
-        other => panic!("expected a Delta clause, got {other:?}"),
+        other @ ValidityClause::At(_) | other @ ValidityClause::Spans { .. } => panic!("expected a Delta clause, got {other:?}"),
     }
 }
 
@@ -2395,6 +2409,7 @@ fn neg_delta_atom(
 fn negation_over_spans_matches_the_independent_complement_generatively() {
     let mut cases = 0usize;
     for seed in 0..150u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xB16_5FA5_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;
@@ -2470,6 +2485,7 @@ fn negation_over_spans_matches_the_independent_complement_generatively() {
 fn negation_over_delta_matches_the_independent_complement_generatively() {
     let mut cases = 0usize;
     for seed in 0..150u64 {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = BridgeRng::new(0xDE17ADBADu64.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ seed);
         let n_keys = rng.range(1, 4);
         let n_events = rng.range(1, 15) as usize;

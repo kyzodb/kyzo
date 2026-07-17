@@ -108,7 +108,7 @@ use thiserror::Error;
 
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::value::DataValue;
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
 
@@ -146,14 +146,11 @@ pub(crate) struct GazetteerEmptySurface {
 
 /// The Aho-Corasick automaton could not be built from the dictionary's
 /// surface forms (e.g. the combined pattern set exceeds the automaton's size
-/// limits). Carries the underlying reason; the dictionary relation is intact
-/// and can be pruned and recompiled.
+/// limits). The dictionary relation is intact and can be pruned and recompiled.
 #[derive(Debug, Error, Diagnostic)]
-#[error("gazetteer automaton build failed: {reason}")]
+#[error("gazetteer automaton build failed")]
 #[diagnostic(code(index::gazetteer::build_failed))]
-pub(crate) struct GazetteerBuildFailed {
-    pub(crate) reason: String,
-}
+pub(crate) struct GazetteerBuildFailed;
 
 // ---------------------------------------------------------------------------
 // The dictionary relation's schema.
@@ -168,24 +165,15 @@ pub(crate) fn gazetteer_dict_metadata(entity_type: ColType) -> StoredRelationMet
     StoredRelationMetadata {
         keys: vec![ColumnDef {
             name: SmartString::from("entity"),
-            typing: NullableColType {
-                coltype: entity_type,
-                nullable: false,
-            },
+            typing: NullableColType::required(entity_type),
             default_gen: None,
         }],
         non_keys: vec![ColumnDef {
             name: SmartString::from("surfaces"),
-            typing: NullableColType {
-                coltype: ColType::List {
-                    eltype: Box::new(NullableColType {
-                        coltype: ColType::String,
-                        nullable: false,
-                    }),
-                    len: None,
-                },
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::List {
+                eltype: Box::new(NullableColType::required(ColType::String)),
+                len: None,
+            }),
             default_gen: None,
         }],
     }
@@ -268,11 +256,10 @@ pub(crate) fn compile_dictionary(
             bail!(IndexRowCorrupt::new(
                 &dict.name,
                 row.as_slice(),
-                format!(
-                    "gazetteer dictionary row has {} columns, expected 2 \
-                     ([entity, surfaces])",
-                    row.len()
-                ),
+                IndexCorruptReason::WrongColumnCount {
+                    found: row.len(),
+                    expected: 2,
+                },
             ));
         }
         let entity = row[0].clone();
@@ -280,7 +267,7 @@ pub(crate) fn compile_dictionary(
             IndexRowCorrupt::new(
                 &dict.name,
                 row.as_slice(),
-                "gazetteer dictionary surfaces column is not a list",
+                IndexCorruptReason::GazetteerSurfacesNotList,
             )
         })?;
         for s in surfaces {
@@ -288,7 +275,7 @@ pub(crate) fn compile_dictionary(
                 IndexRowCorrupt::new(
                     &dict.name,
                     row.as_slice(),
-                    "gazetteer dictionary surface form is not a string",
+                    IndexCorruptReason::GazetteerSurfaceNotString,
                 )
             })?;
             if s.is_empty() {
@@ -318,9 +305,7 @@ pub(crate) fn compile_dictionary(
             .match_kind(MatchKind::LeftmostLongest)
             .ascii_case_insensitive(config.case_insensitive)
             .build(&patterns)
-            .map_err(|e| GazetteerBuildFailed {
-                reason: e.to_string(),
-            })?;
+            .map_err(|_| GazetteerBuildFailed)?;
         Some(ac)
     };
 

@@ -34,8 +34,8 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::relation::StoredRelationMetadata;
-use crate::data::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValidityTs, Vector};
-use crate::data::value::{EncodedKey, RelationId, Tuple, TupleT};
+use crate::data::value::{AsOf, Bound, DataValue, Interval, Num, Validity, ValiditySlot, ValidityTs, Vector};
+use crate::data::value::{StorageKey, RelationId, Tuple, TupleT};
 use crate::runtime::relation::{AccessLevel, KeyspaceKind, RelationHandle, SystemKey};
 use crate::storage::backup::{DumpClockFloorViolation, dump_storage, restore_storage};
 use crate::storage::fjall::new_fjall_storage;
@@ -83,8 +83,8 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Bytes(vec![0]),
         DataValue::Bytes(vec![0, 1]),
         DataValue::Bytes(vec![255]),
-        DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(0))),
-        DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(
+        DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(0))),
+        DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(
             0x1234_5678_9abc_def0_1234_5678_9abc_def0,
         ))),
         DataValue::Regex(
@@ -116,28 +116,30 @@ fn corpus() -> Vec<DataValue> {
         ),
         // Vectors: negative values (raw-bit ordering breaks here), length
         // before content, both element widths.
-        DataValue::Vector(Vector::new(vec![-2.5f64, 0.0, 1.0])),
-        DataValue::Vector(Vector::new(vec![-2.5f64, 0.5, 1.0])),
-        DataValue::Vector(Vector::new(vec![1.0f64])),
-        DataValue::Vector(Vector::new(vec![f64::NAN])),
+        DataValue::Vector(Vector::try_new(vec![-2.5f64, 0.0, 1.0]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![-2.5f64, 0.5, 1.0]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![1.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
         // Signed zero: `OrderedFloat` treats -0.0 == 0.0 (unlike scalar
         // `Num`, which distinguishes them below), so these two must encode
         // byte-identically — see `law_vector_signed_zero_canonicalizes`.
-        DataValue::Vector(Vector::new(vec![-0.0f64])),
-        DataValue::Vector(Vector::new(vec![0.0f64])),
-        DataValue::Vector(Vector::new(vec![-7.5f64])),
-        DataValue::Vector(Vector::new(vec![0.25f64, -7.5])),
-        DataValue::Vector(Vector::new(vec![-0.0f64])),
-        DataValue::Vector(Vector::new(vec![0.0f64])),
+        DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![-7.5f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![0.25f64, -7.5]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap()),
         DataValue::Json(crate::data::json::json_from_serde(
             &serde_json::json!({"a": 1}),
         )),
         DataValue::Json(crate::data::json::json_from_serde(&serde_json::json!([
             1, 2, 3
         ]))),
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), true)),
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), false)),
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(41), true)),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), true).expect("non-reserved").into()),
+        DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(42), false).expect("retract admits every tick").into(),
+        ),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(41), true).expect("non-reserved").into()),
         // Intervals: the i64::MIN/MAX boundaries, adjacent pairs (meets: end
         // of one equals start of the next), an overlapping pair, and an
         // open-ended interval (end == i64::MAX, the plain-max-tick "END"
@@ -226,11 +228,13 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
             &serde_json::Value::String(s)
         ))),
         proptest::collection::vec(any::<u8>(), 0..24).prop_map(DataValue::Bytes),
-        any::<u128>().prop_map(|u| DataValue::Uuid(crate::UuidWrapper(uuid::Uuid::from_u128(u)))),
+        any::<u128>()
+            .prop_map(|u| { DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(u))) }),
         proptest::collection::vec(any::<f64>(), 0..6)
-            .prop_map(|v| DataValue::Vector(Vector::new(v))),
+            .prop_map(|v| DataValue::Vector(Vector::try_new(v).unwrap())),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| {
-            DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), a))
+            let vts = ValidityTs::from_raw(ts);
+            DataValue::Validity(ValiditySlot::from_stored(vts, a))
         }),
         // Two arbitrary i64s, ordered into a closed interval (a tie is the
         // single-instant interval, a lawful value of the kind).
@@ -321,8 +325,8 @@ proptest! {
 /// vector, exactly as it already does for the two NaN encodings.
 #[test]
 fn law_vector_signed_zero_canonicalizes() {
-    let neg_f32 = DataValue::Vector(Vector::new(vec![-0.0f64]));
-    let pos_f32 = DataValue::Vector(Vector::new(vec![0.0f64]));
+    let neg_f32 = DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap());
+    let pos_f32 = DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap());
     assert_eq!(neg_f32.cmp(&pos_f32), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f32),
@@ -330,8 +334,8 @@ fn law_vector_signed_zero_canonicalizes() {
         "-0.0 and +0.0 are semantically Equal in a Vector lane but encoded to different bytes"
     );
 
-    let neg_f64 = DataValue::Vector(Vector::new(vec![-0.0f64]));
-    let pos_f64 = DataValue::Vector(Vector::new(vec![0.0f64]));
+    let neg_f64 = DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap());
+    let pos_f64 = DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap());
     assert_eq!(neg_f64.cmp(&pos_f64), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f64),
@@ -340,8 +344,8 @@ fn law_vector_signed_zero_canonicalizes() {
     );
 
     // Mixed sign, multi-element: only the zero lane should collapse.
-    let neg_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, -0.0, 2.5]));
-    let pos_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, 0.0, 2.5]));
+    let neg_mixed = DataValue::Vector(Vector::try_new(vec![-1.5f64, -0.0, 2.5]).unwrap());
+    let pos_mixed = DataValue::Vector(Vector::try_new(vec![-1.5f64, 0.0, 2.5]).unwrap());
     assert_eq!(neg_mixed.cmp(&pos_mixed), std::cmp::Ordering::Equal);
     assert_eq!(encode(&neg_mixed), encode(&pos_mixed));
 }
@@ -495,8 +499,8 @@ fn del_range_kills_own_writes_too() {
 
 /// A bitemporal key: `[name, valid(ts), sys(sys_ts)]`, slot flags pinned
 /// (the row's polarity lives in the value — see [`pol_val`]).
-fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
-    let slot = |t: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true));
+fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
+    let slot = |t: i64| DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(t), true));
     let tuple: Tuple = Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
     tuple.encode_as_key(rel)
 }
@@ -506,7 +510,7 @@ fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> EncodedKey {
 /// flag. With one system version per instant, current-belief resolution
 /// (`AsOf::current`) equals the single-axis rule, so [`as_of_oracle`]
 /// stays the exact reference.
-fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (EncodedKey, Vec<u8>) {
+fn vld_row(rel: RelationId, name: &str, ts: i64, assert: bool) -> (StorageKey, Vec<u8>) {
     (bitemp_key(rel, name, ts, 1), pol_val(rel, assert))
 }
 
@@ -582,11 +586,11 @@ fn time_travel_matches_naive_oracle() {
                 let t = r.unwrap();
                 let name = match &t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 let ts = match &t.as_slice()[1] {
                     DataValue::Validity(v) => v.ts_micros(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
             })
@@ -619,7 +623,7 @@ fn time_travel_sees_own_writes() {
         .range_skip_scan_tuple(&lower, &upper, AsOf::current(ValidityTs::from_raw(5)))
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
-            v => panic!("unexpected {v:?}"),
+            v @ (data_value_any!()) => panic!("unexpected {v:?}"),
         })
         .collect();
     assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
@@ -686,8 +690,8 @@ fn stamped_row(
     name: &str,
     valid_ts: i64,
     sys: ValidityTs,
-) -> (EncodedKey, Vec<u8>) {
-    let slot = |ts: ValidityTs| DataValue::Validity(Validity::new(ts, true));
+) -> (StorageKey, Vec<u8>) {
+    let slot = |ts: ValidityTs| DataValue::Validity(ValiditySlot::from_stored(ts, true));
     let tuple: Tuple = Tuple::from_vec(vec![
         DataValue::Str(name.into()),
         slot(ValidityTs::from_raw(valid_ts)),
@@ -890,7 +894,7 @@ fn skip_scan_terminates_on_retraction_at_min_ts() {
         )
         .map(|r| match &r.unwrap()[0] {
             DataValue::Str(s) => s.to_string(),
-            v => panic!("unexpected {v:?}"),
+            v @ (data_value_any!()) => panic!("unexpected {v:?}"),
         })
         .collect();
     assert_eq!(got, vec!["a".to_string()]);
@@ -933,7 +937,7 @@ fn corrupt_inputs_error_never_panic() {
     let mut enc = vec![];
     crate::data::value::append_canonical(
         &mut enc,
-        &DataValue::Validity(Validity::new(ValidityTs::from_raw(1), true)),
+        &DataValue::Validity(Validity::new(ValidityTs::from_raw(1), true).expect("non-reserved").into()),
     );
     k.extend(enc);
     let _ = crate::data::bitemporal::check_key_for_bitemporal(
@@ -1004,7 +1008,7 @@ fn format_version_stamp_and_mismatch() {
 
 /// The #119 migration boundary, made explicit and executable. The value
 /// plane changed the on-disk VALUE format (canonical bytes replace the old
-/// self-describing payload), so `FormatVersion::CURRENT` is 5. Per the
+/// self-describing payload), so `FormatVersion::CURRENT` is 6. Per the
 /// prime directive there are no deployed stores and no in-place migration:
 /// a store written by any PRE-#119 build (version 4) must simply REFUSE to
 /// open, never be silently misread by the new decoder. This pins that the
@@ -1014,7 +1018,7 @@ fn format_version_stamp_and_mismatch() {
 fn pre_value_plane_stores_v4_refuse_to_open() {
     use crate::storage::FormatVersion;
     // CURRENT is 5, and 5 is what a fresh store stamps.
-    assert_eq!(FormatVersion::CURRENT, FormatVersion::parse(b"5").unwrap());
+    assert_eq!(FormatVersion::CURRENT, FormatVersion::parse(b"6").unwrap());
     // The immediately-previous format (4) is a DIFFERENT version and so is
     // refused at the door — the value format is incompatible.
     let v4 = FormatVersion::parse(b"4").unwrap();
@@ -1487,7 +1491,7 @@ fn write_write_race_aborts_second_committer() {
         .commit()
         .expect_err("a write-write race must abort the second committer");
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "the write-write abort must be the typed, retryable conflict: {err:?}"
     );
     assert_eq!(
@@ -1515,7 +1519,7 @@ fn write_write_race_aborts_second_committer() {
     let err = tx2
         .commit()
         .expect_err("del vs put on one key is a write-write race");
-    assert!(err.downcast_ref::<ConflictError>().is_some());
+    assert!(err.is_conflict());
     // Disjoint blind writers still never conflict.
     let mut tx1 = db.write_tx().unwrap();
     let mut tx2 = db.write_tx().unwrap();
@@ -1566,7 +1570,7 @@ fn conflict_is_typed_and_options_and_stats_work() {
     tx1.commit().unwrap();
     let err = tx2.commit().unwrap_err();
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "conflict must be matchable as ConflictError, got: {err:?}"
     );
     let stats = db.stats();
@@ -1704,7 +1708,10 @@ fn verify_storage_catches_a_corrupt_value() {
 /// retried rather than surfaced.
 #[test]
 fn retry_on_conflict_reaches_completion_under_contention() {
-    use crate::storage::retry::retry_on_conflict;
+    use std::num::NonZeroUsize;
+    use crate::storage::retry::{
+        get_attempt, put_attempt, retry_on_conflict, write_tx_attempt,
+    };
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
@@ -1719,14 +1726,14 @@ fn retry_on_conflict_reaches_completion_under_contention() {
             let db = db.clone();
             s.spawn(move || {
                 for _ in 0..OPS {
-                    retry_on_conflict(1_000, || {
-                        let mut tx = db.write_tx()?;
-                        let cur: u64 = std::str::from_utf8(&tx.get(b"n")?.unwrap())
+                    retry_on_conflict(NonZeroUsize::new(1_000).unwrap(), || {
+                        let mut tx = write_tx_attempt(&db)?;
+                        let cur: u64 = std::str::from_utf8(&get_attempt(&tx, b"n")?.unwrap())
                             .unwrap()
                             .parse()
                             .unwrap();
-                        tx.put(b"n", (cur + 1).to_string().as_bytes())?;
-                        tx.commit()
+                        put_attempt(&mut tx, b"n", (cur + 1).to_string().as_bytes())?;
+                        { let _ = tx.commit()?; Ok(()) }
                     })
                     .unwrap();
                 }
@@ -1746,7 +1753,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
 #[test]
 fn format_version_rejects_noncanonical_stamps() {
     use crate::storage::FormatVersion;
-    assert_eq!(FormatVersion::parse(b"5").unwrap(), FormatVersion::CURRENT);
+    assert_eq!(FormatVersion::parse(b"6").unwrap(), FormatVersion::CURRENT);
     // An older stamp still parses (so the mismatch refusal can NAME it) —
     // it is simply not CURRENT.
     assert_ne!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);
@@ -1766,11 +1773,13 @@ fn format_version_rejects_noncanonical_stamps() {
 // replays the schedule and fault plan exactly.
 
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 
-use crate::storage::retry::retry_on_conflict;
+use crate::storage::retry::{get_attempt, put_attempt, retry_on_conflict, write_tx_attempt};
 use crate::storage::sim::{
     FaultConfig, SimRng, SimStorage, TxBody, for_each_seed, run_interleaved,
 };
+use crate::data::value::data_value_any;
 
 /// The sim must satisfy the same KV contract as the real backend: the mixed
 /// workload from `kv_contract_matches_model`, checked against the BTreeMap
@@ -1925,7 +1934,7 @@ fn sim_mvcc_semantics_smoke() {
     tx1.commit().unwrap();
     let err = tx2.commit().unwrap_err();
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "conflict must downcast to ConflictError, got {err:?}"
     );
     // Blind write-write on one key: writes are validated (contract v2), so
@@ -1943,7 +1952,7 @@ fn sim_mvcc_semantics_smoke() {
         .commit()
         .expect_err("a write-write race must abort the second committer");
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "the write-write abort must be the typed conflict, got {err:?}"
     );
     assert_eq!(
@@ -1965,8 +1974,7 @@ fn sim_mvcc_semantics_smoke() {
     assert!(
         tx2.commit()
             .unwrap_err()
-            .downcast_ref::<ConflictError>()
-            .is_some(),
+            .is_conflict(),
         "del vs put on one key must abort the second committer"
     );
     // Disjoint blind writers never conflict. (Keys chosen outside every
@@ -2052,7 +2060,7 @@ fn sim_spurious_conflict_is_typed_and_discards() {
     tx.put(b"a", b"1").unwrap();
     let err = tx.commit().unwrap_err();
     assert!(
-        err.downcast_ref::<ConflictError>().is_some(),
+        err.is_conflict(),
         "spurious conflict must be indistinguishable from a real one: {err:?}"
     );
     assert!(
@@ -2105,11 +2113,11 @@ fn sim_time_travel_matches_naive_oracle() {
                 let t = r.unwrap();
                 let name = match &t.as_slice()[0] {
                     DataValue::Str(s) => s.to_string(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 let ts = match &t.as_slice()[1] {
                     DataValue::Validity(v) => v.ts_micros(),
-                    v => panic!("unexpected {v:?}"),
+                    v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                 };
                 (name, ts)
             })
@@ -2248,12 +2256,12 @@ fn sim_interleaving_seed_deterministic_and_diverse() {
                 let db = db.clone();
                 Box::new(move || {
                     for _ in 0..2 {
-                        retry_on_conflict(10_000, || {
-                            let mut tx = db.write_tx()?;
-                            let mut log = tx.get(b"log")?.unwrap().to_vec();
+                        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                            let mut tx = write_tx_attempt(&db)?;
+                            let mut log = get_attempt(&tx, b"log")?.unwrap().to_vec();
                             log.push(b'0' + id);
-                            tx.put(b"log", &log)?;
-                            tx.commit()
+                            put_attempt(&mut tx, b"log", &log)?;
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2296,10 +2304,10 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
                 ..Default::default()
             },
         );
-        retry_on_conflict(10_000, || {
-            let mut tx = db.write_tx()?;
-            tx.put(b"counter", b"0")?;
-            tx.commit()
+        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+            let mut tx = write_tx_attempt(&db)?;
+            put_attempt(&mut tx, b"counter", b"0")?;
+            { let _ = tx.commit()?; Ok(()) }
         })
         .unwrap();
 
@@ -2308,15 +2316,15 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
                 let db = db.clone();
                 Box::new(move || {
                     for i in 0..OPS {
-                        retry_on_conflict(10_000, || {
-                            let mut tx = db.write_tx()?;
-                            let cur: u64 = std::str::from_utf8(&tx.get(b"counter")?.unwrap())
+                        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                            let mut tx = write_tx_attempt(&db)?;
+                            let cur: u64 = std::str::from_utf8(&get_attempt(&tx, b"counter")?.unwrap())
                                 .unwrap()
                                 .parse()
                                 .unwrap();
-                            tx.put(b"counter", (cur + 1).to_string().as_bytes())?;
-                            tx.put(format!("b{b}-k{i}").as_bytes(), b"x")?;
-                            tx.commit()
+                            put_attempt(&mut tx, b"counter", (cur + 1).to_string().as_bytes())?;
+                            put_attempt(&mut tx, format!("b{b}-k{i}").as_bytes(), b"x")?;
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2559,6 +2567,7 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
         );
         // A seeded history, deduplicated on (name, ts) so the oracle's
         // tie-break never diverges from key order, split across 3 writers.
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let mut rng = SimRng::new(seed.wrapping_mul(0x9E37_79B9).wrapping_add(1));
         let mut seen = BTreeSet::new();
         let mut history: Vec<(String, i64, bool)> = vec![];
@@ -2579,11 +2588,11 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                 let db = db.clone();
                 Box::new(move || {
                     for (name, ts, a) in plan {
-                        retry_on_conflict(10_000, || {
-                            let mut tx = db.write_tx()?;
+                        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                            let mut tx = write_tx_attempt(&db)?;
                             let (k, v) = vld_row(rel, &name, ts, a);
-                            tx.put(&k, &v)?;
-                            tx.commit()
+                            put_attempt(&mut tx, &k, &v)?;
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2606,11 +2615,11 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                     let t = r.unwrap();
                     let name = match &t.as_slice()[0] {
                         DataValue::Str(s) => s.to_string(),
-                        v => panic!("unexpected {v:?}"),
+                        v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                     };
                     let ts = match &t.as_slice()[1] {
                         DataValue::Validity(v) => v.ts_micros(),
-                        v => panic!("unexpected {v:?}"),
+                        v @ (data_value_any!()) => panic!("unexpected {v:?}"),
                     };
                     (name, ts)
                 })
@@ -2667,15 +2676,15 @@ fn sim_campaign_write_skew_aborts_and_serializes() {
                     tx.put(dst, (n + 1).to_string().as_bytes()).unwrap();
                     if let Err(e) = tx.commit() {
                         assert!(
-                            e.downcast_ref::<ConflictError>().is_some(),
+                            e.is_conflict(),
                             "only the typed conflict is a legal abort: {e:?}"
                         );
                         aborts.fetch_add(1, Ordering::Relaxed);
-                        retry_on_conflict(10_000, || {
-                            let mut tx = db.write_tx()?;
-                            let n = parse(tx.get(src)?);
-                            tx.put(dst, (n + 1).to_string().as_bytes())?;
-                            tx.commit()
+                        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                            let mut tx = write_tx_attempt(&db)?;
+                            let n = parse(get_attempt(&tx, src)?);
+                            put_attempt(&mut tx, dst, (n + 1).to_string().as_bytes())?;
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2735,11 +2744,11 @@ fn sim_campaign_no_lost_phantom_under_interleaving() {
                 tx_a.put(b"summary", n.to_string().as_bytes()).unwrap();
                 if tx_a.commit().is_err() {
                     a_aborts.fetch_add(1, Ordering::Relaxed);
-                    retry_on_conflict(10_000, || {
-                        let mut tx = db.write_tx()?;
+                    retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                        let mut tx = write_tx_attempt(&db)?;
                         let n = tx.range_scan(b"p", b"q").count();
-                        tx.put(b"summary", n.to_string().as_bytes())?;
-                        tx.commit()
+                        put_attempt(&mut tx, b"summary", n.to_string().as_bytes())?;
+                        { let _ = tx.commit()?; Ok(()) }
                     })
                     .unwrap();
                 }
@@ -2830,14 +2839,14 @@ fn sim_campaign_write_write_race_first_committer_wins() {
                     tx.put(b"hot", val).unwrap();
                     if let Err(e) = tx.commit() {
                         assert!(
-                            e.downcast_ref::<ConflictError>().is_some(),
+                            e.is_conflict(),
                             "only the typed conflict is a legal abort: {e:?}"
                         );
                         aborts.fetch_add(1, Ordering::Relaxed);
-                        retry_on_conflict(10_000, || {
-                            let mut tx = db.write_tx()?;
-                            tx.put(b"hot", val)?;
-                            tx.commit()
+                        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+                            let mut tx = write_tx_attempt(&db)?;
+                            put_attempt(&mut tx, b"hot", val)?;
+                            { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
                     }
@@ -2895,12 +2904,12 @@ fn sim_fault_plan_identical_at_any_thread_count() {
             },
         );
         // Populate the read keys (commits may draw spurious conflicts: retry).
-        retry_on_conflict(10_000, || {
-            let mut tx = db.write_tx()?;
+        retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
+            let mut tx = write_tx_attempt(&db)?;
             for i in 0..KEYS {
-                tx.put(format!("r{i:02}").as_bytes(), b"v")?;
+                put_attempt(&mut tx, format!("r{i:02}").as_bytes(), b"v")?;
             }
-            tx.commit()
+            { let _ = tx.commit()?; Ok(()) }
         })
         .unwrap();
 
@@ -2990,10 +2999,10 @@ fn sim_retry_liveness_escapes_injected_faults() {
         // the attempt component must let every loop escape well within its
         // bound (P(1000 straight faults) = 0.9^1000 ≈ 10^-46).
         for i in 0..20 {
-            retry_on_conflict(1_000, || {
-                let mut tx = db.write_tx()?;
-                tx.put(format!("k{i}").as_bytes(), b"v")?;
-                tx.commit()
+            retry_on_conflict(NonZeroUsize::new(1_000).unwrap(), || {
+                let mut tx = write_tx_attempt(&db)?;
+                put_attempt(&mut tx, format!("k{i}").as_bytes(), b"v")?;
+                { let _ = tx.commit()?; Ok(()) }
             })
             .unwrap_or_else(|e| panic!("commit k{i} never escaped its injected conflict: {e}"));
         }
@@ -3133,8 +3142,8 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
         out
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).
-    let key_at = |stamp: ValidityTs| -> EncodedKey {
-        let slot = DataValue::Validity(Validity::new(stamp, true));
+    let key_at = |stamp: ValidityTs| -> StorageKey {
+        let slot = DataValue::Validity(ValiditySlot::from_stored(stamp, true));
         let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
         tuple.encode_as_key(rel)
     };
@@ -3174,11 +3183,11 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
                         let old = current(rows);
                         tx.put(&key_at(stamp), &val_of(old + 1)).unwrap();
                         match tx.commit() {
-                            Ok(()) => {
+                            Ok(_committed) => {
                                 commits.fetch_add(1, Ordering::SeqCst);
                                 break;
                             }
-                            Err(e) if e.downcast_ref::<ConflictError>().is_some() => {
+                            Err(e) if e.is_conflict() => {
                                 continue;
                             }
                             Err(e) => panic!("unexpected commit error: {e:?}"),

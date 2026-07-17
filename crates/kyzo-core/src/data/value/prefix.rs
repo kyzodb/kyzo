@@ -20,11 +20,6 @@
 //! where the deref counter lives — "dereferences only on a tie" is proven
 //! by counting this path, not asserted.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
 use std::cmp::Ordering;
 
 /// Prefix width in bytes: what fits beside a 4-byte handle in the 16-byte
@@ -72,7 +67,7 @@ pub fn cmp_prefixed(pa: [u8; 4], la: u32, pb: [u8; 4], lb: u32) -> PrefixCmp {
                 PrefixCmp::NeedPayload
             }
         }
-        decided => PrefixCmp::Decided(decided),
+        decided @ Ordering::Less | decided @ Ordering::Greater => PrefixCmp::Decided(decided),
     }
 }
 
@@ -133,6 +128,7 @@ mod tests {
             s ^= s << 13;
             s ^= s >> 7;
             s ^= s << 17;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             s.wrapping_mul(0x2545_F491_4F6C_DD1D)
         };
         for _ in 0..20_000 {

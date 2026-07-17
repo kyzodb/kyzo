@@ -17,13 +17,14 @@
 
 use std::collections::BTreeMap;
 
+use crate::data::expr::Expr;
 use crate::data::program::InputRelationHandle;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::engines::sparse::{
-    SparseSearchParams, sparse_index_metadata, sparse_put, sparse_search, sparse_total_docs,
+    Sparse, SparseSearchParams, sparse_index_metadata, sparse_put, sparse_total_docs,
 };
 use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
 use crate::storage::fjall::new_fjall_storage;
@@ -33,10 +34,7 @@ use smartstring::SmartString;
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype,
-            nullable: false,
-        },
+        typing: NullableColType::required(coltype),
         default_gen: None,
     }
 }
@@ -108,15 +106,17 @@ fn setup(db: &impl Storage, docs: &[Doc]) -> Fixture {
 fn params(k: usize) -> SparseSearchParams {
     SparseSearchParams {
         k,
-        bind_score: true,
+        bind_score: crate::engines::sparse::SparseBindScore::Append,
     }
 }
 
 /// Run and project (key, score-bits) so we can compare EXACT f32 bit patterns.
 fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, u32)> {
     let rtx = db.read_tx().unwrap();
-    let mut stack = vec![];
-    let hits = sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None, &mut stack).unwrap();
+    let hits = crate::engines::search_rows(
+        Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap(),
+    )
+    .unwrap();
     hits.iter()
         .map(|t| {
             (
@@ -224,8 +224,10 @@ fn matches_independent_f64_reference_on_exact_weights() {
     let f = setup(&db, docs);
     let query = &[(0, 2.0f32), (2, 4.0f32), (5, 0.5f32), (9, 0.25f32)];
     let rtx = db.read_tx().unwrap();
-    let mut stack = vec![];
-    let hits = sparse_search(&rtx, query, &f.base, &f.idx, &params(10), &None, &mut stack).unwrap();
+    let hits = crate::engines::search_rows(
+        Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap(),
+    )
+    .unwrap();
     let got: Vec<(i64, f64)> = hits
         .iter()
         .map(|t| {
@@ -346,24 +348,17 @@ fn k_zero_filter_path_returns_zero_rows() {
     let docs: &[Doc] = &[(1, "a", &[(0, 1.0)])];
     let f = setup(&db, docs);
     let rtx = db.read_tx().unwrap();
-    let mut stack = vec![];
     // Always-true filter: the constant `true`.
-    let filter = vec![crate::data::expr::Bytecode::Const {
+    let filter = Expr::Const {
         val: DataValue::from(true),
         span: SourceSpan(0, 0),
-    }];
+    };
     let p = SparseSearchParams {
         k: 0,
-        bind_score: false,
+        bind_score: crate::engines::sparse::SparseBindScore::Omit,
     };
-    let with_filter = sparse_search(
-        &rtx,
-        &[(0, 1.0)],
-        &f.base,
-        &f.idx,
-        &p,
-        &Some((filter, SourceSpan(0, 0))),
-        &mut stack,
+    let with_filter = crate::engines::search_rows(
+        Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap(),
     )
     .unwrap();
     assert!(
@@ -371,7 +366,7 @@ fn k_zero_filter_path_returns_zero_rows() {
         "k=0 + filter must return 0 rows, got {}",
         with_filter.len()
     );
-    let without = sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &None, &mut stack).unwrap();
+    let without = Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &None).unwrap();
     assert!(without.is_empty(), "k=0 without filter returns 0 rows");
 }
 

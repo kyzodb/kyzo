@@ -96,7 +96,10 @@ use miette::{Result, miette};
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{ConflictError, ReadTx, Storage, WriteTx};
+use crate::storage::{
+    Aborted, CommitFailure, CommitIo, Committed, ConflictError, ReadTx, Storage, WriteTx,
+};
+use crate::storage::retry::StorageOpFailure;
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
 
@@ -114,6 +117,7 @@ impl SimRng {
     }
 
     pub(crate) fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -170,6 +174,7 @@ fn op_identity(tag: u64, parts: &[&[u8]]) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01B3;
     fn eat(h: &mut u64, bytes: &[u8]) {
         for &b in bytes {
+            // INVARIANT(fnv1a): FNV-1a prime mix is defined as wrapping mul on u64.
             *h = (*h ^ u64::from(b)).wrapping_mul(PRIME);
         }
     }
@@ -191,6 +196,7 @@ fn fault_hit(seed: u64, identity: u64, attempt: u64, salt: u64, ppm: u32) -> boo
     if ppm == 0 {
         return false;
     }
+    // INVARIANT(fault_ppm): deterministic fault draw mixes identity/attempt/salt via wrap.
     let mut z = seed
         ^ identity.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ attempt.wrapping_mul(0xA24B_AED4_963E_E407)
@@ -441,6 +447,7 @@ impl SimCtx {
     /// epoch. Epoch 0 leaves the seed untouched, so pre-crash fault streams
     /// are unchanged by the salting.
     fn fault_seed(&self) -> u64 {
+        // INVARIANT(epoch_salt): epoch salt is a modular mix into the fault seed stream.
         self.seed ^ self.epoch.wrapping_mul(0xE703_37A9_D9C8_2D95)
     }
 
@@ -469,7 +476,7 @@ impl SimCtx {
     fn check_read_fault(&self, identity: u64) -> Result<()> {
         let mut st = self.state.lock().expect(POISONED);
         if self.roll_fault(&mut st, identity, SALT_READ, self.faults.read_fail_ppm) {
-            return Err(miette!("sim: injected transient read fault"));
+            return Err(StorageOpFailure::SimInjectedReadFault.into());
         }
         Ok(())
     }
@@ -649,14 +656,16 @@ impl Storage for SimStorage {
         st.next_system_stamp += 1;
         let stamp = ValidityTs::from_raw(st.next_system_stamp);
         Ok(SimWriteTx {
-            snapshot: snapshot_at(&st, st.commit_seq),
-            stamp,
-            start_seq: st.commit_seq,
-            writes: BTreeMap::new(),
-            reads: Mutex::new(ReadSet::default()),
-            put_calls: 0,
-            del_calls: 0,
-            ctx: self.ctx.clone(),
+            inner: Some(SimWriteInner {
+                snapshot: snapshot_at(&st, st.commit_seq),
+                stamp,
+                start_seq: st.commit_seq,
+                writes: BTreeMap::new(),
+                reads: Mutex::new(ReadSet::default()),
+                put_calls: 0,
+                del_calls: 0,
+                ctx: self.ctx.clone(),
+            }),
         })
     }
 
@@ -731,9 +740,9 @@ struct ReadSet {
 }
 
 /// A write transaction: snapshot + overlay write set + tracked read set.
-/// The read set lives behind a `Mutex` because the trait reads through
-/// `&self` (and requires `Sync`) while conflict tracking must record.
-pub(crate) struct SimWriteTx {
+/// Open write-transaction payload. Presence of [`SimWriteTx::inner`] is Open;
+/// `take` on commit/abort spends it (Fjall's `Option` pattern).
+struct SimWriteInner {
     snapshot: BTreeMap<Vec<u8>, Vec<u8>>,
     stamp: ValidityTs,
     start_seq: u64,
@@ -751,7 +760,26 @@ pub(crate) struct SimWriteTx {
     ctx: SimCtx,
 }
 
+/// The read set lives behind a `Mutex` because the trait reads through
+/// `&self` (and requires `Sync`) while conflict tracking must record.
+pub(crate) struct SimWriteTx {
+    /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
+    inner: Option<SimWriteInner>,
+}
+
 impl SimWriteTx {
+    fn open(&self) -> &SimWriteInner {
+        self.inner
+            .as_ref()
+            .expect("SimWriteTx used after commit/abort")
+    }
+
+    fn open_mut(&mut self) -> &mut SimWriteInner {
+        self.inner
+            .as_mut()
+            .expect("SimWriteTx used after commit/abort")
+    }
+
     /// The transaction's visible view of `[lower, upper)`, LAZY: a
     /// sorted-merge of two cursors (`self.snapshot`'s range, `self.writes`'s
     /// range) rather than the eager "clone the whole snapshot range into a
@@ -774,8 +802,9 @@ impl SimWriteTx {
         lower: &[u8],
         upper: Option<&[u8]>,
     ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a {
-        let mut snap = map_range(&self.snapshot, lower, upper).peekable();
-        let mut writes = map_range(&self.writes, lower, upper).peekable();
+        let open = self.open();
+        let mut snap = map_range(&open.snapshot, lower, upper).peekable();
+        let mut writes = map_range(&open.writes, lower, upper).peekable();
         std::iter::from_fn(move || {
             loop {
                 let snap_key = snap.peek().map(|(k, _)| *k);
@@ -839,30 +868,37 @@ impl SimWriteTx {
     }
 
     fn track_key(&self, key: &[u8]) {
-        self.reads.lock().expect(POISONED).keys.insert(key.to_vec());
+        self.open()
+            .reads
+            .lock()
+            .expect(POISONED)
+            .keys
+            .insert(key.to_vec());
     }
 
     fn track_range(&self, lower: &[u8], upper: Option<&[u8]>) {
-        self.reads
+        self.open()
+            .reads
             .lock()
             .expect(POISONED)
             .ranges
             .push((lower.to_vec(), upper.map(<[u8]>::to_vec)));
     }
 
-    fn commit_inner(self, durable: bool) -> Result<()> {
-        self.ctx.yield_turn();
-        let SimWriteTx {
-            snapshot: _,
-            stamp: _,
-            start_seq,
-            writes,
-            reads,
-            put_calls,
-            del_calls,
-            ctx,
-        } = self;
-        let reads = reads.into_inner().expect(POISONED);
+    fn commit_inner(mut self, durable: bool) -> std::result::Result<Committed, CommitFailure> {
+        let mut inner = self
+            .inner
+            .take()
+            .expect("SimWriteTx commit after spend");
+        inner.ctx.yield_turn();
+        let start_seq = inner.start_seq;
+        let writes = std::mem::take(&mut inner.writes);
+        let reads = std::mem::replace(&mut inner.reads, Mutex::new(ReadSet::default()))
+            .into_inner()
+            .expect(POISONED);
+        let put_calls = inner.put_calls;
+        let del_calls = inner.del_calls;
+        let ctx = inner.ctx.clone();
         // Fault identities, fixed before any dice roll. The commit identity
         // is the write-set KEYS (already sorted: `writes` is a BTreeMap) —
         // not values, so a retry that recomputes new values over the same
@@ -883,11 +919,11 @@ impl SimWriteTx {
         if writes.is_empty() {
             if durable {
                 if ctx.roll_fault(&mut st, sync_identity, SALT_SYNC, ctx.faults.sync_fail_ppm) {
-                    return Err(miette!("sim: injected fsync failure"));
+                    return Err(CommitFailure::Io(CommitIo::SimInjectedFsync));
                 }
                 st.synced_seq = st.commit_seq;
             }
-            return Ok(());
+            return Ok(Committed);
         }
 
         // Spurious-conflict injection: SSI permits false positives, so a
@@ -902,7 +938,7 @@ impl SimWriteTx {
             SALT_CONFLICT,
             ctx.faults.spurious_conflict_ppm,
         ) {
-            return Err(ConflictError.into());
+            return Err(CommitFailure::Conflict(ConflictError));
         }
 
         // Real SSI validation — READS AND WRITES, matching the real backend
@@ -920,7 +956,7 @@ impl SimWriteTx {
             .any(|(lo, hi)| range_modified_since(&st, start_seq, lo, hi.as_deref()));
         let write_conflict = writes.keys().any(|k| modified_since(&st, start_seq, k));
         if key_conflict || range_conflict || write_conflict {
-            return Err(ConflictError.into());
+            return Err(CommitFailure::Conflict(ConflictError));
         }
 
         // Apply atomically at the next sequence: the buffer durability tier.
@@ -940,13 +976,11 @@ impl SimWriteTx {
             // but the fsync watermark does not advance — committed, not
             // power-cut durable, exactly like the real commit-then-persist.
             if ctx.roll_fault(&mut st, sync_identity, SALT_SYNC, ctx.faults.sync_fail_ppm) {
-                return Err(miette!(
-                    "sim: injected fsync failure (commit applied, not power-cut durable)"
-                ));
+                return Err(CommitFailure::Io(CommitIo::SimInjectedFsyncAfterCommit));
             }
             st.synced_seq = st.commit_seq;
         }
-        Ok(())
+        Ok(Committed)
     }
 }
 
@@ -1004,10 +1038,10 @@ pub(crate) struct SimWriteSkipCursor<'a> {
 
 impl SkipCursor for SimWriteSkipCursor<'_> {
     fn seek(&mut self, target: &[u8]) -> Option<Result<(Vec<u8>, Vec<u8>)>> {
-        self.tx.ctx.yield_turn();
+        let open = self.tx.open();
+        open.ctx.yield_turn();
         self.tx.track_range(target, Some(&self.upper));
-        if let Err(e) = self
-            .tx
+        if let Err(e) = open
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[target, &self.upper]))
         {
@@ -1100,22 +1134,24 @@ impl ReadTx for SimReadTx {
 
 impl ReadTx for SimWriteTx {
     fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         self.track_key(key);
-        self.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
-        Ok(match self.writes.get(key) {
+        open.ctx.check_read_fault(op_identity(TAG_GET, &[key]))?;
+        Ok(match open.writes.get(key) {
             Some(w) => w.as_deref().map(Slice::from),
-            None => self.snapshot.get(key).map(Slice::from),
+            None => open.snapshot.get(key).map(Slice::from),
         })
     }
 
     fn exists(&self, key: &[u8]) -> Result<bool> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         self.track_key(key);
-        self.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
-        Ok(match self.writes.get(key) {
+        open.ctx.check_read_fault(op_identity(TAG_EXISTS, &[key]))?;
+        Ok(match open.writes.get(key) {
             Some(w) => w.is_some(),
-            None => self.snapshot.contains_key(key),
+            None => open.snapshot.contains_key(key),
         })
     }
 
@@ -1124,11 +1160,12 @@ impl ReadTx for SimWriteTx {
         lower: &[u8],
         upper: &[u8],
     ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         // Track the whole requested range even if iteration stops early:
         // conservative (more false conflicts) and therefore legal under SSI.
         self.track_range(lower, Some(upper));
-        if let Err(e) = self
+        if let Err(e) = open
             .ctx
             .check_read_fault(op_identity(TAG_RANGE, &[lower, upper]))
         {
@@ -1155,9 +1192,10 @@ impl ReadTx for SimWriteTx {
     }
 
     fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
-        self.ctx.yield_turn();
+        let open = self.open();
+        open.ctx.yield_turn();
         self.track_range(&[], None);
-        if let Err(e) = self.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
+        if let Err(e) = open.ctx.check_read_fault(op_identity(TAG_TOTAL, &[])) {
             return Box::new(std::iter::once(Err(e)));
         }
         Box::new(
@@ -1169,25 +1207,27 @@ impl ReadTx for SimWriteTx {
 
 impl WriteTx for SimWriteTx {
     fn system_stamp(&self) -> ValidityTs {
-        self.stamp
+        self.open().stamp
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.ctx.yield_turn();
-        self.writes.insert(key.to_vec(), Some(val.to_vec()));
-        self.put_calls += 1;
+        let open = self.open_mut();
+        open.ctx.yield_turn();
+        open.writes.insert(key.to_vec(), Some(val.to_vec()));
+        open.put_calls += 1;
         Ok(())
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.ctx.yield_turn();
-        self.writes.insert(key.to_vec(), None);
-        self.del_calls += 1;
+        let open = self.open_mut();
+        open.ctx.yield_turn();
+        open.writes.insert(key.to_vec(), None);
+        open.del_calls += 1;
         Ok(())
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
-        self.ctx.yield_turn();
+        self.open().ctx.yield_turn();
         // Deleting "everything visible" reads the range: tracked, so a
         // concurrent insert into it is a conflict (matching the real
         // backend, whose del_range scans through the transaction).
@@ -1199,18 +1239,32 @@ impl WriteTx for SimWriteTx {
             .collect();
         // Each doomed key is its own del CALL for the write-count law, same
         // as a caller looping `del` over the same keys one at a time.
-        self.del_calls += doomed.len() as u64;
+        let open = self.open_mut();
+        open.del_calls += doomed.len() as u64;
         for k in doomed {
-            self.writes.insert(k, None);
+            open.writes.insert(k, None);
         }
         Ok(())
     }
 
-    fn commit(self) -> Result<()> {
+    fn commit(self) -> std::result::Result<Committed, CommitFailure> {
         self.commit_inner(false)
     }
 
-    fn commit_durable(self) -> Result<()> {
+    fn commit_durable(self) -> std::result::Result<Committed, CommitFailure> {
         self.commit_inner(true)
+    }
+
+    fn abort(mut self) -> Aborted {
+        let _ = self.inner.take().expect("SimWriteTx abort after spend");
+        Aborted
+    }
+}
+
+impl Drop for SimWriteTx {
+    fn drop(&mut self) {
+        if self.inner.is_some() && !std::thread::panicking() {
+            panic!("Open WriteTx dropped without commit() or abort(self)");
+        }
     }
 }

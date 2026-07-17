@@ -40,16 +40,16 @@
 //!   consult one. What exists is exact and named:
 //!   [`Value::try_cmp_storage`] (decides only what local information can
 //!   lawfully decide, `None` otherwise — never a deref) and
-//!   [`Value::same_word`] (physical 16-byte identity, which is value
-//!   identity only within one stamped context).
-
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
+//!   [`Value::same_word`] (physical 16-byte identity under a proven
+//!   [`Admission`](super::admission::Admission) — without the token the call
+//!   does not compile; the token is mint-checked / unbranded because
+//!   words from coexisting arenas must share one compare API — nest
+//!   brands live on [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx);
+//!   refusal is typed [`Denial`](super::admission::Denial), never a bare bool).
 
 use std::cmp::Ordering;
 
+use super::admission::{Admission, Denial};
 use super::arena::Arena;
 use super::canonical::CanonicalBytes;
 use super::code::{Code, StampedCode};
@@ -109,9 +109,13 @@ impl Minted {
 impl Value {
     /// Mint the physical word for a canonical value. Inline values are
     /// self-contained; out-of-line values intern through the arena, and
-    /// the [`Minted::Wide`] arm carries the context stamp the caller's
+    /// the [`Minted`] stamp arm carries the context stamp the caller's
     /// container must hold — the word itself cannot.
-    pub fn mint(cb: &CanonicalBytes, arena: &mut Arena) -> Minted {
+    ///
+    /// Wide path refuses with [`Denial::ExtentOverflow`] when the arena
+    /// cannot admit another distinct value or the canonical bytes exceed
+    /// `u32` span space — never a process abort.
+    pub fn mint(cb: &CanonicalBytes, arena: &mut Arena) -> Result<Minted, Denial> {
         let canonical = cb.as_bytes();
         debug_assert!(
             !canonical.is_empty(),
@@ -123,19 +127,19 @@ impl Value {
         if payload.len() <= INLINE_MAX {
             bytes[1] = payload.len() as u8;
             bytes[2..2 + payload.len()].copy_from_slice(payload);
-            Minted {
+            Ok(Minted {
                 value: Value { bytes },
                 stamp: None,
-            }
+            })
         } else {
-            let sc = arena.intern(canonical);
+            let sc = arena.intern(canonical)?;
             bytes[1] = LEN_OUT_OF_LINE;
             bytes[2..6].copy_from_slice(&cb.prefix4());
             bytes[6..10].copy_from_slice(&sc.code().raw().to_be_bytes());
-            Minted {
+            Ok(Minted {
                 value: Value { bytes },
                 stamp: Some(sc),
-            }
+            })
         }
     }
 
@@ -224,27 +228,38 @@ impl Value {
     /// already verified arena + epoch against the remap — called bare,
     /// this is the raw-code remap smuggle at word level. Its only caller
     /// is `WordColumn::gather`; keep it that way.
-    pub(super) fn gathered(self, remap: &super::arena::EpochRemap) -> Value {
+    pub(super) fn gathered(self, remap: &super::arena::EpochRemap) -> Result<Value, Denial> {
         match self.code() {
-            None => self,
+            None => Ok(self),
             Some(code) => {
+                let mapped = remap.apply_raw(code)?;
                 let mut bytes = self.bytes;
-                bytes[6..10].copy_from_slice(&remap.apply_raw(code).raw().to_be_bytes());
-                Value { bytes }
+                bytes[6..10].copy_from_slice(&mapped.raw().to_be_bytes());
+                Ok(Value { bytes })
             }
         }
     }
 
-    /// Physical 16-byte identity: value identity ONLY within one stamped
-    /// context (one arena, one epoch) — the container's law, not the
-    /// word's.
-    pub fn same_word(&self, other: &Value) -> bool {
+    /// Physical 16-byte word identity under a proven shared [`Admission`].
+    /// Value identity only when both words were minted in that context —
+    /// without the token this call does not compile, so cross-context
+    /// comparison cannot affirmatively lie.
+    ///
+    /// **Coexisting-arena boundary:** takes the unbranded durable
+    /// [`Admission`] (mint via [`Admission::prove_shared`] /
+    /// [`Admission::from_observer`]). Nest-branded compare under one live
+    /// frame uses [`NestedDomainCtx`](super::admission::NestedDomainCtx) /
+    /// [`Frame::with_nested_ctx`](super::arena::Frame::with_nested_ctx)
+    /// and projects `.ctx()` when calling here.
+    #[inline]
+    pub fn same_word(&self, other: &Value, _ctx: &Admission) -> bool {
         self.bytes == other.bytes
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::arena::BulkObserver;
     use super::super::canonical::{Datum, decode, encode};
     use super::super::number::Num;
     use super::*;
@@ -258,14 +273,19 @@ mod tests {
         let mut arena = Arena::new();
         // Canonical payload for a clean string of n chars is n + 2
         // (terminator), so 12 chars = 14 payload bytes = last inline size.
-        let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena);
+        let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena).expect("mint");
         assert!(inline_edge.is_inline());
-        let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena);
+        let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
         assert!(!outline_edge.is_inline());
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
-        let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
-        assert!(outline_edge.value().same_word(&again.value()));
+        let again = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
+        // Nest brand under one live frame; project durable Admission for
+        // same_word (coexisting-arena API).
+        let ok = arena.frame().with_nested_ctx(|nest| {
+            outline_edge.value().same_word(&again.value(), &nest.ctx())
+        });
+        assert!(ok);
     }
 
     /// The per-kind residency table, pinned: residency is
@@ -278,7 +298,9 @@ mod tests {
         use super::super::wide::validity::{Validity, ValidityTs};
         let mut arena = Arena::new();
         let inline =
-            |cb: &CanonicalBytes, arena: &mut Arena| -> bool { Value::mint(cb, arena).is_inline() };
+            |cb: &CanonicalBytes, arena: &mut Arena| -> bool {
+                Value::mint(cb, arena).expect("mint").is_inline()
+            };
         // Always inline: Null, Bool, every Num (payload <= 13), Validity
         // (payload 9), empty/half-bounded intervals (payload <= 11).
         assert!(inline(&encode(Datum::Null), &mut arena));
@@ -289,10 +311,10 @@ mod tests {
             &mut arena
         ));
         assert!(inline(
-            &encode(Datum::Validity(Validity::new(
-                ValidityTs::from_raw(i64::MAX),
-                false
-            ))),
+            &encode(Datum::Validity(
+                Validity::new(ValidityTs::from_raw(i64::MAX), false)
+                    .expect("retract admits every tick"),
+            )),
             &mut arena
         ));
         assert!(inline(
@@ -335,7 +357,7 @@ mod tests {
             Datum::Str("a\u{0}b"),
         ] {
             let cb = encode(d);
-            let m = Value::mint(&cb, &mut arena);
+            let m = Value::mint(&cb, &mut arena).expect("mint");
             let v = m.value();
             assert!(v.is_inline(), "small value went out of line");
             assert!(m.stamp().is_none());
@@ -349,13 +371,13 @@ mod tests {
         let mut arena = Arena::new();
         let big: Vec<Datum> = (0..40).map(|_| Datum::Num(Num::int(7))).collect();
         let cb = encode(Datum::List(&big));
-        let m = Value::mint(&cb, &mut arena);
+        let m = Value::mint(&cb, &mut arena).expect("mint");
         let v = m.value();
         assert!(!v.is_inline());
         let sc = m.stamp().expect("outline mints a stamp");
-        assert_eq!(v.code(), Some(sc.code()));
+        assert_eq!(v.code().map(Code::raw), Some(sc.code().raw()));
         let f = arena.frame();
-        let resolved = f.resolve(sc);
+        let resolved = f.resolve(sc).expect("lawful");
         assert_eq!(
             resolved,
             cb.as_bytes(),
@@ -383,7 +405,7 @@ mod tests {
         ];
         let words: Vec<(Value, CanonicalBytes)> = corpus
             .into_iter()
-            .map(|cb| (Value::mint(&cb, &mut arena).value(), cb))
+            .map(|cb| (Value::mint(&cb, &mut arena).expect("mint").value(), cb))
             .collect();
         for (va, ca) in &words {
             for (vb, cb) in &words {
@@ -405,18 +427,39 @@ mod tests {
         }
     }
 
+    /// Cross-arena mint cannot obtain a shared [`Admission`], so the old
+    /// trap — calling `same_word` across contexts and getting a lying
+    /// `true` — cannot be written. Physical identity remains only under a
+    /// proven token; storage cmp still refuses the unresolved prefix tie.
     #[test]
-    fn same_word_is_physical_not_semantic() {
+    fn same_word_requires_shared_admission() {
+        use super::super::admission::Denial;
         let mut arena_a = Arena::new();
         let mut arena_b = Arena::new();
         let big_x = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxx"));
         let big_y = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxy"));
         // Same prefix, different values, DIFFERENT arenas: both get code
-        // 0, producing identical words — exactly why same_word is only
-        // value identity under one stamped context.
-        let va = Value::mint(&big_x, &mut arena_a).value();
-        let vb = Value::mint(&big_y, &mut arena_b).value();
-        assert!(va.same_word(&vb), "the trap this API's name warns about");
-        assert_eq!(va.try_cmp_storage(&vb), None, "and storage cmp refuses it");
+        // 0, producing identical words — the trap the unproven API told.
+        let va = Value::mint(&big_x, &mut arena_a).expect("mint").value();
+        let vb = Value::mint(&big_y, &mut arena_b).expect("mint").value();
+        assert_eq!(va.try_cmp_storage(&vb), None, "storage cmp refuses it");
+        let fa = arena_a.frame();
+        let fb = arena_b.frame();
+        assert!(
+            matches!(
+                Admission::prove_shared(
+                    fa.bulk_arena(),
+                    fa.bulk_epoch(),
+                    fb.bulk_arena(),
+                    fb.bulk_epoch(),
+                ),
+                Err(Denial::ArenaMismatch { .. })
+            ),
+            "cross-arena prove_shared must refuse — no token, no same_word"
+        );
+        // Under one arena, identical minting yields same_word.
+        let again = Value::mint(&big_x, &mut arena_a).expect("mint").value();
+        let ctx = Admission::from_observer(&arena_a.frame());
+        assert!(va.same_word(&again, &ctx));
     }
 }

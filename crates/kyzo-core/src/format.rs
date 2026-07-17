@@ -58,14 +58,19 @@
 //! comments needs the grammar itself to capture them as trivia attached to
 //! AST nodes — a `parse`-tier and `data::program`-tier design change, not a
 //! rendering one. Stated here rather than silently unmet.
+//!
+//! **P112 host door.** [`format_program`] / [`format_program_with_comments`]
+//! are the typed doors for format-document / format-on-save. There is no
+//! module-level `allow(dead_code)` on `format` in `lib.rs` — the doors are
+//! real (parse's comment-meaning guardrail and this module's property suite
+//! call them); unused helpers warn until `kyzo-lsp` shares the same door.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::data::aggr::Aggregation;
 use crate::data::expr::{Expr, LazyOp};
 use crate::data::program::{
-    Comment, DeltaAxis, FixedRuleApply, FixedRuleArg, InputAtom, InputInlineRule,
+    Comment, DeltaAxis, FixedRuleApply, FixedRuleArg, HeadAggrSlot, InputAtom, InputInlineRule,
     InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
     InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
     QueryOutOptions, RelationOp, ReturnMutation, SearchInput, Unification, ValidityClause,
@@ -197,7 +202,7 @@ fn write_inline_rule(name: &Symbol, rule: &InputInlineRule, out: &mut String) {
         if i > 0 {
             out.push_str(", ");
         }
-        write_head_arg(head, aggr.as_ref(), out);
+        write_head_arg(head, aggr, out);
     }
     out.push_str("] := ");
     for (i, atom) in rule.body.iter().enumerate() {
@@ -209,10 +214,10 @@ fn write_inline_rule(name: &Symbol, rule: &InputInlineRule, out: &mut String) {
     out.push(';');
 }
 
-fn write_head_arg(head: &Symbol, aggr: Option<&(Aggregation, Vec<DataValue>)>, out: &mut String) {
+fn write_head_arg(head: &Symbol, aggr: &HeadAggrSlot, out: &mut String) {
     match aggr {
-        None => out.push_str(&head.name),
-        Some((aggr, args)) => {
+        HeadAggrSlot::Plain => out.push_str(&head.name),
+        HeadAggrSlot::Aggregated { aggr, args } => {
             out.push_str(aggr.name);
             out.push('(');
             out.push_str(&head.name);
@@ -364,7 +369,7 @@ fn write_conjunct_member(atom: &InputAtom, out: &mut String) {
                 write_disjunct_member(m, out);
             }
         }
-        _ => write_plain_atom(atom, out),
+        InputAtom::Rule { .. } | InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => write_plain_atom(atom, out),
     }
 }
 
@@ -384,7 +389,7 @@ fn write_disjunct_member(atom: &InputAtom, out: &mut String) {
             }
             out.push(')');
         }
-        _ => write_plain_atom(atom, out),
+        InputAtom::Rule { .. } | InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Disjunction { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => write_plain_atom(atom, out),
     }
 }
 
@@ -392,7 +397,7 @@ fn flatten_conjunction<'a>(members: &'a [InputAtom], out: &mut Vec<&'a InputAtom
     for m in members {
         match m {
             InputAtom::Conjunction { inner, .. } => flatten_conjunction(inner, out),
-            other => out.push(other),
+            other @ InputAtom::Rule { .. } | other @ InputAtom::NamedFieldRelation { .. } | other @ InputAtom::Relation { .. } | other @ InputAtom::Predicate { .. } | other @ InputAtom::Negation { .. } | other @ InputAtom::Disjunction { .. } | other @ InputAtom::Unification { .. } | other @ InputAtom::Search { .. } => out.push(other),
         }
     }
 }
@@ -401,7 +406,7 @@ fn flatten_disjunction<'a>(members: &'a [InputAtom], out: &mut Vec<&'a InputAtom
     for m in members {
         match m {
             InputAtom::Disjunction { inner, .. } => flatten_disjunction(inner, out),
-            other => out.push(other),
+            other @ InputAtom::Rule { .. } | other @ InputAtom::NamedFieldRelation { .. } | other @ InputAtom::Relation { .. } | other @ InputAtom::Predicate { .. } | other @ InputAtom::Negation { .. } | other @ InputAtom::Conjunction { .. } | other @ InputAtom::Unification { .. } | other @ InputAtom::Search { .. } => out.push(other),
         }
     }
 }
@@ -422,7 +427,7 @@ fn write_plain_atom(atom: &InputAtom, out: &mut String) {
                 InputAtom::Conjunction { .. } | InputAtom::Disjunction { .. } => {
                     write_disjunct_member(inner, out);
                 }
-                _ => write_plain_atom(inner, out),
+                InputAtom::Rule { .. } | InputAtom::NamedFieldRelation { .. } | InputAtom::Relation { .. } | InputAtom::Predicate { .. } | InputAtom::Negation { .. } | InputAtom::Unification { .. } | InputAtom::Search { .. } => write_plain_atom(inner, out),
             }
         }
         InputAtom::Rule {
@@ -570,12 +575,12 @@ fn write_read_validity(validity: Option<&ValidityClause>, out: &mut String) {
 fn write_at_clause(as_of: &AsOf, out: &mut String) {
     out.push('@');
     out.push(' ');
-    if as_of.sys == MAX_VALIDITY_TS {
-        write_vld(as_of.valid, out);
+    if as_of.sys() == MAX_VALIDITY_TS {
+        write_vld(as_of.valid(), out);
     } else {
-        write_vld(as_of.sys, out);
+        write_vld(as_of.sys(), out);
         out.push_str(", ");
-        write_vld(as_of.valid, out);
+        write_vld(as_of.valid(), out);
     }
 }
 
@@ -719,7 +724,7 @@ enum Assoc {
 /// `cond`) never needs parens as anyone's operand.
 const ATOMIC: u8 = 100;
 
-/// `(precedence, associativity, surface symbol)` for a 2-argument
+/// `(precedence, associativity, surface symbol, args)` for a 2-argument
 /// [`Expr::Apply`]/[`Expr::Lazy`] this grammar also accepts as an infix
 /// operator — `None` for anything that must render as a function call
 /// (wrong arity for its op, or no infix spelling at all). Numbers match
@@ -727,49 +732,71 @@ const ATOMIC: u8 = 100;
 /// against it (higher binds tighter): `||`1 `&&`2 cmp3 `==`/`!=`4 `%`5
 /// `+`/`-`/`++`6 `*`/`/`7 `^`8 `~`9 — then the unary prefixes at 10/11 (see
 /// [`prefix_form`]) and `->` at 12 tighter still.
-fn infix_form(e: &Expr) -> Option<(u8, Assoc, &'static str)> {
+///
+/// Args ride with the form so [`write_expr`] never re-matches Expr arms
+/// (P088: no `unreachable!` on Apply/Lazy drift).
+fn infix_form(e: &Expr) -> Option<(u8, Assoc, &'static str, &[Expr])> {
     match e {
-        Expr::Apply { op, args, .. } if args.len() == 2 => Some(match op.name {
-            "OP_GT" => (3, Assoc::Left, ">"),
-            "OP_LT" => (3, Assoc::Left, "<"),
-            "OP_GE" => (3, Assoc::Left, ">="),
-            "OP_LE" => (3, Assoc::Left, "<="),
-            "OP_EQ" => (4, Assoc::Left, "=="),
-            "OP_NEQ" => (4, Assoc::Left, "!="),
-            "OP_MOD" => (5, Assoc::Left, "%"),
-            "OP_ADD" => (6, Assoc::Left, "+"),
-            "OP_SUB" => (6, Assoc::Left, "-"),
-            "OP_CONCAT" => (6, Assoc::Left, "++"),
-            "OP_MUL" => (7, Assoc::Left, "*"),
-            "OP_DIV" => (7, Assoc::Left, "/"),
-            "OP_POW" => (8, Assoc::Right, "^"),
-            "OP_MAYBE_GET" => (12, Assoc::Left, "->"),
-            _ => return None,
-        }),
-        Expr::Lazy { op, args, .. } if args.len() == 2 => Some(match op {
-            LazyOp::Or => (1, Assoc::Left, "||"),
-            LazyOp::And => (2, Assoc::Left, "&&"),
-            LazyOp::Coalesce => (9, Assoc::Left, "~"),
-        }),
-        _ => None,
+        Expr::Apply { op, args, .. } if args.len() == 2 => {
+            let (p, a, s) = match op.name {
+                "OP_GT" => (3, Assoc::Left, ">"),
+                "OP_LT" => (3, Assoc::Left, "<"),
+                "OP_GE" => (3, Assoc::Left, ">="),
+                "OP_LE" => (3, Assoc::Left, "<="),
+                "OP_EQ" => (4, Assoc::Left, "=="),
+                "OP_NEQ" => (4, Assoc::Left, "!="),
+                "OP_MOD" => (5, Assoc::Left, "%"),
+                "OP_ADD" => (6, Assoc::Left, "+"),
+                "OP_SUB" => (6, Assoc::Left, "-"),
+                "OP_CONCAT" => (6, Assoc::Left, "++"),
+                "OP_MUL" => (7, Assoc::Left, "*"),
+                "OP_DIV" => (7, Assoc::Left, "/"),
+                "OP_POW" => (8, Assoc::Right, "^"),
+                "OP_MAYBE_GET" => (12, Assoc::Left, "->"),
+                _ => return None,
+            };
+            Some((p, a, s, args.as_ref()))
+        }
+        Expr::Lazy { op, args, .. } if args.len() == 2 => {
+            let (p, a, s) = match op {
+                LazyOp::Or => (1, Assoc::Left, "||"),
+                LazyOp::And => (2, Assoc::Left, "&&"),
+                LazyOp::Coalesce => (9, Assoc::Left, "~"),
+            };
+            Some((p, a, s, args.as_ref()))
+        }
+        Expr::Binding { .. }
+        | Expr::Const { .. }
+        | Expr::Apply { .. }
+        | Expr::UnboundApply { .. }
+        | Expr::Cond { .. }
+        | Expr::Lazy { .. } => None,
     }
 }
 
-/// `(precedence, prefix symbol)` for a 1-argument [`Expr::Apply`] this
-/// grammar also accepts as a unary prefix. A prefix's own child, when it
-/// is itself another prefix application, never needs parens regardless of
-/// these numbers (see [`write_prefix_operand`]): `unary_op*` in the
+/// `(precedence, prefix symbol, operand)` for a 1-argument [`Expr::Apply`]
+/// this grammar also accepts as a unary prefix. A prefix's own child, when
+/// it is itself another prefix application, never needs parens regardless
+/// of these numbers (see [`write_prefix_operand`]): `unary_op*` in the
 /// grammar is a plain repetition glued to one term, not a recursive
 /// precedence climb, so a straight prefix chain always re-parses to the
 /// same nesting order it was written in.
-fn prefix_form(e: &Expr) -> Option<(u8, &'static str)> {
+///
+/// The operand rides with the form so [`write_expr`] never re-matches
+/// Expr arms (P088: no `unreachable!`).
+fn prefix_form(e: &Expr) -> Option<(u8, &'static str, &Expr)> {
     match e {
         Expr::Apply { op, args, .. } if args.len() == 1 => match op.name {
-            "OP_MINUS" => Some((10, "-")),
-            "OP_NEGATE" => Some((11, "!")),
+            "OP_MINUS" => Some((10, "-", &args[0])),
+            "OP_NEGATE" => Some((11, "!", &args[0])),
             _ => None,
         },
-        _ => None,
+        Expr::Binding { .. }
+        | Expr::Const { .. }
+        | Expr::Apply { .. }
+        | Expr::UnboundApply { .. }
+        | Expr::Cond { .. }
+        | Expr::Lazy { .. } => None,
     }
 }
 
@@ -777,19 +804,14 @@ fn precedence(e: &Expr) -> u8 {
     if let Some((p, ..)) = infix_form(e) {
         return p;
     }
-    if let Some((p, _)) = prefix_form(e) {
+    if let Some((p, ..)) = prefix_form(e) {
         return p;
     }
     ATOMIC
 }
 
 fn write_expr(e: &Expr, out: &mut String) {
-    if let Some((prec, assoc, sym)) = infix_form(e) {
-        let args: &[Expr] = match e {
-            Expr::Apply { args, .. } => args,
-            Expr::Lazy { args, .. } => args,
-            _ => unreachable!("infix_form only returns Some for Apply/Lazy"),
-        };
+    if let Some((prec, assoc, sym, args)) = infix_form(e) {
         write_operand(&args[0], prec, assoc == Assoc::Left, out);
         out.push(' ');
         out.push_str(sym);
@@ -797,12 +819,8 @@ fn write_expr(e: &Expr, out: &mut String) {
         write_operand(&args[1], prec, assoc == Assoc::Right, out);
         return;
     }
-    if let Some((prec, sym)) = prefix_form(e) {
+    if let Some((prec, sym, inner)) = prefix_form(e) {
         out.push_str(sym);
-        let inner = match e {
-            Expr::Apply { args, .. } => &args[0],
-            _ => unreachable!("prefix_form only returns Some for Apply"),
-        };
         write_prefix_operand(inner, prec, out);
         return;
     }
@@ -918,7 +936,7 @@ fn unwrap_hidden_regex_arg<'a>(op_name: &str, arg: &'a Expr) -> Option<&'a Expr>
     }
     match arg {
         Expr::Apply { op, args, .. } if op.name == "OP_REGEX" && args.len() == 1 => Some(&args[0]),
-        _ => None,
+        Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => None,
     }
 }
 
@@ -977,7 +995,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Uuid(u) => {
             out.push_str("to_uuid(");
-            write_str_literal(&u.0.to_string(), out);
+            write_str_literal(&u.as_uuid().to_string(), out);
             out.push(')');
         }
         DataValue::Regex(rx) => {
@@ -1030,7 +1048,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Vector(a) => {
             out.push_str("vec([");
-            for (i, x) in a.as_slice().iter().enumerate() {
+            for (i, x) in a.to_f64s().iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
                 }

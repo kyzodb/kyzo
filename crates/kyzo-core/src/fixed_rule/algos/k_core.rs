@@ -44,7 +44,9 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 // A test-only observable: how many vertices the peel loop has processed.
 // Mirrors `shortest_path_bfs::BFS_NODES_EXPANDED` (see that comment for the
@@ -216,7 +218,9 @@ mod tests {
     fn naive_coreness(
         nodes: &BTreeSet<String>,
         adj: &BTreeMap<String, BTreeSet<String>>,
-    ) -> BTreeMap<String, u32> {
+    ) -> Result<BTreeMap<String, u32>> {
+        use crate::fixed_rule::GraphAlgorithmInvariantError;
+
         let mut deg: BTreeMap<String, i64> = nodes
             .iter()
             .map(|v| (v.clone(), adj.get(v).map_or(0, |a| a.len() as i64)))
@@ -225,12 +229,11 @@ mod tests {
         let mut core: BTreeMap<String, u32> = BTreeMap::new();
         let mut k = 0u32;
         while removed.len() < nodes.len() {
-            // Minimum current degree, smallest name on ties.
             let v = nodes
                 .iter()
                 .filter(|v| !removed.contains(*v))
                 .min_by_key(|v| (deg[*v], (*v).clone()))
-                .unwrap()
+                .ok_or_else(|| GraphAlgorithmInvariantError::refuse("k_core_remaining"))?
                 .clone();
             k = k.max(deg[&v].max(0) as u32);
             core.insert(v.clone(), k);
@@ -238,12 +241,15 @@ mod tests {
             if let Some(nbrs) = adj.get(&v) {
                 for u in nbrs {
                     if !removed.contains(u) {
-                        *deg.get_mut(u).unwrap() -= 1;
+                        let d = deg
+                            .get_mut(u)
+                            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("k_core_deg"))?;
+                        *d -= 1;
                     }
                 }
             }
         }
-        core
+        Ok(core)
     }
 
     /// Build the undirected simple adjacency (keyed by node name) from an
@@ -316,7 +322,7 @@ mod tests {
             ("a", "h"), // pendant ⇒ h core 1
         ];
         let (nodes, adj) = adjacency(&edges);
-        let expected = naive_coreness(&nodes, &adj);
+        let expected = naive_coreness(&nodes, &adj).unwrap();
         assert_eq!(run(&edges), expected);
     }
 
@@ -347,6 +353,7 @@ mod tests {
     fn deterministic_across_runs() {
         let mut state = 0x51ed_2701_dead_c0deu64;
         let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -418,9 +425,9 @@ mod tests {
             "baseline should peel every vertex, got {full_peeled}"
         );
 
-        // Pre-set flag: the inner poll must refuse before peeling the graph.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the inner poll must refuse before peeling the graph.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&KCoreDecomposition, flag);
         let cancel_peeled = take_kcore_verts_peeled();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));

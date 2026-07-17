@@ -64,8 +64,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload,
-    NodeNotFoundError,
+    ek_bfs_parent, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
+    FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
 
 /// Residual-capacity threshold: values at or below this count as saturated.
@@ -158,10 +158,9 @@ fn single_node(
         .iter()?
         .next()
         .ok_or_else(|| EmptyEndpointError(which, rel.span()))??;
-    // Structural: the caller's `ensure_min_len(1)` on `rel` proved every
-    // tuple has a first column (a nullary relation would otherwise yield
-    // an empty tuple here despite the row-count check above).
-    let dv = tuple.into_iter().next().unwrap();
+    // INVARIANT(endpoint_col): caller's `ensure_min_len(1)` proved every
+    // tuple has a first column.
+    let dv = tuple_into_first_column(tuple)?;
     inv_indices.get(&dv).copied().ok_or_else(|| {
         NodeNotFoundError {
             missing: dv,
@@ -271,8 +270,8 @@ impl ResidualNet {
             let mut bottleneck = f64::INFINITY;
             let mut v = sink;
             while v != source {
-                // Structural: BFS set `prev` for every reached node but source.
-                let (u, ai) = prev[v as usize].unwrap();
+                // INVARIANT(ek_prev): BFS set `prev` for every reached node but source.
+                let (u, ai) = ek_bfs_parent(&prev, v, "ek_prev")?;
                 let arc = &self.adj[u as usize][ai];
                 bottleneck = bottleneck.min(arc.cap - arc.flow);
                 v = u;
@@ -281,7 +280,7 @@ impl ResidualNet {
             // Push it: raise forward flow, lower the paired reverse arc.
             let mut v = sink;
             while v != source {
-                let (u, ai) = prev[v as usize].unwrap();
+                let (u, ai) = ek_bfs_parent(&prev, v, "ek_prev")?;
                 let rev = self.adj[u as usize][ai].rev;
                 self.adj[u as usize][ai].flow += bottleneck;
                 self.adj[v as usize][rev].flow -= bottleneck;
@@ -465,6 +464,7 @@ mod tests {
     fn random_graph(seed: u64, n: usize) -> Vec<(usize, usize, f64)> {
         let mut state = seed;
         let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -647,9 +647,9 @@ mod tests {
             "baseline should dequeue the whole chain, got {full_pops}"
         );
 
-        // Pre-set flag: the inner poll must refuse before walking the chain.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the inner poll must refuse before walking the chain.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&MaxFlow, flag);
         let cancel_pops = take_maxflow_bfs_pops();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));

@@ -7,7 +7,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! `Row`: an interned tuple — a slice of `Code`s — with a `Value`-cell view only at the API boundary. `EncodedKey` is the written form.
+//! `Row`: an interned tuple — a slice of `Code`s — with a `Value`-cell view only at the API boundary. `StorageKey` is the written form.
 //!
 //! ## The code-lifetime law (the two-form Row)
 //!
@@ -20,7 +20,7 @@
 //!   container domain (it *is* a [`CodeColumn`] with an arity, inheriting
 //!   the write door, the admission theorem, and the gather law wholesale).
 //!   It has **no serialization surface** — you cannot write codes down.
-//! - [`EncodedKey`] is the written form: the tuple's canonical encodings
+//! - [`StorageKey`] is the written form: the tuple's canonical encodings
 //!   concatenated. Self-terminating element encodings make concatenation
 //!   order-preserving (lexicographic tuple order = elementwise semantic
 //!   order) and unambiguous to split. It has **no code accessors** — you
@@ -43,44 +43,39 @@
 //! throughout, so held containers stay admissible with no remap mid-run.
 //! The choreography is pinned as a law test below.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
+use super::admission::Denial;
 use super::arena::{Arena, BulkObserver, EpochRemap};
+use super::arity::Arity;
 use super::canonical::{DecodeError, decode_one};
 use super::code::StampedCode;
 use super::column::{AdmittedCodes, CodeColumn, Domain};
 use super::{DataValue, ScanBound};
+use crate::data::value::data_value_any;
 
 /// The execution form of a relation fragment: `arity`-wide tuples as
 /// row-major packed codes under one container domain.
 pub struct Rows {
-    arity: usize,
+    arity: Arity,
     codes: CodeColumn,
 }
 
 impl Rows {
     /// An empty tuple container in the observer's domain.
     ///
-    /// # Panics
-    ///
-    /// Panics on zero arity (a relation has columns).
-    pub fn new_in<O: BulkObserver>(arity: usize, o: &O) -> Rows {
-        assert!(arity >= 1, "a relation has at least one column");
+    /// Zero width is unrepresentable: [`Arity`] is [`NonZeroUsize`](std::num::NonZeroUsize)-backed.
+    pub fn new_in<O: BulkObserver>(arity: Arity, o: &O) -> Rows {
         Rows {
             arity,
             codes: CodeColumn::new_in(o),
         }
     }
 
-    pub fn arity(&self) -> usize {
+    pub fn arity(&self) -> Arity {
         self.arity
     }
 
     pub fn len(&self) -> usize {
-        self.codes.len() / self.arity
+        self.codes.len() / self.arity.get()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -92,23 +87,25 @@ impl Rows {
     }
 
     /// The write door: one tuple of stamped codes, verified element by
-    /// element into the domain.
-    ///
-    /// # Panics
-    ///
-    /// Panics on arity mismatch or a stamp outside the domain.
-    pub fn push_row(&mut self, stamps: &[StampedCode]) {
-        assert_eq!(stamps.len(), self.arity, "tuple arity mismatch");
-        for &sc in stamps {
-            self.codes.push(sc);
+    /// element into the domain. Typed refusal on foreign/stale stamps or
+    /// arity mismatch — never a process abort.
+    pub fn push_row(&mut self, stamps: &[StampedCode]) -> Result<(), Denial> {
+        let expected = self.arity.get();
+        let got = stamps.len();
+        if got != expected {
+            return Err(Denial::ArityMismatch { expected, got });
         }
+        for &sc in stamps {
+            self.codes.push(sc)?;
+        }
+        Ok(())
     }
 
     /// The bytes→execution door: refuse a stale/foreign container with a
     /// TYPED error (storage ingestion is a refusal surface, not a panic
     /// surface), validate the written key element by element (total),
     /// and only then re-intern into the current epoch.
-    pub fn push_encoded(&mut self, key: &EncodedKey, arena: &mut Arena) -> Result<(), PushError> {
+    pub fn push_encoded(&mut self, key: &TupleKey, arena: &mut Arena) -> Result<(), PushError> {
         if self.domain().arena_id() != arena.id() {
             return Err(PushError::ForeignArena);
         }
@@ -121,49 +118,59 @@ impl Rows {
         let bytes = key.as_bytes();
         // Validate and split FIRST — nothing is interned unless the whole
         // key is lawful (no partial tuples on refusal).
-        let splits = split_key(bytes, self.arity).map_err(PushError::Decode)?;
+        let splits = split_key(bytes, self.arity.get()).map_err(PushError::Decode)?;
         for (lo, hi) in splits {
-            let sc = arena.intern(&bytes[lo..hi]);
-            self.codes.push(sc);
+            let sc = arena
+                .intern(&bytes[lo..hi])
+                .map_err(PushError::Denial)?;
+            self.codes.push(sc).map_err(PushError::Denial)?;
         }
         Ok(())
     }
 
     /// The admission: one container-domain check for the whole relation
-    /// fragment.
-    pub fn admit<'a, O: BulkObserver>(&'a self, o: &'a O) -> AdmittedRows<'a, O> {
-        AdmittedRows {
+    /// fragment. Arena/epoch mismatch is a typed refusal.
+    ///
+    /// **Coexisting-arena boundary:** delegates to [`CodeColumn::admit`] —
+    /// mint-checked [`super::admission::Admission`], not a nest brand (rows
+    /// outlive observer nests; see [`super::code`] measurement).
+    pub fn admit<'a, O: BulkObserver>(
+        &'a self,
+        o: &'a O,
+    ) -> Result<AdmittedRows<'a, O>, Denial> {
+        Ok(AdmittedRows {
             arity: self.arity,
-            codes: self.codes.admit(o),
-        }
+            codes: self.codes.admit(o)?,
+        })
     }
 
     /// The gather door (see the gather law): consuming, the only mint of
-    /// a new-epoch tuple container.
-    pub fn gather(self, remap: &EpochRemap) -> Rows {
-        Rows {
+    /// a new-epoch tuple container. Typed refusal on a foreign/wrong-epoch
+    /// remap.
+    pub fn gather(self, remap: &EpochRemap) -> Result<Rows, Denial> {
+        Ok(Rows {
             arity: self.arity,
-            codes: self.codes.gather(remap),
-        }
+            codes: self.codes.gather(remap)?,
+        })
     }
 }
 
 /// Admitted tuples: raw-code reads under the proven domain.
 pub struct AdmittedRows<'a, O: BulkObserver> {
-    arity: usize,
+    arity: Arity,
     codes: AdmittedCodes<'a, O>,
 }
 
 impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     pub fn len(&self) -> usize {
-        self.codes.len() / self.arity
+        self.codes.len() / self.arity.get()
     }
 
     pub fn is_empty(&self) -> bool {
         self.codes.is_empty()
     }
 
-    pub fn arity(&self) -> usize {
+    pub fn arity(&self) -> Arity {
         self.arity
     }
 
@@ -176,36 +183,39 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     /// The raw codes of row `i` — tuple identity within this domain
     /// (equality/hash/dedup currency; never an ordering surface).
     pub fn row(&self, i: usize) -> &'a [u32] {
-        &self.codes.raw()[i * self.arity..(i + 1) * self.arity]
+        let w = self.arity.get();
+        &self.codes.raw()[i * w..(i + 1) * w]
     }
 
     /// Canonical bytes of cell `(row, col)`.
-    pub fn resolve_cell(&self, row: usize, col: usize) -> &'a [u8] {
-        self.codes.resolve(row * self.arity + col)
+    pub fn resolve_cell(&self, row: usize, col: usize) -> Result<&'a [u8], Denial> {
+        self.codes.resolve(row * self.arity.get() + col)
     }
 
     /// Semantic tuple order: elementwise value order (which is exactly
     /// what the written form's byte order embeds).
-    pub fn cmp_rows(&self, i: usize, j: usize) -> std::cmp::Ordering {
-        for k in 0..self.arity {
-            let c = self.codes.cmp_at(i * self.arity + k, j * self.arity + k);
+    pub fn cmp_rows(&self, i: usize, j: usize) -> Result<std::cmp::Ordering, Denial> {
+        let w = self.arity.get();
+        for k in 0..w {
+            let c = self.codes.cmp_at(i * w + k, j * w + k)?;
             if c != std::cmp::Ordering::Equal {
-                return c;
+                return Ok(c);
             }
         }
-        std::cmp::Ordering::Equal
+        Ok(std::cmp::Ordering::Equal)
     }
 
     /// The execution→bytes door: the written form of row `i`. Minted only
-    /// here — an `EncodedKey` in hand is proof its bytes are concatenated
+    /// here — an `TupleKey` in hand is proof its bytes are concatenated
     /// canonical encodings.
-    pub fn encode_row(&self, i: usize) -> EncodedKey {
+    pub fn encode_row(&self, i: usize) -> Result<TupleKey, Denial> {
         let mut out = Vec::new();
-        for k in 0..self.arity {
-            out.extend_from_slice(self.resolve_cell(i, k));
+        for k in 0..self.arity.get() {
+            out.extend_from_slice(self.resolve_cell(i, k)?);
         }
-        EncodedKey(out)
+        Ok(TupleKey(out))
     }
+
 }
 
 /// Typed refusals of the bytes→execution door.
@@ -220,6 +230,8 @@ pub enum PushError {
         container: super::arena::Epoch,
         arena: super::arena::Epoch,
     },
+    /// Intern or domain absorb refused (capacity / stamp / extent).
+    Denial(Denial),
 }
 
 /// Split a key into exactly `arity` lawful canonical encodings, refusing
@@ -238,27 +250,75 @@ fn split_key(bytes: &[u8], arity: usize) -> Result<Vec<(usize, usize)>, DecodeEr
     Ok(splits)
 }
 
-/// The written form of a tuple: concatenated canonical encodings. Byte
-/// order equals elementwise semantic tuple order (self-terminating
-/// elements). No code accessors exist: stored bytes cannot leak execution
-/// currency, and codes cannot leak into storage — the code-lifetime law,
-/// held by the type surface.
+/// Column-wise bound arrays close a scan key the moment they hit a
+/// sentinel: `Value` columns keep contributing bytes, `Least` ends the
+/// key with nothing (every extension sorts at-or-after), `Greatest` ends
+/// it with the `0xFF` byte no canonical encoding begins (every extension
+/// sorts before). An UPPER key that runs out of bounds without a
+/// sentinel gets the `0xFF` tail — the scan includes every extension of
+/// its value prefix.
+fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
+    for b in bounds {
+        match b {
+            ScanBound::Value(v) => super::canonical::append_canonical(out, v),
+            ScanBound::Least => return,
+            ScanBound::Greatest => {
+                out.push(0xFF);
+                return;
+            }
+        }
+    }
+    if upper {
+        out.push(0xFF);
+    }
+}
+
+
+/// Bare written tuple: concatenated canonical encodings with NO relation
+/// prefix. Proof that bytes are arity-split lawful encodings — never a
+/// storage keyspace key.
 ///
-/// @authority EncodedKey
+/// @authority TupleKey
+/// @layer value
+/// @owns bare-tuple memcmp identity (no relation prefix); bytewise order equals DataValue structural order (byte-order law)
+/// @constructs TupleKey::from_values | TupleKey::from_stored
+/// @forbids forging bytes bypassing canonical encode | treating a TupleKey as a relation-prefixed StorageKey
+/// @converts TupleKey -> StorageKey (prefix with RelationId at the storage boundary)
+/// @gate round-trip + byte-order law (storage format gate)
+/// @status established #303
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
+pub struct TupleKey(Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<TupleKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<TupleKey>() == std::mem::align_of::<Vec<u8>>());
+
+/// Relation-prefixed storage key (keyspace layout v1): 8-byte relation id
+/// then key columns (then optional bitemporal tails).
+///
+/// @authority StorageKey
 /// @layer value
 /// @owns canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)
-/// @constructs EncodedKey::from_values | EncodedKey::from_stored | encode_row
-/// @forbids leaking codes out of an EncodedKey | forging bytes bypassing canonical encode | confusing storage identity with record/entity identity
-/// @converts EncodedKey -> Domain (admitted into an arena via push_encoded)
+/// @constructs TupleT::encode_as_key | encode_key_with_suffix
+/// @forbids leaking codes out of a StorageKey | forging bytes bypassing canonical encode | confusing storage identity with record/entity identity | treating a StorageKey as a bare TupleKey
+/// @converts StorageKey -> Domain (admitted into an arena via push_encoded)
 /// @gate round-trip + byte-order law (storage format gate)
-/// @status established #119
+/// @status established #303
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct EncodedKey(Vec<u8>);
+#[repr(transparent)]
+pub struct StorageKey(pub(crate) Vec<u8>);
+
+const _: () = assert!(std::mem::size_of::<StorageKey>() == std::mem::size_of::<Vec<u8>>());
+const _: () = assert!(std::mem::align_of::<StorageKey>() == std::mem::align_of::<Vec<u8>>());
 
 /// A stored relation's identity: the 8-byte big-endian keyspace prefix
 /// every key of the relation opens with (storage key layout v1).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct RelationId(u64);
+
+const _: () = assert!(std::mem::size_of::<RelationId>() == std::mem::size_of::<u64>());
+const _: () = assert!(std::mem::align_of::<RelationId>() == std::mem::align_of::<u64>());
 
 impl RelationId {
     /// The system catalog keyspace.
@@ -306,10 +366,10 @@ impl RelationId {
         Ok(RelationId(id))
     }
 
-    /// The next id, `None` on exhaustion (the caller owns the typed
-    /// refusal).
+    /// The next id, `None` on exhaustion or at/beyond [`RelationId::CAP`]
+    /// — the same ceiling as [`RelationId::new`] / [`RelationId::raw_decode`].
     pub fn next(self) -> Option<RelationId> {
-        self.0.checked_add(1).map(RelationId)
+        self.0.checked_add(1).and_then(RelationId::new)
     }
 }
 
@@ -325,11 +385,11 @@ impl std::fmt::Display for RelationId {
 /// Key encoding for anything that dereferences to a value slice: the
 /// relation prefix, then each value's canonical bytes.
 pub trait TupleT {
-    fn encode_as_key(&self, rel: RelationId) -> EncodedKey;
+    fn encode_as_key(&self, rel: RelationId) -> StorageKey;
 }
 
 impl<S: AsRef<[DataValue]> + ?Sized> TupleT for S {
-    fn encode_as_key(&self, rel: RelationId) -> EncodedKey {
+    fn encode_as_key(&self, rel: RelationId) -> StorageKey {
         encode_key_with_suffix(rel, self.as_ref(), &[])
     }
 }
@@ -340,7 +400,7 @@ pub fn encode_key_with_suffix(
     rel: RelationId,
     cols: &[DataValue],
     suffix: &[DataValue],
-) -> EncodedKey {
+) -> StorageKey {
     let mut out = Vec::with_capacity(8 + 16 * (cols.len() + suffix.len()));
     out.extend_from_slice(&rel.raw_encode());
     for v in cols {
@@ -349,29 +409,88 @@ pub fn encode_key_with_suffix(
     for v in suffix {
         super::canonical::append_canonical(&mut out, v);
     }
-    EncodedKey(out)
+    StorageKey(out)
 }
 
-/// Column-wise bound arrays close a scan key the moment they hit a
-/// sentinel: `Value` columns keep contributing bytes, `Least` ends the
-/// key with nothing (every extension sorts at-or-after), `Greatest` ends
-/// it with the `0xFF` byte no canonical encoding begins (every extension
-/// sorts before). An UPPER key that runs out of bounds without a
-/// sentinel gets the `0xFF` tail — the scan includes every extension of
-/// its value prefix.
-fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
-    for b in bounds {
-        match b {
-            ScanBound::Value(v) => super::canonical::append_canonical(out, v),
-            ScanBound::Least => return,
-            ScanBound::Greatest => {
-                out.push(0xFF);
-                return;
-            }
-        }
+
+impl std::ops::Deref for TupleKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
     }
-    if upper {
-        out.push(0xFF);
+}
+
+impl AsRef<[u8]> for TupleKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for StorageKey {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for StorageKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl TupleKey {
+    /// The lawful multi-value mint: encode each value through the codec
+    /// authority and concatenate — no relation prefix.
+    pub fn from_values<'v>(values: impl IntoIterator<Item = &'v super::DataValue>) -> TupleKey {
+        let mut out = Vec::new();
+        for v in values {
+            out.extend_from_slice(super::canonical::encode_owned(v).as_bytes());
+        }
+        TupleKey(out)
+    }
+
+    /// Claim stored bare-tuple bytes by proving they split into exactly
+    /// `arity` lawful canonical encodings with nothing trailing.
+    pub fn from_stored(bytes: Vec<u8>, arity: usize) -> Result<TupleKey, DecodeError> {
+        split_key(&bytes, arity)?;
+        Ok(TupleKey(bytes))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl StorageKey {
+    /// Storage key layout v1: keys open with the relation id as 8
+    /// big-endian bytes (the keyspace prefix), then the key columns'
+    /// canonical encodings, then — for bitemporal relations — the two
+    /// fixed-width validity slots.
+    pub const RELATION_PREFIX_LEN: usize = 8;
+    /// One canonical validity slot: tag byte + 9-byte payload.
+    pub const VALIDITY_TAIL_LEN: usize = 10;
+    /// Both time slots of a bitemporal key.
+    pub const BITEMPORAL_TAIL_LEN: usize = 2 * Self::VALIDITY_TAIL_LEN;
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -431,73 +550,16 @@ pub fn scan_key_upper_projected(
     out
 }
 
-impl std::ops::Deref for EncodedKey {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl AsRef<[u8]> for EncodedKey {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl EncodedKey {
-    /// Storage key layout v1: keys open with the relation id as 8
-    /// big-endian bytes (the keyspace prefix), then the key columns'
-    /// canonical encodings, then — for bitemporal relations — the two
-    /// fixed-width validity slots.
-    pub const RELATION_PREFIX_LEN: usize = 8;
-    /// One canonical validity slot: tag byte + 9-byte payload.
-    pub const VALIDITY_TAIL_LEN: usize = 10;
-    /// Both time slots of a bitemporal key.
-    pub const BITEMPORAL_TAIL_LEN: usize = 2 * Self::VALIDITY_TAIL_LEN;
-
-    /// The lawful multi-value mint: encode each value through the codec
-    /// authority and concatenate — the execution-free path from logical
-    /// values to their written form.
-    pub fn from_values<'v>(values: impl IntoIterator<Item = &'v super::DataValue>) -> EncodedKey {
-        let mut out = Vec::new();
-        for v in values {
-            out.extend_from_slice(super::canonical::encode_owned(v).as_bytes());
-        }
-        EncodedKey(out)
-    }
-
-    /// The storage-facing door: claim stored bytes as a written tuple by
-    /// proving they split into exactly `arity` lawful canonical
-    /// encodings with nothing trailing. The ONLY public byte constructor
-    /// — random bytes cannot masquerade as a key.
-    pub fn from_stored(bytes: Vec<u8>, arity: usize) -> Result<EncodedKey, DecodeError> {
-        split_key(&bytes, arity)?;
-        Ok(EncodedKey(bytes))
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::admission::Denial;
     use super::super::canonical::{Datum, encode};
     use super::super::code::StampedCode;
     use super::super::number::Num;
     use super::*;
 
     fn stamp_of(arena: &mut Arena, d: Datum<'_>) -> StampedCode {
-        arena.intern(encode(d).as_bytes())
+        arena.intern(encode(d).as_bytes()).expect("intern")
     }
 
     // ------------------------------------------------------------------
@@ -508,32 +570,34 @@ mod tests {
     #[test]
     fn written_form_is_durable_across_seals_while_codes_move() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         for i in 0..30i64 {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(i * 7 % 13)));
             let b = stamp_of(
                 &mut arena,
                 Datum::Str(if i % 2 == 0 { "even" } else { "odd" }),
             );
-            rows.push_row(&[a, b]);
+            rows.push_row(&[a, b]).expect("lawful push");
         }
-        let keys_before: Vec<EncodedKey> = {
+        let keys_before: Vec<TupleKey> = {
             let f = arena.frame();
-            let adm = rows.admit(&f);
-            (0..adm.len()).map(|i| adm.encode_row(i)).collect()
+            let adm = rows.admit(&f).expect("lawful admit");
+            (0..adm.len())
+                .map(|i| adm.encode_row(i).expect("lawful"))
+                .collect()
         };
         let raw_before: Vec<Vec<u32>> = {
             let f = arena.frame();
-            let adm = rows.admit(&f);
+            let adm = rows.admit(&f).expect("lawful admit");
             (0..adm.len()).map(|i| adm.row(i).to_vec()).collect()
         };
         // Seal + gather: the execution currency moves...
-        let remap = arena.seal();
-        let rows = rows.gather(&remap);
+        let remap = arena.seal().expect("lawful seal");
+        let rows = rows.gather(&remap).expect("lawful gather");
         // ...and moves visibly (something re-ranked: 13 distinct nums +
         // 2 strings all started as tail codes).
         let f = arena.frame();
-        let adm = rows.admit(&f);
+        let adm = rows.admit(&f).expect("lawful admit");
         let raw_after: Vec<Vec<u32>> = (0..adm.len()).map(|i| adm.row(i).to_vec()).collect();
         assert_ne!(
             raw_before, raw_after,
@@ -542,7 +606,7 @@ mod tests {
         // ...while the written form is byte-identical, row for row.
         for (i, k) in keys_before.iter().enumerate() {
             assert_eq!(
-                &adm.encode_row(i),
+                &adm.encode_row(i).expect("lawful"),
                 k,
                 "the durable form moved with the seal"
             );
@@ -553,20 +617,22 @@ mod tests {
     #[test]
     fn encoded_key_order_is_tuple_semantic_order() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let tuples: [(i64, &str); 5] = [(3, "b"), (1, "zzz"), (3, "a"), (-5, "x"), (1, "a")];
         for (n, s) in tuples {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(n)));
             let b = stamp_of(&mut arena, Datum::Str(s));
-            rows.push_row(&[a, b]);
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         let f = arena.frame();
-        let adm = rows.admit(&f);
+        let adm = rows.admit(&f).expect("lawful admit");
         for i in 0..adm.len() {
             for j in 0..adm.len() {
                 assert_eq!(
-                    adm.encode_row(i).cmp(&adm.encode_row(j)),
-                    adm.cmp_rows(i, j),
+                    adm.encode_row(i)
+                        .expect("lawful")
+                        .cmp(&adm.encode_row(j).expect("lawful")),
+                    adm.cmp_rows(i, j).expect("lawful"),
                     "key byte order diverged from tuple order at ({i},{j})"
                 );
             }
@@ -578,34 +644,34 @@ mod tests {
     #[test]
     fn push_encoded_round_trips_and_refuses_totally() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(42)));
         let b = stamp_of(&mut arena, Datum::Str("hello"));
-        rows.push_row(&[a, b]);
+        rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
         };
         // Re-enter through the bytes door.
-        let mut rows2 = Rows::new_in(2, &arena.frame());
+        let mut rows2 = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         rows2.push_encoded(&key, &mut arena).expect("lawful key");
         {
             let f = arena.frame();
-            let adm2 = rows2.admit(&f);
-            assert_eq!(adm2.encode_row(0), key, "bytes door changed the tuple");
+            let adm2 = rows2.admit(&f).expect("lawful admit");
+            assert_eq!(adm2.encode_row(0).expect("lawful"), key, "bytes door changed the tuple");
             // Same epoch + arena dedup ⟹ same codes: tuple identity holds.
-            let adm = rows.admit(&f);
+            let adm = rows.admit(&f).expect("lawful admit");
             assert_eq!(adm.row(0), adm2.row(0));
         }
         // Truncated key: typed refusal, nothing pushed.
-        let cut = EncodedKey(key.as_bytes()[..key.len() - 3].to_vec());
+        let cut = TupleKey(key.as_bytes()[..key.len() - 3].to_vec());
         let before = rows2.len();
         assert!(rows2.push_encoded(&cut, &mut arena).is_err());
         assert_eq!(rows2.len(), before, "refusal left a partial tuple");
         // Trailing garbage: refused.
         let mut fat = key.as_bytes().to_vec();
         fat.push(0x05);
-        assert!(rows2.push_encoded(&EncodedKey(fat), &mut arena).is_err());
+        assert!(rows2.push_encoded(&TupleKey(fat), &mut arena).is_err());
         assert_eq!(rows2.len(), before);
     }
 
@@ -620,9 +686,9 @@ mod tests {
         let mut arena = Arena::new();
         let epoch0 = arena.epoch();
         // Seed relation: reach(x) for x in {0}; rule: reach(x+3) up to 12.
-        let mut total = Rows::new_in(1, &arena.frame());
+        let mut total = Rows::new_in(Arity::ONE, &arena.frame());
         let seed = stamp_of(&mut arena, Datum::Num(Num::int(0)));
-        total.push_row(&[seed]);
+        total.push_row(&[seed]).expect("lawful push");
         let mut frontier: Vec<Vec<u8>> = vec![encode(Datum::Num(Num::int(0))).as_bytes().to_vec()];
         let mut rounds = 0;
         while !frontier.is_empty() {
@@ -634,7 +700,7 @@ mod tests {
                 let (datum, _) = decode_one(&bytes).expect("lawful");
                 let n = match datum {
                     super::super::DataValue::Num(n) => n.as_int().expect("int domain"),
-                    other => panic!("wrong kind: {other:?}"),
+                    other @ (data_value_any!()) => panic!("wrong kind: {other:?}"),
                 };
                 if n + 3 <= 12 {
                     fresh.push(stamp_of(&mut arena, Datum::Num(Num::int(n + 3))));
@@ -644,7 +710,7 @@ mod tests {
             // raw-code identity under one admitted domain, then extend.
             let novel: Vec<StampedCode> = {
                 let f = arena.frame();
-                let adm = total.admit(&f);
+                let adm = total.admit(&f).expect("lawful admit");
                 let existing: std::collections::BTreeSet<u32> = adm.raw().iter().copied().collect();
                 fresh
                     .into_iter()
@@ -652,29 +718,31 @@ mod tests {
                     .collect()
             };
             for sc in &novel {
-                total.push_row(&[*sc]);
+                total.push_row(&[*sc]).expect("lawful push");
                 let f = arena.frame();
-                let adm = total.admit(&f);
-                frontier.push(adm.resolve_cell(adm.len() - 1, 0).to_vec());
+                let adm = total.admit(&f).expect("lawful admit");
+                frontier.push(adm.resolve_cell(adm.len() - 1, 0).expect("lawful").to_vec());
             }
             assert_eq!(arena.epoch(), epoch0, "no seal mid-fixpoint");
             assert!(rounds < 32, "fixpoint diverged");
         }
         // Fixpoint reached: {0,3,6,9,12}.
         assert_eq!(total.len(), 5);
-        let keys_at_fixpoint: Vec<EncodedKey> = {
+        let keys_at_fixpoint: Vec<TupleKey> = {
             let f = arena.frame();
-            let adm = total.admit(&f);
-            (0..adm.len()).map(|i| adm.encode_row(i)).collect()
+            let adm = total.admit(&f).expect("lawful admit");
+            (0..adm.len())
+                .map(|i| adm.encode_row(i).expect("lawful"))
+                .collect()
         };
         // COMMIT BOUNDARY: seal once, gather the held container, and the
         // durable form is untouched.
-        let remap = arena.seal();
-        let total = total.gather(&remap);
+        let remap = arena.seal().expect("lawful seal");
+        let total = total.gather(&remap).expect("lawful gather");
         let f = arena.frame();
-        let adm = total.admit(&f);
+        let adm = total.admit(&f).expect("lawful admit");
         for (i, k) in keys_at_fixpoint.iter().enumerate() {
-            assert_eq!(&adm.encode_row(i), k);
+            assert_eq!(&adm.encode_row(i).expect("lawful"), k);
         }
     }
 
@@ -683,21 +751,21 @@ mod tests {
     #[test]
     fn from_stored_is_a_validating_door() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(2, &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(1)));
         let b = stamp_of(&mut arena, Datum::Str("s"));
-        rows.push_row(&[a, b]);
+        rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
         };
         // Lawful bytes round-trip through the storage door.
-        let reclaimed = EncodedKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
+        let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
         assert_eq!(reclaimed, key);
         // Wrong arity, garbage, truncation: typed refusals.
-        assert!(EncodedKey::from_stored(key.as_bytes().to_vec(), 3).is_err());
-        assert!(EncodedKey::from_stored(vec![0xEE, 0x00], 1).is_err());
-        assert!(EncodedKey::from_stored(key.as_bytes()[..key.len() - 1].to_vec(), 2).is_err());
+        assert!(TupleKey::from_stored(key.as_bytes().to_vec(), 3).is_err());
+        assert!(TupleKey::from_stored(vec![0xEE, 0x00], 1).is_err());
+        assert!(TupleKey::from_stored(key.as_bytes()[..key.len() - 1].to_vec(), 2).is_err());
     }
 
     /// Storage ingestion refuses stale/foreign containers with typed
@@ -705,22 +773,22 @@ mod tests {
     #[test]
     fn push_encoded_refuses_stale_and_foreign_domains_typed() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(1, &arena.frame());
+        let mut rows = Rows::new_in(Arity::ONE, &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(9)));
-        rows.push_row(&[a]);
+        rows.push_row(&[a]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
         };
         // Stale: the container predates the seal.
-        arena.seal();
+        arena.seal().expect("lawful seal");
         assert!(matches!(
             rows.push_encoded(&key, &mut arena),
             Err(PushError::StaleDomain { .. })
         ));
         // Foreign: a container from another arena entirely.
         let other = Arena::new();
-        let mut foreign_rows = Rows::new_in(1, &other.frame());
+        let mut foreign_rows = Rows::new_in(Arity::ONE, &other.frame());
         assert!(matches!(
             foreign_rows.push_encoded(&key, &mut arena),
             Err(PushError::ForeignArena)
@@ -749,6 +817,11 @@ mod tests {
         // The constructor door itself refuses the cap.
         assert!(RelationId::new(RelationId::CAP).is_none());
         assert!(RelationId::new(u64::MAX).is_none());
+        // Allocator step cannot skip the ceiling either.
+        assert!(RelationId::new(RelationId::CAP - 1)
+            .expect("last assignable")
+            .next()
+            .is_none());
     }
 
     /// The scan-key sentinel law: lower <= every key of matching rows
@@ -794,21 +867,29 @@ mod tests {
     fn validity_slot_width_is_pinned() {
         use super::super::wide::validity::{Validity, ValidityTs};
         let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(123), true),
+            Validity::new(ValidityTs::from_raw(123), true).expect("non-reserved"),
         ));
-        assert_eq!(enc.len(), EncodedKey::VALIDITY_TAIL_LEN);
+        assert_eq!(enc.len(), StorageKey::VALIDITY_TAIL_LEN);
         let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(i64::MIN), false),
+            Validity::new(ValidityTs::from_raw(i64::MIN), false).expect("retract admits every tick"),
         ));
-        assert_eq!(enc2.len(), EncodedKey::VALIDITY_TAIL_LEN);
+        assert_eq!(enc2.len(), StorageKey::VALIDITY_TAIL_LEN);
     }
 
     #[test]
-    #[should_panic(expected = "tuple arity mismatch")]
     fn arity_is_enforced_at_the_write_door() {
         let mut arena = Arena::new();
         let sc = stamp_of(&mut arena, Datum::Null);
-        let mut rows = Rows::new_in(2, &arena.frame());
-        rows.push_row(&[sc]);
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
+        assert!(
+            matches!(
+                rows.push_row(&[sc]),
+                Err(Denial::ArityMismatch {
+                    expected: 2,
+                    got: 1
+                })
+            ),
+            "wrong-width push must refuse typed — never abort"
+        );
     }
 }

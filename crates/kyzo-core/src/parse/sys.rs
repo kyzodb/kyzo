@@ -109,7 +109,7 @@ pub enum SysOp {
     ListRelations,
     ListRunning,
     ListFixedRules,
-    KillRunning(u64),
+    KillRunning(ProcessId),
     Explain(Box<InputProgram>),
     /// `::verify { <query> }` (story #80): run the query through both the
     /// production evaluator and the sealed naive oracle over one shared
@@ -163,6 +163,13 @@ struct Built;
 /// Configuration of an FTS (full-text search) index, as declared.
 /// Constructible ONLY through [`FtsConfigBuilder`] (the private `_built`
 /// witness seals it), so every value carries a proven `extractor`.
+///
+/// **Sole spelling (story #305 T4).** This is the only `struct FtsIndexConfig`
+/// in the crate. The mutation tier consumes it by path
+/// (`crate::parse::sys::FtsIndexConfig`); the stored catalog form is
+/// [`crate::engines::text::FtsIndexManifest`], a different concept. A second
+/// declared-config spelling must not reappear — pinned by the
+/// `fts_index_config_is_the_sole_spelling` unit test in this module.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtsIndexConfig {
@@ -208,10 +215,7 @@ impl FtsConfigBuilder<Unset> {
                 val: DataValue::Null,
                 span: SourceSpan(0, 0),
             },
-            tokenizer: TokenizerConfig {
-                name: Default::default(),
-                args: Default::default(),
-            },
+            tokenizer: TokenizerConfig::simple(),
             filters: vec![],
             _required: PhantomData,
         }
@@ -317,10 +321,7 @@ impl MinHashLshConfigBuilder<Unset> {
                 val: DataValue::Null,
                 span: SourceSpan(0, 0),
             },
-            tokenizer: TokenizerConfig {
-                name: Default::default(),
-                args: Default::default(),
-            },
+            tokenizer: TokenizerConfig::simple(),
             filters: vec![],
             n_gram: 1,
             n_perm: 200,
@@ -409,8 +410,12 @@ impl BuildMinHashLshConfig for MinHashLshConfigBuilder<Set> {
 /// every `HnswIndexConfig` value is proven complete: `vec_dim`,
 /// `ef_construction`, and `m_neighbours` are always present, never a
 /// sentinel checked after assembly.
+///
+/// `index_filter` is the parsed typed predicate substance (or `None`) — never
+/// raw source text. The mutation tier stores that same substance on the
+/// persisted [`crate::engines::hnsw::HnswIndexManifest`].
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HnswIndexConfig {
     pub base_relation: SmartString<LazyCompact>,
     pub index_name: SmartString<LazyCompact>,
@@ -420,7 +425,7 @@ pub struct HnswIndexConfig {
     pub distance: HnswDistance,
     pub ef_construction: usize,
     pub m_neighbours: usize,
-    pub index_filter: Option<String>,
+    pub index_filter: Option<Expr>,
     pub extend_candidates: bool,
     pub keep_pruned_connections: bool,
     _built: Built,
@@ -442,7 +447,7 @@ pub struct HnswConfigBuilder<Dim, Ef, M> {
     dtype: VecElementType,
     vec_fields: Vec<SmartString<LazyCompact>>,
     distance: HnswDistance,
-    index_filter: Option<String>,
+    index_filter: Option<Expr>,
     extend_candidates: bool,
     keep_pruned_connections: bool,
     _required: PhantomData<(Dim, Ef, M)>,
@@ -509,7 +514,7 @@ impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
         self.vec_fields = vec_fields;
         self
     }
-    pub fn filter(mut self, index_filter: Option<String>) -> Self {
+    pub fn filter(mut self, index_filter: Option<Expr>) -> Self {
         self.index_filter = index_filter;
         self
     }
@@ -526,9 +531,16 @@ impl<Dim, Ef, M> HnswConfigBuilder<Dim, Ef, M> {
 // Each required setter is callable only while its own field is `Unset` (so it
 // cannot be set twice) and flips exactly that field's marker to `Set`.
 impl<Ef, M> HnswConfigBuilder<Unset, Ef, M> {
-    pub fn dim(mut self, vec_dim: usize) -> HnswConfigBuilder<Set, Ef, M> {
+    /// Set vector dimension. Same law as `::hnsw` parse: `dim >= 1` (P092).
+    pub fn dim(
+        mut self,
+        vec_dim: usize,
+    ) -> std::result::Result<HnswConfigBuilder<Set, Ef, M>, HnswDimLawError> {
+        if vec_dim < 1 {
+            return Err(HnswDimLawError(vec_dim));
+        }
         self.vec_dim = vec_dim;
-        self.remark()
+        Ok(self.remark())
     }
 }
 impl<Dim, M> HnswConfigBuilder<Dim, Unset, M> {
@@ -538,11 +550,30 @@ impl<Dim, M> HnswConfigBuilder<Dim, Unset, M> {
     }
 }
 impl<Dim, Ef> HnswConfigBuilder<Dim, Ef, Unset> {
-    pub fn m(mut self, m_neighbours: usize) -> HnswConfigBuilder<Dim, Ef, Set> {
+    /// Set `m` neighbours. Same law as `::hnsw` parse: `m >= 2` (P092).
+    pub fn m(
+        mut self,
+        m_neighbours: usize,
+    ) -> std::result::Result<HnswConfigBuilder<Dim, Ef, Set>, HnswMLawError> {
+        if m_neighbours < 2 {
+            return Err(HnswMLawError(m_neighbours));
+        }
         self.m_neighbours = m_neighbours;
-        self.remark()
+        Ok(self.remark())
     }
 }
+
+/// `HnswConfigBuilder::dim` refused a non-positive dimension (P092).
+#[derive(Debug, Error, Diagnostic)]
+#[error("HNSW dim must be >= 1, got {0}")]
+#[diagnostic(code(parser::hnsw_dim_law))]
+pub struct HnswDimLawError(pub usize);
+
+/// `HnswConfigBuilder::m` refused `m < 2` (P092).
+#[derive(Debug, Error, Diagnostic)]
+#[error("HNSW m must be >= 2, got {0}")]
+#[diagnostic(code(parser::hnsw_m_law))]
+pub struct HnswMLawError(pub usize);
 
 /// The build door for an HNSW configuration: implemented ONLY for the
 /// fully-set builder, so a config missing `dim`, `ef`, or `m` cannot be
@@ -604,6 +635,29 @@ pub enum HnswDistance {
     Cosine,
 }
 
+/// Non-negative process id for `::kill` (P081). Negatives are unconstructible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProcessId(u64);
+
+impl ProcessId {
+    /// Admit a non-negative integer as a process id.
+    pub fn try_from_i64(v: i64) -> std::result::Result<Self, NegativeProcessId> {
+        u64::try_from(v).map(Self).map_err(|_| NegativeProcessId(v))
+    }
+
+    /// The underlying non-negative id.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Negative integer offered where a [`ProcessId`] is required.
+#[derive(Debug, Error, Diagnostic)]
+#[error("`::kill` process ID must be non-negative, got {0}")]
+#[diagnostic(code(parser::kill_pid_negative))]
+#[diagnostic(help("write a non-negative process ID"))]
+pub struct NegativeProcessId(pub i64);
+
 /// A `::kill` argument that evaluates to a non-integer value. Spanned at the
 /// argument expression, replacing the CozoDB original's span-less `miette!`.
 #[derive(Debug, Error, Diagnostic)]
@@ -611,6 +665,13 @@ pub enum HnswDistance {
 #[diagnostic(code(parser::kill_pid_not_integer))]
 #[diagnostic(help("write the process ID as an integer literal or a `$parameter` bound to one"))]
 struct ProcessIdNotInteger(#[label("this must evaluate to an integer process ID")] SourceSpan);
+
+/// Spanned refusal for a negative `::kill` process id.
+#[derive(Debug, Error, Diagnostic)]
+#[error("`::kill` process ID must be non-negative, got {0}")]
+#[diagnostic(code(parser::kill_pid_negative))]
+#[diagnostic(help("write a non-negative process ID"))]
+struct NegativeProcessIdSpanned(i64, #[label("negative process ID")] SourceSpan);
 
 /// A rejected option in an `::hnsw`/`::fts`/`::lsh` index-DDL clause,
 /// labelled at the offending option name or value. One typed carrier for
@@ -698,7 +759,9 @@ pub(crate) fn parse_sys(
             let i_val = build_expr(i_expr, param_pool)?;
             let i_val = i_val.eval_to_const()?;
             let i_val = i_val.get_int().ok_or(ProcessIdNotInteger(span))?;
-            SysOp::KillRunning(i_val as u64)
+            let pid = ProcessId::try_from_i64(i_val)
+                .map_err(|NegativeProcessId(v)| NegativeProcessIdSpanned(v, span))?;
+            SysOp::KillRunning(pid)
         }
         Rule::explain_op => {
             let prog = parse_query(
@@ -812,7 +875,7 @@ pub(crate) fn parse_sys(
                     Rule::trigger_put => puts.push(script_str.to_string()),
                     Rule::trigger_rm => rms.push(script_str.to_string()),
                     Rule::trigger_replace => replaces.push(script_str.to_string()),
-                    _ => return Err(unexpected("a trigger kind", &op)),
+                    Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::index_create_adv | Rule::index_drop | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("a trigger kind", &op)),
                 }
             }
             SysOp::SetTriggers(rel, puts, rms, replaces)
@@ -844,7 +907,7 @@ pub(crate) fn parse_sys(
                     SysOp::RemoveConstraint(Symbol::new(name_p.as_str(), name_p.extract_span()))
                 }
                 Rule::constraint_list => SysOp::ListConstraints,
-                _ => return Err(unexpected("a constraint operation", &op)),
+                Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::index_create_adv | Rule::index_drop | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("a constraint operation", &op)),
             }
         }
         Rule::lsh_idx_op => {
@@ -856,10 +919,7 @@ pub(crate) fn parse_sys(
                     let rel = inner.expect("the relation's name")?;
                     let name = inner.expect("the index's name")?;
                     let mut filters = vec![];
-                    let mut tokenizer = TokenizerConfig {
-                        name: Default::default(),
-                        args: Default::default(),
-                    };
+                    let mut tokenizer = TokenizerConfig::simple();
                     let mut extractor: Option<Expr> = None;
                     let mut extract_filter: Option<Expr> = None;
                     let mut n_gram = 1;
@@ -926,7 +986,12 @@ pub(crate) fn parse_sys(
                                         val_span
                                     )
                                 );
-                                n_gram = v as usize;
+                                n_gram = usize::try_from(v).map_err(|_| {
+                                    IndexOptionError(
+                                        "n_gram must be positive".to_string(),
+                                        val_span,
+                                    )
+                                })?;
                             }
                             "n_perm" => {
                                 n_perm_span = val_span;
@@ -946,7 +1011,12 @@ pub(crate) fn parse_sys(
                                         val_span
                                     )
                                 );
-                                n_perm = v as usize;
+                                n_perm = usize::try_from(v).map_err(|_| {
+                                    IndexOptionError(
+                                        "n_perm must be positive".to_string(),
+                                        val_span,
+                                    )
+                                })?;
                             }
                             "target_threshold" => {
                                 threshold_span = val_span;
@@ -1042,7 +1112,7 @@ pub(crate) fn parse_sys(
                     SysOp::CreateMinHashLshIndex(config)
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an LSH index operation", &inner)),
+                Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("an LSH index operation", &inner)),
             }
         }
         Rule::fts_idx_op => {
@@ -1053,10 +1123,7 @@ pub(crate) fn parse_sys(
                     let rel = inner.expect("the relation's name")?;
                     let name = inner.expect("the index's name")?;
                     let mut filters = vec![];
-                    let mut tokenizer = TokenizerConfig {
-                        name: Default::default(),
-                        args: Default::default(),
-                    };
+                    let mut tokenizer = TokenizerConfig::simple();
                     let mut extractor: Option<Expr> = None;
                     let mut extract_filter: Option<Expr> = None;
                     for opt_pair in inner {
@@ -1106,7 +1173,7 @@ pub(crate) fn parse_sys(
                     SysOp::CreateFtsIndex(config)
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an FTS index operation", &inner)),
+                Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("an FTS index operation", &inner)),
             }
         }
         Rule::vec_idx_op => {
@@ -1153,7 +1220,9 @@ pub(crate) fn parse_sys(
                                     v > 0,
                                     IndexOptionError(format!("Invalid vec_dim: {v}"), val_span)
                                 );
-                                vec_dim = Some(v as usize);
+                                vec_dim = Some(usize::try_from(v).map_err(|_| {
+                                    IndexOptionError(format!("Invalid vec_dim: {v}"), val_span)
+                                })?);
                             }
                             "ef_construction" | "ef" => {
                                 let v = build_expr(opt_val, param_pool)?
@@ -1172,7 +1241,12 @@ pub(crate) fn parse_sys(
                                         val_span,
                                     )
                                 );
-                                ef_construction = Some(v as usize);
+                                ef_construction = Some(usize::try_from(v).map_err(|_| {
+                                    IndexOptionError(
+                                        format!("Invalid ef_construction: {v}"),
+                                        val_span,
+                                    )
+                                })?);
                             }
                             "m_neighbours" | "m" => {
                                 let v = build_expr(opt_val, param_pool)?
@@ -1184,14 +1258,21 @@ pub(crate) fn parse_sys(
                                             val_span,
                                         )
                                     })?;
+                                // `m >= 2`: m=1 makes `1/ln(m)` infinite (the
+                                // persisted MNeighbours newtype refuses it too).
                                 ensure!(
-                                    v > 0,
+                                    v >= 2,
+                                    IndexOptionError(
+                                        format!("Invalid m_neighbours: {v} (must be >= 2)"),
+                                        val_span,
+                                    )
+                                );
+                                m_neighbours = Some(usize::try_from(v).map_err(|_| {
                                     IndexOptionError(
                                         format!("Invalid m_neighbours: {v}"),
                                         val_span,
                                     )
-                                );
-                                m_neighbours = Some(v as usize);
+                                })?);
                             }
                             "dtype" => {
                                 dtype = match opt_val.as_str() {
@@ -1225,7 +1306,9 @@ pub(crate) fn parse_sys(
                                 }
                             }
                             "filter" => {
-                                index_filter = Some(opt_val.as_str().to_string());
+                                let mut ex = build_expr(opt_val, param_pool)?;
+                                ex.partial_eval()?;
+                                index_filter = Some(ex);
                             }
                             "extend_candidates" => {
                                 extend_candidates = opt_val.as_str().trim() == "true";
@@ -1266,14 +1349,14 @@ pub(crate) fn parse_sys(
                     .filter(index_filter)
                     .extend_candidates(extend_candidates)
                     .keep_pruned_connections(keep_pruned_connections)
-                    .dim(vec_dim)
+                    .dim(vec_dim)?
                     .ef(ef_construction)
-                    .m(m_neighbours)
+                    .m(m_neighbours)?
                     .build();
                     SysOp::CreateVectorIndex(config)
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an HNSW index operation", &inner)),
+                Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("an HNSW index operation", &inner)),
             }
         }
         Rule::index_op => {
@@ -1304,11 +1387,11 @@ pub(crate) fn parse_sys(
                     )
                 }
                 Rule::index_drop => parse_index_drop(inner)?,
-                _ => return Err(unexpected("an index operation", &inner)),
+                Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_op | Rule::vec_idx_op | Rule::fts_idx_op | Rule::lsh_idx_op | Rule::index_create_adv | Rule::compact_op | Rule::merkle_root_op | Rule::list_fixed_rules | Rule::running_op | Rule::kill_op | Rule::explain_op | Rule::verify_op | Rule::list_relations_op | Rule::list_columns_op | Rule::list_indices_op | Rule::describe_relation_op | Rule::remove_relations_op | Rule::rename_relations_op | Rule::access_level_op | Rule::access_level | Rule::trigger_relation_show_op | Rule::trigger_relation_op | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_op | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("an index operation", &inner)),
             }
         }
         Rule::list_fixed_rules => SysOp::ListFixedRules,
-        _ => return Err(unexpected("a system operation", &inner)),
+        Rule::EOI | Rule::script | Rule::query_script | Rule::query_script_inner | Rule::query_script_inner_no_bracket | Rule::imperative_script | Rule::sys_script | Rule::sys_script_inner | Rule::index_create | Rule::index_create_adv | Rule::index_drop | Rule::access_level | Rule::trigger_clause | Rule::trigger_put | Rule::trigger_rm | Rule::trigger_replace | Rule::constraint_create | Rule::constraint_drop | Rule::constraint_list | Rule::rename_pair | Rule::from_clause | Rule::to_clause | Rule::index_opt_field | Rule::WHITESPACE | Rule::BLOCK_COMMENT | Rule::LINE_COMMENT | Rule::COMMENT | Rule::prog_entry | Rule::var | Rule::param | Rule::ident | Rule::underscore_ident | Rule::definitely_underscore_ident | Rule::relation_ident | Rule::search_index_ident | Rule::compound_ident | Rule::compound_or_index_ident | Rule::rule | Rule::const_rule | Rule::fixed_rule | Rule::fixed_args_list | Rule::rule_head | Rule::head_arg | Rule::aggr_arg | Rule::fixed_arg | Rule::fixed_opt_pair | Rule::fixed_rel | Rule::fixed_rule_rel | Rule::fixed_relation_rel | Rule::fixed_named_relation_rel | Rule::fixed_named_relation_arg_pair | Rule::validity_clause | Rule::spans_kw | Rule::delta_sys_kw | Rule::delta_kw | Rule::spans_clause | Rule::delta_sys_clause | Rule::delta_clause | Rule::read_validity_clause | Rule::rule_body | Rule::rule_apply | Rule::relation_named_apply | Rule::relation_apply | Rule::search_apply | Rule::disjunction | Rule::or_op | Rule::atom | Rule::unify | Rule::unify_multi | Rule::in_op | Rule::negation | Rule::not_op | Rule::apply | Rule::apply_args | Rule::named_apply_args | Rule::named_apply_pair | Rule::grouped | Rule::expr | Rule::operation | Rule::op_or | Rule::op_and | Rule::op_concat | Rule::op_add | Rule::op_field_access | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_mod | Rule::op_eq | Rule::op_ne | Rule::op_gt | Rule::op_lt | Rule::op_ge | Rule::op_le | Rule::op_pow | Rule::op_coalesce | Rule::unary_op | Rule::minus | Rule::negate | Rule::term | Rule::object | Rule::object_pair | Rule::list | Rule::grouping | Rule::option | Rule::out_arg | Rule::disable_magic_rewrite_option | Rule::limit_option | Rule::offset_option | Rule::sort_option | Rule::returning_option | Rule::relation_option | Rule::relation_op | Rule::relation_create | Rule::relation_replace | Rule::relation_insert | Rule::relation_delete | Rule::relation_put | Rule::relation_update | Rule::relation_rm | Rule::relation_ensure | Rule::relation_ensure_not | Rule::timeout_option | Rule::sleep_option | Rule::sort_arg | Rule::sort_dir | Rule::sort_asc | Rule::sort_desc | Rule::assert_none_option | Rule::assert_some_option | Rule::quoted_string | Rule::quoted_string_inner | Rule::char | Rule::s_quoted_string | Rule::s_quoted_string_inner | Rule::s_char | Rule::raw_string | Rule::raw_string_inner | Rule::string | Rule::boolean | Rule::null | Rule::pos_int | Rule::hex_pos_int | Rule::octo_pos_int | Rule::bin_pos_int | Rule::int | Rule::dot_float | Rule::sci_float | Rule::float | Rule::number | Rule::literal | Rule::table_schema | Rule::table_cols | Rule::table_col | Rule::col_type | Rule::col_type_with_term | Rule::any_type | Rule::int_type | Rule::float_type | Rule::string_type | Rule::bytes_type | Rule::uuid_type | Rule::bool_type | Rule::json_type | Rule::validity_type | Rule::list_type | Rule::tuple_type | Rule::vec_type | Rule::vec_el_type | Rule::imperative_stmt | Rule::imperative_sysop | Rule::imperative_clause | Rule::imperative_condition | Rule::if_chain | Rule::if_not_chain | Rule::imperative_block | Rule::break_stmt | Rule::ignore_error_script | Rule::continue_stmt | Rule::return_stmt | Rule::loop_block | Rule::temp_swap | Rule::debug_stmt | Rule::fts_doc | Rule::fts_phrase_simple | Rule::fts_phrase_group | Rule::fts_prefix_marker | Rule::fts_booster | Rule::fts_phrase | Rule::fts_near | Rule::fts_term | Rule::fts_grouped | Rule::fts_expr | Rule::fts_op | Rule::fts_and | Rule::fts_or | Rule::fts_not | Rule::expression_script | Rule::param_list => return Err(unexpected("a system operation", &inner)),
     })
 }
 
@@ -1336,16 +1419,14 @@ fn parse_tokenizer_expr(expr: Expr) -> Result<TokenizerConfig> {
                 let v = arg.clone().eval_to_const()?;
                 targs.push(v);
             }
-            Ok(TokenizerConfig {
-                name: op,
-                args: targs,
+            TokenizerConfig::admit(op, targs).map_err(|e| {
+                IndexOptionError(e.to_string(), span).into()
             })
         }
-        Expr::Binding { var, .. } => Ok(TokenizerConfig {
-            name: var.name,
-            args: vec![],
+        Expr::Binding { var, .. } => TokenizerConfig::admit(var.name, vec![]).map_err(|e| {
+            IndexOptionError(e.to_string(), span).into()
         }),
-        _ => Err(IndexOptionError(
+        Expr::Const { .. } | Expr::Apply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => Err(IndexOptionError(
             "Tokenizer must be a symbol or a call for an existing tokenizer".to_string(),
             span,
         )
@@ -1374,7 +1455,7 @@ fn parse_filters_expr(mut expr: Expr) -> Result<Vec<TokenizerConfig>> {
             }
             Ok(filters)
         }
-        _ => Err(IndexOptionError("Filters must be a list of filters".to_string(), span).into()),
+        Expr::Binding { .. } | Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => Err(IndexOptionError("Filters must be a list of filters".to_string(), span).into()),
     }
 }
 
@@ -1391,14 +1472,42 @@ mod tests {
             .dtype(VecElementType::F64)
             .distance(HnswDistance::Cosine)
             .dim(128)
+            .unwrap()
             .ef(64)
             .m(16)
+            .unwrap()
             .build();
         assert_eq!(cfg.vec_dim, 128);
         assert_eq!(cfg.ef_construction, 64);
         assert_eq!(cfg.m_neighbours, 16);
         assert_eq!(cfg.dtype, VecElementType::F64);
         assert_eq!(cfg.distance, HnswDistance::Cosine);
+    }
+
+    /// Builder setters enforce the same dim/m laws as `::hnsw` parse (P092).
+    #[test]
+    fn hnsw_builder_refuses_illegal_dim_and_m() {
+        assert!(
+            HnswConfigBuilder::new("docs".into(), "by_vec".into())
+                .dim(0)
+                .is_err()
+        );
+        assert!(
+            HnswConfigBuilder::new("docs".into(), "by_vec".into())
+                .dim(1)
+                .unwrap()
+                .ef(8)
+                .m(1)
+                .is_err()
+        );
+    }
+
+    /// Negative process ids are unconstructible (P081).
+    #[test]
+    fn process_id_refuses_negatives() {
+        assert!(ProcessId::try_from_i64(-1).is_err());
+        assert_eq!(ProcessId::try_from_i64(0).unwrap().get(), 0);
+        assert_eq!(ProcessId::try_from_i64(42).unwrap().get(), 42);
     }
 
     /// The FTS and LSH staged builders carry their required extractor through
@@ -1420,5 +1529,43 @@ mod tests {
             .build();
         assert_eq!(lsh.extractor, ex());
         assert_eq!(lsh.n_gram, 3);
+    }
+
+    /// Story #305 T4: one `struct FtsIndexConfig` spelling. The mutation tier
+    /// names this module's type by path; a second definition must not exist
+    /// anywhere under `src/` (the engines/text twin is already gone).
+    #[test]
+    fn fts_index_config_is_the_sole_spelling() {
+        // Type identity: the path the mutation tier uses IS this definition.
+        fn mutation_tier_consumes(cfg: &crate::parse::sys::FtsIndexConfig) {
+            let _: &FtsIndexConfig = cfg;
+        }
+        let _ = mutation_tier_consumes;
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut defs = Vec::new();
+        fn walk(dir: &std::path::Path, defs: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read src tree") {
+                let entry = entry.expect("dir entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, defs);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&path).expect("read .rs");
+                if src.contains("struct FtsIndexConfig") {
+                    defs.push(path);
+                }
+            }
+        }
+        walk(&root, &mut defs);
+        assert_eq!(
+            defs,
+            [root.join("parse/sys.rs")],
+            "exactly one `struct FtsIndexConfig` — parse/sys.rs owns the sole spelling"
+        );
     }
 }

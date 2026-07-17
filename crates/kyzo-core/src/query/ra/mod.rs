@@ -78,7 +78,7 @@
  *  10. ra.rs:266   Debug-impl `r.data.get(0).unwrap()` — `if let` fallback.
  *  11. Slice-index sites (`tuple[*i]`, `bindings[n..m]`): positions are
  *      minted at compile time from the same plan's binding maps
- *      (`fill_binding_indices_and_compile`), so they are compiled
+ *      (`fill_binding_indices_and_compile`), so binding indices are filled
  *      knowledge, not data — the same structural argument as
  *      `TupleInIter::get` in `runtime/temp_store.rs`. The two range-slices
  *      whose in-bounds proof crosses functions (`prefix_join`'s
@@ -118,7 +118,7 @@
 //! node carries its output *bindings* (`Vec<Symbol>`, one per column); at
 //! the end of compilation `fill_binding_indices_and_compile` resolves every
 //! symbol reference inside filters and unification expressions to a tuple
-//! position and compiles the expressions to [`Bytecode`]. Iteration never
+//! position so [`Expr::eval`] can read them. Iteration never
 //! looks at a name again.
 //!
 //! The delta discipline (the seam contract of `query/eval.rs::RuleBody`):
@@ -146,12 +146,12 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::expr::{Bytecode, Expr, eval_bytecode_pred};
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
-use crate::data::value::{AsOf, DataValue, MAX_VALIDITY_TS};
+use crate::data::value::{AsOf, MAX_VALIDITY_TS};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -181,7 +181,7 @@ pub(crate) use search::SearchRA;
 pub(crate) use stored::{StoredRA, StoredWithValidityRA};
 pub(crate) use temp::TempStoreRA;
 pub(crate) use temporal::{DeltaRA, SpansRA};
-pub(crate) use transform::{FilteredRA, ReorderRA, UnificationRA};
+pub(crate) use transform::{FilteredRA, ReorderRA, UnificationKind, UnificationRA};
 
 /// A lazy stream of fallible tuples: what iterating an operator yields.
 /// (The original homed this alias in `data/tuple.rs`; it is operator-tier
@@ -197,9 +197,8 @@ pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 /// end-of-window bookkeeping, never a real datum.
 struct BatchFilter<'a> {
     parent: BatchIter<'a>,
-    filters: &'a [(Vec<Bytecode>, SourceSpan)],
+    filters: &'a [Expr],
     eliminate_indices: BTreeSet<usize>,
-    stack: Vec<DataValue>,
 }
 
 impl Iterator for BatchFilter<'_> {
@@ -213,8 +212,8 @@ impl Iterator for BatchFilter<'_> {
             let mut out = Batch::new();
             for t in batch.into_rows() {
                 let mut keep = true;
-                for (p, span) in self.filters.iter() {
-                    match eval_bytecode_pred(p, &t, &mut self.stack, *span) {
+                for p in self.filters.iter() {
+                    match p.eval_pred(&t) {
                         Ok(true) => {}
                         Ok(false) => {
                             keep = false;
@@ -263,7 +262,7 @@ pub(crate) struct PlanInvariantError(pub(crate) &'static str);
 #[diagnostic(code(query::stored_row_too_short))]
 #[diagnostic(help("The stored value is truncated or corrupt. Please report it."))]
 pub(crate) struct StoredRowTooShortError(
-    pub(crate) String,
+    pub(crate) Symbol,
     pub(crate) usize,
     pub(crate) usize,
     #[label] pub(crate) SourceSpan,
@@ -311,7 +310,7 @@ pub(crate) enum RelAlgebra {
     /// Column permutation (only ever the plan root, aligning to the rule
     /// head; [`RelAlgebra::join`] refuses it as a join RHS).
     Reorder(ReorderRA),
-    /// Bytecode predicate filter.
+    /// Expr predicate filter.
     Filter(FilteredRA),
     /// Append one computed column (`binding = expr`), or one row per list
     /// element (`binding in expr`).
@@ -347,7 +346,7 @@ impl RelAlgebra {
     }
 
     /// Resolve every symbol reference inside this tree's expressions to a
-    /// tuple position and compile the expressions to bytecode. Called once,
+    /// tuple position for `Expr::eval`. Called once,
     /// at the end of `compile_magic_rule_body`; iteration never resolves a
     /// name again.
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
@@ -427,7 +426,6 @@ impl RelAlgebra {
             storage_key,
             occurrence,
             filters: vec![],
-            filters_bytecodes: vec![],
             span,
         })
     }
@@ -454,7 +452,6 @@ impl RelAlgebra {
                 bindings,
                 storage,
                 filters: vec![],
-                filters_bytecodes: vec![],
                 span,
             })),
             Some(ValidityClause::At(vld)) => {
@@ -464,7 +461,6 @@ impl RelAlgebra {
                     bindings,
                     storage,
                     filters: vec![],
-                    filters_bytecodes: vec![],
                     as_of: vld,
                     span,
                 }))
@@ -474,7 +470,7 @@ impl RelAlgebra {
                 Ok(Self::Spans(SpansRA {
                     bindings,
                     storage,
-                    sys: sys.raw(),
+                    sys,
                     span,
                 }))
             }
@@ -501,8 +497,8 @@ impl RelAlgebra {
                     // Resolved separately, after this constructor returns
                     // (it needs catalog access this constructor does not
                     // have) — see `query/compile.rs`'s Delta-clause arm and
-                    // `DeltaRA::posting`'s own doc.
-                    posting: None,
+                    // `DeltaRA::scan`'s own doc.
+                    scan: crate::query::ra::temporal::DeltaScan::Naive,
                 }))
             }
         }
@@ -533,7 +529,6 @@ impl RelAlgebra {
                 RelAlgebra::Filter(FilteredRA {
                     parent: Box::new(s),
                     filters: vec![filter],
-                    filters_bytecodes: vec![],
                     to_eliminate: Default::default(),
                     span,
                 })
@@ -541,7 +536,6 @@ impl RelAlgebra {
             RelAlgebra::Filter(FilteredRA {
                 parent,
                 filters: mut pred,
-                filters_bytecodes,
                 to_eliminate,
                 span,
             }) => {
@@ -549,7 +543,6 @@ impl RelAlgebra {
                 RelAlgebra::Filter(FilteredRA {
                     parent,
                     filters: pred,
-                    filters_bytecodes,
                     to_eliminate,
                     span,
                 })
@@ -559,7 +552,6 @@ impl RelAlgebra {
                 storage_key,
                 occurrence,
                 mut filters,
-                filters_bytecodes,
                 span,
             }) => {
                 filters.push(filter);
@@ -568,7 +560,6 @@ impl RelAlgebra {
                     storage_key,
                     occurrence,
                     filters,
-                    filters_bytecodes,
                     span,
                 })
             }
@@ -576,7 +567,6 @@ impl RelAlgebra {
                 bindings,
                 storage,
                 mut filters,
-                filters_bytecodes,
                 span,
             }) => {
                 filters.push(filter);
@@ -584,7 +574,6 @@ impl RelAlgebra {
                     bindings,
                     storage,
                     filters,
-                    filters_bytecodes,
                     span,
                 })
             }
@@ -592,7 +581,6 @@ impl RelAlgebra {
                 bindings,
                 storage,
                 mut filters,
-                filters_bytecodes,
                 span,
                 as_of,
             }) => {
@@ -603,7 +591,6 @@ impl RelAlgebra {
                     filters,
                     span,
                     as_of,
-                    filters_bytecodes,
                 })
             }
             RelAlgebra::Join(inner) => {
@@ -647,7 +634,6 @@ impl RelAlgebra {
                     joined = RelAlgebra::Filter(FilteredRA {
                         parent: Box::new(joined),
                         filters: remaining,
-                        filters_bytecodes: vec![],
                         to_eliminate: Default::default(),
                         span,
                     });
@@ -661,15 +647,14 @@ impl RelAlgebra {
         self,
         binding: Symbol,
         expr: Expr,
-        is_multi: bool,
+        kind: UnificationKind,
         span: SourceSpan,
     ) -> Self {
         RelAlgebra::Unification(UnificationRA {
             parent: Box::new(self),
             binding,
             expr,
-            expr_bytecode: vec![],
-            is_multi,
+            kind,
             to_eliminate: Default::default(),
             span,
         })
@@ -698,7 +683,7 @@ impl RelAlgebra {
                     "a NegJoin cannot be the right side of a join"
                 ))
             }
-            _ => {}
+            RelAlgebra::Fixed(_) | RelAlgebra::TempStore(_) | RelAlgebra::Stored(_) | RelAlgebra::StoredWithValidity(_) | RelAlgebra::Join(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
         }
         Ok(RelAlgebra::Join(Box::new(InnerJoin {
             left: self,
@@ -732,7 +717,7 @@ impl RelAlgebra {
             RelAlgebra::StoredWithValidity(v) => NegRight::StoredWithValidity(v),
             RelAlgebra::Spans(v) => NegRight::Spans(v),
             RelAlgebra::Delta(v) => NegRight::Delta(v),
-            _ => bail!(PlanInvariantError(
+            RelAlgebra::Fixed(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) => bail!(PlanInvariantError(
                 "the right side of a negation must be a rule or stored-relation scan"
             )),
         };
@@ -1005,7 +990,7 @@ mod tests {
                     Err(e) => return Some(Err(e)),
                     Ok(b) => {
                         current = (0..b.len())
-                            .map(|i| b.row(i).to_vec())
+                            .map(|i| b.row(i).expect("i < batch.len()").to_vec())
                             .map(Tuple::from_vec)
                             .collect();
                         idx = 0;
@@ -1021,7 +1006,7 @@ mod tests {
     use crate::data::program::InputRelationHandle;
     use crate::data::relation::{ColType, NullableColType};
     use crate::data::relation::{ColumnDef, StoredRelationMetadata};
-    use crate::data::value::ValidityTs;
+    use crate::data::value::{DataValue, ValidityTs};
     use crate::engines::segments::SegmentEngine;
     use crate::query::temp_store::RegularTempStore;
     use crate::runtime::relation::create_relation;
@@ -1044,10 +1029,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1147,7 +1129,7 @@ mod tests {
                 val: DataValue::List(vec![v(1), v(2), v(3)]),
                 span: sp(),
             },
-            true,
+            UnificationKind::Spread,
             sp(),
         );
         let left = RelAlgebra::Fixed(InlineFixedRA {
@@ -1266,7 +1248,7 @@ mod tests {
                 val: DataValue::List(vec![v(1), v(2), v(3)]),
                 span: sp(),
             },
-            true,
+            UnificationKind::Spread,
             sp(),
         );
         ra.fill_binding_indices_and_compile().unwrap();
@@ -1290,7 +1272,7 @@ mod tests {
                 val: v(7),
                 span: sp(),
             },
-            true,
+            UnificationKind::Spread,
             sp(),
         );
         bad.fill_binding_indices_and_compile().unwrap();
@@ -1642,7 +1624,6 @@ mod tests {
             storage_key: storage_key.clone(),
             occurrence: AtomOccurrence(0),
             filters: vec![],
-            filters_bytecodes: vec![],
             span: sp(),
         });
         let mut ra = left
@@ -1911,7 +1892,6 @@ mod tests {
             bindings: vec![sym("z2"), sym("w")],
             storage: right_handle,
             filters: vec![],
-            filters_bytecodes: vec![],
             span: sp(),
         };
         let join_indices = || -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) };
@@ -1987,7 +1967,7 @@ mod tests {
             args: Box::new([
                 Expr::Binding {
                     var: Symbol::new("c0", Default::default()),
-                    tuple_pos: Some(0),
+                    tuple_pos: BindingPos::Resolved(0),
                 },
                 Expr::Const {
                     val: DataValue::from(0),

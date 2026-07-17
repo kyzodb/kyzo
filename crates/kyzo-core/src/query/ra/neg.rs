@@ -168,10 +168,10 @@ impl NegJoin {
                     let rji = right_join_indices;
                     Box::new(move |row: &[DataValue]| {
                         'outer: for found in
-                            storage.prefix_iter_projected(row, &left_to_prefix_indices, false)
+                            storage.prefix_iter_projected(row, &left_to_prefix_indices, false)?
                         {
                             for (l, r) in lji.iter().zip(rji.iter()) {
-                                if row[*l] != found.get(*r) {
+                                if row[*l] != found.try_get(*r)? {
                                     continue 'outer;
                                 }
                             }
@@ -181,9 +181,12 @@ impl NegJoin {
                     })
                 } else {
                     let mut right_join_vals = BTreeSet::new();
-                    for tuple in storage.all_iter() {
-                        let to_join: Box<[DataValue]> =
-                            right_join_indices.iter().map(|i| tuple.get(*i)).collect();
+                    for tuple in storage.all_iter()? {
+                        let to_join: Box<[DataValue]> = right_join_indices
+                            .iter()
+                            .map(|i| tuple.try_get(*i))
+                            .collect::<Result<Vec<_>, _>>()?
+                            .into_boxed_slice();
                         right_join_vals.insert(to_join);
                     }
                     let lji = left_join_indices;
@@ -207,7 +210,7 @@ impl NegJoin {
                             for (l, r) in lji.iter().zip(rji.iter()) {
                                 let found_val = found.get(*r).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        v.storage.name.to_string(),
+                                        Symbol::new(v.storage.name.clone(), v.span),
                                         *r,
                                         found.len(),
                                         v.span,
@@ -267,7 +270,7 @@ impl NegJoin {
                             for (l, r) in lji.iter().zip(rji.iter()) {
                                 let found_val = found.get(*r).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        v.storage.name.to_string(),
+                                        Symbol::new(v.storage.name.clone(), v.span),
                                         *r,
                                         found.len(),
                                         v.span,
@@ -314,7 +317,7 @@ impl NegJoin {
                 for batch in v.iter_batched(tx)? {
                     let batch = batch?;
                     for i in 0..batch.len() {
-                        let row = batch.row(i);
+                        let row = batch.row(i).expect("i < batch.len()");
                         let to_join: Box<[DataValue]> =
                             right_join_indices.iter().map(|i| row[*i].clone()).collect();
                         right_join_vals.insert(to_join);
@@ -332,7 +335,7 @@ impl NegJoin {
                 for batch in v.iter_batched(tx)? {
                     let batch = batch?;
                     for i in 0..batch.len() {
-                        let row = batch.row(i);
+                        let row = batch.row(i).expect("i < batch.len()");
                         let to_join: Box<[DataValue]> =
                             right_join_indices.iter().map(|i| row[*i].clone()).collect();
                         right_join_vals.insert(to_join);
@@ -386,7 +389,7 @@ impl NegBatchFilter<'_> {
                 }
             };
             for i in 0..batch.len() {
-                let row = batch.row(i);
+                let row = batch.row(i).expect("i < batch.len()");
                 match (self.has_match)(row) {
                     Ok(true) => {}
                     Ok(false) => {

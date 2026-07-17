@@ -21,7 +21,7 @@
  * empty-ruleset `unwrap`s are errors; `InputRelationHandle` is re-homed here
  * from the original's `runtime/relation.rs` (it is the *declared* output
  * relation of a query — parse-tier substance, all of its fields data-tier);
- * adornments are `Vec<bool>` (no `smallvec` dependency); the resolved index
+ * adornments are `Vec<AdornmentMark>` (no `smallvec` dependency); the resolved index
  * search atoms (HNSW/FTS/LSH) and the fixed-rule trait's runtime surface
  * land with their owning tiers.
  * Port constraints for later tiers: the parser must synthesize the
@@ -79,7 +79,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::aggr::Aggregation;
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
@@ -97,28 +97,34 @@ pub(crate) use crate::fixed_rule::{FixedRule, FixedRuleHandle};
 
 /// A `:assert none` / `:assert some` clause: the query fails unless its
 /// result set is empty / non-empty.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum QueryAssertion {
-    AssertNone(SourceSpan),
-    AssertSome(SourceSpan),
+    AssertNone(#[serde(skip)] SourceSpan),
+    AssertSome(#[serde(skip)] SourceSpan),
 }
 
 /// Whether a mutating query reports the mutated rows back (`:returning`).
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum ReturnMutation {
     NotReturning,
     Returning,
 }
 
 /// Sort direction in an `:order` clause.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum SortDir {
     Asc,
     Dsc,
 }
 
 /// What a query does to its output stored relation.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum RelationOp {
     Create,
     Replace,
@@ -137,7 +143,7 @@ pub(crate) enum RelationOp {
 /// engine-minted stamp (`SessionTx::system_stamp_routed`); a script has no
 /// syntax to set it, which is what keeps "system time" meaning "when the
 /// database learned this" rather than something a writer can forge.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum WriteValidity {
     /// No `@` clause: every row lands at the transaction's own system
     /// stamp — byte-for-byte the pre-`@` behavior.
@@ -215,7 +221,7 @@ pub(crate) struct InputRelationHandle {
 /// Fields are `pub(crate)`: the parser assembles these incrementally and the
 /// runtime reads them piecemeal; they carry no cross-field invariant that a
 /// constructor could prove.
-#[derive(Clone, PartialEq, Default)]
+#[derive(Clone, PartialEq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct QueryOutOptions {
     pub(crate) limit: Option<usize>,
     pub(crate) offset: Option<usize>,
@@ -480,20 +486,91 @@ pub(crate) struct Trivia {
     pub(crate) trailing: Vec<Comment>,
 }
 
-/// One parsed inline rule: head bindings (with optional aggregations,
-/// index-aligned with the head), and a body of sugared [`InputAtom`]s.
+/// Per-head-position aggregation — a structured slot, never an `Option` hole.
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+pub(crate) enum HeadAggrSlot {
+    Plain,
+    Aggregated {
+        aggr: Aggregation,
+        args: Vec<DataValue>,
+    },
+}
+
+impl HeadAggrSlot {
+    pub(crate) fn is_aggregated(&self) -> bool {
+        matches!(self, HeadAggrSlot::Aggregated { .. })
+    }
+
+    pub(crate) fn as_aggregated(&self) -> Option<(&Aggregation, &[DataValue])> {
+        match self {
+            HeadAggrSlot::Plain => None,
+            HeadAggrSlot::Aggregated { aggr, args } => Some((aggr, args)),
+        }
+    }
+}
+
+/// One head column: binding paired with its aggregation slot — the unit of
+/// an aligned head (mint via [`aligned_head`], never by stuffing two vecs).
 #[derive(Debug, Clone)]
+pub(crate) struct HeadColumn {
+    pub(crate) binding: Symbol,
+    pub(crate) aggr: HeadAggrSlot,
+}
+
+/// Zip head bindings with aggregation slots, refusing length disagreement.
+pub(crate) fn aligned_head(
+    bindings: Vec<Symbol>,
+    aggrs: Vec<HeadAggrSlot>,
+) -> Result<(Vec<Symbol>, Vec<HeadAggrSlot>), HeadAggrLenMismatch> {
+    if bindings.len() != aggrs.len() {
+        return Err(HeadAggrLenMismatch(bindings.len(), aggrs.len()));
+    }
+    Ok((bindings, aggrs))
+}
+
+/// Split aligned [`HeadColumn`]s into the parallel head/aggr representation
+/// carried by rule tiers (same length by construction).
+pub(crate) fn split_head_columns(columns: Vec<HeadColumn>) -> (Vec<Symbol>, Vec<HeadAggrSlot>) {
+    let mut bindings = Vec::with_capacity(columns.len());
+    let mut aggrs = Vec::with_capacity(columns.len());
+    for HeadColumn { binding, aggr } in columns {
+        bindings.push(binding);
+        aggrs.push(aggr);
+    }
+    (bindings, aggrs)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeadAggrLenMismatch(pub(crate) usize, pub(crate) usize);
+
+impl std::fmt::Display for HeadAggrLenMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "head binding count {} disagrees with aggregation slot count {}",
+            self.0, self.1
+        )
+    }
+}
+
+impl std::error::Error for HeadAggrLenMismatch {}
+
+/// One parsed inline rule: head bindings with per-position [`HeadAggrSlot`]s
+/// (same length — mint through [`aligned_head`] / [`split_head_columns`]).
+#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputInlineRule {
     pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+    pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<InputAtom>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
+    #[serde(skip)]
     pub(crate) trivia: Trivia,
 }
 
 /// What a name is defined as in a program: a set of inline rules, or a
 /// fixed-rule application.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum InputInlineRulesOrFixed {
     Rules { rules: Vec<InputInlineRule> },
     Fixed { fixed: FixedRuleApply },
@@ -514,6 +591,8 @@ impl InputInlineRulesOrFixed {
 ///
 /// Carries the live implementation (`fixed_impl`) from parse time onward:
 /// possession of a `FixedRuleApply` is proof the rule name resolved.
+/// Catalog wire stores the handle name + args/options/head/arity and rebinds
+/// `fixed_impl` from [`crate::fixed_rule::DEFAULT_FIXED_RULES`] on decode.
 #[derive(Clone)]
 pub(crate) struct FixedRuleApply {
     pub(crate) fixed_handle: FixedRuleHandle,
@@ -545,25 +624,78 @@ impl Debug for FixedRuleApply {
     }
 }
 
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+struct FixedRuleApplyWire {
+    fixed_handle: FixedRuleHandle,
+    rule_args: Vec<FixedRuleArg>,
+    options: BTreeMap<SmartString<LazyCompact>, Expr>,
+    head: Vec<Symbol>,
+    arity: usize,
+}
+
+impl serde::Serialize for FixedRuleApply {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(
+            &FixedRuleApplyWire {
+                fixed_handle: self.fixed_handle.clone(),
+                rule_args: self.rule_args.clone(),
+                options: (*self.options).clone(),
+                head: self.head.clone(),
+                arity: self.arity,
+            },
+            serializer,
+        )
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FixedRuleApply {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let wire = <FixedRuleApplyWire as serde::Deserialize>::deserialize(deserializer)?;
+        let name: &str = &wire.fixed_handle.name;
+        let fixed_impl = crate::fixed_rule::DEFAULT_FIXED_RULES
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                D::Error::custom(format!(
+                    "fixed rule '{name}' not in DEFAULT_FIXED_RULES on catalog decode"
+                ))
+            })?;
+        Ok(FixedRuleApply {
+            fixed_handle: wire.fixed_handle,
+            rule_args: wire.rule_args,
+            options: Arc::new(wire.options),
+            head: wire.head,
+            arity: wire.arity,
+            span: SourceSpan::default(),
+            fixed_impl,
+            trivia: Trivia::default(),
+        })
+    }
+}
+
 /// A positional argument to a fixed rule: an in-memory rule, a stored
 /// relation, or a stored relation addressed by named fields.
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum FixedRuleArg {
     InMem {
         name: Symbol,
         bindings: Vec<Symbol>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     Stored {
         name: Symbol,
         bindings: Vec<Symbol>,
         as_of: Option<AsOf>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     NamedStored {
         name: Symbol,
         bindings: BTreeMap<SmartString<LazyCompact>, Symbol>,
         as_of: Option<AsOf>,
+        #[serde(skip)]
         span: SourceSpan,
     },
 }
@@ -601,7 +733,7 @@ impl Display for FixedRuleArg {
 /// A body atom as parsed: still sugared (conjunctions, disjunctions,
 /// negations, named-field relations, index searches), normalized away by
 /// [`InputProgram::into_normalized_program`].
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum InputAtom {
     Rule {
         inner: InputRuleApplyAtom,
@@ -617,14 +749,17 @@ pub(crate) enum InputAtom {
     },
     Negation {
         inner: Box<InputAtom>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     Conjunction {
         inner: Vec<InputAtom>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     Disjunction {
         inner: Vec<InputAtom>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     /// `x = y` or `x in y`
@@ -744,27 +879,31 @@ impl Display for InputAtom {
 /// bindings, and raw parameters. Purely syntactic — the resolved forms
 /// (HNSW/FTS/LSH searches holding live relation handles and manifests) are
 /// index-tier substances and land with that tier.
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct SearchInput {
     pub(crate) relation: Symbol,
     pub(crate) index: Symbol,
     pub(crate) bindings: BTreeMap<SmartString<LazyCompact>, Expr>,
     pub(crate) parameters: BTreeMap<SmartString<LazyCompact>, Expr>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// A rule application in a parsed body: `name[args…]` with expression args.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputRuleApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Expr>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// Which axis an [`ValidityClause::Delta`] varies, the other held at the
 /// record's current belief — mirrors [`crate::query::laws::Axis`], the
 /// oracle's own copy of this same distinction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum DeltaAxis {
     /// `@delta(a, b)`: valid-time net diff at the current system snapshot.
     Valid,
@@ -787,7 +926,7 @@ pub(crate) enum DeltaAxis {
 /// (`compile.rs`) appends it to the atom's bindings rather than folding it
 /// into `args`, so relation arity checks against `args` stay exactly what
 /// they were.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum ValidityClause {
     /// `@ expr` (one or two coordinates): resolve at this bitemporal
     /// coordinate. Unchanged surface and unchanged meaning.
@@ -823,32 +962,35 @@ impl ValidityClause {
 
 /// A stored-relation application addressed by named fields:
 /// `*name{field: expr, …}`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputNamedFieldRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: BTreeMap<SmartString<LazyCompact>, Expr>,
     pub(crate) validity: Option<ValidityClause>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// A stored-relation application with positional args: `*name[args…]`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Expr>,
     pub(crate) validity: Option<ValidityClause>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// `binding = expr` (or `binding in expr` when `one_many_unif`: one row per
 /// element of the list `expr` evaluates to).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct Unification {
     /// Symbol to bind expression to.
     pub(crate) binding: Symbol,
     pub(crate) expr: Expr,
     /// If false, `=`; if true, `in`.
     pub(crate) one_many_unif: bool,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
@@ -869,7 +1011,11 @@ impl Unification {
 /// so every downstream stage may rely on the entry structurally instead of
 /// re-deriving `Symbol::new("?", …)` with a dummy span. The stored
 /// `entry_name` keeps the real source span of the `?` the user wrote.
-#[derive(Debug, Clone)]
+///
+/// Catalog durability serializes the sealed program graph (spans/trivia
+/// skipped); decode never re-parses source text and admits only through
+/// [`InputProgram::new`].
+#[derive(Debug, Clone, serde_derive::Serialize)]
 pub(crate) struct InputProgram {
     /// The `?` symbol as written, with its real span.
     entry_name: Symbol,
@@ -893,8 +1039,34 @@ pub(crate) struct InputProgram {
     /// the one that matters in practice: every comment after the last
     /// rule clause in the source, not sharing its line. Filled by
     /// [`Self::attach_comment_trivia`]; empty (the default) until then.
+    #[serde(skip)]
     pub(crate) leading_trivia: Vec<Comment>,
+    #[serde(skip)]
     pub(crate) trailing_trivia: Vec<Comment>,
+}
+
+/// Wire layout for catalog decode — same field names as [`InputProgram`]
+/// serializes, but decode must not mint the struct directly.
+#[derive(serde_derive::Deserialize)]
+struct InputProgramWire {
+    entry_name: Symbol,
+    entry: InputInlineRulesOrFixed,
+    rules: BTreeMap<Symbol, InputInlineRulesOrFixed>,
+    out_opts: QueryOutOptions,
+    disable_magic_rewrite: bool,
+}
+
+impl<'de> serde::Deserialize<'de> for InputProgram {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let wire = InputProgramWire::deserialize(deserializer)?;
+        let mut rules = wire.rules;
+        rules.insert(wire.entry_name, wire.entry);
+        InputProgram::new(rules, wire.out_opts, wire.disable_magic_rewrite)
+            .map_err(D::Error::custom)
+    }
 }
 
 /// Every rule clause in `ruleset` (one per [`InputInlineRule`] if it's a
@@ -1142,7 +1314,7 @@ impl InputProgram {
                 };
                 let mut ret = Vec::with_capacity(last_rule.head.len());
                 for (symb, aggr) in last_rule.head.iter().zip(last_rule.aggr.iter()) {
-                    if let Some((aggr, _)) = aggr {
+                    if let Some((aggr, _)) = aggr.as_aggregated() {
                         ret.push(Symbol::new(format!("{}({})", aggr.name, symb), symb.span))
                     } else {
                         ret.push(symb.clone())
@@ -1208,7 +1380,7 @@ impl Display for InputProgram {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            if let Some((aggr, aggr_args)) = a {
+                            if let Some((aggr, aggr_args)) = a.as_aggregated() {
                                 write!(f, "{}({}", aggr.name, h)?;
                                 for aga in aggr_args {
                                     write!(f, ", {aga}")?;
@@ -1338,7 +1510,7 @@ fn normalize_ruleset(
                                 binding: new_symb.clone(),
                                 expr: Expr::Binding {
                                     var: (*old_symb).clone(),
-                                    tuple_pos: None,
+                                    tuple_pos: BindingPos::Unresolved,
                                 },
                                 one_many_unif: false,
                                 span: new_symb.span,
@@ -1369,7 +1541,7 @@ fn normalize_ruleset(
 #[derive(Debug)]
 pub(crate) struct NormalFormInlineRule {
     pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+    pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<NormalFormAtom>,
 }
 
@@ -1609,12 +1781,30 @@ impl StoreLifetimes {
 // Magic tier
 // ─────────────────────────────────────────────────────────────────────────
 
-/// An adornment: for each argument position of a rule, whether the demand
-/// pattern binds it (`true` = bound, `false` = free). Rendered `b`/`f` in
-/// debug output. (The original used `SmallVec<[bool; 8]>`; the workspace
-/// carries no `smallvec` dependency and adornments are arity-bounded, so a
-/// `Vec` serves until profiling says otherwise.)
-pub(crate) type Adornment = Vec<bool>;
+/// One argument position in a demand pattern — bound or free, never a bool.
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+pub(crate) enum AdornmentMark {
+    Bound,
+    Free,
+}
+
+impl AdornmentMark {
+    pub(crate) fn is_bound(self) -> bool {
+        matches!(self, AdornmentMark::Bound)
+    }
+
+    pub(crate) fn from_bound(bound: bool) -> AdornmentMark {
+        if bound {
+            AdornmentMark::Bound
+        } else {
+            AdornmentMark::Free
+        }
+    }
+}
+
+/// An adornment: for each argument position, [`AdornmentMark::Bound`] or
+/// [`AdornmentMark::Free`]. Rendered `b`/`f` in debug output.
+pub(crate) type Adornment = Vec<AdornmentMark>;
 
 /// A rule name after the magic-sets rewrite. The variants carry the demand
 /// analysis in the name itself: evaluation of a magic program computes only
@@ -1647,7 +1837,7 @@ impl MagicSymbol {
             | MagicSymbol::Sup { inner, .. } => inner,
         }
     }
-    pub(crate) fn magic_adornment(&self) -> &[bool] {
+    pub(crate) fn magic_adornment(&self) -> &[AdornmentMark] {
         match self {
             MagicSymbol::Muggle { .. } => &[],
             MagicSymbol::Magic { adornment, .. }
@@ -1656,7 +1846,7 @@ impl MagicSymbol {
         }
     }
     pub(crate) fn has_bound_adornment(&self) -> bool {
-        self.magic_adornment().iter().any(|b| *b)
+        self.magic_adornment().iter().any(|m| m.is_bound())
     }
     pub(crate) fn is_prog_entry(&self) -> bool {
         if let MagicSymbol::Muggle { inner } = self {
@@ -1679,15 +1869,21 @@ impl Debug for MagicSymbol {
             MagicSymbol::Muggle { inner } => write!(f, "{}", inner.name),
             MagicSymbol::Magic { inner, adornment } => {
                 write!(f, "{}|M", inner.name)?;
-                for b in adornment {
-                    if *b { write!(f, "b")? } else { write!(f, "f")? }
+                for m in adornment {
+                    match m {
+                        AdornmentMark::Bound => write!(f, "b")?,
+                        AdornmentMark::Free => write!(f, "f")?,
+                    }
                 }
                 Ok(())
             }
             MagicSymbol::Input { inner, adornment } => {
                 write!(f, "{}|I", inner.name)?;
-                for b in adornment {
-                    if *b { write!(f, "b")? } else { write!(f, "f")? }
+                for m in adornment {
+                    match m {
+                        AdornmentMark::Bound => write!(f, "b")?,
+                        AdornmentMark::Free => write!(f, "f")?,
+                    }
                 }
                 Ok(())
             }
@@ -1698,8 +1894,11 @@ impl Debug for MagicSymbol {
                 sup_idx,
             } => {
                 write!(f, "{}|S.{}.{}", inner.name, rule_idx, sup_idx)?;
-                for b in adornment {
-                    if *b { write!(f, "b")? } else { write!(f, "f")? }
+                for m in adornment {
+                    match m {
+                        AdornmentMark::Bound => write!(f, "b")?,
+                        AdornmentMark::Free => write!(f, "f")?,
+                    }
                 }
                 Ok(())
             }
@@ -1711,7 +1910,7 @@ impl Debug for MagicSymbol {
 #[derive(Debug)]
 pub(crate) struct MagicInlineRule {
     pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+    pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<MagicAtom>,
 }
 
@@ -1766,22 +1965,67 @@ pub(crate) struct MagicFixedRuleApply {
 #[error("Cannot find a required named option '{name}' for '{rule_name}'")]
 #[diagnostic(code(fixed_rule::arg_not_found))]
 pub(crate) struct FixedRuleOptionNotFoundError {
-    pub(crate) name: String,
+    pub(crate) name: Symbol,
     #[label]
     pub(crate) span: SourceSpan,
-    pub(crate) rule_name: String,
+    pub(crate) rule_name: Symbol,
 }
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Wrong value for option '{name}' of '{rule_name}'")]
 #[diagnostic(code(fixed_rule::arg_wrong))]
 pub(crate) struct WrongFixedRuleOptionError {
-    pub(crate) name: String,
+    pub(crate) name: Symbol,
     #[label]
     pub(crate) span: SourceSpan,
-    pub(crate) rule_name: String,
+    pub(crate) rule_name: Symbol,
     #[help]
-    pub(crate) help: String,
+    pub(crate) help: WrongFixedRuleOptionHelp,
+}
+
+/// Named help for [`WrongFixedRuleOptionError`] — String identity is
+/// unrepresentable; every construction site picks a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WrongFixedRuleOptionHelp {
+    StringRequired,
+    IntegerRequired,
+    PositiveIntegerRequired,
+    PositiveIntegerFitsUsizeRequired,
+    NonNegIntegerRequired,
+    NonNegIntegerFitsUsizeRequired,
+    FloatRequired,
+    UnitIntervalRequired,
+    BoolRequired,
+    ListOfListsRequired,
+    DelimiterSingleByte,
+    OptionMustBeList,
+    TypesNotColType,
+}
+
+impl Display for WrongFixedRuleOptionHelp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StringRequired => write!(f, "a string is required"),
+            Self::IntegerRequired => write!(f, "an integer is required"),
+            Self::PositiveIntegerRequired => write!(f, "a positive integer is required"),
+            Self::PositiveIntegerFitsUsizeRequired => {
+                write!(f, "a positive integer fitting usize is required")
+            }
+            Self::NonNegIntegerRequired => write!(f, "a non-negative integer is required"),
+            Self::NonNegIntegerFitsUsizeRequired => {
+                write!(f, "a non-negative integer fitting usize is required")
+            }
+            Self::FloatRequired => write!(f, "a floating number is required"),
+            Self::UnitIntervalRequired => write!(f, "a number between 0. and 1. is required"),
+            Self::BoolRequired => write!(f, "a boolean value is required"),
+            Self::ListOfListsRequired => write!(f, "a list of lists is required"),
+            Self::DelimiterSingleByte => write!(f, "'delimiter' must be a single-byte string"),
+            Self::OptionMustBeList => write!(f, "This option must evaluate to a list"),
+            Self::TypesNotColType => {
+                write!(f, "each element of 'types' must be a valid column type")
+            }
+        }
+    }
 }
 
 impl MagicFixedRuleApply {
@@ -1801,14 +2045,14 @@ impl MagicFixedRuleApply {
             idx: usize,
             #[label]
             span: SourceSpan,
-            rule_name: String,
+            rule_name: Symbol,
         }
 
         self.rule_args.get(idx).ok_or_else(|| {
             FixedRuleNotEnoughRelationError {
                 idx,
                 span: self.span,
-                rule_name: self.fixed_handle.name.to_string(),
+                rule_name: self.fixed_handle.name.clone(),
             }
             .into()
         })
@@ -1973,7 +2217,7 @@ mod tests {
     fn rule(head: &[&str]) -> InputInlineRule {
         InputInlineRule {
             head: head.iter().map(|h| sym(h)).collect(),
-            aggr: head.iter().map(|_| None).collect(),
+            aggr: head.iter().map(|_| HeadAggrSlot::Plain).collect(),
             body: vec![],
             span: SourceSpan(0, 0),
             trivia: Trivia::default(),
@@ -2050,7 +2294,13 @@ mod tests {
             Symbol::prog_entry(SourceSpan(0, 1)),
             rules_def(vec![InputInlineRule {
                 head: vec![sym("g"), sym("x")],
-                aggr: vec![None, Some((min, vec![]))],
+                aggr: vec![
+                    HeadAggrSlot::Plain,
+                    HeadAggrSlot::Aggregated {
+                        aggr: min,
+                        args: vec![],
+                    },
+                ],
                 body: vec![],
                 span: SourceSpan(0, 0),
                 trivia: Trivia::default(),
@@ -2102,12 +2352,12 @@ mod tests {
                 match &u.expr {
                     Expr::Binding { var, tuple_pos } => {
                         assert_eq!(var.name.as_str(), "a");
-                        assert!(tuple_pos.is_none());
+                        assert_eq!(*tuple_pos, BindingPos::Unresolved);
                     }
-                    other => panic!("expected a binding, got {other:?}"),
+                    other @ Expr::Const { .. } | other @ Expr::Apply { .. } | other @ Expr::UnboundApply { .. } | other @ Expr::Cond { .. } | other @ Expr::Lazy { .. } => panic!("expected a binding, got {other:?}"),
                 }
             }
-            other => panic!("expected a unification, got {other:?}"),
+            other @ NormalFormAtom::Rule(_) | other @ NormalFormAtom::Relation(_) | other @ NormalFormAtom::NegatedRule(_) | other @ NormalFormAtom::NegatedRelation(_) | other @ NormalFormAtom::Predicate(_) | other @ NormalFormAtom::Search(_) => panic!("expected a unification, got {other:?}"),
         }
     }
 
@@ -2144,7 +2394,7 @@ mod tests {
                 NormalFormRulesOrFixed::Rules {
                     rules: vec![NormalFormInlineRule {
                         head: vec![sym("x")],
-                        aggr: vec![None],
+                        aggr: vec![HeadAggrSlot::Plain],
                         body: vec![],
                     }],
                 },
@@ -2233,7 +2483,7 @@ mod tests {
             MagicRulesOrFixed::Rules {
                 rules: vec![MagicInlineRule {
                     head: vec![sym("x")],
-                    aggr: vec![None],
+                    aggr: vec![HeadAggrSlot::Plain],
                     body: vec![],
                 }],
             },
@@ -2242,7 +2492,7 @@ mod tests {
         other.prog.insert(
             MagicSymbol::Magic {
                 inner: sym("r"),
-                adornment: vec![true, false],
+                adornment: vec![AdornmentMark::Bound, AdornmentMark::Free],
             },
             MagicRulesOrFixed::default(),
         );
@@ -2274,12 +2524,12 @@ mod tests {
         };
         let magic = MagicSymbol::Magic {
             inner: Symbol::prog_entry(SourceSpan(0, 1)),
-            adornment: vec![true],
+            adornment: vec![AdornmentMark::Bound],
         };
         assert!(muggle.is_prog_entry());
         assert!(!magic.is_prog_entry());
         assert!(magic.has_bound_adornment());
-        assert_eq!(muggle.magic_adornment(), &[] as &[bool]);
+        assert_eq!(muggle.magic_adornment(), &[] as &[AdornmentMark]);
     }
 
     /// The magic-symbol debug rendering is load-bearing for logs and error
@@ -2288,19 +2538,19 @@ mod tests {
     fn magic_symbol_debug_rendering() {
         let s = MagicSymbol::Sup {
             inner: sym("r"),
-            adornment: vec![true, false],
+            adornment: vec![AdornmentMark::Bound, AdornmentMark::Free],
             rule_idx: 2,
             sup_idx: 5,
         };
         assert_eq!(format!("{s:?}"), "r|S.2.5bf");
         let m = MagicSymbol::Magic {
             inner: sym("r"),
-            adornment: vec![false, true],
+            adornment: vec![AdornmentMark::Free, AdornmentMark::Bound],
         };
         assert_eq!(format!("{m:?}"), "r|Mfb");
         let i = MagicSymbol::Input {
             inner: sym("r"),
-            adornment: vec![true],
+            adornment: vec![AdornmentMark::Bound],
         };
         assert_eq!(format!("{i:?}"), "r|Ib");
         let mu = MagicSymbol::Muggle { inner: sym("r") };

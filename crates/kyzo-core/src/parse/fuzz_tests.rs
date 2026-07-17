@@ -53,6 +53,12 @@
 //! Tuning: the checked-in defaults keep the whole module inside a ~1–2 s
 //! budget (see [`cases`]). For nightly/big runs escalate with
 //! `PROPTEST_CASES=10000 cargo test -p kyzo parse::fuzz`.
+//!
+//! **P091 / P113 (Interval opacity).** This parse-tier fuzz surface never
+//! projects `DataValue::Interval` as `Option<(i64, i64)>` — intervals stay
+//! behind `DataValue` / `Interval`'s own typed accessors. The former
+//! `fuzz_api::interval_bounds` `(i64, i64)` projection is gone; Interval
+//! remains opaque across the fuzz façade.
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};

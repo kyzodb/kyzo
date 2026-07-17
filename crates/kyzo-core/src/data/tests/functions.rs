@@ -23,6 +23,7 @@ use serde_json::json;
 use crate::data::functions::*;
 use crate::data::relation::{ColType, NullableColType};
 use crate::data::value::{DataValue, ValidityTs, Vector};
+use crate::data::value::data_value_any;
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-5
@@ -113,7 +114,7 @@ fn test_mul() {
 }
 
 fn f64_vec(xs: &[f64]) -> DataValue {
-    DataValue::Vector(Vector::new(xs.to_vec()))
+    DataValue::Vector(Vector::try_new(xs.to_vec()).unwrap())
 }
 
 // Regression for the upstream bug where multiplying three or more vectors
@@ -680,13 +681,13 @@ fn test_math_domain_errors_typed() {
 /// position.
 #[test]
 fn test_math_domain_errors_vector() {
-    let has_negative = Vector::new(vec![1.0, -1.0, 4.0]);
+    let has_negative = Vector::try_new(vec![1.0, -1.0, 4.0]).unwrap();
     assert!(op_sqrt(&[DataValue::Vector(has_negative)]).is_err());
 
-    let has_out_of_range = Vector::new(vec![0.0f64, 2.0]);
+    let has_out_of_range = Vector::try_new(vec![0.0f64, 2.0]).unwrap();
     assert!(op_asin(&[DataValue::Vector(has_out_of_range)]).is_err());
 
-    let has_non_positive = Vector::new(vec![1.0, 0.0]);
+    let has_non_positive = Vector::try_new(vec![1.0, 0.0]).unwrap();
     assert!(op_ln(&[DataValue::Vector(has_non_positive)]).is_err());
 }
 
@@ -752,8 +753,8 @@ fn test_math_valid_inputs_unaffected() {
 /// vectors still compute.
 #[test]
 fn test_vector_distance_domain_errors() {
-    let zero = DataValue::Vector(Vector::new(vec![0.0, 0.0]));
-    let unit = DataValue::Vector(Vector::new(vec![1.0, 1.0]));
+    let zero = DataValue::Vector(Vector::try_new(vec![0.0, 0.0]).unwrap());
+    let unit = DataValue::Vector(Vector::try_new(vec![1.0, 1.0]).unwrap());
 
     for res in [
         op_cos_dist(&[zero.clone(), unit.clone()]),
@@ -776,8 +777,8 @@ fn test_vector_distance_domain_errors() {
     assert!(op_l2_normalize(&[unit]).is_ok());
 
     // The F32 lane is guarded identically.
-    let zero32 = DataValue::Vector(Vector::new(vec![0.0f64, 0.0]));
-    let unit32 = DataValue::Vector(Vector::new(vec![1.0f64, 1.0]));
+    let zero32 = DataValue::Vector(Vector::try_new(vec![0.0f64, 0.0]).unwrap());
+    let unit32 = DataValue::Vector(Vector::try_new(vec![1.0f64, 1.0]).unwrap());
     assert!(op_cos_dist(&[zero32.clone(), unit32.clone()]).is_err());
     assert!(op_l2_normalize(&[zero32]).is_err());
     assert!(op_cos_dist(&[unit32.clone(), unit32]).is_ok());
@@ -1760,10 +1761,7 @@ fn test_pre_epoch_timestamps() {
 
     // The schema boundary obeys the same law: coercing a pre-epoch validity
     // string yields negative microseconds.
-    let typing = NullableColType {
-        coltype: ColType::Validity,
-        nullable: false,
-    };
+    let typing = NullableColType::required(ColType::Validity);
     let coerced = typing
         .coerce(
             DataValue::Str("1969-07-20T20:17:00Z".into()),
@@ -1772,7 +1770,7 @@ fn test_pre_epoch_timestamps() {
         .unwrap();
     match coerced {
         DataValue::Validity(vld) => assert!(vld.timestamp().raw() < 0),
-        v => panic!("expected a validity, got {v:?}"),
+        v @ (data_value_any!()) => panic!("expected a validity, got {v:?}"),
     }
 }
 
@@ -1857,7 +1855,7 @@ fn test_vec_rejects_trailing_bytes() {
     let ok = STANDARD.encode([0u8, 0, 128, 63]);
     match op_vec(&[DataValue::Str(ok)]).unwrap() {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other => panic!("expected vector, got {other:?}"),
+        other @ (data_value_any!()) => panic!("expected vector, got {other:?}"),
     }
     // The F64 path is equally strict: 9 bytes is one f64 plus trailing.
     let bad64 = STANDARD.encode([0u8; 9]);
@@ -1865,7 +1863,7 @@ fn test_vec_rejects_trailing_bytes() {
     let ok64 = STANDARD.encode([0u8; 8]);
     match op_vec(&[DataValue::Str(ok64), DataValue::Str("F64".into())]).unwrap() {
         DataValue::Vector(v) => assert_eq!(v.len(), 1),
-        other => panic!("expected vector, got {other:?}"),
+        other @ (data_value_any!()) => panic!("expected vector, got {other:?}"),
     }
 }
 
@@ -1897,7 +1895,7 @@ fn test_vec_rejects_non_array_json() {
             [1.0, 2.0]
         )))])
         .unwrap(),
-        DataValue::Vector(Vector::new(vec![1.0f64, 2.0]))
+        DataValue::Vector(Vector::try_new(vec![1.0f64, 2.0]).unwrap())
     );
 }
 
@@ -1951,15 +1949,12 @@ fn vld_micros(s: &str) -> Result<i64, String> {
 }
 // Validity coercion path (`data/relation.rs`) -> (micros, is_assert).
 fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
-    let typing = NullableColType {
-        coltype: ColType::Validity,
-        nullable: false,
-    };
+    let typing = NullableColType::required(ColType::Validity);
     typing
         .coerce(DataValue::Str(s.into()), ValidityTs::from_raw(999))
         .map(|v| match v {
             DataValue::Validity(vld) => (vld.timestamp().raw(), vld.is_assert()),
-            other => panic!("expected Validity, got {other:?}"),
+            other @ (data_value_any!()) => panic!("expected Validity, got {other:?}"),
         })
         .map_err(|e| e.to_string())
 }
@@ -2000,7 +1995,9 @@ fn format_timestamp_numeric_agreed() {
 fn format_timestamp_validity_input_agreed() {
     use crate::data::value::Validity;
     let f = |micros: i64| {
-        let vld = DataValue::Validity(Validity::new(ValidityTs::from_raw(micros), true));
+        let vld = DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(micros), true).expect("non-reserved"),
+        );
         fmt(&[vld]).unwrap()
     };
     // Validity stores microseconds; the op divides by 1000 to milliseconds.

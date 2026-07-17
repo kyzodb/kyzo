@@ -72,6 +72,7 @@ use miette::{
 pub use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::sync::LazyLock;
+use thiserror::Error;
 
 use crate::data::value::{DataValue, Json, JsonNum, JsonObj, Num};
 use crate::fixed_rule::NamedRows;
@@ -80,9 +81,10 @@ use crate::fixed_rule::NamedRows;
 /// until it crosses into the value plane's identity-lawful [`Json`].
 /// Lives HERE, not in the plane — the plane never depends on serde.
 #[derive(Clone, PartialEq, Debug)]
-pub struct JsonData(pub JsonValue);
+pub struct JsonData(JsonValue);
 
 impl JsonData {
+    /// The only mint: wrap a serde JSON value for the host boundary.
     pub fn new(v: JsonValue) -> JsonData {
         JsonData(v)
     }
@@ -136,9 +138,14 @@ impl<'de> serde::Deserialize<'de> for DataValue {
     }
 }
 
-/// Typed refusals compose with the engine's diagnostics: default
-/// `Diagnostic` surface over the plane's `Error` impl.
-impl miette::Diagnostic for crate::data::value::DecodeError {}
+/// Typed refusals compose with the engine's diagnostics. Stable code
+/// `value::decode` lets product boundaries recognize a codec refusal
+/// without `downcast_ref` (story #302 T6).
+impl miette::Diagnostic for crate::data::value::DecodeError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        Some(Box::new("value::decode"))
+    }
+}
 
 /// `RelationId`'s wire form: the raw u64 (catalog metadata).
 impl serde::Serialize for crate::data::value::RelationId {
@@ -244,6 +251,12 @@ impl From<&JsonValue> for DataValue {
     }
 }
 
+/// Named door for JSON → `DataValue`: same total mapping as [`From<&JsonValue>`].
+/// Fixed-rule readers call this; they do not carry a twin conversion.
+pub(crate) fn json_to_datavalue(v: &JsonValue) -> DataValue {
+    DataValue::from(v)
+}
+
 impl From<&DataValue> for JsonValue {
     fn from(v: &DataValue) -> Self {
         match v {
@@ -269,8 +282,8 @@ impl From<&DataValue> for JsonValue {
             DataValue::List(l) => JsonValue::Array(l.iter().map(JsonValue::from).collect()),
             DataValue::Set(s) => JsonValue::Array(s.iter().map(JsonValue::from).collect()),
             DataValue::Regex(r) => json!(r.pattern()),
-            DataValue::Uuid(u) => json!(u.0.to_string()),
-            DataValue::Vector(v) => json!(v.as_slice()),
+            DataValue::Uuid(u) => json!(u.as_uuid().to_string()),
+            DataValue::Vector(v) => json!(v.to_f64s()),
             DataValue::Validity(v) => json!([v.ts_micros(), v.is_assert()]),
             DataValue::Interval(iv) => match iv.ends() {
                 None => JsonValue::Null,
@@ -306,17 +319,17 @@ impl NamedRows {
     /// `NamedRows` today, so callers see `next: null`, but the shape is
     /// stable for when that changes.
     pub fn into_json(self) -> JsonValue {
-        let next = match self.next {
+        let (headers, rows, next) = self.into_parts();
+        let next = match next {
             None => JsonValue::Null,
             Some(more) => more.into_json(),
         };
-        let rows: Vec<JsonValue> = self
-            .rows
+        let rows: Vec<JsonValue> = rows
             .into_iter()
             .map(|row| JsonValue::Array(row.into_iter().map(JsonValue::from).collect()))
             .collect();
         json!({
-            "headers": self.headers,
+            "headers": headers,
             "rows": rows,
             "next": next,
         })
@@ -348,16 +361,28 @@ impl NamedRows {
                     .ok_or_else(|| miette::miette!("'rows' must be an array of arrays"))
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(NamedRows::new(headers, rows))
+        Ok(NamedRows::try_new(headers, rows)?)
     }
 }
 
-/// Render a query/mutation error as the envelope every binding's failure
-/// path returns: miette's own JSON report (`code`, `labels`, `severity`,
-/// ...) plus `ok: false`, a flat `message`, and a `display` field carrying
-/// the same fancy rendering a terminal would show (a labeled source span,
-/// if the error carries one and `source` supplies the text it points into).
-pub fn format_error_as_json(mut err: Report, source: Option<&str>) -> JsonValue {
+/// Why rendering a diagnostic envelope failed.
+#[derive(Debug, Error)]
+pub enum FormatErrorDiag {
+    #[error("render text error failed: {0}")]
+    TextRender(#[source] std::fmt::Error),
+    #[error("render json error failed: {0}")]
+    JsonRender(#[source] std::fmt::Error),
+    #[error("parse rendered json error failed: {0}")]
+    JsonParse(#[source] serde_json::Error),
+    #[error("miette JSON report was not a JSON object")]
+    NotObject,
+}
+
+/// Fallible diagnostic path — typed refuse instead of `expect`.
+pub fn try_format_error_as_json(
+    mut err: Report,
+    source: Option<&str>,
+) -> std::result::Result<JsonValue, FormatErrorDiag> {
     if err.source_code().is_none()
         && let Some(src) = source
     {
@@ -367,19 +392,32 @@ pub fn format_error_as_json(mut err: Report, source: Option<&str>) -> JsonValue 
     let mut json_err = String::new();
     TEXT_ERR_HANDLER
         .render_report(&mut text_err, err.as_ref())
-        .expect("render text error failed");
+        .map_err(FormatErrorDiag::TextRender)?;
     JSON_ERR_HANDLER
         .render_report(&mut json_err, err.as_ref())
-        .expect("render json error failed");
+        .map_err(FormatErrorDiag::JsonRender)?;
     let mut json: JsonValue =
-        serde_json::from_str(&json_err).expect("parse rendered json error failed");
-    let map = json
-        .as_object_mut()
-        .expect("miette's JSONReportHandler always renders a JSON object");
+        serde_json::from_str(&json_err).map_err(FormatErrorDiag::JsonParse)?;
+    let map = json.as_object_mut().ok_or(FormatErrorDiag::NotObject)?;
     map.insert("ok".to_string(), json!(false));
     map.insert("message".to_string(), json!(err.to_string()));
     map.insert("display".to_string(), json!(text_err));
-    json
+    Ok(json)
+}
+
+/// Render a query/mutation error as the envelope every binding's failure
+/// path returns. Prefers [`try_format_error_as_json`]; on render failure
+/// returns a minimal typed `ok: false` object (never panics).
+pub fn format_error_as_json(err: Report, source: Option<&str>) -> JsonValue {
+    let message = err.to_string();
+    match try_format_error_as_json(err, source) {
+        Ok(json) => json,
+        Err(_) => json!({
+            "ok": false,
+            "message": message,
+            "display": message,
+        }),
+    }
 }
 
 static TEXT_ERR_HANDLER: LazyLock<GraphicalReportHandler> = LazyLock::new(|| {
@@ -436,11 +474,11 @@ mod tests {
 
     #[test]
     fn uuid_and_validity_render_without_panicking() {
-        let dv = DataValue::Uuid(UuidWrapper(uuid::Uuid::nil()));
+        let dv = DataValue::Uuid(UuidWrapper::new(uuid::Uuid::nil()));
         assert_eq!(JsonValue::from(&dv), json!(uuid::Uuid::nil().to_string()));
 
-        let v = Validity::new(ValidityTs::from_raw(5), true);
-        assert_eq!(JsonValue::from(&DataValue::Validity(v)), json!([5, true]));
+        let v = Validity::new(ValidityTs::from_raw(5), true).expect("non-reserved");
+        assert_eq!(JsonValue::from(&DataValue::Validity(v.into())), json!([5, true]));
     }
 
     #[test]
@@ -463,17 +501,18 @@ mod tests {
 
     #[test]
     fn named_rows_json_round_trips() {
-        let nr = NamedRows::new(
+        let nr = NamedRows::try_new(
             vec!["a".to_string(), "b".to_string()],
             vec![
                 Tuple::from_vec(vec![DataValue::from(1_i64), DataValue::from("x")]),
                 Tuple::from_vec(vec![DataValue::from(2_i64), DataValue::from("y")]),
             ],
-        );
+        )
+        .unwrap();
         let j = nr.clone().into_json();
         let back = NamedRows::from_json(&j).unwrap();
-        assert_eq!(back.headers, nr.headers);
-        assert_eq!(back.rows, nr.rows);
+        assert_eq!(back.headers(), nr.headers());
+        assert_eq!(back.rows(), nr.rows());
     }
 
     #[test]

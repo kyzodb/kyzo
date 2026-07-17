@@ -62,11 +62,10 @@
 //! event contributes `Minus` from "old" only; "new" is never a fact.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 
-use miette::{Result, miette};
+use miette::{Diagnostic, Result};
+use thiserror::Error;
 
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -82,6 +81,23 @@ use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::Storage;
+
+/// Named refusal when [`Db::register_standing`] is given a non-standing script.
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum StandingRegisterRefusal {
+    #[error(
+        "register_standing needs a single read query, not a system op or an \
+         imperative script"
+    )]
+    #[diagnostic(code(standing::not_single_read))]
+    NotSingleRead,
+    #[error(
+        "register_standing needs a pure read query, not a mutation — a standing query \
+         maintains its OWN state from EDB commits, it does not write one"
+    )]
+    #[diagnostic(code(standing::mutation))]
+    Mutation,
+}
 
 /// KyzoScript's own canonical name for the entry relation — the same
 /// identity `InputProgram::entry_name` carries and this module's
@@ -162,7 +178,7 @@ impl<S: Storage> StandingQuery<S> {
         db: &Db<S>,
         magic: crate::data::program::StratifiedMagicProgram,
     ) -> Result<Self> {
-        let program = incremental::translate(magic).map_err(|e| miette!("{e}"))?;
+        let program = incremental::translate(magic)?;
         let edb = incremental::edb_relations_pub(&program);
 
         let mut subscriptions = BTreeMap::new();
@@ -220,8 +236,7 @@ impl<S: Storage> StandingQuery<S> {
             .map(|rel| (rel.clone(), BTreeSet::new()))
             .collect();
         let (_deltas, full_state) =
-            incremental::incremental_eval(&program, &edb_only_state, &seed_patch)
-                .map_err(|e| miette!("{e}"))?;
+            incremental::incremental_eval(&program, &edb_only_state, &seed_patch)?;
 
         Ok(StandingQuery {
             db: db.clone(),
@@ -294,8 +309,8 @@ impl<S: Storage> StandingQuery<S> {
                         // the difference here, not raw per-set facts, is
                         // what keeps that case from ever contributing a
                         // spurious `Minus`.
-                        let new_set: BTreeSet<Tuple> = new.rows.into_iter().collect();
-                        let old_set: BTreeSet<Tuple> = old.rows.into_iter().collect();
+                        let new_set: BTreeSet<Tuple> = new.into_iter().collect();
+                        let old_set: BTreeSet<Tuple> = old.into_iter().collect();
                         for row in new_set.difference(&old_set) {
                             *net.entry(row.clone()).or_default() += 1;
                         }
@@ -307,7 +322,7 @@ impl<S: Storage> StandingQuery<S> {
                         // `new` here is bare keys (k_bindings), never a
                         // real row this program's arity matches — only
                         // `old` (the full removed row) is a fact.
-                        for row in old.rows {
+                        for row in old {
                             *net.entry(row).or_default() -= 1;
                         }
                     }
@@ -335,8 +350,7 @@ impl<S: Storage> StandingQuery<S> {
             return Ok(BTreeMap::new());
         }
         let (deltas, new_state) =
-            incremental::incremental_eval(&self.program, &self.state, &edb_patch)
-                .map_err(|e| miette!("{e}"))?;
+            incremental::incremental_eval(&self.program, &self.state, &edb_patch)?;
         debug_assert!(
             self.subscriptions.iter().all(|(rel, sub)| {
                 new_state
@@ -418,17 +432,11 @@ impl<S: Storage> Db<S> {
         let program = match parse_script(query, &params, &fixed, cur_vld)? {
             Script::Single(prog) => *prog,
             Script::Sys(_) | Script::Imperative(_) => {
-                return Err(miette!(
-                    "register_standing needs a single read query, not a system op or an \
-                     imperative script"
-                ));
+                return Err(StandingRegisterRefusal::NotSingleRead.into());
             }
         };
         if program.out_opts().store_relation.is_some() {
-            return Err(miette!(
-                "register_standing needs a pure read query, not a mutation — a standing query \
-                 maintains its OWN state from EDB commits, it does not write one"
-            ));
+            return Err(StandingRegisterRefusal::Mutation.into());
         }
 
         let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
@@ -436,7 +444,7 @@ impl<S: Storage> Db<S> {
             store: &tx.store,
             temp: &tx.temp,
         };
-        let cancel = CancelFlag(Arc::new(AtomicBool::new(false)));
+        let cancel = CancelFlag::inert();
         let mut normalizer = SessionNormalizer::new(view, cancel);
         let (nf, _out_opts) = program.into_normalized_program(&mut normalizer)?;
         let (strat, _lifetimes) = nf.into_stratified_program()?;
@@ -450,8 +458,8 @@ impl<S: Storage> Db<S> {
 mod tests {
     use super::*;
     use crate::data::program::{
-        MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRulesOrFixed,
-        MagicSymbol, StratifiedMagicProgram,
+        HeadAggrSlot, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
+        MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
     };
     use crate::data::value::{DataValue, Num};
     use crate::storage::fjall::new_fjall_storage;
@@ -480,7 +488,7 @@ mod tests {
         }
     }
     fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
-        let aggr = vec![None; head.len()];
+        let aggr = (0..head.len()).map(|_| HeadAggrSlot::Plain).collect();
         MagicInlineRule {
             head: head.into_iter().map(sym).collect(),
             aggr,
@@ -638,7 +646,6 @@ mod tests {
         let real: BTreeSet<Tuple> = db
             .run_script("?[x] := *p[x], not *r[x]", no_params())
             .unwrap()
-            .rows
             .into_iter()
             .collect();
         assert_eq!(sq.current_answer().clone(), real);
@@ -702,7 +709,6 @@ mod tests {
         let real3: BTreeSet<Tuple> = db3
             .run_script("?[k, val] := *q[k, val]", no_params())
             .unwrap()
-            .rows
             .into_iter()
             .collect();
         assert_eq!(maintained, real3);
@@ -808,7 +814,6 @@ mod tests {
         let real = || -> BTreeSet<Tuple> {
             db.run_script(query, no_params())
                 .unwrap()
-                .rows
                 .into_iter()
                 .collect()
         };
@@ -1019,7 +1024,6 @@ mod tests {
                     let recomputed: BTreeSet<Tuple> = db
                         .run_script(shape.query, no_params())
                         .unwrap()
-                        .rows
                         .into_iter()
                         .collect();
                     assert_eq!(
@@ -1116,7 +1120,6 @@ mod tests {
                     let recomputed: BTreeSet<Tuple> = db
                         .run_script(query, no_params())
                         .unwrap()
-                        .rows
                         .into_iter()
                         .collect();
                     let maintained = sq.current_answer().clone();

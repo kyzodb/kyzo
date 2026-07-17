@@ -33,8 +33,8 @@
  *   temporal posting indices directly, manifest kinds (HNSW/FTS/LSH)
  *   through `apply_manifest_index`'s per-engine put/del hooks.
  * - Law 5: the original's `rmp_serde::from_slice(..).unwrap()` on the old
- *   value in `update_in_relation` is a fallible decode; `unreachable!()`
- *   on collected tuples is a typed invariant error.
+ *   value in `update_in_relation` is a fallible decode; index backfill
+ *   splits Plain vs manifest kinds without `unreachable!`.
  * - `Db::run_query` returns `NamedRows` alone (no cleanup ranges), so the
  *   trigger-recursion call sites here simplify accordingly.
  */
@@ -79,6 +79,7 @@ use crate::runtime::relation::{
     Residency,
 };
 use crate::storage::{Storage, WriteTx};
+use crate::data::value::data_value_any;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Assertion failure for {key:?} of {relation}: {notice}")]
@@ -181,7 +182,7 @@ impl<T: WriteTx> SessionTx<T> {
                         if err.source_code().is_some() {
                             err
                         } else {
-                            err.with_source_code(trigger.source().to_string())
+                            err.with_source_code(trigger.program().to_string())
                         }
                     })?;
                 }
@@ -208,7 +209,7 @@ impl<T: WriteTx> SessionTx<T> {
         if !matches!(op, RelationOp::Ensure | RelationOp::EnsureNot) {
             self.note_constraints(&relation_store);
             // Segment soundness: every mutated relation's id is drained
-            // into a watermark bump BEFORE the commit (runtime/db.rs).
+            // into a generation bump BEFORE the commit (runtime/db.rs).
             self.touched_relations.insert(relation_store.id);
         }
         let InputRelationHandle {
@@ -744,7 +745,7 @@ impl<T: WriteTx> SessionTx<T> {
                         if err.source_code().is_some() {
                             err
                         } else {
-                            err.with_source_code(format!("{} ", trigger.source()))
+                            err.with_source_code(format!("{} ", trigger.program()))
                         }
                     })?;
                 }
@@ -756,17 +757,17 @@ impl<T: WriteTx> SessionTx<T> {
                     .or_default();
                 target_collector.push((
                     CallbackOp::Rm,
-                    NamedRows::new(
+                    NamedRows::try_new(
                         k_bindings.into_iter().map(|k| k.name.to_string()).collect(),
                         new_tuples,
-                    ),
-                    NamedRows::new(
+                    )?,
+                    NamedRows::try_new(
                         kv_bindings
                             .into_iter()
                             .map(|k| k.name.to_string())
                             .collect(),
                         old_tuples,
-                    ),
+                    )?,
                 ))
             }
         }
@@ -959,7 +960,7 @@ impl<T: WriteTx> SessionTx<T> {
                     if err.source_code().is_some() {
                         err
                     } else {
-                        err.with_source_code(format!("{} ", trigger.source()))
+                        err.with_source_code(format!("{} ", trigger.program()))
                     }
                 })?;
             }
@@ -975,8 +976,8 @@ impl<T: WriteTx> SessionTx<T> {
                 .collect();
             target_collector.push((
                 CallbackOp::Put,
-                NamedRows::new(headers.clone(), new_tuples),
-                NamedRows::new(headers, old_tuples),
+                NamedRows::try_new(headers.clone(), new_tuples)?,
+                NamedRows::try_new(headers, old_tuples)?,
             ))
         }
         Ok(())
@@ -1117,7 +1118,7 @@ impl<T: WriteTx> SessionTx<T> {
         let key = idx_handle.encode_bitemporal_key_for_store(idx_tup, valid, stamp, span)?;
         let val = idx_handle.encode_bitemporal_val_for_store(idx_tup, polarity, span)?;
         // The index relation is a mutated relation in its own right: its
-        // segment watermark must bump with this commit, or a served index
+        // segment generation must bump with this commit, or a served index
         // segment silently outlives the write (hostile-review finding,
         // demonstrated stale reads on `*t:by_v{..}` after a base `:put`).
         self.touched_relations.insert(idx_handle.id);
@@ -1326,7 +1327,7 @@ pub(crate) fn make_const_rule(
         },
     );
     let fixed_impl = Arc::new(Constant);
-    fixed_impl.init_options(&mut options, SourceSpan::default())?;
+    let options = fixed_impl.init_options(options, SourceSpan::default())?;
     let bindings_arity = bindings.len();
     program.insert_rule(
         rule_symbol,
@@ -1363,18 +1364,18 @@ pub(crate) enum IndexCtx {
     Hnsw {
         idx: RelationHandle,
         manifest: crate::engines::hnsw::HnswIndexManifest,
-        filter: Option<Vec<crate::data::expr::Bytecode>>,
+        filter: Option<Expr>,
     },
     Fts {
         idx: RelationHandle,
-        extractor: Vec<crate::data::expr::Bytecode>,
+        extractor: Expr,
         analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
     },
     Lsh {
         idx: RelationHandle,
         inv: RelationHandle,
         manifest: crate::engines::lsh::MinHashLshIndexManifest,
-        extractor: Vec<crate::data::expr::Bytecode>,
+        extractor: Expr,
         analyzer: Arc<crate::engines::text::tokenizer::TextAnalyzer>,
         perms: Arc<crate::engines::lsh::HashPermutations>,
     },
@@ -1402,25 +1403,22 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Parse + resolve + compile a row expression (extractor or filter)
     /// against the base relation's columns.
-    fn compile_row_expr(
-        base: &RelationHandle,
-        src: &str,
-    ) -> Result<Vec<crate::data::expr::Bytecode>> {
+    fn compile_row_expr(base: &RelationHandle, src: &str) -> Result<Expr> {
         let mut expr = crate::parse::parse_expressions(src, &BTreeMap::new())?;
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
-        expr.compile()
+        Ok(expr)
     }
 
-    /// Compile an already-parsed row extractor ([`FtsIndexConfig::extractor`]
-    /// / the manifest's stored typed substance) into bytecode. The extractor
-    /// is never re-parsed from source at build time — it arrives typed.
+    /// Bind an already-parsed row extractor ([`crate::parse::sys::FtsIndexConfig::extractor`]
+    /// / the manifest's stored typed substance) to the base column frame.
+    /// The extractor is never re-parsed from source at build time — it arrives typed.
     fn compile_row_extractor(
         base: &RelationHandle,
         extractor: &crate::data::expr::Expr,
-    ) -> Result<Vec<crate::data::expr::Bytecode>> {
+    ) -> Result<Expr> {
         let mut expr = extractor.clone();
         expr.fill_binding_indices(&Self::base_column_frame(base))?;
-        expr.compile()
+        Ok(expr)
     }
 
     /// Resolve (and cache) a manifest index's runtime context.
@@ -1442,10 +1440,11 @@ impl<T: WriteTx> SessionTx<T> {
                 )))
             }
             IndexKind::Hnsw(manifest) => {
+                // Manifest holds typed Expr substance; fill binding indices
+                // against the base frame — never re-parse source text.
                 let filter = manifest
-                    .index_filter
-                    .as_deref()
-                    .map(|src| Self::compile_row_expr(base, src))
+                    .index_filter()
+                    .map(|expr| Self::compile_row_extractor(base, expr))
                     .transpose()?;
                 IndexCtx::Hnsw {
                     idx,
@@ -1480,7 +1479,6 @@ impl<T: WriteTx> SessionTx<T> {
         new_kv: Option<&[DataValue]>,
         old_kv: Option<&[DataValue]>,
     ) -> Result<()> {
-        let mut stack = vec![];
         match ctx {
             IndexCtx::Hnsw {
                 idx,
@@ -1496,8 +1494,7 @@ impl<T: WriteTx> SessionTx<T> {
                         manifest,
                         base,
                         idx,
-                        filter.as_deref(),
-                        &mut stack,
+                        filter.as_ref(),
                         new,
                     )?;
                 }
@@ -1512,7 +1509,6 @@ impl<T: WriteTx> SessionTx<T> {
                         &mut self.store,
                         old,
                         extractor,
-                        &mut stack,
                         analyzer,
                         base,
                         idx,
@@ -1523,7 +1519,6 @@ impl<T: WriteTx> SessionTx<T> {
                         &mut self.store,
                         new,
                         extractor,
-                        &mut stack,
                         analyzer,
                         base,
                         idx,
@@ -1546,7 +1541,6 @@ impl<T: WriteTx> SessionTx<T> {
                         &mut self.store,
                         new,
                         extractor,
-                        &mut stack,
                         analyzer,
                         base,
                         idx,
@@ -1588,7 +1582,7 @@ impl<T: WriteTx> SessionTx<T> {
         // current-only state.
         let kind = match &index_ref.kind {
             IndexKind::Plain { .. } | IndexKind::Temporal => KeyspaceKind::Facts,
-            _ => KeyspaceKind::AlgorithmState,
+            IndexKind::Hnsw(_) | IndexKind::Fts(_) | IndexKind::Lsh { .. } => KeyspaceKind::AlgorithmState,
         };
         for (name, metadata) in index_metas {
             self.create_relation(
@@ -1671,11 +1665,18 @@ impl<T: WriteTx> SessionTx<T> {
         // scan borrows the store the puts need mutably, so each round
         // materializes at most BACKFILL_BATCH rows and resumes from the
         // strict successor of the last key (memcmp order: key ++ 0x00).
-        let plain = matches!(&index_ref.kind, IndexKind::Plain { .. });
-        let ctx = if plain {
-            None
-        } else {
-            Some(self.manifest_index_ctx(&base, &index_ref)?)
+        // Split on IndexKind once: Plain carries its mapper; every other
+        // kind builds a manifest ctx. No `unreachable!` residual.
+        let plain_mapper = match &index_ref.kind {
+            IndexKind::Plain { mapper } => Some(mapper),
+            IndexKind::Temporal
+            | IndexKind::Hnsw(_)
+            | IndexKind::Fts(_)
+            | IndexKind::Lsh { .. } => None,
+        };
+        let ctx = match plain_mapper {
+            Some(_) => None,
+            None => Some(self.manifest_index_ctx(&base, &index_ref)?),
         };
         let stamp = self.system_stamp_routed(base.residency());
         let upper = (base.id.raw() + 1).to_be_bytes();
@@ -1709,14 +1710,11 @@ impl<T: WriteTx> SessionTx<T> {
             succ.push(0xFF);
             lower = succ;
             for row in &batch {
-                match &ctx {
-                    Some(ctx) => {
+                match (&ctx, plain_mapper) {
+                    (Some(ctx), _) => {
                         self.apply_manifest_index(&base, ctx, Some(row.as_slice()), None)?
                     }
-                    None => {
-                        let IndexKind::Plain { mapper } = &index_ref.kind else {
-                            unreachable!("ctx is None only for plain indexes")
-                        };
+                    (None, Some(mapper)) => {
                         let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
                         // Backfill re-mints "now" for both coordinates —
                         // it indexes the base's CURRENT rows (`as_of`
@@ -1732,6 +1730,11 @@ impl<T: WriteTx> SessionTx<T> {
                             stamp,
                             stamp,
                         )?;
+                    }
+                    (None, None) => {
+                        bail!(miette::miette!(
+                            "index backfill: plain mapper missing for Plain kind"
+                        ))
                     }
                 }
             }
@@ -1806,10 +1809,9 @@ impl<T: WriteTx> SessionTx<T> {
         let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());
         keys.push(crate::data::relation::ColumnDef {
             name: SmartString::from(crate::runtime::relation::TEMPORAL_POSTING_LEADING_COLUMN),
-            typing: crate::data::relation::NullableColType {
-                coltype: crate::data::relation::ColType::Validity,
-                nullable: false,
-            },
+            typing: crate::data::relation::NullableColType::required(
+                crate::data::relation::ColType::Validity,
+            ),
             default_gen: None,
         });
         keys.extend(base.metadata.keys.iter().cloned());
@@ -1845,39 +1847,26 @@ impl<T: WriteTx> SessionTx<T> {
                 })?;
             vec_fields.push(*pos);
         }
-        if let Some(src) = &cfg.index_filter {
-            // Prove the filter now; the ctx re-compiles it per session.
-            Self::compile_row_expr(&base, src)?;
+        if let Some(filter) = &cfg.index_filter {
+            // Prove the typed filter binds against the base frame now; the
+            // manifest stores that same Expr substance (not source text).
+            Self::compile_row_extractor(&base, filter)?;
         }
-        // `m_max0` reaches the STORED HNSW manifest; `m_neighbours` is a
-        // user-declared count with no upper bound, so this doubling is a
-        // checked multiply — an overflow is a typed refusal, never a wrapped
-        // graph parameter baked into the index.
-        let m_max0 = cfg.m_neighbours.checked_mul(2).ok_or_else(|| {
-            IndexLifecycleError(format!(
-                "HNSW m_neighbours overflow: {} * 2 exceeds usize",
-                cfg.m_neighbours
-            ))
-        })?;
-        let manifest = crate::engines::hnsw::HnswIndexManifest {
-            base_relation: cfg.base_relation.clone(),
-            index_name: cfg.index_name.clone(),
-            vec_dim: cfg.vec_dim,
-            dtype: cfg.dtype,
+        // Admit-only mint: private fields, MNeighbours (m >= 2), derived
+        // m_max / m_max0 / level_multiplier — illegal descriptions refuse here.
+        let manifest = crate::engines::hnsw::HnswIndexManifest::admit(
+            cfg.base_relation.clone(),
+            cfg.index_name.clone(),
+            cfg.vec_dim,
+            cfg.dtype,
             vec_fields,
-            distance: cfg.distance,
-            ef_construction: cfg.ef_construction,
-            m_neighbours: cfg.m_neighbours,
-            // The standard HNSW derivations (the original's constants):
-            // layer-0 keeps twice the neighbours; the level multiplier is
-            // 1/ln(m) so expected layer occupancy decays geometrically.
-            m_max: cfg.m_neighbours,
-            m_max0,
-            level_multiplier: 1.0 / (cfg.m_neighbours as f64).ln(),
-            index_filter: cfg.index_filter.clone(),
-            extend_candidates: cfg.extend_candidates,
-            keep_pruned_connections: cfg.keep_pruned_connections,
-        };
+            cfg.distance,
+            cfg.ef_construction,
+            cfg.m_neighbours,
+            cfg.index_filter.clone(),
+            cfg.extend_candidates,
+            cfg.keep_pruned_connections,
+        )?;
         let idx_meta = crate::engines::hnsw::hnsw_index_metadata(&base.metadata);
         let idx_ref = IndexRef {
             name: cfg.index_name.clone(),
@@ -1953,7 +1942,7 @@ impl<T: WriteTx> SessionTx<T> {
             n_bands: params.b,
             n_rows_in_band: params.r,
             threshold: cfg.target_threshold.0,
-            perms: perms.to_bytes(),
+            perms: crate::engines::lsh::LshPermutationBytes::from_perms(&perms),
         };
         let idx_meta = crate::engines::lsh::lsh_index_metadata(&base.metadata);
         let inv_meta = crate::engines::lsh::lsh_inv_index_metadata(&base.metadata);
@@ -2081,7 +2070,8 @@ mod bulk_write_tests {
         let live = db
             .run_script("?[k, v] := *w{k, v}", no_params())
             .expect("scan back")
-            .rows;
+            .rows()
+            .to_vec();
         assert_eq!(live.len(), 400, "200 re-put + 200 untouched, 100 retracted");
         let mut by_key: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         for row in &live {
@@ -2154,7 +2144,7 @@ mod bulk_write_tests {
             .run_script("?[k, v] := *w3{k, v}", no_params())
             .expect("read back");
         assert_eq!(
-            out.rows.len(),
+            out.rows().len(),
             0,
             "the refused mutation must not commit row 1 either — the write \
              transaction that reached the reserved instant on row 2 was never \
@@ -2195,7 +2185,8 @@ mod bulk_write_tests {
             DataValue::from(10),
         ])];
         assert_eq!(
-            out.rows, want,
+            out.rows(),
+            want.as_slice(),
             "the refused insert must not overwrite the existing row"
         );
     }
@@ -2253,7 +2244,8 @@ mod bulk_write_tests {
             DataValue::from(20),
         ])];
         assert_eq!(
-            out.rows, want,
+            out.rows(),
+            want.as_slice(),
             "a is updated to 99; b (omitted from the :update) carries forward as 20"
         );
     }
@@ -2290,10 +2282,7 @@ mod temporal_index_tests {
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
             name: name.into(),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         }
     }
@@ -2395,16 +2384,16 @@ mod temporal_index_tests {
                     .expect("posting key decodes cleanly");
                 let leading = match &tup.as_slice()[0] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the leading Validity column, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the leading Validity column, got {other:?}"),
                 };
                 let key_col = tup[1].get_int().expect("int base key column");
                 let tail_valid = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the tail valid slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the tail valid slot, got {other:?}"),
                 };
                 let tail_sys = match &tup.as_slice()[3] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the tail sys slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the tail sys slot, got {other:?}"),
                 };
                 let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
                     .expect("posting value decodes cleanly");
@@ -2429,11 +2418,11 @@ mod temporal_index_tests {
                 let key_col = tup[0].get_int().expect("int base key column");
                 let valid = match &tup.as_slice()[1] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the valid slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the valid slot, got {other:?}"),
                 };
                 let sys = match &tup.as_slice()[2] {
                     DataValue::Validity(vv) => vv.ts_micros(),
-                    other => panic!("expected the sys slot, got {other:?}"),
+                    other @ (data_value_any!()) => panic!("expected the sys slot, got {other:?}"),
                 };
                 let polarity = crate::data::bitemporal::claim_polarity_of_value(&v)
                     .expect("base value decodes cleanly");

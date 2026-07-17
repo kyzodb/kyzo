@@ -52,7 +52,10 @@ use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    btree_set_only_element, path_predecessor, GraphAlgorithmInvariantError, CancelAuthority,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct ShortestPathDijkstra;
 
@@ -74,8 +77,7 @@ impl FixedRule for ShortestPathDijkstra {
         let mut starting_nodes = BTreeSet::new();
         for tuple in starting.iter()? {
             let tuple = tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(dijkstra_start_col): `ensure_min_len(1)` proved a first column.
             let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
@@ -88,8 +90,7 @@ impl FixedRule for ShortestPathDijkstra {
                 let mut tn = BTreeSet::new();
                 for tuple in t.iter()? {
                     let tuple = tuple?;
-                    // Structural: `ensure_min_len(1)` proved every tuple
-                    // has a first column.
+                    // INVARIANT(dijkstra_term_col): `ensure_min_len(1)` proved a first column.
                     let node = &tuple.as_slice()[0];
                     if let Some(idx) = inv_indices.get(node) {
                         tn.insert(*idx);
@@ -109,8 +110,9 @@ impl FixedRule for ShortestPathDijkstra {
         let rows_per_start = par_try_map(starts, |start| -> Result<Vec<Tuple>> {
             let res = if let Some(tn) = &termination_nodes {
                 if tn.len() == 1 {
-                    // Structural: `tn.len() == 1`.
-                    let single = Some(*tn.iter().next().unwrap());
+                    // INVARIANT(single_goal): `tn.len() == 1` so the set has
+                    // exactly one element.
+                    let single = Some(btree_set_only_element(tn, "single_goal")?);
                     if keep_ties {
                         dijkstra_keep_ties(&graph, start, &single, &(), &(), cancel.clone())?
                     } else {
@@ -193,7 +195,8 @@ impl ForbiddenNode for BTreeSet<u32> {
 
 pub(crate) trait Goal {
     fn is_exhausted(&self) -> bool;
-    fn visit(&mut self, node: u32);
+    /// Consuming visit: drain this goal of `node` and return the residual (P084).
+    fn visit(self, node: u32) -> Self;
     fn iter(&self, total: u32) -> Box<dyn Iterator<Item = u32> + '_>;
 }
 
@@ -202,7 +205,7 @@ impl Goal for () {
         false
     }
 
-    fn visit(&mut self, _node: u32) {}
+    fn visit(self, _node: u32) -> Self {}
 
     fn iter(&self, total: u32) -> Box<dyn Iterator<Item = u32> + '_> {
         Box::new(0..total)
@@ -214,11 +217,10 @@ impl Goal for Option<u32> {
         self.is_none()
     }
 
-    fn visit(&mut self, node: u32) {
-        if let Some(u) = &self
-            && *u == node
-        {
-            self.take();
+    fn visit(self, node: u32) -> Self {
+        match self {
+            Some(u) if u == node => None,
+            other => other,
         }
     }
 
@@ -236,8 +238,9 @@ impl Goal for BTreeSet<u32> {
         self.is_empty()
     }
 
-    fn visit(&mut self, node: u32) {
+    fn visit(mut self, node: u32) -> Self {
         self.remove(&node);
+        self
     }
 
     fn iter(&self, _total: u32) -> Box<dyn Iterator<Item = u32> + '_> {
@@ -256,7 +259,8 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
     let graph_size = edges.node_count();
     let mut distance = vec![f32::INFINITY; graph_size as usize];
     let mut pq = PriorityQueue::new();
-    let mut back_pointers = vec![u32::MAX; graph_size as usize];
+    // Absence is `None` — never a reserved node id (P078).
+    let mut back_pointers: Vec<Option<u32>> = vec![None; graph_size as usize];
     distance[start as usize] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
     let mut goals_remaining = goals.clone();
@@ -285,35 +289,34 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
             if nxt_cost < distance[nxt_node as usize] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
                 distance[nxt_node as usize] = nxt_cost;
-                back_pointers[nxt_node as usize] = node;
+                back_pointers[nxt_node as usize] = Some(node);
             }
         }
 
-        goals_remaining.visit(node);
+        goals_remaining = goals_remaining.visit(node);
         if goals_remaining.is_exhausted() {
             break;
         }
     }
 
-    Ok(goals
-        .iter(edges.node_count())
-        .map(|target| {
-            let cost = distance[target as usize];
-            if !cost.is_finite() {
-                (target, cost, vec![])
-            } else {
-                let mut path = vec![];
-                let mut current = target;
-                while current != start {
-                    path.push(current);
-                    current = back_pointers[current as usize];
-                }
-                path.push(start);
-                path.reverse();
-                (target, cost, path)
+    let mut results = Vec::new();
+    for target in goals.iter(edges.node_count()) {
+        let cost = distance[target as usize];
+        if !cost.is_finite() {
+            results.push((target, cost, vec![]));
+        } else {
+            let mut path = vec![];
+            let mut current = target;
+            while current != start {
+                path.push(current);
+                current = path_predecessor(&back_pointers, current, "dijkstra_pred")?;
             }
-        })
-        .collect_vec())
+            path.push(start);
+            path.reverse();
+            results.push((target, cost, path));
+        }
+    }
+    Ok(results)
 }
 
 pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
@@ -359,54 +362,54 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
             cancel.check()?;
         }
 
-        goals_remaining.visit(node);
+        goals_remaining = goals_remaining.visit(node);
         if goals_remaining.is_exhausted() {
             break;
         }
     }
 
-    let ret = goals
-        .iter(edges.node_count())
-        .flat_map(|target| {
-            let cost = distance[target as usize];
-            if !cost.is_finite() {
-                vec![(target, cost, vec![])]
-            } else {
-                struct CollectPath {
-                    collected: Vec<(u32, f32, Vec<u32>)>,
-                }
+    let mut ret = Vec::new();
+    for target in goals.iter(edges.node_count()) {
+        let cost = distance[target as usize];
+        if !cost.is_finite() {
+            ret.push((target, cost, vec![]));
+        } else {
+            struct CollectPath {
+                collected: Vec<(u32, f32, Vec<u32>)>,
+            }
 
-                impl CollectPath {
-                    fn collect(
-                        &mut self,
-                        chain: &[u32],
-                        start: u32,
-                        target: u32,
-                        cost: f32,
-                        back_pointers: &[Vec<u32>],
-                    ) {
-                        // Structural: `chain` starts as `[target]` and only
-                        // grows.
-                        let last = chain.last().unwrap();
-                        let prevs = &back_pointers[*last as usize];
-                        for nxt in prevs {
-                            let mut ret = chain.to_vec();
-                            ret.push(*nxt);
-                            if *nxt == start {
-                                ret.reverse();
-                                self.collected.push((target, cost, ret));
-                            } else {
-                                self.collect(&ret, start, target, cost, back_pointers)
-                            }
+            impl CollectPath {
+                fn collect(
+                    &mut self,
+                    chain: &[u32],
+                    start: u32,
+                    target: u32,
+                    cost: f32,
+                    back_pointers: &[Vec<u32>],
+                ) -> Result<()> {
+                    let last = chain
+                        .last()
+                        .copied()
+                        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("keep_ties_chain"))?;
+                    let prevs = &back_pointers[last as usize];
+                    for &nxt in prevs {
+                        let mut ret = chain.to_vec();
+                        ret.push(nxt);
+                        if nxt == start {
+                            ret.reverse();
+                            self.collected.push((target, cost, ret));
+                        } else {
+                            self.collect(&ret, start, target, cost, back_pointers)?;
                         }
                     }
+                    Ok(())
                 }
-                let mut cp = CollectPath { collected: vec![] };
-                cp.collect(&[target], start, target, cost, &back_pointers);
-                cp.collected
             }
-        })
-        .collect_vec();
+            let mut cp = CollectPath { collected: vec![] };
+            cp.collect(&[target], start, target, cost, &back_pointers)?;
+            ret.extend(cp.collected);
+        }
+    }
 
     Ok(ret)
 }
@@ -430,6 +433,7 @@ mod tests {
         let n = 60u32;
         let mut state = 0xfeed_face_cafe_babeu64;
         let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -665,9 +669,9 @@ mod tests {
         // Unset flag: the search completes, path 0→3 costs 3.
         let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::default()).unwrap();
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
-        // Raised flag: the very first pop refuses.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the very first pop refuses.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(dijkstra(&graph, 0, &Some(3u32), &(), &(), flag).is_err());
     }
 }

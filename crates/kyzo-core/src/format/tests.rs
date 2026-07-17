@@ -54,6 +54,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -430,9 +431,11 @@ fn fixed_rule_trivia_round_trips() {
     let mut fixed_rules: BTreeMap<String, Arc<dyn FixedRule>> = BTreeMap::new();
     fixed_rules.insert(
         "algo".to_string(),
-        Arc::new(SimpleFixedRule::new(1, |_inputs, _opts| {
-            unreachable!("fixed rule body never runs in a parse/format/reparse test")
-        })),
+        // Named body — never run; parse/format only needs name + arity (P083).
+        Arc::new(SimpleFixedRule::new(
+            1,
+            crate::fixed_rule::EmptyNamedRowsBody,
+        )),
     );
     let src = "# leads algo\nh[a] <~ algo(); # trails algo\n?[a] := h[a];\n";
     let cur_vld = current_validity().expect("current validity");

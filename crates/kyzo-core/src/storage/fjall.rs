@@ -55,12 +55,70 @@ use fjall::{
     Conflict, Guard, KeyspaceCreateOptions, OptimisticTxDatabase, OptimisticTxKeyspace,
     OptimisticWriteTx, Readable, Slice, Snapshot,
 };
-use miette::{Result, bail, miette};
+use miette::{Diagnostic, Result, bail, miette};
+use thiserror::Error;
 
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{ConflictError, FormatVersion, ReadTx, Storage, SystemClock, WriteTx};
+use crate::storage::{
+    Aborted, BackendIoError, CommitFailure, CommitIo, Committed, ConflictError, FormatVersion,
+    ReadTx, Storage, SystemClock, WriteTx,
+};
+
+/// Typed refusal when the fjall substrate fails. Identity is the variant —
+/// not a stringly `miette!("fjall…")` message. Poisoned lock expects and
+/// drop-bombs are named exceptions outside this enum.
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum FjallRefuse {
+    #[error("opening fjall database")]
+    #[diagnostic(code(storage::fjall::open_database))]
+    OpenDatabase(#[source] fjall::Error),
+
+    #[error("opening fjall meta keyspace")]
+    #[diagnostic(code(storage::fjall::open_meta_keyspace))]
+    OpenMetaKeyspace(#[source] fjall::Error),
+
+    #[error("reading format version")]
+    #[diagnostic(code(storage::fjall::read_format_version))]
+    ReadFormatVersion(#[source] fjall::Error),
+
+    #[error("stamping format version")]
+    #[diagnostic(code(storage::fjall::stamp_format_version))]
+    StampFormatVersion(#[source] fjall::Error),
+
+    #[error("opening fjall keyspace")]
+    #[diagnostic(code(storage::fjall::open_keyspace))]
+    OpenKeyspace(#[source] fjall::Error),
+
+    #[error("reading system clock watermark")]
+    #[diagnostic(code(storage::fjall::read_watermark))]
+    ReadWatermark(#[source] fjall::Error),
+
+    #[error("corrupt system clock watermark")]
+    #[diagnostic(code(storage::fjall::corrupt_watermark))]
+    CorruptWatermark,
+
+    #[error("persisting system clock watermark")]
+    #[diagnostic(code(storage::fjall::persist_watermark))]
+    PersistWatermark(#[source] fjall::Error),
+
+    #[error("fjall write transaction")]
+    #[diagnostic(code(storage::fjall::begin_write_tx))]
+    BeginWriteTx(#[source] fjall::Error),
+
+    #[error("fjall commit")]
+    #[diagnostic(code(storage::fjall::commit))]
+    Commit(#[source] fjall::Error),
+
+    #[error("fjall sync")]
+    #[diagnostic(code(storage::fjall::sync))]
+    Sync(#[source] fjall::Error),
+
+    #[error("fjall read")]
+    #[diagnostic(code(storage::fjall::read))]
+    Read(#[source] fjall::Error),
+}
 
 const KEYSPACE_NAME: &str = "kyzo";
 const META_KEYSPACE_NAME: &str = "kyzo_meta";
@@ -324,19 +382,17 @@ pub fn new_fjall_storage_with(
     if let Some(n) = opts.worker_threads {
         builder = builder.worker_threads(n);
     }
-    let db = builder
-        .open()
-        .map_err(|e| miette!("opening fjall database: {e}"))?;
+    let db = builder.open().map_err(FjallRefuse::OpenDatabase)?;
     let meta = db
         .keyspace(META_KEYSPACE_NAME, || tuning::meta_keyspace_options(opts))
-        .map_err(|e| miette!("opening fjall meta keyspace: {e}"))?;
+        .map_err(FjallRefuse::OpenMetaKeyspace)?;
     match meta
         .get(FORMAT_VERSION_KEY)
-        .map_err(|e| miette!("reading format version: {e}"))?
+        .map_err(FjallRefuse::ReadFormatVersion)?
     {
         None => meta
             .insert(FORMAT_VERSION_KEY, FormatVersion::CURRENT.as_bytes())
-            .map_err(|e| miette!("stamping format version: {e}"))?,
+            .map_err(FjallRefuse::StampFormatVersion)?,
         Some(v) => {
             let found = FormatVersion::parse(v.as_ref())?;
             if found != FormatVersion::CURRENT {
@@ -349,18 +405,18 @@ pub fn new_fjall_storage_with(
     }
     let ks = db
         .keyspace(KEYSPACE_NAME, || tuning::main_keyspace_options(opts))
-        .map_err(|e| miette!("opening fjall keyspace: {e}"))?;
+        .map_err(FjallRefuse::OpenKeyspace)?;
     let now = crate::runtime::current_validity()?.raw();
     let watermark = match meta
         .get(SYSTEM_CLOCK_WATERMARK_KEY)
-        .map_err(|e| miette!("reading system clock watermark: {e}"))?
+        .map_err(FjallRefuse::ReadWatermark)?
     {
         None => i64::MIN,
         Some(v) => {
             let bytes: [u8; 8] = v
                 .as_ref()
                 .try_into()
-                .map_err(|_| miette!("corrupt system clock watermark"))?;
+                .map_err(|_| FjallRefuse::CorruptWatermark)?;
             i64::from_be_bytes(bytes)
         }
     };
@@ -413,10 +469,10 @@ impl FjallStorage {
             .lock()
             .map_err(|_| miette!("watermark lock poisoned"))?;
         let now = crate::runtime::current_validity()?.raw();
-        let stamp = self.clock.stamp(now);
+        let stamp = self.clock.stamp(now)?;
         self.meta
             .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())
-            .map_err(|e| miette!("persisting system clock watermark: {e}"))?;
+            .map_err(FjallRefuse::PersistWatermark)?;
         Ok(stamp)
     }
 }
@@ -443,7 +499,7 @@ impl Storage for FjallStorage {
         // max, so a stale (lower) argument must not regress the disk.
         self.meta
             .insert(SYSTEM_CLOCK_WATERMARK_KEY, self.clock.floor().to_be_bytes())
-            .map_err(|e| miette!("persisting system clock watermark: {e}"))?;
+            .map_err(FjallRefuse::PersistWatermark)?;
         Ok(())
     }
 
@@ -470,13 +526,10 @@ impl Storage for FjallStorage {
         // `concurrent_increments_lose_nothing_at_the_storage_layer`).
         // The watermark persists non-transactionally — a floor, not a
         // record.
-        let tx = self
-            .db
-            .write_tx()
-            .map_err(|e| miette!("fjall write tx: {e}"))?;
+        let tx = self.db.write_tx().map_err(FjallRefuse::BeginWriteTx)?;
         let stamp = self.stamp_after_snapshot(&tx)?;
         Ok(FjallWriteTx {
-            tx,
+            tx: Some(tx),
             ks: self.ks.clone(),
             db: self.db.clone(),
             stamp,
@@ -523,15 +576,12 @@ impl Storage for FjallStorage {
         const CHUNK: usize = 32_768;
         let mut data = data.peekable();
         while data.peek().is_some() {
-            let mut tx = self
-                .db
-                .write_tx()
-                .map_err(|e| miette!("fjall write tx: {e}"))?;
+            let mut tx = self.db.write_tx().map_err(FjallRefuse::BeginWriteTx)?;
             for pair in data.by_ref().take(CHUNK) {
                 let (k, v) = pair?;
                 tx.insert(&self.ks, k, v);
             }
-            match tx.commit().map_err(|e| miette!("fjall commit: {e}"))? {
+            match tx.commit().map_err(FjallRefuse::Commit)? {
                 Ok(()) => {}
                 Err(Conflict) => {
                     // Under the exclusive-access precondition this is caller
@@ -544,9 +594,10 @@ impl Storage for FjallStorage {
     }
 
     fn sync(&self) -> Result<()> {
-        self.db
+        Ok(self
+            .db
             .persist(fjall::PersistMode::SyncAll)
-            .map_err(|e| miette!("fjall sync: {e}"))
+            .map_err(FjallRefuse::Sync)?)
     }
 }
 
@@ -576,13 +627,22 @@ pub struct FjallReadTx {
 /// set. Reads see the transaction's own writes; `commit` consumes the value,
 /// so a committed transaction cannot be touched again by construction.
 pub struct FjallWriteTx {
-    tx: OptimisticWriteTx,
+    /// `None` after commit/abort spends Open. Drop-bomb if still `Some`.
+    tx: Option<OptimisticWriteTx>,
     ks: OptimisticTxKeyspace,
     db: OptimisticTxDatabase,
     stamp: ValidityTs,
 }
 
 impl FjallWriteTx {
+    fn open_tx(&self) -> &OptimisticWriteTx {
+        self.tx.as_ref().expect("FjallWriteTx used after commit/abort")
+    }
+
+    fn open_tx_mut(&mut self) -> &mut OptimisticWriteTx {
+        self.tx.as_mut().expect("FjallWriteTx used after commit/abort")
+    }
+
     /// Contract v2 (write-set validation): put every written key on the
     /// commit-time conflict surface. fjall's `insert`/`remove` register the
     /// key only as a conflict SOURCE (something that aborts *others*); the
@@ -595,9 +655,10 @@ impl FjallWriteTx {
     /// concurrent transaction committed a write to the same key. Mutating
     /// this call away breaks `write_write_race_aborts_second_committer`.
     fn mark_written_key_validated(&mut self, key: &[u8]) -> Result<()> {
-        self.tx
-            .contains_key(&self.ks, key)
-            .map_err(|e| miette!("fjall read: {e}"))?;
+        let ks = self.ks.clone();
+        self.open_tx_mut()
+            .contains_key(&ks, key)
+            .map_err(FjallRefuse::Read)?;
         Ok(())
     }
 }
@@ -643,7 +704,7 @@ fn raw_range<'a, R: Readable>(
 fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
     let (k, v) = guard
         .into_inner_if(|_| true)
-        .map_err(|e| miette!("fjall read: {e}"))?;
+        .map_err(FjallRefuse::Read)?;
     Ok((
         k,
         v.expect("predicate is unconditionally true: the value is always loaded"),
@@ -653,7 +714,7 @@ fn materialize_row(guard: Guard) -> Result<(Slice, Slice)> {
 /// A key alone, filtering the guard on `key()` and never loading the value
 /// — the currency for existence probes and counts, which cost no value I/O.
 fn materialize_key(guard: Guard) -> Result<Slice> {
-    guard.key().map_err(|e| miette!("fjall read: {e}"))
+    Ok(guard.key().map_err(FjallRefuse::Read)?)
 }
 
 fn read_get<R: Readable>(
@@ -661,13 +722,13 @@ fn read_get<R: Readable>(
     ks: &OptimisticTxKeyspace,
     key: &[u8],
 ) -> Result<Option<Slice>> {
-    reader.get(ks, key).map_err(|e| miette!("fjall read: {e}"))
+    Ok(reader.get(ks, key).map_err(FjallRefuse::Read)?)
 }
 
 fn read_exists<R: Readable>(reader: &R, ks: &OptimisticTxKeyspace, key: &[u8]) -> Result<bool> {
-    reader
+    Ok(reader
         .contains_key(ks, key)
-        .map_err(|e| miette!("fjall read: {e}"))
+        .map_err(FjallRefuse::Read)?)
 }
 
 fn read_total_scan<'a, R: Readable>(
@@ -721,7 +782,7 @@ impl<S: FjallSeekStep> SkipCursor for FjallSkipCursor<S> {
         match self {
             Self::Empty => None,
             Self::Live(iter) => iter.fjall_seek(target).map(|r| {
-                let (k, v) = r.map_err(|e| miette!("fjall read: {e}"))?;
+                let (k, v) = r.map_err(FjallRefuse::Read)?;
                 Ok((k.to_vec(), v.to_vec()))
             }),
         }
@@ -791,7 +852,64 @@ macro_rules! impl_read_tx {
 }
 
 impl_read_tx!(FjallReadTx, snap, fjall::SeekIter);
-impl_read_tx!(FjallWriteTx, tx, fjall::TrackedSeekIter<'c>);
+
+impl ReadTx for FjallWriteTx {
+    fn get(&self, key: &[u8]) -> Result<Option<Slice>> {
+        read_get(self.open_tx(), &self.ks, key)
+    }
+
+    fn exists(&self, key: &[u8]) -> Result<bool> {
+        read_exists(self.open_tx(), &self.ks, key)
+    }
+
+    fn range_scan<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        Box::new(raw_range(self.open_tx(), &self.ks, lower, upper).map(materialize_row))
+    }
+
+    fn range_scan_keys<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+    ) -> Box<dyn Iterator<Item = Result<Slice>> + 'a> {
+        Box::new(raw_range(self.open_tx(), &self.ks, lower, upper).map(materialize_key))
+    }
+
+    fn range_skip_scan_tuple<'a>(
+        &'a self,
+        lower: &[u8],
+        upper: &[u8],
+        as_of: AsOf,
+    ) -> Box<dyn Iterator<Item = Result<Tuple>> + 'a> {
+        Box::new(SkipWalk::new(
+            self.open_skip_cursor(lower, upper),
+            lower,
+            upper,
+            as_of,
+        ))
+    }
+
+    fn total_scan<'a>(&'a self) -> Box<dyn Iterator<Item = Result<(Slice, Slice)>> + 'a> {
+        read_total_scan(self.open_tx(), &self.ks)
+    }
+}
+
+impl OpenSkipCursor for FjallWriteTx {
+    type Cursor<'c> = FjallSkipCursor<fjall::TrackedSeekIter<'c>>;
+
+    fn open_skip_cursor<'c>(&'c self, lower: &[u8], upper: &[u8]) -> Self::Cursor<'c> {
+        if lower >= upper {
+            return FjallSkipCursor::Empty;
+        }
+        FjallSkipCursor::Live(self.open_tx().seek_range::<&[u8], _>(
+            &self.ks,
+            (Bound::Included(lower), Bound::Excluded(upper)),
+        ))
+    }
+}
 
 impl WriteTx for FjallWriteTx {
     fn system_stamp(&self) -> ValidityTs {
@@ -799,30 +917,28 @@ impl WriteTx for FjallWriteTx {
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
-        self.tx.insert(&self.ks, key, val);
+        let ks = self.ks.clone();
+        self.open_tx_mut().insert(&ks, key, val);
         self.mark_written_key_validated(key)
     }
 
     fn del(&mut self, key: &[u8]) -> Result<()> {
-        self.tx.remove(&self.ks, key);
+        let ks = self.ks.clone();
+        self.open_tx_mut().remove(&ks, key);
         self.mark_written_key_validated(key)
     }
 
     fn del_range(&mut self, lower: &[u8], upper: &[u8]) -> Result<()> {
-        // Everything visible to this transaction in the range dies: snapshot
-        // data and the transaction's own writes alike. Chunked with a
-        // resuming cursor, so scratch memory is bounded and no pass re-walks
-        // the tombstones of previous passes (a naive rescan-from-lower is
-        // quadratic in range size). The write set itself necessarily holds
-        // one tombstone per deleted key until commit.
         const CHUNK: usize = 1024;
         let mut cursor = lower.to_vec();
         loop {
-            // Keys only: a delete never needs the value bytes.
-            let keys: Vec<Slice> = raw_range(&self.tx, &self.ks, &cursor, upper)
-                .map(materialize_key)
-                .take(CHUNK)
-                .collect::<Result<_>>()?;
+            let keys: Vec<Slice> = {
+                let tx = self.open_tx();
+                raw_range(tx, &self.ks, &cursor, upper)
+                    .map(materialize_key)
+                    .take(CHUNK)
+                    .collect::<Result<_>>()?
+            };
             let Some(last) = keys.last() else {
                 return Ok(());
             };
@@ -832,8 +948,9 @@ impl WriteTx for FjallWriteTx {
                 succ
             };
             let full_chunk = keys.len() == CHUNK;
+            let ks = self.ks.clone();
             for k in keys {
-                self.tx.remove(&self.ks, k);
+                self.open_tx_mut().remove(&ks, k);
             }
             if !full_chunk {
                 return Ok(());
@@ -841,17 +958,48 @@ impl WriteTx for FjallWriteTx {
         }
     }
 
-    fn commit(self) -> Result<()> {
-        match self.tx.commit().map_err(|e| miette!("fjall commit: {e}"))? {
-            Ok(()) => Ok(()),
-            Err(Conflict) => Err(ConflictError.into()),
+    fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
+        let tx = self
+            .tx
+            .take()
+            .expect("FjallWriteTx commit after spend");
+        match tx.commit().map_err(|e| {
+            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
+        })? {
+            Ok(()) => Ok(Committed),
+            Err(Conflict) => Err(CommitFailure::Conflict(ConflictError)),
         }
     }
 
-    fn commit_durable(self) -> Result<()> {
+    fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
         let db = self.db.clone();
-        self.commit()?;
+        let tx = self
+            .tx
+            .take()
+            .expect("FjallWriteTx commit_durable after spend");
+        match tx.commit().map_err(|e| {
+            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
+        })? {
+            Ok(()) => {}
+            Err(Conflict) => return Err(CommitFailure::Conflict(ConflictError)),
+        }
         db.persist(fjall::PersistMode::SyncAll)
-            .map_err(|e| miette!("fjall sync: {e}"))
+            .map_err(|e| CommitFailure::Io(CommitIo::FjallSync(BackendIoError::from_error(e))))?;
+        Ok(Committed)
+    }
+
+    fn abort(mut self) -> Aborted {
+        if let Some(tx) = self.tx.take() {
+            tx.rollback();
+        }
+        Aborted
+    }
+}
+
+impl Drop for FjallWriteTx {
+    fn drop(&mut self) {
+        if self.tx.is_some() && !std::thread::panicking() {
+            panic!("Open WriteTx dropped without commit() or abort(self)");
+        }
     }
 }

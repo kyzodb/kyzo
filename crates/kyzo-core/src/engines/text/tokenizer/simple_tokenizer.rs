@@ -46,12 +46,12 @@ impl<'a> SimpleTokenStream<'a> {
 impl<'a> TokenStream for SimpleTokenStream<'a> {
     fn advance(&mut self) -> bool {
         self.token.text.clear();
+        // INVARIANT(token_position): tokenizer position is a modular counter; wrap is intentional.
         self.token.position = self.token.position.wrapping_add(1);
         while let Some((offset_from, c)) = self.chars.next() {
             if c.is_alphanumeric() {
                 let offset_to = self.search_token_end();
-                self.token.offset_from = offset_from;
-                self.token.offset_to = offset_to;
+                let _ = self.token.set_offsets(offset_from, offset_to);
                 self.token.text.push_str(&self.text[offset_from..offset_to]);
                 return true;
             }

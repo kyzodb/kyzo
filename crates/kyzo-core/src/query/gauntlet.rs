@@ -80,7 +80,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::data::program::MagicSymbol;
+use crate::data::program::{HeadAggrSlot, MagicSymbol};
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::{CancelFlag, NamedRows};
@@ -110,6 +110,7 @@ impl Rng {
         Rng { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
+        // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -186,7 +187,7 @@ fn literal_text(program: &Program, lit: &Literal) -> String {
     let args: Vec<String> = lit.args.iter().map(term_text).collect();
     format!(
         "{}{sigil}{}[{}]",
-        if lit.negated { "not " } else { "" },
+        if lit.is_negated() { "not " } else { "" },
         lit.rel,
         args.join(", ")
     )
@@ -203,8 +204,8 @@ fn rule_text(program: &Program, rule: &Rule) -> String {
         .map(|(t, a)| {
             let base = term_text(t);
             match a {
-                Some((aggr, _args)) => format!("{}({base})", aggr.name),
-                None => base,
+                HeadAggrSlot::Aggregated { aggr, .. } => format!("{}({base})", aggr.name),
+                HeadAggrSlot::Plain => base,
             }
         })
         .collect();
@@ -309,7 +310,7 @@ fn compiled_magic_symbols<S: Storage>(db: &Db<S>, script: &str) -> Vec<MagicSymb
         .expect("gauntlet script parses")
     {
         Script::Single(p) => *p,
-        _ => panic!("gauntlet scripts are always a single query"),
+        Script::Imperative(_) | Script::Sys(_) => panic!("gauntlet scripts are always a single query"),
     };
     let tx = SessionTx::new_read(
         db.storage.read_tx().expect("read tx"),
@@ -524,6 +525,7 @@ fn magic_sets_norec_sweep_matches_naive_oracle_across_bound_unbound_adornment() 
     let count = seed_count();
     let mut failures: Vec<String> = Vec::new();
     for i in 0..count {
+        // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
         let seed = Rng::new(base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15)).next_u64();
         if let Err(f) = run_one_seed(seed) {
             failures.push(f);

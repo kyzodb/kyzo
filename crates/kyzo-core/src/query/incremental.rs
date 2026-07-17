@@ -72,7 +72,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Error, Result};
 
-use crate::data::aggr::{Aggregation, NormalAggrObj};
+use crate::data::aggr::{Aggregation, NormalAggr};
+use crate::data::program::HeadAggrSlot;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
@@ -90,14 +91,20 @@ pub(crate) enum Term {
 pub(crate) struct Literal {
     pub(crate) rel: Symbol,
     pub(crate) args: Vec<Term>,
-    pub(crate) negated: bool,
+    pub(crate) polarity: crate::query::laws::Polarity,
 }
 
-/// One head position's aggregation, if any — the REAL landed
+impl Literal {
+    pub(crate) fn is_negated(&self) -> bool {
+        matches!(self.polarity, crate::query::laws::Polarity::Negative)
+    }
+}
+
+/// One head position's aggregation slot — the REAL landed
 /// [`Aggregation`] from `data/aggr.rs`, the same type `laws::HeadAggr`
 /// wraps: both tiers fold through exactly the code users get, never a
 /// second hand-rolled implementation of "sum" or "min".
-pub(crate) type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+pub(crate) type HeadAggr = HeadAggrSlot;
 
 /// One derivation rule: `head_rel(head_args) :- body`. `aggr` is always
 /// the same length as `head_args`; all-`None` marks an ordinary
@@ -376,19 +383,19 @@ fn contribute_candidates_subset(
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && !l.negated)
+        .filter(|(i, l)| !subset.contains(i) && !l.is_negated())
         .map(|(_, l)| l);
     let remaining_negated = rule
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && l.negated)
+        .filter(|(i, l)| !subset.contains(i) && l.is_negated())
         .map(|(_, l)| l);
     for lit in remaining_positive.chain(remaining_negated) {
         let rows = literal_rows(state, lit);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -431,15 +438,15 @@ fn head_is_derivable(rules: &[&Rule], state: &MaintainedState, target: &Tuple) -
 /// Positives first, so safety guarantees negated literals are fully
 /// bound when probed — the same ordering `laws::body_bindings` uses.
 fn body_bindings_from(rule: &Rule, state: &MaintainedState, initial: Bindings) -> Vec<Bindings> {
-    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
-    ordered.extend(rule.body.iter().filter(|l| l.negated));
+    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
+    ordered.extend(rule.body.iter().filter(|l| l.is_negated()));
 
     let mut frontier: Vec<Bindings> = vec![initial];
     for lit in ordered {
         let rows = literal_rows(state, lit);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -476,7 +483,7 @@ pub(crate) enum IncrementalRejection {
 // and `Symbol`s are gone — there is nothing left to translate. `MagicAtom`
 // still names its variables by `Symbol` and already separates
 // `Rule`/`NegatedRule` and `Relation`/`NegatedRelation` as distinct
-// variants, matching this module's `Literal.negated` directly.
+// variants, matching this module's `Literal.is_negated()` directly.
 //
 // One real subtlety, not a free structural match: after the magic
 // rewrite, a CONSTANT never appears inline in a `Relation`/`Rule` atom's
@@ -529,7 +536,9 @@ fn collect_const_substitutions(
                 ));
             }
             let crate::data::expr::Expr::Const { val, .. } = &u.expr else {
-                unreachable!("Unification::is_const just proved this is Expr::Const");
+                return Err(TranslationRejection::Unsupported(
+                    "a non-constant unification (is_const disagreed with Expr shape)",
+                ));
             };
             subst.insert(u.binding.clone(), val.clone());
         }
@@ -548,8 +557,8 @@ fn substitute(v: &Symbol, subst: &BTreeMap<Symbol, DataValue>) -> Term {
 
 /// Translate one magic-tier rule (for the head `head_sym`) into this
 /// module's [`Rule`]. `MagicInlineRule::aggr` is already exactly this
-/// module's `HeadAggr` shape (`Option<(Aggregation, Vec<DataValue>)>`) —
-/// carried straight through, not re-derived.
+/// module's `HeadAggr` shape ([`HeadAggrSlot`]) — carried straight through,
+/// not re-derived.
 fn translate_rule(
     head_sym: &MagicSymbol,
     rule: &MagicInlineRule,
@@ -573,7 +582,11 @@ fn translate_rule(
         body.push(Literal {
             rel,
             args: args.iter().map(|v| substitute(v, &subst)).collect(),
-            negated,
+            polarity: if negated {
+                crate::query::laws::Polarity::Negative
+            } else {
+                crate::query::laws::Polarity::Positive
+            },
         });
     }
     let head_args = rule.head.iter().map(|v| substitute(v, &subst)).collect();
@@ -653,13 +666,13 @@ fn eval_one_group(
     signature_len: usize,
     group_key: &Tuple,
 ) -> Result<Option<Tuple>> {
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>> {
         val_positions
             .iter()
             .map(|(_, aggr, args)| aggr.normal_op(args))
             .collect()
     };
-    let mut ops: Option<Vec<Box<dyn NormalAggrObj>>> = None;
+    let mut ops: Option<Vec<NormalAggr>> = None;
     for rule in rules {
         let mut seed = Bindings::new();
         let mut consistent = true;
@@ -727,13 +740,13 @@ fn eval_aggregating_head_incremental(
     let key_positions: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .filter_map(|(i, a)| a.as_aggregated().map(|(aggr, args)| (i, aggr, args)))
         .collect();
 
     let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
@@ -869,7 +882,7 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(Option::is_some));
+            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let delta = if has_aggr {
                 eval_aggregating_head_incremental(
                     &rules,
@@ -941,11 +954,17 @@ mod tests {
         Literal {
             rel: sym(rel),
             args,
-            negated,
+            polarity: if negated {
+                crate::query::laws::Polarity::Negative
+            } else {
+                crate::query::laws::Polarity::Positive
+            },
         }
     }
     fn rule(head_rel: &str, head_args: Vec<Term>, body: Vec<Literal>) -> Rule {
-        let aggr = vec![None; head_args.len()];
+        let aggr = (0..head_args.len())
+            .map(|_| HeadAggrSlot::Plain)
+            .collect();
         Rule {
             head_rel: sym(head_rel),
             head_args,
@@ -1115,7 +1134,7 @@ mod tests {
         Literal {
             rel: sym(l.rel),
             args: l.args.iter().map(conv_term).collect(),
-            negated: l.negated,
+            polarity: l.polarity,
         }
     }
     fn conv_rule(r: &laws::Rule) -> Rule {
@@ -1384,7 +1403,7 @@ mod tests {
         })
     }
     fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
-        let aggr = vec![None; head.len()];
+        let aggr = (0..head.len()).map(|_| HeadAggrSlot::Plain).collect();
         MagicInlineRule {
             head: head.into_iter().map(sym).collect(),
             aggr,
@@ -1419,9 +1438,9 @@ mod tests {
         assert_eq!(rule.head_args, vec![x()]);
         assert_eq!(rule.body.len(), 2);
         assert_eq!(rule.body[0].rel, sym("p"));
-        assert!(!rule.body[0].negated);
+        assert!(!rule.body[0].is_negated());
         assert_eq!(rule.body[1].rel, sym("r"));
-        assert!(rule.body[1].negated);
+        assert!(rule.body[1].is_negated());
     }
 
     /// A rule reference (not a stored relation) uses the referenced
@@ -1479,22 +1498,26 @@ mod tests {
     fn translate_carries_aggregation_through() {
         let mut inline = magic_inline(vec!["X", "Y"], vec![rel_atom("p", vec!["X", "Y"], false)]);
         let sum = crate::data::aggr::parse_aggr("sum").expect("real aggregation exists");
-        inline.aggr = vec![None, Some((sum, vec![]))];
+        inline.aggr = vec![
+            HeadAggrSlot::Plain,
+            HeadAggrSlot::Aggregated {
+                aggr: sum,
+                args: vec![],
+            },
+        ];
         let magic = one_stratum_program(vec![("?", vec![inline])]);
         let program = translate(magic).expect("translation succeeds");
         let rule = &program.rules[0];
         assert_eq!(rule.aggr.len(), 2);
-        assert!(rule.aggr[0].is_none());
-        assert_eq!(rule.aggr[1].as_ref().unwrap().0, sum);
+        assert!(!rule.aggr[0].is_aggregated());
+        assert_eq!(rule.aggr[1].as_aggregated().unwrap().0, &sum);
     }
 
     #[test]
     fn translate_refuses_fixed_rules() {
-        use crate::fixed_rule::{FixedRuleHandle, SimpleFixedRule};
+        use crate::fixed_rule::{EmptyNamedRowsBody, FixedRuleHandle, SimpleFixedRule};
         let fixed_impl: std::sync::Arc<dyn crate::fixed_rule::FixedRule> =
-            std::sync::Arc::new(SimpleFixedRule::new(0, |_, _| {
-                Ok(crate::fixed_rule::NamedRows::new(vec![], vec![]))
-            }));
+            std::sync::Arc::new(SimpleFixedRule::new(0, EmptyNamedRowsBody));
         let fixed = crate::data::program::MagicFixedRuleApply {
             fixed_handle: FixedRuleHandle::new("?", SourceSpan::default()),
             rule_args: vec![],

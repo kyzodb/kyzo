@@ -25,16 +25,15 @@
 //! the output of a recombination is admitted under the SAME Domain as its
 //! inputs by construction.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
+use super::admission::{Admission, Denial};
 use super::arena::BulkObserver;
+use super::arity::Arity;
+use super::code::Code;
 use super::column::Domain;
 use super::row::{AdmittedRows, Rows};
+use crate::data::value::data_value_any;
 
 /// Which input a projected output column is copied from.
 #[derive(Clone, Copy, Debug)]
@@ -55,12 +54,12 @@ pub enum Side {
 /// @owns the admitted execution currency; codes are unforgeable (private field, no raw-code door)
 /// @constructs ExecRows::admit(&Rows, &O) | ExecRows::join_project
 /// @forbids from_raw over raw codes | injecting codes into Rows | reconstruction outside admission
-/// @converts ExecRows -> EncodedKey (canonical bytes only at a storage/output boundary, never durable identity)
+/// @converts ExecRows -> StorageKey (canonical bytes only at a storage/output boundary, never durable identity)
 /// @gate no raw-code door exposed; zero-canonical-encode-in-fixpoint law (#120)
 /// @status established #119
 pub struct ExecRows {
     domain: Domain,
-    arity: usize,
+    arity: Arity,
     /// Row-major: `codes[r * arity + c]` is row `r`, column `c`.
     codes: Vec<u32>,
 }
@@ -69,22 +68,25 @@ impl ExecRows {
     /// THE DOOR (in): admit a code-backed [`Rows`] against `o` and copy its
     /// raw codes into owned execution rows. The admission (arena + epoch +
     /// visibility) is the container's own `admit`; nothing here injects a
-    /// code.
-    pub fn admit<O: BulkObserver>(rows: &Rows, o: &O) -> ExecRows {
-        let admitted: AdmittedRows<'_, O> = rows.admit(o);
-        ExecRows {
+    /// code. Arena/epoch mismatch is a typed refusal.
+    pub fn admit<O: BulkObserver>(
+        rows: &Rows,
+        o: &O,
+    ) -> Result<ExecRows, Denial> {
+        let admitted: AdmittedRows<'_, O> = rows.admit(o)?;
+        Ok(ExecRows {
             domain: rows.domain(),
             arity: rows.arity(),
             codes: admitted.raw().to_vec(),
-        }
+        })
     }
 
-    pub fn arity(&self) -> usize {
+    pub fn arity(&self) -> Arity {
         self.arity
     }
 
     pub fn len(&self) -> usize {
-        self.codes.len().checked_div(self.arity).unwrap_or(0)
+        self.codes.len().checked_div(self.arity.get()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -97,7 +99,8 @@ impl ExecRows {
 
     /// Row `r`'s codes.
     pub fn row(&self, r: usize) -> &[u32] {
-        &self.codes[r * self.arity..(r + 1) * self.arity]
+        let w = self.arity.get();
+        &self.codes[r * w..(r + 1) * w]
     }
 
     /// THE DOOR (recombine): hash-join `self` and `other` on the code
@@ -109,28 +112,31 @@ impl ExecRows {
     /// rows under the SAME Domain (the wider extent of the two inputs), so
     /// its codes remain provably in-domain.
     ///
-    /// # Panics
-    /// If the two inputs are not the same arena+epoch domain (u32 identity
-    /// would not mean value identity across domains).
+    /// Typed refusal when the two inputs are not the same arena+epoch
+    /// domain (u32 identity would not mean value identity across domains).
+    ///
+    /// **Coexisting-arena boundary:** both inputs are owned execution rows
+    /// that outlive any observer nest and may have been built under
+    /// different brands (or none). Shared identity is mint-checked
+    /// [`Admission::prove_shared`] — a nest brand cannot unify two
+    /// coexisting domains at compile time.
     pub fn join_project(
         &self,
         other: &ExecRows,
         self_col: usize,
         other_col: usize,
         out: &[(Side, usize)],
-    ) -> ExecRows {
-        assert_eq!(
+    ) -> Result<ExecRows, Denial> {
+        // Shared context for raw-handle identity — mint proves both sides
+        // name one domain; mismatch refuses typed, never panics.
+        let ctx = Admission::prove_shared(
             self.domain.arena_id(),
-            other.domain.arena_id(),
-            "join across different arenas: u32 identity is not value identity"
-        );
-        assert_eq!(
             self.domain.epoch(),
+            other.domain.arena_id(),
             other.domain.epoch(),
-            "join across different epochs: gather to a common epoch first"
-        );
+        )?;
         // Build a probe on `other`'s join column: code -> the row indices
-        // carrying it.
+        // carrying it. Keys are packed under `ctx`.
         let mut index: HashMap<u32, Vec<usize>> = HashMap::new();
         for r in 0..other.len() {
             index.entry(other.row(r)[other_col]).or_default().push(r);
@@ -142,6 +148,9 @@ impl ExecRows {
             let Some(matches) = index.get(&key) else {
                 continue;
             };
+            debug_assert!(matches
+                .iter()
+                .all(|&rr| ctx.same_handle(Code(key), Code(other.row(rr)[other_col]))));
             for &rr in matches {
                 for &(side, col) in out {
                     let code = match side {
@@ -152,6 +161,8 @@ impl ExecRows {
                 }
             }
         }
+        // Empty projection is not a lawful width — refuse typed, never invent Arity::ONE.
+        let arity = Arity::try_new(out_arity).ok_or(Denial::EmptyProjection)?;
         // The output's domain is the wider extent so every copied code
         // stays below it.
         let domain = if self.domain.extent() >= other.domain.extent() {
@@ -159,11 +170,11 @@ impl ExecRows {
         } else {
             other.domain
         };
-        ExecRows {
+        Ok(ExecRows {
             domain,
-            arity: out_arity.max(1),
+            arity,
             codes,
-        }
+        })
     }
 
     /// Row-major raw codes (for the dedup sink; still admitted).
@@ -175,28 +186,43 @@ impl ExecRows {
     /// place a code becomes bytes. Admits this domain against `o` (proving
     /// visibility) and spends the code through the observer. Callers
     /// materialize bytes only at storage/scan/output boundaries.
-    pub fn resolve_cell<'o, O: BulkObserver>(&self, o: &'o O, row: usize, col: usize) -> &'o [u8] {
-        let proof = self.domain.admit(o);
-        o.resolve_raw(self.row(row)[col] as usize, &proof)
+    /// Arena/epoch mismatch is a typed refusal.
+    pub fn resolve_cell<'o, O: BulkObserver>(
+        &self,
+        o: &'o O,
+        row: usize,
+        col: usize,
+    ) -> Result<&'o [u8], Denial> {
+        let proof = self.domain.admit(o)?;
+        Ok(o.resolve_raw(self.row(row)[col] as usize, proof)?)
+    }
+
+    /// The compare/identity context for raw handles in these rows.
+    ///
+    /// **Coexisting-arena boundary:** unbranded durable [`Admission`] —
+    /// [`ExecRows`] outlives observer nests (see [`Domain::ctx`]).
+    pub fn ctx(&self) -> Admission {
+        self.domain.ctx()
     }
 }
 
 /// Packed `u32` tuple dedup under one [`Domain`]: the hot-loop identity.
 /// Two derived tuples are the SAME iff their code tuples are equal —
-/// `u32`-slice equality, no canonical encode. Every inserted tuple's cells
-/// come from an [`ExecRows`] (admitted), so no arbitrary code enters.
+/// `u32`-slice equality, no canonical encode. The only insert door is
+/// [`ExecDedup::absorb`] from admitted [`ExecRows`] — bare `&[u32]` cannot
+/// enter the sink.
 ///
 /// @authority ExecDedup
 /// @layer value
 /// @owns the fixpoint dedup identity: packed admitted code tuples, u32-slice equality, no canonical encode in the hot loop
-/// @constructs ExecDedup::new | ExecDedup::insert | ExecDedup::absorb
-/// @forbids inserting codes that did not come from an admitted ExecRows | mixing domains in one sink
+/// @constructs ExecDedup::new | ExecDedup::absorb
+/// @forbids inserting codes that did not come from an admitted ExecRows | mixing domains in one sink | bare `&[u32]` insert
 /// @converts ExecDedup -> ExecRows (to_exec: the distinct rows, same Domain)
 /// @gate zero-canonical-encode-in-fixpoint law (#120)
 /// @status established #119
 pub struct ExecDedup {
     domain: Domain,
-    arity: usize,
+    arity: Arity,
     /// Row-major insertion-ordered codes of the DISTINCT tuples.
     rows: Vec<u32>,
     /// Membership by packed code tuple.
@@ -205,8 +231,9 @@ pub struct ExecDedup {
 
 impl ExecDedup {
     /// A fresh dedup sink over `domain`, holding `arity`-wide tuples.
-    pub fn new(domain: Domain, arity: usize) -> ExecDedup {
-        assert!(arity >= 1, "a tuple has at least one column");
+    ///
+    /// Zero width is unrepresentable: [`Arity`] is [`NonZeroUsize`](std::num::NonZeroUsize)-backed.
+    pub fn new(domain: Domain, arity: Arity) -> ExecDedup {
         ExecDedup {
             domain,
             arity,
@@ -227,17 +254,27 @@ impl ExecDedup {
         self.domain
     }
 
-    /// Is this exact code tuple already present? `u32`-slice lookup, no
-    /// encode.
-    pub fn contains(&self, tuple: &[u32]) -> bool {
-        debug_assert_eq!(tuple.len(), self.arity, "dedup probe arity");
-        self.seen.contains_key(tuple)
+    /// Is this exact admitted row already present? Lookup under a shared
+    /// domain proof — no bare `&[u32]` door.
+    pub fn contains(&self, rows: &ExecRows, row: usize) -> Result<bool, Denial> {
+        Admission::prove_shared(
+            self.domain.arena_id(),
+            self.domain.epoch(),
+            rows.domain().arena_id(),
+            rows.domain().epoch(),
+        )?;
+        if self.arity != rows.arity() {
+            return Err(Denial::ArityMismatch {
+                expected: self.arity.get(),
+                got: rows.arity().get(),
+            });
+        }
+        Ok(self.seen.contains_key(rows.row(row)))
     }
 
-    /// Insert a code tuple; returns `true` if it was NEW. `u32`-slice
-    /// identity dedup.
-    pub fn insert(&mut self, tuple: &[u32]) -> bool {
-        assert_eq!(tuple.len(), self.arity, "dedup insert arity");
+    /// Admit one row already proven by `rows`' domain. Private — the only
+    /// public insert path is [`ExecDedup::absorb`].
+    fn admit_row(&mut self, tuple: &[u32]) -> bool {
         if self.seen.contains_key(tuple) {
             return false;
         }
@@ -246,27 +283,37 @@ impl ExecDedup {
         true
     }
 
-    /// Absorb every row of `rows` (same domain), deduping. Returns the
-    /// count of genuinely-new tuples.
-    pub fn absorb(&mut self, rows: &ExecRows) -> usize {
-        assert_eq!(self.arity, rows.arity(), "absorb arity mismatch");
-        assert_eq!(
+    /// Absorb every row of admitted `rows` (same arena+epoch), deduping.
+    /// Returns the count of genuinely-new tuples. Typed refusal when
+    /// domains or arities disagree. Bare `&[u32]` cannot enter.
+    ///
+    /// **Coexisting-arena boundary:** two owned sinks/rows; mint-checked
+    /// [`Admission::prove_shared`].
+    pub fn absorb(&mut self, rows: &ExecRows) -> Result<usize, Denial> {
+        if self.arity != rows.arity() {
+            return Err(Denial::ArityMismatch {
+                expected: self.arity.get(),
+                got: rows.arity().get(),
+            });
+        }
+        Admission::prove_shared(
             self.domain.arena_id(),
-            rows.domain().arena_id(),
-            "absorb across arenas"
-        );
-        assert_eq!(
             self.domain.epoch(),
+            rows.domain().arena_id(),
             rows.domain().epoch(),
-            "absorb across epochs"
-        );
+        )?;
+        // Cover the source extent so the sink's Domain stamp remains a
+        // sound upper bound on every packed code it holds.
+        if rows.domain().extent() > self.domain.extent() {
+            self.domain = rows.domain();
+        }
         let mut new = 0;
         for r in 0..rows.len() {
-            if self.insert(rows.row(r)) {
+            if self.admit_row(rows.row(r)) {
                 new += 1;
             }
         }
-        new
+        Ok(new)
     }
 
     /// The distinct tuples as execution rows (for the next iteration's
@@ -289,7 +336,9 @@ mod tests {
 
     /// Intern a value's canonical bytes, returning its stamped code.
     fn intern(arena: &mut Arena, v: i64) -> super::super::code::StampedCode {
-        arena.intern(encode_owned(&DataValue::from(v)).as_bytes())
+        arena
+            .intern(encode_owned(&DataValue::from(v)).as_bytes())
+            .expect("intern")
     }
 
     /// Build a 2-arity Rows of (a, b) pairs in `arena`.
@@ -302,9 +351,9 @@ mod tests {
             .map(|&(a, b)| (intern(arena, a), intern(arena, b)))
             .collect();
         let f = arena.frame();
-        let mut rows = Rows::new_in(2, &f);
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &f);
         for (a, b) in stamps {
-            rows.push_row(&[a, b]);
+            rows.push_row(&[a, b]).expect("lawful push");
         }
         rows
     }
@@ -317,15 +366,17 @@ mod tests {
         // edges 1->2, 2->3, 3->4, 1->5
         let edges = rows_of(&mut arena, &[(1, 2), (2, 3), (3, 4), (1, 5)]);
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f);
+        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
         // one TC step: join edge(x,y) with edge(y,z) on y, emit (x, z).
-        let step = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        let step = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
         // Resolve the produced code pairs back to values and compare to
         // the hand oracle {(1,3),(2,4)}.
         let mut got: Vec<(i64, i64)> = Vec::new();
         for r in 0..step.len() {
-            let x = decode_int(step.resolve_cell(&f, r, 0));
-            let z = decode_int(step.resolve_cell(&f, r, 1));
+            let x = decode_int(step.resolve_cell(&f, r, 0).expect("lawful resolve"));
+            let z = decode_int(step.resolve_cell(&f, r, 1).expect("lawful resolve"));
             got.push((x, z));
         }
         got.sort();
@@ -339,13 +390,13 @@ mod tests {
         let mut arena = Arena::new();
         let rows = rows_of(&mut arena, &[(1, 2), (2, 3), (1, 2)]);
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f);
-        let mut dedup = ExecDedup::new(e.domain(), 2);
-        let new = dedup.absorb(&e);
+        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
+        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).expect("test arity 2"));
+        let new = dedup.absorb(&e).expect("lawful absorb");
         assert_eq!(new, 2, "the duplicate (1,2) must not be a new tuple");
         assert_eq!(dedup.len(), 2);
         // A second absorb of the same rows adds nothing.
-        assert_eq!(dedup.absorb(&e), 0);
+        assert_eq!(dedup.absorb(&e).expect("lawful absorb"), 0);
     }
 
     /// THE FOUNDATIONAL GUARANTEE (why this exists): the recombine door
@@ -363,14 +414,18 @@ mod tests {
         let derefs_after_load = arena.compare_derefs();
 
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f);
+        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
         // Two TC steps + dedup -- the recombination hot loop.
-        let step1 = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
-        let step2 = step1.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
-        let mut dedup = ExecDedup::new(e.domain(), 2);
-        dedup.absorb(&e);
-        dedup.absorb(&step1);
-        dedup.absorb(&step2);
+        let step1 = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
+        let step2 = step1
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
+        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).expect("test arity 2"));
+        dedup.absorb(&e).expect("lawful absorb");
+        dedup.absorb(&step1).expect("lawful absorb");
+        dedup.absorb(&step2).expect("lawful absorb");
         let _ = dedup.to_exec();
 
         // No value was interned by recombination or dedup: they only COPY
@@ -405,8 +460,8 @@ mod tests {
         let mut arena = Arena::new();
         let rows = rows_of(&mut arena, &[(1, 2)]);
         let f = arena.frame();
-        let e = ExecRows::admit(&rows, &f);
-        assert_eq!(e.arity(), 2);
+        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
+        assert_eq!(e.arity(), Arity::try_new(2).expect("test arity 2"));
     }
 
     /// DIFFERENTIAL: `join_project` on codes equals a naive nested-loop
@@ -430,14 +485,16 @@ mod tests {
             let mut arena = Arena::new();
             let edges = rows_of(&mut arena, pairs);
             let f = arena.frame();
-            let e = ExecRows::admit(&edges, &f);
+            let e = ExecRows::admit(&edges, &f).expect("lawful admit");
             // Code path: edge(x,y) ⋈_y edge(y,z) → (x, z).
-            let step = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+            let step = e
+                .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+                .expect("lawful join");
             let mut got: Vec<(i64, i64)> = (0..step.len())
                 .map(|r| {
                     (
-                        decode_int(step.resolve_cell(&f, r, 0)),
-                        decode_int(step.resolve_cell(&f, r, 1)),
+                        decode_int(step.resolve_cell(&f, r, 0).expect("lawful resolve")),
+                        decode_int(step.resolve_cell(&f, r, 1).expect("lawful resolve")),
                     )
                 })
                 .collect();
@@ -470,9 +527,13 @@ mod tests {
         let mut arena = Arena::new();
         let edges = rows_of(&mut arena, pairs);
         let f = arena.frame();
-        let e = ExecRows::admit(&edges, &f);
-        let a = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
-        let b = e.join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        let e = ExecRows::admit(&edges, &f).expect("lawful admit");
+        let a = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
+        let b = e
+            .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
+            .expect("lawful join");
         assert_eq!(
             a.raw(),
             b.raw(),
@@ -482,29 +543,50 @@ mod tests {
         assert_eq!(a.len(), 9, "3 left rows × 3 right matches on code 9");
     }
 
-    /// The domain guard: joining rows from two DIFFERENT arenas is refused
-    /// — u32 code identity is only value identity within one arena+epoch.
+    /// Empty projection invents no width — refuse typed, never fabricate Arity::ONE.
     #[test]
-    #[should_panic(expected = "different arenas")]
-    fn join_project_across_arenas_panics() {
+    fn join_project_empty_projection_refuses_typed() {
+        let mut arena = Arena::new();
+        let rows = rows_of(&mut arena, &[(1, 2)]);
+        let f = arena.frame();
+        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
+        assert!(
+            matches!(
+                e.join_project(&e, 0, 0, &[]),
+                Err(Denial::EmptyProjection)
+            ),
+            "empty out must refuse typed — never invent a width"
+        );
+    }
+
+    /// The domain guard: joining rows from two DIFFERENT arenas is refused
+    /// typed — u32 code identity is only value identity within one arena+epoch.
+    #[test]
+    fn join_project_across_arenas_refuses_typed() {
         let mut a1 = Arena::new();
         let r1 = rows_of(&mut a1, &[(1, 2)]);
         let f1 = a1.frame();
-        let e1 = ExecRows::admit(&r1, &f1);
+        let e1 = ExecRows::admit(&r1, &f1).expect("lawful admit");
 
         let mut a2 = Arena::new();
         let r2 = rows_of(&mut a2, &[(2, 3)]);
         let f2 = a2.frame();
-        let e2 = ExecRows::admit(&r2, &f2);
+        let e2 = ExecRows::admit(&r2, &f2).expect("lawful admit");
 
         // Same shape, foreign arena: the codes are incomparable.
-        let _ = e1.join_project(&e2, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]);
+        assert!(
+            matches!(
+                e1.join_project(&e2, 1, 0, &[(Side::Left, 0), (Side::Right, 1)]),
+                Err(Denial::ArenaMismatch { .. })
+            ),
+            "cross-arena join must refuse typed — never panic"
+        );
     }
 
     fn decode_int(bytes: &[u8]) -> i64 {
         match super::super::canonical::decode(bytes).expect("lawful") {
             DataValue::Num(n) => n.as_int().expect("int"),
-            other => panic!("not an int: {other:?}"),
+            other @ (data_value_any!()) => panic!("not an int: {other:?}"),
         }
     }
 }

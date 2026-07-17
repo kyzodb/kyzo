@@ -41,7 +41,7 @@
  *   evaluation are both wired: a query that APPLIES a fixed rule builds the
  *   `FixedRuleEval` adapter ([`crate::query::normalize::SessionFixedRule`])
  *   that bridges `MagicFixedRuleApply` to `FixedRule::run`, sharing the
- *   budget's kill flag as the rule's `CancelFlag`. This includes the
+ *   budget's cancel poll as the rule's `CancelFlag`. This includes the
  *   `Constant` rule behind every `<- [[…]]` inline datum.
  *
  * INTERIM (named, not smoothed over):
@@ -65,9 +65,10 @@
 //! pipeline, and a system op reads or edits the catalog. The result is a
 //! [`NamedRows`].
 
+use std::num::NonZeroUsize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU32, NonZeroU64};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -82,7 +83,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue, ValidityTs};
-use crate::fixed_rule::{CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
+use crate::fixed_rule::{CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
 use crate::query::compile::stratified_magic_compile;
@@ -90,13 +91,15 @@ use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::levels::EpochStore;
 use crate::query::normalize::{SessionFixedRule, SessionNormalizer, SessionView};
 use crate::query::sort::sort_and_collect;
+use crate::query::temp_store::TupleInIter;
 use crate::runtime::callback::{CallbackCollector, EventCallbackRegistry};
 use crate::runtime::current_validity;
 use crate::runtime::relation::{
-    AccessLevel, KeyspaceKind, RelationHandle, Residency, create_relation, describe_relation,
-    destroy_relation, get_relation, list_relations, rename_relation, set_access_level,
-    set_relation_triggers, write_relation_row,
+    AccessLevel, ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
+    describe_relation, destroy_relation, get_relation, list_relations, rename_relation,
+    set_access_level, set_relation_triggers, write_relation_row,
 };
+use crate::storage::retry::RetryError;
 use crate::storage::temp::TempTx;
 use crate::storage::{ReadTx, Storage, WriteTx};
 
@@ -115,7 +118,7 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// not failing.
 ///
 /// [`ConflictError`]: crate::storage::ConflictError
-const MAX_COMMIT_ATTEMPTS: usize = 128;
+const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(128).unwrap();
 
 /// A script asked for the imperative genus (`?[…] <- …` control flow), which
 /// the session tier executes for queries and system ops but not yet for
@@ -413,29 +416,35 @@ impl<S: Storage> Db<S> {
                 // Fresh transaction AND fresh collector per attempt: a
                 // conflicted attempt is discarded whole, so no phantom events.
                 let mut collector = CallbackCollector::default();
-                let mut tx = SessionTx::new_write(self.storage.write_tx()?, options.clone());
-                let rows = self.run_query(
-                    &mut tx,
-                    program.clone(),
-                    cur_vld,
-                    &callback_targets,
-                    &mut collector,
-                    0,
-                )?;
+                let mut tx = SessionTx::new_write(
+                    crate::storage::retry::write_tx_attempt(&self.storage)?,
+                    options.clone(),
+                );
+                let rows = self
+                    .run_query(
+                        &mut tx,
+                        program.clone(),
+                        cur_vld,
+                        &callback_targets,
+                        &mut collector,
+                        0,
+                    )
+                    .map_err(RetryError::session_report)?;
                 // Integrity constraints: the denial check. Every constraint
                 // of every relation this transaction mutated (user writes
                 // and trigger writes alike) is evaluated against the
                 // post-write state; a non-empty result is a typed refusal
                 // and the whole transaction rolls back.
-                self.enforce_constraints(&mut tx, cur_vld)?;
+                self.enforce_constraints(&mut tx, cur_vld)
+                    .map_err(RetryError::session_report)?;
                 // Segment soundness: bumps precede the commit, so any
-                // snapshot that can see these writes sees the new marks.
+                // snapshot that can see these writes sees the new generation.
                 for rel in &tx.touched_relations {
                     self.segments.bump_before_commit(*rel);
                 }
                 tx.store.commit()?;
                 // Post-commit only: retirements are durable, so their
-                // segments and watermarks leave the engine now (a
+                // segments and generation slots leave the engine now (a
                 // rolled-back destroy never reaches this line).
                 for rel in &tx.retired_relations {
                     self.segments.evict(*rel);
@@ -471,12 +480,12 @@ impl<S: Storage> Db<S> {
         let out_opts = program.out_opts().clone();
         let head = program.get_entry_out_head_or_default()?;
 
-        // One kill flag shared by the budget (checked at epoch barriers),
-        // every fixed rule's `CancelFlag` (checked inside long algorithms),
-        // and every search atom (checked once per search invocation), so a
-        // cancelled or deadline-exceeded query stops them all.
-        let kill = Arc::new(AtomicBool::new(false));
-        let cancel = CancelFlag(kill.clone());
+        // One cancel lifecycle shared by the budget (checked at epoch
+        // barriers), every fixed rule's `CancelFlag` (checked inside long
+        // algorithms), and every search atom (checked once per search
+        // invocation), so a cancelled or deadline-exceeded query stops
+        // them all. `_auth` is retained for a future `::kill` door.
+        let (_auth, cancel) = CancelAuthority::arm();
 
         let mut normalizer = SessionNormalizer::new(view, cancel.clone());
         let (nf, _) = program.into_normalized_program(&mut normalizer)?;
@@ -504,7 +513,7 @@ impl<S: Storage> Db<S> {
         };
 
         let _ = cur_vld;
-        let budget = build_budget(options, &out_opts, kill)?;
+        let budget = build_budget(options, &out_opts, cancel)?;
         let outcome = stratified_evaluate(&eval_prog, &lifetimes, limit, &budget, None)?;
         Ok((outcome.store, outcome.limited, head, out_opts))
     }
@@ -522,11 +531,14 @@ impl<S: Storage> Db<S> {
             // opaque types, so each branch collects on its own.
             if limited {
                 result
-                    .early_returned_iter()
-                    .map(|t| t.into_tuple())
-                    .collect()
+                    .early_returned_iter()?
+                    .map(TupleInIter::try_into_tuple)
+                    .collect::<Result<Vec<_>, _>>()?
             } else {
-                result.all_iter().map(|t| t.into_tuple()).collect()
+                result
+                    .all_iter()?
+                    .map(TupleInIter::try_into_tuple)
+                    .collect::<Result<Vec<_>, _>>()?
             }
         } else {
             let sorted = sort_and_collect(result, &out_opts.sorters, head)?;
@@ -597,7 +609,7 @@ impl<S: Storage> Db<S> {
                         meta.name.name
                     )));
                 }
-                _ => {}
+                RelationOp::Put | RelationOp::Insert | RelationOp::Update | RelationOp::Rm | RelationOp::Delete | RelationOp::Ensure | RelationOp::EnsureNot => {}
             }
         }
 
@@ -639,15 +651,12 @@ impl<S: Storage> Db<S> {
                 // for the rows, which the mutation pipeline routed through the
                 // collector.
                 if ret == ReturnMutation::Returning {
-                    Ok(returning_rows(callback_collector, &meta.name.name))
+                    returning_rows(callback_collector, &meta.name.name)
                 } else {
-                    Ok(NamedRows::new(
-                        vec!["status".to_string()],
-                        vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-                    ))
+                    Ok(status_ok())
                 }
             }
-            None => Ok(materialize(rows, &head)),
+            None => materialize(rows, &head),
         }
     }
 
@@ -670,7 +679,7 @@ impl<S: Storage> Db<S> {
             crate::engines::segments::Segments(Some(&self.segments)),
         )?;
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
-        Ok(materialize(rows, &head))
+        materialize(rows, &head)
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -703,10 +712,10 @@ impl<S: Storage> Db<S> {
                         DataValue::from(format!("{:?}", handle.access_level)),
                     ]));
                 }
-                Ok(NamedRows::new(
+                Ok(NamedRows::try_new(
                     vec!["name".into(), "arity".into(), "access_level".into()],
                     rows,
-                ))
+                )?)
             }
             SysOp::ListColumns(name) => {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
@@ -724,7 +733,7 @@ impl<S: Storage> Db<S> {
                         DataValue::from(col.1),
                     ]));
                 }
-                Ok(NamedRows::new(vec!["column".into(), "is_key".into()], rows))
+                Ok(NamedRows::try_new(vec!["column".into(), "is_key".into()], rows)?)
             }
             SysOp::ListFixedRules => {
                 let rows = self
@@ -732,7 +741,7 @@ impl<S: Storage> Db<S> {
                     .keys()
                     .map(|k| Tuple::from_vec(vec![DataValue::from(k.as_str())]))
                     .collect();
-                Ok(NamedRows::new(vec!["name".into()], rows))
+                Ok(NamedRows::try_new(vec!["name".into()], rows)?)
             }
             SysOp::ShowTrigger(name) => {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
@@ -747,15 +756,15 @@ impl<S: Storage> Db<S> {
                 {
                     rows.push(Tuple::from_vec(vec![
                         DataValue::from(kind),
-                        DataValue::from(src.source()),
+                        DataValue::from(src.program().to_string()),
                     ]));
                 }
-                Ok(NamedRows::new(vec!["kind".into(), "source".into()], rows))
+                Ok(NamedRows::try_new(vec!["kind".into(), "source".into()], rows)?)
             }
-            SysOp::ListRunning => Ok(NamedRows::new(
+            SysOp::ListRunning => Ok(NamedRows::try_new(
                 vec!["id".into(), "started_at".into()],
                 vec![],
-            )),
+            )?),
 
             // Write catalog ops (retry on conflict).
             SysOp::RemoveRelation(names) => self.sys_write(|tx| {
@@ -810,10 +819,10 @@ impl<S: Storage> Db<S> {
                         crate::storage::merkle::relation_root(&rtx, id, ceiling)?
                     }
                 };
-                Ok(NamedRows::new(
+                Ok(NamedRows::try_new(
                     vec!["root".into()],
                     vec![Tuple::from_vec(vec![DataValue::from(root.to_hex())])],
-                ))
+                )?)
             }
 
             // Story #80: the ::verify self-adversary product surface.
@@ -846,7 +855,7 @@ impl<S: Storage> Db<S> {
                         ])
                     })
                     .collect();
-                Ok(NamedRows::new(vec!["name".into(), "kind".into()], rows))
+                Ok(NamedRows::try_new(vec!["name".into(), "kind".into()], rows)?)
             }
             SysOp::CreateIndex(rel, name, cols) => {
                 self.sys_write(|tx| tx.create_plain_index(&rel.name, &name.name, &cols))
@@ -867,8 +876,11 @@ impl<S: Storage> Db<S> {
         f: impl Fn(&mut SessionTx<S::WriteTx>) -> Result<NamedRows>,
     ) -> Result<NamedRows> {
         crate::storage::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
-            let mut tx = SessionTx::new_write(self.storage.write_tx()?, ScriptOptions::default());
-            let out = f(&mut tx)?;
+            let mut tx = SessionTx::new_write(
+                crate::storage::retry::write_tx_attempt(&self.storage)?,
+                ScriptOptions::default(),
+            );
+            let out = f(&mut tx).map_err(RetryError::session_report)?;
             for rel in &tx.touched_relations {
                 self.segments.bump_before_commit(*rel);
             }
@@ -888,11 +900,11 @@ impl<S: Storage> Db<S> {
 fn build_budget(
     options: &ScriptOptions,
     out_opts: &QueryOutOptions,
-    kill: Arc<AtomicBool>,
+    cancel: CancelFlag,
 ) -> Result<Budget> {
     let ceiling = options.epoch_ceiling.unwrap_or(DEFAULT_EPOCH_CEILING);
     let ceiling = NonZeroU32::new(ceiling.max(1)).expect("max(1) is nonzero");
-    let mut budget = Budget::new(ceiling).with_kill_flag(kill);
+    let mut budget = Budget::new(ceiling).with_cancel(cancel);
     let derived_tuple_ceiling = options
         .derived_tuple_ceiling
         .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING);
@@ -911,33 +923,31 @@ fn build_budget(
 }
 
 /// Materialize a row vector into a headered result.
-fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> NamedRows {
+fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> Result<NamedRows> {
     let headers = head.iter().map(|s| s.name.to_string()).collect();
-    NamedRows::new(headers, rows)
+    Ok(NamedRows::try_new(headers, rows)?)
 }
 
 /// A one-cell `status: OK` result for ops that report success, not rows.
+/// Width match is by construction via [`NamedRows::status_ok`].
 pub(crate) fn status_ok() -> NamedRows {
-    NamedRows::new(
-        vec!["status".to_string()],
-        vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-    )
+    NamedRows::status_ok()
 }
 
 /// Build the `:returning` result from what the mutation collected. The
 /// collector holds `(op, new, old)` events; `:returning` reports the new rows.
-fn returning_rows(collector: &CallbackCollector, relation: &str) -> NamedRows {
+fn returning_rows(collector: &CallbackCollector, relation: &str) -> Result<NamedRows> {
     let mut headers = vec![];
     let mut rows = vec![];
     if let Some(events) = collector.get(relation) {
         for (_op, new, _old) in events {
             if headers.is_empty() {
-                headers = new.headers.clone();
+                headers = new.headers().to_vec();
             }
-            rows.extend(new.rows.iter().cloned());
+            rows.extend(new.rows().iter().cloned());
         }
     }
-    NamedRows::new(headers, rows)
+    Ok(NamedRows::try_new(headers, rows)?)
 }
 
 /// Map the parser's access-level enum to the catalog's. Both are the same
@@ -956,7 +966,7 @@ fn map_access_level(level: ParseAccessLevel) -> AccessLevel {
 // ─────────────────────────────────────────────────────────────────────────
 
 /// One session: a backend transaction `T` plus a private scratch store for
-/// temp (`_`-prefixed) relations and a per-session trigger-parse cache.
+/// temp (`_`-prefixed) relations.
 ///
 /// The species law: catalog reads and scans need only [`ReadTx`]; every
 /// mutation method requires `T: WriteTx`, so a mutation on a read session is
@@ -971,22 +981,17 @@ pub struct SessionTx<T> {
     >,
     pub(crate) store: T,
     pub(crate) temp: TempTx,
-    /// Trigger source → parsed program, parsed once per session. Sound
-    /// because a session has one `cur_vld`, which parsing substitutes.
-    /// Constraint bodies share this cache (same convention: raw source in
-    /// the catalog, parsed once per session).
-    pub(crate) parsed_triggers: BTreeMap<SmartString<LazyCompact>, InputProgram>,
     /// The evaluation controls for every query in this session, including
     /// triggers (which run under the parent's budget).
     pub(crate) options: ScriptOptions,
     /// Integrity constraints of every relation this transaction has
-    /// mutated, `name → body source`, deduped by name (each relation in a
-    /// constraint's read-set mirrors the identical spec). Collected by the
-    /// mutation pipeline and drained by
+    /// mutated, `name → typed [`ConstraintRef`] substance`, deduped by name
+    /// (each relation in a constraint's read-set mirrors the identical
+    /// spec). Collected by the mutation pipeline and drained by
     /// [`Db::enforce_constraints`](crate::runtime::db::Db) before commit.
-    pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, String>,
+    pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, ConstraintRef>,
     /// Every relation id this transaction wrote (user writes, trigger
-    /// writes, index backfills alike) — drained into segment-watermark
+    /// writes, index backfills alike) — drained into segment-generation
     /// bumps BEFORE the storage commit (the segments' soundness rule).
     pub(crate) touched_relations: std::collections::BTreeSet<crate::data::value::RelationId>,
     /// Relation ids permanently retired by this transaction (destroy /
@@ -1000,7 +1005,6 @@ impl<T: ReadTx> SessionTx<T> {
         Self {
             store,
             temp: TempTx::default(),
-            parsed_triggers: BTreeMap::new(),
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
@@ -1082,7 +1086,6 @@ impl<T: WriteTx> SessionTx<T> {
         Self {
             store,
             temp: TempTx::default(),
-            parsed_triggers: BTreeMap::new(),
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
@@ -1109,8 +1112,8 @@ impl<T: WriteTx> SessionTx<T> {
     pub(crate) fn note_constraints(&mut self, handle: &RelationHandle) {
         for c in &handle.constraints {
             self.pending_constraints
-                .entry(c.name.clone())
-                .or_insert_with(|| c.source.clone());
+                .entry(c.name().clone())
+                .or_insert_with(|| c.clone());
         }
     }
 
@@ -1129,7 +1132,7 @@ impl<T: WriteTx> SessionTx<T> {
 
     /// Destroy a relation (catalog row and keyspace, in-transaction), routed
     /// by name. The retired id is recorded so the session evicts its
-    /// segment and watermark after commit — every permanent retirement
+    /// segment and generation slot after commit — every permanent retirement
     /// (remove, replace, ::index drop, LSH inverse drop) funnels through
     /// here, so none can leak (hostile-review finding: three sibling
     /// destroy sites leaked one engine entry per cycle, forever).
@@ -1174,24 +1177,6 @@ impl<T: WriteTx> SessionTx<T> {
         }
     }
 
-    /// Parse a trigger's source once per session and cache the program. The
-    /// session's single `cur_vld` is baked in at first parse; every later
-    /// firing clones the cached program.
-    pub(crate) fn parsed_trigger(
-        &mut self,
-        source: &str,
-        fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
-        cur_vld: ValidityTs,
-    ) -> Result<InputProgram> {
-        if let Some(prog) = self.parsed_triggers.get(source) {
-            return Ok(prog.clone());
-        }
-        let prog =
-            parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
-        self.parsed_triggers
-            .insert(SmartString::from(source), prog.clone());
-        Ok(prog)
-    }
 }
 
 #[cfg(test)]
@@ -1224,7 +1209,7 @@ mod tests {
         .unwrap();
 
         // The first read's miss is ungated (declines to build, per the
-        // rebuild gate); the second read's miss is at the same witness
+        // rebuild gate); the second read's miss is at the same generation
         // (stable) and crosses the threshold, building the segment. Either
         // way both reads return the correct answer.
         let q = "?[k, v] := *w[k, v]";
@@ -1302,9 +1287,10 @@ mod tests {
     /// state, straight from its segment (`StoredRA::prefix_join_batched`)
     /// instead of the bitemporal seek-based probe. The probe side must
     /// obey the identical freshness law as a plain scan — a write to `jr`
-    /// bumps its watermark BEFORE commit, so the very next read's witness
-    /// can never match a segment built before that write, and the join
-    /// sees the new row immediately, never a cached probe answer.
+    /// bumps its generation BEFORE commit, so the very next read's live
+    /// stamp can never classify a segment sealed before that write as
+    /// fresh, and the join sees the new row immediately, never a cached
+    /// probe answer.
     #[test]
     fn segments_serve_fresh_and_never_dirty_for_join_probes() {
         let db = Db::new(SimStorage::new(9)).unwrap();
@@ -1314,7 +1300,7 @@ mod tests {
             .unwrap();
 
         // The first read's miss declines (rebuild gate); the second read's
-        // miss is at the same stable witness and builds jr's segment, so
+        // miss is at the same stable generation and builds jr's segment, so
         // its point-lookup probe is served from the cache from here on.
         let q = "?[k, v] := *jl[k], *jr[k, v]";
         assert_eq!(
@@ -1352,7 +1338,7 @@ mod tests {
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
-            .rows
+            .rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect();
@@ -1565,13 +1551,13 @@ mod tests {
         // A Datalog answer is a set; :sort puts it in distance order.
         // Nearest first by squared L2: id 1 at 0, id 3 at 0.02, id 2 at 2.
         let ids: Vec<i64> = out
-            .rows
+            .rows()
             .iter()
             .map(|r| r[1].get_int().expect("id"))
             .collect();
         assert_eq!(ids, vec![1, 3, 2], "nearest-first order");
-        let d0 = out.rows[0][0].get_float().expect("dist");
-        let d1 = out.rows[1][0].get_float().expect("dist");
+        let d0 = out.rows()[0][0].get_float().expect("dist");
+        let d1 = out.rows()[1][0].get_float().expect("dist");
         assert!(d0.abs() < 1e-6, "exact match at distance 0, got {d0}");
         assert!((d1 - 0.02).abs() < 1e-6, "squared L2, got {d1}");
     }
@@ -1608,16 +1594,16 @@ mod tests {
                 no_params(),
             )
             .expect("fts search");
-        assert_eq!(out.rows.len(), 1);
-        assert_eq!(out.rows[0][0].get_int(), Some(1));
-        assert!(out.rows[0][1].get_float().expect("score") > 0.0);
+        assert_eq!(out.rows().len(), 1);
+        assert_eq!(out.rows()[0][0].get_int(), Some(1));
+        assert!(out.rows()[0][1].get_float().expect("score") > 0.0);
         // The searching row must survive a doc deletion (hook coverage).
         db.run_script("?[id] <- [[1]] :rm doc {id}", no_params())
             .expect("delete");
         let out = db
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 5}", no_params())
             .expect("fts search after delete");
-        assert_eq!(out.rows.len(), 0, "deleted doc left the index");
+        assert_eq!(out.rows().len(), 0, "deleted doc left the index");
     }
 
     /// A single search atom whose hit count exceeds one output batch
@@ -1642,7 +1628,7 @@ mod tests {
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 1500}", no_params())
             .expect("boundary search");
         assert_eq!(
-            out.rows.len(),
+            out.rows().len(),
             1200,
             "every hit exactly once across the boundary"
         );
@@ -1672,7 +1658,7 @@ mod tests {
             )
             .expect("lsh search");
         let ids: Vec<i64> = out
-            .rows
+            .rows()
             .iter()
             .map(|r| r[0].get_int().expect("id"))
             .collect();
@@ -1829,7 +1815,7 @@ mod tests {
                 .run_script("?[k, v] := *t[k, v]", no_params())
                 .expect("read");
             assert!(
-                gone.rows.is_empty(),
+                gone.rows().is_empty(),
                 "retracted fact must be absent: {gone:?}"
             );
             db.run_script("?[k, v] <- [[1, 'second']] :put t {k => v}", no_params())
@@ -1837,15 +1823,15 @@ mod tests {
             let back = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
                 .expect("read");
-            assert_eq!(back.rows.len(), 1, "reinserted fact must be present");
-            assert_eq!(back.rows[0][1], DataValue::from("second"));
+            assert_eq!(back.rows().len(), 1, "reinserted fact must be present");
+            assert_eq!(back.rows()[0][1], DataValue::from("second"));
             // And once more: the second retraction must also govern.
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
                 .expect("rm again");
             let gone = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
                 .expect("read");
-            assert!(gone.rows.is_empty(), "re-retracted fact must be absent");
+            assert!(gone.rows().is_empty(), "re-retracted fact must be absent");
         }
         let dir = tempfile::tempdir().unwrap();
         drive(Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap());
@@ -1888,7 +1874,7 @@ mod tests {
             .expect("two-coordinate read");
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("retro")])];
         assert_eq!(
-            rows.rows, want,
+            rows.rows(), want,
             "system-now, valid-200 must see the retroactive claim"
         );
         // Swapped (sys=200, valid=now): at system time 200 µs the record
@@ -1898,7 +1884,7 @@ mod tests {
             .run_script(&format!("?[v] := *hist[1, v @ 200, {now}]"), no_params())
             .expect("swapped-coordinate read");
         assert!(
-            rows.rows.is_empty(),
+            rows.rows().is_empty(),
             "at system time 200µs the record knew nothing: {rows:?}"
         );
     }
@@ -1933,12 +1919,12 @@ mod tests {
             .run_script("?[v, k] := *t[k, v] :order v", no_params())
             .expect("base read");
         assert_eq!(
-            via_index.rows, via_base.rows,
+            via_index.rows(), via_base.rows(),
             "index and base must agree on current state"
         );
-        assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
+        assert_eq!(via_base.rows().len(), 1, "one row: k=1 updated, k=2 gone");
         let want: Tuple = Tuple::from_vec(vec![DataValue::from(11), DataValue::from(1)]);
-        assert_eq!(via_base.rows[0], want);
+        assert_eq!(via_base.rows()[0], want);
     }
 
     /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
@@ -2065,7 +2051,7 @@ mod tests {
                 no_params(),
             )
             .expect("index spot");
-        assert_eq!(via_base.rows, via_idx.rows, "batch-boundary rows agree");
+        assert_eq!(via_base.rows(), via_idx.rows(), "batch-boundary rows agree");
     }
 
     /// The `@` clause parses in both arities through the public script
@@ -2090,7 +2076,7 @@ mod tests {
         let out = db
             .run_script("?[v] := *ctr[k, v]", no_params())
             .expect("read counter");
-        out.rows[0][0].get_int().expect("int")
+        out.rows()[0][0].get_int().expect("int")
     }
 
     /// A deterministic derived-tuple ceiling refuses a query that would derive
@@ -2139,7 +2125,7 @@ mod tests {
                 no_params(),
             )
             .expect("default budget completes");
-        assert_eq!(ok.rows.len(), 12);
+        assert_eq!(ok.rows().len(), 12);
     }
 
     /// Story #68 / issue #1: a value-generating recursion with NO fixpoint
@@ -2289,7 +2275,7 @@ mod tests {
         let ok = db
             .run_script_with(q, no_params(), high_opts)
             .expect("a raised ceiling must let the larger terminating query complete");
-        assert_eq!(ok.rows.len(), 499_500);
+        assert_eq!(ok.rows().len(), 499_500);
     }
 
     /// Exercises the normalizer paths the recursive-join test does not: a
@@ -2330,7 +2316,7 @@ mod tests {
         let fixed = db.fixed_rules();
         let prog = match parse_script(script, &no_params(), &fixed, cur_vld).unwrap() {
             Script::Single(p) => *p,
-            _ => panic!("expected a single query"),
+            Script::Imperative(_) | Script::Sys(_) => panic!("expected a single query"),
         };
         let tx = SessionTx::new_read(db.storage.read_tx().unwrap(), ScriptOptions::default());
         let view = SessionView {

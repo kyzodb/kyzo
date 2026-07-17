@@ -1,5 +1,9 @@
 {
-  "blob-meaning": 9,
-  "missing-authority": 5,
-  "searchra-decoded-tuples": 3
+  "blob-meaning": 0,
+  "duplicate-generation-counter": 0,
+  "encoder-twin": 0,
+  "error-downcast": 0,
+  "freshness-twin": 0,
+  "missing-authority": 0,
+  "searchra-decoded-tuples": 0
 }

@@ -43,7 +43,10 @@ use crate::data::value::Tuple;
 use crate::fixed_rule::algos::shortest_path_dijkstra::dijkstra;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
+    FixedRulePayload,
+};
 
 pub(crate) struct KShortestPathYen;
 
@@ -65,8 +68,7 @@ impl FixedRule for KShortestPathYen {
         let mut starting_nodes = BTreeSet::new();
         for tuple in starting.iter()? {
             let tuple = tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(yen_start_col): `ensure_min_len(1)` proved a first column.
             let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
@@ -75,8 +77,7 @@ impl FixedRule for KShortestPathYen {
         let mut termination_nodes = BTreeSet::new();
         for tuple in termination.iter()? {
             let tuple = tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(yen_term_col): `ensure_min_len(1)` proved a first column.
             let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 termination_nodes.insert(*idx);
@@ -153,8 +154,10 @@ fn k_shortest_path_yen(
     }
 
     for _ in 1..k {
-        // Structural: `k_shortest` starts with one entry and only grows.
-        let (_, prev_path) = k_shortest.last().unwrap();
+        // INVARIANT(yen_k_nonempty): `k_shortest` starts with one entry and only grows.
+        let (_, prev_path) = k_shortest
+            .last()
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("yen_k_nonempty"))?;
         for i in 0..prev_path.len() - 1 {
             // Polled at the top of the spur-search unit of work: one
             // iteration runs a full Dijkstra, so a raised flag must refuse
@@ -207,10 +210,11 @@ fn k_shortest_path_yen(
                             best = Some(best.map_or(target.value, |b: f32| b.min(target.value)));
                         }
                     }
-                    // Structural: (seg_from, seg_to) is a consecutive pair on
-                    // a path Dijkstra just returned, so a matching edge
-                    // exists.
-                    total_cost += best.unwrap();
+                    // INVARIANT(yen_root_edge): (seg_from, seg_to) is a
+                    // consecutive pair on a path Dijkstra just returned.
+                    total_cost += best.ok_or_else(|| {
+                        GraphAlgorithmInvariantError::refuse("yen_root_edge")
+                    })?;
                 }
                 let mut total_path = root_path.to_vec();
                 total_path.pop();
@@ -224,8 +228,10 @@ fn k_shortest_path_yen(
             break;
         }
         candidates.sort_by(|(a_cost, _), (b_cost, _)| b_cost.total_cmp(a_cost));
-        // Structural: `candidates` was just checked non-empty.
-        let shortest = candidates.pop().unwrap();
+        // INVARIANT(yen_candidates): just checked non-empty above.
+        let shortest = candidates
+            .pop()
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("yen_candidates"))?;
         let shortest_dist = shortest.0;
         if shortest_dist.is_finite() {
             k_shortest.push(shortest);
@@ -264,6 +270,7 @@ mod tests {
         let n = 40u32;
         let mut state = 0xd1ce_d1ce_d1ce_d1ceu64;
         let mut next = || {
+            // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
@@ -357,8 +364,8 @@ mod tests {
             (0, 2, 3.0),
         ])
         .unwrap();
-        let flag = CancelFlag::default();
-        flag.cancel();
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(k_shortest_path_yen(3, &graph, 0, 3, flag).is_err());
     }
 
@@ -441,8 +448,8 @@ mod tests {
     /// any of them.
     #[test]
     fn cancellation_stops_spur_search() {
-        let cancel = CancelFlag::default();
-        cancel.cancel();
+        let (auth, cancel) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let err = run_fixed_rule(
             &KShortestPathYen,
             vec![

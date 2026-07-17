@@ -15,21 +15,23 @@
 
 //! Full-text search: tokenizer configuration and the analyzer cache.
 //!
-//! A [`TokenizerConfig`] is pure data — a name plus [`DataValue`] arguments —
-//! stored verbatim in an FTS index manifest. It becomes a runnable
-//! [`TextAnalyzer`] only through [`TokenizerConfig::build`], which is where
-//! unknown names and malformed arguments are refused.
+//! A [`TokenizerConfig`] is pure data — a proven stage name plus
+//! [`DataValue`] arguments — stored in an FTS index manifest. Unknown names
+//! are refused at [`TokenizerConfig::admit`] (and on serde decode), so they
+//! are unstorable. It becomes a runnable [`TextAnalyzer`] only through
+//! [`TokenizerConfig::build`], which still refuses malformed arguments.
 //!
 //! Two moments of truth, by design:
 //!
-//! - **Definition time**: the operator tier (`::fts create`) must call
-//!   [`TokenizerConfig::validate`] so a bad config is refused before the
-//!   manifest is ever written. (New over the CozoDB original, where a
-//!   manifest with an unknown tokenizer name was storable and only failed
-//!   at first use.)
-//! - **Use time**: [`TokenizerConfig::build`] stays lazily fallible anyway —
-//!   a manifest written by an older or foreign build is data, and data is
-//!   never trusted to be well-formed just because it was once stored.
+//! - **Name / store time**: [`TokenizerConfig::admit`] (parse, builder, serde)
+//!   refuses unknown stage names before a config can exist.
+//! - **Definition time**: the operator tier (`::fts create`) calls
+//!   [`TokenizerConfig::validate`] so unlawful *arguments* are refused before
+//!   the manifest is written.
+//! - **Use time**: [`TokenizerConfig::build`] stays lazily fallible for
+//!   argument shape — a manifest written by an older or foreign build is
+//!   data, and data is never trusted to be well-formed just because it was
+//!   once stored.
 
 use crate::DataValue;
 use crate::engines::text::cangjie::tokenizer::CangJieTokenizer;
@@ -39,13 +41,15 @@ use crate::engines::text::tokenizer::{
     TextAnalyzer, Tokenizer, WhitespaceTokenizer,
 };
 use jieba_rs::Jieba;
-use miette::{Diagnostic, Result, bail, ensure, miette};
+use miette::{Diagnostic, Result, ensure};
+use serde::Deserialize;
 use sha2::digest::FixedOutput;
 use sha2::{Digest, Sha256};
 use smartstring::{LazyCompact, SmartString};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
+use crate::data::value::data_value_any;
 
 pub(crate) mod ast;
 pub(crate) mod cangjie;
@@ -77,11 +81,40 @@ pub(crate) struct FtsIndexManifest {
 /// A tokenizer or token-filter *as configuration*: a name and its arguments,
 /// exactly as written in the index definition. Pure data — see the module
 /// docs for when it is proven runnable.
+///
+/// Name proof: private fields; the only mints are [`TokenizerConfig::admit`]
+/// (and serde deserialize through that door). Unknown stage names are
+/// unstorable. Argument shape is still proven at [`validate`] / [`build`].
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize)]
 pub struct TokenizerConfig {
-    pub name: SmartString<LazyCompact>,
-    pub args: Vec<DataValue>,
+    name: SmartString<LazyCompact>,
+    args: Vec<DataValue>,
+}
+
+/// Unknown tokenizer / token-filter name refused at the admit door.
+#[derive(Debug, Error, Diagnostic)]
+#[error("unknown tokenizer or token-filter name: {0}")]
+#[diagnostic(code(fts::unknown_stage_name))]
+pub struct UnknownTokenizerStageName(pub SmartString<LazyCompact>);
+
+fn is_known_stage_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Raw"
+            | "Simple"
+            | "Whitespace"
+            | "NGram"
+            | "Cangjie"
+            | "AlphaNumOnly"
+            | "AsciiFolding"
+            | "LowerCase"
+            | "Lowercase"
+            | "RemoveLong"
+            | "SplitCompoundWords"
+            | "Stemmer"
+            | "Stopwords"
+    )
 }
 
 /// `RemoveLong` configured with a non-positive length. Typed because the
@@ -100,7 +133,102 @@ pub struct TokenizerConfig {
 ))]
 struct NonPositiveRemoveLong(i64);
 
+/// Named refusal when tokenizer / token-filter arguments are unlawful.
+/// String/`miette!`/`bail!` identity is unrepresentable — every build path
+/// picks a variant.
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum TokenizerBuildRefusal {
+    #[error("First argument `min_gram` must be an integer")]
+    #[diagnostic(code(fts::ngram_min_not_int))]
+    NgramMinNotInt,
+    #[error("Second argument `max_gram` must be an integer")]
+    #[diagnostic(code(fts::ngram_max_not_int))]
+    NgramMaxNotInt,
+    #[error("Third argument `prefix_only` must be a boolean")]
+    #[diagnostic(code(fts::ngram_prefix_not_bool))]
+    NgramPrefixNotBool,
+    #[error("min_gram must be >= 1")]
+    #[diagnostic(code(fts::ngram_min_too_small))]
+    NgramMinTooSmall,
+    #[error("max_gram must be >= min_gram")]
+    #[diagnostic(code(fts::ngram_max_below_min))]
+    NgramMaxBelowMin,
+    #[error("Second argument `use_hmm` to Cangjie must be a boolean")]
+    #[diagnostic(code(fts::cangjie_hmm_not_bool))]
+    CangjieHmmNotBool,
+    #[error("First argument `kind` to Cangjie must be a string")]
+    #[diagnostic(code(fts::cangjie_kind_not_str))]
+    CangjieKindNotStr,
+    #[error("Unknown Cangjie kind: {0}")]
+    #[diagnostic(code(fts::cangjie_unknown_kind))]
+    CangjieUnknownKind(SmartString<LazyCompact>),
+    #[error("Unknown tokenizer: {0}")]
+    #[diagnostic(code(fts::unknown_tokenizer))]
+    UnknownTokenizer(SmartString<LazyCompact>),
+    #[error("Missing first argument `min_length`")]
+    #[diagnostic(code(fts::remove_long_missing_arg))]
+    RemoveLongMissingArg,
+    #[error("First argument `min_length` must be an integer")]
+    #[diagnostic(code(fts::remove_long_not_int))]
+    RemoveLongNotInt,
+    #[error("Missing first argument `compound_words_list`")]
+    #[diagnostic(code(fts::compound_missing_arg))]
+    CompoundMissingArg,
+    #[error("First argument `compound_words_list` must be a list of strings")]
+    #[diagnostic(code(fts::compound_not_str_list))]
+    CompoundNotStrList,
+    #[error("Missing first argument `language` to Stemmer")]
+    #[diagnostic(code(fts::stemmer_missing_lang))]
+    StemmerMissingLang,
+    #[error("First argument `language` to Stemmer must be a string")]
+    #[diagnostic(code(fts::stemmer_lang_not_str))]
+    StemmerLangNotStr,
+    #[error("Unsupported language: {0}")]
+    #[diagnostic(code(fts::stemmer_unsupported_lang))]
+    StemmerUnsupportedLang(SmartString<LazyCompact>),
+    #[error("Filter Stopwords requires language name or a list of stopwords")]
+    #[diagnostic(code(fts::stopwords_bad_arg))]
+    StopwordsBadArg,
+    #[error("First argument `stopwords` must be a list of strings")]
+    #[diagnostic(code(fts::stopwords_not_str_list))]
+    StopwordsNotStrList,
+    #[error("Unknown token filter: {0}")]
+    #[diagnostic(code(fts::unknown_token_filter))]
+    UnknownTokenFilter(SmartString<LazyCompact>),
+}
+
 impl TokenizerConfig {
+    /// Typed name-proof door: unknown stage names are unrepresentable as a
+    /// stored config. Argument legality remains at [`validate`] / [`build`].
+    pub fn admit(
+        name: impl Into<SmartString<LazyCompact>>,
+        args: Vec<DataValue>,
+    ) -> std::result::Result<TokenizerConfig, UnknownTokenizerStageName> {
+        let name = name.into();
+        if !is_known_stage_name(&name) {
+            return Err(UnknownTokenizerStageName(name));
+        }
+        Ok(TokenizerConfig { name, args })
+    }
+
+    /// Default stage used by staged FTS/LSH builders before an override —
+    /// `Simple` is always an admitted name; constructed directly so the
+    /// known-stage proof is unrepresentable as failure.
+    pub fn simple() -> TokenizerConfig {
+        TokenizerConfig {
+            name: SmartString::from("Simple"),
+            args: vec![],
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn args(&self) -> &[DataValue] {
+        &self.args
+    }
+
     /// The cache key for one full analyzer pipeline (this tokenizer plus
     /// `filters`): sha256 over each stage's name and memcmp-encoded args.
     ///
@@ -163,21 +291,21 @@ impl TokenizerConfig {
                     .first()
                     .unwrap_or(&DataValue::from(1))
                     .get_int()
-                    .ok_or_else(|| miette!("First argument `min_gram` must be an integer"))?;
+                    .ok_or(TokenizerBuildRefusal::NgramMinNotInt)?;
                 let max_gram = self
                     .args
                     .get(1)
                     .unwrap_or(&DataValue::from(min_gram))
                     .get_int()
-                    .ok_or_else(|| miette!("Second argument `max_gram` must be an integer"))?;
+                    .ok_or(TokenizerBuildRefusal::NgramMaxNotInt)?;
                 let prefix_only = self
                     .args
                     .get(2)
                     .unwrap_or(&DataValue::Bool(false))
                     .get_bool()
-                    .ok_or_else(|| miette!("Third argument `prefix_only` must be a boolean"))?;
-                ensure!(min_gram >= 1, "min_gram must be >= 1");
-                ensure!(max_gram >= min_gram, "max_gram must be >= min_gram");
+                    .ok_or(TokenizerBuildRefusal::NgramPrefixNotBool)?;
+                ensure!(min_gram >= 1, TokenizerBuildRefusal::NgramMinTooSmall);
+                ensure!(max_gram >= min_gram, TokenizerBuildRefusal::NgramMaxBelowMin);
                 Box::new(NgramTokenizer::new(
                     min_gram as usize,
                     max_gram as usize,
@@ -187,22 +315,24 @@ impl TokenizerConfig {
             "Cangjie" => {
                 let hmm = match self.args.get(1) {
                     None => false,
-                    Some(d) => d.get_bool().ok_or_else(|| {
-                        miette!("Second argument `use_hmm` to Cangjie must be a boolean")
-                    })?,
+                    Some(d) => d
+                        .get_bool()
+                        .ok_or(TokenizerBuildRefusal::CangjieHmmNotBool)?,
                 };
                 let option = match self.args.first() {
                     None => cangjie::options::TokenizerOption::Default { hmm },
                     Some(d) => {
-                        let s = d.get_str().ok_or_else(|| {
-                            miette!("First argument `kind` to Cangjie must be a string")
-                        })?;
+                        let s = d
+                            .get_str()
+                            .ok_or(TokenizerBuildRefusal::CangjieKindNotStr)?;
                         match s {
                             "default" => cangjie::options::TokenizerOption::Default { hmm },
                             "all" => cangjie::options::TokenizerOption::All,
                             "search" => cangjie::options::TokenizerOption::ForSearch { hmm },
                             "unicode" => cangjie::options::TokenizerOption::Unicode,
-                            _ => bail!("Unknown Cangjie kind: {}", s),
+                            _ => {
+                                return Err(TokenizerBuildRefusal::CangjieUnknownKind(s.into()).into());
+                            }
                         }
                     }
                 };
@@ -211,7 +341,9 @@ impl TokenizerConfig {
                     option,
                 })
             }
-            _ => bail!("Unknown tokenizer: {}", self.name),
+            _ => {
+                return Err(TokenizerBuildRefusal::UnknownTokenizer(self.name.clone()).into());
+            }
         })
     }
     pub(crate) fn construct_token_filter(&self) -> Result<BoxTokenFilter> {
@@ -223,9 +355,9 @@ impl TokenizerConfig {
                 let limit = self
                     .args
                     .first()
-                    .ok_or_else(|| miette!("Missing first argument `min_length`"))?
+                    .ok_or(TokenizerBuildRefusal::RemoveLongMissingArg)?
                     .get_int()
-                    .ok_or_else(|| miette!("First argument `min_length` must be an integer"))?;
+                    .ok_or(TokenizerBuildRefusal::RemoveLongNotInt)?;
                 ensure!(limit > 0, NonPositiveRemoveLong(limit));
                 RemoveLongFilter::limit(limit as usize).into()
             }
@@ -234,32 +366,29 @@ impl TokenizerConfig {
                 match self
                     .args
                     .first()
-                    .ok_or_else(|| miette!("Missing first argument `compound_words_list`"))?
+                    .ok_or(TokenizerBuildRefusal::CompoundMissingArg)?
                 {
                     DataValue::List(l) => {
                         for v in l {
-                            list_values.push(v.get_str().ok_or_else(|| {
-                                miette!(
-                                    "First argument `compound_words_list` must be a list of strings"
-                                )
-                            })?);
+                            list_values.push(
+                                v.get_str()
+                                    .ok_or(TokenizerBuildRefusal::CompoundNotStrList)?,
+                            );
                         }
                     }
-                    _ => bail!("First argument `compound_words_list` must be a list of strings"),
+                    data_value_any!() => {
+                        return Err(TokenizerBuildRefusal::CompoundNotStrList.into());
+                    }
                 }
-                SplitCompoundWords::from_dictionary(list_values)
-                    .map_err(|e| miette!("Failed to load dictionary: {}", e))?
-                    .into()
+                SplitCompoundWords::from_dictionary(list_values)?.into()
             }
             "Stemmer" => {
                 let language = match self
                     .args
                     .first()
-                    .ok_or_else(|| miette!("Missing first argument `language` to Stemmer"))?
+                    .ok_or(TokenizerBuildRefusal::StemmerMissingLang)?
                     .get_str()
-                    .ok_or_else(|| {
-                        miette!("First argument `language` to Stemmer must be a string")
-                    })?
+                    .ok_or(TokenizerBuildRefusal::StemmerLangNotStr)?
                     .to_lowercase()
                     .as_str()
                 {
@@ -281,45 +410,84 @@ impl TokenizerConfig {
                     "swedish" => Language::Swedish,
                     "tamil" => Language::Tamil,
                     "turkish" => Language::Turkish,
-                    lang => bail!("Unsupported language: {}", lang),
+                    lang => {
+                        return Err(
+                            TokenizerBuildRefusal::StemmerUnsupportedLang(lang.into()).into(),
+                        );
+                    }
                 };
                 Stemmer::new(language).into()
             }
             "Stopwords" => {
-                match self.args.first().ok_or_else(|| {
-                    miette!("Filter Stopwords requires language name or a list of stopwords")
-                })? {
+                match self
+                    .args
+                    .first()
+                    .ok_or(TokenizerBuildRefusal::StopwordsBadArg)?
+                {
                     DataValue::Str(name) => StopWordFilter::for_lang(name)?.into(),
                     DataValue::List(l) => {
                         let mut stopwords = Vec::new();
                         for v in l {
                             stopwords.push(
                                 v.get_str()
-                                    .ok_or_else(|| {
-                                        miette!(
-                                            "First argument `stopwords` must be a list of strings"
-                                        )
-                                    })?
+                                    .ok_or(TokenizerBuildRefusal::StopwordsNotStrList)?
                                     .to_string(),
                             );
                         }
                         StopWordFilter::new(stopwords).into()
                     }
-                    _ => bail!("Filter Stopwords requires language name or a list of stopwords"),
+                    data_value_any!() => {
+                        return Err(TokenizerBuildRefusal::StopwordsBadArg.into());
+                    }
                 }
             }
-            _ => bail!("Unknown token filter: {:?}", self.name),
+            _ => {
+                return Err(
+                    TokenizerBuildRefusal::UnknownTokenFilter(self.name.clone()).into(),
+                );
+            }
         })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
-pub(crate) struct FtsIndexConfig {
-    base_relation: SmartString<LazyCompact>,
-    index_name: SmartString<LazyCompact>,
-    fts_fields: Vec<SmartString<LazyCompact>>,
-    tokenizer: TokenizerConfig,
-    filters: Vec<TokenizerConfig>,
+impl<'de> Deserialize<'de> for TokenizerConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{Error as _, MapAccess, Visitor};
+        use std::fmt;
+        struct RawVisitor;
+        impl<'de> Visitor<'de> for RawVisitor {
+            type Value = (SmartString<LazyCompact>, Vec<DataValue>);
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("TokenizerConfig { name, args }")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut name = None;
+                let mut args = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "args" => args = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok((
+                    name.ok_or_else(|| A::Error::missing_field("name"))?,
+                    args.ok_or_else(|| A::Error::missing_field("args"))?,
+                ))
+            }
+        }
+        let (name, args) =
+            deserializer.deserialize_struct("TokenizerConfig", &["name", "args"], RawVisitor)?;
+        TokenizerConfig::admit(name, args).map_err(serde::de::Error::custom)
+    }
 }
 
 /// The per-database analyzer cache: index name → analyzer, and config hash →
@@ -380,10 +548,7 @@ mod tests {
     use super::*;
 
     fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
-        TokenizerConfig {
-            name: name.into(),
-            args,
-        }
+        TokenizerConfig::admit(name, args).expect("test stage name must be admitted")
     }
 
     fn hex(h: impl AsRef<[u8]>) -> String {
@@ -530,19 +695,15 @@ mod tests {
         );
     }
 
-    /// The lazy path stays lazy: an unknown name is representable as config
-    /// (a stored manifest may carry it) and fails only when constructed...
+    /// Unknown names are refused at the admit door — unstorable as config.
     #[test]
-    fn unknown_tokenizer_fails_at_construction() {
-        let bad = cfg("NoSuchTokenizer", vec![]);
-        assert!(bad.construct_tokenizer().is_err());
-        assert!(bad.build(&[]).is_err());
-        let bad_filter = cfg("NoSuchFilter", vec![]);
-        assert!(bad_filter.construct_token_filter().is_err());
+    fn unknown_tokenizer_refused_at_admit() {
+        assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
+        assert!(TokenizerConfig::admit("NoSuchFilter", vec![]).is_err());
     }
 
-    /// ...and `validate` is the definition-time proof the operator tier
-    /// calls before writing a manifest.
+    /// `validate` is the definition-time proof the operator tier calls
+    /// before writing a manifest (known name, argument legality).
     #[test]
     fn validate_proves_config_at_definition_time() {
         cfg("Simple", vec![])
@@ -556,8 +717,8 @@ mod tests {
             ])
             .unwrap();
 
-        // Unknown tokenizer name.
-        assert!(cfg("NoSuchTokenizer", vec![]).validate(&[]).is_err());
+        // Unknown tokenizer name — refuse at admit, not at validate.
+        assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
         // Known name, unlawful args.
         assert!(
             cfg("NGram", vec![DataValue::from(0)])

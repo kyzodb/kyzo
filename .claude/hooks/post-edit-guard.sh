@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# PostToolUse(Edit|Write) hook: deterministic unsafe-policy enforcement.
-# Blocks real `unsafe` (or allow(unsafe_code)) in first-party code and the
-# removal of the forbid declaration. Silent when nothing matches.
+# PostToolUse(Edit|Write) hook: real-time unsafe-code tripwire.
+# Blocks real `unsafe` (or allow(unsafe_code)) the instant it's typed, in the
+# two forbid-governed engine crates (kyzo-core, kyzo-bin — language-binding
+# crates are exempt, unsafe FFI is what a binding is; same ENGINE_CRATES set
+# as crates/xtask/src/checks/unsafe_check.rs). Everything else about the
+# unsafe policy — the forbid declaration staying present, and no doc/comment
+# falsely claiming a reviewed unsafe exception — is checked once, at the
+# gate, by unsafe_check.rs; it isn't duplicated here. Silent when nothing
+# matches.
 set -euo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
@@ -21,9 +27,9 @@ block() {
   exit 0
 }
 
-# Real `unsafe` block / fn / impl (not prose), or a lint-lowering, anywhere in
-# first-party forbid-governed code.
-if printf '%s' "$file" | grep -Eq 'kyzo-[a-z-]+/src/'; then
+# Real `unsafe` block / fn / impl (not prose), or a lint-lowering, in the two
+# forbid-governed engine crates only — same scope unsafe_check.rs enforces.
+if printf '%s' "$file" | grep -Eq 'crates/(kyzo-core|kyzo-bin)/src/'; then
   if grep -Eq '^[[:space:]]*(unsafe[[:space:]]*\{|unsafe[[:space:]]+fn|unsafe[[:space:]]+impl)' "$abs" \
      || grep -Eq '^[[:space:]]*#!?\[allow\(unsafe_code\)\]' "$abs"; then
     block "This introduces unsafe (or allow(unsafe_code)) into forbid-governed first-party code. Remove it, or open the deliberate narrowest-scope lint-lowering with a full safety case. Do not proceed with unsafe present."
@@ -31,14 +37,6 @@ if printf '%s' "$file" | grep -Eq 'kyzo-[a-z-]+/src/'; then
 fi
 
 case "$file" in
-  *crates/kyzo-core/src/lib.rs)
-    if ! grep -q '#!\[forbid(unsafe_code)\]' "$abs"; then
-      block "crates/kyzo-core/src/lib.rs no longer declares #![forbid(unsafe_code)]. Restore it — removing forbid is an in-story reviewed decision with a safety case, not an edit."
-    fi
-    if grep -Eqi 'germanstr[^a-z]*unsafe|reviewed exception|Miri-audited exception' "$abs"; then
-      block "lib.rs claims an unsafe exception that does not exist. First-party code is pure safe Rust; delete the phantom-exception language."
-    fi
-    ;;
   *crates/xtask/src/checks/unsafe_check.rs)
     warn "You edited the unsafe guard. Run it now: docker compose run --rm kyzo-dev cargo xtask unsafe — a guard that lies is itself a failure."
     ;;

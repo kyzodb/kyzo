@@ -8,9 +8,8 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): `Expr::Apply`'s op is now `&'static Op` (the original held
- * an `Arc`), so the `OP_LIST` matches deref accordingly; the
- * `val.last().unwrap()` in the ranking loop is annotated as structural
- * (every buffered tuple ends with its sort key, pushed above); output
+ * an `Arc`), so the `OP_LIST` matches deref accordingly; every buffered
+ * tuple ends with its sort key (`reorder_sort_key`); output
  * rows flow through the arity-checked writer.
  */
 
@@ -23,9 +22,9 @@ use itertools::Itertools;
 use miette::{Result, bail};
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::{Expr, eval_bytecode};
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::OP_LIST;
-use crate::data::program::WrongFixedRuleOptionError;
+use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -57,12 +56,12 @@ impl FixedRule for ReorderSort {
                 })
                 .collect_vec(),
             Expr::Apply { op, args, .. } if *op == OP_LIST => args.to_vec(),
-            _ => {
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                 bail!(WrongFixedRuleOptionError {
-                    name: "out".to_string(),
+                    name: Symbol::new("out", payload.span()),
                     span: payload.span(),
-                    rule_name: payload.name().to_string(),
-                    help: "This option must evaluate to a list".to_string()
+                    rule_name: Symbol::new(payload.name(), payload.span()),
+                    help: WrongFixedRuleOptionHelp::OptionMustBeList,
                 })
             }
         };
@@ -84,18 +83,11 @@ impl FixedRule for ReorderSort {
         for out in out_list.iter_mut() {
             out.fill_binding_indices(&binding_map)?;
         }
-        let out_bytecods: Vec<_> = out_list.iter().map(|e| e.compile()).try_collect()?;
-        let sort_by_bytecodes = sort_by.compile()?;
-        let mut stack = vec![];
-
         let mut buffer = vec![];
         for tuple in in_rel.iter()? {
             let tuple = tuple?;
-            let sorter = eval_bytecode(&sort_by_bytecodes, &tuple, &mut stack)?;
-            let mut s_tuple: Vec<_> = out_bytecods
-                .iter()
-                .map(|ex| eval_bytecode(ex, &tuple, &mut stack))
-                .try_collect()?;
+            let sorter = sort_by.eval(&tuple)?;
+            let mut s_tuple: Vec<_> = out_list.iter().map(|ex| ex.eval(&tuple)).try_collect()?;
             s_tuple.push(sorter);
             buffer.push(s_tuple);
             cancel.check()?;
@@ -111,9 +103,10 @@ impl FixedRule for ReorderSort {
         let mut last: Option<&DataValue> = None;
         let take_plus_skip = take.saturating_add(skip);
         for val in &buffer {
-            // Structural: every buffered tuple ends with the sort key
-            // pushed above, so it is non-empty.
-            let sorter = val.last().unwrap();
+            // Every buffered tuple ends with the sort key pushed above.
+            let sorter = val.last().ok_or_else(|| {
+                crate::fixed_rule::FixedRuleInvariantError::refuse("reorder_sort_key")
+            })?;
 
             if last == Some(sorter) {
                 count += 1;
@@ -160,7 +153,7 @@ impl FixedRule for ReorderSort {
                 ..
             } => l.len() + 1,
             Expr::Apply { op, args, .. } if **op == OP_LIST => args.len() + 1,
-            _ => bail!(CannotDetermineArity(
+            Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => bail!(CannotDetermineArity(
                 "ReorderSort".to_string(),
                 "invalid option 'out' given, expect a list".to_string(),
                 span
@@ -182,7 +175,7 @@ mod tests {
     fn binding(name: &'static str) -> Expr {
         Expr::Binding {
             var: Symbol::new(name, SourceSpan::default()),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         }
     }
 

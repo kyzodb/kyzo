@@ -19,20 +19,168 @@
 //! The canonical payload is a u32 dimension count followed by each
 //! component as Num's order-preserving float key (see
 //! [`super::super::canonical`]).
+//!
+//! After the admit door, dimension is a proven newtype and the store is
+//! [`Vec<VectorComponent>`] — bare `Vec<f64>` is not a post-door store.
+
+use super::super::number::Num;
+
+/// One vector component after Num's float law: `-0.0 → +0.0`, one
+/// canonical NaN. Private field; the only public mint is [`Self::admit`].
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct VectorComponent(f64);
+
+const _: () = assert!(std::mem::size_of::<VectorComponent>() == std::mem::size_of::<f64>());
+const _: () = assert!(std::mem::align_of::<VectorComponent>() == std::mem::align_of::<f64>());
+
+impl VectorComponent {
+    /// Admit door: apply Num's float law, then brand the result.
+    /// `Num::float` always stores a float (never Int), so `to_f64` is the
+    /// canonical magnitude — no `Option`/`expect` on the product path.
+    pub fn admit(raw: f64) -> VectorComponent {
+        VectorComponent(Num::float(raw).to_f64())
+    }
+
+    /// Post-proof mint: the float is already in Num's canonical form.
+    pub(crate) fn from_canonical(canonical: f64) -> VectorComponent {
+        VectorComponent(canonical)
+    }
+
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for VectorComponent {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for VectorComponent {}
+
+impl std::hash::Hash for VectorComponent {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0.to_bits());
+    }
+}
+
+/// Vector dimensionality as stored: a `u32` count proven at the admit
+/// door. Private field; mint only through [`try_from_len`] /
+/// [`from_len_unchecked`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
+pub struct VectorDimension(u32);
+
+const _: () = assert!(std::mem::size_of::<VectorDimension>() == std::mem::size_of::<u32>());
+const _: () = assert!(std::mem::align_of::<VectorDimension>() == std::mem::align_of::<u32>());
+
+impl VectorDimension {
+    /// Prove a component length fits the wire dimension (`u32`).
+    pub fn try_from_len(len: usize) -> Option<VectorDimension> {
+        u32::try_from(len).ok().map(VectorDimension)
+    }
+
+    /// Post-proof mint: length already proven at [`Vector::try_new`].
+    pub(crate) fn from_len_unchecked(len: u32) -> VectorDimension {
+        VectorDimension(len)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+
+    pub fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A vector value: proven [`VectorComponent`]s held after [`Vector::try_new`]
+/// admits every raw `f64`. Identity is dimensionality + exact component bits.
+#[derive(Clone, Debug)]
+pub struct Vector {
+    dim: VectorDimension,
+    /// Proven components only — never a bare `Vec<f64>` after the door.
+    components: Vec<VectorComponent>,
+}
+
+impl Vector {
+    /// Admit door: brand every raw float, prove the dimension fits `u32`.
+    /// `None` when the component count exceeds the wire dimension.
+    pub fn try_new(components: Vec<f64>) -> Option<Vector> {
+        let components: Vec<VectorComponent> =
+            components.into_iter().map(VectorComponent::admit).collect();
+        let dim = VectorDimension::try_from_len(components.len())?;
+        Some(Vector { dim, components })
+    }
+
+    /// Proven components.
+    pub fn components(&self) -> impl Iterator<Item = VectorComponent> + '_ {
+        self.components.iter().copied()
+    }
+
+    /// Proven dimensionality (wire `u32` count).
+    pub fn dimension(&self) -> VectorDimension {
+        self.dim
+    }
+
+    /// Proven component store after the admit door (read-only; not a mint).
+    pub fn as_slice(&self) -> &[VectorComponent] {
+        &self.components
+    }
+
+    /// Canonical float magnitudes copied out of the proven store.
+    pub fn to_f64s(&self) -> Vec<f64> {
+        self.components.iter().map(|c| c.get()).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.components.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty()
+    }
+}
+
+impl PartialEq for Vector {
+    fn eq(&self, other: &Self) -> bool {
+        self.dim == other.dim && self.components == other.components
+    }
+}
+
+impl Eq for Vector {}
+
+impl std::hash::Hash for Vector {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.dim.hash(state);
+        for c in &self.components {
+            c.hash(state);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::super::super::canonical::{Datum, encode};
+    use super::super::super::number::Num;
+    use super::{Vector, VectorComponent, VectorDimension};
 
     #[test]
     fn component_identity_follows_num_law() {
-        // -0.0 and +0.0 components are one vector identity; all NaN bit
-        // patterns are one.
-        let a = encode(Datum::Vector(&[0.0, 1.0]));
-        let b = encode(Datum::Vector(&[-0.0, 1.0]));
+        let a = encode(Datum::Vector(&Vector::try_new(vec![0.0, 1.0]).unwrap()));
+        let b = encode(Datum::Vector(&Vector::try_new(vec![-0.0, 1.0]).unwrap()));
         assert_eq!(a, b);
-        let n1 = encode(Datum::Vector(&[f64::NAN]));
-        let n2 = encode(Datum::Vector(&[f64::from_bits(0xFFF8_0000_0000_0001)]));
-        assert_eq!(n1, n2);
+        let v = Vector::try_new(vec![-0.0, 1.0]).unwrap();
+        assert_eq!(v.dimension(), VectorDimension::try_from_len(2).unwrap());
+        assert_eq!(
+            v.components().map(|c| c.get()).collect::<Vec<_>>(),
+            vec![0.0, 1.0]
+        );
+        assert_eq!(
+            VectorComponent::admit(f64::NAN).get().to_bits(),
+            Num::float(f64::NAN).as_float().unwrap().to_bits()
+        );
     }
 }

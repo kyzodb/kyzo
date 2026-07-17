@@ -77,9 +77,11 @@ const CANON_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
 /// A number of the unified domain: exactly an `i64` or an `f64`, held in
 /// normalized identity form (no `-0.0`, one NaN). Construct through
-/// [`Num::int`] / [`Num::float`]; `Ord` is the semantic law (exact real
+/// [`Num::int`] / [`Num::float`]; `Ord` is the **storage** law (exact real
 /// order, `Int < Float` on equal reals, NaN greatest) — lawful as a trait
-/// here because `Num` is fully inline: no deref, no context.
+/// here because `Num` is fully inline: no deref, no context. Query-semantic
+/// numeric order (ties equal: `1 == 1.0`) lives on [`NumericOrd`], never
+/// as a second method on this type.
 #[derive(Clone, Copy, Debug)]
 pub struct Num(Repr);
 
@@ -106,63 +108,9 @@ impl Num {
         Num(Repr::Float(v))
     }
 
-    /// NUMERIC comparison: exact real-value order with ties EQUAL —
-    /// `1 == 1.0` here, unlike the identity/storage order where they are
-    /// adjacent distinct values. This is the expression layer's
-    /// comparison authority for numbers; `Ord` remains the storage
-    /// mirror. Two authorities, both named, never confused.
-    pub fn cmp_numeric(self, other: Num) -> Ordering {
-        // The total order is (real value, repr tie-break); stripping the
-        // tie-break yields the numeric order exactly.
-        match self.cmp(&other) {
-            Ordering::Equal => Ordering::Equal,
-            o => {
-                if self.repr_byte() != other.repr_byte() {
-                    // Could be a pure tie-break difference: re-check by
-                    // comparing with reprs swapped-normalized.
-                    let same = matches!(
-                        (self.as_int(), other.as_float()),
-                        (Some(i), Some(f)) if int_float_eq(i, f)
-                    ) || matches!(
-                        (self.as_float(), other.as_int()),
-                        (Some(f), Some(i)) if int_float_eq(i, f)
-                    );
-                    if same { Ordering::Equal } else { o }
-                } else {
-                    o
-                }
-            }
-        }
-    }
-
-    /// Numeric equality (see [`Num::cmp_numeric`]).
-    pub fn eq_numeric(self, other: Num) -> bool {
-        self.cmp_numeric(other) == Ordering::Equal
-    }
-
-    /// Numeric maximum (ties keep `self` — deterministic and
-    /// accumulation-friendly). Expression authority, like
-    /// [`Num::cmp_numeric`].
-    pub fn max_numeric(self, other: Num) -> Num {
-        if self.cmp_numeric(other) == Ordering::Less {
-            other
-        } else {
-            self
-        }
-    }
-
-    /// Numeric minimum (ties keep `self`).
-    pub fn min_numeric(self, other: Num) -> Num {
-        if self.cmp_numeric(other) == Ordering::Greater {
-            other
-        } else {
-            self
-        }
-    }
-
     /// The numeric value as f64: ints promote by cast. A NUMERIC read
     /// for math kernels, never an identity claim (beyond 2^53 the cast
-    /// rounds; comparison sites must use [`Num::cmp_numeric`] instead).
+    /// rounds).
     pub fn to_f64(self) -> f64 {
         match self.repr() {
             NumRepr::Int(i) => i as f64,
@@ -242,7 +190,7 @@ impl Num {
                 out.push(CLASS_NAN);
                 out.push(REPR_FLOAT);
             }
-            _ => {
+            Repr::Int(_) | Repr::Float(_) => {
                 let (neg, mag) = self.sign_magnitude();
                 out.push(if neg { CLASS_NEG } else { CLASS_POS });
                 let start = out.len();
@@ -251,10 +199,11 @@ impl Num {
                         out.extend_from_slice(&EXP_INF.to_be_bytes());
                         out.extend_from_slice(&[0xFF; 9]);
                     }
-                    Magnitude::Finite { e, frac72 } => {
-                        let off = (e + EXP_OFFSET) as u16;
-                        debug_assert!(off < EXP_INF);
-                        out.extend_from_slice(&off.to_be_bytes());
+                    Magnitude::Finite { exp_key, frac72 } => {
+                        // exp_key was proven at Magnitude construction
+                        // (E ∈ [-1073, 1024] ⇒ biased ∈ [7, 2104] ⊂ u16).
+                        debug_assert!(exp_key < EXP_INF);
+                        out.extend_from_slice(&exp_key.to_be_bytes());
                         let fb = frac72.to_be_bytes(); // 16 bytes; the low 9 hold the 72-bit field
                         out.extend_from_slice(&fb[7..16]);
                     }
@@ -342,6 +291,7 @@ impl Num {
             if m > 1u64 << 63 {
                 return Err(NumDecodeError::IntRange);
             }
+            // INVARIANT(num_twos_complement): magnitude already range-checked; wrap-neg is two's-complement encode.
             Ok(Num::int((m as i128).wrapping_neg() as i64))
         } else {
             if m > i64::MAX as u64 {
@@ -391,7 +341,7 @@ impl Num {
                 let bl = 64 - m.leading_zeros();
                 let e = bl as i32;
                 let frac72 = (m as u128) << (72 - bl);
-                (neg, Magnitude::Finite { e, frac72 })
+                (neg, Magnitude::finite(e, frac72))
             }
             Repr::Float(v) => {
                 debug_assert!(v != 0.0 && !v.is_nan());
@@ -407,13 +357,13 @@ impl Num {
                     let sig53 = (1u64 << 52) | frac52;
                     let e = expf - 1023 + 1;
                     let frac72 = (sig53 as u128) << 19;
-                    (neg, Magnitude::Finite { e, frac72 })
+                    (neg, Magnitude::finite(e, frac72))
                 } else {
                     // Subnormal: frac52 × 2^-1074.
                     let bl = 64 - frac52.leading_zeros();
                     let e = bl as i32 - 1074;
                     let frac72 = (frac52 as u128) << (72 - bl);
-                    (neg, Magnitude::Finite { e, frac72 })
+                    (neg, Magnitude::finite(e, frac72))
                 }
             }
         }
@@ -443,8 +393,24 @@ impl Num {
 }
 
 enum Magnitude {
-    Finite { e: i32, frac72: u128 },
+    /// Biased exponent already in key form: `E + EXP_OFFSET` as `u16`.
+    /// Constructed only via [`Magnitude::finite`], which proves the range
+    /// so [`Num::encode_key`] never re-checks with expect.
+    Finite { exp_key: u16, frac72: u128 },
     Inf,
+}
+
+impl Magnitude {
+    /// Finite magnitude door: `e ∈ [-1073, 1024]` from int/float bit math
+    /// ⇒ biased exponent fits `u16` and sits strictly below [`EXP_INF`].
+    fn finite(e: i32, frac72: u128) -> Self {
+        let biased = e.wrapping_add(EXP_OFFSET);
+        debug_assert!((7..=2104).contains(&biased));
+        Magnitude::Finite {
+            exp_key: biased as u16,
+            frac72,
+        }
+    }
 }
 
 impl PartialEq for Num {
@@ -462,8 +428,9 @@ impl PartialOrd for Num {
 }
 
 impl Ord for Num {
-    /// The semantic law: exact real order, `Int < Float` on equal reals,
-    /// NaN greatest and equal to itself.
+    /// Storage / identity order: exact real order, `Int < Float` on equal
+    /// reals, NaN greatest and equal to itself. Matches the order-preserving
+    /// key. Query-semantic numeric order is [`NumericOrd`].
     fn cmp(&self, other: &Self) -> Ordering {
         let (ca, cb) = (self.class(), other.class());
         if ca != cb {
@@ -479,8 +446,14 @@ impl Ord for Num {
                     (Magnitude::Inf, Magnitude::Finite { .. }) => Ordering::Greater,
                     (Magnitude::Finite { .. }, Magnitude::Inf) => Ordering::Less,
                     (
-                        Magnitude::Finite { e: ea, frac72: fa },
-                        Magnitude::Finite { e: eb, frac72: fb },
+                        Magnitude::Finite {
+                            exp_key: ea,
+                            frac72: fa,
+                        },
+                        Magnitude::Finite {
+                            exp_key: eb,
+                            frac72: fb,
+                        },
                     ) => ea.cmp(&eb).then(fa.cmp(&fb)),
                 };
                 let real = if neg { mag.reverse() } else { mag };
@@ -490,16 +463,69 @@ impl Ord for Num {
     }
 }
 
-impl std::hash::Hash for Num {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self.0 {
-            Repr::Int(v) => {
-                state.write_u8(REPR_INT);
-                state.write_i64(v);
-            }
-            Repr::Float(v) => {
-                state.write_u8(REPR_FLOAT);
-                state.write_u64(v.to_bits());
+/// Exact real-value order for query/expression semantics.
+///
+/// Law: real-number order with ties EQUAL — `Int(1)` and `Float(1.0)`
+/// compare `Equal` here. Distinct from [`Num`]'s storage `Ord`, which
+/// places `Int < Float` on equal reals. Two total orders = two types;
+/// expression compare/eq/min/max must go through this newtype, never
+/// through a second method on [`Num`].
+///
+/// Private field: the only mint is [`NumericOrd::of`].
+#[derive(Clone, Copy, Debug)]
+pub struct NumericOrd(Num);
+
+impl NumericOrd {
+    /// Wrap a [`Num`] for query-semantic numeric order.
+    #[inline]
+    pub const fn of(n: Num) -> NumericOrd {
+        NumericOrd(n)
+    }
+
+    /// The wrapped number (read-only; construction stays at [`of`]).
+    #[inline]
+    pub const fn get(self) -> Num {
+        self.0
+    }
+}
+
+impl PartialEq for NumericOrd {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for NumericOrd {}
+
+impl PartialOrd for NumericOrd {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NumericOrd {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Storage order is (real value, repr tie-break); stripping the
+        // tie-break yields the numeric order exactly.
+        match self.0.cmp(&other.0) {
+            Ordering::Equal => Ordering::Equal,
+            o @ Ordering::Less | o @ Ordering::Greater => {
+                if self.0.repr_byte() != other.0.repr_byte() {
+                    let same = matches!(
+                        (self.0.as_int(), other.0.as_float()),
+                        (Some(i), Some(f)) if int_float_eq(i, f)
+                    ) || matches!(
+                        (self.0.as_float(), other.0.as_int()),
+                        (Some(f), Some(i)) if int_float_eq(i, f)
+                    );
+                    if same {
+                        Ordering::Equal
+                    } else {
+                        o
+                    }
+                } else {
+                    o
+                }
             }
         }
     }
@@ -515,6 +541,21 @@ fn int_float_eq(i: i64, f: f64) -> bool {
         return false;
     }
     f as i64 == i
+}
+
+impl std::hash::Hash for Num {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.0 {
+            Repr::Int(v) => {
+                state.write_u8(REPR_INT);
+                state.write_i64(v);
+            }
+            Repr::Float(v) => {
+                state.write_u8(REPR_FLOAT);
+                state.write_u64(v.to_bits());
+            }
+        }
+    }
 }
 
 /// The read-only view of a `Num`'s representation (see [`Num::repr`]):
@@ -551,6 +592,7 @@ mod tests {
             x ^= x >> 7;
             x ^= x << 17;
             self.0 = x;
+            // INVARIANT(xorshift_finalizer): xorshift* final mul is defined wrapping on u64.
             x.wrapping_mul(0x2545_F491_4F6C_DD1D)
         }
     }
@@ -736,30 +778,42 @@ mod tests {
         }
     }
 
-    /// The numeric authority: ties equal, exactness beyond 2^53, named
-    /// apart from the storage order.
+    /// Query-semantic numeric order: ties equal, exact beyond 2^53, typed
+    /// apart from storage order on [`Num`].
     #[test]
-    fn numeric_comparison_is_value_order_with_ties_equal() {
-        assert_eq!(Num::int(1).cmp_numeric(Num::float(1.0)), Ordering::Equal);
-        assert_eq!(Num::float(1.0).cmp_numeric(Num::int(1)), Ordering::Equal);
-        assert!(Num::int(1).eq_numeric(Num::float(1.0)));
-        assert_eq!(Num::int(1).cmp_numeric(Num::float(1.5)), Ordering::Less);
-        assert_eq!(Num::float(2.5).cmp_numeric(Num::int(2)), Ordering::Greater);
-        // Beyond 2^53: floats cannot represent the int; NOT equal.
-        assert_ne!(
-            Num::int((1 << 53) + 1).cmp_numeric(Num::float(9_007_199_254_740_992.0)),
+    fn numeric_ord_is_value_order_with_ties_equal() {
+        assert_eq!(
+            NumericOrd::of(Num::int(1)).cmp(&NumericOrd::of(Num::float(1.0))),
             Ordering::Equal
         );
-        // The storage order keeps its tie-break; numeric drops it. Both
-        // named, both true.
+        assert_eq!(
+            NumericOrd::of(Num::float(1.0)).cmp(&NumericOrd::of(Num::int(1))),
+            Ordering::Equal
+        );
+        assert_eq!(NumericOrd::of(Num::int(1)), NumericOrd::of(Num::float(1.0)));
+        assert_eq!(
+            NumericOrd::of(Num::int(1)).cmp(&NumericOrd::of(Num::float(1.5))),
+            Ordering::Less
+        );
+        assert_eq!(
+            NumericOrd::of(Num::float(2.5)).cmp(&NumericOrd::of(Num::int(2))),
+            Ordering::Greater
+        );
+        // Beyond 2^53: floats cannot represent the int; NOT equal.
+        assert_ne!(
+            NumericOrd::of(Num::int((1 << 53) + 1))
+                .cmp(&NumericOrd::of(Num::float(9_007_199_254_740_992.0))),
+            Ordering::Equal
+        );
+        // Storage keeps its tie-break; NumericOrd drops it. Both named.
         assert_eq!(Num::int(1).cmp(&Num::float(1.0)), Ordering::Less);
-        // Differential vs the oracle over the corpus: equal reals are the
+        // Differential vs storage over the corpus: equal reals are the
         // ONLY places the two authorities differ.
         let mut c = corpus();
         extend_random(&mut c, 300, 0xACE);
         for &a in &c {
             for &b in &c {
-                let num = a.cmp_numeric(b);
+                let num = NumericOrd::of(a).cmp(&NumericOrd::of(b));
                 let sto = a.cmp(&b);
                 if num != sto {
                     assert_eq!(num, Ordering::Equal, "authorities may differ only on ties");

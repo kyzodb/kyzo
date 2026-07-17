@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 use super::{BindingFormatter, PlanInvariantError, RelAlgebra, TupleIter};
-use crate::data::expr::{Bytecode, eval_bytecode_pred};
+use crate::data::expr::Expr;
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -45,13 +45,12 @@ pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
 }
 
 pub(crate) fn filter_iter(
-    filters_bytecodes: Vec<(Vec<Bytecode>, SourceSpan)>,
+    filters: Vec<Expr>,
     it: impl Iterator<Item = Result<Tuple>>,
 ) -> impl Iterator<Item = Result<Tuple>> {
-    let mut stack = vec![];
     it.filter_map_ok(move |t| -> Option<Result<Tuple>> {
-        for (p, span) in filters_bytecodes.iter() {
-            match eval_bytecode_pred(p, &t, &mut stack, *span) {
+        for p in filters.iter() {
+            match p.eval_pred(&t) {
                 Ok(false) => return None,
                 Err(e) => return Some(Err(e)),
                 Ok(true) => {}
@@ -155,13 +154,12 @@ pub(crate) struct PrefixProbeBatchJoin<'a> {
     /// row-at-a-time path's per-tuple closure would yield before the left
     /// prefix is appended.
     pub(crate) probe: Box<dyn FnMut(&[DataValue]) -> Result<TupleIter<'a>> + 'a>,
-    pub(crate) filters_bytecodes: &'a [(Vec<Bytecode>, SourceSpan)],
+    pub(crate) filters: &'a [Expr],
     pub(crate) eliminate_indices: BTreeSet<usize>,
     /// The left batch currently being probed, and the cursor into it.
     pub(crate) cur: Option<(Batch, usize)>,
     /// The in-flight match iterator for the row at `cur`'s cursor.
     pub(crate) active: Option<TupleIter<'a>>,
-    pub(crate) stack: Vec<DataValue>,
 }
 
 impl<'a> PrefixProbeBatchJoin<'a> {
@@ -207,8 +205,16 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     }
                 }
                 let left_row = {
-                    let (b, idx) = self.cur.as_ref().unwrap();
-                    b.row(*idx)
+                    let Some((b, idx)) = self.cur.as_ref() else {
+                        return Some(Err(crate::query::ra::PlanInvariantError(
+                            "join left cursor missing after batch advance",
+                        )
+                        .into()));
+                    };
+                    match b.row(*idx) {
+                        Ok(r) => r,
+                        Err(e) => return Some(Err(e.into())),
+                    }
                 };
                 match (self.probe)(left_row) {
                     Ok(it) => self.active = Some(it),
@@ -216,10 +222,23 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                 }
             }
 
-            let (b, idx) = self.cur.as_ref().unwrap();
-            let left_row = b.row(*idx);
+            let Some((b, idx)) = self.cur.as_ref() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "join left cursor missing while probing",
+                )
+                .into()));
+            };
+            let left_row = match b.row(*idx) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e.into())),
+            };
             let mut exhausted = false;
-            let active = self.active.as_mut().unwrap();
+            let Some(active) = self.active.as_mut() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "join active probe missing after setup",
+                )
+                .into()));
+            };
             while out.len() < BATCH_ROWS {
                 match active.next() {
                     None => {
@@ -229,8 +248,8 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     Some(Err(e)) => return Some(Err(e)),
                     Some(Ok(found)) => {
                         let mut keep = true;
-                        for (p, span) in self.filters_bytecodes.iter() {
-                            match eval_bytecode_pred(p, &found, &mut self.stack, *span) {
+                        for p in self.filters.iter() {
+                            match p.eval_pred(&found) {
                                 Ok(true) => {}
                                 Ok(false) => {
                                     keep = false;
@@ -370,7 +389,7 @@ impl InnerJoin {
         left.extend(self.joiner.left_keys.clone());
         if let Some(filters) = match &self.right {
             RelAlgebra::TempStore(r) => Some(&r.filters),
-            _ => None,
+            RelAlgebra::Fixed(_) | RelAlgebra::Stored(_) | RelAlgebra::StoredWithValidity(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => None,
         } {
             for filter in filters {
                 left.extend(filter.bindings()?);
@@ -536,7 +555,7 @@ impl InnerJoin {
                     return r.prefix_join_batched(tx, left, join_indices, eliminate_indices);
                 }
             }
-            _ => {}
+            RelAlgebra::Fixed(_) | RelAlgebra::Join(_) | RelAlgebra::NegJoin(_) | RelAlgebra::Reorder(_) | RelAlgebra::Filter(_) | RelAlgebra::Unification(_) | RelAlgebra::Search(_) | RelAlgebra::Spans(_) | RelAlgebra::Delta(_) => {}
         }
         let bindings = self.bindings();
         let eliminate_indices = get_eliminate_indices(&bindings, &self.to_eliminate);
@@ -641,7 +660,10 @@ impl MaterializedBatchJoin<'_> {
                 self.left_batch = None;
                 continue;
             }
-            let left = batch.row(self.left_row);
+            let left = match batch.row(self.left_row) {
+                Ok(r) => r,
+                Err(e) => return Err(e.into()),
+            };
             if self.run_idx == usize::MAX {
                 // New left row: binary-search the run start by comparing
                 // stored join columns against the projected left row — no

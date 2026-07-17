@@ -16,7 +16,20 @@
 //! the value plane's arena (`data::value::column`) — this module is the
 //! seam it swaps behind.
 
+use miette::{Diagnostic, Result, bail};
+use thiserror::Error;
+
 use crate::data::value::{DataValue, Tuple};
+
+/// A row's width does not match the batch arity — refuse, never truncate
+/// with `.take` (P061).
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("column batch row width {got} does not match arity {expected}")]
+#[diagnostic(code(query::column_batch_width))]
+pub(crate) struct ColumnBatchWidthMismatch {
+    pub(crate) expected: usize,
+    pub(crate) got: usize,
+}
 
 /// A row set pivoted to columns for the columnar expression evaluator.
 pub(crate) struct ColumnBatch {
@@ -25,20 +38,25 @@ pub(crate) struct ColumnBatch {
 }
 
 impl ColumnBatch {
-    pub(crate) fn from_rows(rows: Vec<Tuple>, width: usize) -> ColumnBatch {
+    pub(crate) fn from_rows(rows: Vec<Tuple>, width: usize) -> Result<ColumnBatch> {
         let height = rows.len();
         let mut cols: Vec<Vec<DataValue>> =
             (0..width).map(|_| Vec::with_capacity(height)).collect();
         for row in rows {
-            debug_assert_eq!(row.len(), width, "ragged batch row");
-            for (i, v) in row.into_iter().enumerate().take(width) {
+            if row.len() != width {
+                bail!(ColumnBatchWidthMismatch {
+                    expected: width,
+                    got: row.len(),
+                });
+            }
+            for (i, v) in row.into_iter().enumerate() {
                 cols[i].push(v);
             }
         }
-        ColumnBatch {
+        Ok(ColumnBatch {
             cols: cols.into_iter().map(BatchColumn).collect(),
             height,
-        }
+        })
     }
 
     pub(crate) fn width(&self) -> usize {
@@ -64,14 +82,22 @@ impl BatchColumn {
     }
 }
 
+/// Batch height exceeds `u32::MAX` — selection indexes are `u32`.
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("batch beyond u32 rows ({n})")]
+#[diagnostic(code(query::batch_row_u32))]
+pub(crate) struct BatchRowU32Overflow {
+    pub(crate) n: usize,
+}
+
 /// A sorted set of live row indices.
 #[derive(Clone)]
 pub(crate) struct Selection(Vec<u32>);
 
 impl Selection {
-    pub(crate) fn all(n: usize) -> Selection {
-        assert!(u32::try_from(n).is_ok(), "batch beyond u32 rows");
-        Selection((0..n as u32).collect())
+    pub(crate) fn all(n: usize) -> Result<Selection> {
+        let n = u32::try_from(n).map_err(|_| BatchRowU32Overflow { n })?;
+        Ok(Selection((0..n).collect()))
     }
 
     /// From ascending row ids (debug-asserted: sortedness is the caller's
@@ -147,12 +173,28 @@ mod tests {
             Tuple::from_vec(vec![DataValue::from(1i64), DataValue::from("a")]),
             Tuple::from_vec(vec![DataValue::from(2i64), DataValue::from("b")]),
         ];
-        let b = ColumnBatch::from_rows(rows, 2);
+        let b = ColumnBatch::from_rows(rows, 2).expect("uniform width");
         assert_eq!((b.width(), b.height()), (2, 2));
         assert_eq!(b.column(1).get(1), DataValue::from("b"));
         let sel = Selection::from_sorted(vec![1]);
         assert_eq!(sel.iter().collect::<Vec<_>>(), vec![1usize]);
         assert!(!sel.is_empty());
-        assert_eq!(Selection::all(2).len(), 2);
+        assert_eq!(Selection::all(2).expect("fits u32").len(), 2);
+    }
+
+    #[test]
+    fn from_rows_refuses_wrong_width() {
+        let rows = vec![Tuple::from_vec(vec![DataValue::from(1i64)])];
+        let err = ColumnBatch::from_rows(rows, 2).expect_err("wrong width");
+        let mismatch = err
+            .downcast_ref::<ColumnBatchWidthMismatch>()
+            .expect("width mismatch");
+        assert_eq!(
+            *mismatch,
+            ColumnBatchWidthMismatch {
+                expected: 2,
+                got: 1
+            }
+        );
     }
 }

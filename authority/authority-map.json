@@ -2,11 +2,11 @@
   "tool": "authority-graph",
   "tool_version": 1,
   "scope": "crates/kyzo-core/src",
-  "files_scanned": 175,
+  "files_scanned": 179,
   "layers": [
     {
       "layer": "value",
-      "holds": "Tuple · Domain · ExecRows/ExecDedup · EncodedKey"
+      "holds": "Tuple · Domain · ExecRows/ExecDedup · TupleKey/StorageKey"
     },
     {
       "layer": "runtime-catalog",
@@ -14,7 +14,7 @@
     },
     {
       "layer": "storage",
-      "holds": "encoded-key / order integrity (consumes EncodedKey)"
+      "holds": "encoded-key / order integrity (consumes StorageKey)"
     },
     {
       "layer": "engines",
@@ -31,10 +31,34 @@
   ],
   "nodes": [
     {
+      "name": "CatalogGeneration",
+      "layer": "runtime-catalog",
+      "file": "crates/kyzo-core/src/runtime/generation.rs",
+      "line": 22,
+      "owns": "the one catalog-meaning freshness clock; sole door that mints projection Generation stamps from a proven counter",
+      "constructs": [
+        "CatalogGeneration::from_relation",
+        "CatalogGeneration::from_index"
+      ],
+      "forbids": [
+        "bare u64 freshness",
+        "public Generation::new(raw)"
+      ],
+      "converts": [
+        "CatalogGeneration -> Generation (projection seal/classify stamp)"
+      ],
+      "gate": "Generation stamps only via CatalogGeneration::projection_stamp (#337)",
+      "status": {
+        "kind": "established",
+        "story": 337,
+        "note": ""
+      }
+    },
+    {
       "name": "Domain",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/column.rs",
-      "line": 55,
+      "line": 68,
       "owns": "arena+epoch+visibility admission; a raw u32 code is meaningful only under a proven Domain; cross-Domain code comparison is invalid",
       "constructs": [
         "the arena/observer authority (BulkObserver admission)"
@@ -46,33 +70,7 @@
       "converts": [
         "Domain -> ExecRows (Rows::admit(observer) -> AdmittedRows, under this Domain)"
       ],
-      "gate": "join_project panics cross-arena/epoch; raw-code use requires admission (value-plane.md)",
-      "status": {
-        "kind": "established",
-        "story": 119,
-        "note": ""
-      }
-    },
-    {
-      "name": "EncodedKey",
-      "layer": "value",
-      "file": "crates/kyzo-core/src/data/value/row.rs",
-      "line": 247,
-      "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
-      "constructs": [
-        "EncodedKey::from_values",
-        "EncodedKey::from_stored",
-        "encode_row"
-      ],
-      "forbids": [
-        "leaking codes out of an EncodedKey",
-        "forging bytes bypassing canonical encode",
-        "confusing storage identity with record/entity identity"
-      ],
-      "converts": [
-        "EncodedKey -> Domain (admitted into an arena via push_encoded)"
-      ],
-      "gate": "round-trip + byte-order law (storage format gate)",
+      "gate": "join_project / admit refuse cross-arena/epoch typed; raw-code use requires admission (value-plane.md)",
       "status": {
         "kind": "established",
         "story": 119,
@@ -83,16 +81,16 @@
       "name": "ExecDedup",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/exec.rs",
-      "line": 189,
+      "line": 220,
       "owns": "the fixpoint dedup identity: packed admitted code tuples, u32-slice equality, no canonical encode in the hot loop",
       "constructs": [
         "ExecDedup::new",
-        "ExecDedup::insert",
         "ExecDedup::absorb"
       ],
       "forbids": [
         "inserting codes that did not come from an admitted ExecRows",
-        "mixing domains in one sink"
+        "mixing domains in one sink",
+        "bare `&[u32]` insert"
       ],
       "converts": [
         "ExecDedup -> ExecRows (to_exec: the distinct rows, same Domain)"
@@ -108,7 +106,7 @@
       "name": "ExecRows",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/exec.rs",
-      "line": 53,
+      "line": 57,
       "owns": "the admitted execution currency; codes are unforgeable (private field, no raw-code door)",
       "constructs": [
         "ExecRows::admit(&Rows, &O)",
@@ -120,7 +118,7 @@
         "reconstruction outside admission"
       ],
       "converts": [
-        "ExecRows -> EncodedKey (canonical bytes only at a storage/output boundary, never durable identity)"
+        "ExecRows -> StorageKey (canonical bytes only at a storage/output boundary, never durable identity)"
       ],
       "gate": "no raw-code door exposed; zero-canonical-encode-in-fixpoint law (#120)",
       "status": {
@@ -130,10 +128,120 @@
       }
     },
     {
+      "name": "IndexGeneration",
+      "layer": "runtime-catalog",
+      "file": "crates/kyzo-core/src/runtime/generation.rs",
+      "line": 77,
+      "owns": "per-index monotone rebuild counter that witnesses catalog freshness for one index",
+      "constructs": [
+        "IndexGeneration::witness"
+      ],
+      "forbids": [
+        "bare integer index freshness outside this authority"
+      ],
+      "converts": [
+        "IndexGeneration -> CatalogGeneration (lift into the catalog clock)"
+      ],
+      "gate": "index rebuild stamps only through IndexGeneration::witness (#337)",
+      "status": {
+        "kind": "established",
+        "story": 337,
+        "note": ""
+      }
+    },
+    {
+      "name": "QueryDomainAdmission",
+      "layer": "query",
+      "file": "crates/kyzo-core/src/query/ra/search.rs",
+      "line": 39,
+      "owns": "admission of engine search hits into the query execution currency as codes; decoded engine tuples never cross the SearchRA seam",
+      "constructs": [
+        "QueryDomainAdmission::admit_hits"
+      ],
+      "forbids": [
+        "holding decoded engine Tuple vectors as the SearchRA hit currency"
+      ],
+      "converts": [],
+      "gate": "SearchRA hit currency is QueryDomainAdmission codes only (#337)",
+      "status": {
+        "kind": "established",
+        "story": 337,
+        "note": ""
+      }
+    },
+    {
+      "name": "RelationGeneration",
+      "layer": "runtime-catalog",
+      "file": "crates/kyzo-core/src/runtime/generation.rs",
+      "line": 52,
+      "owns": "per-relation monotone write counter that witnesses catalog freshness for one relation",
+      "constructs": [
+        "RelationGeneration::witness"
+      ],
+      "forbids": [
+        "bare AtomicU64 load standing for relation freshness without this witness"
+      ],
+      "converts": [
+        "RelationGeneration -> CatalogGeneration (lift into the catalog clock)"
+      ],
+      "gate": "segment freshness samples only through RelationGeneration::witness (#337)",
+      "status": {
+        "kind": "established",
+        "story": 337,
+        "note": ""
+      }
+    },
+    {
+      "name": "ResidentIndexKey",
+      "layer": "engines",
+      "file": "crates/kyzo-core/src/engines/projection.rs",
+      "line": 105,
+      "owns": "rebuildable projection residency identity — a sealed kind's cache key under one Generation",
+      "constructs": [
+        "ResidentIndexKey::for_relation"
+      ],
+      "forbids": [
+        "bare RelationId standing for resident index identity across engines"
+      ],
+      "converts": [],
+      "gate": "segment/index resident maps keyed only by ResidentIndexKey (#337)",
+      "status": {
+        "kind": "established",
+        "story": 337,
+        "note": ""
+      }
+    },
+    {
+      "name": "StorageKey",
+      "layer": "value",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
+      "line": 300,
+      "owns": "canonical storage identity in the memcmp keyspace; bytewise order equals DataValue structural order (byte-order law)",
+      "constructs": [
+        "TupleT::encode_as_key",
+        "encode_key_with_suffix"
+      ],
+      "forbids": [
+        "leaking codes out of a StorageKey",
+        "forging bytes bypassing canonical encode",
+        "confusing storage identity with record/entity identity",
+        "treating a StorageKey as a bare TupleKey"
+      ],
+      "converts": [
+        "StorageKey -> Domain (admitted into an arena via push_encoded)"
+      ],
+      "gate": "round-trip + byte-order law (storage format gate)",
+      "status": {
+        "kind": "established",
+        "story": 303,
+        "note": ""
+      }
+    },
+    {
       "name": "Tuple",
       "layer": "value",
       "file": "crates/kyzo-core/src/data/value/mod.rs",
-      "line": 518,
+      "line": 514,
       "owns": "row identity as an ordered `DataValue` sequence, distinct from any bare `Vec<DataValue>`",
       "constructs": [
         "Tuple::new",
@@ -150,6 +258,30 @@
         "story": 300,
         "note": ""
       }
+    },
+    {
+      "name": "TupleKey",
+      "layer": "value",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
+      "line": 282,
+      "owns": "bare-tuple memcmp identity (no relation prefix); bytewise order equals DataValue structural order (byte-order law)",
+      "constructs": [
+        "TupleKey::from_values",
+        "TupleKey::from_stored"
+      ],
+      "forbids": [
+        "forging bytes bypassing canonical encode",
+        "treating a TupleKey as a relation-prefixed StorageKey"
+      ],
+      "converts": [
+        "TupleKey -> StorageKey (prefix with RelationId at the storage boundary)"
+      ],
+      "gate": "round-trip + byte-order law (storage format gate)",
+      "status": {
+        "kind": "established",
+        "story": 303,
+        "note": ""
+      }
     }
   ],
   "edges": [
@@ -161,7 +293,7 @@
     },
     {
       "from": "ExecRows",
-      "to": "EncodedKey",
+      "to": "StorageKey",
       "context": "canonical bytes only at a storage/output boundary, never durable identity",
       "declared_by": "ExecRows"
     },
@@ -172,10 +304,34 @@
       "declared_by": "ExecDedup"
     },
     {
-      "from": "EncodedKey",
+      "from": "TupleKey",
+      "to": "StorageKey",
+      "context": "prefix with RelationId at the storage boundary",
+      "declared_by": "TupleKey"
+    },
+    {
+      "from": "StorageKey",
       "to": "Domain",
       "context": "admitted into an arena via push_encoded",
-      "declared_by": "EncodedKey"
+      "declared_by": "StorageKey"
+    },
+    {
+      "from": "CatalogGeneration",
+      "to": "Generation",
+      "context": "projection seal/classify stamp",
+      "declared_by": "CatalogGeneration"
+    },
+    {
+      "from": "RelationGeneration",
+      "to": "CatalogGeneration",
+      "context": "lift into the catalog clock",
+      "declared_by": "RelationGeneration"
+    },
+    {
+      "from": "IndexGeneration",
+      "to": "CatalogGeneration",
+      "context": "lift into the catalog clock",
+      "declared_by": "IndexGeneration"
     }
   ],
   "planned": [
@@ -187,152 +343,53 @@
   ],
   "findings": [
     {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 491,
-      "excerpt": "vec_hash: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
+      "class": "error-downcast",
+      "file": "crates/kyzo-core/src/storage/retry.rs",
+      "line": 27,
+      "excerpt": ".downcast_ref::<ConflictError>",
+      "note": "Report.downcast_ref recovering typed errors in product code"
     },
     {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 530,
-      "excerpt": "entry_key: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/hnsw.rs",
-      "line": 2074,
-      "excerpt": "key: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/engines/lsh.rs",
-      "line": 158,
-      "excerpt": "pub(crate) perms: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 63,
-      "excerpt": "values: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 557,
-      "excerpt": "lower: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 558,
-      "excerpt": "upper: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 754,
-      "excerpt": "lower: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
-    },
-    {
-      "class": "blob-meaning",
-      "file": "crates/kyzo-core/src/query/levels.rs",
-      "line": 755,
-      "excerpt": "upper: Vec<u8>,",
-      "note": "generic byte blob carrying meaning outside the byte plane"
+      "class": "error-downcast",
+      "file": "crates/kyzo-core/src/storage/retry.rs",
+      "line": 29,
+      "excerpt": ".downcast_ref::<CommitFailure>",
+      "note": "Report.downcast_ref recovering typed errors in product code"
     },
     {
       "class": "illegal-escape",
       "file": "crates/kyzo-core/src/data/value/row.rs",
-      "line": 434,
-      "excerpt": "impl std::ops::Deref for EncodedKey {",
-      "note": "Deref dissolves the EncodedKey authority boundary",
-      "allowlisted": "read-only &[u8] view: the one legal EncodedKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
+      "line": 417,
+      "excerpt": "impl std::ops::Deref for TupleKey {",
+      "note": "Deref dissolves the TupleKey authority boundary",
+      "allowlisted": "read-only &[u8] view: the one legal TupleKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
     },
     {
-      "class": "missing-authority",
-      "file": "crates/kyzo-core/src",
-      "line": 0,
-      "excerpt": "CatalogGeneration",
-      "note": "expected authority (layer runtime-catalog) does not exist yet — owed by #135"
-    },
-    {
-      "class": "missing-authority",
-      "file": "crates/kyzo-core/src",
-      "line": 0,
-      "excerpt": "IndexGeneration",
-      "note": "expected authority (layer runtime-catalog) does not exist yet — owed by #135"
-    },
-    {
-      "class": "missing-authority",
-      "file": "crates/kyzo-core/src",
-      "line": 0,
-      "excerpt": "QueryDomainAdmission",
-      "note": "expected authority (layer query) does not exist yet — owed by #122"
-    },
-    {
-      "class": "missing-authority",
-      "file": "crates/kyzo-core/src",
-      "line": 0,
-      "excerpt": "RelationGeneration",
-      "note": "expected authority (layer runtime-catalog) does not exist yet — owed by #135"
-    },
-    {
-      "class": "missing-authority",
-      "file": "crates/kyzo-core/src",
-      "line": 0,
-      "excerpt": "ResidentIndexKey",
-      "note": "expected authority (layer engines) does not exist yet — owed by #122"
-    },
-    {
-      "class": "searchra-decoded-tuples",
-      "file": "crates/kyzo-core/src/query/ra/search.rs",
-      "line": 114,
-      "excerpt": "let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {",
-      "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
-    },
-    {
-      "class": "searchra-decoded-tuples",
-      "file": "crates/kyzo-core/src/query/ra/search.rs",
-      "line": 186,
-      "excerpt": "hits: Vec<Tuple>,",
-      "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
-    },
-    {
-      "class": "searchra-decoded-tuples",
-      "file": "crates/kyzo-core/src/query/ra/search.rs",
-      "line": 188,
-      "excerpt": "search: Box<dyn FnMut(&[DataValue]) -> Result<Vec<Tuple>> + 'a>,",
-      "note": "engine hits flow as decoded tuples, not admitted codes (QueryDomainAdmission owed by #122)"
+      "class": "illegal-escape",
+      "file": "crates/kyzo-core/src/data/value/row.rs",
+      "line": 430,
+      "excerpt": "impl std::ops::Deref for StorageKey {",
+      "note": "Deref dissolves the StorageKey authority boundary",
+      "allowlisted": "read-only &[u8] view: the one legal StorageKey -> stored-bytes conversion; field private, no DerefMut, every mint validates — bytes can be read, never forged"
     },
     {
       "class": "unchecked-constructor",
       "file": "crates/kyzo-core/src/data/value/arena.rs",
-      "line": 2372,
-      "excerpt": "fn forged_in_epoch_stamp_beyond_len_panics() {",
-      "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_panics'",
-      "allowlisted": "named corruption/bypass TEST asserting that a forged stamp panics — it proves the door is shut, it is not a door"
+      "line": 2818,
+      "excerpt": "fn forged_in_epoch_stamp_beyond_len_refuses_typed() {",
+      "note": "raw-door constructor 'forged_in_epoch_stamp_beyond_len_refuses_typed'",
+      "allowlisted": "named corruption/bypass TEST asserting that a forged stamp refuses typed — it proves the door is shut, it is not a door"
     },
     {
       "class": "unchecked-constructor",
       "file": "crates/kyzo-core/src/data/value/wide/validity.rs",
-      "line": 43,
-      "excerpt": "pub fn from_raw(ts_micros: i64) -> ValidityTs {",
+      "line": 60,
+      "excerpt": "pub(crate) fn from_raw(ts_micros: i64) -> ValidityTs {",
       "note": "raw-door constructor 'from_raw'",
       "allowlisted": "total boundary constructor: every i64 is a valid validity-timestamp micros value; parse-at-boundary, not an authority bypass"
     }
   ],
   "counts_by_class": {
-    "blob-meaning": 9,
-    "missing-authority": 5,
-    "searchra-decoded-tuples": 3
+    "error-downcast": 2
   }
 }

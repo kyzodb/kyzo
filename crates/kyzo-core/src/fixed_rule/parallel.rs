@@ -83,6 +83,7 @@ mod tests {
     /// A single-thread pool and the default pool agree byte-for-byte.
     #[test]
     fn single_thread_matches_default_pool() {
+        // INVARIANT(test_hash_mix): golden-hash mul in a unit test; wrap is intentional.
         let f = |i: u32| Ok::<_, miette::Report>(i.wrapping_mul(2_654_435_761));
         let default = par_try_map((0u32..2000).collect(), f).unwrap();
         let pool = rayon::ThreadPoolBuilder::new()

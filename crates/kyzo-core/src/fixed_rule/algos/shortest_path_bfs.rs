@@ -37,7 +37,10 @@ use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    backtrace_predecessor, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
+    FixedRuleOutput, FixedRulePayload,
+};
 
 // A test-only observable: how many nodes the inner BFS loop has dequeued.
 // It lets `honors_cancel_pins_inner_poll` assert a *deterministic* effect of
@@ -75,20 +78,14 @@ impl FixedRule for ShortestPathBFS {
         cancel: CancelFlag,
     ) -> Result<()> {
         let edges = payload.get_input(0)?.ensure_min_len(2)?;
-        let starting_nodes: Vec<_> = payload
-            .get_input(1)?
-            .ensure_min_len(1)?
-            .iter()?
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
-            .map_ok(|n| n.into_iter().next().unwrap())
-            .try_collect()?;
-        let ending_nodes: BTreeSet<_> = payload
-            .get_input(2)?
-            .ensure_min_len(1)?
-            .iter()?
-            .map_ok(|n| n.into_iter().next().unwrap())
-            .try_collect()?;
+        let mut starting_nodes = Vec::new();
+        for tuple in payload.get_input(1)?.ensure_min_len(1)?.iter()? {
+            starting_nodes.push(tuple_into_first_column(tuple?)?);
+        }
+        let mut ending_nodes = BTreeSet::new();
+        for tuple in payload.get_input(2)?.ensure_min_len(1)?.iter()? {
+            ending_nodes.insert(tuple_into_first_column(tuple?)?);
+        }
 
         for starting_node in starting_nodes.iter() {
             let mut pending: BTreeSet<_> = ending_nodes.clone();
@@ -137,10 +134,10 @@ impl FixedRule for ShortestPathBFS {
                     let mut current = ending_node.clone();
                     while current != *starting_node {
                         route.push(current.clone());
-                        // Structural: `ending_node` has a backtrace entry
-                        // (checked above), and so does every predecessor
-                        // back to the start.
-                        current = backtrace.get(&current).unwrap().clone();
+                        // INVARIANT(sp_bfs_pred): `ending_node` has a
+                        // backtrace entry (checked above), and so does every
+                        // predecessor back to the start.
+                        current = backtrace_predecessor(&backtrace, &current, "sp_bfs_pred")?;
                     }
                     route.push(starting_node.clone());
                     route.reverse();
@@ -276,9 +273,9 @@ mod tests {
             "baseline should expand the whole chain, got {full_expanded}"
         );
 
-        // Pre-set flag: the inner poll must refuse before expanding the graph.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the inner poll must refuse before expanding the graph.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&ShortestPathBFS, flag);
         let cancel_expanded = take_bfs_nodes_expanded();
         assert!(cancelled.is_err());

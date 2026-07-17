@@ -1,0 +1,19 @@
+error[E0382]: borrow of moved value: `tx`
+  --> tests/compile_fail/write_tx_use_after_abort.rs:18:13
+   |
+16 | fn spent_after_abort<T: WriteTx>(mut tx: T) {
+   |                                  ------ move occurs because `tx` has type `T`, which does not implement the `Copy` trait
+17 |     let _ = tx.abort();
+   |                ------- `tx` moved due to this method call
+18 |     let _ = tx.put(b"k", b"v");
+   |             ^^ value borrowed here after move
+   |
+note: `kyzo::WriteTx::abort` takes ownership of the receiver `self`, which moves `tx`
+  --> src/storage/mod.rs
+   |
+   |     fn abort(self) -> Aborted
+   |              ^^^^
+help: consider further restricting type parameter `T` with trait `Copy`
+   |
+16 | fn spent_after_abort<T: WriteTx + Copy>(mut tx: T) {
+   |                                 ++++++

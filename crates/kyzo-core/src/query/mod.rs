@@ -58,20 +58,11 @@
 //!    *Enforcement:* query-level tests exercising each operator inside
 //!    joins, negation, and recursion, landing with the operators.
 
-// The naive reference oracle. Test-only until story #80 ("ship the
-// judge"): `::verify` (`runtime/verify.rs`) is production code that calls
-// `naive_eval`/`naive_eval_at` directly — the issue's own telos is a
-// "shipped reference evaluator," so the oracle is no longer test-only by
-// construction. Its own `#[cfg(test)] mod tests` and every OTHER harness
-// that drives it (`trials.rs`, `provenance.rs`, `time_travel_trials.rs`,
-// `dst_query.rs`, `time_travel_script_laws.rs`, `gauntlet.rs`) stay
-// test-only regardless — only this declaration's own gate changes.
-// `::verify`'s translator covers one language fragment today (see
-// `runtime/verify.rs`'s module docs), so most of the oracle's timed-axis
-// and bitemporal-history surface (used by the test harnesses above but not
-// yet by `::verify`) is dead in a plain release build — same posture as
-// `parse`/`fixed_rule` in `lib.rs`.
-#[allow(dead_code)]
+// The naive reference oracle. Production host door:
+// `runtime/verify.rs` calls `laws::naive_eval_at_budgeted`; differential
+// tests and `runtime/db.rs` tests call `naive_eval`/`naive_eval_at`
+// directly. Residual oracle surface not yet on those paths warns honestly
+// (P112) — no module-level `allow(dead_code)`.
 pub(crate) mod batch;
 pub(crate) mod laws;
 
@@ -110,30 +101,16 @@ mod time_travel_trials;
 #[cfg(test)]
 mod time_travel_script_laws;
 
-// The plan compiler's production caller (runtime/db.rs::compile_and_eval)
-// has landed: `stratified_magic_compile` and `bind_for_eval` run on every
-// query. `#[allow(dead_code)]` stays for the residual items no production
-// path reaches yet (`CompiledRuleSet::arity`, the uninhabited
-// `NoFixedRules`), kept live only by this module's own tests.
-#[allow(dead_code)]
+// Production host door: `runtime/db.rs::compile_and_eval` runs
+// `stratified_magic_compile` and `bind_for_eval` on every query (P112).
 pub(crate) mod compile;
-// The relational-algebra operators: consumed by `compile`'s plans and
-// driven by `eval`'s loop, both production paths now. `#[allow(dead_code)]`
-// stays for a handful of helpers no production plan shape reaches yet
-// (`join.rs`'s `flatten_err`/`filter_iter`/`as_map`, a couple of
-// `join_type`/`join` methods on non-default join kinds), exercised only by
-// this module's own tests.
-#[allow(dead_code)]
+// Production host door: `compile`'s plans and `eval`'s loop drive every
+// `ra` operator (`runtime/db.rs::compile_and_eval`).
 pub(crate) mod ra;
 
-// The evaluator's production caller (runtime/db.rs::compile_and_eval) has
-// landed: `stratified_evaluate` runs on every query. `#[allow(dead_code)]`
-// stays because the provenance-graph plumbing in this file
-// (`provenance_graph`, `PremiseSource`, `ProvNode`, `ProvenanceUnsupported`,
-// `Premises::Rows`, `RuleBody::premise_sources`/`entries`) has no
-// production caller yet — only the `provenance` trials exercise it, same
-// posture as `semiring` below.
-#[allow(dead_code)]
+// Production host door: `runtime/db.rs::compile_and_eval` runs
+// `stratified_evaluate` on every query. Provenance-graph plumbing with no
+// production caller yet warns honestly until wired (P112).
 pub(crate) mod eval;
 pub(crate) mod graph;
 // Story #61's production incremental-maintenance engine: an independently-
@@ -151,45 +128,29 @@ pub(crate) mod standing;
 // and thread-determinism tests over the eval seams. Test-only, like `laws`.
 #[cfg(test)]
 mod provenance;
-// Semiring provenance (boolean/tropical annotations + certificates). Its
-// production caller (runtime/db.rs) lands later; until then its lib code
-// is dead, kept live in test builds by the `provenance` trials — the same
-// pattern as `eval` above.
-#[cfg_attr(not(test), expect(dead_code))]
-#[cfg_attr(test, allow(dead_code))]
+// Semiring provenance (boolean/tropical annotations + certificates).
+// Production caller (`runtime/db.rs` provenance recording) lands later;
+// unused lib surface warns honestly until wired (P112) — no module-level
+// dead_code silence.
 pub(crate) mod semiring;
-// The magic tier's consumer (query/compile.rs's `stratified_magic_compile`,
-// reached from runtime/db.rs::compile_and_eval) has landed: every query
-// runs `magic_sets_rewrite`. Nothing in this module is dead code in a
-// release build any more (verified: `#[allow(dead_code)]` removed here
-// produces zero warnings), so the attribute is gone.
+// Production host door: every query runs `magic_sets_rewrite` via
+// `compile::stratified_magic_compile` (P112).
 pub(crate) mod magic;
-// The stratifier's caller (runtime/db.rs::compile_and_eval's
-// `nf.into_stratified_program()`) has landed: every query is stratified
-// before magic-sets. Fully live in a release build; `#[allow(dead_code)]`
-// removed here produces zero warnings, so the attribute is gone.
+// Production host door: every query is stratified before magic-sets via
+// `runtime/db.rs::compile_and_eval` (P112).
 pub(crate) mod stratify;
-// The columnar execution currency (`batch_ops::Batch`): driven by every
-// `ra` operator's `iter`, which `compile`/`eval` run in production. Fully
-// live in a release build; `#[allow(dead_code)]` removed here produces
-// zero warnings, so the attribute is gone.
+// Production host door: columnar execution currency (`batch_ops::Batch`)
+// driven by every `ra` operator's `iter` (P112).
 pub(crate) mod batch_ops;
 pub(crate) mod levels;
-// normalize's production caller (runtime/db.rs and runtime/verify.rs's
-// `SessionNormalizer::new`) has landed; `#[allow(dead_code)]` stays for
-// residual items no production path reaches yet, kept live by this
-// module's own tests — same posture as `compile`/`ra`/`eval` above.
-#[allow(dead_code)]
+// Production host door: `runtime/db.rs` and `runtime/verify.rs` call
+// `SessionNormalizer::new` on every query path that normalizes (P112).
 pub(crate) mod normalize;
-// search's one resolution site (`resolve_search`) is called from
-// normalize's body normalizer, itself production-called; the same
-// residual-items posture as normalize above.
-#[allow(dead_code)]
+// Production host door: `resolve_search` is called from normalize's body
+// normalizer, itself production-called (P112).
 pub(crate) mod search;
-// sort's production caller (runtime/db.rs's `sort_and_collect`) has
-// landed; `#[allow(dead_code)]` stays for residual items no production
-// path reaches yet, kept live by this module's own tests.
-#[allow(dead_code)]
+// Production host door: `runtime/db.rs::sort_and_collect` runs on every
+// query result path (P112).
 pub(crate) mod sort;
 pub(crate) mod temp_store;
 pub(crate) mod vm;

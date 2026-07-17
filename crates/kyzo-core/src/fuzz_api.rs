@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use miette::Result;
 
 use crate::data::value::DataValue;
-use crate::data::value::EncodedKey;
+use crate::data::value::StorageKey;
 use crate::data::value::RelationId;
 use crate::data::value::Tuple;
 use crate::data::value::decode_values_all;
@@ -61,10 +61,10 @@ pub fn fuzz_parse_script(src: &str) -> Result<()> {
 /// Encode a tuple as a relation-prefixed memcmp key
 /// (`encode_key_with_suffix` with no suffix columns), for the
 /// memcmp-codec fuzz target's round-trip law against
-/// [`crate::decode_tuple_from_key`]. `EncodedKey`/`RelationId`/`Tuple`
+/// [`crate::decode_tuple_from_key`]. `StorageKey`/`RelationId`/`Tuple`
 /// are already public; the façade exists only because
 /// `encode_key_with_suffix` itself is crate-internal.
-pub fn fuzz_encode_tuple_key(rel: u64, tuple: &Tuple) -> Option<EncodedKey> {
+pub fn fuzz_encode_tuple_key(rel: u64, tuple: &Tuple) -> Option<StorageKey> {
     let rel = RelationId::new(rel)?;
     Some(encode_key_with_suffix(rel, tuple.as_slice(), &[]))
 }
@@ -94,22 +94,6 @@ pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
 /// constant.
 pub const MAX_RELATION_ID: u64 = crate::data::value::RelationId::CAP;
 
-/// Extract an `Interval`'s bounds as raw `i64`s. `Interval`'s type itself
-/// is crate-internal (never re-exported at the crate root), and its
-/// `start()`/`end()` accessors are `pub(crate)` — this is the seam the
-/// fuzz law needs to check the bypass-detecting invariant (`start < end`)
-/// on every successfully-decoded `DataValue::Interval`, without widening
-/// the accessors or the type themselves.
-pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
-    match v {
-        DataValue::Interval(iv) => match (iv.start(), iv.end()) {
-            (Some(a), Some(b)) => Some((a, b)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Build a `DataValue::Interval` from a canonicalizing `(start, end)`
 /// pair, each bound spelled as a `(kind, value)` primitive pair —
 /// `kind % 3`: 0 = unbounded, 1 = closed at `value`, 2 = open at `value`
@@ -117,6 +101,25 @@ pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
 /// naming the crate-internal `Bound`/`Interval` construction types.
 /// `Interval::new` itself canonicalizes (empty denotations collapse to
 /// `Interval::EMPTY`), so every input pair yields a lawful value.
+///
+/// Interval stays opaque here: no façade projects bounds as
+/// `Option<(i64, i64)>`. Bypass-detecting fuzz laws use `Interval`'s own
+/// typed accessors (`start`/`end`) on a `DataValue::Interval` match arm.
+
+/// Bypass-detecting law for fuzz targets: a successfully decoded finite
+/// Interval must satisfy `start < end`. Returns `true` for non-intervals
+/// and for intervals with an unbounded end. Does **not** project bounds
+/// as `Option<(i64, i64)>` — Interval stays opaque.
+pub fn finite_interval_is_ordered(v: &DataValue) -> bool {
+    match v {
+        DataValue::Interval(iv) => match (iv.start(), iv.end()) {
+            (Some(a), Some(b)) => a < b,
+            _ => true,
+        },
+        _ => true,
+    }
+}
+
 pub fn fuzz_interval(start_kind: u8, start_val: i64, end_kind: u8, end_val: i64) -> DataValue {
     use crate::data::value::Bound;
     fn bound(kind: u8, val: i64) -> Bound {
@@ -142,3 +145,15 @@ pub fn fuzz_regex(pattern: String) -> Option<DataValue> {
             .ok()?;
     Some(DataValue::Regex(source))
 }
+
+/// Lawful `DataValue::Validity` mint for memcmp Ord↔bytes fuzzing.
+/// Uses [`ValidityTs::for_assertion`] + [`Validity::new`] only — assert+`i64::MAX`
+/// and other unrepresentable Validity states are refused (`None`), never forged
+/// via struct literals or `from_raw` past the purity seals.
+pub fn fuzz_validity(ts_micros: i64, is_assert: bool) -> Option<DataValue> {
+    use crate::data::value::{Validity, ValidityTs};
+    let ts = ValidityTs::for_assertion(ts_micros)?;
+    let v = Validity::new(ts, is_assert)?;
+    Some(DataValue::Validity(v.into()))
+}
+

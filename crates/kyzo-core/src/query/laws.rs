@@ -141,26 +141,113 @@
 //! does NOT touch is `query/stratify.rs::aggregation_character` — see its
 //! own doc comment for why that one stays hand-maintained.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
+use std::borrow::Borrow;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+use std::sync::Arc;
 
-use crate::data::aggr::{Aggregation, MeetAggrObj, NormalAggrObj};
+use miette::{Diagnostic, Result};
+use thiserror::Error;
+
+use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr, NormalAggr};
 use crate::data::bitemporal::ClaimPolarity;
+use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::query::eval::Budget;
 
-pub(crate) type Rel = &'static str;
+/// Oracle relation / variable name. Content-eq `Arc<str>`: corpus sites
+/// mint from `'static` literals via [`From`]; the verify→oracle seam mints
+/// from runtime [`Symbol`](crate::data::symb::Symbol) text with
+/// [`Name::owned`] — no process-global leak-intern table (P115).
+#[derive(Clone, Debug)]
+pub(crate) struct Name(Arc<str>);
+
+impl Name {
+    /// Runtime / owned seam: verify and any non-static bridge.
+    pub(crate) fn owned(s: impl AsRef<str>) -> Self {
+        Self(Arc::from(s.as_ref()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl From<&'static str> for Name {
+    fn from(s: &'static str) -> Self {
+        Self(Arc::from(s))
+    }
+}
+
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+impl Eq for Name {}
+impl PartialOrd for Name {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Name {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+impl Deref for Name {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl AsRef<str> for Name {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl Borrow<str> for Name {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl PartialEq<str> for Name {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+impl PartialEq<&str> for Name {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+pub(crate) type Rel = Name;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Term {
-    Var(&'static str),
+    Var(Name),
     Const(DataValue),
+}
+
+impl Term {
+    /// Variable term from a static corpus name or an owned runtime name.
+    pub(crate) fn var(name: impl Into<Name>) -> Self {
+        Term::Var(name.into())
+    }
 }
 
 /// A bitemporal read coordinate, mirroring `data::value::AsOf`'s `(sys,
@@ -174,9 +261,9 @@ pub(crate) enum Term {
 /// the coordinate their generated histories bridge against directly.
 ///
 /// **The exact correspondence.** `laws::AsOf { valid: v, sys: s }` is
-/// `data::value::AsOf { valid: ValidityTs::from_raw(v), sys:
-/// ValidityTs::from_raw(s) }` — wrap each field in `ValidityTs::from_raw(_)`
-/// to go from this type to the real one. Because `Reverse` inverts
+/// `data::value::AsOf::at(ValidityTs::from_raw(s), ValidityTs::from_raw(v))`
+/// — wrap each field in `ValidityTs::from_raw(_)` and mint through the
+/// real type's `at` / `current` doors. Because `Reverse` inverts
 /// comparison, this module's ascending `t <= v` ("instant `t` is at or
 /// before coordinate `v`") is the real type's DESCENDING `ValidityTs(t) >=
 /// ValidityTs(v)` — the two types encode the identical total order
@@ -214,12 +301,12 @@ impl AsOf {
     }
 }
 
-/// One stored point-event in a fact's bitemporal history: the fact's
-/// identifying key columns, the non-key payload it claims (populated only
-/// for [`ClaimPolarity::Assert`] — empty for `Retract`/`Erase`, mirroring
-/// the stored format where polarity lives in the value and a
-/// retract/erase carries no payload, `data/bitemporal.rs`), the valid
-/// instant, the system version, and the polarity.
+/// One stored point-event in a fact's bitemporal history. Polarity is the
+/// enum discriminant; an assertion owns its non-key payload, while
+/// retract/erase carry none — mirroring the stored format
+/// (`data/bitemporal.rs`) where polarity lives in the value and a
+/// retract/erase has no payload. A freestanding `polarity` beside an
+/// optional/`empty`-for-other-modes `payload` field is unrepresentable.
 ///
 /// **The untimed embedding.** A plain (non-historical) fact tuple `t` in
 /// `Program::facts` is sugar for exactly one canonical `Event`: assert
@@ -235,13 +322,33 @@ impl AsOf {
 /// overlap) — the two worlds are cleanly disjoint, unified only through
 /// the one evaluator that reads either.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Event {
-    pub key: Tuple,
-    pub payload: Tuple,
-    pub valid: i64,
-    pub sys: i64,
-    pub polarity: ClaimPolarity,
+pub(crate) enum Event {
+    Assert {
+        key: Tuple,
+        payload: Tuple,
+        valid: i64,
+        sys: i64,
+    },
+    Retract {
+        key: Tuple,
+        valid: i64,
+        sys: i64,
+    },
+    Erase {
+        key: Tuple,
+        valid: i64,
+        sys: i64,
+    },
 }
+
+/// Named refusal when an event claims the reserved `@ 'END'` valid instant.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+#[error(
+    "valid instant i64::MAX is reserved for the `@ 'END'` write-side \
+     sentinel; no event may claim it as its own coordinate"
+)]
+#[diagnostic(code(laws::reserved_valid_end))]
+pub(crate) struct ReservedValidInstant;
 
 impl Event {
     /// The valid instant `i64::MAX` is RESERVED for the `@ 'END'`
@@ -254,44 +361,28 @@ impl Event {
     /// (Hostile-review ruling, issue #62 comment 4882951801: the write
     /// path's own refusal of the same instant is a separate, later
     /// change; this is the oracle's side of the reservation.)
-    fn check_valid_not_reserved(valid: i64) -> miette::Result<()> {
+    fn check_valid_not_reserved(valid: i64) -> Result<(), ReservedValidInstant> {
         if valid == i64::MAX {
-            miette::bail!(
-                "valid instant i64::MAX is reserved for the `@ 'END'` write-side \
-                 sentinel; no event may claim it as its own coordinate"
-            );
+            return Err(ReservedValidInstant);
         }
         Ok(())
     }
     pub(crate) fn assert(key: Tuple, payload: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
         Self::check_valid_not_reserved(valid)?;
-        Ok(Event {
+        Ok(Event::Assert {
             key,
             payload,
             valid,
             sys,
-            polarity: ClaimPolarity::Assert,
         })
     }
     pub(crate) fn retract(key: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
         Self::check_valid_not_reserved(valid)?;
-        Ok(Event {
-            key,
-            payload: Tuple::new(),
-            valid,
-            sys,
-            polarity: ClaimPolarity::Retract,
-        })
+        Ok(Event::Retract { key, valid, sys })
     }
     pub(crate) fn erase(key: Tuple, valid: i64, sys: i64) -> miette::Result<Self> {
         Self::check_valid_not_reserved(valid)?;
-        Ok(Event {
-            key,
-            payload: Tuple::new(),
-            valid,
-            sys,
-            polarity: ClaimPolarity::Erase,
-        })
+        Ok(Event::Erase { key, valid, sys })
     }
     /// The untimed embedding: sugar for "this fact has always held, as
     /// far as any historical read can see." See the type doc. Bypasses
@@ -299,12 +390,41 @@ impl Event {
     /// 0` is a fixed internal constant, never user input, so there is no
     /// coordinate here to validate.
     pub(crate) fn untimed(tuple: Tuple) -> Self {
-        Event {
+        Event::Assert {
             key: tuple,
             payload: Tuple::new(),
             valid: 0,
             sys: 0,
-            polarity: ClaimPolarity::Assert,
+        }
+    }
+
+    pub(crate) fn key(&self) -> &Tuple {
+        match self {
+            Event::Assert { key, .. } | Event::Retract { key, .. } | Event::Erase { key, .. } => key,
+        }
+    }
+
+    pub(crate) fn valid(&self) -> i64 {
+        match self {
+            Event::Assert { valid, .. }
+            | Event::Retract { valid, .. }
+            | Event::Erase { valid, .. } => *valid,
+        }
+    }
+
+    pub(crate) fn sys(&self) -> i64 {
+        match self {
+            Event::Assert { sys, .. } | Event::Retract { sys, .. } | Event::Erase { sys, .. } => {
+                *sys
+            }
+        }
+    }
+
+    /// Non-key payload of an assertion; `None` for retract/erase.
+    pub(crate) fn payload(&self) -> Option<&Tuple> {
+        match self {
+            Event::Assert { payload, .. } => Some(payload),
+            Event::Retract { .. } | Event::Erase { .. } => None,
         }
     }
 }
@@ -321,7 +441,7 @@ impl Event {
 fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
     let mut instants: Vec<i64> = events
         .iter()
-        .map(|e| e.valid)
+        .map(|e| e.valid())
         .filter(|v| *v <= at.valid)
         .collect();
     instants.sort_unstable();
@@ -329,17 +449,16 @@ fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
     for instant in instants.into_iter().rev() {
         let governing = events
             .iter()
-            .filter(|e| e.valid == instant && e.sys <= at.sys)
-            .max_by_key(|e| e.sys);
-        match governing.map(|e| e.polarity) {
-            Some(ClaimPolarity::Assert) => {
-                let e = governing.expect("just matched Some");
-                let mut tuple = e.key.clone();
-                tuple.extend(e.payload.iter().cloned());
+            .filter(|e| e.valid() == instant && e.sys() <= at.sys)
+            .max_by_key(|e| e.sys());
+        match governing {
+            Some(Event::Assert { key, payload, .. }) => {
+                let mut tuple = key.clone();
+                tuple.extend(payload.iter().cloned());
                 return Some(tuple);
             }
-            Some(ClaimPolarity::Retract) => return None,
-            Some(ClaimPolarity::Erase) | None => {}
+            Some(Event::Retract { .. }) => return None,
+            Some(Event::Erase { .. }) | None => {}
         }
     }
     None
@@ -348,7 +467,7 @@ fn resolve_events(events: &[&Event], at: AsOf) -> Option<Tuple> {
 /// [`resolve_events`] for one named fact key within a relation's whole
 /// event history.
 pub(crate) fn resolve(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple> {
-    let events: Vec<&Event> = history.iter().filter(|e| &e.key == key).collect();
+    let events: Vec<&Event> = history.iter().filter(|e| e.key() == key).collect();
     resolve_events(&events, at)
 }
 
@@ -357,7 +476,7 @@ pub(crate) fn resolve(history: &[Event], key: &Tuple, at: AsOf) -> Option<Tuple>
 pub(crate) fn resolve_relation(history: &[Event], at: AsOf) -> BTreeSet<Tuple> {
     let mut by_key: BTreeMap<&Tuple, Vec<&Event>> = BTreeMap::new();
     for e in history {
-        by_key.entry(&e.key).or_default().push(e);
+        by_key.entry(e.key()).or_default().push(e);
     }
     by_key
         .into_values()
@@ -406,19 +525,19 @@ pub(crate) fn derive_intervals(
     axis: Axis,
     fixed: i64,
 ) -> Vec<Interval> {
-    let events: Vec<&Event> = history.iter().filter(|e| &e.key == key).collect();
+    let events: Vec<&Event> = history.iter().filter(|e| e.key() == key).collect();
     let mut breaks: Vec<i64> = match axis {
         // Every stored valid instant of this fact is a candidate
         // breakpoint at the fixed system snapshot.
-        Axis::Valid => events.iter().map(|e| e.valid).collect(),
+        Axis::Valid => events.iter().map(|e| e.valid()).collect(),
         // Only versions recorded at or before the fixed valid instant can
         // ever govern it (fall-through only reaches OLDER instants, never
         // newer ones), so later instants' system stamps are irrelevant
         // breakpoints here.
         Axis::Sys => events
             .iter()
-            .filter(|e| e.valid <= fixed)
-            .map(|e| e.sys)
+            .filter(|e| e.valid() <= fixed)
+            .map(|e| e.sys())
             .collect(),
     };
     breaks.sort_unstable();
@@ -494,10 +613,18 @@ pub(crate) fn diff(history: &[Event], from: AsOf, to: AsOf) -> BTreeSet<SignedFa
 /// that changes and changes back within the composed window). The
 /// executable form of the compositionality law
 /// `diff(a,c) == diff(a,b) ⊕ diff(b,c)`.
+/// Net tally outside `{-1, 0, +1}` — well-formed patches never produce it.
+#[derive(Debug, Error, Diagnostic)]
+#[error("compose net tally {net} is outside {{-1, 0, +1}}")]
+#[diagnostic(code(query::compose_net_out_of_range))]
+pub(crate) struct ComposeNetOutOfRange {
+    pub(crate) net: i32,
+}
+
 pub(crate) fn compose(
     first: &BTreeSet<SignedFact>,
     second: &BTreeSet<SignedFact>,
-) -> BTreeSet<SignedFact> {
+) -> Result<BTreeSet<SignedFact>> {
     let mut tally: BTreeMap<&Tuple, i32> = BTreeMap::new();
     for patch in [first, second] {
         for fact in patch {
@@ -508,21 +635,34 @@ pub(crate) fn compose(
             *tally.entry(t).or_insert(0) += delta;
         }
     }
-    tally
-        .into_iter()
-        .filter_map(|(t, net)| match net {
-            0 => None,
-            n if n > 0 => Some(SignedFact::Plus(t.clone())),
-            _ => Some(SignedFact::Minus(t.clone())),
-        })
-        .collect()
+    let mut out = BTreeSet::new();
+    for (t, net) in tally {
+        match net {
+            0 => {}
+            1 => {
+                out.insert(SignedFact::Plus(t.clone()));
+            }
+            -1 => {
+                out.insert(SignedFact::Minus(t.clone()));
+            }
+            n => return Err(ComposeNetOutOfRange { net: n }.into()),
+        }
+    }
+    Ok(out)
+}
+
+/// Body-literal polarity: positive read vs negation gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Polarity {
+    Positive,
+    Negative,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Literal {
     pub rel: Rel,
     pub args: Vec<Term>,
-    pub negated: bool,
+    pub polarity: Polarity,
     /// The literal's own bitemporal read coordinate, overriding the
     /// query-level default (`naive_eval_at`'s parameter) when present.
     /// Meaningful only on a literal reading a relation with an entry in
@@ -534,34 +674,39 @@ pub(crate) struct Literal {
 }
 
 impl Literal {
+    /// Whether this literal is a negation gate.
+    pub(crate) fn is_negated(&self) -> bool {
+        matches!(self.polarity, Polarity::Negative)
+    }
+
     /// A positive body literal, current/untimed (no explicit as-of) — the
     /// one seam every call site should construct through, so a future
     /// field on `Literal` fans out from here instead of from every file's
     /// own hand-written struct literal (the lesson of story #62's
     /// compiler-forced fallout across five files).
-    pub(crate) fn pos(rel: Rel, args: Vec<Term>) -> Self {
+    pub(crate) fn pos(rel: impl Into<Rel>, args: Vec<Term>) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
-            negated: false,
+            polarity: Polarity::Positive,
             as_of: None,
         }
     }
     /// A negated body literal, current/untimed.
-    pub(crate) fn neg(rel: Rel, args: Vec<Term>) -> Self {
+    pub(crate) fn neg(rel: impl Into<Rel>, args: Vec<Term>) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
-            negated: true,
+            polarity: Polarity::Negative,
             as_of: None,
         }
     }
     /// A positive body literal at its own bitemporal coordinate.
-    pub(crate) fn pos_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
+    pub(crate) fn pos_at(rel: impl Into<Rel>, args: Vec<Term>, at: AsOf) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
-            negated: false,
+            polarity: Polarity::Positive,
             as_of: Some(at),
         }
     }
@@ -573,19 +718,19 @@ impl Literal {
     /// stored events and `at` alone, exactly as safe to negate as a read
     /// of `Program::facts`. See the module doc's "the time-travel negation
     /// lift" section for the full argument and its generative proof.
-    pub(crate) fn neg_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
+    pub(crate) fn neg_at(rel: impl Into<Rel>, args: Vec<Term>, at: AsOf) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
-            negated: true,
+            polarity: Polarity::Negative,
             as_of: Some(at),
         }
     }
 }
 
-/// One head position's aggregation, if any: the real landed [`Aggregation`]
+/// One head position's aggregation slot: the real landed [`Aggregation`]
 /// plus its compile-time arguments (only `collect` takes one today).
-pub(crate) type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+pub(crate) type HeadAggr = HeadAggrSlot;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Rule {
@@ -598,10 +743,14 @@ pub(crate) struct Rule {
 
 impl Rule {
     /// A rule with no aggregations.
-    pub(crate) fn plain(head_rel: Rel, head_args: Vec<Term>, body: Vec<Literal>) -> Self {
-        let aggr = vec![None; head_args.len()];
+    pub(crate) fn plain(
+        head_rel: impl Into<Rel>,
+        head_args: Vec<Term>,
+        body: Vec<Literal>,
+    ) -> Self {
+        let aggr = (0..head_args.len()).map(|_| HeadAggrSlot::Plain).collect();
         Self {
-            head_rel,
+            head_rel: head_rel.into(),
             head_args,
             aggr,
             body,
@@ -610,13 +759,13 @@ impl Rule {
 
     /// A rule with per-position head aggregations.
     pub(crate) fn aggregated(
-        head_rel: Rel,
+        head_rel: impl Into<Rel>,
         head_args: Vec<Term>,
         aggr: Vec<HeadAggr>,
         body: Vec<Literal>,
     ) -> Self {
         Self {
-            head_rel,
+            head_rel: head_rel.into(),
             head_args,
             aggr,
             body,
@@ -673,38 +822,40 @@ impl Program {
 /// Why a program is refused, or an evaluation failed. The real compiler
 /// must refuse the same programs, for the same reasons; evaluation errors
 /// are values (law 5), never panics.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Rejection {
     /// A head variable is not bound by any positive body literal, or a
     /// negated literal uses a variable no positive literal binds.
-    Unsafe(&'static str),
+    Unsafe(Rel),
     /// A stratum-forcing dependency (negation, non-meet aggregation, a
     /// read of a meet-aggregated or fixed relation) occurs inside a
-    /// recursive cycle.
-    Unstratifiable(&'static str),
+    /// recursive cycle. May carry a blamed relation or a static diagnostic
+    /// token (`"incremental …".into()`).
+    Unstratifiable(Rel),
     /// The program shape is ill-formed: an aggregation vector whose length
     /// differs from the head's, rules of one head disagreeing on their
     /// aggregation signature (upstream refuses this at parse as
     /// `parser::head_aggr_mismatch`), a fixed head that is also a rule
     /// head, duplicated, or seeded with facts, facts under an aggregated
-    /// head, or a relation used at two different arities.
-    Malformed(&'static str),
+    /// head, or a relation used at two different arities. Blamed relation
+    /// or static diagnostic token via [`Name::from`].
+    Malformed(Rel),
     /// An aggregation failed at evaluation time (e.g. a type error inside
     /// a fold); carried as a value, never a panic.
     AggrError(String),
     /// [`naive_eval_at_budgeted`]'s budget ran out (epoch ceiling, deadline,
     /// or kill) — never raised by the unbudgeted [`naive_eval_at`]/
     /// [`naive_eval`], whose whole reason to exist is the unbounded true
-    /// reference answer. Carries the real `eval::LimitExceeded`/`Killed`
+    /// reference answer. Carries the real `eval::LimitExceeded`/`Cancelled`
     /// message, not a re-derived one.
     BudgetExceeded(String),
 }
 
-fn literal_vars(l: &Literal) -> HashSet<&'static str> {
+fn literal_vars(l: &Literal) -> HashSet<&str> {
     l.args
         .iter()
         .filter_map(|t| match t {
-            Term::Var(v) => Some(*v),
+            Term::Var(v) => Some(v.as_str()),
             Term::Const(_) => None,
         })
         .collect()
@@ -716,19 +867,19 @@ pub(crate) fn check_safety(program: &Program) -> Result<(), Rejection> {
         let positive_vars: HashSet<&str> = rule
             .body
             .iter()
-            .filter(|l| !l.negated)
+            .filter(|l| !l.is_negated())
             .flat_map(literal_vars)
             .collect();
         for t in &rule.head_args {
             if let Term::Var(v) = t
-                && !positive_vars.contains(v)
+                && !positive_vars.contains(v.as_str())
             {
-                return Err(Rejection::Unsafe(rule.head_rel));
+                return Err(Rejection::Unsafe(rule.head_rel.clone()));
             }
         }
-        for l in rule.body.iter().filter(|l| l.negated) {
+        for l in rule.body.iter().filter(|l| l.is_negated()) {
             if !literal_vars(l).is_subset(&positive_vars) {
-                return Err(Rejection::Unsafe(rule.head_rel));
+                return Err(Rejection::Unsafe(rule.head_rel.clone()));
             }
         }
     }
@@ -759,15 +910,18 @@ pub(crate) struct HeadClass {
 pub(crate) fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
     let mut per_head: HashMap<Rel, Vec<&Rule>> = HashMap::new();
     for rule in &program.rules {
-        per_head.entry(rule.head_rel).or_default().push(rule);
+        per_head
+            .entry(rule.head_rel.clone())
+            .or_default()
+            .push(rule);
     }
     per_head
         .into_iter()
         .map(|(rel, rules)| {
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
+            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let is_meet = has_aggr
                 && rules.iter().all(|r| {
-                    r.aggr.iter().all(|a| match a {
+                    r.aggr.iter().all(|a| match a.as_aggregated() {
                         None => true,
                         Some((aggr, _)) => aggr.is_meet(),
                     })
@@ -790,31 +944,31 @@ pub(crate) fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
 /// - a fixed rule forces a stratum on every input.
 fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
     let classes = head_classes(program);
-    let fixed_heads: HashSet<Rel> = program.fixed.iter().map(|f| f.head_rel).collect();
-    let is_meet = |rel: Rel| classes.get(rel).is_some_and(|c| c.is_meet);
+    let fixed_heads: HashSet<Rel> = program.fixed.iter().map(|f| f.head_rel.clone()).collect();
+    let is_meet = |rel: &Rel| classes.get(rel).is_some_and(|c| c.is_meet);
     let mut edges = Vec::new();
     for rule in &program.rules {
-        let head = rule.head_rel;
+        let head = rule.head_rel.clone();
         let class = classes[&head];
         for lit in &rule.body {
-            let dep = lit.rel;
+            let dep = lit.rel.clone();
             let forcing = if class.has_aggr {
                 if class.is_meet && dep == head {
                     // The one legal aggregation inside recursion: a meet
                     // head folding its own positive derivations.
-                    lit.negated
+                    lit.is_negated()
                 } else {
                     true
                 }
             } else {
-                lit.negated || fixed_heads.contains(dep) || is_meet(dep)
+                lit.is_negated() || fixed_heads.contains(&dep) || is_meet(&dep)
             };
-            edges.push((head, dep, forcing));
+            edges.push((head.clone(), dep, forcing));
         }
     }
     for f in &program.fixed {
         for dep in &f.inputs {
-            edges.push((f.head_rel, *dep, true));
+            edges.push((f.head_rel.clone(), dep.clone(), true));
         }
     }
     edges
@@ -830,24 +984,27 @@ pub(crate) fn check_stratifiable(program: &Program) -> Result<(), Rejection> {
     let edges = dependency_edges(program);
     let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        adjacency.entry(*head).or_default().insert(*dep);
+        adjacency
+            .entry(head.clone())
+            .or_default()
+            .insert(dep.clone());
     }
-    let reaches = |from: Rel, to: Rel| -> bool {
+    let reaches = |from: &Rel, to: &Rel| -> bool {
         let mut seen = HashSet::new();
-        let mut stack = vec![from];
+        let mut stack = vec![from.clone()];
         while let Some(r) = stack.pop() {
-            if r == to {
+            if r == *to {
                 return true;
             }
-            if seen.insert(r) {
-                stack.extend(adjacency.get(r).into_iter().flatten().copied());
+            if seen.insert(r.clone()) {
+                stack.extend(adjacency.get(&r).into_iter().flatten().cloned());
             }
         }
         false
     };
     for (head, dep, forcing) in &edges {
         if *forcing && reaches(dep, head) {
-            return Err(Rejection::Unstratifiable(head));
+            return Err(Rejection::Unstratifiable(head.clone()));
         }
     }
     Ok(())
@@ -879,7 +1036,7 @@ enum NameIntroduction {
 
 impl NameIntroduction {
     /// The name being introduced — checked against `Program::histories`.
-    fn name(&self) -> Rel {
+    fn name(&self) -> &Rel {
         match self {
             NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r,
             NameIntroduction::FixedInput { input, .. } => input,
@@ -889,8 +1046,8 @@ impl NameIntroduction {
     /// collides with a historical relation.
     fn report(&self) -> Rel {
         match self {
-            NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r,
-            NameIntroduction::FixedInput { head, .. } => head,
+            NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r.clone(),
+            NameIntroduction::FixedInput { head, .. } => head.clone(),
         }
     }
 }
@@ -905,14 +1062,14 @@ impl NameIntroduction {
 fn name_introductions(program: &Program) -> Vec<NameIntroduction> {
     let mut out = Vec::new();
     for rule in &program.rules {
-        out.push(NameIntroduction::RuleHead(rule.head_rel));
+        out.push(NameIntroduction::RuleHead(rule.head_rel.clone()));
     }
     for f in &program.fixed {
-        out.push(NameIntroduction::FixedHead(f.head_rel));
-        for &input in &f.inputs {
+        out.push(NameIntroduction::FixedHead(f.head_rel.clone()));
+        for input in &f.inputs {
             out.push(NameIntroduction::FixedInput {
-                head: f.head_rel,
-                input,
+                head: f.head_rel.clone(),
+                input: input.clone(),
             });
         }
     }
@@ -941,11 +1098,11 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     let mut signatures: BTreeMap<Rel, &[HeadAggr]> = BTreeMap::new();
     for rule in &program.rules {
         if rule.aggr.len() != rule.head_args.len() {
-            return Err(Rejection::Malformed(rule.head_rel));
+            return Err(Rejection::Malformed(rule.head_rel.clone()));
         }
-        match signatures.entry(rule.head_rel) {
+        match signatures.entry(rule.head_rel.clone()) {
             Entry::Occupied(prev) if *prev.get() != rule.aggr.as_slice() => {
-                return Err(Rejection::Malformed(rule.head_rel));
+                return Err(Rejection::Malformed(rule.head_rel.clone()));
             }
             Entry::Occupied(_) => {}
             Entry::Vacant(e) => {
@@ -955,17 +1112,17 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     }
     let mut fixed_heads = HashSet::new();
     for f in &program.fixed {
-        if !fixed_heads.insert(f.head_rel) || program.facts.contains_key(f.head_rel) {
-            return Err(Rejection::Malformed(f.head_rel));
+        if !fixed_heads.insert(f.head_rel.clone()) || program.facts.contains_key(&f.head_rel) {
+            return Err(Rejection::Malformed(f.head_rel.clone()));
         }
     }
     for rule in &program.rules {
-        if fixed_heads.contains(rule.head_rel) {
-            return Err(Rejection::Malformed(rule.head_rel));
+        if fixed_heads.contains(&rule.head_rel) {
+            return Err(Rejection::Malformed(rule.head_rel.clone()));
         }
     }
     for (rel, class) in head_classes(program) {
-        if class.has_aggr && program.facts.contains_key(rel) {
+        if class.has_aggr && program.facts.contains_key(&rel) {
             return Err(Rejection::Malformed(rel));
         }
     }
@@ -974,7 +1131,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // only through the one evaluator that reads either.
     for rel in program.histories.keys() {
         if program.facts.contains_key(rel) {
-            return Err(Rejection::Malformed(rel));
+            return Err(Rejection::Malformed(rel.clone()));
         }
     }
     // ONE law, checked from ONE walk (`name_introductions`): a historical
@@ -999,22 +1156,18 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // history is ill-formed the same way a fact tuple at the wrong arity
     // is.
     for (rel, history) in &program.histories {
-        let key_arity = history.first().map(|e| e.key.len());
+        let key_arity = history.first().map(|e| e.key().len());
         for e in history {
-            if Some(e.key.len()) != key_arity {
-                return Err(Rejection::Malformed(rel));
+            if Some(e.key().len()) != key_arity {
+                return Err(Rejection::Malformed(rel.clone()));
             }
         }
         let payload_arity = history
             .iter()
-            .find(|e| e.polarity == ClaimPolarity::Assert)
-            .map(|e| e.payload.len());
-        for e in history
-            .iter()
-            .filter(|e| e.polarity == ClaimPolarity::Assert)
-        {
-            if Some(e.payload.len()) != payload_arity {
-                return Err(Rejection::Malformed(rel));
+            .find_map(|e| e.payload().map(|p| p.len()));
+        for e in history.iter().filter_map(Event::payload) {
+            if Some(e.len()) != payload_arity {
+                return Err(Rejection::Malformed(rel.clone()));
             }
         }
     }
@@ -1023,8 +1176,8 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // fact/derived (IDB) relation has no leaf to resolve it against.
     for rule in &program.rules {
         for lit in &rule.body {
-            if lit.as_of.is_some() && !program.histories.contains_key(lit.rel) {
-                return Err(Rejection::Malformed(lit.rel));
+            if lit.as_of.is_some() && !program.histories.contains_key(&lit.rel) {
+                return Err(Rejection::Malformed(lit.rel.clone()));
             }
         }
     }
@@ -1036,7 +1189,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // can be neither rule heads nor fact relations, checked above).
     let mut arities: HashMap<Rel, usize> = HashMap::new();
     let mut check_arity = |rel: Rel, arity: usize| -> Result<(), Rejection> {
-        match arities.get(rel) {
+        match arities.get(&rel) {
             Some(known) if *known != arity => Err(Rejection::Malformed(rel)),
             Some(_) => Ok(()),
             None => {
@@ -1047,24 +1200,23 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     };
     for (rel, tuples) in &program.facts {
         for t in tuples {
-            check_arity(rel, t.len())?;
+            check_arity(rel.clone(), t.len())?;
         }
     }
     for (rel, history) in &program.histories {
         if let (Some(k), Some(v)) = (
-            history.first().map(|e| e.key.len()),
+            history.first().map(|e| e.key().len()),
             history
                 .iter()
-                .find(|e| e.polarity == ClaimPolarity::Assert)
-                .map(|e| e.payload.len()),
+                .find_map(|e| e.payload().map(|p| p.len())),
         ) {
-            check_arity(rel, k + v)?;
+            check_arity(rel.clone(), k + v)?;
         }
     }
     for rule in &program.rules {
-        check_arity(rule.head_rel, rule.head_args.len())?;
+        check_arity(rule.head_rel.clone(), rule.head_args.len())?;
         for l in &rule.body {
-            check_arity(l.rel, l.args.len())?;
+            check_arity(l.rel.clone(), l.args.len())?;
         }
     }
     Ok(())
@@ -1079,18 +1231,17 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
     let rels: HashSet<Rel> = program
         .rules
         .iter()
-        .flat_map(|r| std::iter::once(r.head_rel).chain(r.body.iter().map(|l| l.rel)))
-        .chain(program.facts.keys().copied())
-        .chain(program.histories.keys().copied())
-        .chain(
-            program
-                .fixed
-                .iter()
-                .flat_map(|f| std::iter::once(f.head_rel).chain(f.inputs.iter().copied())),
-        )
+        .flat_map(|r| {
+            std::iter::once(r.head_rel.clone()).chain(r.body.iter().map(|l| l.rel.clone()))
+        })
+        .chain(program.facts.keys().cloned())
+        .chain(program.histories.keys().cloned())
+        .chain(program.fixed.iter().flat_map(|f| {
+            std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())
+        }))
         .collect();
     for r in &rels {
-        s.insert(r, 0);
+        s.insert(r.clone(), 0);
     }
     // Bellman-Ford over ≤ |rels| levels: any simple dependency path has
     // fewer than |rels| edges, so |rels| passes settle every level and one
@@ -1101,7 +1252,7 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
         for (head, dep, forcing) in &edges {
             let need = s[dep] + usize::from(*forcing);
             if s[head] < need {
-                s.insert(*head, need);
+                s.insert(head.clone(), need);
                 changed = true;
             }
         }
@@ -1117,7 +1268,7 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
 /// happened to alias `BTreeMap` instead of `HashMap` — never load-bearing,
 /// since a `Bindings` map is only ever probed by key here or in either
 /// consumer, never iterated as a whole).
-pub(crate) type Bindings = HashMap<&'static str, DataValue>;
+pub(crate) type Bindings = HashMap<Name, DataValue>;
 
 /// Shared reference-tier helper (issue #89): plain Datalog unification of
 /// one literal's argument list against one candidate tuple, extending
@@ -1137,11 +1288,11 @@ pub(crate) fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Opt
                     return None;
                 }
             }
-            Term::Var(name) => match out.get(name) {
+            Term::Var(name) => match out.get(name.as_str()) {
                 Some(existing) if existing != v => return None,
                 Some(_) => {}
                 None => {
-                    out.insert(name, v.clone());
+                    out.insert(name.clone(), v.clone());
                 }
             },
         }
@@ -1155,7 +1306,7 @@ pub(crate) fn ground(args: &[Term], bound: &Bindings) -> Tuple {
     args.iter()
         .map(|t| match t {
             Term::Const(c) => c.clone(),
-            Term::Var(v) => bound[v].clone(),
+            Term::Var(v) => bound[v.as_str()].clone(),
         })
         .collect()
 }
@@ -1175,9 +1326,9 @@ fn literal_rows(
     lit: &Literal,
     default_as_of: AsOf,
 ) -> BTreeSet<Tuple> {
-    match program.histories.get(lit.rel) {
+    match program.histories.get(&lit.rel) {
         Some(history) => resolve_relation(history, lit.as_of.unwrap_or(default_as_of)),
-        None => db.get(lit.rel).cloned().unwrap_or_default(),
+        None => db.get(&lit.rel).cloned().unwrap_or_default(),
     }
 }
 
@@ -1204,15 +1355,15 @@ fn body_bindings_from(
     default_as_of: AsOf,
     initial: Bindings,
 ) -> Vec<Bindings> {
-    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
-    ordered.extend(rule.body.iter().filter(|l| l.negated));
+    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
+    ordered.extend(rule.body.iter().filter(|l| l.is_negated()));
 
     let mut frontier: Vec<Bindings> = vec![initial];
     for lit in ordered {
         let rows = literal_rows(program, db, lit, default_as_of);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -1264,22 +1415,22 @@ fn eval_normal_aggr_head(
     let key_positions: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .filter_map(|(i, a)| a.as_aggregated().map(|(aggr, args)| (i, aggr, args)))
         .collect();
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>, Rejection> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>, Rejection> {
         val_positions
             .iter()
             .map(|(_, aggr, args)| aggr.normal_op(args).map_err(aggr_err))
             .collect()
     };
 
-    let mut groups: BTreeMap<Tuple, Vec<Box<dyn NormalAggrObj>>> = BTreeMap::new();
+    let mut groups: BTreeMap<Tuple, Vec<NormalAggr>> = BTreeMap::new();
     for rule in rules {
         for row in derived_rows(rule, program, db, default_as_of) {
             let key: Tuple = key_positions.iter().map(|i| row[*i].clone()).collect();
@@ -1320,9 +1471,9 @@ fn eval_normal_aggr_head(
 struct MeetState {
     key_positions: Vec<usize>,
     val_positions: Vec<usize>,
-    ops: Vec<Box<dyn MeetAggrObj>>,
+    ops: Vec<MeetAggr>,
     arity: usize,
-    acc: BTreeMap<Tuple, Tuple>,
+    acc: BTreeMap<Tuple, Vec<MeetAccum>>,
 }
 
 impl MeetState {
@@ -1330,18 +1481,18 @@ impl MeetState {
         let key_positions = signature
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.is_none())
+            .filter(|(_, a)| !a.is_aggregated())
             .map(|(i, _)| i)
             .collect();
         let mut val_positions = Vec::new();
         let mut ops = Vec::new();
         for (i, a) in signature.iter().enumerate() {
-            if let Some((aggr, _)) = a {
+            if let Some((aggr, _)) = a.as_aggregated() {
                 // Total by classification (`is_meet` heads only), never a
                 // panic: a non-meet form here is a malformed program.
-                let op = aggr
-                    .meet_op()
-                    .ok_or(Rejection::Malformed("non-meet aggregation on a meet head"))?;
+                let op = aggr.meet_op().ok_or(Rejection::Malformed(
+                    "non-meet aggregation on a meet head".into(),
+                ))?;
                 val_positions.push(i);
                 ops.push(op);
             }
@@ -1359,9 +1510,21 @@ impl MeetState {
     /// value changed (a fresh key always counts).
     fn meet_row(&mut self, row: &Tuple) -> Result<bool, Rejection> {
         let key: Tuple = self.key_positions.iter().map(|i| row[*i].clone()).collect();
-        let vals: Tuple = self.val_positions.iter().map(|i| row[*i].clone()).collect();
+        let incoming: Vec<MeetAccum> = self
+            .val_positions
+            .iter()
+            .map(|i| MeetAccum::from_derived(row[*i].clone()))
+            .collect();
         match self.acc.entry(key) {
             Entry::Vacant(e) => {
+                // Same admit path as `MeetAggrStore::meet_put`: fold the
+                // first row through each op's identity so Null-first Min/Max
+                // stays Empty instead of installing `Value(Null)`.
+                let mut vals: Vec<MeetAccum> = self.ops.iter().map(|op| op.init_val()).collect();
+                for (slot, op) in self.ops.iter().enumerate() {
+                    op.update(&mut vals[slot], &incoming[slot])
+                        .map_err(aggr_err)?;
+                }
                 e.insert(vals);
                 Ok(true)
             }
@@ -1370,7 +1533,7 @@ impl MeetState {
                 let mut changed = false;
                 for (slot, op) in self.ops.iter().enumerate() {
                     changed |= op
-                        .update(&mut stored[slot], &vals[slot])
+                        .update(&mut stored[slot], &incoming[slot])
                         .map_err(aggr_err)?;
                 }
                 Ok(changed)
@@ -1390,7 +1553,7 @@ impl MeetState {
                     row[*i] = key[slot].clone();
                 }
                 for (slot, i) in self.val_positions.iter().enumerate() {
-                    row[*i] = vals[slot].clone();
+                    row[*i] = vals[slot].to_value();
                 }
                 row
             })
@@ -1517,14 +1680,14 @@ fn naive_eval_at_impl(
         for f in program
             .fixed
             .iter()
-            .filter(|f| strata_of[f.head_rel] == stratum)
+            .filter(|f| strata_of[&f.head_rel] == stratum)
         {
             let inputs: Vec<BTreeSet<Tuple>> = f
                 .inputs
                 .iter()
                 .map(|r| db.get(r).cloned().unwrap_or_default())
                 .collect();
-            db.insert(f.head_rel, (f.eval)(&inputs));
+            db.insert(f.head_rel.clone(), (f.eval)(&inputs));
         }
 
         // Normal-aggregation heads run once, next: stratification forces
@@ -1533,8 +1696,8 @@ fn naive_eval_at_impl(
         let normal_heads: BTreeSet<Rel> = program
             .rules
             .iter()
-            .filter(|r| strata_of[r.head_rel] == stratum)
-            .map(|r| r.head_rel)
+            .filter(|r| strata_of[&r.head_rel] == stratum)
+            .map(|r| r.head_rel.clone())
             .filter(|rel| {
                 let c = classes[rel];
                 c.has_aggr && !c.is_meet
@@ -1547,19 +1710,17 @@ fn naive_eval_at_impl(
                 .filter(|r| r.head_rel == *head)
                 .collect();
             let out = eval_normal_aggr_head(&head_rules, program, &db, default_as_of)?;
-            db.insert(head, out);
+            db.insert(head.clone(), out);
         }
 
         // Meet-aggregation heads of this stratum accumulate during the
         // fixpoint below; plain heads insert as ever.
         let mut meets: BTreeMap<Rel, MeetState> = BTreeMap::new();
-        for rule in program
-            .rules
-            .iter()
-            .filter(|r| strata_of[r.head_rel] == stratum && classes[r.head_rel].is_meet)
-        {
-            if !meets.contains_key(rule.head_rel) {
-                meets.insert(rule.head_rel, MeetState::new(&rule.aggr)?);
+        for rule in program.rules.iter().filter(|r| {
+            strata_of[&r.head_rel] == stratum && classes[&r.head_rel].is_meet
+        }) {
+            if !meets.contains_key(&rule.head_rel) {
+                meets.insert(rule.head_rel.clone(), MeetState::new(&rule.aggr)?);
             }
         }
         // Law 3's embodiment: over finite data with no invented values the
@@ -1576,19 +1737,17 @@ fn naive_eval_at_impl(
                 check_oracle_budget(b, &db, rounds)?;
             }
             let mut changed = false;
-            for rule in program
-                .rules
-                .iter()
-                .filter(|r| strata_of[r.head_rel] == stratum && !normal_heads.contains(r.head_rel))
-            {
+            for rule in program.rules.iter().filter(|r| {
+                strata_of[&r.head_rel] == stratum && !normal_heads.contains(&r.head_rel)
+            }) {
                 let rows = derived_rows(rule, program, &db, default_as_of);
-                if let Some(state) = meets.get_mut(rule.head_rel) {
+                if let Some(state) = meets.get_mut(&rule.head_rel) {
                     for row in &rows {
                         changed |= state.meet_row(row)?;
                     }
                 } else {
                     for row in rows {
-                        changed |= db.entry(rule.head_rel).or_default().insert(row);
+                        changed |= db.entry(rule.head_rel.clone()).or_default().insert(row);
                     }
                 }
             }
@@ -1607,7 +1766,8 @@ fn naive_eval_at_impl(
                         && state.key_positions.is_empty()
                         && !state.ops.is_empty()
                     {
-                        let identity: Tuple = state.ops.iter().map(|op| op.init_val()).collect();
+                        let identity: Vec<MeetAccum> =
+                            state.ops.iter().map(|op| op.init_val()).collect();
                         state.acc.insert(Tuple::new(), identity);
                         changed = true;
                     }
@@ -1616,7 +1776,7 @@ fn naive_eval_at_impl(
             // Republish the accumulated meet relations so the next round's
             // derivations (the recursive reads) see this round's meets.
             for (head, state) in &meets {
-                db.insert(head, state.materialize());
+                db.insert(head.clone(), state.materialize());
             }
             if !changed {
                 break;
@@ -1740,28 +1900,22 @@ fn edb_relations(program: &Program) -> BTreeSet<Rel> {
     let idb: BTreeSet<Rel> = program
         .rules
         .iter()
-        .map(|r| r.head_rel)
-        .chain(program.fixed.iter().map(|f| f.head_rel))
+        .map(|r| r.head_rel.clone())
+        .chain(program.fixed.iter().map(|f| f.head_rel.clone()))
         .collect();
     let mentioned: BTreeSet<Rel> = program
         .facts
         .keys()
-        .copied()
-        .chain(program.histories.keys().copied())
-        .chain(
-            program
-                .rules
-                .iter()
-                .flat_map(|r| std::iter::once(r.head_rel).chain(r.body.iter().map(|l| l.rel))),
-        )
-        .chain(
-            program
-                .fixed
-                .iter()
-                .flat_map(|f| std::iter::once(f.head_rel).chain(f.inputs.iter().copied())),
-        )
+        .cloned()
+        .chain(program.histories.keys().cloned())
+        .chain(program.rules.iter().flat_map(|r| {
+            std::iter::once(r.head_rel.clone()).chain(r.body.iter().map(|l| l.rel.clone()))
+        }))
+        .chain(program.fixed.iter().flat_map(|f| {
+            std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())
+        }))
         .collect();
-    mentioned.difference(&idb).copied().collect()
+    mentioned.difference(&idb).cloned().collect()
 }
 
 /// A full topological order over EVERY dependency edge (not just the
@@ -1773,20 +1927,23 @@ fn topological_order(program: &Program) -> Vec<Rel> {
     let edges = dependency_edges(program);
     let mut all_rels: BTreeSet<Rel> = edb_relations(program);
     for rule in &program.rules {
-        all_rels.insert(rule.head_rel);
+        all_rels.insert(rule.head_rel.clone());
         for lit in &rule.body {
-            all_rels.insert(lit.rel);
+            all_rels.insert(lit.rel.clone());
         }
     }
     for f in &program.fixed {
-        all_rels.insert(f.head_rel);
+        all_rels.insert(f.head_rel.clone());
         for input in &f.inputs {
-            all_rels.insert(*input);
+            all_rels.insert(input.clone());
         }
     }
     let mut depends_on: HashMap<Rel, HashSet<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        depends_on.entry(*head).or_default().insert(*dep);
+        depends_on
+            .entry(head.clone())
+            .or_default()
+            .insert(dep.clone());
     }
     // Kahn's algorithm over "depends_on": a relation is ready once every
     // relation it depends on has already been placed.
@@ -1794,7 +1951,7 @@ fn topological_order(program: &Program) -> Vec<Rel> {
     let mut order = Vec::with_capacity(all_rels.len());
     while placed.len() < all_rels.len() {
         let mut progressed = false;
-        for &rel in &all_rels {
+        for rel in &all_rels {
             if placed.contains(rel) {
                 continue;
             }
@@ -1802,8 +1959,8 @@ fn topological_order(program: &Program) -> Vec<Rel> {
                 .get(rel)
                 .is_none_or(|deps| deps.iter().all(|d| placed.contains(d)));
             if ready {
-                order.push(rel);
-                placed.insert(rel);
+                order.push(rel.clone());
+                placed.insert(rel.clone());
                 progressed = true;
             }
         }
@@ -1825,22 +1982,25 @@ fn has_any_cycle(program: &Program) -> bool {
     let edges = dependency_edges(program);
     let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        adjacency.entry(*head).or_default().insert(*dep);
+        adjacency
+            .entry(head.clone())
+            .or_default()
+            .insert(dep.clone());
     }
-    let reaches = |from: Rel, to: Rel| -> bool {
+    let reaches = |from: &Rel, to: &Rel| -> bool {
         let mut seen = HashSet::new();
-        let mut stack = vec![from];
+        let mut stack = vec![from.clone()];
         while let Some(r) = stack.pop() {
-            if r == to {
+            if r == *to {
                 return true;
             }
-            if seen.insert(r) {
-                stack.extend(adjacency.get(r).into_iter().flatten().copied());
+            if seen.insert(r.clone()) {
+                stack.extend(adjacency.get(&r).into_iter().flatten().cloned());
             }
         }
         false
     };
-    edges.iter().any(|(head, dep, _)| reaches(*dep, *head))
+    edges.iter().any(|(head, dep, _)| reaches(dep, head))
 }
 
 /// Every grounded head tuple ONE rule could possibly have gained or lost
@@ -1866,7 +2026,7 @@ fn collect_candidates(
         .body
         .iter()
         .enumerate()
-        .filter(|(_, l)| rel_deltas.get(l.rel).is_some_and(|d| !d.is_empty()))
+        .filter(|(_, l)| rel_deltas.get(&l.rel).is_some_and(|d| !d.is_empty()))
         .map(|(i, _)| i)
         .collect();
     if varying.is_empty() {
@@ -1908,7 +2068,7 @@ fn contribute_candidates_subset(
     let mut frontier: Vec<Bindings> = vec![Bindings::new()];
     for &pos in subset {
         let lit = &rule.body[pos];
-        let deltas = &rel_deltas[lit.rel];
+        let deltas = &rel_deltas[&lit.rel];
         let mut next = Vec::new();
         for bound in &frontier {
             for fact in deltas {
@@ -1934,19 +2094,19 @@ fn contribute_candidates_subset(
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && !l.negated)
+        .filter(|(i, l)| !subset.contains(i) && !l.is_negated())
         .map(|(_, l)| l);
     let remaining_negated = rule
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && l.negated)
+        .filter(|(i, l)| !subset.contains(i) && l.is_negated())
         .map(|(_, l)| l);
     for lit in remaining_positive.chain(remaining_negated) {
         let rows = literal_rows(program, total, lit, default_as_of);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -2046,13 +2206,13 @@ fn eval_one_group(
     signature_len: usize,
     group_key: &Tuple,
 ) -> Result<Option<Tuple>, Rejection> {
-    let fresh_ops = || -> Result<Vec<Box<dyn NormalAggrObj>>, Rejection> {
+    let fresh_ops = || -> Result<Vec<NormalAggr>, Rejection> {
         val_positions
             .iter()
             .map(|(_, aggr, args)| aggr.normal_op(args).map_err(aggr_err))
             .collect()
     };
-    let mut ops: Option<Vec<Box<dyn NormalAggrObj>>> = None;
+    let mut ops: Option<Vec<NormalAggr>> = None;
     for rule in rules {
         // Seed a binding fixing each key position's variable to this
         // group's value; a `Const` key position that disagrees with
@@ -2070,7 +2230,7 @@ fn eval_one_group(
                     }
                 }
                 Term::Var(name) => {
-                    seed.insert(name, group_key[slot].clone());
+                    seed.insert(name.clone(), group_key[slot].clone());
                 }
             }
         }
@@ -2132,13 +2292,13 @@ fn eval_aggregating_head_incremental(
     let key_positions: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .filter_map(|(i, a)| a.as_aggregated().map(|(aggr, args)| (i, aggr, args)))
         .collect();
 
     let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
@@ -2219,7 +2379,8 @@ pub(crate) fn incremental_eval(
         return Err(Rejection::Unstratifiable(
             "incremental maintenance refuses any recursive dependency, not just the \
              stratification-illegal ones — retraction through recursion is DRed territory, \
-             out of this story's scope",
+             out of this story's scope"
+                .into(),
         ));
     }
     let classes = head_classes(program);
@@ -2232,7 +2393,8 @@ pub(crate) fn incremental_eval(
         // actually changed. A typed refusal, not a wrong answer.
         return Err(Rejection::Malformed(
             "incremental maintenance does not cover fixed rules (opaque graph algorithms) — \
-             refused, not silently wrong; recompute this program in full instead",
+             refused, not silently wrong; recompute this program in full instead"
+                .into(),
         ));
     }
 
@@ -2243,8 +2405,8 @@ pub(crate) fn incremental_eval(
     let mut new_total: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
 
     for rel in order {
-        let old_rows = old_total.get(rel).cloned().unwrap_or_default();
-        let (delta, new_rows) = if edb.contains(rel) {
+        let old_rows = old_total.get(&rel).cloned().unwrap_or_default();
+        let (delta, new_rows) = if edb.contains(&rel) {
             // A redundant patch entry (asserting a fact already present,
             // retracting one already absent) is a no-op on the SET, even
             // though it's a real byte written to the log — recompute's
@@ -2254,7 +2416,7 @@ pub(crate) fn incremental_eval(
             // `Plus` for an already-present fact showed up as a phantom
             // EDB delta with nothing on the recompute side to match).
             let filtered: BTreeSet<SignedFact> = edb_patch
-                .get(rel)
+                .get(&rel)
                 .into_iter()
                 .flatten()
                 .filter(|fact| match fact {
@@ -2277,7 +2439,7 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let delta = if classes[rel].has_aggr {
+            let delta = if classes[&rel].has_aggr {
                 eval_aggregating_head_incremental(
                     &rules,
                     program,
@@ -2329,7 +2491,7 @@ pub(crate) fn incremental_eval(
             }
             (delta, new_rows)
         };
-        new_total.insert(rel, new_rows);
+        new_total.insert(rel.clone(), new_rows);
         rel_deltas.insert(rel, delta);
     }
     Ok(rel_deltas)
@@ -2338,20 +2500,22 @@ pub(crate) fn incremental_eval(
 /// The corpus of programs the compiler must refuse — shared between the
 /// reference checker's self-tests and (as they land) the real compiler's.
 pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
-    fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
+    fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
         if negated {
             Literal::neg(rel, args)
         } else {
             Literal::pos(rel, args)
         }
     }
-    fn named(name: &'static str) -> (Aggregation, Vec<DataValue>) {
-        let aggr = crate::data::aggr::parse_aggr(name)
-            .unwrap_or_else(|| panic!("corpus uses only real aggregations, missing: {name}"));
-        (aggr, vec![])
+    fn named(name: &'static str) -> HeadAggr {
+        HeadAggrSlot::Aggregated {
+            aggr: crate::data::aggr::parse_aggr(name)
+                .unwrap_or_else(|| panic!("corpus uses only real aggregations, missing: {name}")),
+            args: vec![],
+        }
     }
-    let x = || Term::Var("X");
-    let y = || Term::Var("Y");
+    let x = || Term::var("X");
+    let y = || Term::var("Y");
     vec![
         (
             "direct self-negation: p(X) :- d(X), not p(X)",
@@ -2417,13 +2581,13 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     Rule::aggregated(
                         "p",
                         vec![x(), y()],
-                        vec![None, Some(named("count"))],
+                        vec![HeadAggrSlot::Plain, named("count")],
                         vec![lit("d", vec![x(), y()], false)],
                     ),
                     Rule::aggregated(
                         "p",
                         vec![x(), y()],
-                        vec![None, Some(named("count"))],
+                        vec![HeadAggrSlot::Plain, named("count")],
                         vec![lit("p", vec![x(), y()], false)],
                     ),
                 ],
@@ -2436,9 +2600,9 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
             Program {
                 rules: vec![Rule::aggregated(
                     "q",
-                    vec![x(), y(), Term::Var("Z")],
-                    vec![None, Some(named("min")), Some(named("count"))],
-                    vec![lit("q", vec![x(), y(), Term::Var("Z")], false)],
+                    vec![x(), y(), Term::var("Z")],
+                    vec![HeadAggrSlot::Plain, named("min"), named("count")],
+                    vec![lit("q", vec![x(), y(), Term::var("Z")], false)],
                 )],
                 ..Program::default()
             },
@@ -2449,7 +2613,7 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                 rules: vec![Rule::aggregated(
                     "m",
                     vec![x(), y()],
-                    vec![None, Some(named("min"))],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![
                         lit("d", vec![x(), y()], false),
                         lit("m", vec![x(), y()], true),
@@ -2467,8 +2631,8 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     vec![lit("f", vec![x()], false)],
                 )],
                 fixed: vec![FixedRule {
-                    head_rel: "f",
-                    inputs: vec!["r"],
+                    head_rel: "f".into(),
+                    inputs: vec!["r".into()],
                     eval: |_| BTreeSet::new(),
                 }],
                 ..Program::default()
@@ -2525,10 +2689,11 @@ mod tests {
     }
     /// A real landed aggregation by name, with no arguments.
     fn named(name: &str) -> HeadAggr {
-        Some((
-            parse_aggr(name).unwrap_or_else(|| panic!("real aggregation exists: {name}")),
-            vec![],
-        ))
+        HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name)
+                .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
+            args: vec![],
+        }
     }
 
     /// path(X,Y) :- edge(X,Y); path(X,Y) :- edge(X,Z), path(Z,Y).
@@ -2559,13 +2724,13 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![y(), z()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![x(), z()], false),
@@ -2771,7 +2936,7 @@ mod tests {
             Rule::aggregated(
                 "total",
                 vec![x(), y(), y()],
-                vec![None, named("sum"), named("count")],
+                vec![HeadAggrSlot::Plain, named("sum"), named("count")],
                 vec![lit(rel, vec![x(), y()], false)],
             )
         };
@@ -2815,7 +2980,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "t",
                 vec![x(), y()],
-                vec![None, named("count")],
+                vec![HeadAggrSlot::Plain, named("count")],
                 vec![lit("nothing", vec![x(), y()], false)],
             )],
             ..Program::default()
@@ -2833,7 +2998,7 @@ mod tests {
         rules.push(Rule::aggregated(
             "reach_count",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit("path", vec![x(), y()], false)],
         ));
         let program = Program {
@@ -3137,7 +3302,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "t",
                 vec![x(), y()],
-                vec![None, named("sum")],
+                vec![HeadAggrSlot::Plain, named("sum")],
                 vec![lit("d", vec![x(), y()], false)],
             )],
             facts,
@@ -3169,13 +3334,13 @@ mod tests {
                 Rule::aggregated(
                     "p",
                     vec![x(), y()],
-                    vec![None, named("min")],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![lit("d", vec![x(), y()], false)],
                 ),
                 Rule::aggregated(
                     "p",
                     vec![x(), y()],
-                    vec![None, named("count")],
+                    vec![HeadAggrSlot::Plain, named("count")],
                     vec![lit("d", vec![x(), y()], false)],
                 ),
             ],
@@ -3276,16 +3441,18 @@ mod tests {
     fn semi_naive_meet_reach(
         edges: &BTreeSet<(i64, i64)>,
         seeds: &BTreeMap<i64, DataValue>,
-        op: &dyn MeetAggrObj,
+        op: &MeetAggr,
         mode: FlagMode,
     ) -> BTreeMap<i64, DataValue> {
-        let mut total: BTreeMap<i64, DataValue> = BTreeMap::new();
+        let mut total: BTreeMap<i64, MeetAccum> = BTreeMap::new();
         // Epoch 0: only the seed rule fires — the recursive store is empty.
-        let mut epoch_rows: Vec<(i64, DataValue)> =
-            seeds.iter().map(|(k, val)| (*k, val.clone())).collect();
+        let mut epoch_rows: Vec<(i64, MeetAccum)> = seeds
+            .iter()
+            .map(|(k, val)| (*k, MeetAccum::from_derived(val.clone())))
+            .collect();
         for _epoch in 0..100_000 {
             // The epoch's own meet store: rows meet together before merging.
-            let mut fresh: BTreeMap<i64, DataValue> = BTreeMap::new();
+            let mut fresh: BTreeMap<i64, MeetAccum> = BTreeMap::new();
             for (k, val) in epoch_rows {
                 match fresh.entry(k) {
                     Entry::Vacant(e) => {
@@ -3297,7 +3464,7 @@ mod tests {
                 }
             }
             // merge_in: flag-gated delta discovery.
-            let mut delta: BTreeMap<i64, DataValue> = BTreeMap::new();
+            let mut delta: BTreeMap<i64, MeetAccum> = BTreeMap::new();
             for (k, val) in fresh {
                 match total.entry(k) {
                     Entry::Vacant(e) => {
@@ -3317,7 +3484,7 @@ mod tests {
                 }
             }
             if delta.is_empty() {
-                return total;
+                return total.into_iter().map(|(k, a)| (k, a.to_value())).collect();
             }
             // Next epoch: the recursive rule joined against the delta only.
             let mut next = Vec::new();
@@ -3388,7 +3555,7 @@ mod tests {
                 .meet_op()
                 .expect("meet form");
             // The honest flag reaches the oracle's fixpoint...
-            let honest = semi_naive_meet_reach(&edges, &seeds, op.as_ref(), FlagMode::Landed);
+            let honest = semi_naive_meet_reach(&edges, &seeds, &op, FlagMode::Landed);
             assert_eq!(
                 honest, oracle,
                 "honest semi-naive equals the oracle for {name}"
@@ -3396,8 +3563,7 @@ mod tests {
             // ...the inverted flag stops early: node 2's flip is applied
             // to the store but never re-enters the delta, so node 3 keeps
             // its seed value.
-            let buggy =
-                semi_naive_meet_reach(&edges, &seeds, op.as_ref(), FlagMode::UpstreamInverted);
+            let buggy = semi_naive_meet_reach(&edges, &seeds, &op, FlagMode::UpstreamInverted);
             assert_ne!(
                 buggy, oracle,
                 "the upstream inversion must be observable for {name}"
@@ -3490,7 +3656,7 @@ mod tests {
                 .meet_op()
                 .expect("meet form");
             let semi_naive: BTreeSet<Tuple> =
-                semi_naive_meet_reach(&case.edges, &case.seeds, op.as_ref(), FlagMode::Landed)
+                semi_naive_meet_reach(&case.edges, &case.seeds, &op, FlagMode::Landed)
                     .into_iter()
                     .map(|(k, val)| vec![v(k), val])
                     .map(Tuple::from_vec).collect();
@@ -3820,13 +3986,13 @@ mod tests {
     fn asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture() {
         use crate::data::bitemporal::check_key_for_bitemporal;
         use crate::data::value::{RelationId, TupleT};
-        use crate::data::value::{Validity, ValidityTs};
+        use crate::data::value::{Validity, ValiditySlot, ValidityTs};
 
         fn vts(t: i64) -> ValidityTs {
             ValidityTs::from_raw(t)
         }
-        fn slot(t: i64) -> Validity {
-            Validity::new(vts(t), true)
+        fn slot(t: i64) -> ValiditySlot {
+            ValiditySlot::from_stored(vts(t), true)
         }
         fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
             [
@@ -3860,10 +4026,7 @@ mod tests {
                 let (ret, nxt) = check_key_for_bitemporal(
                     k,
                     *polarity,
-                    crate::data::value::AsOf {
-                        sys: vts(sys_at),
-                        valid: vts(valid_at),
-                    },
+                    crate::data::value::AsOf::at(vts(sys_at), vts(valid_at)),
                     None,
                 )
                 .expect("well-formed test key");
@@ -3902,12 +4065,26 @@ mod tests {
             .collect();
         let events: Vec<Event> = rows
             .iter()
-            .map(|(f, valid, sys, polarity)| Event {
-                key: Tuple::from_vec(vec![v(*f)]),
-                payload: Tuple::from_vec(vec![]),
-                valid: *valid,
-                sys: *sys,
-                polarity: *polarity,
+            .map(|(f, valid, sys, polarity)| {
+                let key = Tuple::from_vec(vec![v(*f)]);
+                match polarity {
+                    ClaimPolarity::Assert => Event::Assert {
+                        key,
+                        payload: Tuple::from_vec(vec![]),
+                        valid: *valid,
+                        sys: *sys,
+                    },
+                    ClaimPolarity::Retract => Event::Retract {
+                        key,
+                        valid: *valid,
+                        sys: *sys,
+                    },
+                    ClaimPolarity::Erase => Event::Erase {
+                        key,
+                        valid: *valid,
+                        sys: *sys,
+                    },
+                }
             })
             .collect();
 
@@ -4300,6 +4477,7 @@ mod tests {
             Rng { state: seed }
         }
         fn next_u64(&mut self) -> u64 {
+            // INVARIANT(splitmix64): modular mix per the splitmix64 contract; wrap is the PRNG.
             self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = self.state;
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -4386,8 +4564,8 @@ mod tests {
             .iter()
             .flat_map(|e| {
                 let c = match axis {
-                    Axis::Valid => e.valid,
-                    Axis::Sys => e.sys,
+                    Axis::Valid => e.valid(),
+                    Axis::Sys => e.sys(),
                 };
                 [c - 1, c, c + 1]
             })
@@ -4418,6 +4596,7 @@ mod tests {
     fn grid_differential_derived_intervals_equal_maximal_runs() {
         let mut cases = 0usize;
         for seed in 0..500u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng::new(0xB17E_5EED_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let key = k(1);
             let history = gen_history(&mut rng, &key);
@@ -4445,7 +4624,7 @@ mod tests {
                     cases += 1;
                 }
             }
-            for &fixed_valid in &[history.first().map(|e| e.valid).unwrap_or(0), 3] {
+            for &fixed_valid in &[history.first().map(|e| e.valid()).unwrap_or(0), 3] {
                 let ivs = derive_intervals(&history, &key, Axis::Sys, fixed_valid);
                 for &sys_pt in &sys_grid {
                     let direct = resolve(
@@ -4475,6 +4654,7 @@ mod tests {
     fn diff_composition_law_holds_across_axes() {
         let mut cases = 0usize;
         for seed in 0..300u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng::new(0xD1FF_C0DE_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let key = k(1);
             let history = gen_history(&mut rng, &key);
@@ -4495,7 +4675,11 @@ mod tests {
             let ab = diff(&history, a, b);
             let bc = diff(&history, b, c);
             let ac = diff(&history, a, c);
-            assert_eq!(compose(&ab, &bc), ac, "seed {seed}: valid-axis composition");
+            assert_eq!(
+                compose(&ab, &bc).expect("unit net"),
+                ac,
+                "seed {seed}: valid-axis composition"
+            );
             cases += 1;
 
             let fixed_valid = 3;
@@ -4514,7 +4698,11 @@ mod tests {
             let ab = diff(&history, a, b);
             let bc = diff(&history, b, c);
             let ac = diff(&history, a, c);
-            assert_eq!(compose(&ab, &bc), ac, "seed {seed}: sys-axis composition");
+            assert_eq!(
+                compose(&ab, &bc).expect("unit net"),
+                ac,
+                "seed {seed}: sys-axis composition"
+            );
             cases += 1;
         }
         assert!(
@@ -4554,6 +4742,7 @@ mod tests {
     fn negation_over_fixed_as_of_matches_independent_complement_generatively() {
         let mut cases = 0usize;
         for seed in 0..500u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut rng = Rng::new(0x4E6A_7104_u64 ^ seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let key = k(1);
             let history = gen_existential_history(&mut rng, &key);
@@ -4913,7 +5102,7 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![None, named("sum")],
+                vec![HeadAggrSlot::Plain, named("sum")],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
@@ -4956,7 +5145,7 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
@@ -4997,7 +5186,7 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![None, named("sum")],
+                vec![HeadAggrSlot::Plain, named("sum")],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
@@ -5122,8 +5311,11 @@ mod tests {
                 "q",
                 vec![x(), y()],
                 vec![
-                    None,
-                    Some((parse_aggr("min").expect("real aggregation exists"), vec![])),
+                    HeadAggrSlot::Plain,
+                    HeadAggrSlot::Aggregated {
+                        aggr: parse_aggr("min").expect("real aggregation exists"),
+                        args: vec![],
+                    },
                 ],
                 vec![lit("p", vec![x(), y()], false)],
             )]

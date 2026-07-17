@@ -57,7 +57,10 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
+    FixedRulePayload,
+};
 
 /// The default ceiling on enumerated maximal cliques when the caller gives no
 /// `max_cliques` option. Generous, but finite: enumeration must never be
@@ -75,7 +78,7 @@ pub(crate) const DEFAULT_MAX_CLIQUES: usize = 1 << 20;
 thread_local! {
     static CLIQUE_DEGEN_REMOVALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static CLIQUE_EXPANSION_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static CANCEL_AT_EXPANSION_STEP: std::cell::RefCell<Option<(u64, CancelFlag)>> =
+    static CANCEL_AT_EXPANSION_STEP: std::cell::RefCell<Option<(u64, CancelAuthority)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -91,10 +94,12 @@ fn note_clique_expansion_step() {
         c.get()
     });
     CANCEL_AT_EXPANSION_STEP.with(|h| {
-        if let Some((at, flag)) = h.borrow().as_ref()
+        let mut slot = h.borrow_mut();
+        if let Some((at, _)) = slot.as_ref()
             && now == *at
+            && let Some((_, auth)) = slot.take()
         {
-            flag.cancel();
+            let _ = auth.cancel();
         }
     });
 }
@@ -208,9 +213,15 @@ fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
     for _ in 0..n {
         note_clique_degen_removal();
         cancel.check()?;
-        // Lowest non-empty bucket, smallest id within it.
-        let d = buckets.iter().position(|b| !b.is_empty()).unwrap();
-        let v = *buckets[d].iter().next().unwrap();
+        // INVARIANT(degen_bucket): n removals leave a non-empty bucket until done.
+        let d = buckets
+            .iter()
+            .position(|b| !b.is_empty())
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("degen_bucket"))?;
+        let v = *buckets[d]
+            .iter()
+            .next()
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("degen_bucket_nonempty"))?;
         buckets[d].remove(&v);
         removed[v as usize] = true;
         order.push(v);
@@ -367,7 +378,7 @@ impl Enumeration<'_> {
                 idx: 0,
             });
         }
-        let pivot = choose_pivot(&p, &x, self.adj);
+        let pivot = choose_pivot(&p, &x, self.adj)?;
         let pivot_nbrs = &self.adj[pivot as usize];
         let cands: Vec<u32> = p
             .iter()
@@ -388,7 +399,7 @@ impl Enumeration<'_> {
 /// that `P \ N(pivot)` — the branch set — is as small as possible. Ties break
 /// by smallest id for determinism. Called only on a non-terminal frame, so
 /// `P ∪ X` is non-empty.
-fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> u32 {
+fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> Result<u32> {
     let mut best: Option<(usize, u32)> = None; // (coverage, id)
     for &u in p.iter().chain(x.iter()) {
         let coverage = count_intersection(p, &adj[u as usize]);
@@ -401,8 +412,8 @@ fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> u32 {
             }
         }
     }
-    // Structural: `p ∪ x` non-empty on a non-terminal frame.
-    best.unwrap().1
+    best.map(|(_, u)| u)
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("clique_pivot"))
 }
 
 /// Sorted-set intersection of two ascending slices.
@@ -614,8 +625,10 @@ mod tests {
 
         // Pseudo-random graphs.
         for seed in 0..40u64 {
+            // INVARIANT(test_seed_mix): property-test seed diffusion uses modular golden mix.
             let mut state = 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(seed + 1);
             let mut next = || {
+                // INVARIANT(lcg64): Knuth LCG step is defined wrapping on u64.
                 state = state
                     .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
@@ -800,9 +813,9 @@ mod tests {
             "baseline should remove every vertex, got {full_removals}"
         );
 
-        // Pre-set flag: the degeneracy poll must refuse before ordering.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the degeneracy poll must refuse before ordering.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&MaximalCliques, flag);
         let (cancel_removals, cancel_steps) = take_clique_counters();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));
@@ -833,9 +846,9 @@ mod tests {
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
         let prepared = prepare_fixed_rule(&MaximalCliques, inputs, BTreeMap::new()).unwrap();
 
-        let flag = CancelFlag::default();
+        let (auth, flag) = CancelAuthority::arm();
         take_clique_counters();
-        CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = Some((5, flag.clone())));
+        CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = Some((5, auth)));
         let cancelled = prepared.run(&MaximalCliques, flag);
         CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = None);
         let (removals, steps) = take_clique_counters();

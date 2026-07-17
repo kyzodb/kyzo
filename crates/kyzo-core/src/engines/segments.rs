@@ -17,58 +17,45 @@
 //! repeated scans and prefix probes are memcpy runs and binary searches
 //! over decoded values instead of LSM iteration plus per-row memcmp decode.
 //!
-//! ## Validity is typed, not sequenced
+//! ## Freshness (story #305 T5)
 //!
-//! Segments are built on demand and *never maintained*. Soundness is the
-//! pairing of two rules, each carried by a signature rather than a calling
-//! convention (the enforcement-ladder ruling after a hostile review proved
-//! the documented-ordering version racy):
+//! Serving uses the projection machine's generation contract:
+//! [`Generation::classify`] keeps a matching [`Sealed`] handle or yields
+//! [`Stale`] — never a `Watermark(u64)` equality re-check, and never
+//! `Option` standing for staleness. Absence of an installed segment is the
+//! distinct [`SegmentMiss::Absent`]; a generation mismatch is
+//! [`SegmentMiss::Stale`].
 //!
+//! - **Readers witness AFTER opening a snapshot**
+//!   ([`SegmentEngine::generation_after_snapshot`]): the open
+//!   [`ReadTx`](crate::storage::ReadTx) is required by signature so a
+//!   generation cannot be sampled before the snapshot that must see it.
 //! - **Writers bump BEFORE commit** ([`SegmentEngine::bump_before_commit`]):
 //!   if a commit's rows are visible to any snapshot, its bump already
-//!   happened. (A rolled-back transaction that bumped merely orphans a
-//!   segment early — safe, never wrong.)
-//! - **Readers witness AFTER their snapshot opens**
-//!   ([`SegmentEngine::witness_after_snapshot`] takes the open snapshot as
-//!   an argument, so the reverse order is unrepresentable): if a write is
-//!   visible to the snapshot, the witness already reflects its bump, so a
-//!   segment built before that write can never serve.
+//!   happened. (A rolled-back transaction that bumped merely advances the
+//!   counter early — safe.)
+//! - **Rebuild is gated** ([`SegmentEngine::should_build`]): N consecutive
+//!   misses at the SAME live generation (issue #82) — declining to build is
+//!   always sound; a segment is optional speed.
 //!
-//! Together: served segment ⇒ witness equality ⇒ no write committed between
-//! the segment's snapshot and the reader's ⇒ identical current state.
-//!
-//! Segments hold `Arc`s: an orphaned segment stays alive for readers
-//! mid-scan and is freed when the last one drops.
-//!
-//! ## The rebuild is gated, not unconditional
-//!
-//! A miss (no segment, or one built at a stale witness) does not
-//! automatically rebuild: [`SegmentEngine::should_build`] requires a few
-//! consecutive misses at the SAME witness first (see its doc). A build
-//! pays a full relation scan no matter how small the read that triggered
-//! it — cheap-to-amortize for a segment that then serves many probes,
-//! ruinous for a caller whose every read is preceded by a write to the
-//! same relation (every write bumps the watermark, so every such read
-//! misses): unconditional rebuild-on-miss turned a point lookup into a
-//! full-relation scan on every single mixed read/write op (issue #82).
-//! Declining is always sound — identical to the existing "relation too
-//! large for `u32` offsets" decline in [`Segment::build`] — the caller
-//! falls back to its own unsegmented path, which pays no more than the
-//! scan a build would have paid anyway.
+//! Handles are [`SegmentHandle`] (`Arc` over the dense buffer): an orphaned
+//! segment stays alive for readers mid-scan and is freed when the last one
+//! drops.
 
 use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use crate::data::value::{DataValue, RelationId, Tuple};
+use crate::engines::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
+use crate::runtime::generation::RelationGeneration;
+use crate::storage::ReadTx;
 
-/// A relation-version witness: proof of "which write-history instant my
-/// snapshot belongs to", obtainable only through
-/// [`SegmentEngine::witness_after_snapshot`]. Monotone and process-local;
-/// a fresh process starts every relation at zero with an empty cache, so
-/// cross-process staleness cannot arise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Watermark(u64);
+/// Consecutive misses at one live generation before a rebuild is admitted.
+/// One miss declines (not yet proven stable); the second at the same
+/// generation builds. Alternating write+read never crosses this gate.
+const REBUILD_AFTER_STABLE_MISSES: u32 = 2;
 
 /// The execution path's segment context: `OFF` (tests, benches, callers
 /// without a session) or a borrow of the session's engine. `Copy`, so it
@@ -80,123 +67,168 @@ impl Segments<'_> {
     pub(crate) const OFF: Segments<'static> = Segments(None);
 }
 
-/// A build only pays off if the segment survives to serve at least one
-/// probe beyond the one that triggered it; below this many consecutive
-/// misses at the SAME witness, [`SegmentEngine::should_build`] declines.
-/// See that method's doc for why the number is small and why a
-/// write-interleaved caller never crosses it.
-const REBUILD_AFTER_STABLE_MISSES: u32 = 2;
+/// Shared handle to a sealed segment body — `Clone` is an `Arc` bump, so
+/// [`Sealed<SegmentHandle>`] can be classified without copying the dense
+/// buffer.
+#[derive(Clone, Debug)]
+pub(crate) struct SegmentHandle(Arc<Segment>);
 
-/// The session's segment engine: per-relation write watermarks plus the
-/// segment cache they guard. One per [`Db`](crate::runtime::db::Db),
-/// shared by all its transactions.
+impl SegmentHandle {
+    pub(crate) fn arc(&self) -> Arc<Segment> {
+        self.0.clone()
+    }
+}
+
+impl Deref for SegmentHandle {
+    type Target = Segment;
+
+    fn deref(&self) -> &Segment {
+        &self.0
+    }
+}
+
+/// Why a live generation could not serve an installed segment.
+///
+/// Distinguishable from a successful serve: absence is not staleness, and
+/// staleness is [`Stale`] — never collapsed into `Option::None`.
+#[derive(Debug)]
+pub(crate) enum SegmentMiss {
+    /// No sealed segment is installed for the relation.
+    Absent,
+    /// An installed segment's generation does not match the live stamp.
+    Stale(Stale<SegmentHandle>),
+}
+
+/// The session's segment engine: per-relation write counters plus the
+/// sealed-segment cache. One per [`Db`](crate::runtime::db::Db), shared by
+/// all its transactions.
 #[derive(Debug, Default)]
 pub(crate) struct SegmentEngine {
-    marks: Mutex<BTreeMap<RelationId, Arc<AtomicU64>>>,
-    segments: Mutex<BTreeMap<RelationId, Arc<Segment>>>,
-    /// Per-relation (witness, consecutive-miss-count) for the rebuild gate:
-    /// a cache miss at a witness this map hasn't seen resets the count to
-    /// 1; a repeat miss at the SAME witness (no write happened between the
-    /// two reads) increments it. Never a source of truth about relation
-    /// content — losing this map (e.g. on process restart) only costs a
-    /// few extra ungated misses, never a wrong answer.
-    misses: Mutex<BTreeMap<RelationId, (Watermark, u32)>>,
+    marks: Mutex<BTreeMap<ResidentIndexKey, Arc<AtomicU64>>>,
+    segments: Mutex<BTreeMap<ResidentIndexKey, Sealed<SegmentHandle>>>,
+    misses: Mutex<BTreeMap<ResidentIndexKey, (Generation, u32)>>,
 }
 
 impl SegmentEngine {
     fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
-        let mut marks = self.marks.lock().expect("watermark lock poisoned");
-        marks.entry(relation).or_default().clone()
+        let key = ResidentIndexKey::for_relation(relation);
+        let mut marks = self.marks.lock().expect("generation lock poisoned");
+        marks.entry(key).or_default().clone()
     }
 
-    /// The relation's version witness, valid for `_snapshot`. Taking the
-    /// open snapshot by reference makes witness-before-snapshot
-    /// unrepresentable — the ordering the soundness proof (module docs)
-    /// stands on, enforced by signature exactly like the storage layer's
-    /// `stamp_after_snapshot`.
-    pub(crate) fn witness_after_snapshot<T>(
+    /// Live generation for `relation`, sampled only after `tx` proves a
+    /// snapshot is open — the racy "read mark then open snapshot" order is
+    /// unrepresentable. Freshness is witnessed as [`RelationGeneration`] and
+    /// stamped only through the catalog authority (no bare `Generation::new`).
+    pub(crate) fn generation_after_snapshot(
         &self,
-        _snapshot: &T,
+        _tx: &impl ReadTx,
         relation: RelationId,
-    ) -> Watermark {
-        Watermark(self.slot(relation).load(AtomicOrdering::Acquire))
+    ) -> Generation {
+        RelationGeneration::witness(self.slot(relation).load(AtomicOrdering::Acquire))
+            .projection_stamp()
     }
 
     /// Record an imminent committed write to `relation` — called BEFORE the
     /// storage commit, so a bump precedes any snapshot that can see the
-    /// write. A subsequent rollback leaves a harmless early orphan.
+    /// write. A subsequent rollback leaves a harmless early counter advance.
+    ///
+    /// # Non-transition (proven invariant)
+    ///
+    /// Story #302 T4: not a Domain-style consuming field transition. The engine is an
+    /// `Arc`-shared capability handle ([`crate::runtime::db::Db::segments`]);
+    /// the per-relation counter is an [`AtomicU64`] under a stated
+    /// concurrent-access requirement (many writers/readers across
+    /// transactions). The bump is a monotone counter advance on that shared
+    /// atomic — reassignment of a Domain-like proof is unrepresentable
+    /// without breaking Arc sharing. `rust-state` Capability Handle permits
+    /// Atomic/Mutex only with that concurrency need; `rust-verbs` Transition
+    /// (field reassignment) applies to single-owner handles, which this is
+    /// not.
     pub(crate) fn bump_before_commit(&self, relation: RelationId) {
         self.slot(relation).fetch_add(1, AtomicOrdering::AcqRel);
     }
 
-    /// The relation's segment, iff still exactly valid at `witness`.
-    pub(crate) fn get(&self, relation: RelationId, witness: Watermark) -> Option<Arc<Segment>> {
+    /// Serve a sealed segment when `live` matches its stamped generation.
+    ///
+    /// Freshness is [`Generation::classify`]: matching keeps [`Sealed`];
+    /// mismatch yields [`Stale`] (wrapped as [`SegmentMiss::Stale`]). No
+    /// installed segment is [`SegmentMiss::Absent`] — never `Option` for
+    /// either case.
+    pub(crate) fn get(
+        &self,
+        relation: RelationId,
+        live: Generation,
+    ) -> Result<SegmentHandle, SegmentMiss> {
+        let key = ResidentIndexKey::for_relation(relation);
         let segments = self.segments.lock().expect("segment lock poisoned");
-        segments
-            .get(&relation)
-            .filter(|s| s.built_at == witness)
-            .cloned()
+        let Some(sealed) = segments.get(&key) else {
+            return Err(SegmentMiss::Absent);
+        };
+        match live.classify(sealed.clone()) {
+            Ok(fresh) => Ok(fresh.into_kind()),
+            Err(stale) => Err(SegmentMiss::Stale(stale)),
+        }
     }
 
-    /// Whether a cache miss at `witness` should trigger a full-relation
-    /// rebuild. `Segment::build` pays the same relation scan an unsegmented
-    /// read would have paid, plus a flatten and an `Arc` install — a good
-    /// trade when the segment then serves many later probes, a pure loss
-    /// when the very next write orphans it before it serves even one. A
-    /// witness only changes on a committed write to this relation (see the
-    /// module doc's soundness pairing), so "N misses at the same witness"
-    /// is exactly "N reads with no intervening write": below
-    /// [`REBUILD_AFTER_STABLE_MISSES`], the caller should fall back to its
-    /// unsegmented path (a point probe or plain scan — no more expensive
-    /// than the scan a build would pay anyway) instead of building. A
-    /// write-interleaved (OLTP mixed-op) caller bumps the watermark before
-    /// every read, so every miss resets this count to 1 and a build is
-    /// never attempted — the pathological O(n)-rebuild-per-read case this
-    /// gate exists to close. A read-heavy caller (the segment's intended
-    /// case) crosses the threshold after a couple of stable reads and
-    /// builds once, same as before this gate existed.
-    pub(crate) fn should_build(&self, relation: RelationId, witness: Watermark) -> bool {
-        let mut misses = self.misses.lock().expect("miss-streak lock poisoned");
-        let count = match misses.get_mut(&relation) {
-            Some(entry) if entry.0 == witness => {
-                entry.1 += 1;
-                entry.1
+    /// Admit a rebuild after [`REBUILD_AFTER_STABLE_MISSES`] consecutive
+    /// misses at the same live generation. A write (generation advance)
+    /// resets the streak. Declining is always sound — the caller falls
+    /// back to storage.
+    pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
+        let key = ResidentIndexKey::for_relation(relation);
+        let mut misses = self.misses.lock().expect("miss lock poisoned");
+        match misses.get_mut(&key) {
+            Some((recorded, count)) if *recorded == live => {
+                *count = count.saturating_add(1);
+                *count >= REBUILD_AFTER_STABLE_MISSES
             }
             _ => {
-                misses.insert(relation, (witness, 1));
-                1
+                misses.insert(key, (live, 1));
+                false
             }
-        };
-        count >= REBUILD_AFTER_STABLE_MISSES
+        }
     }
 
-    /// Install a freshly built segment, replacing any predecessor (which
-    /// stays alive for readers holding its `Arc`).
-    pub(crate) fn install(&self, relation: RelationId, segment: Segment) -> Arc<Segment> {
-        let seg = Arc::new(segment);
+    /// Seal `segment` at `generation` and install it, replacing any
+    /// predecessor (which stays alive for readers holding its handle).
+    pub(crate) fn install(
+        &self,
+        relation: RelationId,
+        segment: Segment,
+        generation: Generation,
+    ) -> SegmentHandle {
+        let key = ResidentIndexKey::for_relation(relation);
+        let handle = SegmentHandle(Arc::new(segment));
+        let sealed = ProjectionBuilder::new(handle.clone()).seal(generation);
         self.segments
             .lock()
             .expect("segment lock poisoned")
-            .insert(relation, seg.clone());
-        seg
-    }
-
-    /// Drop a relation's segment, watermark, and miss-streak outright
-    /// (destructive schema ops: the relation identity itself is being
-    /// reused or destroyed).
-    pub(crate) fn evict(&self, relation: RelationId) {
-        self.segments
-            .lock()
-            .expect("segment lock poisoned")
-            .remove(&relation);
+            .insert(key, sealed);
         self.misses
             .lock()
-            .expect("miss-streak lock poisoned")
-            .remove(&relation);
+            .expect("miss lock poisoned")
+            .remove(&key);
+        handle
+    }
+
+    /// Drop a relation's segment, miss streak, and write-counter slot
+    /// outright (destructive schema ops: the relation identity itself is
+    /// being reused or destroyed).
+    pub(crate) fn evict(&self, relation: RelationId) {
+        let key = ResidentIndexKey::for_relation(relation);
+        self.segments
+            .lock()
+            .expect("segment lock poisoned")
+            .remove(&key);
+        self.misses
+            .lock()
+            .expect("miss lock poisoned")
+            .remove(&key);
         self.marks
             .lock()
-            .expect("watermark lock poisoned")
-            .remove(&relation);
+            .expect("generation lock poisoned")
+            .remove(&key);
     }
 }
 
@@ -206,7 +238,6 @@ impl SegmentEngine {
 /// values.
 #[derive(Debug)]
 pub(crate) struct Segment {
-    built_at: Watermark,
     values: Vec<DataValue>,
     /// `offsets[i]` is the END of row `i` in `values` (row 0 starts at 0).
     offsets: Vec<u32>,
@@ -223,26 +254,21 @@ fn checked_row_end(values_len: usize) -> Option<u32> {
 
 impl Segment {
     /// Build from the rows a plain current-state scan produced, in the
-    /// scan's own (key) order, at the witness taken for that scan's
-    /// snapshot.
+    /// scan's own (key) order.
     ///
     /// `None` iff the relation's flattened value count would overflow the
     /// `u32` offset encoding (~4.3 billion `DataValue`s in one relation): a
     /// segment is an optional, rebuildable acceleration structure, so
     /// declining to build one is semantically free — the caller falls back
     /// to a normal scan, which has no such ceiling.
-    pub(crate) fn build(rows: impl Iterator<Item = Tuple>, built_at: Watermark) -> Option<Self> {
+    pub(crate) fn build(rows: impl Iterator<Item = Tuple>) -> Option<Self> {
         let mut values = Vec::new();
         let mut offsets = Vec::new();
         for row in rows {
             values.extend(row);
             offsets.push(checked_row_end(values.len())?);
         }
-        Some(Segment {
-            built_at,
-            values,
-            offsets,
-        })
+        Some(Segment { values, offsets })
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -253,7 +279,14 @@ impl Segment {
         self.offsets.is_empty()
     }
 
-    pub(crate) fn row(&self, i: usize) -> &[DataValue] {
+    /// Row at index `i`, or `None` when out of bounds.
+    pub(crate) fn row(&self, i: usize) -> Option<&[DataValue]> {
+        (i < self.len()).then(|| self.row_at(i))
+    }
+
+    /// INVARIANT(segment_row_in_bounds): `i < self.len()`.
+    fn row_at(&self, i: usize) -> &[DataValue] {
+        debug_assert!(i < self.len());
         let start = if i == 0 {
             0
         } else {
@@ -264,11 +297,11 @@ impl Segment {
 
     /// Compare stored row `i` against a probe prefix, coordinate-wise.
     fn cmp_prefix(&self, i: usize, prefix: &[DataValue]) -> std::cmp::Ordering {
-        let row = self.row(i);
+        let row = self.row_at(i);
         for (v, p) in row.iter().zip(prefix) {
             match v.cmp(p) {
                 std::cmp::Ordering::Equal => continue,
-                ord => return ord,
+                ord @ std::cmp::Ordering::Less | ord @ std::cmp::Ordering::Greater => return ord,
             }
         }
         std::cmp::Ordering::Equal
@@ -301,6 +334,8 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::sim::SimStorage;
+    use crate::storage::Storage;
 
     fn row(vals: &[i64]) -> Tuple {
         vals.iter().map(|&i| DataValue::from(i)).collect()
@@ -321,7 +356,7 @@ mod tests {
             DataValue::from(7),
             DataValue::from("y"),
         ]));
-        let s = Segment::build(rows.clone().into_iter(), Watermark(0)).unwrap();
+        let s = Segment::build(rows.clone().into_iter()).unwrap();
         for a in -1..9 {
             let probe = [DataValue::from(a)];
             let got = s.prefix_range(&probe);
@@ -335,143 +370,14 @@ mod tests {
                 .unwrap_or(rows.len());
             assert_eq!(got, want_lo..want_hi.max(want_lo), "prefix a={a}");
             for i in got {
-                assert_eq!(s.row(i), rows[i].as_slice());
+                assert_eq!(s.row(i), Some(rows[i].as_slice()));
             }
         }
     }
 
     #[test]
-    fn witness_equality_governs_service() {
-        let engine = SegmentEngine::default();
-        let rel = RelationId::new(7).expect("below cap");
-        let snapshot = (); // any open snapshot stands in
-
-        let w0 = engine.witness_after_snapshot(&snapshot, rel);
-        engine.install(rel, Segment::build([row(&[1, 2])].into_iter(), w0).unwrap());
-        assert!(engine.get(rel, w0).is_some(), "fresh segment serves");
-
-        engine.bump_before_commit(rel);
-        let w1 = engine.witness_after_snapshot(&snapshot, rel);
-        assert_ne!(w0, w1);
-        assert!(
-            engine.get(rel, w1).is_none(),
-            "a write orphans the segment: it must NOT serve at the new witness"
-        );
-
-        let held = engine.install(rel, Segment::build([row(&[3, 4])].into_iter(), w1).unwrap());
-        assert!(engine.get(rel, w1).is_some(), "rebuilt segment serves");
-        engine.evict(rel);
-        assert!(engine.get(rel, w1).is_none(), "evicted");
-        assert_eq!(held.len(), 1, "held Arc outlives eviction");
-    }
-
-    /// The rebuild gate (`should_build`): a lone miss at a witness declines
-    /// (not yet proven stable); a second miss at the SAME witness (no write
-    /// happened between the two reads) crosses the threshold and triggers.
-    #[test]
-    fn rebuild_gated_by_stable_miss_streak() {
-        let engine = SegmentEngine::default();
-        let rel = RelationId::new(3).expect("below cap");
-        let snapshot = ();
-
-        let w = engine.witness_after_snapshot(&snapshot, rel);
-        assert!(
-            !engine.should_build(rel, w),
-            "first miss at a witness must not trigger a build"
-        );
-        assert!(
-            engine.should_build(rel, w),
-            "second miss at the same witness must trigger a build"
-        );
-
-        // A write bumps the witness: the next miss resets the streak to 1,
-        // exactly like a fresh relation.
-        engine.bump_before_commit(rel);
-        let w2 = engine.witness_after_snapshot(&snapshot, rel);
-        assert_ne!(w, w2);
-        assert!(
-            !engine.should_build(rel, w2),
-            "a witness change must reset the streak"
-        );
-        assert!(
-            engine.should_build(rel, w2),
-            "second stable miss at the new witness must trigger"
-        );
-    }
-
-    /// The OLTP mixed-op shape (issue #82): a caller whose every read is
-    /// preceded by a committed write to the same relation never sees two
-    /// misses at the same witness, so the gate must NEVER cross threshold —
-    /// this is what keeps such a caller off the O(n)-rebuild-per-read path.
-    #[test]
-    fn alternating_writes_never_cross_the_rebuild_gate() {
-        let engine = SegmentEngine::default();
-        let rel = RelationId::new(5).expect("below cap");
-        let snapshot = ();
-        for _ in 0..50 {
-            engine.bump_before_commit(rel);
-            let w = engine.witness_after_snapshot(&snapshot, rel);
-            assert!(
-                !engine.should_build(rel, w),
-                "a witness that changes before every miss must never reach the rebuild threshold"
-            );
-        }
-    }
-
-    /// (e) the miss map is documented as "never a source of truth" — losing
-    /// it costs a few extra ungated misses, never a wrong decision. Proven
-    /// directly: clearing it mid-streak (standing in for whatever external
-    /// event could lose it, e.g. a process restart) only restarts the
-    /// stable-miss count at the same witness; it can never make
-    /// `should_build` return `true` early, and it can never affect what
-    /// [`SegmentEngine::get`] would serve (that question is answered by
-    /// witness equality alone, a wholly separate map).
-    #[test]
-    fn miss_map_loss_only_delays_rebuild_never_corrupts_serving() {
-        let engine = SegmentEngine::default();
-        let rel = RelationId::new(11).expect("below cap");
-        let snapshot = ();
-
-        let w = engine.witness_after_snapshot(&snapshot, rel);
-        assert!(
-            !engine.should_build(rel, w),
-            "first miss at a witness must not trigger a build"
-        );
-
-        // Simulate losing the miss-streak map outright.
-        engine
-            .misses
-            .lock()
-            .expect("miss-streak lock poisoned")
-            .clear();
-
-        assert!(
-            !engine.should_build(rel, w),
-            "a miss after losing the streak must restart at 1, not resume at 2"
-        );
-        assert!(
-            engine.should_build(rel, w),
-            "the streak still reaches threshold normally after the loss"
-        );
-
-        // The loss never touches what a served segment answers: install one
-        // and confirm `get` still serves purely off witness equality.
-        let seg = Segment::build([row(&[9, 99])].into_iter(), w).unwrap();
-        engine.install(rel, seg);
-        engine
-            .misses
-            .lock()
-            .expect("miss-streak lock poisoned")
-            .clear();
-        assert!(
-            engine.get(rel, w).is_some(),
-            "losing the miss map must never un-serve a validly-witnessed segment"
-        );
-    }
-
-    #[test]
     fn empty_segment_probes_cleanly() {
-        let s = Segment::build(std::iter::empty(), Watermark(0)).unwrap();
+        let s = Segment::build(std::iter::empty()).unwrap();
         assert!(s.is_empty());
         assert!(s.prefix_range(&[DataValue::from(1)]).is_empty());
     }
@@ -488,5 +394,72 @@ mod tests {
         assert_eq!(checked_row_end(u32::MAX as usize), Some(u32::MAX));
         assert_eq!(checked_row_end(u32::MAX as usize + 1), None);
         assert_eq!(checked_row_end(usize::MAX), None);
+    }
+
+    #[test]
+    fn classify_serves_matching_generation_and_rejects_stale() {
+        let db = SimStorage::new(3);
+        let rtx = db.read_tx().unwrap();
+        let engine = SegmentEngine::default();
+        let relation = RelationId::new(1).expect("below cap");
+        let live = engine.generation_after_snapshot(&rtx, relation);
+        let handle = engine.install(
+            relation,
+            Segment::build(std::iter::once(row(&[1, 2]))).unwrap(),
+            live,
+        );
+        assert_eq!(
+            handle.row(0),
+            Some([DataValue::from(1), DataValue::from(2)].as_slice())
+        );
+        assert!(engine.get(relation, live).is_ok());
+
+        engine.bump_before_commit(relation);
+        let after = engine.generation_after_snapshot(&rtx, relation);
+        assert!(matches!(
+            engine.get(relation, after),
+            Err(SegmentMiss::Stale(_))
+        ));
+    }
+
+    #[test]
+    fn rebuild_gated_by_stable_miss_streak() {
+        let db = SimStorage::new(5);
+        let rtx = db.read_tx().unwrap();
+        let engine = SegmentEngine::default();
+        let relation = RelationId::new(2).expect("below cap");
+        let live = engine.generation_after_snapshot(&rtx, relation);
+
+        assert!(
+            !engine.should_build(relation, live),
+            "first miss declines"
+        );
+        assert!(
+            engine.should_build(relation, live),
+            "second stable miss admits build"
+        );
+
+        engine.bump_before_commit(relation);
+        let next = engine.generation_after_snapshot(&rtx, relation);
+        assert!(
+            !engine.should_build(relation, next),
+            "write resets the streak"
+        );
+    }
+
+    #[test]
+    fn alternating_writes_never_cross_rebuild_gate() {
+        let db = SimStorage::new(7);
+        let engine = SegmentEngine::default();
+        let relation = RelationId::new(3).expect("below cap");
+        for _ in 0..20 {
+            engine.bump_before_commit(relation);
+            let rtx = db.read_tx().unwrap();
+            let live = engine.generation_after_snapshot(&rtx, relation);
+            assert!(
+                !engine.should_build(relation, live),
+                "write-interleaved single miss must never admit a build"
+            );
+        }
     }
 }
