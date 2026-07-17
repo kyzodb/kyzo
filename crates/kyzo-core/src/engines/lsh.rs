@@ -159,12 +159,10 @@ impl RelationIndexSearch for Lsh {}
 /// Prefer [`Self::from_perms`] at mint sites. `From<Vec<u8>>` is gone so an
 /// arbitrary byte vector is not type-equal to a permutation payload; the
 /// length law is re-proven by [`HashPermutations::from_bytes`] on read.
-/// The tuple field stays `pub(crate)` so the lifecycle tier
-/// (`runtime/mutate.rs`, off this slice's allowlist) can still construct
-/// from `HashPermutations::to_bytes` until it migrates to [`Self::from_perms`].
+/// Field is private — mint only via [`Self::from_perms`].
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
 #[repr(transparent)]
-pub(crate) struct LshPermutationBytes(pub(crate) Vec<u8>);
+pub(crate) struct LshPermutationBytes(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<LshPermutationBytes>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<LshPermutationBytes>() == std::mem::align_of::<Vec<u8>>());
@@ -174,6 +172,18 @@ impl LshPermutationBytes {
     /// length-lawful: `4 * n_perms` bytes).
     pub(crate) fn from_perms(perms: &HashPermutations) -> Self {
         Self(perms.to_bytes())
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Test-only: truncate the payload so [`HashPermutations::from_bytes`]
+    /// refuses — exercises the corrupt-manifest path without forging via
+    /// a public `Vec` field.
+    #[cfg(test)]
+    pub(crate) fn corrupt_truncate_last_byte_for_test(&mut self) {
+        let _ = self.0.pop();
     }
 }
 
@@ -228,7 +238,7 @@ impl MinHashLshIndexManifest {
     /// catalog payload and may be corrupt (the original truncated odd
     /// lengths silently).
     pub(crate) fn get_hash_perms(&self) -> Result<HashPermutations> {
-        HashPermutations::from_bytes(&self.perms.0).map_err(|reason| {
+        HashPermutations::from_bytes(self.perms.as_bytes()).map_err(|reason| {
             miette!(IndexRowCorrupt::new(
                 &self.index_name,
                 &[],
@@ -919,7 +929,7 @@ mod tests {
         assert!(HashPermutations::from_bytes(&bytes[..7]).is_err());
         // And through the manifest it is the typed corruption error.
         let mut m = manifest_with_perms(vec![1, 2, 3, 4], 4);
-        m.perms.0.pop();
+        m.perms.corrupt_truncate_last_byte_for_test();
         let err = m.get_hash_perms().unwrap_err();
         assert!(err.downcast_ref::<IndexRowCorrupt>().is_some());
     }
