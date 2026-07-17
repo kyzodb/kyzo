@@ -72,7 +72,8 @@ struct LevelInvariantError(&'static str);
 /// per row visited.
 /// Flattened row-byte arena for a normal query level.
 /// Field is private: arbitrary `Vec<u8>` is not a level arena (P028).
-/// Mint empty via [`Self::new`]; grow only via [`Self::append_encoded`].
+/// Mint empty via [`Self::new`]; grow only via branded append doors
+/// ([`Self::append_bare`], [`Self::append_row`]). No Deref/AsRef<[u8]>.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct LevelArenaBytes(Vec<u8>);
@@ -80,26 +81,51 @@ pub(crate) struct LevelArenaBytes(Vec<u8>);
 const _: () = assert!(std::mem::size_of::<LevelArenaBytes>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<LevelArenaBytes>() == std::mem::align_of::<Vec<u8>>());
 
-impl std::ops::Deref for LevelArenaBytes {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        &self.0
+/// Borrowed row extent inside a sealed [`LevelArenaBytes`].
+/// Mintable only by [`NormalLevel::row_at`] — never from foreign `&[u8]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LevelRowRef<'a>(&'a [u8]);
+
+impl<'a> LevelRowRef<'a> {
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    pub(crate) fn as_bytes(self) -> &'a [u8] {
+        self.0
+    }
+
+    /// Named peel alias.
+    pub(crate) fn as_slice(self) -> &'a [u8] {
+        self.0
     }
 }
-impl AsRef<[u8]> for LevelArenaBytes {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
+
 impl LevelArenaBytes {
-    /// Empty arena — the only open mint beside appending encoded row bytes.
+    /// Empty arena — the only open mint beside branded append doors.
     pub(crate) fn new() -> Self {
         Self(Vec::new())
     }
 
-    /// Append row bytes already produced by the bare tuple encode door.
-    pub(crate) fn append_encoded(&mut self, row: &[u8]) {
-        self.0.extend_from_slice(row);
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Named peel alias.
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Append a bare-encoded key minted by [`OwnBareKey::encode`].
+    pub(crate) fn append_bare(&mut self, row: &OwnBareKey) {
+        self.0.extend_from_slice(row.as_bytes());
+    }
+
+    /// Append a row extent that only [`NormalLevel::row_at`] can mint.
+    pub(crate) fn append_row(&mut self, row: LevelRowRef<'_>) {
+        self.0.extend_from_slice(row.as_bytes());
     }
 }
 
@@ -267,19 +293,21 @@ impl NormalLevel {
         self.offsets.is_empty()
     }
     /// Row bytes at index `i`, or `None` when out of bounds.
-    pub(crate) fn row(&self, i: usize) -> Option<&[u8]> {
+    pub(crate) fn row(&self, i: usize) -> Option<LevelRowRef<'_>> {
         (i < self.len()).then(|| self.row_at(i))
     }
 
     /// INVARIANT(level_row_in_bounds): `i < self.len()`.
-    fn row_at(&self, i: usize) -> &[u8] {
+    /// The sole mint of [`LevelRowRef`] — foreign `&[u8]` cannot enter the arena.
+    fn row_at(&self, i: usize) -> LevelRowRef<'_> {
         debug_assert!(i < self.len());
         let start = if i == 0 {
             0
         } else {
             self.offsets[i - 1] as usize
         };
-        &self.values[start..self.offsets[i] as usize]
+        let end = self.offsets[i] as usize;
+        LevelRowRef(&self.values.as_bytes()[start..end])
     }
 
     /// INVARIANT(level_row_in_bounds): `i < self.len()`.
@@ -292,7 +320,7 @@ impl NormalLevel {
     /// already minted at derivation. Refuses when the arena end would
     /// overflow the `u32` offset encoding.
     fn push(&mut self, row: Box<OwnBareKey>, flags: RowFlags) -> Result<()> {
-        self.values.append_encoded(row.as_bytes());
+        self.values.append_bare(&row);
         let end = u32::try_from(self.values.len()).map_or_else(
             |_| {
                 bail!(LevelArenaOverflow {
@@ -310,7 +338,7 @@ impl NormalLevel {
     /// source level, so this one copy per compacted row is the cost of
     /// dropping the shadowed copy).
     fn push_from(&mut self, other: &NormalLevel, i: usize, flags: RowFlags) -> Result<()> {
-        self.values.append_encoded(other.row_at(i));
+        self.values.append_row(other.row_at(i));
         let end = u32::try_from(self.values.len()).map_or_else(
             |_| {
                 bail!(LevelArenaOverflow {
@@ -328,7 +356,7 @@ impl NormalLevel {
         let mut hi = self.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match self.row_at(mid).cmp(key_bytes) {
+            match self.row_at(mid).as_bytes().cmp(key_bytes) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
                 Ordering::Equal => return Some(mid),
@@ -345,7 +373,7 @@ impl NormalLevel {
         let projected: Vec<DataValue> = cols.iter().map(|&c| row[c].clone()).collect();
         let probe = encode_tuple_bare(&projected);
         let cmp = |i: usize| -> Ordering {
-            let stored = self.row_at(i);
+            let stored = self.row_at(i).as_bytes();
             match bare_prefix_len(stored, cols.len()) {
                 Some(boundary) => stored[..boundary].cmp(probe.as_slice()),
                 None => Ordering::Less,
@@ -382,7 +410,7 @@ impl NormalLevel {
         let mut hi = self.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if self.row_at(mid) < lower {
+            if self.row_at(mid).as_bytes() < lower {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -394,9 +422,9 @@ impl NormalLevel {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let below = if upper_inclusive {
-                self.row_at(mid) <= upper
+                self.row_at(mid).as_bytes() <= upper
             } else {
-                self.row_at(mid) < upper
+                self.row_at(mid).as_bytes() < upper
             };
             if below {
                 lo = mid + 1;
@@ -841,7 +869,7 @@ fn normal_merge_next<'s>(
         let mut best: Option<(&'s [u8], usize)> = None;
         for (ci, (l, next, end)) in cursors.iter().enumerate() {
             if next < end {
-                let t = l.row_at(*next);
+                let t = l.row_at(*next).as_bytes();
                 best = match best {
                     None => Some((t, ci)),
                     Some((bt, bci)) => {
@@ -858,9 +886,9 @@ fn normal_merge_next<'s>(
         // Advance every cursor sharing the winning key; the winner's row
         // index is remembered before advancing.
         let win_row = cursors[win_ci].1;
-        let key: Vec<u8> = cursors[win_ci].0.row_at(win_row).to_vec();
+        let key: Vec<u8> = cursors[win_ci].0.row_at(win_row).as_bytes().to_vec();
         for (l, next, end) in cursors.iter_mut() {
-            while *next < *end && l.row_at(*next) == key.as_slice() {
+            while *next < *end && l.row_at(*next).as_bytes() == key.as_slice() {
                 *next += 1;
             }
         }
@@ -869,7 +897,7 @@ fn normal_merge_next<'s>(
         if delta_only && flags.refresh.hides_from_delta() {
             continue;
         }
-        return Some(TupleInIter::new_bytes(l.row_at(win_row), flags.skip));
+        return Some(TupleInIter::new_bytes(l.row_at(win_row).as_bytes(), flags.skip));
     }
 }
 
@@ -893,7 +921,7 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
                     merged.push_from(older, a, older.row_flags_at(a))?;
                     a += 1;
                 } else {
-                    match older.row_at(a).cmp(newer.row_at(b)) {
+                    match older.row_at(a).as_bytes().cmp(newer.row_at(b).as_bytes()) {
                         Ordering::Less => {
                             merged.push_from(older, a, older.row_flags_at(a))?;
                             a += 1;
