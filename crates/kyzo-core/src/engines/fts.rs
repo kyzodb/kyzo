@@ -128,14 +128,14 @@ use crate::data::value::data_value_any;
 ///
 /// Relation-backed posting maintenance and search ([`fts_put`],
 /// [`Fts::search_index`]) are the kernel algorithms — not a second
-/// build/seal/freshness protocol. Search is owned by [`RelationIndexSearch`]
-/// (P103).
+/// build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); [`Fts::search_index`]
+/// is the UFCS alias into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Fts;
 
 impl ProjectionKind for Fts {}
-impl RelationIndexSearch for Fts {}
 
 // ---------------------------------------------------------------------------
 // Scoring vocabulary.
@@ -618,6 +618,41 @@ pub(crate) struct FtsSearchParams {
     pub(crate) bind_score: FtsBindScore,
 }
 
+/// One FTS relation-backed search invocation — [`RelationIndexSearch::Request`]
+/// for [`Fts`] (P103).
+#[derive(Clone, Copy)]
+pub(crate) struct FtsSearchRequest<'a> {
+    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) query: &'a str,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a FtsSearchParams,
+    pub(crate) filter_code: &'a Option<Expr>,
+    pub(crate) tokenizer: &'a TextAnalyzer,
+    pub(crate) n_total: usize,
+}
+
+impl RelationIndexSearch for Fts {
+    type Request<'a> = FtsSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<Vec<Tuple>> {
+        fts_search_body(
+            request.cancel,
+            tx,
+            request.query,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_code,
+            request.tokenizer,
+            request.n_total,
+        )
+    }
+}
+
 /// Full-text search. Returns matching base-relation rows, highest score
 /// first, each optionally extended by its score (a trailing `Float`).
 ///
@@ -639,8 +674,9 @@ pub(crate) struct FtsSearchParams {
 ///
 /// `n_total` is [`fts_total_docs`] when `score_kind` is `TfIdf`, else `0`.
 impl Fts {
-    /// Relation-backed full-text search — the sole FTS search door (P103).
-    /// Formerly the free function `fts_search`.
+    /// Relation-backed full-text search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `fts_search`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_index(
         cancel: &crate::fixed_rule::CancelFlag,
@@ -653,8 +689,18 @@ impl Fts {
         tokenizer: &TextAnalyzer,
         n_total: usize,
     ) -> Result<Vec<Tuple>> {
-        fts_search_body(
-            cancel, tx, query, base, idx, params, filter_code, tokenizer, n_total,
+        Self::search_relation(
+            tx,
+            FtsSearchRequest {
+                cancel,
+                query,
+                base,
+                idx,
+                params,
+                filter_code,
+                tokenizer,
+                n_total,
+            },
         )
     }
 }

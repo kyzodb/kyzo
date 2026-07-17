@@ -21,8 +21,9 @@
 //! kind engines (`hnsw`/`fts`/`lsh`/`sparse`/`spatial`) are `K`
 //! parameterizations of that machine — each implements
 //! [`projection::ProjectionKind`] for build→seal→freshness and
-//! [`projection::RelationIndexSearch`] for relation-backed search (P103);
-//! put/search math remains the kernel algorithm, not a second protocol.
+//! [`projection::RelationIndexSearch::search_relation`] for relation-backed
+//! search (P103); put/search math remains the kernel algorithm, not a
+//! second protocol.
 
 // `fts`/`hnsw`/`lsh`'s `db.rs` surface has landed (`::fts|hnsw|lsh
 // create/drop` in `runtime/mutate.rs` dispatch to the real creation/

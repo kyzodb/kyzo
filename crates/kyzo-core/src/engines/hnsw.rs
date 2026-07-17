@@ -238,13 +238,13 @@ use crate::data::value::data_value_any;
 ///
 /// Relation-backed graph maintenance and knn ([`hnsw_put`], [`Hnsw::knn`])
 /// are the kernel algorithms — not a second build/seal/freshness protocol.
-/// Search is owned by [`RelationIndexSearch`] / [`Hnsw::knn`] (P103).
+/// Search is owned by [`RelationIndexSearch::search_relation`] (P103);
+/// [`Hnsw::knn`] is the UFCS alias into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Hnsw;
 
 impl ProjectionKind for Hnsw {}
-impl RelationIndexSearch for Hnsw {}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.
@@ -2161,6 +2161,39 @@ pub(crate) struct HnswKnnParams {
     pub(crate) bind: HnswBindPack,
 }
 
+/// One HNSW relation-backed k-NN invocation — [`RelationIndexSearch::Request`]
+/// for [`Hnsw`] (P103).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HnswSearchRequest<'a> {
+    pub(crate) q: &'a Vector,
+    pub(crate) manifest: &'a HnswIndexManifest,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a HnswKnnParams,
+    pub(crate) filter_expr: &'a Option<Expr>,
+    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+}
+
+impl RelationIndexSearch for Hnsw {
+    type Request<'a> = HnswSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<Vec<Tuple>> {
+        hnsw_knn_body(
+            tx,
+            request.q,
+            request.manifest,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_expr,
+            request.cancel,
+        )
+    }
+}
+
 /// k-nearest-neighbours search. Returns matching base-relation rows,
 /// nearest first, each extended (IN THIS ORDER — the RA tier's binding
 /// order depends on it) by the optional columns: matched field name
@@ -2194,8 +2227,9 @@ pub(crate) struct HnswKnnParams {
 /// checked, non-finite refused, and — under cosine — the zero vector
 /// refused typed and the query normalized.
 impl Hnsw {
-    /// Relation-backed k-NN — the sole HNSW search algorithm door (P103).
-    /// Formerly the free function `hnsw_knn`.
+    /// Relation-backed k-NN — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `hnsw_knn`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn knn(
         tx: &impl ReadTx,
@@ -2207,7 +2241,18 @@ impl Hnsw {
         filter_expr: &Option<Expr>,
         cancel: &crate::fixed_rule::CancelFlag,
     ) -> Result<Vec<Tuple>> {
-        hnsw_knn_body(tx, q, manifest, base, idx, params, filter_expr, cancel)
+        Self::search_relation(
+            tx,
+            HnswSearchRequest {
+                q,
+                manifest,
+                base,
+                idx,
+                params,
+                filter_expr,
+                cancel,
+            },
+        )
     }
 }
 

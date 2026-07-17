@@ -130,14 +130,14 @@ use crate::storage::{ReadTx, WriteTx};
 ///
 /// Relation-backed posting maintenance and search ([`sparse_put`],
 /// [`Sparse::search_index`]) are the kernel algorithms — not a second
-/// build/seal/freshness protocol. Search is owned by [`RelationIndexSearch`]
-/// (P103).
+/// build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); [`Sparse::search_index`]
+/// is the UFCS alias into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Sparse;
 
 impl ProjectionKind for Sparse {}
-impl RelationIndexSearch for Sparse {}
 
 // ---------------------------------------------------------------------------
 // Typed errors — the admission gate's refusals.
@@ -415,6 +415,35 @@ pub(crate) struct SparseSearchParams {
     pub(crate) bind_score: SparseBindScore,
 }
 
+/// One sparse relation-backed search — [`RelationIndexSearch::Request`] for
+/// [`Sparse`] (P103).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SparseSearchRequest<'a> {
+    pub(crate) query: &'a [(u32, f32)],
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a SparseSearchParams,
+    pub(crate) filter_code: &'a Option<Expr>,
+}
+
+impl RelationIndexSearch for Sparse {
+    type Request<'a> = SparseSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<Vec<Tuple>> {
+        sparse_search_body(
+            tx,
+            request.query,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_code,
+        )
+    }
+}
+
 /// Sparse dot-product search. Returns matching base-relation rows, highest
 /// score first, each optionally extended by its score (a trailing `Float`).
 ///
@@ -433,8 +462,9 @@ pub(crate) struct SparseSearchParams {
 /// broken by the document key's memcmp order — a total order, so the result is
 /// byte-identical across runs.
 impl Sparse {
-    /// Relation-backed sparse search — the sole sparse search door (P103).
-    /// Formerly the free function `sparse_search`.
+    /// Relation-backed sparse search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `sparse_search`.
     pub(crate) fn search_index(
         tx: &impl ReadTx,
         query: &[(u32, f32)],
@@ -443,7 +473,16 @@ impl Sparse {
         params: &SparseSearchParams,
         filter_code: &Option<Expr>,
     ) -> Result<Vec<Tuple>> {
-        sparse_search_body(tx, query, base, idx, params, filter_code)
+        Self::search_relation(
+            tx,
+            SparseSearchRequest {
+                query,
+                base,
+                idx,
+                params,
+                filter_code,
+            },
+        )
     }
 }
 

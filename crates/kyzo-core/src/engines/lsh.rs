@@ -137,14 +137,14 @@ use crate::data::value::data_value_any;
 ///
 /// Relation-backed signature maintenance and candidate search ([`lsh_put`],
 /// [`Lsh::search_index`]) are the kernel algorithms — not a second
-/// build/seal/freshness protocol. Search is owned by [`RelationIndexSearch`]
-/// (P103).
+/// build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch::search_relation`] (P103); [`Lsh::search_index`]
+/// is the UFCS alias into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Lsh;
 
 impl ProjectionKind for Lsh {}
-impl RelationIndexSearch for Lsh {}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.
@@ -785,6 +785,43 @@ pub(crate) struct LshSearchParams {
     pub(crate) k: Option<usize>,
 }
 
+/// One LSH relation-backed candidate search — [`RelationIndexSearch::Request`]
+/// for [`Lsh`] (P103).
+#[derive(Clone, Copy)]
+pub(crate) struct LshSearchRequest<'a> {
+    pub(crate) cancel: &'a crate::fixed_rule::CancelFlag,
+    pub(crate) q: &'a DataValue,
+    pub(crate) manifest: &'a MinHashLshIndexManifest,
+    pub(crate) base: &'a RelationHandle,
+    pub(crate) idx: &'a RelationHandle,
+    pub(crate) params: &'a LshSearchParams,
+    pub(crate) filter_code: &'a Option<Expr>,
+    pub(crate) perms: &'a HashPermutations,
+    pub(crate) tokenizer: &'a TextAnalyzer,
+}
+
+impl RelationIndexSearch for Lsh {
+    type Request<'a> = LshSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<Vec<Tuple>> {
+        lsh_search_body(
+            request.cancel,
+            tx,
+            request.q,
+            request.manifest,
+            request.base,
+            request.idx,
+            request.params,
+            request.filter_code,
+            request.perms,
+            request.tokenizer,
+        )
+    }
+}
+
 /// Candidate near-duplicates of `q`: base rows whose stored signature
 /// shares at least one band with `q`'s, in deterministic base-key order,
 /// optionally filtered and truncated to `k`.
@@ -793,8 +830,9 @@ pub(crate) struct LshSearchParams {
 /// docs). A `Null` query yields no candidates. `perms`/`tokenizer` follow
 /// the same caller contracts as [`lsh_put`].
 impl Lsh {
-    /// Relation-backed LSH candidate search — the sole LSH search door (P103).
-    /// Formerly the free function `lsh_search`.
+    /// Relation-backed LSH candidate search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103). Formerly the free
+    /// function `lsh_search`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_index(
         cancel: &crate::fixed_rule::CancelFlag,
@@ -808,8 +846,19 @@ impl Lsh {
         perms: &HashPermutations,
         tokenizer: &TextAnalyzer,
     ) -> Result<Vec<Tuple>> {
-        lsh_search_body(
-            cancel, tx, q, manifest, base, idx, params, filter_code, perms, tokenizer,
+        Self::search_relation(
+            tx,
+            LshSearchRequest {
+                cancel,
+                q,
+                manifest,
+                base,
+                idx,
+                params,
+                filter_code,
+                perms,
+                tokenizer,
+            },
         )
     }
 }

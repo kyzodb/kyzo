@@ -21,12 +21,14 @@
 //! spanned refusal at that boundary, never a downstream surprise.
 //!
 //! A search atom evaluates as "a search is a join": for each parent row the
-//! query expression is evaluated against that row, the engine's pure search
-//! function runs once, and each result row (the full base row plus the
+//! query expression is evaluated against that row, the engine's
+//! [`RelationIndexSearch`](crate::engines::projection::RelationIndexSearch)
+//! door runs once, and each result row (the full base row plus the
 //! engine's appended columns, in the engine's fixed order) extends the
 //! parent row. The atom *binds* `own_bindings` and *requires* the variables
 //! of its query expression — the well-ordering pass places it exactly like a
-//! unification with those dataflow facts.
+//! unification with those dataflow facts. Resolved [`SearchConfig`] variants
+//! dispatch only through that trait seam (P103) — never an empty marker.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -39,12 +41,14 @@ use crate::data::expr::Expr;
 use crate::data::program::{SearchInput, TempSymbGen};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::DataValue;
-use crate::engines::fts::{FtsScoreKind, FtsSearchParams};
-use crate::engines::hnsw::HnswKnnParams;
-use crate::engines::lsh::{HashPermutations, LshSearchParams};
+use crate::data::value::{DataValue, Tuple, Vector, data_value_any};
+use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
+use crate::engines::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
+use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
+use crate::engines::projection::RelationIndexSearch;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::runtime::relation::{IndexKind, RelationHandle};
+use crate::storage::ReadTx;
 
 /// A search atom the catalog has proven: live handles, decoded manifest,
 /// engine parameters, and the output frame. Carried by
@@ -86,6 +90,121 @@ impl SearchConfig {
             SearchConfig::Fts(c) => &c.base,
             SearchConfig::Lsh(c) => &c.base,
         }
+    }
+
+    /// Run the resolved index search through [`RelationIndexSearch`] (P103).
+    ///
+    /// This is the query-tier live path into the engine doors — not a façade
+    /// that invents `k`/`ef` answers. Kind-specific UFCS aliases
+    /// (`Hnsw::knn` / `Fts::search_index` / `Lsh::search_index`) construct
+    /// the same `Request` and call the same trait method.
+    pub(crate) fn search_relation(
+        &self,
+        tx: &impl ReadTx,
+        query: &DataValue,
+        filter: &Option<Expr>,
+        cancel: &crate::fixed_rule::CancelFlag,
+        fts_n_total: usize,
+        span: SourceSpan,
+    ) -> Result<Vec<Tuple>> {
+        match self {
+            SearchConfig::Hnsw(c) => {
+                let q = match query {
+                    DataValue::Vector(v) => v,
+                    other @ (data_value_any!()) => {
+                        bail!(SearchQueryWrongType(format!("{other:?}"), span))
+                    }
+                };
+                c.search_relation(tx, q, filter, cancel)
+            }
+            SearchConfig::Fts(c) => {
+                let text = match query {
+                    DataValue::Str(t) => t.as_str(),
+                    other @ (data_value_any!()) => {
+                        bail!(SearchQueryWrongType(format!("{other:?}"), span))
+                    }
+                };
+                c.search_relation(tx, text, filter, cancel, fts_n_total)
+            }
+            SearchConfig::Lsh(c) => c.search_relation(tx, query, filter, cancel),
+        }
+    }
+}
+
+impl HnswSearch {
+    /// Dispatch one HNSW k-NN through [`RelationIndexSearch::search_relation`].
+    pub(crate) fn search_relation(
+        &self,
+        tx: &impl ReadTx,
+        q: &Vector,
+        filter: &Option<Expr>,
+        cancel: &crate::fixed_rule::CancelFlag,
+    ) -> Result<Vec<Tuple>> {
+        Hnsw::search_relation(
+            tx,
+            HnswSearchRequest {
+                q,
+                manifest: &self.manifest,
+                base: &self.base,
+                idx: &self.idx,
+                params: &self.params,
+                filter_expr: filter,
+                cancel,
+            },
+        )
+    }
+}
+
+impl FtsSearch {
+    /// Dispatch one FTS search through [`RelationIndexSearch::search_relation`].
+    pub(crate) fn search_relation(
+        &self,
+        tx: &impl ReadTx,
+        query: &str,
+        filter: &Option<Expr>,
+        cancel: &crate::fixed_rule::CancelFlag,
+        n_total: usize,
+    ) -> Result<Vec<Tuple>> {
+        Fts::search_relation(
+            tx,
+            FtsSearchRequest {
+                cancel,
+                query,
+                base: &self.base,
+                idx: &self.idx,
+                params: &self.params,
+                filter_code: filter,
+                tokenizer: self.analyzer.as_ref(),
+                n_total,
+            },
+        )
+    }
+}
+
+impl LshSearch {
+    /// Dispatch one LSH candidate search through
+    /// [`RelationIndexSearch::search_relation`].
+    pub(crate) fn search_relation(
+        &self,
+        tx: &impl ReadTx,
+        query: &DataValue,
+        filter: &Option<Expr>,
+        cancel: &crate::fixed_rule::CancelFlag,
+    ) -> Result<Vec<Tuple>> {
+        Lsh::search_relation(
+            tx,
+            LshSearchRequest {
+                cancel,
+                q: query,
+                manifest: &self.manifest,
+                base: &self.base,
+                idx: &self.idx,
+                params: &self.params,
+                filter_code: filter,
+                perms: self.perms.as_ref(),
+                tokenizer: self.analyzer.as_ref(),
+            },
+        )
     }
 }
 
@@ -188,6 +307,11 @@ pub(crate) struct SearchParamInvalid(
      is a ranked/candidate join, and 'not near' has no single sound meaning"
 ))]
 pub(crate) struct NegatedSearchUnsupported(#[label] pub(crate) SourceSpan);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("search query has wrong type for this index: {0}")]
+#[diagnostic(code(query::search_query_wrong_type))]
+pub(crate) struct SearchQueryWrongType(pub(crate) String, #[label] pub(crate) SourceSpan);
 
 // ─────────────────────────────────────────────────────────────────────────
 // Resolution
@@ -363,7 +487,8 @@ pub(crate) fn resolve_search(
                 radius,
                 bind,
             };
-            // The engine appends these IN THIS ORDER (Hnsw::knn's contract).
+            // The engine appends these IN THIS ORDER
+            // (`RelationIndexSearch` / Hnsw search_relation contract).
             own_bindings.extend(
                 [bind_field, bind_field_idx, bind_distance, bind_vector]
                     .into_iter()

@@ -130,13 +130,13 @@ use crate::storage::{ReadTx, WriteTx};
 /// Relation-backed curve maintenance and search ([`spatial_put`],
 /// [`Spatial::range_query`], [`Spatial::knn`]) are the kernel algorithms —
 /// not a second build/seal/freshness protocol. Search is owned by
-/// [`RelationIndexSearch`] (P103).
+/// [`RelationIndexSearch::search_relation`] (P103); range/knn are UFCS
+/// aliases into that door.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Spatial;
 
 impl ProjectionKind for Spatial {}
-impl RelationIndexSearch for Spatial {}
 
 // ---------------------------------------------------------------------------
 // Format constants (on-disk).
@@ -785,18 +785,61 @@ pub(crate) struct KnnParams {
     pub(crate) bind_distance: SpatialBindDistance,
 }
 
+/// One spatial relation-backed search — [`RelationIndexSearch::Request`] for
+/// [`Spatial`] (P103). Range and k-NN share the trait door as variants.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SpatialSearchRequest<'a> {
+    Range {
+        base: &'a RelationHandle,
+        idx: &'a RelationHandle,
+        bbox: &'a BoundingBox,
+    },
+    Knn {
+        base: &'a RelationHandle,
+        idx: &'a RelationHandle,
+        query: &'a GeoPoint,
+        params: &'a KnnParams,
+    },
+}
+
+impl RelationIndexSearch for Spatial {
+    type Request<'a> = SpatialSearchRequest<'a>;
+
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<Vec<Tuple>> {
+        match request {
+            SpatialSearchRequest::Range { base, idx, bbox } => {
+                spatial_range_query_body(tx, base, idx, bbox)
+            }
+            SpatialSearchRequest::Knn {
+                base,
+                idx,
+                query,
+                params,
+            } => spatial_knn_body(tx, base, idx, query, params),
+        }
+    }
+}
+
 impl Spatial {
-    /// Relation-backed bounding-box search — sole spatial range door (P103).
+    /// Relation-backed bounding-box search — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103).
     pub(crate) fn range_query(
         tx: &impl ReadTx,
         base: &RelationHandle,
         idx: &RelationHandle,
         bbox: &BoundingBox,
     ) -> Result<Vec<Tuple>> {
-        spatial_range_query_body(tx, base, idx, bbox)
+        Self::search_relation(
+            tx,
+            SpatialSearchRequest::Range { base, idx, bbox },
+        )
     }
 
-    /// Relation-backed k-NN — sole spatial knn door (P103).
+    /// Relation-backed k-NN — UFCS door into
+    /// [`RelationIndexSearch::search_relation`] (P103).
     pub(crate) fn knn(
         tx: &impl ReadTx,
         base: &RelationHandle,
@@ -804,7 +847,15 @@ impl Spatial {
         query: &GeoPoint,
         params: &KnnParams,
     ) -> Result<Vec<Tuple>> {
-        spatial_knn_body(tx, base, idx, query, params)
+        Self::search_relation(
+            tx,
+            SpatialSearchRequest::Knn {
+                base,
+                idx,
+                query,
+                params,
+            },
+        )
     }
 }
 

@@ -18,9 +18,9 @@
 //! (story #305 T3): [`crate::engines::hnsw::Hnsw`], [`crate::engines::fts::Fts`],
 //! [`crate::engines::lsh::Lsh`], [`crate::engines::sparse::Sparse`], and
 //! [`crate::engines::spatial::Spatial`]. Relation-backed search is owned by
-//! those kinds through [`RelationIndexSearch`] (inherent `knn` /
-//! `search_index` / `range_query` doors) — there is no `ProjectionKind`
-//! k-bound façade and no free-fn dual (P103). This module owns the shared
+//! [`RelationIndexSearch::search_relation`] on those kinds — inherent
+//! `knn` / `search_index` / `range_query` doors are thin UFCS aliases into
+//! that trait, not a second authority (P103). This module owns the shared
 //! protocol types. Segment freshness (T5) consumes [`Generation::classify`]
 //! at [`crate::engines::segments`] — staleness is [`Stale`], never an
 //! `Option` from a get-shaped call. The segment cache is rebuildable
@@ -29,7 +29,10 @@
 
 use std::fmt;
 
-use crate::data::value::RelationId;
+use miette::Result;
+
+use crate::data::value::{RelationId, Tuple};
+use crate::storage::ReadTx;
 
 /// A projection kind's identity in the build→seal→freshness machine.
 ///
@@ -51,10 +54,24 @@ pub trait SealedQuery: ProjectionKind {
     fn search(&self, query: &Self::Query) -> Self::Candidates;
 }
 
-/// Marker: this kind owns relation-backed index search on its inherent
-/// methods (`knn` / `search_index` / `range_query`). The sole search seam
-/// for engine kinds — free-fn duals and ProjectionKind façades are gone (P103).
-pub(crate) trait RelationIndexSearch: ProjectionKind {}
+/// Relation-backed index search — the sole search seam for engine kinds (P103).
+///
+/// Each kind supplies a [`Self::Request`] bundling one invocation's inputs
+/// and implements [`Self::search_relation`] as the algorithm door. An empty
+/// marker impl is condemned: ownership means the trait method runs the
+/// live HNSW / FTS / LSH / sparse / spatial search. Inherent `knn` /
+/// `search_index` / `range_query` names on engine types are UFCS-friendly
+/// aliases that construct `Request` and call this trait — not a dual path.
+pub(crate) trait RelationIndexSearch: ProjectionKind {
+    /// Bundled inputs for one relation-backed search invocation.
+    type Request<'a>;
+
+    /// Run the kind's relation-backed search algorithm.
+    fn search_relation<Tx: ReadTx>(
+        tx: &Tx,
+        request: Self::Request<'_>,
+    ) -> Result<Vec<Tuple>>;
+}
 
 /// Generation stamp carried by a sealed projection.
 ///
@@ -157,7 +174,7 @@ impl<K> ProjectionBuilder<K> {
 ///
 /// Produced only by [`ProjectionBuilder::seal`]. In-memory search is
 /// [`Sealed::query`] for [`SealedQuery`] kinds; relation engines search
-/// through [`RelationIndexSearch`] inherent doors on `K`.
+/// through [`RelationIndexSearch::search_relation`] on `K`.
 #[derive(Debug, Clone)]
 pub struct Sealed<K> {
     generation: Generation,
@@ -184,7 +201,8 @@ impl<K> Sealed<K> {
 impl<K: SealedQuery> Sealed<K> {
     /// Query this sealed in-memory projection. Absent from
     /// [`ProjectionBuilder`] and from [`Stale`] — and absent from
-    /// relation-backed engine kinds (those use [`RelationIndexSearch`]).
+    /// relation-backed engine kinds (those use
+    /// [`RelationIndexSearch::search_relation`]).
     pub fn query(&self, query: &K::Query) -> K::Candidates {
         self.kind.search(query)
     }
@@ -273,8 +291,8 @@ mod tests {
     }
 
     /// Closure test (story #305): one machine typechecks build→seal→classify
-    /// for all five engine kinds — search is [`RelationIndexSearch`], not a
-    /// ProjectionKind façade (P103).
+    /// for all five engine kinds — search is [`RelationIndexSearch`] with a
+    /// real `search_relation` door, not a ProjectionKind façade (P103).
     #[test]
     fn five_engine_kinds_share_one_machine() {
         use crate::engines::fts::Fts;
@@ -282,6 +300,13 @@ mod tests {
         use crate::engines::lsh::Lsh;
         use crate::engines::sparse::Sparse;
         use crate::engines::spatial::Spatial;
+
+        fn assert_owns_relation_search<K: RelationIndexSearch>() {}
+        assert_owns_relation_search::<Hnsw>();
+        assert_owns_relation_search::<Fts>();
+        assert_owns_relation_search::<Lsh>();
+        assert_owns_relation_search::<Sparse>();
+        assert_owns_relation_search::<Spatial>();
 
         let generation = stamp(1);
 
