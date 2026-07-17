@@ -334,9 +334,10 @@ impl fmt::Display for FormatVersion {
 /// still never aborts.
 ///
 /// **Retryable**: rerun the whole transaction. Prefer matching
-/// [`CommitFailure::Conflict`] on the commit outcome. Diagnostic code
-/// `storage::conflict` is the Report-era signal for retry helpers until
-/// story #273 removes the erased carrier.
+/// [`CommitFailure::Conflict`] on the commit outcome, or feeding
+/// [`CommitFailure`] into [`retry::RetryError`] via [`From`]. Residual
+/// Reports enter the same channel through [`retry::RetryError::classify`]
+/// on diagnostic code `storage::conflict` (never `downcast_ref`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, miette::Diagnostic)]
 #[diagnostic(code(storage::conflict))]
 pub struct ConflictError;

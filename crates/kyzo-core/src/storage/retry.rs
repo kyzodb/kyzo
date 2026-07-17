@@ -12,8 +12,10 @@
 //! Under SSI, a conflicted transaction is not a failure — it is an
 //! instruction to rerun. This is the single place that instruction is
 //! obeyed: retryable work is expressed as a closure that builds, runs, and
-//! commits a fresh transaction; [`crate::storage::ConflictError`] triggers a
-//! rerun and every other error propagates untouched.
+//! commits a fresh transaction; [`RetryError::Conflict`] (from
+//! [`ConflictError`] / [`CommitFailure::Conflict`] via [`From`], or
+//! [`RetryError::classify`] on a residual Report) triggers a rerun and
+//! every other error propagates untouched.
 
 use std::num::NonZeroUsize;
 
@@ -21,13 +23,57 @@ use miette::{Result, miette};
 
 use crate::storage::{CommitFailure, ConflictError};
 
-/// True when the report carries a typed [`ConflictError`] (directly or via
-/// a transparent [`CommitFailure::Conflict`] wrapper).
-fn report_is_conflict(err: &miette::Report) -> bool {
-    err.downcast_ref::<ConflictError>().is_some()
-        || err
-            .downcast_ref::<CommitFailure>()
-            .is_some_and(CommitFailure::is_conflict)
+/// Typed channel into the conflict-retry loop: conflict (rerun) or fatal.
+///
+/// Construct via [`From<ConflictError>`] / [`From<CommitFailure>`], or
+/// [`Self::classify`] when an attempt still surfaces an erased Report.
+/// Classification never uses `downcast_ref`.
+#[derive(Debug)]
+pub(crate) enum RetryError {
+    /// SSI conflict — discard the attempt; retry on a fresh snapshot.
+    Conflict(ConflictError),
+    /// Non-retryable refusal; propagate as the attempt's outcome.
+    Other(miette::Report),
+}
+
+impl RetryError {
+    /// Admit a residual [`miette::Report`] into this channel without
+    /// `downcast_ref`: only diagnostic code `storage::conflict` (the code
+    /// on [`ConflictError`], forwarded by transparent
+    /// [`CommitFailure::Conflict`]) is a conflict; everything else is fatal.
+    pub(crate) fn classify(r: miette::Report) -> Self {
+        if r.code()
+            .is_some_and(|c| c.to_string() == "storage::conflict")
+        {
+            Self::Conflict(ConflictError)
+        } else {
+            Self::Other(r)
+        }
+    }
+}
+
+impl From<ConflictError> for RetryError {
+    fn from(c: ConflictError) -> Self {
+        Self::Conflict(c)
+    }
+}
+
+impl From<CommitFailure> for RetryError {
+    fn from(f: CommitFailure) -> Self {
+        match f {
+            CommitFailure::Conflict(c) => Self::Conflict(c),
+            other => Self::Other(miette::Report::from(other)),
+        }
+    }
+}
+
+impl From<RetryError> for miette::Report {
+    fn from(e: RetryError) -> Self {
+        match e {
+            RetryError::Conflict(c) => c.into(),
+            RetryError::Other(r) => r,
+        }
+    }
 }
 
 /// Run `attempt` until it commits without conflict, retrying HOT (no
@@ -39,6 +85,12 @@ fn report_is_conflict(err: &miette::Report) -> bool {
 /// exhausting it returns the final [`crate::storage::ConflictError`].
 /// Zero attempts are unrepresentable: the budget is [`NonZeroUsize`] at the
 /// API, not a runtime check after mint.
+///
+/// Attempt errors are [`miette::Report`]; retry classifies them into
+/// [`RetryError`] via [`RetryError::classify`] (diagnostic code
+/// `storage::conflict`, never `downcast_ref`). Typed
+/// [`CommitFailure`] / [`ConflictError`] enter the same channel through
+/// [`From`] when constructed directly.
 ///
 /// Hot retry is for harnesses whose conflicts are injected or simulated
 /// (the DST campaigns): pausing there wastes wall-clock on races that
@@ -52,14 +104,18 @@ pub fn retry_on_conflict<T>(
     for _ in 0..max_attempts.get() {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(e) if report_is_conflict(&e) => {
-                last_err = Some(e);
-            }
-            Err(e) => return Err(e),
+            Err(e) => match RetryError::classify(e) {
+                RetryError::Conflict(c) => {
+                    last_err = Some(c);
+                }
+                RetryError::Other(r) => return Err(r),
+            },
         }
     }
     // INVARIANT(retry): NonZero attempts + conflict-only continuation ⇒ last_err is Some.
-    Err(last_err.unwrap_or_else(|| miette!("conflict retry exhausted without a stored error")))
+    Err(last_err
+        .map(Into::into)
+        .unwrap_or_else(|| miette!("conflict retry exhausted without a stored error")))
 }
 
 /// As [`retry_on_conflict`], with losses backing off: the first retries
@@ -78,15 +134,19 @@ pub fn retry_on_conflict_with_backoff<T>(
     for n in 0..max_attempts.get() {
         match attempt() {
             Ok(v) => return Ok(v),
-            Err(e) if report_is_conflict(&e) => {
-                last_err = Some(e);
-                backoff(n);
-            }
-            Err(e) => return Err(e),
+            Err(e) => match RetryError::classify(e) {
+                RetryError::Conflict(c) => {
+                    last_err = Some(c);
+                    backoff(n);
+                }
+                RetryError::Other(r) => return Err(r),
+            },
         }
     }
     // INVARIANT(retry): NonZero attempts + conflict-only continuation ⇒ last_err is Some.
-    Err(last_err.unwrap_or_else(|| miette!("conflict retry exhausted without a stored error")))
+    Err(last_err
+        .map(Into::into)
+        .unwrap_or_else(|| miette!("conflict retry exhausted without a stored error")))
 }
 
 /// The `n`-th loss's pause: yield for the first few, then sleep,
