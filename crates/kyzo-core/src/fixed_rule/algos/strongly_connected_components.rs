@@ -190,7 +190,7 @@ impl TarjanSccG {
                 }
                 None => {
                     frames.pop();
-                    // Structural: `ids[at]` was set to `Some` by `open`.
+                    // INVARIANT(scc_ids_open): `ids[at]` was set to `Some` by `open`.
                     if self.ids[at as usize] == Some(self.low[at as usize]) {
                         let label = self.low[at as usize];
                         while let Some(node) = self.stack.pop() {

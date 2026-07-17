@@ -55,8 +55,7 @@ impl FixedRule for Dfs {
 
         'outer: for node_tuple in starting_nodes.iter()? {
             let node_tuple = node_tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(dfs_start_col): `ensure_min_len(1)` proved a first column.
             let starting_node = &node_tuple[0];
             if visited.contains(starting_node) {
                 continue;

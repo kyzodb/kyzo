@@ -85,17 +85,25 @@ pub(crate) fn parse_schema(
     ))
 }
 
+/// Staging typestate for a column's type during `parse_col` (P089):
+/// `Unset` is never `ColType::Any` — Any is only chosen when parse completes
+/// with no type spelling.
+enum ColTypingStage {
+    Unset,
+    Set(NullableColType),
+}
+
 fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
     let mut src = pair.children();
     let name_p = src.expect("the column's name")?;
     let name = SmartString::from(name_p.as_str());
     // Unset until a type is parsed — never stage `ColType::Any` as "missing" (P089).
-    let mut typing: Option<NullableColType> = None;
+    let mut typing = ColTypingStage::Unset;
     let mut default_gen = None;
     let mut binding_candidate = None;
     for nxt in src {
         match nxt.as_rule() {
-            Rule::col_type => typing = Some(parse_nullable_type(nxt)?),
+            Rule::col_type => typing = ColTypingStage::Set(parse_nullable_type(nxt)?),
             Rule::expr => default_gen = Some(build_expr(nxt, &Default::default())?),
             Rule::out_arg => {
                 binding_candidate = Some(Symbol::new(nxt.as_str(), nxt.extract_span()))
@@ -104,7 +112,10 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
         }
     }
     // Omitted type defaults to nullable Any only after parse completes.
-    let typing = typing.unwrap_or(NullableColType::optional(ColType::Any));
+    let typing = match typing {
+        ColTypingStage::Set(t) => t,
+        ColTypingStage::Unset => NullableColType::optional(ColType::Any),
+    };
     let binding =
         binding_candidate.unwrap_or_else(|| Symbol::new(&name as &str, name_p.extract_span()));
     Ok((

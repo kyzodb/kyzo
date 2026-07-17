@@ -15,9 +15,8 @@
  *   `query/normalize.rs`'s `SessionView` (the runtime tier's query-time
  *   view) now implements it for real, so both in-memory inputs
  *   (`EpochStore`-backed) and stored/validity reads work in production.
- *   [`NoStoredInputs`] is the pre-runtime placeholder it superseded, kept
- *   only for its own regression test. No algorithm sees the seam — they
- *   consume [`FixedRulePayload`] /
+ *   The pre-runtime `NoStoredInputs` placeholder is gone (P090). No
+ *   algorithm sees the seam — they consume [`FixedRulePayload`] /
  *   [`FixedRuleInputRelation`] exactly as before (one lifetime instead of
  *   the original's two, since the `SessionTx<'b>` lifetime is erased by
  *   the trait object).
@@ -77,8 +76,8 @@
 //! - [`DEFAULT_FIXED_RULES`], the registry of the built-ins declared in
 //!   `algos/` (graph algorithms) and `utilities/`.
 //! - [`SimpleFixedRule`], the reduced-boilerplate wrapper for user-defined
-//!   rules over realized [`NamedRows`] — typed [`SimpleRuleBody`] owner,
-//!   never a `Box<dyn Fn…>` (P083).
+//!   rules over realized [`NamedRows`] — named [`SimpleRuleBody`] owner
+//!   types only (P083: no `Fn`/`dyn Fn` body).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -227,9 +226,9 @@ impl CancelFlag {
 /// `MagicFixedRuleRuleArg::Stored` input: arity lookup and (validity-
 /// aware) scans. `query/normalize.rs`'s `SessionView` implements this in
 /// production, so a fixed rule reading a stored (including historical)
-/// relation runs for real; [`NoStoredInputs`] is the superseded pre-runtime
-/// placeholder, kept only for its own regression test. Algorithms never see
-/// this trait — it exists so their code is final now.
+/// relation runs for real. The condemned pre-runtime `NoStoredInputs`
+/// placeholder is demolished (P090). Algorithms never see this trait — it
+/// exists so their code is final now.
 pub(crate) trait StoredInputSource {
     fn stored_arity(&self, name: &Symbol) -> Result<usize>;
     /// Scan the whole relation, as-of `as_of` if given.
@@ -241,60 +240,6 @@ pub(crate) trait StoredInputSource {
         prefix: &DataValue,
         as_of: Option<AsOf>,
     ) -> Result<TupleIter<'a>>;
-}
-
-/// [`NoStoredInputs`]'s refusal. In production, `SessionView` serves
-/// stored/validity reads for real and this error never fires; it is
-/// reachable only through the pre-runtime placeholder's own test.
-#[derive(Debug, Error, Diagnostic)]
-#[error("Stored relation '{name}' is not available to fixed rules yet")]
-#[diagnostic(code(algo::stored_input_unavailable))]
-#[diagnostic(help(
-    "this refusal is the pre-runtime StoredInputSource placeholder \
-     (NoStoredInputs); the live runtime tier serves stored reads instead"
-))]
-pub(crate) struct StoredInputUnavailable {
-    name: String,
-    #[label]
-    span: SourceSpan,
-}
-
-/// The pre-runtime [`StoredInputSource`] placeholder: every stored read
-/// refuses, typed. Superseded in production by `query/normalize.rs`'s
-/// `SessionView`, which implements the trait for real; kept here only for
-/// its own regression test (`fixed_rule_stored_input_is_a_refusing_seam`).
-///
-/// **P112 residual door.** Production never constructs this; the module-
-/// level `allow(dead_code)` on `fixed_rule` in `lib.rs` names this
-/// placeholder (and sibling unused items), not a missing consumer for the
-/// live `SessionView` path.
-pub(crate) struct NoStoredInputs;
-
-impl NoStoredInputs {
-    fn refuse<T>(&self, name: &Symbol) -> Result<T> {
-        Err(StoredInputUnavailable {
-            name: name.to_string(),
-            span: name.span,
-        }
-        .into())
-    }
-}
-
-impl StoredInputSource for NoStoredInputs {
-    fn stored_arity(&self, name: &Symbol) -> Result<usize> {
-        self.refuse(name)
-    }
-    fn stored_scan_all<'a>(&'a self, name: &Symbol, _as_of: Option<AsOf>) -> Result<TupleIter<'a>> {
-        self.refuse(name)
-    }
-    fn stored_scan_prefix<'a>(
-        &'a self,
-        name: &Symbol,
-        _prefix: &DataValue,
-        _as_of: Option<AsOf>,
-    ) -> Result<TupleIter<'a>> {
-        self.refuse(name)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -617,7 +562,16 @@ impl<'a> FixedRulePayload<'a> {
                 help: "a positive integer is required".to_string(),
             }
         );
-        Ok(i as usize)
+        let span = self.option_span(name).unwrap_or(self.manifest.span);
+        usize::try_from(i).map_err(|_| {
+            WrongFixedRuleOptionError {
+                name: name.to_string(),
+                span,
+                rule_name: self.manifest.fixed_handle.name.to_string(),
+                help: "a positive integer fitting usize is required".to_string(),
+            }
+            .into()
+        })
     }
     /// Extract a non-negative integer option
     pub fn non_neg_integer_option(&self, name: &str, default: Option<usize>) -> Result<usize> {
@@ -631,7 +585,16 @@ impl<'a> FixedRulePayload<'a> {
                 help: "a non-negative integer is required".to_string(),
             }
         );
-        Ok(i as usize)
+        let span = self.option_span(name).unwrap_or(self.manifest.span);
+        usize::try_from(i).map_err(|_| {
+            WrongFixedRuleOptionError {
+                name: name.to_string(),
+                span,
+                rule_name: self.manifest.fixed_handle.name.to_string(),
+                help: "a non-negative integer fitting usize is required".to_string(),
+            }
+            .into()
+        })
     }
     /// Extract a floating point option
     pub fn float_option(&self, name: &str, default: Option<f64>) -> Result<f64> {
@@ -755,12 +718,35 @@ struct OutputSpendGuard {
     /// Globally admitted total as of this stratum's epoch-0 barrier.
     baseline: u64,
     ceiling: u64,
-    countdown: u32,
+    /// Remaining puts until the next ceiling check (P097: proven stride).
+    stride_left: OutputStrideLeft,
 }
 
 /// Rows a fixed rule may `put` between mid-run ceiling checks — harmonized
-/// with `query::eval`'s `INTERRUPT_STRIDE`.
+/// with `query::eval`'s `INTERRUPT_STRIDE`. Non-zero by construction.
 const OUTPUT_STRIDE: u32 = 64;
+
+/// Countdown to the next mid-run ceiling check (P097).
+struct OutputStrideLeft(u32);
+
+impl OutputStrideLeft {
+    fn fresh() -> Self {
+        Self(OUTPUT_STRIDE)
+    }
+
+    /// Tick one put; returns true when a ceiling check is due.
+    fn tick(&mut self) -> bool {
+        // INVARIANT(output_stride): `OUTPUT_STRIDE >= 1`, so reset never
+        // installs a zero countdown that would skip checks forever.
+        self.0 -= 1;
+        if self.0 == 0 {
+            self.0 = OUTPUT_STRIDE;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 impl FixedRuleOutput {
     /// Brand a fresh output store with the rule's declared arity (the
@@ -795,7 +781,7 @@ impl FixedRuleOutput {
             guard: ceiling.map(|ceiling| OutputSpendGuard {
                 baseline,
                 ceiling,
-                countdown: OUTPUT_STRIDE,
+                stride_left: OutputStrideLeft::fresh(),
             }),
         }
     }
@@ -813,9 +799,7 @@ impl FixedRuleOutput {
             }
         );
         if let Some(guard) = self.guard.as_mut() {
-            guard.countdown -= 1;
-            if guard.countdown == 0 {
-                guard.countdown = OUTPUT_STRIDE;
+            if guard.stride_left.tick() {
                 // Distinct rows materialized so far (the store dedups), the
                 // same quantity the barrier will admit — so this never
                 // refuses an output the barrier would have accepted.
@@ -936,26 +920,23 @@ pub trait FixedRule: Send + Sync {
 
 /// Private seal: any private field blocks struct-literal minting outside
 /// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]
-/// / [`NamedRows::new`] (P082 / NamedRows private fields).
+/// (P082).
 #[derive(Debug, Clone, Default)]
 struct NamedRowsSeal;
 
 /// The rows of a relation, together with its header names.
 ///
-/// Prefer [`Self::try_new`]: it proves every row's width equals
-/// `headers.len()`. [`Self::new`] panics on arity mismatch (legacy door
-/// for call sites that already guarantee the shape). Payload fields stay
-/// `pub(crate)` for same-crate readers mid-migration to accessors; the
-/// private [`NamedRowsSeal`] makes struct-literal minting impossible
-/// outside this module (P082).
+/// Sole door: [`Self::try_new`] proves every row's width equals
+/// `headers.len()`. Payload fields are private; the private
+/// [`NamedRowsSeal`] blocks struct-literal minting outside this module
+/// (P082). Read via [`Self::headers`] / [`Self::rows`] / [`Self::next`];
+/// consume via [`Self::into_parts`] / [`Self::into_rows`] /
+/// [`Self::with_next`]. Illegal (misaligned) NamedRows are unconstructible.
 #[derive(Debug, Clone, Default)]
 pub struct NamedRows {
-    /// The headers
-    pub(crate) headers: Vec<String>,
-    /// The rows
-    pub(crate) rows: Vec<Tuple>,
-    /// Contains the next named rows, if exists
-    pub(crate) next: Option<Box<NamedRows>>,
+    headers: Vec<String>,
+    rows: Vec<Tuple>,
+    next: Option<Box<NamedRows>>,
     _seal: NamedRowsSeal,
 }
 
@@ -972,7 +953,7 @@ pub struct NamedRowsArityError {
 }
 
 impl NamedRows {
-    /// Proving door: every row's width equals `headers.len()`.
+    /// Sole door: every row's width equals `headers.len()`.
     pub fn try_new(
         headers: Vec<String>,
         rows: Vec<Tuple>,
@@ -996,18 +977,12 @@ impl NamedRows {
         })
     }
 
-    /// Create named rows with the given headers and rows.
-    ///
-    /// # Panics
-    /// Panics when any row's width differs from `headers.len()`. Prefer
-    /// [`Self::try_new`] at fallible boundaries.
-    pub fn new(headers: Vec<String>, rows: Vec<Tuple>) -> Self {
-        Self::try_new(headers, rows).unwrap_or_else(|e| {
-            panic!(
-                "NamedRows::new arity mismatch (header {}, row {} width {}): use try_new",
-                e.header_arity, e.row_index, e.row_arity
-            )
-        })
+    /// Alias of [`Self::try_new`] — typed refuse, never panic (P082).
+    pub fn new(
+        headers: Vec<String>,
+        rows: Vec<Tuple>,
+    ) -> std::result::Result<Self, NamedRowsArityError> {
+        Self::try_new(headers, rows)
     }
 
     /// Header names.
@@ -1028,6 +1003,18 @@ impl NamedRows {
     /// Consume into headers, rows, and optional follow-on page.
     pub fn into_parts(self) -> (Vec<String>, Vec<Tuple>, Option<Box<NamedRows>>) {
         (self.headers, self.rows, self.next)
+    }
+
+    /// Consume into the row vector only.
+    pub fn into_rows(self) -> Vec<Tuple> {
+        self.rows
+    }
+
+    /// Attach a follow-on page (pagination chain). Does not re-prove arity —
+    /// the page was already admitted through [`Self::try_new`].
+    pub fn with_next(mut self, next: Option<Box<NamedRows>>) -> Self {
+        self.next = next;
+        self
     }
 
     /// Encode this result set as a self-contained Arrow IPC stream (story
@@ -1055,13 +1042,14 @@ impl IntoIterator for NamedRows {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// SimpleFixedRule — typed body owner (P083: no Box<dyn Fn>)
+// SimpleFixedRule — named body owner only (P083: no Fn / dyn Fn)
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Typed body for a simple fixed rule. Prefer a named `FixedRule` impl for
-/// production algorithms; this trait is the reduced door for host/test
-/// rules that already work over realized [`NamedRows`].
-pub(crate) trait SimpleRuleBody: Send + Sync + 'static {
+/// Named body for a simple fixed rule. Prefer a named [`FixedRule`] impl for
+/// production algorithms; this trait is the reduced door for host rules that
+/// already work over realized [`NamedRows`]. Bodies are named types only —
+/// there is no `Fn` blanket impl (P083).
+pub trait SimpleRuleBody: Send + Sync + 'static {
     fn apply(
         &self,
         inputs: Vec<NamedRows>,
@@ -1069,24 +1057,7 @@ pub(crate) trait SimpleRuleBody: Send + Sync + 'static {
     ) -> Result<NamedRows>;
 }
 
-impl<F> SimpleRuleBody for F
-where
-    F: Fn(Vec<NamedRows>, BTreeMap<String, DataValue>) -> Result<NamedRows>
-        + Send
-        + Sync
-        + 'static,
-{
-    fn apply(
-        &self,
-        inputs: Vec<NamedRows>,
-        options: BTreeMap<String, DataValue>,
-    ) -> Result<NamedRows> {
-        self(inputs, options)
-    }
-}
-
-/// Channel-backed simple-rule body: one typed owner instead of an erased
-/// `dyn Fn` closure (P083).
+/// Channel-backed simple-rule body: one named owner (P083).
 struct ChannelRuleBody {
     db2app: SyncSender<(
         Vec<NamedRows>,
@@ -1111,9 +1082,57 @@ impl SimpleRuleBody for ChannelRuleBody {
     }
 }
 
+/// Named body: emit no rows under the declared headers (empty relation).
+pub struct EmptyNamedRowsBody;
+
+impl SimpleRuleBody for EmptyNamedRowsBody {
+    fn apply(
+        &self,
+        _inputs: Vec<NamedRows>,
+        _options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        Ok(NamedRows::try_new(vec![], vec![])?)
+    }
+}
+
+/// Named body: forward the first input relation unchanged.
+pub struct IdentityNamedRowsBody;
+
+impl SimpleRuleBody for IdentityNamedRowsBody {
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        _options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        let input = inputs
+            .into_iter()
+            .next()
+            .ok_or_else(|| miette::miette!("IdentityNamedRowsBody requires one input relation"))?;
+        let (headers, rows, next) = input.into_parts();
+        Ok(NamedRows::try_new(headers, rows)?.with_next(next))
+    }
+}
+
+/// Named body: deliberately emit a one-column row under a mismatched
+/// arity declaration — used to pin the universal writer check.
+pub struct MismatchedArityBody;
+
+impl SimpleRuleBody for MismatchedArityBody {
+    fn apply(
+        &self,
+        _inputs: Vec<NamedRows>,
+        _options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        Ok(NamedRows::try_new(
+            vec!["a".to_string()],
+            vec![Tuple::from_vec(vec![DataValue::from(1i64)])],
+        )?)
+    }
+}
+
 /// Simple wrapper for custom fixed rule. You have less control than implementing [FixedRule] directly,
-/// but implementation is simpler. The body is a typed [`SimpleRuleBody`] —
-/// not a `Box<dyn Fn…>` (P083).
+/// but implementation is simpler. The body is a named [`SimpleRuleBody`] —
+/// never a closure / `Fn` owner (P083).
 pub struct SimpleFixedRule<B> {
     return_arity: usize,
     body: B,
@@ -1123,7 +1142,7 @@ impl<B: SimpleRuleBody> SimpleFixedRule<B> {
     /// Construct a SimpleFixedRule.
     ///
     /// * `return_arity`: The return arity of this rule.
-    /// * `body`: The typed rule body ([`SimpleRuleBody`], including closures).
+    /// * `body`: A named [`SimpleRuleBody`] (not a closure).
     pub fn new(return_arity: usize, body: B) -> Self {
         Self {
             return_arity,
@@ -1193,7 +1212,7 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
         let input_arity = payload.manifest.rule_args.len();
         let inputs: Vec<_> = (0..input_arity)
             .map(|i| -> Result<_> {
-                // Structural: `i < rule_args.len()`, so the index resolves.
+                // INVARIANT(simple_input_index): `i < rule_args.len()`.
                 let input = payload.get_input(i)?;
                 let rows: Vec<_> = input.iter()?.try_collect()?;
                 let mut headers = input
@@ -1207,7 +1226,7 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
                 for i in l..m {
                     headers.push(format!("_{i}"));
                 }
-                Ok(NamedRows::new(headers, rows))
+                Ok(NamedRows::try_new(headers, rows)?)
             })
             .try_collect()?;
         let results: NamedRows = self.body.apply(inputs, options)?;
@@ -1443,9 +1462,8 @@ impl MagicFixedRuleRuleArg {
 
 /// Runs fixed rules without a database: builds a [`MagicFixedRuleApply`]
 /// over in-memory inputs, executes `run`, and returns the output rows in
-/// canonical order. The stored-input seam stays closed
-/// ([`NoStoredInputs`]), which is exactly the point: everything except
-/// stored-relation arguments is testable before the runtime lands.
+/// canonical order. Stored-relation arguments are refused by the harness
+/// double [`HarnessStoredClosed`] (not a production placeholder — P090).
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
@@ -1464,6 +1482,50 @@ pub(crate) mod tests_support {
                 rows,
                 arity,
             }
+        }
+    }
+
+    /// Test-only stored-input double: every stored read refuses. Not the
+    /// demolished production `NoStoredInputs` seam (P090) — harness door only.
+    pub(crate) struct HarnessStoredClosed;
+
+    #[derive(Debug, Error, Diagnostic)]
+    #[error("test harness has no stored relation '{name}'")]
+    #[diagnostic(code(algo::harness_stored_closed))]
+    struct HarnessStoredClosedError {
+        name: String,
+        #[label]
+        span: SourceSpan,
+    }
+
+    impl HarnessStoredClosed {
+        fn refuse<T>(&self, name: &Symbol) -> Result<T> {
+            Err(HarnessStoredClosedError {
+                name: name.to_string(),
+                span: name.span,
+            }
+            .into())
+        }
+    }
+
+    impl StoredInputSource for HarnessStoredClosed {
+        fn stored_arity(&self, name: &Symbol) -> Result<usize> {
+            self.refuse(name)
+        }
+        fn stored_scan_all<'a>(
+            &'a self,
+            name: &Symbol,
+            _as_of: Option<AsOf>,
+        ) -> Result<TupleIter<'a>> {
+            self.refuse(name)
+        }
+        fn stored_scan_prefix<'a>(
+            &'a self,
+            name: &Symbol,
+            _prefix: &DataValue,
+            _as_of: Option<AsOf>,
+        ) -> Result<TupleIter<'a>> {
+            self.refuse(name)
         }
     }
 
@@ -1535,7 +1597,7 @@ pub(crate) mod tests_support {
             let payload = FixedRulePayload {
                 manifest: &self.manifest,
                 stores: &self.stores,
-                stored: &NoStoredInputs,
+                stored: &HarnessStoredClosed,
             };
             let mut out = FixedRuleOutput::new(self.arity, SourceSpan::default());
             rule.run(payload, &mut out, cancel)?;
@@ -1632,25 +1694,14 @@ mod tests {
     }
 
     /// `SimpleFixedRule` rides the universal check: its rows are
-    /// width-checked by the writer.
+    /// width-checked by the writer. Bodies are named types (P083).
     #[test]
     fn simple_fixed_rule_arity_check_is_universal() {
-        let rule = SimpleFixedRule::new(2, |_inputs, _opts| {
-            Ok(NamedRows::new(
-                vec!["a".to_string()],
-                vec![Tuple::from_vec(vec![DataValue::from(1i64)])], // width 1, declared 2
-            ))
-        });
+        let rule = SimpleFixedRule::new(2, MismatchedArityBody);
         let res = run_fixed_rule(&rule, vec![], BTreeMap::new(), CancelFlag::default());
         assert!(res.is_err());
 
-        let rule = SimpleFixedRule::new(1, |inputs, _opts| {
-            // Identity over the single input.
-            Ok(NamedRows::new(
-                vec!["a".to_string()],
-                inputs.into_iter().next().unwrap().rows,
-            ))
-        });
+        let rule = SimpleFixedRule::new(1, IdentityNamedRowsBody);
         let got = run_fixed_rule(
             &rule,
             vec![TestInput::new(
@@ -1665,9 +1716,11 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// The stored-input seam refuses, typed, until the runtime lands.
+    /// Harness stored-input double refuses stored args (P090: production
+    /// placeholder gone; this pins the test door only).
     #[test]
-    fn stored_inputs_refuse_before_runtime() {
+    fn harness_stored_inputs_refuse() {
+        use tests_support::HarnessStoredClosed;
         let span = SourceSpan::default();
         let arg = MagicFixedRuleRuleArg::Stored {
             name: Symbol::new("some_relation", span),
@@ -1676,8 +1729,8 @@ mod tests {
             span,
         };
         let stores = BTreeMap::new();
-        let err = arg.arity(&stores, &NoStoredInputs).unwrap_err();
-        assert!(err.to_string().contains("not available"), "{err}");
+        let err = arg.arity(&stores, &HarnessStoredClosed).unwrap_err();
+        assert!(err.to_string().contains("test harness"), "{err}");
     }
 
     /// Cancellation is honored mid-run: a spent [`CancelAuthority`] makes a
@@ -1744,9 +1797,9 @@ mod tests {
         let (rule, receiver) = SimpleFixedRule::rule_with_channel(1);
         let handle = std::thread::spawn(move || {
             let (inputs, _opts, reply) = receiver.recv().unwrap();
-            let rows = inputs.into_iter().next().unwrap().rows;
+            let (_headers, rows, _next) = inputs.into_iter().next().unwrap().into_parts();
             reply
-                .send(Ok(NamedRows::new(vec!["x".to_string()], rows)))
+                .send(Ok(NamedRows::try_new(vec!["x".to_string()], rows).unwrap()))
                 .unwrap();
         });
         let got = run_fixed_rule(
@@ -2153,13 +2206,14 @@ mod tests {
     /// path for a genuinely heterogeneous column.
     #[test]
     fn to_arrow_ipc_encodes_a_real_result_set() {
-        let named = NamedRows::new(
+        let named = NamedRows::try_new(
             vec!["n".into(), "name".into()],
             vec![
                 Tuple::from_vec(vec![DataValue::from(1), s("a")]),
                 Tuple::from_vec(vec![DataValue::from(2), s("b")]),
             ],
-        );
+        )
+        .unwrap();
         let bytes = named
             .to_arrow_ipc()
             .expect("uniformly-typed columns encode");
@@ -2168,13 +2222,14 @@ mod tests {
 
     #[test]
     fn to_arrow_ipc_refuses_a_heterogeneous_column() {
-        let named = NamedRows::new(
+        let named = NamedRows::try_new(
             vec!["mixed".into()],
             vec![
                 Tuple::from_vec(vec![DataValue::from(1)]),
                 Tuple::from_vec(vec![s("x")]),
             ],
-        );
+        )
+        .unwrap();
         let err = named.to_arrow_ipc().unwrap_err();
         assert!(
             err.to_string().contains("more than one non-null kind"),

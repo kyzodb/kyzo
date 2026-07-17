@@ -59,8 +59,8 @@ impl FixedRule for ShortestPathAStar {
             for goal in goals.iter()? {
                 let goal = goal?;
                 let (cost, path) = astar(&start, &goal, edges, nodes, &heuristic, cancel.clone())?;
-                // Structural: `ensure_min_len(1)` on `starting`/`goals`
-                // proved every tuple has a first column.
+                // INVARIANT(astar_endpoint_col): `ensure_min_len(1)` on
+                // `starting`/`goals` proved a first column.
                 out.put(Tuple::from_vec(vec![
                     start[0].clone(),
                     goal[0].clone(),
@@ -91,8 +91,7 @@ fn astar(
     heuristic: &Expr,
     cancel: CancelFlag,
 ) -> Result<(f64, Vec<DataValue>)> {
-    // Structural: the caller's `ensure_min_len(1)` on `starting`/`goals`
-    // proved every tuple has a first column.
+    // INVARIANT(astar_endpoint_col): caller's `ensure_min_len(1)` proved a first column.
     let start_node = &starting.as_slice()[0];
     let goal_node = &goal.as_slice()[0];
     let eval_heuristic = |node: &Tuple| -> Result<f64> {

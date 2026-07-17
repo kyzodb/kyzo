@@ -1308,29 +1308,25 @@ fn negation_over_asof_non_prefix_join_matches_independent_complement() {
     assert_eq!(got, BTreeSet::from([Tuple::from_vec(vec![v(999)])]));
 }
 
-/// Fixed rules reading stored relations (validity-keyed or not) go through
-/// the `StoredInputSource` seam. In production `query/normalize.rs`'s
-/// `SessionView` implements it for real, so a fixed rule consuming a
-/// validity relation actually reads it. `NoStoredInputs` — exercised below
-/// — is the superseded pre-runtime placeholder that refuses every stored
-/// read with a typed, spanned `StoredInputUnavailable`; this test pins ONLY
-/// that placeholder's own behavior, not current production semantics.
+/// Fixed rules reading stored relations go through `StoredInputSource`.
+/// Production serves them via `query/normalize.rs`'s `SessionView`. The
+/// condemned `NoStoredInputs` placeholder is gone (P090); the fixed-rule
+/// test harness's `HarnessStoredClosed` is the only refusing double, and
+/// this trial pins that harness door (not a production residual).
 #[test]
-fn fixed_rule_stored_input_is_a_refusing_seam() {
-    use crate::fixed_rule::NoStoredInputs;
+fn fixed_rule_harness_stored_input_refuses() {
     use crate::fixed_rule::StoredInputSource;
+    use crate::fixed_rule::tests_support::HarnessStoredClosed;
 
-    let src = NoStoredInputs;
-    // As-of read of a (would-be) validity relation refuses, typed.
+    let src = HarnessStoredClosed;
     let err = src
         .stored_scan_all(&sym("hist"), Some(AsOf::current(vts(20))))
         .err()
-        .expect("NoStoredInputs must refuse an as-of stored scan");
+        .expect("harness stored double must refuse an as-of stored scan");
     assert!(
-        err.to_string().contains("not available to fixed rules"),
-        "expected StoredInputUnavailable, got: {err:?}"
+        err.to_string().contains("test harness"),
+        "expected HarnessStoredClosed refusal, got: {err:?}"
     );
-    // The non-as-of read refuses identically (the seam is total).
     assert!(src.stored_scan_all(&sym("hist"), None).is_err());
     assert!(src.stored_arity(&sym("hist")).is_err());
 }

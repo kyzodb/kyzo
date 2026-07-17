@@ -639,15 +639,12 @@ impl<S: Storage> Db<S> {
                 // for the rows, which the mutation pipeline routed through the
                 // collector.
                 if ret == ReturnMutation::Returning {
-                    Ok(returning_rows(callback_collector, &meta.name.name))
+                    returning_rows(callback_collector, &meta.name.name)
                 } else {
-                    Ok(NamedRows::new(
-                        vec!["status".to_string()],
-                        vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-                    ))
+                    Ok(status_ok())
                 }
             }
-            None => Ok(materialize(rows, &head)),
+            None => materialize(rows, &head),
         }
     }
 
@@ -670,7 +667,7 @@ impl<S: Storage> Db<S> {
             crate::engines::segments::Segments(Some(&self.segments)),
         )?;
         let rows = Self::finalize_rows(&result, limited, &head, &out_opts)?;
-        Ok(materialize(rows, &head))
+        materialize(rows, &head)
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -703,10 +700,10 @@ impl<S: Storage> Db<S> {
                         DataValue::from(format!("{:?}", handle.access_level)),
                     ]));
                 }
-                Ok(NamedRows::new(
+                Ok(NamedRows::try_new(
                     vec!["name".into(), "arity".into(), "access_level".into()],
                     rows,
-                ))
+                )?)
             }
             SysOp::ListColumns(name) => {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
@@ -724,7 +721,7 @@ impl<S: Storage> Db<S> {
                         DataValue::from(col.1),
                     ]));
                 }
-                Ok(NamedRows::new(vec!["column".into(), "is_key".into()], rows))
+                Ok(NamedRows::try_new(vec!["column".into(), "is_key".into()], rows)?)
             }
             SysOp::ListFixedRules => {
                 let rows = self
@@ -732,7 +729,7 @@ impl<S: Storage> Db<S> {
                     .keys()
                     .map(|k| Tuple::from_vec(vec![DataValue::from(k.as_str())]))
                     .collect();
-                Ok(NamedRows::new(vec!["name".into()], rows))
+                Ok(NamedRows::try_new(vec!["name".into()], rows)?)
             }
             SysOp::ShowTrigger(name) => {
                 let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());
@@ -750,12 +747,12 @@ impl<S: Storage> Db<S> {
                         DataValue::from(src.source()),
                     ]));
                 }
-                Ok(NamedRows::new(vec!["kind".into(), "source".into()], rows))
+                Ok(NamedRows::try_new(vec!["kind".into(), "source".into()], rows)?)
             }
-            SysOp::ListRunning => Ok(NamedRows::new(
+            SysOp::ListRunning => Ok(NamedRows::try_new(
                 vec!["id".into(), "started_at".into()],
                 vec![],
-            )),
+            )?),
 
             // Write catalog ops (retry on conflict).
             SysOp::RemoveRelation(names) => self.sys_write(|tx| {
@@ -810,10 +807,10 @@ impl<S: Storage> Db<S> {
                         crate::storage::merkle::relation_root(&rtx, id, ceiling)?
                     }
                 };
-                Ok(NamedRows::new(
+                Ok(NamedRows::try_new(
                     vec!["root".into()],
                     vec![Tuple::from_vec(vec![DataValue::from(root.to_hex())])],
-                ))
+                )?)
             }
 
             // Story #80: the ::verify self-adversary product surface.
@@ -846,7 +843,7 @@ impl<S: Storage> Db<S> {
                         ])
                     })
                     .collect();
-                Ok(NamedRows::new(vec!["name".into(), "kind".into()], rows))
+                Ok(NamedRows::try_new(vec!["name".into(), "kind".into()], rows)?)
             }
             SysOp::CreateIndex(rel, name, cols) => {
                 self.sys_write(|tx| tx.create_plain_index(&rel.name, &name.name, &cols))
@@ -911,33 +908,35 @@ fn build_budget(
 }
 
 /// Materialize a row vector into a headered result.
-fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> NamedRows {
+fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> Result<NamedRows> {
     let headers = head.iter().map(|s| s.name.to_string()).collect();
-    NamedRows::new(headers, rows)
+    Ok(NamedRows::try_new(headers, rows)?)
 }
 
 /// A one-cell `status: OK` result for ops that report success, not rows.
 pub(crate) fn status_ok() -> NamedRows {
-    NamedRows::new(
+    // INVARIANT(status_ok): one header, one width-1 row.
+    NamedRows::try_new(
         vec!["status".to_string()],
         vec![Tuple::from_vec(vec![DataValue::from("OK")])],
     )
+    .expect("INVARIANT(status_ok): status/OK shape")
 }
 
 /// Build the `:returning` result from what the mutation collected. The
 /// collector holds `(op, new, old)` events; `:returning` reports the new rows.
-fn returning_rows(collector: &CallbackCollector, relation: &str) -> NamedRows {
+fn returning_rows(collector: &CallbackCollector, relation: &str) -> Result<NamedRows> {
     let mut headers = vec![];
     let mut rows = vec![];
     if let Some(events) = collector.get(relation) {
         for (_op, new, _old) in events {
             if headers.is_empty() {
-                headers = new.headers.clone();
+                headers = new.headers().to_vec();
             }
-            rows.extend(new.rows.iter().cloned());
+            rows.extend(new.rows().iter().cloned());
         }
     }
-    NamedRows::new(headers, rows)
+    Ok(NamedRows::try_new(headers, rows)?)
 }
 
 /// Map the parser's access-level enum to the catalog's. Both are the same
@@ -1328,7 +1327,7 @@ mod tests {
     /// Result rows as sorted `i64` vectors, for order-independent assertions.
     fn int_rows(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
-            .rows
+            .rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect();
@@ -1541,13 +1540,13 @@ mod tests {
         // A Datalog answer is a set; :sort puts it in distance order.
         // Nearest first by squared L2: id 1 at 0, id 3 at 0.02, id 2 at 2.
         let ids: Vec<i64> = out
-            .rows
+            .rows()
             .iter()
             .map(|r| r[1].get_int().expect("id"))
             .collect();
         assert_eq!(ids, vec![1, 3, 2], "nearest-first order");
-        let d0 = out.rows[0][0].get_float().expect("dist");
-        let d1 = out.rows[1][0].get_float().expect("dist");
+        let d0 = out.rows()[0][0].get_float().expect("dist");
+        let d1 = out.rows()[1][0].get_float().expect("dist");
         assert!(d0.abs() < 1e-6, "exact match at distance 0, got {d0}");
         assert!((d1 - 0.02).abs() < 1e-6, "squared L2, got {d1}");
     }
@@ -1584,16 +1583,16 @@ mod tests {
                 no_params(),
             )
             .expect("fts search");
-        assert_eq!(out.rows.len(), 1);
-        assert_eq!(out.rows[0][0].get_int(), Some(1));
-        assert!(out.rows[0][1].get_float().expect("score") > 0.0);
+        assert_eq!(out.rows().len(), 1);
+        assert_eq!(out.rows()[0][0].get_int(), Some(1));
+        assert!(out.rows()[0][1].get_float().expect("score") > 0.0);
         // The searching row must survive a doc deletion (hook coverage).
         db.run_script("?[id] <- [[1]] :rm doc {id}", no_params())
             .expect("delete");
         let out = db
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 5}", no_params())
             .expect("fts search after delete");
-        assert_eq!(out.rows.len(), 0, "deleted doc left the index");
+        assert_eq!(out.rows().len(), 0, "deleted doc left the index");
     }
 
     /// A single search atom whose hit count exceeds one output batch
@@ -1618,7 +1617,7 @@ mod tests {
             .run_script("?[id] := ~doc:txt{id | query: 'fox', k: 1500}", no_params())
             .expect("boundary search");
         assert_eq!(
-            out.rows.len(),
+            out.rows().len(),
             1200,
             "every hit exactly once across the boundary"
         );
@@ -1648,7 +1647,7 @@ mod tests {
             )
             .expect("lsh search");
         let ids: Vec<i64> = out
-            .rows
+            .rows()
             .iter()
             .map(|r| r[0].get_int().expect("id"))
             .collect();
@@ -1805,7 +1804,7 @@ mod tests {
                 .run_script("?[k, v] := *t[k, v]", no_params())
                 .expect("read");
             assert!(
-                gone.rows.is_empty(),
+                gone.rows().is_empty(),
                 "retracted fact must be absent: {gone:?}"
             );
             db.run_script("?[k, v] <- [[1, 'second']] :put t {k => v}", no_params())
@@ -1813,15 +1812,15 @@ mod tests {
             let back = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
                 .expect("read");
-            assert_eq!(back.rows.len(), 1, "reinserted fact must be present");
-            assert_eq!(back.rows[0][1], DataValue::from("second"));
+            assert_eq!(back.rows().len(), 1, "reinserted fact must be present");
+            assert_eq!(back.rows()[0][1], DataValue::from("second"));
             // And once more: the second retraction must also govern.
             db.run_script("?[k] <- [[1]] :rm t {k}", no_params())
                 .expect("rm again");
             let gone = db
                 .run_script("?[k, v] := *t[k, v]", no_params())
                 .expect("read");
-            assert!(gone.rows.is_empty(), "re-retracted fact must be absent");
+            assert!(gone.rows().is_empty(), "re-retracted fact must be absent");
         }
         let dir = tempfile::tempdir().unwrap();
         drive(Db::new(new_fjall_storage(dir.path()).unwrap()).unwrap());
@@ -1864,7 +1863,7 @@ mod tests {
             .expect("two-coordinate read");
         let want: Vec<Tuple> = vec![Tuple::from_vec(vec![DataValue::from("retro")])];
         assert_eq!(
-            rows.rows, want,
+            rows.rows(), want,
             "system-now, valid-200 must see the retroactive claim"
         );
         // Swapped (sys=200, valid=now): at system time 200 µs the record
@@ -1874,7 +1873,7 @@ mod tests {
             .run_script(&format!("?[v] := *hist[1, v @ 200, {now}]"), no_params())
             .expect("swapped-coordinate read");
         assert!(
-            rows.rows.is_empty(),
+            rows.rows().is_empty(),
             "at system time 200µs the record knew nothing: {rows:?}"
         );
     }
@@ -1909,12 +1908,12 @@ mod tests {
             .run_script("?[v, k] := *t[k, v] :order v", no_params())
             .expect("base read");
         assert_eq!(
-            via_index.rows, via_base.rows,
+            via_index.rows(), via_base.rows(),
             "index and base must agree on current state"
         );
-        assert_eq!(via_base.rows.len(), 1, "one row: k=1 updated, k=2 gone");
+        assert_eq!(via_base.rows().len(), 1, "one row: k=1 updated, k=2 gone");
         let want: Tuple = Tuple::from_vec(vec![DataValue::from(11), DataValue::from(1)]);
-        assert_eq!(via_base.rows[0], want);
+        assert_eq!(via_base.rows()[0], want);
     }
 
     /// The guard idiom is a language guarantee: `&&`, `||`, and `~`
@@ -2041,7 +2040,7 @@ mod tests {
                 no_params(),
             )
             .expect("index spot");
-        assert_eq!(via_base.rows, via_idx.rows, "batch-boundary rows agree");
+        assert_eq!(via_base.rows(), via_idx.rows(), "batch-boundary rows agree");
     }
 
     /// The `@` clause parses in both arities through the public script
@@ -2066,7 +2065,7 @@ mod tests {
         let out = db
             .run_script("?[v] := *ctr[k, v]", no_params())
             .expect("read counter");
-        out.rows[0][0].get_int().expect("int")
+        out.rows()[0][0].get_int().expect("int")
     }
 
     /// A deterministic derived-tuple ceiling refuses a query that would derive
@@ -2115,7 +2114,7 @@ mod tests {
                 no_params(),
             )
             .expect("default budget completes");
-        assert_eq!(ok.rows.len(), 12);
+        assert_eq!(ok.rows().len(), 12);
     }
 
     /// Story #68 / issue #1: a value-generating recursion with NO fixpoint
@@ -2265,7 +2264,7 @@ mod tests {
         let ok = db
             .run_script_with(q, no_params(), high_opts)
             .expect("a raised ceiling must let the larger terminating query complete");
-        assert_eq!(ok.rows.len(), 499_500);
+        assert_eq!(ok.rows().len(), 499_500);
     }
 
     /// Exercises the normalizer paths the recursive-join test does not: a

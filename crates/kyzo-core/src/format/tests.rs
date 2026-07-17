@@ -431,9 +431,11 @@ fn fixed_rule_trivia_round_trips() {
     let mut fixed_rules: BTreeMap<String, Arc<dyn FixedRule>> = BTreeMap::new();
     fixed_rules.insert(
         "algo".to_string(),
-        Arc::new(SimpleFixedRule::new(1, |_inputs, _opts| {
-            unreachable!("fixed rule body never runs in a parse/format/reparse test")
-        })),
+        // Named body — never run; parse/format only needs name + arity (P083).
+        Arc::new(SimpleFixedRule::new(
+            1,
+            crate::fixed_rule::EmptyNamedRowsBody,
+        )),
     );
     let src = "# leads algo\nh[a] <~ algo(); # trails algo\n?[a] := h[a];\n";
     let cur_vld = current_validity().expect("current validity");

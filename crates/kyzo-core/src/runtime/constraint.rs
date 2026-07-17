@@ -79,7 +79,7 @@ use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ValidityTs};
 use crate::fixed_rule::NamedRows;
-use crate::runtime::db::{Db, ScriptOptions, SessionTx};
+use crate::runtime::db::{Db, ScriptOptions, SessionTx, status_ok};
 use crate::runtime::relation::{
     AccessLevel, ConstraintRef, InsufficientAccessLevel, get_relation, list_relations,
     write_relation_row,
@@ -419,10 +419,7 @@ impl<S: Storage> Db<S> {
                 write_relation_row(&mut tx.store, &handle)?;
             }
             tx.store.commit()?;
-            Ok(NamedRows::new(
-                vec!["status".to_string()],
-                vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-            ))
+            Ok(status_ok())
         })
     }
 
@@ -459,10 +456,7 @@ impl<S: Storage> Db<S> {
                 bail!(NoSuchConstraint(name.to_string()));
             }
             tx.store.commit()?;
-            Ok(NamedRows::new(
-                vec!["status".to_string()],
-                vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-            ))
+            Ok(status_ok())
         })
     }
 
@@ -481,10 +475,10 @@ impl<S: Storage> Db<S> {
                 ]));
             }
         }
-        Ok(NamedRows::new(
+        Ok(NamedRows::try_new(
             vec!["name".into(), "relation".into(), "source".into()],
             rows,
-        ))
+        )?)
     }
 }
 
@@ -501,7 +495,7 @@ mod tests {
 
     fn ints(nr: &NamedRows) -> Vec<Vec<i64>> {
         let mut out: Vec<Vec<i64>> = nr
-            .rows
+            .rows()
             .iter()
             .map(|r| r.iter().map(|v| v.get_int().expect("int")).collect())
             .collect();
@@ -577,11 +571,11 @@ mod tests {
         // Both relations carry the mirrored spec.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
         let attached: Vec<String> = listed
-            .rows
+            .rows()
             .iter()
             .map(|r| format!("{:?}|{:?}", r[0], r[1]))
             .collect();
-        assert_eq!(listed.rows.len(), 2, "mirrored onto child AND parent");
+        assert_eq!(listed.rows().len(), 2, "mirrored onto child AND parent");
         assert!(attached.iter().all(|s| s.contains("fk_child_parent")));
 
         // Child referencing an existing parent: commits.
@@ -639,7 +633,7 @@ mod tests {
 
         // Nothing was attached by the refused creation.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
-        assert!(listed.rows.is_empty());
+        assert!(listed.rows().is_empty());
 
         // Repair, create, and the constraint now enforces.
         db.run_script("?[k, v] <- [[1, 9]] :put scores {k, v}", no_params())
@@ -760,7 +754,7 @@ mod tests {
         let out = db
             .run_script("?[a, b] := *edge[a, b]", no_params())
             .unwrap();
-        assert_eq!(out.rows.len(), 4, "the guarded insert rolled back");
+        assert_eq!(out.rows().len(), 4, "the guarded insert rolled back");
 
         // The same insert under the default budget commits.
         db.run_script("?[a, b] <- [[9, 9]] :put edge {a, b}", no_params())
@@ -916,7 +910,7 @@ mod tests {
 
         // Exactly one attachment survives all the refusals.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
-        assert_eq!(listed.rows.len(), 1);
+        assert_eq!(listed.rows().len(), 1);
     }
 
     /// Destroying, renaming, or `:replace`-ing a relation that participates
@@ -996,7 +990,7 @@ mod tests {
         );
         // And nothing was stripped — the constraint is still listed.
         let listed = db.run_script("::constraint list", no_params()).unwrap();
-        assert_eq!(listed.rows.len(), 1, "the refused drop detached nothing");
+        assert_eq!(listed.rows().len(), 1, "the refused drop detached nothing");
 
         // Restore the rung, then the drop proceeds — the invariant can only
         // be removed at (or above) the rung that created it.
@@ -1007,7 +1001,7 @@ mod tests {
         assert!(
             db.run_script("::constraint list", no_params())
                 .unwrap()
-                .rows
+                .rows()
                 .is_empty()
         );
     }
@@ -1067,7 +1061,7 @@ mod tests {
         assert_eq!(
             db.run_script("?[x] := *s[x]", no_params())
                 .unwrap()
-                .rows
+                .rows()
                 .len(),
             0,
             "the aborted cascade kept nothing"

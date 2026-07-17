@@ -9,7 +9,7 @@
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): `Expr::Apply`'s op is now `&'static Op` (the original held
  * an `Arc`), so the `OP_LIST` matches deref accordingly; the
- * `val.last().unwrap()` in the ranking loop is annotated as structural
+ * `val.last()` in the ranking loop is `INVARIANT(reorder_sort_key)`
  * (every buffered tuple ends with its sort key, pushed above); output
  * rows flow through the arity-checked writer.
  */

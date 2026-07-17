@@ -292,8 +292,8 @@ impl<S: Storage> StandingQuery<S> {
                         // the difference here, not raw per-set facts, is
                         // what keeps that case from ever contributing a
                         // spurious `Minus`.
-                        let new_set: BTreeSet<Tuple> = new.rows.into_iter().collect();
-                        let old_set: BTreeSet<Tuple> = old.rows.into_iter().collect();
+                        let new_set: BTreeSet<Tuple> = new.into_iter().collect();
+                        let old_set: BTreeSet<Tuple> = old.into_iter().collect();
                         for row in new_set.difference(&old_set) {
                             *net.entry(row.clone()).or_default() += 1;
                         }
@@ -305,7 +305,7 @@ impl<S: Storage> StandingQuery<S> {
                         // `new` here is bare keys (k_bindings), never a
                         // real row this program's arity matches — only
                         // `old` (the full removed row) is a fact.
-                        for row in old.rows {
+                        for row in old {
                             *net.entry(row).or_default() -= 1;
                         }
                     }
@@ -636,7 +636,6 @@ mod tests {
         let real: BTreeSet<Tuple> = db
             .run_script("?[x] := *p[x], not *r[x]", no_params())
             .unwrap()
-            .rows
             .into_iter()
             .collect();
         assert_eq!(sq.current_answer().clone(), real);
@@ -700,7 +699,6 @@ mod tests {
         let real3: BTreeSet<Tuple> = db3
             .run_script("?[k, val] := *q[k, val]", no_params())
             .unwrap()
-            .rows
             .into_iter()
             .collect();
         assert_eq!(maintained, real3);
@@ -806,7 +804,6 @@ mod tests {
         let real = || -> BTreeSet<Tuple> {
             db.run_script(query, no_params())
                 .unwrap()
-                .rows
                 .into_iter()
                 .collect()
         };
@@ -1017,7 +1014,6 @@ mod tests {
                     let recomputed: BTreeSet<Tuple> = db
                         .run_script(shape.query, no_params())
                         .unwrap()
-                        .rows
                         .into_iter()
                         .collect();
                     assert_eq!(
@@ -1114,7 +1110,6 @@ mod tests {
                     let recomputed: BTreeSet<Tuple> = db
                         .run_script(query, no_params())
                         .unwrap()
-                        .rows
                         .into_iter()
                         .collect();
                     let maintained = sq.current_answer().clone();

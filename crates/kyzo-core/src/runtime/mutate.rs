@@ -757,17 +757,17 @@ impl<T: WriteTx> SessionTx<T> {
                     .or_default();
                 target_collector.push((
                     CallbackOp::Rm,
-                    NamedRows::new(
+                    NamedRows::try_new(
                         k_bindings.into_iter().map(|k| k.name.to_string()).collect(),
                         new_tuples,
-                    ),
-                    NamedRows::new(
+                    )?,
+                    NamedRows::try_new(
                         kv_bindings
                             .into_iter()
                             .map(|k| k.name.to_string())
                             .collect(),
                         old_tuples,
-                    ),
+                    )?,
                 ))
             }
         }
@@ -976,8 +976,8 @@ impl<T: WriteTx> SessionTx<T> {
                 .collect();
             target_collector.push((
                 CallbackOp::Put,
-                NamedRows::new(headers.clone(), new_tuples),
-                NamedRows::new(headers, old_tuples),
+                NamedRows::try_new(headers.clone(), new_tuples)?,
+                NamedRows::try_new(headers, old_tuples)?,
             ))
         }
         Ok(())
@@ -2061,7 +2061,8 @@ mod bulk_write_tests {
         let live = db
             .run_script("?[k, v] := *w{k, v}", no_params())
             .expect("scan back")
-            .rows;
+            .rows()
+            .to_vec();
         assert_eq!(live.len(), 400, "200 re-put + 200 untouched, 100 retracted");
         let mut by_key: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         for row in &live {
@@ -2134,7 +2135,7 @@ mod bulk_write_tests {
             .run_script("?[k, v] := *w3{k, v}", no_params())
             .expect("read back");
         assert_eq!(
-            out.rows.len(),
+            out.rows().len(),
             0,
             "the refused mutation must not commit row 1 either — the write \
              transaction that reached the reserved instant on row 2 was never \
@@ -2175,7 +2176,8 @@ mod bulk_write_tests {
             DataValue::from(10),
         ])];
         assert_eq!(
-            out.rows, want,
+            out.rows(),
+            want.as_slice(),
             "the refused insert must not overwrite the existing row"
         );
     }
@@ -2233,7 +2235,8 @@ mod bulk_write_tests {
             DataValue::from(20),
         ])];
         assert_eq!(
-            out.rows, want,
+            out.rows(),
+            want.as_slice(),
             "a is updated to 99; b (omitted from the :update) carries forward as 20"
         );
     }

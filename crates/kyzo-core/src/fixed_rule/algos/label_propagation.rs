@@ -54,7 +54,9 @@ impl FixedRule for LabelPropagation {
         let max_iter = payload.pos_integer_option("max_iter", Some(10))?;
         // Determinism: the shuffled scan order and random tie-break are
         // seeded from this option (fixed default), never from OS entropy.
-        let seed = payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))? as u64;
+        let seed = SeededRng::seed_from_i64(
+            payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
+        );
         let (graph, indices, _inv_indices) = edges.as_directed_weighted_graph(undirected, true)?;
         let labels = label_propagation(&graph, max_iter, seed, cancel)?;
         for (idx, label) in labels.into_iter().enumerate() {

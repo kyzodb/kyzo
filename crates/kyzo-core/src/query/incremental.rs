@@ -1515,11 +1515,9 @@ mod tests {
 
     #[test]
     fn translate_refuses_fixed_rules() {
-        use crate::fixed_rule::{FixedRuleHandle, SimpleFixedRule};
+        use crate::fixed_rule::{EmptyNamedRowsBody, FixedRuleHandle, SimpleFixedRule};
         let fixed_impl: std::sync::Arc<dyn crate::fixed_rule::FixedRule> =
-            std::sync::Arc::new(SimpleFixedRule::new(0, |_, _| {
-                Ok(crate::fixed_rule::NamedRows::new(vec![], vec![]))
-            }));
+            std::sync::Arc::new(SimpleFixedRule::new(0, EmptyNamedRowsBody));
         let fixed = crate::data::program::MagicFixedRuleApply {
             fixed_handle: FixedRuleHandle::new("?", SourceSpan::default()),
             rule_args: vec![],

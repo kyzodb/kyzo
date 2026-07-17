@@ -319,17 +319,17 @@ impl NamedRows {
     /// `NamedRows` today, so callers see `next: null`, but the shape is
     /// stable for when that changes.
     pub fn into_json(self) -> JsonValue {
-        let next = match self.next {
+        let (headers, rows, next) = self.into_parts();
+        let next = match next {
             None => JsonValue::Null,
             Some(more) => more.into_json(),
         };
-        let rows: Vec<JsonValue> = self
-            .rows
+        let rows: Vec<JsonValue> = rows
             .into_iter()
             .map(|row| JsonValue::Array(row.into_iter().map(JsonValue::from).collect()))
             .collect();
         json!({
-            "headers": self.headers,
+            "headers": headers,
             "rows": rows,
             "next": next,
         })
@@ -361,7 +361,7 @@ impl NamedRows {
                     .ok_or_else(|| miette::miette!("'rows' must be an array of arrays"))
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(NamedRows::new(headers, rows))
+        Ok(NamedRows::try_new(headers, rows)?)
     }
 }
 
@@ -501,17 +501,18 @@ mod tests {
 
     #[test]
     fn named_rows_json_round_trips() {
-        let nr = NamedRows::new(
+        let nr = NamedRows::try_new(
             vec!["a".to_string(), "b".to_string()],
             vec![
                 Tuple::from_vec(vec![DataValue::from(1_i64), DataValue::from("x")]),
                 Tuple::from_vec(vec![DataValue::from(2_i64), DataValue::from("y")]),
             ],
-        );
+        )
+        .unwrap();
         let j = nr.clone().into_json();
         let back = NamedRows::from_json(&j).unwrap();
-        assert_eq!(back.headers, nr.headers);
-        assert_eq!(back.rows, nr.rows);
+        assert_eq!(back.headers(), nr.headers());
+        assert_eq!(back.rows(), nr.rows());
     }
 
     #[test]

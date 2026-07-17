@@ -63,7 +63,9 @@ impl FixedRule for RandomWalk {
         let steps = payload.pos_integer_option("steps", None)?;
         // Determinism: each step's neighbor pick is seeded from this option
         // (fixed default), never from OS entropy.
-        let seed = payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))? as u64;
+        let seed = SeededRng::seed_from_i64(
+            payload.integer_option("seed", Some(SeededRng::DEFAULT_SEED as i64))?,
+        );
 
         let mut maybe_weight = payload.expr_option("weight", None).ok();
         if let Some(weight) = &mut maybe_weight {
@@ -78,8 +80,7 @@ impl FixedRule for RandomWalk {
         let mut rng = SeededRng::new(seed);
         for start_node in starting.iter()? {
             let start_node = start_node?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(walk_start_col): `ensure_min_len(1)` proved a first column.
             let start_node_key = &start_node.as_slice()[0];
             let starting_tuple =
                 nodes
@@ -94,8 +95,8 @@ impl FixedRule for RandomWalk {
                 let mut current_tuple = starting_tuple.clone();
                 let mut path = vec![start_node_key.clone()];
                 for _ in 0..steps {
-                    // Structural: `nodes.ensure_min_len(1)` proved every
-                    // `nodes` tuple (which `current_tuple` always is) has
+                    // INVARIANT(walk_node_col): `nodes.ensure_min_len(1)` proved
+                    // every `nodes` tuple (which `current_tuple` always is) has
                     // a first column.
                     let cur_node_key = &current_tuple.as_slice()[0];
                     let candidate_steps: Vec<_> = edges.prefix_iter(cur_node_key)?.try_collect()?;

@@ -267,10 +267,9 @@ pub(crate) mod format;
 // `query/normalize.rs`'s `SessionFixedRule` bridging `MagicFixedRuleApply`
 // to `FixedRule::run`) has landed: registration, evaluation, and the
 // stored-input seam (`StoredInputSource`, served for real by
-// `SessionView`) all run in production. `#[allow(dead_code)]` stays for the
-// residual items no production path reaches yet (the pre-runtime
-// `NoStoredInputs`/`StoredInputUnavailable` placeholders it superseded,
-// kept live only by their own regression test — see `fixed_rule/mod.rs`).
+// `SessionView`) all run in production. `#[allow(dead_code)]` stays for
+// residual items no production path reaches yet (P112 named residual —
+// not the demolished `NoStoredInputs` placeholder; see `fixed_rule/mod.rs`).
 #[allow(dead_code)]
 pub(crate) mod fixed_rule;
 // The parse tier's production consumer (runtime/db.rs, via
@@ -314,8 +313,8 @@ pub use engines::projection::{
 };
 
 pub use fixed_rule::{
-    CancelAuthority, CancelFlag, Cancelled, FixedRule, FixedRuleInputRelation, FixedRulePayload,
-    NamedRows, SimpleFixedRule,
+    CancelAuthority, CancelFlag, Cancelled, EmptyNamedRowsBody, FixedRule, FixedRuleInputRelation,
+    FixedRulePayload, NamedRows, SimpleFixedRule, SimpleRuleBody,
 };
 pub use runtime::callback::{CallbackEvent, CallbackOp};
 pub use runtime::db::{Db, ScriptOptions};

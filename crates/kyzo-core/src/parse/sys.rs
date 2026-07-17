@@ -648,12 +648,7 @@ pub struct ProcessId(u64);
 impl ProcessId {
     /// Admit a non-negative integer as a process id.
     pub fn try_from_i64(v: i64) -> std::result::Result<Self, NegativeProcessId> {
-        if v < 0 {
-            Err(NegativeProcessId(v))
-        } else {
-            // Non-negative `i64` always fits in `u64`.
-            Ok(Self(v as u64))
-        }
+        u64::try_from(v).map(Self).map_err(|_| NegativeProcessId(v))
     }
 
     /// The underlying non-negative id.

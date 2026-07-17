@@ -57,8 +57,7 @@ impl FixedRule for DegreeCentrality {
             let nodes = nodes.ensure_min_len(1)?;
             for tuple in nodes.iter()? {
                 let tuple = tuple?;
-                // Structural: `ensure_min_len(1)` proved every tuple has a
-                // first column.
+                // INVARIANT(degree_node_col): `ensure_min_len(1)` proved a first column.
                 let id = &tuple[0];
                 if !counter.contains_key(id) {
                     counter.insert(id.clone(), (0, 0, 0));

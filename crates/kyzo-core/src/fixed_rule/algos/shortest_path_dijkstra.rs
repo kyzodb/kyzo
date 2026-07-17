@@ -76,8 +76,7 @@ impl FixedRule for ShortestPathDijkstra {
         let mut starting_nodes = BTreeSet::new();
         for tuple in starting.iter()? {
             let tuple = tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(dijkstra_start_col): `ensure_min_len(1)` proved a first column.
             let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
@@ -90,8 +89,7 @@ impl FixedRule for ShortestPathDijkstra {
                 let mut tn = BTreeSet::new();
                 for tuple in t.iter()? {
                     let tuple = tuple?;
-                    // Structural: `ensure_min_len(1)` proved every tuple
-                    // has a first column.
+                    // INVARIANT(dijkstra_term_col): `ensure_min_len(1)` proved a first column.
                     let node = &tuple.as_slice()[0];
                     if let Some(idx) = inv_indices.get(node) {
                         tn.insert(*idx);

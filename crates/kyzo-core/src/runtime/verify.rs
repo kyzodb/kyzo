@@ -147,7 +147,8 @@ impl VerifyOutcome {
             VerifyOutcome::Unsupported { reason } => ("unsupported", reason, String::new()),
             VerifyOutcome::OracleRefused { reason } => ("oracle_refused", reason, String::new()),
         };
-        crate::fixed_rule::NamedRows::new(
+        // INVARIANT(verify_named_rows): three headers, one width-3 row.
+        crate::fixed_rule::NamedRows::try_new(
             headers,
             vec![Tuple::from_vec(vec![
                 crate::data::value::DataValue::from(status),
@@ -155,6 +156,7 @@ impl VerifyOutcome {
                 crate::data::value::DataValue::from(detail),
             ])],
         )
+        .expect("INVARIANT(verify_named_rows): status/summary/detail row matches headers")
     }
 }
 
@@ -800,9 +802,12 @@ mod tests {
                 no_params(),
             )
             .expect("::verify runs as a script directive");
-        assert_eq!(rows.headers, vec!["status", "summary", "detail"]);
-        assert_eq!(rows.rows.len(), 1);
-        assert_eq!(rows.rows[0][0], DataValue::from("match"));
+        assert_eq!(
+            rows.headers(),
+            &["status".to_string(), "summary".to_string(), "detail".to_string()]
+        );
+        assert_eq!(rows.rows().len(), 1);
+        assert_eq!(rows.rows()[0][0], DataValue::from("match"));
     }
 
     /// The directive surfaces an unsupported construct the same way the
@@ -814,7 +819,7 @@ mod tests {
         let rows = db
             .run_script("::verify { ?[x, y] := *edge[x, y], y > 2 }", no_params())
             .expect("::verify runs as a script directive");
-        assert_eq!(rows.rows[0][0], DataValue::from("unsupported"));
+        assert_eq!(rows.rows()[0][0], DataValue::from("unsupported"));
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -852,10 +857,10 @@ mod tests {
                 let line = entry_line(entry_rel, &vec![None; arity]);
                 let script = format!("::verify {{ {rules_text}\n{line} }}");
                 match db.run_script(&script, no_params()) {
-                    Ok(rows) if rows.rows[0][0] == DataValue::from("match") => {}
+                    Ok(rows) if rows.rows()[0][0] == DataValue::from("match") => {}
                     Ok(rows) => failures.push(format!(
                         "seed {seed} entry {entry_rel}: expected match, got {:?}",
-                        rows.rows[0]
+                        rows.rows()[0]
                     )),
                     Err(e) => failures.push(format!("seed {seed} entry {entry_rel}: {e}")),
                 }
@@ -931,11 +936,11 @@ mod tests {
                     // The production compiler refused before ::verify's own
                     // comparison ran — a legitimate "stays refused" outcome.
                     Err(_) => {}
-                    Ok(rows) if rows.rows[0][0] != DataValue::from("match") => {}
+                    Ok(rows) if rows.rows()[0][0] != DataValue::from("match") => {}
                     Ok(rows) => failures.push(format!(
                         "{name}/{rel}: ::verify silently matched an unstratifiable \
                          program: {:?}",
-                        rows.rows[0]
+                        rows.rows()[0]
                     )),
                 }
             }

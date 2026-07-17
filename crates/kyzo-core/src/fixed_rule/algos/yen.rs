@@ -67,8 +67,7 @@ impl FixedRule for KShortestPathYen {
         let mut starting_nodes = BTreeSet::new();
         for tuple in starting.iter()? {
             let tuple = tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(yen_start_col): `ensure_min_len(1)` proved a first column.
             let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 starting_nodes.insert(*idx);
@@ -77,8 +76,7 @@ impl FixedRule for KShortestPathYen {
         let mut termination_nodes = BTreeSet::new();
         for tuple in termination.iter()? {
             let tuple = tuple?;
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
+            // INVARIANT(yen_term_col): `ensure_min_len(1)` proved a first column.
             let node = &tuple.as_slice()[0];
             if let Some(idx) = inv_indices.get(node) {
                 termination_nodes.insert(*idx);
