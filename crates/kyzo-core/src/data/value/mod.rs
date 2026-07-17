@@ -33,6 +33,15 @@
 //! There is deliberately no bottom/sentinel variant: scan bounds are the
 //! codec's bound vocabulary (the empty byte string sorts below every
 //! encoding), never members of the value domain.
+//!
+//! ## Production host doors (P112)
+//!
+//! - [`canonical::encode_owned`] / [`decode`] — storage and expression currency.
+//! - [`SearchHits::admit_decoded`] — engine→query search-hit admission, wired
+//!   through [`crate::engines::admit_relation_search_hits`].
+//! - [`string::MintedStr`] — compile-time absence proofs in [`proofs`]
+//!   (every build); RA columnar lane lands in story #120.
+//! - [`exec`] is `#[cfg(test)]` only (zero production references until #120).
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -45,6 +54,7 @@ pub mod canonical;
 pub mod cell;
 pub mod code;
 pub mod column;
+#[cfg(test)]
 pub mod exec;
 pub mod number;
 pub mod prefix;

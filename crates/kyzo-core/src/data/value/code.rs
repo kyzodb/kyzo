@@ -30,7 +30,6 @@
 //! which still deletes every domain-mixup panic and every unproven
 //! comparison. Admission and [`Denial`](super::admission::Denial) speak
 //! one vocabulary ([`super::admission`]).
-#![allow(dead_code)] // #119 foundation: dead_code is target-split, #120 wires it
 
 /// The raw dense handle for an interned value: **identity only, no read
 /// authority**. By design, no read API anywhere accepts a bare `Code` —

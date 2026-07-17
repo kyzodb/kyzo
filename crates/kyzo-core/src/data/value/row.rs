@@ -43,11 +43,6 @@
 //! throughout, so held containers stay admissible with no remap mid-run.
 //! The choreography is pinned as a law test below.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
 use super::admission::Denial;
 use super::arena::{Arena, BulkObserver, EpochRemap};
 use super::arity::Arity;

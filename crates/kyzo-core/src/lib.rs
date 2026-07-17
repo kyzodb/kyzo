@@ -222,8 +222,11 @@
 //! `parse`, and `fixed_rule` carry no module-level `allow(dead_code)` —
 //! their host doors are real (`format_program` / `parse_script` /
 //! `FixedRule::run`); any unused residual is a rustc warning, not a
-//! blanket lie about a consumer that "lands later". Other tiers may still
-//! narrow item-level allows where a residual is documented. What refuses
+//! blanket lie about a consumer that "lands later". The same P112 posture
+//! now applies to `query`, `runtime`, `engines`, and the value plane's
+//! production modules (`SearchHits::admit_decoded`, canonical encode/decode):
+//! module-level `allow(dead_code)` is gone; unlanded surfaces are
+//! `#[cfg(test)]`, wired, or left to warn honestly. What refuses
 //! *today*, typed and (where it has a source location) spanned: malformed
 //! query text (parser), unstratifiable programs (stratifier), budget
 //! exhaustion, fixed-rule arity mismatch, format-version mismatch, and
@@ -256,6 +259,11 @@
 
 pub(crate) mod capacity;
 pub(crate) mod data;
+// Engines production host doors: `runtime/mutate.rs` (fts/hnsw/lsh create/drop),
+// `query/search.rs` (`RelationIndexSearch::search_relation`),
+// `engines::admit_relation_search_hits` → `SearchHits::admit_decoded`.
+// Unlanded kind engines (gazetteer/sparse/spatial) are `#[cfg(test)]` until
+// their `db.rs` surface lands. No module-level `allow(dead_code)` (P112).
 pub(crate) mod engines;
 // Formatter host doors: `format::format_program` /
 // `format_program_with_comments` (P112). Exercised by the in-module
@@ -273,7 +281,15 @@ pub(crate) mod fixed_rule;
 // execution (`ImperativeNotWired`); its AST is still constructed by the
 // parser and exercised in-file — no module-level `allow(dead_code)` (P112).
 pub(crate) mod parse;
+// Query production host doors: `runtime/db.rs::compile_and_eval` (compile,
+// magic, stratify, ra, eval, normalize, search, sort, batch_ops, vm) and
+// `runtime/verify.rs` (`laws::naive_eval_at_budgeted`). No module-level
+// `allow(dead_code)` (P112); unlanded oracle/eval surface warns honestly.
 pub(crate) mod query;
+// Runtime production host doors: `Db::run_script` / `compile_and_eval`,
+// `mutate` index create/drop, `relation` catalog, `callback` notifications,
+// and `constraint` enforcement at commit (P112). No module-level
+// `allow(dead_code)` (P112).
 pub(crate) mod runtime;
 pub(crate) mod storage;
 pub(crate) mod typestate;

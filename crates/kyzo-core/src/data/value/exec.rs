@@ -25,11 +25,6 @@
 //! the output of a recombination is admitted under the SAME Domain as its
 //! inputs by construction.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use super::admission::{Admission, Denial};

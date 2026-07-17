@@ -21,9 +21,6 @@
 //! - [`ByteOff`]: a stored byte offset within a chunk (the `off` field).
 //! - [`ChunkId`]: a chunk ordering index (the `chunk` field).
 
-// alive only within the value plane; other targets don't use it
-#![allow(dead_code)]
-
 /// A stored byte count: the length of a payload held in the arena heap.
 ///
 /// Raw arithmetic operators are absent; callers either use

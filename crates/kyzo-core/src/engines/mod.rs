@@ -25,18 +25,15 @@
 //! search (P103); put/search math remains the kernel algorithm, not a
 //! second protocol.
 
-// `fts`/`hnsw`/`lsh`'s `db.rs` surface has landed (`::fts|hnsw|lsh
-// create/drop` in `runtime/mutate.rs` dispatch to the real creation/
-// backfill tier, tested end to end in `runtime/db.rs`), so neither carries
-// `#[allow(dead_code)]` any more. `gazetteer`/`sparse`/`spatial` below have
-// no `db.rs` surface yet and are still lib-dead by construction; their
-// in-file tests keep them live under test, so a plain `allow` covers them.
+// Production host doors: `runtime/mutate.rs` dispatches `::fts|hnsw|lsh
+// create/drop`; `query/search.rs` dispatches live search through
+// `RelationIndexSearch::search_relation` (P112).
 pub(crate) mod fts;
 /// Generic build→seal→query machine for every projection kind (story #305).
 pub(crate) mod projection;
-// gazetteer has no `db.rs` surface yet (see the block comment above);
-// its in-file tests keep it live under test, so a plain `allow` covers it.
-#[allow(dead_code)]
+// No `db.rs` surface yet — exercised only under `#[cfg(test)]` hostile
+// suites and projection compile proofs until the operator lands (P112).
+#[cfg(test)]
 pub(crate) mod gazetteer;
 #[cfg(test)]
 mod gazetteer_hostile;
@@ -47,21 +44,17 @@ pub(crate) mod lsh;
 /// at the segment seam (story #305 T5) — [`projection::Sealed`] vs
 /// [`projection::Stale`], never watermark equality or Option-as-staleness.
 pub(crate) mod segments;
-// sparse has no `db.rs` surface yet (see the block comment above); its
-// in-file tests keep it live under test, so a plain `allow` covers it.
-#[allow(dead_code)]
+// No `db.rs` surface yet — exercised only under `#[cfg(test)]` until the
+// operator lands (P112).
+#[cfg(test)]
 pub(crate) mod sparse;
 #[cfg(test)]
 mod sparse_hostile;
-// spatial has no `db.rs` surface yet (see the block comment above); its
-// in-file tests keep it live under test, so a plain `allow` covers it.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) mod spatial;
 /// Text analysis (tokenizers, filters, the tantivy-derived pipeline) —
-/// the engines' shared linguistic plumbing. Carries surface its future
-/// consumers (config-driven tokenizer caches) haven't landed for; the
-/// in-file tests keep it live under test.
-#[allow(dead_code)]
+/// production host door: `runtime/mutate.rs` FTS create, `query/search.rs`
+/// analyzer resolution, and `runtime/relation` manifest decode (P112).
 pub(crate) mod text;
 
 use std::fmt;

@@ -141,11 +141,6 @@
 //! does NOT touch is `query/stratify.rs::aggregation_character` — see its
 //! own doc comment for why that one stays hand-maintained.
 
-// #119 execution-currency foundation / naive oracle: exercised by its own tests (and, for
-// laws, by runtime/verify.rs); #120 wires the foundation into the RA engine. dead_code is
-// target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
-#![allow(dead_code)]
-
 use std::borrow::Borrow;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
