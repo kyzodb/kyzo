@@ -782,8 +782,9 @@ impl FixedRuleOutput {
     }
 
     /// Surrender the filled store to the evaluator (which merges it into
-    /// the rule's `EpochStore` at the epoch barrier).
-    #[allow(dead_code)] // consumed by eval when the query tier lands
+    /// the rule's `EpochStore` at the epoch barrier). Called by the
+    /// fixed-rule harness after `run` and by normalize when wiring a
+    /// fixed rule into an epoch.
     pub(crate) fn into_store(self) -> RegularTempStore {
         self.store
     }
