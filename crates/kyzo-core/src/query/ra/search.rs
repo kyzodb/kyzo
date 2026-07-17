@@ -65,19 +65,24 @@ impl QueryDomainAdmission {
     /// THE DOOR: admit engine search results as codes under this admission.
     ///
     /// Consumes decoded engine hit rows at the boundary; SearchRA never
-    /// stores them as a decoded-tuple vector.
+    /// stores them as a decoded-tuple vector. Codes are checked `u32`s —
+    /// table growth past `u32::MAX` distinct cells refuses (no truncating cast).
     pub(crate) fn admit_hits(
         hits: impl IntoIterator<Item = impl IntoIterator<Item = DataValue>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut table = Vec::new();
         let mut codes = Vec::new();
         let mut row_ends = Vec::new();
         for hit in hits {
             for cell in hit {
                 let code = match table.iter().position(|v| v == &cell) {
-                    Some(i) => i as u32,
+                    Some(i) => u32::try_from(i).map_err(|_| {
+                        miette::miette!("search admission intern table exceeded u32 code space")
+                    })?,
                     None => {
-                        let i = table.len() as u32;
+                        let i = u32::try_from(table.len()).map_err(|_| {
+                            miette::miette!("search admission intern table exceeded u32 code space")
+                        })?;
                         table.push(cell);
                         i
                     }
@@ -86,11 +91,11 @@ impl QueryDomainAdmission {
             }
             row_ends.push(codes.len());
         }
-        QueryDomainAdmission {
+        Ok(QueryDomainAdmission {
             codes,
             row_ends,
             table,
-        }
+        })
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -229,9 +234,7 @@ impl SearchRA {
                     &c.analyzer,
                 )?,
             };
-            Ok(QueryDomainAdmission::admit_hits(
-                hits.into_iter().map(|t| t.into_vec()),
-            ))
+            QueryDomainAdmission::admit_hits(hits.into_iter().map(|t| t.into_vec()))
         };
 
         Ok(Box::new(SearchBatches {
