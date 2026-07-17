@@ -51,8 +51,7 @@ impl<'a> TokenStream for SimpleTokenStream<'a> {
         while let Some((offset_from, c)) = self.chars.next() {
             if c.is_alphanumeric() {
                 let offset_to = self.search_token_end();
-                self.token.offset_from = offset_from;
-                self.token.offset_to = offset_to;
+                self.token.set_offsets(offset_from, offset_to);
                 self.token.text.push_str(&self.text[offset_from..offset_to]);
                 return true;
             }

@@ -108,7 +108,7 @@ use thiserror::Error;
 
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::value::DataValue;
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::ReadTx;
 
@@ -268,11 +268,10 @@ pub(crate) fn compile_dictionary(
             bail!(IndexRowCorrupt::new(
                 &dict.name,
                 row.as_slice(),
-                format!(
-                    "gazetteer dictionary row has {} columns, expected 2 \
-                     ([entity, surfaces])",
-                    row.len()
-                ),
+                IndexCorruptReason::WrongColumnCount {
+                    found: row.len(),
+                    expected: 2,
+                },
             ));
         }
         let entity = row[0].clone();
@@ -280,7 +279,7 @@ pub(crate) fn compile_dictionary(
             IndexRowCorrupt::new(
                 &dict.name,
                 row.as_slice(),
-                "gazetteer dictionary surfaces column is not a list",
+                IndexCorruptReason::GazetteerSurfacesNotList,
             )
         })?;
         for s in surfaces {
@@ -288,7 +287,7 @@ pub(crate) fn compile_dictionary(
                 IndexRowCorrupt::new(
                     &dict.name,
                     row.as_slice(),
-                    "gazetteer dictionary surface form is not a string",
+                    IndexCorruptReason::GazetteerSurfaceNotString,
                 )
             })?;
             if s.is_empty() {

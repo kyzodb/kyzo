@@ -180,14 +180,18 @@ pub(crate) mod tests {
         );
         assert_eq!(token.text, text, "expected text {} but {:?}", text, token);
         assert_eq!(
-            token.offset_from, from,
+            token.offset_from(),
+            from,
             "expected offset_from {} but {:?}",
-            from, token
+            from,
+            token
         );
         assert_eq!(
-            token.offset_to, to,
+            token.offset_to(),
+            to,
             "expected offset_to {} but {:?}",
-            to, token
+            to,
+            token
         );
     }
 

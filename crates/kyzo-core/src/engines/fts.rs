@@ -109,7 +109,7 @@ use crate::data::expr::Expr;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::ProjectionKind;
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
@@ -290,7 +290,7 @@ pub(crate) fn fts_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let Some(text) = extract_text(extractor, tuple)? else {
@@ -308,8 +308,8 @@ pub(crate) fn fts_put<T: WriteTx>(
     while let Some(token) = token_stream.next() {
         let term = SmartString::<LazyCompact>::from(&token.text);
         let (fr, to, position) = collector.entry(term).or_default();
-        fr.push(DataValue::from(token.offset_from as i64));
-        to.push(DataValue::from(token.offset_to as i64));
+        fr.push(DataValue::from(token.offset_from() as i64));
+        to.push(DataValue::from(token.offset_to() as i64));
         position.push(DataValue::from(token.position as i64));
         count += 1;
     }
@@ -353,7 +353,7 @@ pub(crate) fn fts_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let Some(text) = extract_text(extractor, tuple)? else {
@@ -434,17 +434,17 @@ fn literal_postings(
             bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                format!(
-                    "FTS posting has {} columns, expected {expected_len}",
-                    row.len()
-                ),
+                IndexCorruptReason::WrongColumnCount {
+                    found: row.len(),
+                    expected: expected_len,
+                },
             ));
         }
         let positions = row[position_col].get_slice().ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "FTS posting position column is not a list",
+                IndexCorruptReason::FtsPositionsNotList,
             ))
         })?;
         let positions = positions
@@ -454,7 +454,7 @@ fn literal_postings(
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
                         row.as_slice(),
-                        "FTS posting position is not an integer",
+                        IndexCorruptReason::FtsPositionNotInt,
                     ))
                 })
             })
@@ -701,7 +701,7 @@ pub(crate) fn fts_search(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 doc_key.as_slice(),
-                "FTS index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
         if params.bind_score {

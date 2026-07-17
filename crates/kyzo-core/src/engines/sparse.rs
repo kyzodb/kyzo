@@ -115,7 +115,7 @@ use crate::data::expr::Expr;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::ProjectionKind;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -309,7 +309,7 @@ pub(crate) fn sparse_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let vector = admit_sparse(vector)?;
@@ -346,7 +346,7 @@ pub(crate) fn sparse_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let vector = admit_sparse(vector)?;
@@ -389,24 +389,24 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
         bail!(IndexRowCorrupt::new(
             idx_name,
             row,
-            format!(
-                "sparse posting has {} columns, expected {expected_len}",
-                row.len()
-            ),
+            IndexCorruptReason::WrongColumnCount {
+                found: row.len(),
+                expected: expected_len,
+            },
         ));
     }
     let weight = row[base_key_len + 1].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             idx_name,
             row,
-            "sparse posting weight is not a float",
+            IndexCorruptReason::SparseWeightNotFloat,
         ))
     })? as f32;
     if !weight.is_finite() || weight < 0.0 {
         bail!(IndexRowCorrupt::new(
             idx_name,
             row,
-            "sparse posting weight is not a finite non-negative float",
+            IndexCorruptReason::SparseWeightNotFiniteNonNeg,
         ));
     }
     Ok((Tuple::from_vec(row[1..=base_key_len].to_vec()), weight))
@@ -505,7 +505,7 @@ pub(crate) fn sparse_search(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 doc_key.as_slice(),
-                "sparse index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
         if params.bind_score {

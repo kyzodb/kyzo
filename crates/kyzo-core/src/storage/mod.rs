@@ -211,7 +211,15 @@ impl SystemClock {
         use std::sync::atomic::Ordering;
         let mut last = self.0.load(Ordering::Relaxed);
         loop {
-            let next = now_micros.max(last + 1);
+            // INVARIANT(SystemClock): stamp space is i64; refuse rather than
+            // wrap when the floor is already i64::MAX.
+            let after_last = match last.checked_add(1) {
+                Some(n) => n,
+                None => panic!(
+                    "INVARIANT(SystemClock): system timestamp space exhausted at i64::MAX"
+                ),
+            };
+            let next = now_micros.max(after_last);
             match self
                 .0
                 .compare_exchange_weak(last, next, Ordering::AcqRel, Ordering::Relaxed)

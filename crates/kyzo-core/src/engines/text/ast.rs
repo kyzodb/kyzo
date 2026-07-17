@@ -30,6 +30,10 @@ use smartstring::{LazyCompact, SmartString};
 
 /// One search term: the text, whether it is a prefix search, and its
 /// score booster.
+///
+/// Prefer [`Self::new`] at mint sites. Fields stay `pub(crate)` so the
+/// parser (`parse/fts.rs`, off this slice's allowlist) can still construct
+/// until it migrates to [`Self::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FtsLiteral {
     pub(crate) value: SmartString<LazyCompact>,
@@ -38,6 +42,19 @@ pub(crate) struct FtsLiteral {
 }
 
 impl FtsLiteral {
+    /// Sole preferred constructor for engine-side minting.
+    pub(crate) fn new(
+        value: SmartString<LazyCompact>,
+        is_prefix: bool,
+        booster: OrderedFloat<f64>,
+    ) -> Self {
+        FtsLiteral {
+            value,
+            is_prefix,
+            booster,
+        }
+    }
+
     /// Re-tokenize this literal through the index's analyzer, pushing the
     /// resulting terms into `coll`. Prefix literals pass through whole: a
     /// prefix search matches stored terms by byte prefix, so filtering or
@@ -50,11 +67,11 @@ impl FtsLiteral {
 
         let mut tokens = tokenizer.token_stream(&self.value);
         while let Some(t) = tokens.next() {
-            coll.push(FtsLiteral {
-                value: SmartString::from(&t.text),
-                is_prefix: false,
-                booster: self.booster,
-            })
+            coll.push(FtsLiteral::new(
+                SmartString::from(&t.text),
+                false,
+                self.booster,
+            ))
         }
     }
 }
@@ -64,6 +81,32 @@ impl FtsLiteral {
 pub(crate) struct FtsNear {
     pub(crate) literals: Vec<FtsLiteral>,
     pub(crate) distance: u32,
+}
+
+/// Non-empty And/Or children. Empty conjunction/disjunction is
+/// unrepresentable through [`Self::admit`] / [`FtsExpr::and`] /
+/// [`FtsExpr::or`]; [`FtsExpr::flatten`] never emits empty And/Or either
+/// (collapses to [`FtsExpr::empty_node`]).
+///
+/// The parser still builds `FtsExpr::And(Vec)` directly (off-allowlist);
+/// type-level wrapping of the enum variants waits on that migration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct NonEmptyFtsExprs {
+    children: Vec<FtsExpr>,
+}
+
+impl NonEmptyFtsExprs {
+    pub(crate) fn admit(children: Vec<FtsExpr>) -> Option<Self> {
+        if children.is_empty() {
+            None
+        } else {
+            Some(Self { children })
+        }
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<FtsExpr> {
+        self.children
+    }
 }
 
 /// A parsed FTS query.
@@ -94,6 +137,28 @@ pub(crate) enum FtsExpr {
 }
 
 impl FtsExpr {
+    /// Canonical empty node (empty literal). Used when And/Or would otherwise
+    /// be empty after flatten/tokenize — empty And/Or is refused.
+    pub(crate) fn empty_node() -> Self {
+        FtsExpr::Literal(FtsLiteral::new(SmartString::new(), false, OrderedFloat(0.0)))
+    }
+
+    /// Conjunction door: refuses empty children (returns [`Self::empty_node`]).
+    pub(crate) fn and(children: Vec<FtsExpr>) -> Self {
+        match NonEmptyFtsExprs::admit(children) {
+            Some(n) => FtsExpr::And(n.into_vec()),
+            None => Self::empty_node(),
+        }
+    }
+
+    /// Disjunction door: refuses empty children (returns [`Self::empty_node`]).
+    pub(crate) fn or(children: Vec<FtsExpr>) -> Self {
+        match NonEmptyFtsExprs::admit(children) {
+            Some(n) => FtsExpr::Or(n.into_vec()),
+            None => Self::empty_node(),
+        }
+    }
+
     /// Rewrite every literal through the index's analyzer, then
     /// [`flatten`](Self::flatten). A literal that tokenizes to several terms
     /// becomes a conjunction of them; one that tokenizes to nothing (all
@@ -106,6 +171,8 @@ impl FtsExpr {
         match self {
             FtsExpr::Literal(l) => l.booster == 0. || l.value.is_empty(),
             FtsExpr::Near(FtsNear { literals, .. }) => literals.is_empty(),
+            // Empty And/Or is refused by flatten/and/or; a lingering empty
+            // vec from the parser is still treated as empty.
             FtsExpr::And(v) => v.is_empty(),
             FtsExpr::Or(v) => v.is_empty(),
             FtsExpr::Not(lhs, _) => lhs.is_empty(),
@@ -113,6 +180,7 @@ impl FtsExpr {
     }
 
     /// Collapse nested conjunctions/disjunctions and drop empty subtrees.
+    /// Never emits empty And/Or — all-empty collapses to [`Self::empty_node`].
     pub(crate) fn flatten(self) -> Self {
         match self {
             FtsExpr::And(exprs) => {
@@ -127,11 +195,10 @@ impl FtsExpr {
                         }
                     }
                 }
-                if flattened.len() == 1 {
-                    // In bounds: length checked to be exactly 1.
-                    flattened.remove(0)
-                } else {
-                    FtsExpr::And(flattened)
+                match flattened.len() {
+                    0 => Self::empty_node(),
+                    1 => flattened.remove(0),
+                    _ => FtsExpr::And(flattened),
                 }
             }
             FtsExpr::Or(exprs) => {
@@ -146,11 +213,10 @@ impl FtsExpr {
                         }
                     }
                 }
-                if flattened.len() == 1 {
-                    // In bounds: length checked to be exactly 1.
-                    flattened.remove(0)
-                } else {
-                    FtsExpr::Or(flattened)
+                match flattened.len() {
+                    0 => Self::empty_node(),
+                    1 => flattened.remove(0),
+                    _ => FtsExpr::Or(flattened),
                 }
             }
             FtsExpr::Not(lhs, rhs) => {
@@ -172,11 +238,10 @@ impl FtsExpr {
             FtsExpr::Literal(l) => {
                 let mut tokens = vec![];
                 l.tokenize(tokenizer, &mut tokens);
-                if tokens.len() == 1 {
-                    // In bounds: length checked to be exactly 1.
-                    FtsExpr::Literal(tokens.remove(0))
-                } else {
-                    FtsExpr::And(tokens.into_iter().map(FtsExpr::Literal).collect())
+                match tokens.len() {
+                    0 => Self::empty_node(),
+                    1 => FtsExpr::Literal(tokens.remove(0)),
+                    _ => FtsExpr::and(tokens.into_iter().map(FtsExpr::Literal).collect()),
                 }
             }
             FtsExpr::Near(FtsNear { literals, distance }) => {
@@ -189,13 +254,13 @@ impl FtsExpr {
                     distance,
                 })
             }
-            FtsExpr::And(exprs) => FtsExpr::And(
+            FtsExpr::And(exprs) => FtsExpr::and(
                 exprs
                     .into_iter()
                     .map(|e| e.do_tokenize(tokenizer))
                     .collect(),
             ),
-            FtsExpr::Or(exprs) => FtsExpr::Or(
+            FtsExpr::Or(exprs) => FtsExpr::or(
                 exprs
                     .into_iter()
                     .map(|e| e.do_tokenize(tokenizer))
@@ -216,11 +281,7 @@ mod tests {
     use crate::engines::text::TokenizerConfig;
 
     fn lit(s: &str) -> FtsExpr {
-        FtsExpr::Literal(FtsLiteral {
-            value: s.into(),
-            is_prefix: false,
-            booster: 1.0.into(),
-        })
+        FtsExpr::Literal(FtsLiteral::new(s.into(), false, 1.0.into()))
     }
 
     fn analyzer(tk: &str, filters: &[(&str, Vec<DataValue>)]) -> TextAnalyzer {
@@ -243,15 +304,13 @@ mod tests {
         assert!(lit("").is_empty());
         // A zero booster empties a literal even with text.
         assert!(
-            FtsExpr::Literal(FtsLiteral {
-                value: "hello".into(),
-                is_prefix: false,
-                booster: 0.0.into(),
-            })
-            .is_empty()
+            FtsExpr::Literal(FtsLiteral::new("hello".into(), false, 0.0.into())).is_empty()
         );
+        // Parser-era empty vec still reads as empty; flatten/and/or refuse it.
         assert!(FtsExpr::And(vec![]).is_empty());
         assert!(FtsExpr::Or(vec![]).is_empty());
+        assert!(FtsExpr::and(vec![]).is_empty());
+        assert!(FtsExpr::or(vec![]).is_empty());
         assert!(
             FtsExpr::Near(FtsNear {
                 literals: vec![],
@@ -289,9 +348,11 @@ mod tests {
         // Single-survivor collapse: And(a, "") → a
         let e = FtsExpr::And(vec![lit("a"), lit("")]);
         assert_eq!(e.flatten(), lit("a"));
-        // All-empty collapse: Or("", "") → Or([]) (empty, not a panic)
+        // All-empty collapse: Or("", "") → empty_node (never empty Or)
         let e = FtsExpr::Or(vec![lit(""), lit("")]);
-        assert!(e.flatten().is_empty());
+        let flat = e.flatten();
+        assert!(flat.is_empty());
+        assert!(matches!(flat, FtsExpr::Literal(_)));
         // Not with empty rhs collapses to lhs.
         let e = FtsExpr::Not(Box::new(lit("keep")), Box::new(lit("")));
         assert_eq!(e.flatten(), lit("keep"));
@@ -331,25 +392,13 @@ mod tests {
             other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Prefix literals pass through untouched.
-        let p = FtsExpr::Literal(FtsLiteral {
-            value: "Runni".into(),
-            is_prefix: true,
-            booster: 2.0.into(),
-        });
+        let p = FtsExpr::Literal(FtsLiteral::new("Runni".into(), true, 2.0.into()));
         assert_eq!(p.clone().tokenize(&an), p);
         // Near re-tokenizes its members but keeps the distance.
         let e = FtsExpr::Near(FtsNear {
             literals: vec![
-                FtsLiteral {
-                    value: "Running".into(),
-                    is_prefix: false,
-                    booster: 1.0.into(),
-                },
-                FtsLiteral {
-                    value: "Dogs".into(),
-                    is_prefix: false,
-                    booster: 1.0.into(),
-                },
+                FtsLiteral::new("Running".into(), false, 1.0.into()),
+                FtsLiteral::new("Dogs".into(), false, 1.0.into()),
             ],
             distance: 3,
         })

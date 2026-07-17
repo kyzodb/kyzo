@@ -15,14 +15,19 @@
 //! commits a fresh transaction; [`crate::storage::ConflictError`] triggers a
 //! rerun and every other error propagates untouched.
 
-use miette::Result;
+use std::num::NonZeroUsize;
 
-/// True when the report carries the conflict diagnostic code
-/// (`storage::conflict`) — typed [`crate::storage::ConflictError`] or a
-/// transparent [`crate::storage::CommitFailure::Conflict`] wrapper.
+use miette::{Result, miette};
+
+use crate::storage::{CommitFailure, ConflictError};
+
+/// True when the report carries a typed [`ConflictError`] (directly or via
+/// a transparent [`CommitFailure::Conflict`] wrapper).
 fn report_is_conflict(err: &miette::Report) -> bool {
-    err.code()
-        .is_some_and(|c| c.to_string() == "storage::conflict")
+    err.downcast_ref::<ConflictError>().is_some()
+        || err
+            .downcast_ref::<CommitFailure>()
+            .is_some_and(CommitFailure::is_conflict)
 }
 
 /// Run `attempt` until it commits without conflict, retrying HOT (no
@@ -32,6 +37,9 @@ fn report_is_conflict(err: &miette::Report) -> bool {
 /// commit — so each retry sees a fresh snapshot. Non-conflict errors
 /// propagate immediately. `max_attempts` bounds pathological contention;
 /// exhausting it returns the final [`crate::storage::ConflictError`].
+/// Zero attempts are refused at the door (not an `expect` after a zero-trip
+/// loop): callers still pass `usize` for ABI stability with the session
+/// tier; the budget is proven [`NonZeroUsize`] before any attempt runs.
 ///
 /// Hot retry is for harnesses whose conflicts are injected or simulated
 /// (the DST campaigns): pausing there wastes wall-clock on races that
@@ -41,9 +49,10 @@ pub fn retry_on_conflict<T>(
     max_attempts: usize,
     mut attempt: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    debug_assert!(max_attempts > 0);
+    let max_attempts = NonZeroUsize::new(max_attempts)
+        .ok_or_else(|| miette!("retry max_attempts must be non-zero"))?;
     let mut last_err = None;
-    for _ in 0..max_attempts {
+    for _ in 0..max_attempts.get() {
         match attempt() {
             Ok(v) => return Ok(v),
             Err(e) if report_is_conflict(&e) => {
@@ -52,7 +61,8 @@ pub fn retry_on_conflict<T>(
             Err(e) => return Err(e),
         }
     }
-    Err(last_err.expect("max_attempts > 0"))
+    // INVARIANT(retry): NonZero attempts + conflict-only continuation ⇒ last_err is Some.
+    Err(last_err.unwrap_or_else(|| miette!("conflict retry exhausted without a stored error")))
 }
 
 /// As [`retry_on_conflict`], with losses backing off: the first retries
@@ -67,9 +77,10 @@ pub fn retry_on_conflict_with_backoff<T>(
     max_attempts: usize,
     mut attempt: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    debug_assert!(max_attempts > 0);
+    let max_attempts = NonZeroUsize::new(max_attempts)
+        .ok_or_else(|| miette!("retry max_attempts must be non-zero"))?;
     let mut last_err = None;
-    for n in 0..max_attempts {
+    for n in 0..max_attempts.get() {
         match attempt() {
             Ok(v) => return Ok(v),
             Err(e) if report_is_conflict(&e) => {
@@ -79,7 +90,8 @@ pub fn retry_on_conflict_with_backoff<T>(
             Err(e) => return Err(e),
         }
     }
-    Err(last_err.expect("max_attempts > 0"))
+    // INVARIANT(retry): NonZero attempts + conflict-only continuation ⇒ last_err is Some.
+    Err(last_err.unwrap_or_else(|| miette!("conflict retry exhausted without a stored error")))
 }
 
 /// The `n`-th loss's pause: yield for the first few, then sleep,

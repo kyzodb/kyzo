@@ -163,8 +163,7 @@ impl<'a> TokenStream for NgramTokenStream<'a> {
                 return false;
             }
             self.token.position = 0;
-            self.token.offset_from = offset_from;
-            self.token.offset_to = offset_to;
+            self.token.set_offsets(offset_from, offset_to);
             self.token.text.clear();
             self.token.text.push_str(&self.text[offset_from..offset_to]);
             true

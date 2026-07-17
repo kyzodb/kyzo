@@ -63,6 +63,8 @@ pub(crate) mod spatial;
 #[allow(dead_code)]
 pub(crate) mod text;
 
+use std::fmt;
+
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -81,7 +83,169 @@ use crate::data::value::DataValue;
 pub(crate) struct IndexRowCorrupt {
     pub(crate) index: String,
     pub(crate) row: String,
-    pub(crate) reason: String,
+    pub(crate) reason: IndexCorruptReason,
+}
+
+/// Named reason a stored index row (or its base-row reference) is corrupt.
+/// String reasons are unrepresentable — every engine path picks a variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IndexCorruptReason {
+    RowShorterThanKey,
+    WrongColumnCount { found: usize, expected: usize },
+    BaseRowMissing,
+    DecodeFailed { detail: String },
+
+    SpatialCurveNot8Bytes,
+    SpatialLatNotNumber,
+    SpatialLonNotNumber,
+
+    SparseWeightNotFloat,
+    SparseWeightNotFiniteNonNeg,
+
+    LshPermutations { detail: String },
+    LshInvChunkNotBytes,
+    LshInvNotChunkList,
+    LshEmptyPosting,
+
+    FtsPositionsNotList,
+    FtsPositionNotInt,
+
+    GazetteerSurfacesNotList,
+    GazetteerSurfaceNotString,
+
+    HnswNotInteger { what: String },
+    HnswCanaryNonNullKeys,
+    HnswCanaryEntryNotBytes,
+    HnswLayerOutOfRange { layer: i64 },
+    HnswNegativeField { side: &'static str },
+    HnswSubOutOfRange { side: &'static str, sub: i64 },
+    HnswIgnoreLinkNotBool,
+    HnswNodeDegreeNegative,
+    HnswNodeHashNotBytes,
+    HnswEdgeDistanceNotNumber,
+    HnswEdgeHashNotNull,
+    HnswFieldBeyondArity { field: usize },
+    HnswListElementBeyondList { sub: usize },
+    HnswExpectsListOfVectors,
+    HnswExpectsVector,
+    HnswCanaryBelowCanaryLayer,
+    HnswCanaryInsideNeighbourPrefix,
+    HnswNonNodeRow,
+    HnswEdgeTargetMissingNode,
+    HnswNeighbourMissingNode,
+    HnswManifestFieldBeyondArity { field: usize },
+    HnswCanaryInsideLayer0Prefix,
+    HnswIndexedFieldBeyondRelationArity,
+    HnswIndexedFieldBeyondRowArity,
+    HnswIndexedListElementBeyondList,
+    HnswIndexedFieldNotListOfVectors,
+}
+
+impl fmt::Display for IndexCorruptReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RowShorterThanKey => {
+                write!(f, "row shorter than the base relation's key")
+            }
+            Self::WrongColumnCount { found, expected } => {
+                write!(f, "posting has {found} columns, expected {expected}")
+            }
+            Self::BaseRowMissing => {
+                write!(f, "index references a base row that does not exist")
+            }
+            Self::DecodeFailed { detail } => {
+                write!(f, "stored row bytes did not decode: {detail}")
+            }
+            Self::SpatialCurveNot8Bytes => {
+                write!(f, "spatial posting curve column is not 8 bytes")
+            }
+            Self::SpatialLatNotNumber => write!(f, "spatial posting lat is not a number"),
+            Self::SpatialLonNotNumber => write!(f, "spatial posting lon is not a number"),
+            Self::SparseWeightNotFloat => write!(f, "sparse posting weight is not a float"),
+            Self::SparseWeightNotFiniteNonNeg => {
+                write!(f, "sparse posting weight is not a finite non-negative float")
+            }
+            Self::LshPermutations { detail } => {
+                write!(f, "stored LSH permutations: {detail}")
+            }
+            Self::LshInvChunkNotBytes => {
+                write!(f, "inverse LSH row holds a non-bytes chunk")
+            }
+            Self::LshInvNotChunkList => {
+                write!(f, "inverse LSH row is not a list of chunks")
+            }
+            Self::LshEmptyPosting => write!(f, "empty LSH posting"),
+            Self::FtsPositionsNotList => {
+                write!(f, "FTS posting position column is not a list")
+            }
+            Self::FtsPositionNotInt => write!(f, "FTS posting position is not an integer"),
+            Self::GazetteerSurfacesNotList => {
+                write!(f, "gazetteer dictionary surfaces column is not a list")
+            }
+            Self::GazetteerSurfaceNotString => {
+                write!(f, "gazetteer dictionary surface form is not a string")
+            }
+            Self::HnswNotInteger { what } => write!(f, "{what} is not an integer"),
+            Self::HnswCanaryNonNullKeys => write!(f, "canary row with non-Null key slots"),
+            Self::HnswCanaryEntryNotBytes => write!(f, "canary entry key is not bytes"),
+            Self::HnswLayerOutOfRange { layer } => {
+                write!(
+                    f,
+                    "layer {layer} is out of range (layers are <= 0; 1 is the canary)"
+                )
+            }
+            Self::HnswNegativeField { side } => write!(f, "{side} field is negative"),
+            Self::HnswSubOutOfRange { side, sub } => {
+                write!(f, "{side} sub-index {sub} is out of range")
+            }
+            Self::HnswIgnoreLinkNotBool => write!(f, "ignore_link is not a boolean"),
+            Self::HnswNodeDegreeNegative => write!(f, "node degree is negative"),
+            Self::HnswNodeHashNotBytes => write!(f, "node vector hash is not bytes"),
+            Self::HnswEdgeDistanceNotNumber => write!(f, "edge distance is not a number"),
+            Self::HnswEdgeHashNotNull => write!(f, "edge hash slot is not Null"),
+            Self::HnswFieldBeyondArity { field } => {
+                write!(f, "HNSW index references field {field} beyond the row's arity")
+            }
+            Self::HnswListElementBeyondList { sub } => {
+                write!(f, "HNSW index references list element {sub} beyond the list")
+            }
+            Self::HnswExpectsListOfVectors => {
+                write!(f, "HNSW index expects a list of vectors at this field")
+            }
+            Self::HnswExpectsVector => write!(f, "HNSW index expects a vector at this field"),
+            Self::HnswCanaryBelowCanaryLayer => {
+                write!(f, "canary row found below the canary layer")
+            }
+            Self::HnswCanaryInsideNeighbourPrefix => {
+                write!(f, "canary row inside a neighbour prefix")
+            }
+            Self::HnswNonNodeRow => write!(f, "node key decoded to a non-node row"),
+            Self::HnswEdgeTargetMissingNode => {
+                write!(f, "edge target has no node row at its layer")
+            }
+            Self::HnswNeighbourMissingNode => {
+                write!(f, "neighbour of a removed vector has no node row")
+            }
+            Self::HnswManifestFieldBeyondArity { field } => {
+                write!(f, "manifest vector field {field} beyond the row's arity")
+            }
+            Self::HnswCanaryInsideLayer0Prefix => {
+                write!(f, "canary row inside a vector's layer-0 prefix")
+            }
+            Self::HnswIndexedFieldBeyondRelationArity => {
+                write!(f, "indexed field beyond the base relation's arity")
+            }
+            Self::HnswIndexedFieldBeyondRowArity => {
+                write!(f, "indexed field beyond the base row's arity")
+            }
+            Self::HnswIndexedListElementBeyondList => {
+                write!(f, "indexed list element beyond the stored list")
+            }
+            Self::HnswIndexedFieldNotListOfVectors => {
+                write!(f, "indexed field is not a list of vectors")
+            }
+        }
+    }
 }
 
 /// Wrap a scanned index-row stream so a codec refusal surfaces as this
@@ -107,11 +271,11 @@ pub(crate) fn index_rows<'a>(
 }
 
 impl IndexRowCorrupt {
-    pub(crate) fn new(index: &str, row: &[DataValue], reason: impl Into<String>) -> Self {
+    pub(crate) fn new(index: &str, row: &[DataValue], reason: IndexCorruptReason) -> Self {
         IndexRowCorrupt {
             index: index.to_string(),
             row: format!("{row:?}"),
-            reason: reason.into(),
+            reason,
         }
     }
 
@@ -123,7 +287,9 @@ impl IndexRowCorrupt {
         IndexRowCorrupt {
             index: index.to_string(),
             row: "<undecodable bytes>".to_string(),
-            reason: format!("stored row bytes did not decode: {err}"),
+            reason: IndexCorruptReason::DecodeFailed {
+                detail: err.to_string(),
+            },
         }
     }
 }

@@ -219,7 +219,7 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::ProjectionKind;
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
@@ -886,12 +886,22 @@ impl HnswRow {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                format!("expected {expected_len} columns, found {}", tuple.len()),
+                IndexCorruptReason::WrongColumnCount {
+                    found: tuple.len(),
+                    expected: expected_len,
+                },
             ));
         }
         let int_at = |i: usize, what: &str| -> Result<i64> {
             tuple[i].get_int().ok_or_else(|| {
-                IndexRowCorrupt::new(index_name, tuple, format!("{what} is not an integer")).into()
+                IndexRowCorrupt::new(
+                    index_name,
+                    tuple,
+                    IndexCorruptReason::HnswNotInteger {
+                        what: what.to_string(),
+                    },
+                )
+                .into()
             })
         };
         let layer = int_at(0, "layer")?;
@@ -902,7 +912,7 @@ impl HnswRow {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "canary row with non-Null key slots",
+                    IndexCorruptReason::HnswCanaryNonNullKeys,
                 ));
             }
             let bottom_layer = int_at(2 * kl + 5, "canary bottom layer")?;
@@ -910,7 +920,7 @@ impl HnswRow {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "canary entry key is not bytes",
+                    IndexCorruptReason::HnswCanaryEntryNotBytes,
                 ));
             };
             return Ok(HnswRow::Canary {
@@ -922,17 +932,17 @@ impl HnswRow {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                format!("layer {layer} is out of range (layers are <= 0; 1 is the canary)"),
+                IndexCorruptReason::HnswLayerOutOfRange { layer },
             ));
         }
 
-        let vector_id_at = |start: usize, side: &str| -> Result<VectorId> {
+        let vector_id_at = |start: usize, side: &'static str| -> Result<VectorId> {
             let field = int_at(start + kl, &format!("{side} field"))?;
             if field < 0 {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    format!("{side} field is negative"),
+                    IndexCorruptReason::HnswNegativeField { side },
                 ));
             }
             let sub = match int_at(start + kl + 1, &format!("{side} sub-index"))? {
@@ -941,7 +951,7 @@ impl HnswRow {
                 s => bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    format!("{side} sub-index {s} is out of range"),
+                    IndexCorruptReason::HnswSubOutOfRange { side, sub: s },
                 )),
             };
             Ok(VectorId {
@@ -957,7 +967,7 @@ impl HnswRow {
             bail!(IndexRowCorrupt::new(
                 index_name,
                 tuple,
-                "ignore_link is not a boolean",
+                IndexCorruptReason::HnswIgnoreLinkNotBool,
             ));
         };
 
@@ -967,14 +977,14 @@ impl HnswRow {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "node degree is negative",
+                    IndexCorruptReason::HnswNodeDegreeNegative,
                 ));
             }
             let DataValue::Bytes(vec_hash) = &tuple[2 * kl + 6] else {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "node vector hash is not bytes",
+                    IndexCorruptReason::HnswNodeHashNotBytes,
                 ));
             };
             Ok(HnswRow::Node {
@@ -988,14 +998,14 @@ impl HnswRow {
                 miette!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "edge distance is not a number",
+                    IndexCorruptReason::HnswEdgeDistanceNotNumber,
                 ))
             })?;
             if tuple[2 * kl + 6] != DataValue::Null {
                 bail!(IndexRowCorrupt::new(
                     index_name,
                     tuple,
-                    "edge hash slot is not Null",
+                    IndexCorruptReason::HnswEdgeHashNotNull,
                 ));
             }
             Ok(HnswRow::Edge {
@@ -1197,17 +1207,14 @@ impl<'m> VectorCache<'m> {
             bail!(IndexRowCorrupt::new(
                 &base.name,
                 id.tuple_key.as_slice(),
-                "HNSW index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ));
         };
         let mut field = tuple.get(id.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &base.name,
                 tuple.as_slice(),
-                format!(
-                    "HNSW index references field {} beyond the row's arity",
-                    id.field
-                ),
+                IndexCorruptReason::HnswFieldBeyondArity { field: id.field },
             ))
         })?;
         if let Some(sub) = id.sub {
@@ -1217,14 +1224,14 @@ impl<'m> VectorCache<'m> {
                         miette!(IndexRowCorrupt::new(
                             &base.name,
                             tuple.as_slice(),
-                            format!("HNSW index references list element {sub} beyond the list"),
+                            IndexCorruptReason::HnswListElementBeyondList { sub },
                         ))
                     })?;
                 }
                 data_value_any!() => bail!(IndexRowCorrupt::new(
                     &base.name,
                     tuple.as_slice(),
-                    "HNSW index expects a list of vectors at this field",
+                    IndexCorruptReason::HnswExpectsListOfVectors,
                 )),
             }
         }
@@ -1237,7 +1244,7 @@ impl<'m> VectorCache<'m> {
             data_value_any!() => bail!(IndexRowCorrupt::new(
                 &base.name,
                 tuple.as_slice(),
-                "HNSW index expects a vector at this field",
+                IndexCorruptReason::HnswExpectsVector,
             )),
         }
     }
@@ -1305,7 +1312,7 @@ fn entry_point(
                 HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                     &idx.name,
                     row.as_slice(),
-                    "canary row found below the canary layer",
+                    IndexCorruptReason::HnswCanaryBelowCanaryLayer,
                 )),
             }
         }
@@ -1353,7 +1360,7 @@ fn neighbours(
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "canary row inside a neighbour prefix",
+                IndexCorruptReason::HnswCanaryInsideNeighbourPrefix,
             )),
         }
     }
@@ -1586,7 +1593,7 @@ fn read_node_row(
             HnswRow::Edge { .. } | HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "node key decoded to a non-node row",
+                IndexCorruptReason::HnswNonNodeRow,
             )),
         },
     }
@@ -1623,7 +1630,7 @@ fn neighbours_tagged(
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "canary row inside a neighbour prefix",
+                IndexCorruptReason::HnswCanaryInsideNeighbourPrefix,
             )),
         }
     }
@@ -1887,7 +1894,7 @@ fn put_vector<T: WriteTx>(
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
                     node_key(layer, neighbour).as_slice(),
-                    "edge target has no node row at its layer",
+                    IndexCorruptReason::HnswEdgeTargetMissingNode,
                 ));
             };
             let mut new_degree = degree + 1;
@@ -1954,7 +1961,7 @@ fn remove_vec<T: WriteTx>(
                 bail!(IndexRowCorrupt::new(
                     &idx.name,
                     node_key(layer, &neighbour).as_slice(),
-                    "neighbour of a removed vector has no node row",
+                    IndexCorruptReason::HnswNeighbourMissingNode,
                 ));
             };
             // Saturating: the removal walk counts ignored links, the
@@ -2039,7 +2046,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     // Extract, then ADMIT everything before writing anything: a refused
@@ -2051,7 +2058,7 @@ pub(crate) fn hnsw_put<T: WriteTx>(
             miette!(IndexRowCorrupt::new(
                 &base.name,
                 tuple,
-                format!("manifest vector field {field} beyond the row's arity"),
+                IndexCorruptReason::HnswManifestFieldBeyondArity { field: *field },
             ))
         })?;
         match val {
@@ -2108,7 +2115,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let mut prefix = Tuple::with_capacity(key_len + 1);
@@ -2130,7 +2137,7 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
             HnswRow::Canary { .. } => bail!(IndexRowCorrupt::new(
                 &idx.name,
                 row.as_slice(),
-                "canary row inside a vector's layer-0 prefix",
+                IndexCorruptReason::HnswCanaryInsideLayer0Prefix,
             )),
         }
     }
@@ -2267,7 +2274,7 @@ pub(crate) fn hnsw_knn(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 cand.tuple_key.as_slice(),
-                "HNSW index references a base row that does not exist",
+                IndexCorruptReason::BaseRowMissing,
             ))
         })?;
 
@@ -2285,7 +2292,7 @@ pub(crate) fn hnsw_knn(
                         miette!(IndexRowCorrupt::new(
                             &idx.name,
                             cand_tuple.as_slice(),
-                            "indexed field beyond the base relation's arity",
+                            IndexCorruptReason::HnswIndexedFieldBeyondRelationArity,
                         ))
                     })?
                     .name
@@ -2307,7 +2314,7 @@ pub(crate) fn hnsw_knn(
                 miette!(IndexRowCorrupt::new(
                     &idx.name,
                     cand_tuple.as_slice(),
-                    "indexed field beyond the base row's arity",
+                    IndexCorruptReason::HnswIndexedFieldBeyondRowArity,
                 ))
             })?;
             let vec = match cand.sub {
@@ -2319,14 +2326,14 @@ pub(crate) fn hnsw_knn(
                             miette!(IndexRowCorrupt::new(
                                 &idx.name,
                                 cand_tuple.as_slice(),
-                                "indexed list element beyond the stored list",
+                                IndexCorruptReason::HnswIndexedListElementBeyondList,
                             ))
                         })?
                         .clone(),
                     data_value_any!() => bail!(IndexRowCorrupt::new(
                         &idx.name,
                         cand_tuple.as_slice(),
-                        "indexed field is not a list of vectors",
+                        IndexCorruptReason::HnswIndexedFieldNotListOfVectors,
                     )),
                 },
             };
@@ -2464,7 +2471,7 @@ fn build_cand_tuple(
         miette!(IndexRowCorrupt::new(
             &idx.name,
             cand.tuple_key.as_slice(),
-            "HNSW index references a base row that does not exist",
+            IndexCorruptReason::BaseRowMissing,
         ))
     })?;
     if params.bind_field {
@@ -2478,7 +2485,7 @@ fn build_cand_tuple(
                     miette!(IndexRowCorrupt::new(
                         &idx.name,
                         cand_tuple.as_slice(),
-                        "indexed field beyond the base relation's arity",
+                        IndexCorruptReason::HnswIndexedFieldBeyondRelationArity,
                     ))
                 })?
                 .name
@@ -2500,7 +2507,7 @@ fn build_cand_tuple(
             miette!(IndexRowCorrupt::new(
                 &idx.name,
                 cand_tuple.as_slice(),
-                "indexed field beyond the base row's arity",
+                IndexCorruptReason::HnswIndexedFieldBeyondRowArity,
             ))
         })?;
         let vec = match cand.sub {
@@ -2512,14 +2519,14 @@ fn build_cand_tuple(
                         miette!(IndexRowCorrupt::new(
                             &idx.name,
                             cand_tuple.as_slice(),
-                            "indexed list element beyond the stored list",
+                            IndexCorruptReason::HnswIndexedListElementBeyondList,
                         ))
                     })?
                     .clone(),
                 data_value_any!() => bail!(IndexRowCorrupt::new(
                     &idx.name,
                     cand_tuple.as_slice(),
-                    "indexed field is not a list of vectors",
+                    IndexCorruptReason::HnswIndexedFieldNotListOfVectors,
                 )),
             },
         };

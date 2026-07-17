@@ -2271,9 +2271,11 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
 // Nondeterministic: fresh randomness per evaluation; never constant-folded.
 define_op!(OP_RAND_VEC, 1, true, false);
 pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
-    let len = args[0]
+    let len_i = args[0]
         .get_int()
-        .ok_or_else(|| miette!("'rand_vec' requires an integer"))? as usize;
+        .ok_or_else(|| miette!("'rand_vec' requires an integer"))?;
+    let len = usize::try_from(len_i)
+        .map_err(|_| miette!("'rand_vec' length must be non-negative, got {len_i}"))?;
     let t = vec_element_type(args.get(1), "rand_vec")?;
 
     let mut rng = rand::rng();

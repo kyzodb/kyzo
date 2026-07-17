@@ -114,7 +114,7 @@ use thiserror::Error;
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, ScanBound, Tuple};
-use crate::engines::IndexRowCorrupt;
+use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::ProjectionKind;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -474,7 +474,7 @@ pub(crate) fn spatial_put<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let point = extract_point(tuple, manifest)?;
@@ -503,7 +503,7 @@ pub(crate) fn spatial_del<T: WriteTx>(
         bail!(IndexRowCorrupt::new(
             &base.name,
             tuple,
-            "row shorter than the base relation's key",
+            IndexCorruptReason::RowShorterThanKey,
         ));
     }
     let point = extract_point(tuple, manifest)?;
@@ -691,10 +691,10 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         bail!(IndexRowCorrupt::new(
             index_name,
             row,
-            format!(
-                "spatial posting has {} columns, expected {expected_len}",
-                row.len()
-            ),
+            IndexCorruptReason::WrongColumnCount {
+                found: row.len(),
+                expected: expected_len,
+            },
         ));
     }
     // The curve column must be exactly the 8 bytes it was stored as.
@@ -703,21 +703,21 @@ fn decode_posting(row: &[DataValue], base_key_len: usize, index_name: &str) -> R
         _ => bail!(IndexRowCorrupt::new(
             index_name,
             row,
-            "spatial posting curve column is not 8 bytes",
+            IndexCorruptReason::SpatialCurveNot8Bytes,
         )),
     }
     let lat = row[base_key_len + 1].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             index_name,
             row,
-            "spatial posting lat is not a number",
+            IndexCorruptReason::SpatialLatNotNumber,
         ))
     })?;
     let lon = row[base_key_len + 2].get_float().ok_or_else(|| {
         miette!(IndexRowCorrupt::new(
             index_name,
             row,
-            "spatial posting lon is not a number",
+            IndexCorruptReason::SpatialLonNotNumber,
         ))
     })?;
     Ok(Posting {
@@ -738,7 +738,7 @@ fn fetch_base(
         miette!(IndexRowCorrupt::new(
             &idx.name,
             src_key,
-            "spatial index references a base row that does not exist",
+            IndexCorruptReason::BaseRowMissing,
         ))
     })
 }
