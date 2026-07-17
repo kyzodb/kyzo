@@ -2720,7 +2720,11 @@ pub(crate) fn data_value_to_vld_spec(
     match val {
         DataValue::Num(n) => {
             let microseconds = n.as_int().ok_or(BadValiditySpecification(span))?;
-            Ok(ValidityTs::from_raw(microseconds))
+            // User-facing int coordinate: refuse the reserved terminal via
+            // the assertion door. (`"END"` below remains the read-side
+            // sentinel spelling of the same tick.)
+            ValidityTs::for_assertion(microseconds)
+                .ok_or_else(|| miette::Report::new(BadValiditySpecification(span)))
         }
         DataValue::Str(s) => match &s as &str {
             "NOW" => Ok(cur_vld),
@@ -2785,7 +2789,13 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
             .get_bool()
             .ok_or_else(|| miette!("'validity' expects a boolean as second argument"))?
     };
-    let vld = Validity::new(ValidityTs::from_raw(ts), is_assert).ok_or_else(|| {
+    // User-facing validity construction: mint the coordinate through
+    // `for_assertion`, not `from_raw`. The reserved terminal is a typed
+    // refusal at this door (P005).
+    let coord = ValidityTs::for_assertion(ts).ok_or_else(|| {
+        miette!("'validity' refuses the reserved terminal tick (i64::MAX)")
+    })?;
+    let vld = Validity::new(coord, is_assert).ok_or_else(|| {
         miette!("'validity' refuses assert of the reserved terminal tick (i64::MAX)")
     })?;
     Ok(DataValue::Validity(vld))
