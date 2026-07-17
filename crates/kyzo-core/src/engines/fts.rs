@@ -387,9 +387,9 @@ fn literal_postings(
     base_key_len: usize,
     literal: &FtsLiteral,
 ) -> Result<Vec<LiteralPostings>> {
-    let value = literal.value.as_str();
-    let scan: Box<dyn Iterator<Item = Result<Tuple>>> = if literal.is_prefix {
-        let mut upper = literal.value.clone();
+    let value = literal.value();
+    let scan: Box<dyn Iterator<Item = Result<Tuple>>> = if literal.is_prefix() {
+        let mut upper = SmartString::<LazyCompact>::from(value);
         upper.push(LARGEST_UTF_CHAR);
         idx.scan_bounded_prefix(
             tx,
@@ -485,7 +485,7 @@ fn eval_ast(
             let df = found.len();
             let mut res = FxHashMap::default();
             for lp in found {
-                let score = compute_score(lp.positions.len(), df, n_total, l.booster.0, score_kind);
+                let score = compute_score(lp.positions.len(), df, n_total, l.booster().0, score_kind);
                 res.insert(lp.doc_key, score);
             }
             res
@@ -587,7 +587,7 @@ fn eval_near(
             })
             .collect();
     }
-    let booster: f64 = literals.iter().map(|l| l.booster.0).sum();
+    let booster: f64 = literals.iter().map(|l| l.booster().0).sum();
     let df = coll.len();
     Ok(coll
         .into_iter()

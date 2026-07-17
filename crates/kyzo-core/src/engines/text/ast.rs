@@ -31,28 +31,48 @@ use smartstring::{LazyCompact, SmartString};
 /// One search term: the text, whether it is a prefix search, and its
 /// score booster.
 ///
-/// Prefer [`Self::new`] at mint sites. Fields stay `pub(crate)` so the
-/// parser (`parse/fts.rs`, off this slice's allowlist) can still construct
-/// until it migrates to [`Self::new`].
+/// Mint only through [`Self::new`]. Empty text is the canonical empty
+/// node (`is_prefix == false`, `booster == 0`); searchable terms require
+/// non-empty text and a finite positive booster.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FtsLiteral {
-    pub(crate) value: SmartString<LazyCompact>,
-    pub(crate) is_prefix: bool,
-    pub(crate) booster: OrderedFloat<f64>,
+    value: SmartString<LazyCompact>,
+    is_prefix: bool,
+    booster: OrderedFloat<f64>,
 }
 
 impl FtsLiteral {
-    /// Sole preferred constructor for engine-side minting.
+    /// Sole mint. Empty value is only the canonical empty node; non-empty
+    /// values require a finite positive booster.
     pub(crate) fn new(
         value: SmartString<LazyCompact>,
         is_prefix: bool,
         booster: OrderedFloat<f64>,
-    ) -> Self {
-        FtsLiteral {
+    ) -> Option<Self> {
+        if value.is_empty() {
+            if is_prefix || booster != OrderedFloat(0.0) {
+                return None;
+            }
+        } else if !(booster.0.is_finite() && booster.0 > 0.0) {
+            return None;
+        }
+        Some(FtsLiteral {
             value,
             is_prefix,
             booster,
-        }
+        })
+    }
+
+    pub(crate) fn value(&self) -> &str {
+        self.value.as_str()
+    }
+
+    pub(crate) fn is_prefix(&self) -> bool {
+        self.is_prefix
+    }
+
+    pub(crate) fn booster(&self) -> OrderedFloat<f64> {
+        self.booster
     }
 
     /// Re-tokenize this literal through the index's analyzer, pushing the
@@ -67,11 +87,13 @@ impl FtsLiteral {
 
         let mut tokens = tokenizer.token_stream(&self.value);
         while let Some(t) = tokens.next() {
-            coll.push(FtsLiteral::new(
+            if let Some(l) = FtsLiteral::new(
                 SmartString::from(&t.text),
                 false,
                 self.booster,
-            ))
+            ) {
+                coll.push(l);
+            }
         }
     }
 }
@@ -186,7 +208,10 @@ impl FtsExpr {
     /// Canonical empty node (empty literal). Used when And/Or would otherwise
     /// be empty after flatten/tokenize — empty And/Or is refused.
     pub(crate) fn empty_node() -> Self {
-        FtsExpr::Literal(FtsLiteral::new(SmartString::new(), false, OrderedFloat(0.0)))
+        FtsExpr::Literal(
+            FtsLiteral::new(SmartString::new(), false, OrderedFloat(0.0))
+                .expect("canonical empty literal"),
+        )
     }
 
     /// Conjunction door: refuses empty children (returns [`Self::empty_node`]).
@@ -223,7 +248,7 @@ impl FtsExpr {
 
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            FtsExpr::Literal(l) => l.booster == 0. || l.value.is_empty(),
+            FtsExpr::Literal(l) => l.value().is_empty(),
             FtsExpr::Near(_) => false,
             // NonEmptyFtsExprs is never empty by construction.
             FtsExpr::And(_) | FtsExpr::Or(_) => false,
@@ -332,7 +357,11 @@ mod tests {
     use crate::engines::text::TokenizerConfig;
 
     fn lit(s: &str) -> FtsExpr {
-        FtsExpr::Literal(FtsLiteral::new(s.into(), false, 1.0.into()))
+        if s.is_empty() {
+            FtsExpr::empty_node()
+        } else {
+            FtsExpr::Literal(FtsLiteral::new(s.into(), false, 1.0.into()).unwrap())
+        }
     }
 
     fn analyzer(tk: &str, filters: &[(&str, Vec<DataValue>)]) -> TextAnalyzer {
@@ -347,10 +376,9 @@ mod tests {
     #[test]
     fn is_empty_edge_cases() {
         assert!(lit("").is_empty());
-        // A zero booster empties a literal even with text.
-        assert!(
-            FtsExpr::Literal(FtsLiteral::new("hello".into(), false, 0.0.into())).is_empty()
-        );
+        // Zero booster with text is unrepresentable; only the empty node is empty.
+        assert!(FtsLiteral::new("hello".into(), false, 0.0.into()).is_none());
+        assert!(FtsExpr::empty_node().is_empty());
         // Empty And/Or unrepresentable; doors yield empty_node.
         assert!(NonEmptyFtsExprs::admit(vec![]).is_none());
         assert!(FtsExpr::and(vec![]).is_empty());
@@ -431,13 +459,13 @@ mod tests {
             other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Prefix literals pass through untouched.
-        let p = FtsExpr::Literal(FtsLiteral::new("Runni".into(), true, 2.0.into()));
+        let p = FtsExpr::Literal(FtsLiteral::new("Runni".into(), true, 2.0.into()).unwrap());
         assert_eq!(p.clone().tokenize(&an), p);
         // Near re-tokenizes its members but keeps the distance.
         let e = FtsExpr::near(
             vec![
-                FtsLiteral::new("Running".into(), false, 1.0.into()),
-                FtsLiteral::new("Dogs".into(), false, 1.0.into()),
+                FtsLiteral::new("Running".into(), false, 1.0.into()).unwrap(),
+                FtsLiteral::new("Dogs".into(), false, 1.0.into()).unwrap(),
             ],
             3,
         )
@@ -446,8 +474,8 @@ mod tests {
             FtsExpr::Near(FtsNear { literals, distance }) => {
                 assert_eq!(distance, 3);
                 assert_eq!(literals.len(), 2);
-                assert_eq!(literals.as_slice()[0].value, "run");
-                assert_eq!(literals.as_slice()[1].value, "dog");
+                assert_eq!(literals.as_slice()[0].value(), "run");
+                assert_eq!(literals.as_slice()[1].value(), "dog");
             }
             other @ FtsExpr::Literal(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected Near, got {other:?}"),
         }
