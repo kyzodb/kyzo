@@ -97,7 +97,7 @@ impl LevelArenaBytes {
 }
 
 /// Inclusive/exclusive scan bound key bytes for stored levels.
-/// Mint only via [`LevelBoundKey::from_encoded`] (encode-door bytes).
+/// Mint only via the bare-bound / bare-tuple encode doors below.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct LevelBoundKey(Vec<u8>);
@@ -106,9 +106,19 @@ const _: () = assert!(std::mem::size_of::<LevelBoundKey>() == std::mem::size_of:
 const _: () = assert!(std::mem::align_of::<LevelBoundKey>() == std::mem::align_of::<Vec<u8>>());
 
 impl LevelBoundKey {
-    /// Bound key from bytes already produced by the bare tuple encode door.
-    pub(crate) fn from_encoded(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    /// Lower scan bound through [`bare_bounds_lower`].
+    pub(crate) fn from_lower_bounds(bounds: &[ScanBound]) -> Self {
+        Self(bare_bounds_lower(bounds))
+    }
+
+    /// Upper scan bound through [`bare_bounds_upper`].
+    pub(crate) fn from_upper_bounds(bounds: &[ScanBound]) -> Self {
+        Self(bare_bounds_upper(bounds))
+    }
+
+    /// Prefix / full-tuple bound through [`encode_tuple_bare`].
+    pub(crate) fn from_tuple_prefix(prefix: &[DataValue]) -> Self {
+        Self(encode_tuple_bare(prefix))
     }
 
     /// Extend an exclusive upper bound (successor sentinel byte).
@@ -277,8 +287,8 @@ impl NormalLevel {
     /// per-row heap allocation beyond the byte string `RegularTempStore`
     /// already minted at derivation. Refuses when the arena end would
     /// overflow the `u32` offset encoding.
-    fn push(&mut self, row: Box<[u8]>, flags: RowFlags) -> Result<()> {
-        self.values.append_encoded(&row);
+    fn push(&mut self, row: Box<OwnBareKey>, flags: RowFlags) -> Result<()> {
+        self.values.append_encoded(row.as_bytes());
         let end = u32::try_from(self.values.len()).map_or_else(
             |_| {
                 bail!(LevelArenaOverflow {
@@ -574,7 +584,7 @@ impl EpochStore {
                                 sink.admit(TupleInIter::new_bytes(row_bytes.as_bytes(), skip))?;
                             }
                             level.push(
-                                row_bytes.into(),
+                                row_bytes,
                                 RowFlags {
                                     skip,
                                     refresh: FlagRefresh::Admitted,
@@ -586,7 +596,7 @@ impl EpochStore {
                             // Re-derivation refreshing the limiter flag:
                             // shadows the old row, admitted nowhere.
                             level.push(
-                                row_bytes.into(),
+                                row_bytes,
                                 RowFlags {
                                     skip,
                                     refresh: FlagRefresh::Refresh,
@@ -662,8 +672,8 @@ impl EpochStore {
         upper_inclusive: bool,
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         self.ranged(
-            LevelBoundKey::from_encoded(bare_bounds_lower(lower)),
-            LevelBoundKey::from_encoded(bare_bounds_upper(upper)),
+            LevelBoundKey::from_lower_bounds(lower),
+            LevelBoundKey::from_upper_bounds(upper),
             upper_inclusive,
             false,
         )
@@ -675,8 +685,8 @@ impl EpochStore {
         upper_inclusive: bool,
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         self.ranged(
-            LevelBoundKey::from_encoded(bare_bounds_lower(lower)),
-            LevelBoundKey::from_encoded(bare_bounds_upper(upper)),
+            LevelBoundKey::from_lower_bounds(lower),
+            LevelBoundKey::from_upper_bounds(upper),
             upper_inclusive,
             true,
         )
@@ -687,7 +697,7 @@ impl EpochStore {
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         // The 0xFF tail (which no canonical encoding begins) bounds every
         // extension of `prefix`, inclusively.
-        let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
+        let lower = LevelBoundKey::from_tuple_prefix(prefix.as_slice());
         let mut upper = lower.clone();
         upper.push_exclusive_sentinel();
         self.ranged(lower, upper, true, false)
@@ -696,7 +706,7 @@ impl EpochStore {
         &'s self,
         prefix: &Tuple,
     ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
-        let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
+        let lower = LevelBoundKey::from_tuple_prefix(prefix.as_slice());
         let mut upper = lower.clone();
         upper.push_exclusive_sentinel();
         self.ranged(lower, upper, true, true)
@@ -733,7 +743,7 @@ impl EpochStore {
             }
             LevelKind::Meet { spec, levels } => {
                 let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
-                let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
+                let lower = LevelBoundKey::from_tuple_prefix(prefix.as_slice());
                 let mut upper = lower.clone();
                 upper.push_exclusive_sentinel();
                 let all: Vec<&'s MeetLevel> = levels.iter().collect();

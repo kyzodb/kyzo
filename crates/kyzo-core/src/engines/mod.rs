@@ -111,6 +111,7 @@ pub(crate) enum IndexCorruptReason {
     HnswNotInteger { what: String },
     HnswCanaryNonNullKeys,
     HnswCanaryEntryNotBytes,
+    HnswCanaryEntryKeyTooShort { found: usize },
     HnswLayerOutOfRange { layer: i64 },
     HnswNegativeField { side: &'static str },
     HnswSubOutOfRange { side: &'static str, sub: i64 },
@@ -184,6 +185,11 @@ impl fmt::Display for IndexCorruptReason {
             Self::HnswNotInteger { what } => write!(f, "{what} is not an integer"),
             Self::HnswCanaryNonNullKeys => write!(f, "canary row with non-Null key slots"),
             Self::HnswCanaryEntryNotBytes => write!(f, "canary entry key is not bytes"),
+            Self::HnswCanaryEntryKeyTooShort { found } => write!(
+                f,
+                "canary entry key is {found} bytes, expected at least {}",
+                crate::data::value::StorageKey::RELATION_PREFIX_LEN
+            ),
             Self::HnswLayerOutOfRange { layer } => {
                 write!(
                     f,

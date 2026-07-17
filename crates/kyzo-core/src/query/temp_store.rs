@@ -152,12 +152,6 @@ impl OwnBareKey {
     }
 }
 
-impl From<Box<OwnBareKey>> for Box<[u8]> {
-    fn from(key: Box<OwnBareKey>) -> Self {
-        key.0
-    }
-}
-
 impl AsRef<[u8]> for OwnBareKey {
     fn as_ref(&self) -> &[u8] {
         &self.0

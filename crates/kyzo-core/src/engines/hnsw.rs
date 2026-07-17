@@ -220,7 +220,7 @@ use crate::data::relation::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
-use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
+use crate::data::value::{DataValue, ScanBound, StorageKey, Vector, append_canonical, encode_owned};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
@@ -715,7 +715,8 @@ impl AsRef<[u8]> for VecContentHash {
 
 
 /// Canary entry key bytes for an HNSW index row.
-/// Mint only via [`Self::from_encoded`] (encode-door bytes).
+/// Mint only via [`Self::from_storage_key`] (encode door) or
+/// [`Self::from_stored`] (wire decode with typed refuse).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct HnswEntryKey(Vec<u8>);
@@ -724,9 +725,28 @@ const _: () = assert!(std::mem::size_of::<HnswEntryKey>() == std::mem::size_of::
 const _: () = assert!(std::mem::align_of::<HnswEntryKey>() == std::mem::align_of::<Vec<u8>>());
 
 impl HnswEntryKey {
-    /// Entry key from bytes already produced by [`RelationHandle::encode_key_for_store`].
-    fn from_encoded(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
+    fn from_storage_key(key: StorageKey) -> Self {
+        Self(key.0)
+    }
+
+    /// Wire decode of the canary entry-key payload; refuses keys shorter
+    /// than a storage-key relation prefix.
+    fn from_stored(
+        bytes: Vec<u8>,
+        index_name: &str,
+        tuple: &[DataValue],
+    ) -> Result<Self> {
+        if bytes.len() < StorageKey::RELATION_PREFIX_LEN {
+            bail!(IndexRowCorrupt::new(
+                index_name,
+                tuple,
+                IndexCorruptReason::HnswCanaryEntryKeyTooShort {
+                    found: bytes.len(),
+                },
+            ));
+        }
+        Ok(Self(bytes))
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -748,7 +768,7 @@ impl AsRef<[u8]> for HnswEntryKey {
 
 
 /// Ranked-hit key bytes during HNSW search (layer-0 node key encoding).
-/// Mint only via [`Self::from_encoded`] (encode-door bytes).
+/// Mint only via [`Self::from_storage_key`] (encode door).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[repr(transparent)]
 pub(crate) struct HnswHitKey(Vec<u8>);
@@ -757,9 +777,9 @@ const _: () = assert!(std::mem::size_of::<HnswHitKey>() == std::mem::size_of::<V
 const _: () = assert!(std::mem::align_of::<HnswHitKey>() == std::mem::align_of::<Vec<u8>>());
 
 impl HnswHitKey {
-    /// Hit-order key from bytes already produced by [`RelationHandle::encode_key_for_store`].
-    fn from_encoded(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
+    fn from_storage_key(key: StorageKey) -> Self {
+        Self(key.0)
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -962,7 +982,7 @@ impl HnswRow {
             };
             return Ok(HnswRow::Canary {
                 bottom_layer,
-                entry_key: HnswEntryKey::from_encoded(entry_key.clone()),
+                entry_key: HnswEntryKey::from_stored(entry_key.clone(), index_name, tuple)?,
             });
         }
         if layer > 0 {
@@ -1596,12 +1616,10 @@ fn put_fresh_at_levels(
     // artifact of construction order; recording the real key is
     // deliberate.)
     let entry_key = idx
-        .encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?
-        .as_bytes()
-        .to_vec();
+        .encode_key_for_store(node_key(bottom_layer, at).as_slice(), SourceSpan::default())?;
     HnswRow::Canary {
         bottom_layer,
-        entry_key: HnswEntryKey::from_encoded(entry_key),
+        entry_key: HnswEntryKey::from_storage_key(entry_key),
     }
     .write(tx, idx, base_key_len)?;
     for layer in bottom_layer..=top_layer {
@@ -2024,17 +2042,14 @@ fn remove_vec<T: WriteTx>(
             idx.encode_key_for_store(canary_key(base_key_len).as_slice(), SourceSpan::default())?;
         match entry_point(tx, base, idx)? {
             Some((bottom_layer, ep_id)) => {
-                let entry_key = idx
-                    .encode_key_for_store(
-                        node_key(bottom_layer, &ep_id).as_slice(),
-                        SourceSpan::default(),
-                    )?
-                    .as_bytes()
-                    .to_vec();
+                let entry_key = idx.encode_key_for_store(
+                    node_key(bottom_layer, &ep_id).as_slice(),
+                    SourceSpan::default(),
+                )?;
                 let val = idx.encode_val_only_for_store(
                     HnswRow::Canary {
                         bottom_layer,
-                        entry_key: HnswEntryKey::from_encoded(entry_key),
+                        entry_key: HnswEntryKey::from_storage_key(entry_key),
                     }
                     .val_tuple()
                     .as_slice(),
@@ -2552,10 +2567,8 @@ impl PartialOrd for Ranked {
 /// tie-break key. The layer-0 node key is a stable, memcmp-ordered encoding of
 /// the `VectorId`.
 fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<HnswHitKey> {
-    Ok(HnswHitKey::from_encoded(
-        idx.encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?
-            .as_bytes()
-            .to_vec(),
+    Ok(HnswHitKey::from_storage_key(
+        idx.encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?,
     ))
 }
 
@@ -4123,7 +4136,12 @@ mod tests {
             },
             HnswRow::Canary {
                 bottom_layer: -3,
-                entry_key: HnswEntryKey::from_encoded(vec![9, 9]),
+                entry_key: HnswEntryKey::from_stored(
+                    vec![0u8; StorageKey::RELATION_PREFIX_LEN + 2],
+                    "t",
+                    &[],
+                )
+                .unwrap(),
             },
         ];
         for row in rows {
@@ -4150,7 +4168,12 @@ mod tests {
         );
         let c = HnswRow::Canary {
             bottom_layer: 0,
-            entry_key: HnswEntryKey::from_encoded(vec![]),
+            entry_key: HnswEntryKey::from_stored(
+                vec![0u8; StorageKey::RELATION_PREFIX_LEN],
+                "t",
+                &[],
+            )
+            .unwrap(),
         }
         .key_tuple(kl);
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));
