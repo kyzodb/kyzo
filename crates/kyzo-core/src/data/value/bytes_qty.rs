@@ -12,8 +12,8 @@
 //! Every field in the heap that holds a byte count lives here.
 //! Raw `+`/`-`/`*` on these quantities is absent by design: the only
 //! arithmetic is through `checked_*` methods, so overflow is a typed
-//! refusal (via `Option` propagated to an `.expect()`) in every build
-//! profile — independent of the `overflow-checks` Cargo toggle.
+//! refusal (`Option` / [`super::arena::Denial`] at the heap door) in every
+//! build profile — independent of the `overflow-checks` Cargo toggle.
 //!
 //! The three kinds:
 //!
@@ -62,7 +62,7 @@ impl ByteLen {
         self.0
     }
 
-    /// Checked addition: `None` on overflow (caller must `.expect()` or handle).
+    /// Checked addition: `None` on overflow (caller maps to [`super::arena::Denial`]).
     pub(super) fn checked_add(self, rhs: ByteLen) -> Option<ByteLen> {
         self.0.checked_add(rhs.0).map(ByteLen)
     }

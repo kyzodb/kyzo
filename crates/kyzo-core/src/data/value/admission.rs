@@ -18,7 +18,7 @@
 //! | Allowed | [`NestedDomainCtx`] | Same fact under an invariant-lifetime nest brand |
 //! | Allowed | [`BulkSpendAuthority`] | Consumable permission after domain admission |
 //! | Allowed | [`BulkPass`] | Amortized capability after spending the authority |
-//! | Refused | [`Denial`] | Typed witness for arena/epoch/cut/arity/extent refusal |
+//! | Refused | [`Denial`] | Typed witness for arena/epoch/cut/arity/extent/bookkeeping refusal |
 //!
 //! Both directions are re-exported here so the value plane has one
 //! vocabulary door. Call sites may keep the thin aliases [`DomainCtx`] /

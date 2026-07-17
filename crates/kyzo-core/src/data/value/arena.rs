@@ -161,15 +161,15 @@ pub(super) struct Span {
 }
 
 impl Span {
-    /// The exclusive end offset within the chunk (`off + len`). Both
-    /// quantities are u32-bounded, so their sum fits in usize on any
-    /// 64-bit target.
+    /// The exclusive end offset within the chunk (`off + len`).
+    ///
+    /// Spans are minted only by [`Heap::push`], which refuses when
+    /// `off + len` overflows `u32`. Widening each field to `usize` before
+    /// adding therefore cannot wrap on our targets — the overflow state
+    /// is unrepresentable.
     #[inline]
     fn end_off(self) -> usize {
-        self.off
-            .checked_add(self.len)
-            .expect("span end overflows u32: span layout is broken")
-            .as_usize()
+        self.off.as_usize() + self.len.as_usize()
     }
 }
 
@@ -184,37 +184,40 @@ impl Heap {
 
     /// Store a byte-string, returning its permanent handle.
     ///
-    /// # Panics
-    ///
-    /// Panics if a single value exceeds `u32::MAX` bytes or the chunk id
-    /// space is exhausted (typed `None` from the quantity doors, surfaced
-    /// here as the heap's documented capacity refusal).
-    pub fn push(&mut self, value: &[u8]) -> Span {
-        let vlen = ByteLen::from_usize(value.len())
-            .expect("byte length exceeds u32 span space");
+    /// Refuses with [`Denial::ExtentOverflow`] when a single value exceeds
+    /// `u32::MAX` bytes, the live offset exceeds `u32` span space, `off +
+    /// len` would overflow `u32`, or the chunk id space is exhausted —
+    /// never a process abort.
+    pub fn push(&mut self, value: &[u8]) -> Result<Span, Denial> {
+        let vlen = ByteLen::from_usize(value.len()).ok_or(Denial::ExtentOverflow)?;
         if value.len() >= CHUNK_SIZE {
             // Oversize value: a chunk of its own.
             self.freeze_live();
-            let chunk = self.chunk_id();
+            let chunk = self.chunk_id()?;
+            // Prove end_off: ZERO + vlen is the length itself when vlen is
+            // a lawful ByteLen; keep the checked door for one mint law.
+            let _ = ByteOff::ZERO
+                .checked_add(vlen)
+                .ok_or(Denial::ExtentOverflow)?;
             self.frozen.push(Arc::from(value));
-            return Span {
+            return Ok(Span {
                 chunk,
                 off: ByteOff::ZERO,
                 len: vlen,
-            };
+            });
         }
         if self.live.len() + value.len() > CHUNK_SIZE {
             self.freeze_live();
         }
-        let chunk = self.chunk_id();
-        let off = ByteOff::from_usize(self.live.len())
-            .expect("byte offset exceeds u32 span space");
+        let chunk = self.chunk_id()?;
+        let off = ByteOff::from_usize(self.live.len()).ok_or(Denial::ExtentOverflow)?;
+        let _ = off.checked_add(vlen).ok_or(Denial::ExtentOverflow)?;
         self.live.extend_from_slice(value);
-        Span {
+        Ok(Span {
             chunk,
             off,
             len: vlen,
-        }
+        })
     }
 
     /// Freeze the live chunk (if non-empty) into the shared set. Its chunk
@@ -226,8 +229,8 @@ impl Heap {
         }
     }
 
-    fn chunk_id(&self) -> ChunkId {
-        ChunkId::from_usize(self.frozen.len()).expect("heap chunk id space exhausted")
+    fn chunk_id(&self) -> Result<ChunkId, Denial> {
+        ChunkId::from_usize(self.frozen.len()).ok_or(Denial::ExtentOverflow)
     }
 
     pub fn get(&self, span: Span) -> &[u8] {
@@ -509,7 +512,8 @@ pub struct Admission {
 
 /// Why an admission/spend/write door refused — the **denial** witness.
 /// Opposite of [`Admission`]: same discipline, refuse direction. Never a
-/// bare boolean, never a process abort for a reachable cut/bounds miss.
+/// bare boolean, never a process abort for a reachable cut/bounds miss
+/// or capacity/bookkeeping failure.
 ///
 /// Thin call-site alias: [`DomainCtxRefusal`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -522,12 +526,16 @@ pub enum Denial {
     EmptyProjection,
     /// Tuple width does not match the container / sink arity.
     ArityMismatch { expected: usize, got: usize },
-    /// A `u32` extent would wrap past `u32::MAX`: domain absorb growth,
-    /// arena distinct-value capacity (`len == u32::MAX`), or a value's
-    /// byte length exceeding the heap span encoding space.
+    /// A `u32`/`u64` extent would wrap: domain absorb growth, arena
+    /// distinct-value capacity (`len == u32::MAX`), a value's byte length /
+    /// heap offset / chunk id exceeding span encoding space, `off + len`
+    /// overflow at span mint, or the epoch counter exhausting `u64`.
     ExtentOverflow,
     /// Epoch remap produced a code past `u32::MAX` (checked add overflow).
     CodeRemapOverflow,
+    /// Rank select or seal dedup contradicted proven bounds: run/delta
+    /// bookkeeping is corrupt — typed refuse, never `unreachable!`.
+    BookkeepingBroken,
 }
 
 impl std::fmt::Display for Denial {
@@ -548,6 +556,7 @@ impl std::fmt::Display for Denial {
             }
             Denial::ExtentOverflow => write!(f, "extent overflow"),
             Denial::CodeRemapOverflow => write!(f, "code remap overflow"),
+            Denial::BookkeepingBroken => write!(f, "arena bookkeeping broken"),
         }
     }
 }
@@ -873,7 +882,7 @@ impl<'a, S: Store> View<'a, S> {
             if self.runs.len() == 1 {
                 return Ok(self.runs[0].entries[c]);
             }
-            Ok(self.select_sealed(c))
+            self.select_sealed(c)
         } else {
             let a = c - self.sealed_len;
             if a >= self.arrivals.len() {
@@ -962,27 +971,34 @@ impl<'a, S: Store> View<'a, S> {
                 visible,
             });
         }
-        Ok(self.store.payload(self.select_global(k).span))
+        Ok(self.store.payload(self.select_global(k)?.span))
     }
 
     /// Select the sealed value of rank `k` across the disjoint runs: in
     /// exactly one run, an index `i` has `i` + (lower bounds elsewhere)
     /// equal to `k`; that predicate is monotone in `i` per run.
-    fn select_sealed(&self, k: usize) -> Entry {
+    ///
+    /// Refuses with [`Denial::BookkeepingBroken`] when no run yields rank
+    /// `k` despite the caller having proven `k` in sealed range.
+    fn select_sealed(&self, k: usize) -> Result<Entry, Denial> {
         debug_assert!(k < self.sealed_len);
         for (r, run) in self.runs.iter().enumerate() {
             if let Some(e) = self.select_in(run, r, k, false) {
-                return e;
+                return Ok(e);
             }
         }
-        unreachable!("sealed rank {k} not found: rank bookkeeping is broken");
+        Err(Denial::BookkeepingBroken)
     }
 
     /// Select rank `k` across runs and delta together.
-    fn select_global(&self, k: usize) -> Entry {
+    ///
+    /// Refuses with [`Denial::BookkeepingBroken`] when neither runs nor
+    /// delta yields rank `k` despite the caller having proven `k` in
+    /// visible range.
+    fn select_global(&self, k: usize) -> Result<Entry, Denial> {
         for (r, run) in self.runs.iter().enumerate() {
             if let Some(e) = self.select_in(run, r, k, true) {
-                return e;
+                return Ok(e);
             }
         }
         // Not in any run: it is a delta value. Binary search the delta's
@@ -996,10 +1012,10 @@ impl<'a, S: Store> View<'a, S> {
             match g.cmp(&k) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
-                Ordering::Equal => return e,
+                Ordering::Equal => return Ok(e),
             }
         }
-        unreachable!("global rank {k} not found: rank bookkeeping is broken");
+        Err(Denial::BookkeepingBroken)
     }
 
     fn entry_by_delta_rank(&self, rank: usize) -> Entry {
@@ -1590,8 +1606,9 @@ impl Arena {
     /// door is `Value::mint`, which spends a `CanonicalBytes` witness.
     ///
     /// Refuses with [`Denial::ExtentOverflow`] when the arena already holds
-    /// `u32::MAX` distinct values, or when `value.len()` exceeds the `u32`
-    /// heap-span encoding space — never a process abort.
+    /// `u32::MAX` distinct values, when `value.len()` exceeds the `u32`
+    /// heap-span encoding space, or when heap chunk/offset capacity is
+    /// exhausted — never a process abort.
     pub(super) fn intern(&mut self, value: &[u8]) -> Result<StampedCode, Denial> {
         if self.len() >= u32::MAX as usize {
             return Err(Denial::ExtentOverflow);
@@ -1623,7 +1640,7 @@ impl Arena {
                     Code((self.sealed_len + arrival as usize) as u32)
                 }
                 Err(pos) => {
-                    let span = self.heap.push(value);
+                    let span = self.heap.push(value)?;
                     let entry = Entry::new(span, &self.heap);
                     let arrival = self.delta.arrivals.len() as u32;
                     self.delta.arrivals.push(entry);
@@ -1646,7 +1663,10 @@ impl Arena {
     /// code crosses through. Rides commit boundaries.
     ///
     /// Refuses with [`Denial::ExtentOverflow`] when a cascade merge would
-    /// exceed the `u32` position space — never a process abort.
+    /// exceed the `u32` position space, or when the epoch counter would
+    /// wrap; refuses with [`Denial::BookkeepingBroken`] when a delta value
+    /// is already present in sealed runs (dedup invariant) — never a
+    /// process abort.
     pub fn seal(&mut self) -> Result<EpochRemap, Denial> {
         let from = self.epoch;
         let from_sealed_len = self.sealed_len as u32;
@@ -1666,9 +1686,8 @@ impl Arena {
             for run in &self.runs {
                 match run.search(np, bytes, &self.heap) {
                     // Delta values are disjoint from sealed by
-                    // intern-time dedup; an exact hit would be a broken
-                    // invariant.
-                    Ok(_) => unreachable!("delta value already sealed: dedup invariant broken"),
+                    // intern-time dedup; an exact hit is corrupt bookkeeping.
+                    Ok(_) => return Err(Denial::BookkeepingBroken),
                     Err(pos) => sealed_rank += pos,
                 }
             }
@@ -1707,7 +1726,7 @@ impl Arena {
             self.epoch
                 .0
                 .checked_add(1)
-                .expect("epoch counter is monotone, never wraps"),
+                .ok_or(Denial::ExtentOverflow)?,
         );
         Ok(EpochRemap {
             arena: self.id,
