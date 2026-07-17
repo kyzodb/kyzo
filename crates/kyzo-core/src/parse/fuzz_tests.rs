@@ -56,9 +56,9 @@
 //!
 //! **P091 / P113 (Interval opacity).** This parse-tier fuzz surface never
 //! projects `DataValue::Interval` as `Option<(i64, i64)>` — intervals stay
-//! behind `DataValue` / `Interval`'s own accessors. The remaining bypass
-//! helper `crate::fuzz_api::interval_bounds` lives outside `parse/` and is
-//! not part of this module's contract.
+//! behind `DataValue` / `Interval`'s own typed accessors. The former
+//! `fuzz_api::interval_bounds` `(i64, i64)` projection is gone; Interval
+//! remains opaque across the fuzz façade.
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};

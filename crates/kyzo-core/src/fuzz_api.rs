@@ -94,22 +94,6 @@ pub fn fuzz_decode_relation_handle_id(data: &[u8]) -> Result<u64> {
 /// constant.
 pub const MAX_RELATION_ID: u64 = crate::data::value::RelationId::CAP;
 
-/// Extract an `Interval`'s bounds as raw `i64`s. `Interval`'s type itself
-/// is crate-internal (never re-exported at the crate root), and its
-/// `start()`/`end()` accessors are `pub(crate)` — this is the seam the
-/// fuzz law needs to check the bypass-detecting invariant (`start < end`)
-/// on every successfully-decoded `DataValue::Interval`, without widening
-/// the accessors or the type themselves.
-pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
-    match v {
-        DataValue::Interval(iv) => match (iv.start(), iv.end()) {
-            (Some(a), Some(b)) => Some((a, b)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Build a `DataValue::Interval` from a canonicalizing `(start, end)`
 /// pair, each bound spelled as a `(kind, value)` primitive pair —
 /// `kind % 3`: 0 = unbounded, 1 = closed at `value`, 2 = open at `value`
@@ -117,6 +101,25 @@ pub fn interval_bounds(v: &DataValue) -> Option<(i64, i64)> {
 /// naming the crate-internal `Bound`/`Interval` construction types.
 /// `Interval::new` itself canonicalizes (empty denotations collapse to
 /// `Interval::EMPTY`), so every input pair yields a lawful value.
+///
+/// Interval stays opaque here: no façade projects bounds as
+/// `Option<(i64, i64)>`. Bypass-detecting fuzz laws use `Interval`'s own
+/// typed accessors (`start`/`end`) on a `DataValue::Interval` match arm.
+
+/// Bypass-detecting law for fuzz targets: a successfully decoded finite
+/// Interval must satisfy `start < end`. Returns `true` for non-intervals
+/// and for intervals with an unbounded end. Does **not** project bounds
+/// as `Option<(i64, i64)>` — Interval stays opaque.
+pub fn finite_interval_is_ordered(v: &DataValue) -> bool {
+    match v {
+        DataValue::Interval(iv) => match (iv.start(), iv.end()) {
+            (Some(a), Some(b)) => a < b,
+            _ => true,
+        },
+        _ => true,
+    }
+}
+
 pub fn fuzz_interval(start_kind: u8, start_val: i64, end_kind: u8, end_val: i64) -> DataValue {
     use crate::data::value::Bound;
     fn bound(kind: u8, val: i64) -> Bound {
