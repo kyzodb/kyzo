@@ -2232,8 +2232,8 @@ impl RelationIndexSearch for Hnsw {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<Vec<Tuple>> {
-        hnsw_knn_body(
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(hnsw_knn_body(
             tx,
             request.q,
             request.manifest,
@@ -2242,7 +2242,7 @@ impl RelationIndexSearch for Hnsw {
             request.params,
             request.filter_expr,
             request.cancel,
-        )
+        )?)
     }
 }
 
@@ -2292,7 +2292,7 @@ impl Hnsw {
         params: &HnswKnnParams,
         filter_expr: &Option<Expr>,
         cancel: &crate::fixed_rule::CancelFlag,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         Self::search_relation(
             tx,
             HnswSearchRequest {
@@ -3060,6 +3060,12 @@ mod tests {
 
     use super::*;
     use crate::data::program::InputRelationHandle;
+
+    macro_rules! knn_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(Hnsw::knn($($arg),*).unwrap()).unwrap()
+        };
+    }
     use crate::data::symb::Symbol;
     use crate::fixed_rule::CancelFlag;
     use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
@@ -3733,7 +3739,8 @@ mod tests {
             truth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
-            let hits = Hnsw::knn(
+            let hits = crate::engines::search_rows(
+                Hnsw::knn(
                 &rtx,
                 q_vec,
                 &m,
@@ -3747,6 +3754,8 @@ mod tests {
                 },
                 &None,
                 &CancelFlag::default(),
+            )
+            .unwrap(),
             )
             .unwrap();
             let engine_ids: FxHashSet<i64> =
@@ -3783,7 +3792,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![0.9, 0.1]);
-        let hits = Hnsw::knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3792,8 +3801,7 @@ mod tests {
             &knn_params(2),
             &None,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         // Hand-computed squared distances from (0.9, 0.1):
         //   k=2 (1,0): 0.01 + 0.01 = 0.02   <- nearest
         //   k=1 (0,0): 0.81 + 0.01 = 0.82
@@ -3810,12 +3818,12 @@ mod tests {
         // Radius is in squared units too: 0.5 keeps only (1,0).
         let mut p = knn_params(4);
         p.radius = Some(0.5);
-        let hits = Hnsw::knn(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default()).unwrap();
+        let hits = knn_rows!(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default());
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(2));
 
         // k larger than the index: everything comes back, still ordered.
-        let hits = Hnsw::knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3824,8 +3832,7 @@ mod tests {
             &knn_params(10),
             &None,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(hits.len(), 4);
         assert_eq!(
             hits.iter()
@@ -3850,7 +3857,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![2.0, 0.0]);
-        let hits = Hnsw::knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3859,8 +3866,7 @@ mod tests {
             &knn_params(3),
             &None,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(
             hits.iter()
                 .map(|t| t[0].get_int().unwrap())
@@ -3968,7 +3974,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![1.0, 0.0]);
-        let hits = Hnsw::knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3977,8 +3983,7 @@ mod tests {
             &knn_params(2),
             &None,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(1));
         drop(rtx);
@@ -3988,7 +3993,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = Hnsw::knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -3997,8 +4002,7 @@ mod tests {
             &knn_params(2),
             &None,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert!(hits.is_empty(), "empty index yields empty results");
         assert_eq!(
             idx.scan_all(&rtx).count(),
@@ -4034,7 +4038,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![4.0, 4.0]);
-        let hits = Hnsw::knn(
+        let hits = knn_rows!(
             &rtx,
             &q,
             &m,
@@ -4043,8 +4047,7 @@ mod tests {
             &knn_params(1),
             &None,
             &CancelFlag::default(),
-        )
-        .unwrap();
+        );
         assert_eq!(hits[0][0], DataValue::from(1), "found at its new position");
     }
 
@@ -4319,7 +4322,7 @@ mod tests {
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
             let q = Vector::new(vec![1.0, 0.0]);
-            let hits = Hnsw::knn(
+            let hits = knn_rows!(
                 &rtx,
                 &q,
                 &m,
@@ -4328,8 +4331,7 @@ mod tests {
                 &knn_params(3),
                 &None,
                 &CancelFlag::default(),
-            )
-            .unwrap();
+            );
             // Every hit is at distance 0 (identical vectors).
             for h in &hits {
                 assert!(h[2].get_float().unwrap().abs() < 1e-9, "all equidistant");

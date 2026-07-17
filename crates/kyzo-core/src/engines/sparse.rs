@@ -432,15 +432,15 @@ impl RelationIndexSearch for Sparse {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<Vec<Tuple>> {
-        sparse_search_body(
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(sparse_search_body(
             tx,
             request.query,
             request.base,
             request.idx,
             request.params,
             request.filter_code,
-        )
+        )?)
     }
 }
 
@@ -472,7 +472,7 @@ impl Sparse {
         idx: &RelationHandle,
         params: &SparseSearchParams,
         filter_code: &Option<Expr>,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         Self::search_relation(
             tx,
             SparseSearchRequest {
@@ -583,6 +583,14 @@ mod tests {
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
 
+    macro_rules! sparse_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(
+                Sparse::search_index($($arg),*).unwrap()
+            ).unwrap()
+        };
+    }
+
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
@@ -668,7 +676,7 @@ mod tests {
     /// Run a search and project `(key, score)`.
     fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, f32)> {
         let rtx = db.read_tx().unwrap();
-        let hits = Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
+        let hits = sparse_rows!(&rtx, query, &f.base, &f.idx, &params(k), &None);
         hits.iter()
             .map(|t| {
                 (
@@ -832,7 +840,7 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let f = setup(&db, docs);
             let rtx = db.read_tx().unwrap();
-            Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap()
+            sparse_rows!(&rtx, query, &f.base, &f.idx, &params(10), &None)
         };
 
         let a = build_and_search();
@@ -1042,7 +1050,7 @@ mod tests {
             k: 10,
             bind_score: SparseBindScore::Append,
         };
-        let hits = Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap();
+        let hits = sparse_rows!(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter));
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert_eq!(
             keys,

@@ -417,6 +417,8 @@ fn filtered_search(
         &crate::fixed_rule::CancelFlag::default(),
     )
     .unwrap()
+    .materialize_all_tuples()
+    .unwrap()
 }
 
 /// The chosen strategy for `filter` — for the selector/order-invariance tests.
@@ -1176,7 +1178,8 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
     assert_eq!(f.true_match_count(&rows), rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
-    let unfiltered = Hnsw::knn(
+    let unfiltered = crate::engines::search_rows(
+        Hnsw::knn(
         &rtx,
         &q,
         &m,
@@ -1185,6 +1188,8 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
         &params,
         &None,
         &crate::fixed_rule::CancelFlag::default(),
+    )
+    .unwrap(),
     )
     .unwrap();
     let filtered = filtered_search(&rtx, &q, &m, &base, &idx, P2_K, P2_EF, &f);

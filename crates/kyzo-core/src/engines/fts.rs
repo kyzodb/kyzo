@@ -638,8 +638,8 @@ impl RelationIndexSearch for Fts {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<Vec<Tuple>> {
-        fts_search_body(
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(fts_search_body(
             request.cancel,
             tx,
             request.query,
@@ -649,7 +649,7 @@ impl RelationIndexSearch for Fts {
             request.filter_code,
             request.tokenizer,
             request.n_total,
-        )
+        )?)
     }
 }
 
@@ -688,7 +688,7 @@ impl Fts {
         filter_code: &Option<Expr>,
         tokenizer: &TextAnalyzer,
         n_total: usize,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         Self::search_relation(
             tx,
             FtsSearchRequest {
@@ -785,6 +785,14 @@ mod tests {
     use crate::runtime::relation::{KeyspaceKind, RelationHandle, create_relation};
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
+
+    macro_rules! fts_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(
+                Fts::search_index($($arg),*).unwrap()
+            ).unwrap()
+        };
+    }
 
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
@@ -897,7 +905,7 @@ mod tests {
         } else {
             0
         };
-        let hits = Fts::search_index(
+        let hits = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             q,
@@ -907,8 +915,7 @@ mod tests {
             &None,
             &f.analyzer,
             n,
-        )
-        .unwrap();
+        );
         hits.iter()
             .map(|t| {
                 (
@@ -1212,7 +1219,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         // "the" and "a" are stopwords: the query tokenizes to nothing.
-        let hits = Fts::search_index(
+        let hits = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "the AND a",
@@ -1222,14 +1229,13 @@ mod tests {
             &None,
             &a,
             0,
-        )
-        .unwrap();
+        );
         assert!(
             hits.is_empty(),
             "stopword-only query yields no hits, no error"
         );
         // "cat" survives tokenization and matches.
-        let hits = Fts::search_index(
+        let hits = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1239,8 +1245,7 @@ mod tests {
             &None,
             &a,
             0,
-        )
-        .unwrap();
+        );
         assert_eq!(hits.len(), 1);
     }
 
@@ -1263,7 +1268,7 @@ mod tests {
             span: SourceSpan(0, 0),
         };
         let p = params(0, FtsScoreKind::Tf);
-        let with_filter = Fts::search_index(
+        let with_filter = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1273,14 +1278,13 @@ mod tests {
             &Some(filter),
             &f.analyzer,
             0,
-        )
-        .unwrap();
+        );
         assert!(
             with_filter.is_empty(),
             "k=0 + filter must return 0 rows, got {}",
             with_filter.len()
         );
-        let without = Fts::search_index(
+        let without = fts_rows!(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1290,8 +1294,7 @@ mod tests {
             &None,
             &f.analyzer,
             0,
-        )
-        .unwrap();
+        );
         assert!(without.is_empty(), "k=0 without filter returns 0 rows");
     }
 }

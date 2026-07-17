@@ -806,8 +806,8 @@ impl RelationIndexSearch for Lsh {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<Vec<Tuple>> {
-        lsh_search_body(
+    ) -> Result<crate::data::value::SearchHits> {
+        crate::engines::admit_relation_search_hits(lsh_search_body(
             request.cancel,
             tx,
             request.q,
@@ -818,7 +818,7 @@ impl RelationIndexSearch for Lsh {
             request.filter_code,
             request.perms,
             request.tokenizer,
-        )
+        )?)
     }
 }
 
@@ -845,7 +845,7 @@ impl Lsh {
         filter_code: &Option<Expr>,
         perms: &HashPermutations,
         tokenizer: &TextAnalyzer,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         Self::search_relation(
             tx,
             LshSearchRequest {
@@ -954,6 +954,14 @@ mod tests {
     use crate::runtime::relation::create_relation;
     use crate::storage::Storage;
     use crate::storage::fjall::new_fjall_storage;
+
+    macro_rules! lsh_rows {
+        ($($arg:expr),* $(,)?) => {
+            crate::engines::search_rows(
+                Lsh::search_index($($arg),*).unwrap()
+            ).unwrap()
+        };
+    }
 
     /// The ratified LE format, byte for byte: known seeds encode to their
     /// little-endian bytes on EVERY platform, and decoding asserts the
@@ -1363,7 +1371,7 @@ mod tests {
         let perms = f.manifest.get_hash_perms().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = Lsh::search_index(
+        let hits = lsh_rows!(
             &CancelFlag::default(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1374,8 +1382,7 @@ mod tests {
             &None,
             &perms,
             &f.tokenizer,
-        )
-        .unwrap();
+        );
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert!(keys.contains(&1), "the row itself is a candidate");
         assert!(keys.contains(&2), "the near-duplicate collides");
@@ -1427,7 +1434,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = Lsh::search_index(
+        let hits = lsh_rows!(
             &CancelFlag::default(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1438,8 +1445,7 @@ mod tests {
             &None,
             &perms,
             &f.tokenizer,
-        )
-        .unwrap();
+        );
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert!(!keys.contains(&1), "deleted row withdrawn");
         assert!(keys.contains(&2), "the near-duplicate remains");

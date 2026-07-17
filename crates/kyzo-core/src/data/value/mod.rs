@@ -50,6 +50,7 @@ pub mod number;
 pub mod prefix;
 pub(crate) mod proofs;
 pub mod row;
+pub(crate) mod search_hits;
 pub mod string;
 pub mod tag;
 pub mod wide;
@@ -62,6 +63,7 @@ pub use row::{
     TupleKey, StorageKey, RelationId, TupleT, encode_key_with_suffix, scan_key_lower,
     scan_key_lower_projected, scan_key_upper, scan_key_upper_projected,
 };
+pub(crate) use search_hits::SearchHits;
 pub use tag::Tag;
 pub use wide::interval::{Bound, Interval};
 pub use wide::json::{Json, JsonNum, JsonObj};

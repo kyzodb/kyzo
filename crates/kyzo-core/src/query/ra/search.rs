@@ -19,98 +19,15 @@
 
 use super::RelAlgebra;
 use crate::data::program::MagicSymbol;
-use crate::data::span::SourceSpan;
 use crate::data::value::DataValue;
+use crate::data::value::SearchHits;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
 use crate::storage::ReadTx;
-use miette::{Diagnostic, Result, bail};
+use miette::Result;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
-use thiserror::Error;
-use crate::data::value::data_value_any;
-
-/// Admitted search-hit rows as codes into this admission's private value
-/// table. Engine decoded tuples never cross the SearchRA seam — they enter
-/// only through [`QueryDomainAdmission::admit_hits`].
-///
-/// @authority QueryDomainAdmission
-/// @layer query
-/// @owns admission of engine search hits into the query execution currency as codes; decoded engine tuples never cross the SearchRA seam
-/// @constructs QueryDomainAdmission::admit_hits
-/// @forbids holding decoded engine Tuple vectors as the SearchRA hit currency
-/// @gate SearchRA hit currency is QueryDomainAdmission codes only (#337)
-/// @status established #337
-pub(crate) struct QueryDomainAdmission {
-    /// Row-major codes; each code indexes `table`.
-    codes: Vec<u32>,
-    /// End offset of each hit row in `codes`.
-    row_ends: Vec<usize>,
-    /// Intern table: code → value. Codes are local to this admission.
-    table: Vec<DataValue>,
-}
-
-impl QueryDomainAdmission {
-    /// No hits yet — the batch executor's idle state before the first search.
-    pub(crate) fn empty() -> Self {
-        QueryDomainAdmission {
-            codes: Vec::new(),
-            row_ends: Vec::new(),
-            table: Vec::new(),
-        }
-    }
-
-    /// THE DOOR: admit engine search results as codes under this admission.
-    ///
-    /// Consumes decoded engine hit rows at the boundary; SearchRA never
-    /// stores them as a decoded-tuple vector. Codes are checked `u32`s —
-    /// table growth past `u32::MAX` distinct cells refuses (no truncating cast).
-    pub(crate) fn admit_hits(
-        hits: impl IntoIterator<Item = impl IntoIterator<Item = DataValue>>,
-    ) -> Result<Self> {
-        let mut table = Vec::new();
-        let mut codes = Vec::new();
-        let mut row_ends = Vec::new();
-        for hit in hits {
-            for cell in hit {
-                let code = match table.iter().position(|v| v == &cell) {
-                    Some(i) => u32::try_from(i).map_err(|_| {
-                        miette::miette!("search admission intern table exceeded u32 code space")
-                    })?,
-                    None => {
-                        let i = u32::try_from(table.len()).map_err(|_| {
-                            miette::miette!("search admission intern table exceeded u32 code space")
-                        })?;
-                        table.push(cell);
-                        i
-                    }
-                };
-                codes.push(code);
-            }
-            row_ends.push(codes.len());
-        }
-        Ok(QueryDomainAdmission {
-            codes,
-            row_ends,
-            table,
-        })
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.row_ends.len()
-    }
-
-    /// Resolve hit `i`'s codes through the admission table.
-    pub(crate) fn hit_cells(&self, i: usize) -> impl Iterator<Item = &DataValue> + '_ {
-        let start = if i == 0 { 0 } else { self.row_ends[i - 1] };
-        let end = self.row_ends[i];
-        self.codes[start..end]
-            .iter()
-            .map(|&c| &self.table[c as usize])
-    }
-}
 
 /// An index search driven once per parent row: the query expression is
 /// evaluated against the parent tuple, the engine's pure search function
@@ -123,12 +40,6 @@ pub(crate) struct SearchRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) atom: crate::query::search::SearchAtom,
 }
-
-/// A search query expression evaluated to a value the engine cannot accept.
-#[derive(Debug, Error, Diagnostic)]
-#[error("the search query evaluated to {1}, which this index cannot search for")]
-#[diagnostic(code(query::search_query_type))]
-pub(crate) struct SearchQueryTypeError(#[label] pub(crate) SourceSpan, pub(crate) String);
 
 impl SearchRA {
     pub(crate) fn fill_binding_indices_and_compile(&mut self) -> Result<()> {
@@ -184,64 +95,24 @@ impl SearchRA {
         let cancel = self.atom.cancel.clone();
         let cfg = &self.atom.cfg;
 
-        let search = move |row: &[DataValue]| -> Result<QueryDomainAdmission> {
+        let search = move |row: &[DataValue]| -> Result<SearchHits> {
             cancel.check()?;
             let q = query_expr.eval(row)?;
-            let hits = match cfg {
-                SearchConfig::Hnsw(c) => {
-                    let v = match &q {
-                        DataValue::Vector(v) => v,
-                        other @ (data_value_any!()) => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
-                    };
-                    crate::engines::hnsw::Hnsw::knn(
-                        tx,
-                        v,
-                        &c.manifest,
-                        &c.base,
-                        &c.idx,
-                        &c.params,
-                        &filter_expr,
-                        &self.atom.cancel,
-                    )?
-                }
-                SearchConfig::Fts(c) => {
-                    let text = match &q {
-                        DataValue::Str(t) => t,
-                        other @ (data_value_any!()) => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
-                    };
-                    crate::engines::fts::Fts::search_index(
-                        &self.atom.cancel,
-                        tx,
-                        text,
-                        &c.base,
-                        &c.idx,
-                        &c.params,
-                        &filter_expr,
-                        &c.analyzer,
-                        fts_n_total,
-                    )?
-                }
-                SearchConfig::Lsh(c) => crate::engines::lsh::Lsh::search_index(
-                    &self.atom.cancel,
-                    tx,
-                    &q,
-                    &c.manifest,
-                    &c.base,
-                    &c.idx,
-                    &c.params,
-                    &filter_expr,
-                    &c.perms,
-                    &c.analyzer,
-                )?,
-            };
-            QueryDomainAdmission::admit_hits(hits.into_iter().map(|t| t.into_vec()))
+            cfg.search_relation(
+                tx,
+                &q,
+                &filter_expr,
+                &cancel,
+                fts_n_total,
+                span,
+            )
         };
 
         Ok(Box::new(SearchBatches {
             parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
             parent_batch: None,
             parent_row: 0,
-            hits: QueryDomainAdmission::empty(),
+            hits: SearchHits::empty(),
             hit_idx: 0,
             search: Box::new(search),
             pending_err: None,
@@ -254,9 +125,9 @@ struct SearchBatches<'a> {
     parent: BatchIter<'a>,
     parent_batch: Option<Batch>,
     parent_row: usize,
-    hits: QueryDomainAdmission,
+    hits: SearchHits,
     hit_idx: usize,
-    search: Box<dyn FnMut(&[DataValue]) -> Result<QueryDomainAdmission> + 'a>,
+    search: Box<dyn FnMut(&[DataValue]) -> Result<SearchHits> + 'a>,
     pending_err: Option<miette::Error>,
 }
 
@@ -280,11 +151,13 @@ impl SearchBatches<'_> {
                     Err(e) => return Err(e.into()),
                 };
                 while self.hit_idx < self.hits.len() {
-                    let hit: Vec<DataValue> =
-                        self.hits.hit_cells(self.hit_idx).cloned().collect();
+                    let hit = self
+                        .hits
+                        .materialize_hit(self.hit_idx)
+                        .map_err(|e| miette::miette!("search hit materialization refused: {e:?}"))?;
                     out.push_with(|buf| {
                         buf.extend_from_slice(&row);
-                        buf.extend(hit.iter().cloned());
+                        buf.extend(hit);
                         Ok(())
                     })?;
                     self.hit_idx += 1;

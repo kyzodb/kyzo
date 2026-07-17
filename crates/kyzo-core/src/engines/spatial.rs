@@ -808,17 +808,21 @@ impl RelationIndexSearch for Spatial {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         match request {
             SpatialSearchRequest::Range { base, idx, bbox } => {
-                spatial_range_query_body(tx, base, idx, bbox)
+                crate::engines::admit_relation_search_hits(spatial_range_query_body(
+                    tx, base, idx, bbox,
+                )?)
             }
             SpatialSearchRequest::Knn {
                 base,
                 idx,
                 query,
                 params,
-            } => spatial_knn_body(tx, base, idx, query, params),
+            } => crate::engines::admit_relation_search_hits(spatial_knn_body(
+                tx, base, idx, query, params,
+            )?),
         }
     }
 }
@@ -831,7 +835,7 @@ impl Spatial {
         base: &RelationHandle,
         idx: &RelationHandle,
         bbox: &BoundingBox,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         Self::search_relation(
             tx,
             SpatialSearchRequest::Range { base, idx, bbox },
@@ -846,7 +850,7 @@ impl Spatial {
         idx: &RelationHandle,
         query: &GeoPoint,
         params: &KnnParams,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<crate::data::value::SearchHits> {
         Self::search_relation(
             tx,
             SpatialSearchRequest::Knn {
@@ -1167,8 +1171,10 @@ mod tests {
 
     fn range_ids(db: &impl Storage, f: &Fixture, bbox: &BoundingBox) -> Vec<i64> {
         let rtx = db.read_tx().unwrap();
-        Spatial::range_query(&rtx, &f.base, &f.idx, bbox)
-            .unwrap()
+        crate::engines::search_rows(
+            Spatial::range_query(&rtx, &f.base, &f.idx, bbox).unwrap(),
+        )
+        .unwrap()
             .iter()
             .map(|t| t[0].get_int().unwrap())
             .collect()
@@ -1176,7 +1182,8 @@ mod tests {
 
     fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Vec<(i64, f64)> {
         let rtx = db.read_tx().unwrap();
-        Spatial::knn(
+        crate::engines::search_rows(
+            Spatial::knn(
             &rtx,
             &f.base,
             &f.idx,
@@ -1186,11 +1193,13 @@ mod tests {
                 bind_distance: SpatialBindDistance::Append,
             },
         )
+        .unwrap(),
+        )
         .unwrap()
-        .iter()
-        .map(|t| {
-            (
-                t[0].get_int().unwrap(),
+            .iter()
+            .map(|t| {
+                (
+                    t[0].get_int().unwrap(),
                 t.last().unwrap().get_float().unwrap(),
             )
         })

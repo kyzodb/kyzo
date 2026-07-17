@@ -31,7 +31,7 @@ use std::fmt;
 
 use miette::Result;
 
-use crate::data::value::{RelationId, Tuple};
+use crate::data::value::{RelationId, SearchHits, Tuple};
 use crate::storage::ReadTx;
 
 /// A projection kind's identity in the build→seal→freshness machine.
@@ -70,7 +70,7 @@ pub(crate) trait RelationIndexSearch: ProjectionKind {
     fn search_relation<Tx: ReadTx>(
         tx: &Tx,
         request: Self::Request<'_>,
-    ) -> Result<Vec<Tuple>>;
+    ) -> Result<SearchHits>;
 }
 
 /// Generation stamp carried by a sealed projection.

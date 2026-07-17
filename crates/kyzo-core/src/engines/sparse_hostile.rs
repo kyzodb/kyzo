@@ -113,7 +113,10 @@ fn params(k: usize) -> SparseSearchParams {
 /// Run and project (key, score-bits) so we can compare EXACT f32 bit patterns.
 fn run_bits(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, u32)> {
     let rtx = db.read_tx().unwrap();
-    let hits = Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
+    let hits = crate::engines::search_rows(
+        Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap(),
+    )
+    .unwrap();
     hits.iter()
         .map(|t| {
             (
@@ -221,7 +224,10 @@ fn matches_independent_f64_reference_on_exact_weights() {
     let f = setup(&db, docs);
     let query = &[(0, 2.0f32), (2, 4.0f32), (5, 0.5f32), (9, 0.25f32)];
     let rtx = db.read_tx().unwrap();
-    let hits = Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap();
+    let hits = crate::engines::search_rows(
+        Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap(),
+    )
+    .unwrap();
     let got: Vec<(i64, f64)> = hits
         .iter()
         .map(|t| {
@@ -351,7 +357,10 @@ fn k_zero_filter_path_returns_zero_rows() {
         k: 0,
         bind_score: crate::engines::sparse::SparseBindScore::Omit,
     };
-    let with_filter = Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap();
+    let with_filter = crate::engines::search_rows(
+        Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap(),
+    )
+    .unwrap();
     assert!(
         with_filter.is_empty(),
         "k=0 + filter must return 0 rows, got {}",

@@ -70,6 +70,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::data::value::DataValue;
+use crate::data::value::{SearchHits, Tuple};
 
 /// A stored index row (or a base row an index points at) failed to decode as
 /// what the index format says it must be. Corruption is an error, never a
@@ -274,6 +275,19 @@ pub(crate) fn index_rows<'a>(
             }
         })
     })
+}
+
+/// Admit decoded relation-search rows at the engine→query seam.
+pub(crate) fn admit_relation_search_hits(tuples: Vec<Tuple>) -> miette::Result<SearchHits> {
+    SearchHits::admit_decoded(tuples).map_err(|d| {
+        miette::miette!("search hit admission refused: {d:?}")
+    })
+}
+
+/// Materialize admitted search hits for test assertions (output boundary).
+pub(crate) fn search_rows(hits: SearchHits) -> miette::Result<Vec<Tuple>> {
+    hits.materialize_all_tuples()
+        .map_err(|e| miette::miette!("search hit materialization refused: {e:?}"))
 }
 
 impl IndexRowCorrupt {

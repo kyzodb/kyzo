@@ -41,7 +41,7 @@ use crate::data::expr::Expr;
 use crate::data::program::{SearchInput, TempSymbGen};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, Tuple, Vector, data_value_any};
+use crate::data::value::{DataValue, SearchHits, Vector, data_value_any};
 use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
 use crate::engines::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
 use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
@@ -106,7 +106,7 @@ impl SearchConfig {
         cancel: &crate::fixed_rule::CancelFlag,
         fts_n_total: usize,
         span: SourceSpan,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<SearchHits> {
         match self {
             SearchConfig::Hnsw(c) => {
                 let q = match query {
@@ -139,7 +139,7 @@ impl HnswSearch {
         q: &Vector,
         filter: &Option<Expr>,
         cancel: &crate::fixed_rule::CancelFlag,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<SearchHits> {
         Hnsw::search_relation(
             tx,
             HnswSearchRequest {
@@ -164,7 +164,7 @@ impl FtsSearch {
         filter: &Option<Expr>,
         cancel: &crate::fixed_rule::CancelFlag,
         n_total: usize,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<SearchHits> {
         Fts::search_relation(
             tx,
             FtsSearchRequest {
@@ -190,7 +190,7 @@ impl LshSearch {
         query: &DataValue,
         filter: &Option<Expr>,
         cancel: &crate::fixed_rule::CancelFlag,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<SearchHits> {
         Lsh::search_relation(
             tx,
             LshSearchRequest {
