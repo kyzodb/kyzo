@@ -198,6 +198,17 @@ pub(crate) mod verify;
 /// deterministic backends use logical time and need no floor).
 pub(crate) struct SystemClock(std::sync::atomic::AtomicI64);
 
+/// Typed refusal when [`SystemClock::stamp`] cannot mint another stamp.
+/// Identity is the variant — never a process abort at `i64::MAX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, miette::Diagnostic)]
+pub(crate) enum SystemClockRefuse {
+    /// Stamp space is `i64`; the floor is already `i64::MAX`, so
+    /// `last + 1` would wrap. Refuse rather than abort the process.
+    #[error("INVARIANT(SystemClock): system timestamp space exhausted at i64::MAX")]
+    #[diagnostic(code(storage::system_clock::stamp_space_exhausted))]
+    StampSpaceExhausted,
+}
+
 impl SystemClock {
     /// A clock that will never mint at or below `floor`.
     pub(crate) fn new(floor: i64) -> Self {
@@ -206,8 +217,9 @@ impl SystemClock {
 
     /// Mint the next stamp: strictly greater than every stamp minted
     /// before it, and equal to the wall clock whenever the wall clock is
-    /// ahead.
-    pub(crate) fn stamp(&self, now_micros: i64) -> ValidityTs {
+    /// ahead. Refuses with [`SystemClockRefuse::StampSpaceExhausted`] when
+    /// the floor is already `i64::MAX` — never panics, never wraps.
+    pub(crate) fn stamp(&self, now_micros: i64) -> std::result::Result<ValidityTs, SystemClockRefuse> {
         use std::sync::atomic::Ordering;
         let mut last = self.0.load(Ordering::Relaxed);
         loop {
@@ -215,16 +227,14 @@ impl SystemClock {
             // wrap when the floor is already i64::MAX.
             let after_last = match last.checked_add(1) {
                 Some(n) => n,
-                None => panic!(
-                    "INVARIANT(SystemClock): system timestamp space exhausted at i64::MAX"
-                ),
+                None => return Err(SystemClockRefuse::StampSpaceExhausted),
             };
             let next = now_micros.max(after_last);
             match self
                 .0
                 .compare_exchange_weak(last, next, Ordering::AcqRel, Ordering::Relaxed)
             {
-                Ok(_) => return ValidityTs::from_raw(next),
+                Ok(_) => return Ok(ValidityTs::from_raw(next)),
                 Err(observed) => last = observed,
             }
         }

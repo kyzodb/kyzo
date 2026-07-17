@@ -469,7 +469,7 @@ impl FjallStorage {
             .lock()
             .map_err(|_| miette!("watermark lock poisoned"))?;
         let now = crate::runtime::current_validity()?.raw();
-        let stamp = self.clock.stamp(now);
+        let stamp = self.clock.stamp(now)?;
         self.meta
             .insert(SYSTEM_CLOCK_WATERMARK_KEY, stamp.raw().to_be_bytes())
             .map_err(FjallRefuse::PersistWatermark)?;
