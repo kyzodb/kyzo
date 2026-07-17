@@ -1665,8 +1665,10 @@ impl Arena {
     /// Refuses with [`Denial::ExtentOverflow`] when a cascade merge would
     /// exceed the `u32` position space, or when the epoch counter would
     /// wrap; refuses with [`Denial::BookkeepingBroken`] when a delta value
-    /// is already present in sealed runs (dedup invariant), or when the
-    /// geometric merge cannot obtain two runs — never a process abort.
+    /// is already present in sealed runs (dedup invariant) — never a
+    /// process abort. Geometric cascade takes its two-run pair only when
+    /// that pair is structurally present; [`Denial::BookkeepingBroken`]
+    /// does not cover "cannot obtain two runs."
     pub fn seal(&mut self) -> Result<EpochRemap, Denial> {
         let from = self.epoch;
         let from_sealed_len = self.sealed_len as u32;
@@ -1708,14 +1710,7 @@ impl Arena {
                 .collect();
             self.runs
                 .push(Arc::new(Run::from_sorted(entries, &self.heap)));
-            while self.runs.len() >= 2 {
-                let last = self.runs[self.runs.len() - 1].len();
-                let prev = self.runs[self.runs.len() - 2].len();
-                if prev > 2 * last {
-                    break;
-                }
-                let b = self.runs.pop().ok_or(Denial::BookkeepingBroken)?;
-                let a = self.runs.pop().ok_or(Denial::BookkeepingBroken)?;
+            while let Some([a, b]) = take_geometric_merge_pair(&mut self.runs) {
                 let merged = Run::merge(&a, &b, &self.heap)?;
                 self.runs.push(Arc::new(merged));
             }
@@ -1737,6 +1732,24 @@ impl Arena {
             tail,
         })
     }
+}
+
+/// When a geometric cascade is due, take the last two runs as
+/// `[Arc<Run>; 2]`. Returns `None` if fewer than two runs exist or the
+/// geometric stop holds (`prev > 2 * last`). The pair comes from
+/// `split_off` + array conversion — pop failure is unrepresentable.
+fn take_geometric_merge_pair(runs: &mut Vec<Arc<Run>>) -> Option<[Arc<Run>; 2]> {
+    let n = runs.len();
+    if n < 2 {
+        return None;
+    }
+    let last = runs[n - 1].len();
+    let prev = runs[n - 2].len();
+    if prev > 2 * last {
+        return None;
+    }
+    let pair = runs.split_off(n - 2);
+    <[Arc<Run>; 2]>::try_from(pair).ok()
 }
 
 impl Default for Arena {
