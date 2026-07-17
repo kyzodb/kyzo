@@ -94,18 +94,22 @@ impl Domain {
     /// never in-place mutation of an existing one (`rust-verbs` consuming
     /// rebuild; `Domain` is a proven value, not a live handle).
     ///
-    /// Typed [`Denial`] on foreign arena or wrong epoch — never a panic,
-    /// never a bare boolean.
+    /// Typed [`Denial`] on foreign arena, wrong epoch, or extent wrap —
+    /// never a panic, never a bare boolean.
     ///
     /// **Coexisting-arena boundary:** stamps arrive from any mint path;
     /// proof is [`Admission::prove_shared`], not a nest brand.
     fn absorb_stamp(self, sc: StampedCode) -> Result<Domain, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
-        let raw = sc.code().raw();
+        let next = sc
+            .code()
+            .raw()
+            .checked_add(1)
+            .ok_or(Denial::ExtentOverflow)?;
         Ok(Domain {
             arena: self.arena,
             epoch: self.epoch,
-            extent: self.extent.max(raw + 1),
+            extent: self.extent.max(next),
         })
     }
 
@@ -121,29 +125,23 @@ impl Domain {
         &self,
         o: &O,
     ) -> Result<SpendAdmission, Denial> {
-        self.admit_to(o, "domain resolve")
+        self.admit_to(o)
     }
 
     /// The admission check: arena/epoch via [`Admission::prove_shared`]
-    /// (typed [`Denial`], never panic); visibility extent remains an
-    /// observer-cut assert (not a domain-identity mixup).
+    /// and visibility extent against the observer cut — both typed
+    /// [`Denial`], never panic.
     ///
     /// **Coexisting-arena boundary:** container domain and observer may
     /// have been created under different nest brands (or none); shared
     /// identity is mint-checked here.
-    fn admit_to<O: BulkObserver>(
-        &self,
-        o: &O,
-        what: &str,
-    ) -> Result<SpendAdmission, Denial> {
+    fn admit_to<O: BulkObserver>(&self, o: &O) -> Result<SpendAdmission, Denial> {
         Admission::prove_shared(self.arena, self.epoch, o.bulk_arena(), o.bulk_epoch())?;
-        assert!(
-            self.extent as usize <= o.bulk_len(),
-            "{what} extent {} exceeds the observer's visibility ({} codes): \
-             contents were minted beyond this observer's cut",
-            self.extent,
-            o.bulk_len()
-        );
+        let visible = o.bulk_len();
+        let required = self.extent as usize;
+        if required > visible {
+            return Err(Denial::VisibilityOverflow { required, visible });
+        }
         Ok(BulkSpendAuthority::after_domain_admission())
     }
 
@@ -207,14 +205,14 @@ impl CodeColumn {
 
     /// The admission: one container-domain check (arena + epoch +
     /// visibility extent), then every read is check-free. Arena/epoch
-    /// mismatch is a typed [`Denial`].
+    /// mismatch and cut overflow are typed [`Denial`].
     pub fn admit<'a, O: BulkObserver>(
         &'a self,
         o: &'a O,
     ) -> Result<AdmittedCodes<'a, O>, Denial> {
         // One admission authority, spent by value into the bulk pass —
         // not discarded and reminted per resolve.
-        let proof = self.domain.admit_to(o, "code column")?;
+        let proof = self.domain.admit_to(o)?;
         Ok(AdmittedCodes {
             codes: &self.codes,
             pass: proof.open_pass(o),
@@ -416,7 +414,7 @@ impl WordColumn {
         &'a self,
         o: &'a O,
     ) -> Result<AdmittedWords<'a, O>, Denial> {
-        let proof = self.domain.admit_to(o, "word column")?;
+        let proof = self.domain.admit_to(o)?;
         Ok(AdmittedWords {
             words: &self.words,
             pass: proof.open_pass(o),
@@ -636,7 +634,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "exceeds the observer's visibility")]
     fn admission_refuses_contents_beyond_a_snapshot_cut() {
         let mut arena = Arena::new();
         intern_num(&mut arena, 1);
@@ -645,8 +642,13 @@ mod tests {
         let late = intern_num(&mut arena, 2);
         let mut col = CodeColumn::new_in(&arena.frame());
         col.push(late).expect("lawful push");
-        // Arena/epoch match; visibility extent is still an assert.
-        let _ = col.admit(&early);
+        assert!(
+            matches!(
+                col.admit(&early),
+                Err(Denial::VisibilityOverflow { .. })
+            ),
+            "contents beyond the observer cut must refuse typed"
+        );
     }
 
     #[test]

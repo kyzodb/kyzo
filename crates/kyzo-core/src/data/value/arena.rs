@@ -510,15 +510,23 @@ pub struct Admission {
     epoch: Epoch,
 }
 
-/// Why [`Admission::prove_shared`] refused to mint a context token — the
-/// **denial** witness. Opposite of [`Admission`]: same discipline, refuse
-/// direction. Never a bare boolean.
+/// Why an admission/spend/write door refused — the **denial** witness.
+/// Opposite of [`Admission`]: same discipline, refuse direction. Never a
+/// bare boolean, never a process abort for a reachable cut/bounds miss.
 ///
 /// Thin call-site alias: [`DomainCtxRefusal`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Denial {
     ArenaMismatch { left: ArenaId, right: ArenaId },
     EpochMismatch { left: Epoch, right: Epoch },
+    /// Code or domain extent exceeds the observer's live cut / length.
+    VisibilityOverflow { required: usize, visible: usize },
+    /// Empty projection cannot invent a tuple width.
+    EmptyProjection,
+    /// Tuple width does not match the container / sink arity.
+    ArityMismatch { expected: usize, got: usize },
+    /// Domain extent would wrap past `u32::MAX`.
+    ExtentOverflow,
 }
 
 /// Thin alias for [`Admission`] — existing call sites keep this name; the
@@ -1084,9 +1092,8 @@ impl<'a> Frame<'a> {
     /// (`&mut Arena`) can coexist with this frame. The bounds theorem is
     /// re-checked in debug builds.
     ///
-    /// Arena/epoch mismatch is a typed refusal — cross through
-    /// [`EpochRemap::apply`] for a stale epoch. Bounds failures remain
-    /// asserts (minting discipline broken).
+    /// Arena/epoch mismatch and out-of-bounds codes are typed
+    /// [`Denial`] — cross through [`EpochRemap::apply`] for a stale epoch.
     ///
     /// **Coexisting-arena boundary:** stamps are owned and may arrive from
     /// any arena; proof is mint-checked [`Admission::prove_shared`], not a
@@ -1094,17 +1101,19 @@ impl<'a> Frame<'a> {
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let c = sc.code().raw() as usize;
-        assert!(
-            c < self.len(),
-            "minting discipline broken: in-epoch stamp {c} not live in the frame ({} values)",
-            self.len()
-        );
+        let visible = self.len();
+        if c >= visible {
+            return Err(Denial::VisibilityOverflow {
+                required: c + 1,
+                visible,
+            });
+        }
         Ok(c)
     }
 
     /// Whether a stamp is spendable in this frame — the non-panicking
     /// probe for callers that branch. Exact: arena identity, epoch, AND
-    /// liveness bounds, the same three facts [`Frame::resolve`] asserts,
+    /// liveness bounds, the same three facts [`Frame::resolve`] checks,
     /// so `admits(sc)` true means the spend cannot refuse on domain identity.
     pub fn admits(&self, sc: StampedCode) -> bool {
         sc.arena() == self.arena
@@ -1217,26 +1226,26 @@ impl Snapshot {
     /// Verify stamp + visibility against this snapshot: the epoch must
     /// match and the code must be within the snapshot's delta cut (a
     /// same-epoch code minted *after* the snapshot is beyond its view).
-    /// Arena/epoch mismatch is a typed refusal; cut overflow remains an
-    /// assert (visibility, not domain-identity mixup).
+    /// Arena/epoch mismatch and cut overflow are typed [`Denial`].
     ///
     /// **Coexisting-arena boundary:** owned snapshots and stamps outlive
     /// nest brands; domain identity is mint-checked [`Admission::prove_shared`].
     fn check(&self, sc: StampedCode) -> Result<usize, Denial> {
         Admission::prove_shared(self.arena, self.epoch, sc.arena(), sc.epoch())?;
         let c = sc.code().raw() as usize;
-        assert!(
-            c < self.len(),
-            "code {c} is beyond this snapshot's cut ({} values)",
-            self.len()
-        );
+        let visible = self.len();
+        if c >= visible {
+            return Err(Denial::VisibilityOverflow {
+                required: c + 1,
+                visible,
+            });
+        }
         Ok(c)
     }
 
     /// Resolve a stamped code to its bytes.
     ///
-    /// Typed refusal on a wrong-epoch or foreign-arena stamp. Panics on a
-    /// code beyond the snapshot's cut.
+    /// Typed refusal on a wrong-epoch, foreign-arena, or past-cut stamp.
     pub fn resolve(&self, sc: StampedCode) -> Result<&[u8], Denial> {
         let c = self.check(sc)?;
         Ok(self.view().resolve(c))
@@ -2126,7 +2135,7 @@ mod tests {
         let f = arena.frame();
         assert!(f.admits(sc));
         // A forged in-epoch stamp beyond the frame's length is NOT
-        // spendable: admits must agree with what resolve would assert.
+        // spendable: admits must agree with what resolve would refuse.
         let forged = stamp(7, f.epoch(), f.arena);
         assert!(
             !f.admits(forged),
@@ -2239,14 +2248,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "beyond this snapshot's cut")]
     fn snapshot_refuses_codes_past_its_cut() {
         let mut arena = Arena::new();
         arena.intern(b"x");
         let snap = arena.snapshot();
         let later = arena.intern(b"y"); // same epoch, after the cut
-        // Arena/epoch match; cut overflow remains an assert.
-        let _ = snap.resolve(later);
+        assert!(
+            matches!(
+                snap.resolve(later),
+                Err(Denial::VisibilityOverflow { .. })
+            ),
+            "same-epoch code past the snapshot cut must refuse typed"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2787,16 +2800,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not live")]
-    fn forged_in_epoch_stamp_beyond_len_panics() {
+    fn forged_in_epoch_stamp_beyond_len_refuses_typed() {
         let mut arena = Arena::new();
         arena.intern(b"x");
         let f = arena.frame();
-        // A forged in-epoch stamp beyond len violates the minting
-        // discipline; the debug bound catches it at check, the view's
-        // liveness assert in release. Domain identity matches — this is
-        // not a Denial.
-        let _ = f.resolve(stamp(7, f.epoch(), f.arena));
+        // A forged in-epoch stamp beyond len is a visibility refusal —
+        // same vocabulary as cut overflow, never a process abort.
+        assert!(
+            matches!(
+                f.resolve(stamp(7, f.epoch(), f.arena)),
+                Err(Denial::VisibilityOverflow { .. })
+            ),
+            "forged beyond-len stamp must refuse typed"
+        );
     }
 
     #[test]

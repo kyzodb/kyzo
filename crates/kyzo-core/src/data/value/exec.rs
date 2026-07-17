@@ -166,6 +166,8 @@ impl ExecRows {
                 }
             }
         }
+        // Empty projection is not a lawful width — refuse typed, never invent Arity::ONE.
+        let arity = Arity::try_new(out_arity).ok_or(Denial::EmptyProjection)?;
         // The output's domain is the wider extent so every copied code
         // stays below it.
         let domain = if self.domain.extent() >= other.domain.extent() {
@@ -173,8 +175,6 @@ impl ExecRows {
         } else {
             other.domain
         };
-        // Empty projection is not a lawful width; keep the prior floor of 1.
-        let arity = Arity::try_new(out_arity).unwrap_or(Arity::ONE);
         Ok(ExecRows {
             domain,
             arity,
@@ -213,14 +213,15 @@ impl ExecRows {
 
 /// Packed `u32` tuple dedup under one [`Domain`]: the hot-loop identity.
 /// Two derived tuples are the SAME iff their code tuples are equal —
-/// `u32`-slice equality, no canonical encode. Every inserted tuple's cells
-/// come from an [`ExecRows`] (admitted), so no arbitrary code enters.
+/// `u32`-slice equality, no canonical encode. The only insert door is
+/// [`ExecDedup::absorb`] from admitted [`ExecRows`] — bare `&[u32]` cannot
+/// enter the sink.
 ///
 /// @authority ExecDedup
 /// @layer value
 /// @owns the fixpoint dedup identity: packed admitted code tuples, u32-slice equality, no canonical encode in the hot loop
-/// @constructs ExecDedup::new | ExecDedup::insert | ExecDedup::absorb
-/// @forbids inserting codes that did not come from an admitted ExecRows | mixing domains in one sink
+/// @constructs ExecDedup::new | ExecDedup::absorb
+/// @forbids inserting codes that did not come from an admitted ExecRows | mixing domains in one sink | bare `&[u32]` insert
 /// @converts ExecDedup -> ExecRows (to_exec: the distinct rows, same Domain)
 /// @gate zero-canonical-encode-in-fixpoint law (#120)
 /// @status established #119
@@ -258,17 +259,27 @@ impl ExecDedup {
         self.domain
     }
 
-    /// Is this exact code tuple already present? `u32`-slice lookup, no
-    /// encode.
-    pub fn contains(&self, tuple: &[u32]) -> bool {
-        debug_assert_eq!(tuple.len(), self.arity.get(), "dedup probe arity");
-        self.seen.contains_key(tuple)
+    /// Is this exact admitted row already present? Lookup under a shared
+    /// domain proof — no bare `&[u32]` door.
+    pub fn contains(&self, rows: &ExecRows, row: usize) -> Result<bool, Denial> {
+        Admission::prove_shared(
+            self.domain.arena_id(),
+            self.domain.epoch(),
+            rows.domain().arena_id(),
+            rows.domain().epoch(),
+        )?;
+        if self.arity != rows.arity() {
+            return Err(Denial::ArityMismatch {
+                expected: self.arity.get(),
+                got: rows.arity().get(),
+            });
+        }
+        Ok(self.seen.contains_key(rows.row(row)))
     }
 
-    /// Insert a code tuple; returns `true` if it was NEW. `u32`-slice
-    /// identity dedup.
-    pub fn insert(&mut self, tuple: &[u32]) -> bool {
-        assert_eq!(tuple.len(), self.arity.get(), "dedup insert arity");
+    /// Admit one row already proven by `rows`' domain. Private — the only
+    /// public insert path is [`ExecDedup::absorb`].
+    fn admit_row(&mut self, tuple: &[u32]) -> bool {
         if self.seen.contains_key(tuple) {
             return false;
         }
@@ -277,22 +288,33 @@ impl ExecDedup {
         true
     }
 
-    /// Absorb every row of `rows` (same domain), deduping. Returns the
-    /// count of genuinely-new tuples. Typed refusal when domains disagree.
+    /// Absorb every row of admitted `rows` (same arena+epoch), deduping.
+    /// Returns the count of genuinely-new tuples. Typed refusal when
+    /// domains or arities disagree. Bare `&[u32]` cannot enter.
     ///
     /// **Coexisting-arena boundary:** two owned sinks/rows; mint-checked
     /// [`Admission::prove_shared`].
     pub fn absorb(&mut self, rows: &ExecRows) -> Result<usize, Denial> {
-        assert_eq!(self.arity, rows.arity(), "absorb arity mismatch");
+        if self.arity != rows.arity() {
+            return Err(Denial::ArityMismatch {
+                expected: self.arity.get(),
+                got: rows.arity().get(),
+            });
+        }
         Admission::prove_shared(
             self.domain.arena_id(),
             self.domain.epoch(),
             rows.domain().arena_id(),
             rows.domain().epoch(),
         )?;
+        // Cover the source extent so the sink's Domain stamp remains a
+        // sound upper bound on every packed code it holds.
+        if rows.domain().extent() > self.domain.extent() {
+            self.domain = rows.domain();
+        }
         let mut new = 0;
         for r in 0..rows.len() {
-            if self.insert(rows.row(r)) {
+            if self.admit_row(rows.row(r)) {
                 new += 1;
             }
         }
@@ -522,6 +544,22 @@ mod tests {
         );
         // And it is the left-row-major order the fixpoint relies on.
         assert_eq!(a.len(), 9, "3 left rows × 3 right matches on code 9");
+    }
+
+    /// Empty projection invents no width — refuse typed, never fabricate Arity::ONE.
+    #[test]
+    fn join_project_empty_projection_refuses_typed() {
+        let mut arena = Arena::new();
+        let rows = rows_of(&mut arena, &[(1, 2)]);
+        let f = arena.frame();
+        let e = ExecRows::admit(&rows, &f).expect("lawful admit");
+        assert!(
+            matches!(
+                e.join_project(&e, 0, 0, &[]),
+                Err(Denial::EmptyProjection)
+            ),
+            "empty out must refuse typed — never invent a width"
+        );
     }
 
     /// The domain guard: joining rows from two DIFFERENT arenas is refused

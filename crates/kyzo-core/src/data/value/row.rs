@@ -92,13 +92,14 @@ impl Rows {
     }
 
     /// The write door: one tuple of stamped codes, verified element by
-    /// element into the domain. Typed refusal on foreign/stale stamps.
-    ///
-    /// # Panics
-    ///
-    /// Panics on arity mismatch (not a domain-identity mixup).
+    /// element into the domain. Typed refusal on foreign/stale stamps or
+    /// arity mismatch — never a process abort.
     pub fn push_row(&mut self, stamps: &[StampedCode]) -> Result<(), Denial> {
-        assert_eq!(stamps.len(), self.arity.get(), "tuple arity mismatch");
+        let expected = self.arity.get();
+        let got = stamps.len();
+        if got != expected {
+            return Err(Denial::ArityMismatch { expected, got });
+        }
         for &sc in stamps {
             self.codes.push(sc)?;
         }
@@ -366,10 +367,10 @@ impl RelationId {
         Ok(RelationId(id))
     }
 
-    /// The next id, `None` on exhaustion (the caller owns the typed
-    /// refusal).
+    /// The next id, `None` on exhaustion or at/beyond [`RelationId::CAP`]
+    /// — the same ceiling as [`RelationId::new`] / [`RelationId::raw_decode`].
     pub fn next(self) -> Option<RelationId> {
-        self.0.checked_add(1).map(RelationId)
+        self.0.checked_add(1).and_then(RelationId::new)
     }
 }
 
@@ -552,6 +553,7 @@ pub fn scan_key_upper_projected(
 
 #[cfg(test)]
 mod tests {
+    use super::super::admission::Denial;
     use super::super::canonical::{Datum, encode};
     use super::super::code::StampedCode;
     use super::super::number::Num;
@@ -810,6 +812,11 @@ mod tests {
         // The constructor door itself refuses the cap.
         assert!(RelationId::new(RelationId::CAP).is_none());
         assert!(RelationId::new(u64::MAX).is_none());
+        // Allocator step cannot skip the ceiling either.
+        assert!(RelationId::new(RelationId::CAP - 1)
+            .expect("last assignable")
+            .next()
+            .is_none());
     }
 
     /// The scan-key sentinel law: lower <= every key of matching rows
@@ -865,11 +872,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "tuple arity mismatch")]
     fn arity_is_enforced_at_the_write_door() {
         let mut arena = Arena::new();
         let sc = stamp_of(&mut arena, Datum::Null);
         let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
-        rows.push_row(&[sc]).expect("lawful push");
+        assert!(
+            matches!(
+                rows.push_row(&[sc]),
+                Err(Denial::ArityMismatch {
+                    expected: 2,
+                    got: 1
+                })
+            ),
+            "wrong-width push must refuse typed — never abort"
+        );
     }
 }
