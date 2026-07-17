@@ -336,8 +336,8 @@ impl fmt::Display for FormatVersion {
 /// **Retryable**: rerun the whole transaction. Prefer matching
 /// [`CommitFailure::Conflict`] on the commit outcome, or feeding
 /// [`CommitFailure`] / [`ConflictError`] into [`retry::RetryError`] via
-/// [`From`]. Residual Reports are never conflicts in that channel — only
-/// [`retry::RetryError::Other`].
+/// [`From`]. Conflict vs fatal in that channel is decided by variant only —
+/// never by diagnostic code or string identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, miette::Diagnostic)]
 #[diagnostic(code(storage::conflict))]
 pub struct ConflictError;
@@ -365,6 +365,65 @@ pub struct Committed;
 #[must_use]
 pub struct Aborted;
 
+/// Backend-sourced IO error as `std::error::Error`. Variant identity lives on
+/// the outer [`CommitIo`] (or attempt-op) enum — not in a formatted string.
+#[derive(Debug)]
+pub struct BackendIoError(Box<dyn std::error::Error + Send + Sync>);
+
+impl BackendIoError {
+    /// Box any backend error as a commit/op source.
+    pub fn from_error(e: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(e))
+    }
+}
+
+impl fmt::Display for BackendIoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for BackendIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+/// Structured IO refusal during commit (or `commit_durable`'s fsync).
+///
+/// For [`WriteTx::commit_durable`]: if the commit applied and only the fsync
+/// failed, the transaction IS committed (visible, process-crash durable) —
+/// [`Self::FjallSync`] / [`Self::SimInjectedFsyncAfterCommit`] report the
+/// durability shortfall, not a rollback.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[diagnostic(code(storage::commit_io))]
+pub enum CommitIo {
+    /// fjall optimistic commit returned a non-conflict substrate error.
+    #[error("fjall commit failed")]
+    FjallCommit(#[source] BackendIoError),
+
+    /// fjall `PersistMode::SyncAll` after a successful commit failed.
+    #[error("fjall sync failed")]
+    FjallSync(#[source] BackendIoError),
+
+    /// Simulator injected an fsync failure (empty write set / pre-apply).
+    #[error("sim: injected fsync failure")]
+    SimInjectedFsync,
+
+    /// Simulator injected an fsync failure after the commit applied.
+    #[error("sim: injected fsync failure (commit applied, not power-cut durable)")]
+    SimInjectedFsyncAfterCommit,
+}
+
+/// Structured corruption refusal detected while committing.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[diagnostic(code(storage::commit_corruption))]
+pub enum CommitCorruption {
+    /// On-disk or internal corruption observed at commit time.
+    #[error("storage corruption during commit")]
+    Detected,
+}
+
 /// Closed commit refusal: conflict, IO, or corruption — never an erased
 /// `Result<()>` / stringly dispatch. The Open transaction is spent either way.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
@@ -375,19 +434,14 @@ pub enum CommitFailure {
     Conflict(#[from] ConflictError),
 
     /// Storage IO failed during commit (or during `commit_durable`'s fsync).
-    ///
-    /// For [`WriteTx::commit_durable`]: if the commit applied and only the
-    /// fsync failed, the transaction IS committed (visible, process-crash
-    /// durable) — this variant reports the durability shortfall, not a
-    /// rollback.
-    #[error("storage IO during commit: {0}")]
-    #[diagnostic(code(storage::commit_io))]
-    Io(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Io(#[from] CommitIo),
 
     /// On-disk or internal corruption detected while committing.
-    #[error("storage corruption during commit: {0}")]
-    #[diagnostic(code(storage::commit_corruption))]
-    Corruption(String),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Corruption(#[from] CommitCorruption),
 }
 
 impl CommitFailure {

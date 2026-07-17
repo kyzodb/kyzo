@@ -417,7 +417,7 @@ impl<S: Storage> Db<S> {
                 // conflicted attempt is discarded whole, so no phantom events.
                 let mut collector = CallbackCollector::default();
                 let mut tx = SessionTx::new_write(
-                    self.storage.write_tx().map_err(RetryError::Other)?,
+                    crate::storage::retry::write_tx_attempt(&self.storage)?,
                     options.clone(),
                 );
                 let rows = self
@@ -429,14 +429,14 @@ impl<S: Storage> Db<S> {
                         &mut collector,
                         0,
                     )
-                    .map_err(RetryError::Other)?;
+                    .map_err(RetryError::session_report)?;
                 // Integrity constraints: the denial check. Every constraint
                 // of every relation this transaction mutated (user writes
                 // and trigger writes alike) is evaluated against the
                 // post-write state; a non-empty result is a typed refusal
                 // and the whole transaction rolls back.
                 self.enforce_constraints(&mut tx, cur_vld)
-                    .map_err(RetryError::Other)?;
+                    .map_err(RetryError::session_report)?;
                 // Segment soundness: bumps precede the commit, so any
                 // snapshot that can see these writes sees the new generation.
                 for rel in &tx.touched_relations {
@@ -877,10 +877,10 @@ impl<S: Storage> Db<S> {
     ) -> Result<NamedRows> {
         crate::storage::retry::retry_on_conflict_with_backoff(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                self.storage.write_tx().map_err(RetryError::Other)?,
+                crate::storage::retry::write_tx_attempt(&self.storage)?,
                 ScriptOptions::default(),
             );
-            let out = f(&mut tx).map_err(RetryError::Other)?;
+            let out = f(&mut tx).map_err(RetryError::session_report)?;
             for rel in &tx.touched_relations {
                 self.segments.bump_before_commit(*rel);
             }

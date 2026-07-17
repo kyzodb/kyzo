@@ -62,8 +62,8 @@ use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::storage::{
-    Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, SystemClock,
-    WriteTx,
+    Aborted, BackendIoError, CommitFailure, CommitIo, Committed, ConflictError, FormatVersion,
+    ReadTx, Storage, SystemClock, WriteTx,
 };
 
 /// Typed refusal when the fjall substrate fails. Identity is the variant —
@@ -963,10 +963,9 @@ impl WriteTx for FjallWriteTx {
             .tx
             .take()
             .expect("FjallWriteTx commit after spend");
-        match tx
-            .commit()
-            .map_err(|e| CommitFailure::Io(format!("fjall commit: {e}")))?
-        {
+        match tx.commit().map_err(|e| {
+            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
+        })? {
             Ok(()) => Ok(Committed),
             Err(Conflict) => Err(CommitFailure::Conflict(ConflictError)),
         }
@@ -978,15 +977,14 @@ impl WriteTx for FjallWriteTx {
             .tx
             .take()
             .expect("FjallWriteTx commit_durable after spend");
-        match tx
-            .commit()
-            .map_err(|e| CommitFailure::Io(format!("fjall commit: {e}")))?
-        {
+        match tx.commit().map_err(|e| {
+            CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
+        })? {
             Ok(()) => {}
             Err(Conflict) => return Err(CommitFailure::Conflict(ConflictError)),
         }
         db.persist(fjall::PersistMode::SyncAll)
-            .map_err(|e| CommitFailure::Io(format!("fjall sync: {e}")))?;
+            .map_err(|e| CommitFailure::Io(CommitIo::FjallSync(BackendIoError::from_error(e))))?;
         Ok(Committed)
     }
 

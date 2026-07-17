@@ -96,7 +96,10 @@ use miette::{Result, miette};
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, ValidityTs};
 use crate::storage::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::storage::{Aborted, CommitFailure, Committed, ConflictError, ReadTx, Storage, WriteTx};
+use crate::storage::{
+    Aborted, CommitFailure, CommitIo, Committed, ConflictError, ReadTx, Storage, WriteTx,
+};
+use crate::storage::retry::StorageOpFailure;
 
 const POISONED: &str = "sim lock poisoned: a holder panicked";
 
@@ -473,7 +476,7 @@ impl SimCtx {
     fn check_read_fault(&self, identity: u64) -> Result<()> {
         let mut st = self.state.lock().expect(POISONED);
         if self.roll_fault(&mut st, identity, SALT_READ, self.faults.read_fail_ppm) {
-            return Err(miette!("sim: injected transient read fault"));
+            return Err(StorageOpFailure::SimInjectedReadFault.into());
         }
         Ok(())
     }
@@ -916,9 +919,7 @@ impl SimWriteTx {
         if writes.is_empty() {
             if durable {
                 if ctx.roll_fault(&mut st, sync_identity, SALT_SYNC, ctx.faults.sync_fail_ppm) {
-                    return Err(CommitFailure::Io(
-                        "sim: injected fsync failure".to_string(),
-                    ));
+                    return Err(CommitFailure::Io(CommitIo::SimInjectedFsync));
                 }
                 st.synced_seq = st.commit_seq;
             }
@@ -975,10 +976,7 @@ impl SimWriteTx {
             // but the fsync watermark does not advance — committed, not
             // power-cut durable, exactly like the real commit-then-persist.
             if ctx.roll_fault(&mut st, sync_identity, SALT_SYNC, ctx.faults.sync_fail_ppm) {
-                return Err(CommitFailure::Io(
-                    "sim: injected fsync failure (commit applied, not power-cut durable)"
-                        .to_string(),
-                ));
+                return Err(CommitFailure::Io(CommitIo::SimInjectedFsyncAfterCommit));
             }
             st.synced_seq = st.commit_seq;
         }

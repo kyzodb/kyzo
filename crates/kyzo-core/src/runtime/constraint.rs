@@ -371,16 +371,17 @@ impl<S: Storage> Db<S> {
 
         crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                self.storage.write_tx().map_err(RetryError::Other)?,
+                crate::storage::retry::write_tx_attempt(&self.storage)?,
                 options.clone(),
             );
 
             // Constraint names are one global namespace: scan the catalog.
-            for handle in list_relations(&tx.store).map_err(RetryError::Other)? {
+            for handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
                 if let Some(c) = handle.constraints.iter().find(|c| c.name() == &name.name) {
-                    return Err(RetryError::Other(
-                        ConstraintNameTaken(c.name().to_string(), handle.name.to_string()).into(),
-                    ));
+                    return Err(RetryError::session(ConstraintNameTaken(
+                        c.name().to_string(),
+                        handle.name.to_string(),
+                    )));
                 }
             }
 
@@ -398,40 +399,34 @@ impl<S: Storage> Db<S> {
                 .wrap_err_with(|| {
                     format!("while checking integrity constraint '{name}' over existing data")
                 })
-                .map_err(RetryError::Other)?;
+                .map_err(RetryError::session_report)?;
             if !witnesses.is_empty() {
                 let total = witnesses.len();
                 let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
-                return Err(RetryError::Other(
-                    ConstraintRejectedOnCreation {
-                        name: name.to_string(),
-                        total,
-                        witnesses: shown,
-                        body: source.to_string(),
-                        span: SourceSpan(0, source.len()),
-                    }
-                    .into(),
-                ));
+                return Err(RetryError::session(ConstraintRejectedOnCreation {
+                    name: name.to_string(),
+                    total,
+                    witnesses: shown,
+                    body: source.to_string(),
+                    span: SourceSpan(0, source.len()),
+                }));
             }
 
             // Attach: the identical substance mirrored onto every relation
             // the body reads, kept name-sorted. Requires the trigger rung of
             // the access ladder on each.
             for rel in &read_set {
-                let mut handle = get_relation(&tx.store, rel).map_err(RetryError::Other)?;
+                let mut handle = get_relation(&tx.store, rel).map_err(RetryError::session_report)?;
                 if handle.access_level < AccessLevel::Protected {
-                    return Err(RetryError::Other(
-                        InsufficientAccessLevel(
-                            handle.name.to_string(),
-                            "create constraint".to_string(),
-                            handle.access_level,
-                        )
-                        .into(),
-                    ));
+                    return Err(RetryError::session(InsufficientAccessLevel(
+                        handle.name.to_string(),
+                        "create constraint".to_string(),
+                        handle.access_level,
+                    )));
                 }
                 handle.constraints.push(constraint.clone());
                 handle.constraints.sort_by(|a, b| a.name().cmp(b.name()));
-                write_relation_row(&mut tx.store, &handle).map_err(RetryError::Other)?;
+                write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
             }
             tx.store.commit()?;
             Ok(status_ok())
@@ -449,34 +444,29 @@ impl<S: Storage> Db<S> {
     pub(crate) fn sys_remove_constraint(&self, name: &Symbol) -> Result<NamedRows> {
         crate::storage::retry::retry_on_conflict(MAX_COMMIT_ATTEMPTS, || {
             let mut tx = SessionTx::new_write(
-                self.storage
-                    .write_tx()
-                    .map_err(RetryError::Other)?,
+                crate::storage::retry::write_tx_attempt(&self.storage)?,
                 ScriptOptions::default(),
             );
             let mut found = false;
-            for mut handle in list_relations(&tx.store).map_err(RetryError::Other)? {
+            for mut handle in list_relations(&tx.store).map_err(RetryError::session_report)? {
                 let before = handle.constraints.len();
                 if handle.constraints.iter().any(|c| c.name() == &name.name)
                     && handle.access_level < AccessLevel::Protected
                 {
-                    return Err(RetryError::Other(
-                        InsufficientAccessLevel(
-                            handle.name.to_string(),
-                            "drop constraint".to_string(),
-                            handle.access_level,
-                        )
-                        .into(),
-                    ));
+                    return Err(RetryError::session(InsufficientAccessLevel(
+                        handle.name.to_string(),
+                        "drop constraint".to_string(),
+                        handle.access_level,
+                    )));
                 }
                 handle.constraints.retain(|c| c.name() != &name.name);
                 if handle.constraints.len() != before {
                     found = true;
-                    write_relation_row(&mut tx.store, &handle).map_err(RetryError::Other)?;
+                    write_relation_row(&mut tx.store, &handle).map_err(RetryError::session_report)?;
                 }
             }
             if !found {
-                return Err(RetryError::Other(NoSuchConstraint(name.to_string()).into()));
+                return Err(RetryError::session(NoSuchConstraint(name.to_string())));
             }
             tx.store.commit()?;
             Ok(status_ok())

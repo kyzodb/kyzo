@@ -1709,7 +1709,9 @@ fn verify_storage_catches_a_corrupt_value() {
 #[test]
 fn retry_on_conflict_reaches_completion_under_contention() {
     use std::num::NonZeroUsize;
-    use crate::storage::retry::retry_on_conflict;
+    use crate::storage::retry::{
+        get_attempt, put_attempt, retry_on_conflict, write_tx_attempt,
+    };
     let dir = tempfile::tempdir().unwrap();
     let db = new_fjall_storage(dir.path()).unwrap();
     {
@@ -1725,12 +1727,12 @@ fn retry_on_conflict_reaches_completion_under_contention() {
             s.spawn(move || {
                 for _ in 0..OPS {
                     retry_on_conflict(NonZeroUsize::new(1_000).unwrap(), || {
-                        let mut tx = db.write_tx()?;
-                        let cur: u64 = std::str::from_utf8(&tx.get(b"n")?.unwrap())
+                        let mut tx = write_tx_attempt(&db)?;
+                        let cur: u64 = std::str::from_utf8(&get_attempt(&tx, b"n")?.unwrap())
                             .unwrap()
                             .parse()
                             .unwrap();
-                        tx.put(b"n", (cur + 1).to_string().as_bytes())?;
+                        put_attempt(&mut tx, b"n", (cur + 1).to_string().as_bytes())?;
                         { let _ = tx.commit()?; Ok(()) }
                     })
                     .unwrap();
@@ -1773,7 +1775,7 @@ fn format_version_rejects_noncanonical_stamps() {
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
-use crate::storage::retry::retry_on_conflict;
+use crate::storage::retry::{get_attempt, put_attempt, retry_on_conflict, write_tx_attempt};
 use crate::storage::sim::{
     FaultConfig, SimRng, SimStorage, TxBody, for_each_seed, run_interleaved,
 };
@@ -2255,10 +2257,10 @@ fn sim_interleaving_seed_deterministic_and_diverse() {
                 Box::new(move || {
                     for _ in 0..2 {
                         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-                            let mut tx = db.write_tx()?;
-                            let mut log = tx.get(b"log")?.unwrap().to_vec();
+                            let mut tx = write_tx_attempt(&db)?;
+                            let mut log = get_attempt(&tx, b"log")?.unwrap().to_vec();
                             log.push(b'0' + id);
-                            tx.put(b"log", &log)?;
+                            put_attempt(&mut tx, b"log", &log)?;
                             { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
@@ -2303,8 +2305,8 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
             },
         );
         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-            let mut tx = db.write_tx()?;
-            tx.put(b"counter", b"0")?;
+            let mut tx = write_tx_attempt(&db)?;
+            put_attempt(&mut tx, b"counter", b"0")?;
             { let _ = tx.commit()?; Ok(()) }
         })
         .unwrap();
@@ -2315,13 +2317,13 @@ fn sim_campaign_retry_survives_spurious_conflicts_and_interleavings() {
                 Box::new(move || {
                     for i in 0..OPS {
                         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-                            let mut tx = db.write_tx()?;
-                            let cur: u64 = std::str::from_utf8(&tx.get(b"counter")?.unwrap())
+                            let mut tx = write_tx_attempt(&db)?;
+                            let cur: u64 = std::str::from_utf8(&get_attempt(&tx, b"counter")?.unwrap())
                                 .unwrap()
                                 .parse()
                                 .unwrap();
-                            tx.put(b"counter", (cur + 1).to_string().as_bytes())?;
-                            tx.put(format!("b{b}-k{i}").as_bytes(), b"x")?;
+                            put_attempt(&mut tx, b"counter", (cur + 1).to_string().as_bytes())?;
+                            put_attempt(&mut tx, format!("b{b}-k{i}").as_bytes(), b"x")?;
                             { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
@@ -2587,9 +2589,9 @@ fn sim_campaign_time_travel_under_interleaved_history_writes() {
                 Box::new(move || {
                     for (name, ts, a) in plan {
                         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-                            let mut tx = db.write_tx()?;
+                            let mut tx = write_tx_attempt(&db)?;
                             let (k, v) = vld_row(rel, &name, ts, a);
-                            tx.put(&k, &v)?;
+                            put_attempt(&mut tx, &k, &v)?;
                             { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
@@ -2679,9 +2681,9 @@ fn sim_campaign_write_skew_aborts_and_serializes() {
                         );
                         aborts.fetch_add(1, Ordering::Relaxed);
                         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-                            let mut tx = db.write_tx()?;
-                            let n = parse(tx.get(src)?);
-                            tx.put(dst, (n + 1).to_string().as_bytes())?;
+                            let mut tx = write_tx_attempt(&db)?;
+                            let n = parse(get_attempt(&tx, src)?);
+                            put_attempt(&mut tx, dst, (n + 1).to_string().as_bytes())?;
                             { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
@@ -2743,9 +2745,9 @@ fn sim_campaign_no_lost_phantom_under_interleaving() {
                 if tx_a.commit().is_err() {
                     a_aborts.fetch_add(1, Ordering::Relaxed);
                     retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-                        let mut tx = db.write_tx()?;
+                        let mut tx = write_tx_attempt(&db)?;
                         let n = tx.range_scan(b"p", b"q").count();
-                        tx.put(b"summary", n.to_string().as_bytes())?;
+                        put_attempt(&mut tx, b"summary", n.to_string().as_bytes())?;
                         { let _ = tx.commit()?; Ok(()) }
                     })
                     .unwrap();
@@ -2842,8 +2844,8 @@ fn sim_campaign_write_write_race_first_committer_wins() {
                         );
                         aborts.fetch_add(1, Ordering::Relaxed);
                         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-                            let mut tx = db.write_tx()?;
-                            tx.put(b"hot", val)?;
+                            let mut tx = write_tx_attempt(&db)?;
+                            put_attempt(&mut tx, b"hot", val)?;
                             { let _ = tx.commit()?; Ok(()) }
                         })
                         .unwrap();
@@ -2903,9 +2905,9 @@ fn sim_fault_plan_identical_at_any_thread_count() {
         );
         // Populate the read keys (commits may draw spurious conflicts: retry).
         retry_on_conflict(NonZeroUsize::new(10_000).unwrap(), || {
-            let mut tx = db.write_tx()?;
+            let mut tx = write_tx_attempt(&db)?;
             for i in 0..KEYS {
-                tx.put(format!("r{i:02}").as_bytes(), b"v")?;
+                put_attempt(&mut tx, format!("r{i:02}").as_bytes(), b"v")?;
             }
             { let _ = tx.commit()?; Ok(()) }
         })
@@ -2998,8 +3000,8 @@ fn sim_retry_liveness_escapes_injected_faults() {
         // bound (P(1000 straight faults) = 0.9^1000 ≈ 10^-46).
         for i in 0..20 {
             retry_on_conflict(NonZeroUsize::new(1_000).unwrap(), || {
-                let mut tx = db.write_tx()?;
-                tx.put(format!("k{i}").as_bytes(), b"v")?;
+                let mut tx = write_tx_attempt(&db)?;
+                put_attempt(&mut tx, format!("k{i}").as_bytes(), b"v")?;
                 { let _ = tx.commit()?; Ok(()) }
             })
             .unwrap_or_else(|e| panic!("commit k{i} never escaped its injected conflict: {e}"));
