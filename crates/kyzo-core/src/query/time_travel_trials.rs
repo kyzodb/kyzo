@@ -41,12 +41,12 @@ use std::num::NonZeroU32;
 use smartstring::SmartString;
 
 use crate::data::aggr::parse_aggr;
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::{OP_GE, OP_LE};
 use crate::data::program::{
-    DeltaAxis, InputAtom, InputInlineRulesOrFixed, InputRelationHandle, MagicAtom, MagicInlineRule,
-    MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol,
-    StoreLifetimes, StratifiedMagicProgram, ValidityClause,
+    DeltaAxis, HeadAggrSlot, InputAtom, InputInlineRulesOrFixed, InputRelationHandle, MagicAtom,
+    MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
+    MagicSymbol, StoreLifetimes, StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -99,10 +99,7 @@ fn generous_budget() -> Budget {
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype,
-            nullable: false,
-        },
+        typing: NullableColType::required(coltype),
         default_gen: None,
     }
 }
@@ -136,7 +133,7 @@ fn neg_rel_atom_at(name: &str, args: &[Symbol], at: Option<i64>) -> MagicAtom {
 fn binding(var: &str) -> Expr {
     Expr::Binding {
         var: sym(var),
-        tuple_pos: None,
+        tuple_pos: BindingPos::Unresolved,
     }
 }
 /// `var >= k` — a lower-bound predicate `compute_bounds` recognizes.
@@ -168,7 +165,7 @@ fn pred_le(var: &str, k: i64) -> MagicAtom {
     })
 }
 
-type HeadAggr = Option<(crate::data::aggr::Aggregation, Vec<DataValue>)>;
+type HeadAggr = HeadAggrSlot;
 
 fn inline_rule(head: &[Symbol], aggr: Vec<HeadAggr>, body: Vec<MagicAtom>) -> MagicInlineRule {
     MagicInlineRule {
@@ -178,7 +175,11 @@ fn inline_rule(head: &[Symbol], aggr: Vec<HeadAggr>, body: Vec<MagicAtom>) -> Ma
     }
 }
 fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
-    inline_rule(head, vec![None; head.len()], body)
+    inline_rule(
+        head,
+        (0..head.len()).map(|_| HeadAggrSlot::Plain).collect(),
+        body,
+    )
 }
 
 fn program_of(strata: Vec<Vec<(MagicSymbol, Vec<MagicInlineRule>)>>) -> StratifiedMagicProgram {
@@ -876,7 +877,16 @@ fn normal_aggregation_over_asof_read() {
             entry_symbol(),
             vec![inline_rule(
                 &[k0.clone(), val.clone()],
-                vec![Some((count, vec![])), Some((sum, vec![]))],
+                vec![
+                    HeadAggrSlot::Aggregated {
+                        aggr: count,
+                        args: vec![],
+                    },
+                    HeadAggrSlot::Aggregated {
+                        aggr: sum,
+                        args: vec![],
+                    },
+                ],
                 vec![rel_atom_at(
                     "hist",
                     &[k0.clone(), val.clone()],
@@ -929,7 +939,10 @@ fn meet_aggregation_over_asof_read() {
             entry_symbol(),
             vec![inline_rule(
                 std::slice::from_ref(&val),
-                vec![Some((min, vec![]))],
+                vec![HeadAggrSlot::Aggregated {
+                    aggr: min,
+                    args: vec![],
+                }],
                 vec![rel_atom_at(
                     "hist",
                     &[k0.clone(), val.clone()],

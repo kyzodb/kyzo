@@ -85,6 +85,23 @@ pub(crate) struct TupleTooShortError(
 #[diagnostic(code(eval::deserialized_arity_mismatch))]
 struct ArityMismatchError(&'static str, usize, String);
 
+/// Binding position in a tuple — unresolved until [`Expr::fill_binding_indices`],
+/// then resolved. Replaces `Option<usize>` so the phase is a named sum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
+pub enum BindingPos {
+    Unresolved,
+    Resolved(usize),
+}
+
+impl BindingPos {
+    pub fn resolved(self) -> Option<usize> {
+        match self {
+            BindingPos::Resolved(i) => Some(i),
+            BindingPos::Unresolved => None,
+        }
+    }
+}
+
 /// The language's expression tree: a KyzoScript expression as parsed,
 /// evaluable to a [`DataValue`] against a tuple of bindings.
 #[derive(Clone, PartialEq, Eq, serde_derive::Serialize)]
@@ -94,14 +111,10 @@ pub enum Expr {
         /// The variable name to bind
         var: Symbol,
         /// When executing in the context of a tuple, the position of the
-        /// binding within the tuple.
-        ///
-        /// Two-phase: `None` between parsing and `fill_binding_indices`,
-        /// `Some` afterwards, and evaluation errors on `None`. P049
-        /// typestate (`Unresolved` vs `Resolved`) replaces this `Option`
-        /// once off-list constructors (`parse/*`, `query/*`, engines) are
-        /// on the allowlist — they still pass `None`/`Some` literals.
-        tuple_pos: Option<usize>,
+        /// binding within the tuple — [`BindingPos::Unresolved`] between
+        /// parsing and [`Expr::fill_binding_indices`], then
+        /// [`BindingPos::Resolved`].
+        tuple_pos: BindingPos,
     },
     /// Constant expression containing a value
     Const {
@@ -237,7 +250,7 @@ impl LazyOp {
 enum ExprDe {
     Binding {
         var: Symbol,
-        tuple_pos: Option<usize>,
+        tuple_pos: BindingPos,
     },
     Const {
         val: DataValue,
@@ -459,7 +472,7 @@ impl Expr {
                 let found_idx = *binding_map
                     .get(var)
                     .ok_or_else(|| BadBindingError(var.to_string(), var.span))?;
-                *tuple_pos = Some(found_idx)
+                *tuple_pos = BindingPos::Resolved(found_idx)
             }
             Expr::Const { .. } => {}
             Expr::Apply { args, .. } | Expr::Lazy { args, .. } => {
@@ -487,7 +500,7 @@ impl Expr {
     fn do_binding_indices(&self, coll: &mut BTreeSet<usize>) -> Result<()> {
         match self {
             Expr::Binding { tuple_pos, .. } => {
-                if let Some(idx) = tuple_pos {
+                if let BindingPos::Resolved(idx) = tuple_pos {
                     coll.insert(*idx);
                 }
             }
@@ -650,10 +663,10 @@ impl Expr {
     pub(crate) fn eval(&self, bindings: impl AsRef<[DataValue]>) -> Result<DataValue> {
         match self {
             Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
-                None => {
+                BindingPos::Unresolved => {
                     bail!(UnboundVariableError(var.name.to_string(), var.span))
                 }
-                Some(i) => Ok(bindings
+                BindingPos::Resolved(i) => Ok(bindings
                     .as_ref()
                     .get(*i)
                     .ok_or_else(|| {

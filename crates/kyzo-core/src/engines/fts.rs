@@ -105,7 +105,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
@@ -191,10 +191,7 @@ pub(crate) struct FtsExtractorType {
 pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("word"),
-        typing: NullableColType {
-            coltype: ColType::String,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::String),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -204,15 +201,11 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
             default_gen: None,
         });
     }
-    let int_list = || NullableColType {
-        coltype: ColType::List {
-            eltype: Box::new(NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            }),
+    let int_list = || {
+        NullableColType::required(ColType::List {
+            eltype: Box::new(NullableColType::required(ColType::Int)),
             len: None,
-        },
-        nullable: false,
+        })
     };
     let non_keys = vec![
         ColumnDef {
@@ -232,10 +225,7 @@ pub(crate) fn fts_index_metadata(base: &StoredRelationMetadata) -> StoredRelatio
         },
         ColumnDef {
             name: SmartString::from("total_length"),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         },
     ];
@@ -765,10 +755,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -818,7 +805,7 @@ mod tests {
     fn extractor() -> Expr {
         Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
-            tuple_pos: Some(1),
+            tuple_pos: BindingPos::Resolved(1),
         }
     }
 
@@ -1092,7 +1079,7 @@ mod tests {
         // Extractor projects the INT key column (position 0): not a string.
         let bad_extractor = Expr::Binding {
             var: Symbol::new("k", SourceSpan(0, 0)),
-            tuple_pos: Some(0),
+            tuple_pos: BindingPos::Resolved(0),
         };
         let row = vec![DataValue::from(1), DataValue::from("text")];
         let err = fts_put(&mut tx, &row, &bad_extractor, &a, &base, &idx).unwrap_err();

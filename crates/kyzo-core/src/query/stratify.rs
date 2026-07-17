@@ -154,10 +154,10 @@ impl NormalFormAtom {
 fn aggregation_character(rules: &[NormalFormInlineRule]) -> (bool, bool) {
     let has_aggr = rules
         .iter()
-        .any(|rule| rule.aggr.iter().any(|a| a.is_some()));
+        .any(|rule| rule.aggr.iter().any(|a| a.is_aggregated()));
     let is_meet = has_aggr
         && rules.iter().all(|rule| {
-            rule.aggr.iter().all(|v| match v {
+            rule.aggr.iter().all(|v| match v.as_aggregated() {
                 None => true,
                 Some((v, _)) => v.is_meet(),
             })
@@ -516,12 +516,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::data::aggr::{Aggregation, parse_aggr};
+    use crate::data::aggr::parse_aggr;
     use crate::data::expr::Expr;
     use crate::data::program::{
-        BodyNormalizer, FixedRule, FixedRuleApply, FixedRuleHandle, InputAtom, InputInlineRule,
-        InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom, NormalFormRuleApplyAtom,
-        QueryOutOptions, Trivia,
+        BodyNormalizer, FixedRule, FixedRuleApply, FixedRuleHandle, HeadAggrSlot, InputAtom,
+        InputInlineRule, InputInlineRulesOrFixed, InputProgram, InputRuleApplyAtom,
+        NormalFormRuleApplyAtom, QueryOutOptions, Trivia,
     };
     use crate::data::symb::SymbolKind;
     use crate::data::value::DataValue;
@@ -634,14 +634,13 @@ mod tests {
         fn rule(self, head: &str, aggrs: &[Option<&str>], body: Vec<InputAtom>) -> Self {
             let aggr = aggrs
                 .iter()
-                .map(|a| {
-                    a.map(|name| {
-                        (
-                            parse_aggr(name)
-                                .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
-                            vec![],
-                        )
-                    })
+                .map(|a| match a {
+                    None => HeadAggrSlot::Plain,
+                    Some(name) => HeadAggrSlot::Aggregated {
+                        aggr: parse_aggr(name)
+                            .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
+                        args: vec![],
+                    },
                 })
                 .collect();
             self.rule_raw(head, aggr, body)
@@ -650,7 +649,7 @@ mod tests {
         fn rule_raw(
             mut self,
             head: &str,
-            aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+            aggr: Vec<HeadAggrSlot>,
             body: Vec<InputAtom>,
         ) -> Self {
             let head_syms: Vec<Symbol> = (0..aggr.len()).map(|i| sym(&format!("v{i}"))).collect();

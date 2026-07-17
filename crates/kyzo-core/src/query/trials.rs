@@ -69,7 +69,7 @@ use miette::Result;
 
 use crate::data::aggr::{MeetAccum, MeetAggr, parse_aggr};
 use crate::data::bitemporal::ClaimPolarity;
-use crate::data::program::{MagicSymbol, StoreLifetimes};
+use crate::data::program::{HeadAggrSlot, MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -624,7 +624,10 @@ fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
     }
 }
 fn named(name: &str) -> HeadAggr {
-    Some((parse_aggr(name).expect("real aggregation"), vec![]))
+    HeadAggrSlot::Aggregated {
+        aggr: parse_aggr(name).expect("real aggregation"),
+        args: vec![],
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -776,13 +779,13 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "m",
             vec![y(), x()],
-            vec![named(p.meet_op), None],
+            vec![named(p.meet_op), HeadAggrSlot::Plain],
             vec![lit("seed", vec![x(), y()], false)],
         ));
         rules.push(Rule::aggregated(
             "m",
             vec![z(), y()],
-            vec![named(p.meet_op), None],
+            vec![named(p.meet_op), HeadAggrSlot::Plain],
             vec![
                 lit("edge", vec![x(), y()], false),
                 lit("m", vec![z(), x()], false),
@@ -792,13 +795,13 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "m",
             vec![x(), y()],
-            vec![None, named(p.meet_op)],
+            vec![HeadAggrSlot::Plain, named(p.meet_op)],
             vec![lit("seed", vec![x(), y()], false)],
         ));
         rules.push(Rule::aggregated(
             "m",
             vec![y(), z()],
-            vec![None, named(p.meet_op)],
+            vec![HeadAggrSlot::Plain, named(p.meet_op)],
             vec![
                 lit("edge", vec![x(), y()], false),
                 lit("m", vec![x(), z()], false),
@@ -832,13 +835,13 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "mi",
             vec![lo.clone(), k.clone(), hi.clone()],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![lit("seed3", vec![k.clone(), lo.clone(), hi.clone()], false)],
         ));
         rules.push(Rule::aggregated(
             "mi",
             vec![lo.clone(), t.clone(), hi.clone()],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![
                 lit("edge", vec![s.clone(), t], false),
                 lit("mi", vec![lo, s, hi], false),
@@ -928,7 +931,7 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "reach_count",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit("path", vec![x(), y()], false)],
         ));
     }
@@ -936,7 +939,7 @@ fn generate(seed: u64) -> Generated {
         rules.push(Rule::aggregated(
             "bulk_sum",
             vec![x(), y()],
-            vec![None, named("sum")],
+            vec![HeadAggrSlot::Plain, named("sum")],
             vec![lit("item", vec![x(), y()], false)],
         ));
     }
@@ -2831,21 +2834,21 @@ fn reachability_program(rng: &mut Rng, fx: &ReachabilityFixture) -> Program {
         Rule::aggregated(
             "deg",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit_at("hedge", vec![x(), y()], fx.c_edge)],
         ),
         // m(X,V) :- hseed(X,V) @c_seed.
         Rule::aggregated(
             "m",
             vec![x(), y()],
-            vec![None, named(fx.meet_op)],
+            vec![HeadAggrSlot::Plain, named(fx.meet_op)],
             vec![lit_at("hseed", vec![x(), y()], fx.c_seed)],
         ),
         // m(Y,Z) :- hedge(X,Y) @c_edge, m(X,Z).
         Rule::aggregated(
             "m",
             vec![y(), z()],
-            vec![None, named(fx.meet_op)],
+            vec![HeadAggrSlot::Plain, named(fx.meet_op)],
             vec![
                 lit_at("hedge", vec![x(), y()], fx.c_edge),
                 lit("m", vec![x(), z()], false),

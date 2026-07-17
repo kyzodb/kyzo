@@ -71,16 +71,10 @@ impl FixedRule for CsvReader {
         let prepend_index = payload.bool_option("prepend_index", Some(false))?;
         let has_headers = payload.bool_option("has_headers", Some(true))?;
         let types_opts = payload.expr_option("types", None)?.eval_to_const()?;
-        let typing = NullableColType {
-            coltype: ColType::List {
-                eltype: Box::new(NullableColType {
-                    coltype: ColType::String,
-                    nullable: false,
-                }),
-                len: None,
-            },
-            nullable: false,
-        };
+        let typing = NullableColType::required(ColType::List {
+            eltype: Box::new(NullableColType::required(ColType::String)),
+            len: None,
+        });
         let types_opts = typing.coerce(types_opts, TERMINAL_VALIDITY.timestamp())?;
         let mut types = vec![];
         // INVARIANT(csv_types_list): `coerce` to `[String]` proved the outer
@@ -122,7 +116,7 @@ impl FixedRule for CsvReader {
             for (i, typ) in types.iter().enumerate() {
                 match row.get(i) {
                     None => {
-                        if typ.nullable {
+                        if typ.is_nullable() {
                             out_tuple.push(DataValue::Null)
                         } else {
                             bail!(
@@ -132,12 +126,12 @@ impl FixedRule for CsvReader {
                     }
                     Some(s) => {
                         let dv = DataValue::from(s);
-                        match &typ.coltype {
+                        match typ.coltype() {
                             ColType::Any | ColType::String => out_tuple.push(dv),
                             ColType::Uuid => out_tuple.push(match op_to_uuid(&[dv]) {
                                 Ok(uuid) => uuid,
                                 Err(err) => {
-                                    if typ.nullable {
+                                    if typ.is_nullable() {
                                         DataValue::Null
                                     } else {
                                         bail!(err)
@@ -147,7 +141,7 @@ impl FixedRule for CsvReader {
                             ColType::Float => out_tuple.push(match op_to_float(&[dv]) {
                                 Ok(data) => data,
                                 Err(err) => {
-                                    if typ.nullable {
+                                    if typ.is_nullable() {
                                         DataValue::Null
                                     } else {
                                         bail!(err)
@@ -167,7 +161,7 @@ impl FixedRule for CsvReader {
                                     .filter(|x| x.is_finite() && x.fract() == 0.0);
                                 match integral {
                                     Some(x) => out_tuple.push(DataValue::from(x as i64)),
-                                    None if typ.nullable => out_tuple.push(DataValue::Null),
+                                    None if typ.is_nullable() => out_tuple.push(DataValue::Null),
                                     None => bail!("cannot convert {} to type {}", s, typ),
                                 };
                             }

@@ -30,7 +30,7 @@
  * `BodyNormalizer` in `data/program.rs` — the runtime's session transaction
  * implements it when it lands); the index-search atom arms (HNSW/FTS/LSH)
  * land with the index tier, which owns those `MagicAtom` variants;
- * adornments are `Vec<bool>` (no `smallvec` dependency); the
+ * adornments are `Vec<AdornmentMark>` (no `smallvec` dependency); the
  * `exempt_aggr_rules_for_magic_sets` walk is re-homed from
  * `NormalFormProgram` onto [`NormalFormStratum`], which is what the landed
  * stratified tier stores. `NamedFieldNotFound` is declared here, its
@@ -141,10 +141,11 @@ use miette::{Diagnostic, Result, bail, ensure};
 use thiserror::Error;
 
 use crate::data::program::{
-    Adornment, FixedRuleApply, FixedRuleArg, MagicAtom, MagicFixedRuleApply, MagicFixedRuleRuleArg,
-    MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed,
-    MagicSymbol, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum,
-    StratifiedMagicProgram, StratifiedNormalFormProgram, ValidityClause,
+    Adornment, AdornmentMark, FixedRuleApply, FixedRuleArg, HeadAggrSlot, MagicAtom,
+    MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicInlineRule, MagicProgram,
+    MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, NormalFormAtom,
+    NormalFormInlineRule, NormalFormRulesOrFixed, NormalFormStratum, StratifiedMagicProgram,
+    StratifiedNormalFormProgram, ValidityClause,
 };
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
@@ -221,7 +222,7 @@ impl AdornedHead {
         }
     }
 
-    fn adornment(&self) -> &[bool] {
+    fn adornment(&self) -> &[AdornmentMark] {
         match self {
             AdornedHead::Muggle { .. } => &[],
             AdornedHead::Magic { adornment, .. } => adornment,
@@ -229,7 +230,7 @@ impl AdornedHead {
     }
 
     fn has_bound_adornment(&self) -> bool {
-        self.adornment().iter().any(|b| *b)
+        self.adornment().iter().any(|m| m.is_bound())
     }
 
     fn to_magic_symbol(&self) -> MagicSymbol {
@@ -333,7 +334,7 @@ impl NormalFormStratum {
                 NormalFormRulesOrFixed::Rules { rules: rule_set } => {
                     'outer: for rule in rule_set.iter() {
                         for aggr in rule.aggr.iter() {
-                            if aggr.is_some() {
+                            if aggr.is_aggregated() {
                                 exempt_rules.insert(name.clone());
                                 continue 'outer;
                             }
@@ -474,7 +475,13 @@ impl NormalFormStratum {
                     .head
                     .iter()
                     .zip(adornment.iter())
-                    .filter_map(|(kw, bound)| if *bound { Some(kw.clone()) } else { None })
+                    .filter_map(|(kw, bound)| {
+                        if bound.is_bound() {
+                            Some(kw.clone())
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
                 let adorned_rule =
                     rule.adorn(&mut pending_adornment, &rules_to_rewrite, seen_bindings);
@@ -653,7 +660,9 @@ impl NormalFormAtom {
                         // Bound iff already seen. A binding repeated within
                         // this same application adorns its later positions
                         // bound — faithful to the original.
-                        adornment.push(!seen_bindings.insert(arg.clone()));
+                        adornment.push(AdornmentMark::from_bound(
+                            !seen_bindings.insert(arg.clone()),
+                        ));
                     }
                     pending.push(AdornedHead::Magic {
                         inner: rule.name.clone(),
@@ -754,7 +763,9 @@ impl AdornedProgram {
             .prog
             .keys()
             .filter_map(|head| match head {
-                AdornedHead::Magic { inner, adornment } if !adornment.iter().any(|b| *b) => {
+                AdornedHead::Magic { inner, adornment }
+                    if !adornment.iter().any(|m| m.is_bound()) =>
+                {
                     Some(inner.clone())
                 }
                 AdornedHead::Muggle { .. } | AdornedHead::Magic { .. } => None,
@@ -765,10 +776,12 @@ impl AdornedProgram {
         }
         let redirect_to_ff = |name: &mut MagicSymbol| {
             if let MagicSymbol::Magic { inner, adornment } = name
-                && adornment.iter().any(|b| *b)
+                && adornment.iter().any(|m| m.is_bound())
                 && ff_names.contains(inner)
             {
-                adornment.iter_mut().for_each(|b| *b = false);
+                adornment
+                    .iter_mut()
+                    .for_each(|m| *m = AdornmentMark::Free);
             }
         };
         for rules_or_fixed in self.prog.values_mut() {
@@ -974,13 +987,15 @@ fn magic_rewrite_ruleset(
                 .head
                 .iter()
                 .zip(adornment.iter())
-                .filter_map(
-                    |(arg, is_bound)| {
-                        if *is_bound { Some(arg.clone()) } else { None }
-                    },
-                )
+                .filter_map(|(arg, is_bound)| {
+                    if is_bound.is_bound() {
+                        Some(arg.clone())
+                    } else {
+                        None
+                    }
+                })
                 .collect();
-            let sup_aggr = vec![None; sup_args.len()];
+            let sup_aggr = (0..sup_args.len()).map(|_| HeadAggrSlot::Plain).collect();
             let sup_body = vec![MagicAtom::Rule(MagicRuleApplyAtom {
                 name: MagicSymbol::Input {
                     inner: rule_name.clone(),
@@ -1050,7 +1065,7 @@ fn magic_rewrite_ruleset(
                             sup_kw.clone(),
                             MagicInlineRule {
                                 head: args.clone(),
-                                aggr: vec![None; args.len()],
+                                aggr: (0..args.len()).map(|_| HeadAggrSlot::Plain).collect(),
                                 body: sup_rule_atoms,
                             },
                         )?;
@@ -1073,13 +1088,15 @@ fn magic_rewrite_ruleset(
                             .args
                             .iter()
                             .zip(r_app.name.magic_adornment())
-                            .filter_map(
-                                |(kw, is_bound)| {
-                                    if *is_bound { Some(kw.clone()) } else { None }
-                                },
-                            )
+                            .filter_map(|(kw, is_bound)| {
+                                if is_bound.is_bound() {
+                                    Some(kw.clone())
+                                } else {
+                                    None
+                                }
+                            })
                             .collect();
-                        let inp_aggr = vec![None; inp_args.len()];
+                        let inp_aggr = (0..inp_args.len()).map(|_| HeadAggrSlot::Plain).collect();
                         push_magic_rule(
                             ret_prog,
                             inp_kw,
@@ -1121,7 +1138,7 @@ mod tests {
 
     use super::*;
     use crate::data::aggr::parse_aggr;
-    use crate::data::expr::Expr;
+    use crate::data::expr::{BindingPos, Expr};
     use crate::data::program::{
         FixedRule, FixedRuleHandle, NormalFormRelationApplyAtom, NormalFormRuleApplyAtom, Trivia,
         Unification,
@@ -1171,7 +1188,7 @@ mod tests {
             binding: sym(binding),
             expr: Expr::Binding {
                 var: sym(var),
-                tuple_pos: None,
+                tuple_pos: BindingPos::Unresolved,
             },
             one_many_unif: false,
             span: SourceSpan(0, 0),
@@ -1181,7 +1198,7 @@ mod tests {
     fn nf_rule(head: &[&str], body: Vec<NormalFormAtom>) -> NormalFormInlineRule {
         NormalFormInlineRule {
             head: head.iter().map(|h| sym(h)).collect(),
-            aggr: head.iter().map(|_| None).collect(),
+            aggr: head.iter().map(|_| HeadAggrSlot::Plain).collect(),
             body,
         }
     }
@@ -1240,10 +1257,7 @@ mod tests {
     fn column(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1514,7 +1528,10 @@ mod tests {
     fn aggregation_rules_are_exempt() {
         let count = parse_aggr("count").expect("count exists");
         let mut agg_rule = nf_rule(&["a", "n"], vec![stored_app("e", &["a", "n"])]);
-        agg_rule.aggr[1] = Some((count, vec![]));
+        agg_rule.aggr[1] = HeadAggrSlot::Aggregated {
+            aggr: count,
+            args: vec![],
+        };
 
         let strata = vec![stratum(vec![
             ("agg", vec![agg_rule]),
@@ -1543,7 +1560,7 @@ mod tests {
             vec!["unify v", "rule agg"]
         );
         // The aggregation itself is untouched.
-        assert!(rules_of(out, "agg")[0].aggr[1].is_some());
+        assert!(rules_of(out, "agg")[0].aggr[1].is_aggregated());
     }
 
     /// Exemption: `:disable_magic_rewrite`. The flag lives once on the tier
@@ -1697,7 +1714,7 @@ mod tests {
             .expect("rewrite succeeds");
         let out = &rewritten.strata()[0];
 
-        // The exact adornment vector: bound, free, bound (true = bound).
+        // The exact adornment vector: bound, free, bound.
         let adornments: Vec<Adornment> = out
             .prog
             .keys()
@@ -1710,7 +1727,11 @@ mod tests {
             .collect();
         assert_eq!(
             adornments,
-            vec![vec![true, false, true]],
+            vec![vec![
+                AdornmentMark::Bound,
+                AdornmentMark::Free,
+                AdornmentMark::Bound,
+            ]],
             "repeated y must adorn its second position bound; got {:?}",
             key_names(out)
         );

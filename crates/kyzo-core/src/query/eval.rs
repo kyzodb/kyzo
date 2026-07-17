@@ -189,7 +189,7 @@ use rayon::prelude::*;
 use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, NormalAggr};
-use crate::data::program::MagicSymbol;
+use crate::data::program::{HeadAggrSlot, MagicSymbol};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -200,9 +200,9 @@ use crate::query::temp_store::{
     AdmissionSink, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
 };
 
-/// One head position's aggregation, if any — the shape carried through
+/// One head position's aggregation slot — the shape carried through
 /// every program tier (see `MagicInlineRule::aggr` in `data/program.rs`).
-type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+type HeadAggr = HeadAggrSlot;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Refusals and invariants
@@ -789,10 +789,10 @@ impl<R> EvalRuleSet<R> {
         if bodies.is_empty() {
             return Err(RuleSetShapeError::Empty);
         }
-        let has_aggr = aggr.iter().any(Option::is_some);
+        let has_aggr = aggr.iter().any(|a| a.is_aggregated());
         let all_meet = aggr
             .iter()
-            .flatten()
+            .filter_map(|a| a.as_aggregated())
             .all(|(aggregation, _)| aggregation.is_meet());
         // MeetAggrStore groups positionally: key positions are every
         // non-aggregated head slot, wherever they sit.
@@ -803,7 +803,7 @@ impl<R> EvalRuleSet<R> {
                 key_positions: aggr
                     .iter()
                     .enumerate()
-                    .filter(|(_, a)| a.is_none())
+                    .filter(|(_, a)| !a.is_aggregated())
                     .map(|(i, _)| HeadPos::from_index(i))
                     .collect(),
             },
@@ -1697,7 +1697,7 @@ fn initial_meet_eval<R: RuleBody>(
         })?;
         budget.check_interrupt()?;
     }
-    if out.is_empty() && rule_set.aggr.iter().all(Option::is_some) {
+    if out.is_empty() && rule_set.aggr.iter().all(|a| a.is_aggregated()) {
         // No pending entry: the identity row's witness is `None` by design.
         out.seed_identity()?;
     }
@@ -1785,15 +1785,15 @@ fn initial_normal_aggr_eval<R: RuleBody>(
     let key_indices: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_specs: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
         .filter_map(|(i, a)| {
-            a.as_ref()
-                .map(|(aggregation, args)| (i, aggregation, args.as_slice()))
+            a.as_aggregated()
+                .map(|(aggregation, args)| (i, aggregation, args))
         })
         .collect();
     let fresh_ops = || -> Result<Vec<NormalAggr>> {
@@ -1914,10 +1914,11 @@ mod tests {
         Term::Var("Z")
     }
     fn named(name: &str) -> HeadAggr {
-        Some((
-            parse_aggr(name).unwrap_or_else(|| panic!("real aggregation exists: {name}")),
-            vec![],
-        ))
+        HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name)
+                .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
+            args: vec![],
+        }
     }
 
     // ── the differential harness: the oracle's rule model as a RuleBody ──
@@ -2233,10 +2234,10 @@ mod tests {
         per_head
             .into_iter()
             .map(|(rel, rules)| {
-                let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
+                let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
                 let is_meet = has_aggr
                     && rules.iter().all(|r| {
-                        r.aggr.iter().all(|a| match a {
+                        r.aggr.iter().all(|a| match a.as_aggregated() {
                             None => true,
                             Some((aggregation, _)) => aggregation.is_meet(),
                         })
@@ -2590,13 +2591,13 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![y(), z()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![x(), z()], false),
@@ -2618,13 +2619,13 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![y(), x()],
-                vec![named(aggr_name), None],
+                vec![named(aggr_name), HeadAggrSlot::Plain],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![z(), y()],
-                vec![named(aggr_name), None],
+                vec![named(aggr_name), HeadAggrSlot::Plain],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![z(), x()], false),
@@ -2683,7 +2684,7 @@ mod tests {
         rules.push(Rule::aggregated(
             "reach_count",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit("path", vec![x(), y()], false)],
         ));
         assert_matches_oracle(&Program {
@@ -2836,7 +2837,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "g",
             vec![Term::Var("V"), Term::Var("K"), Term::Var("V")],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![lit("obs", vec![Term::Var("K"), Term::Var("V")], false)],
         )];
         assert_matches_oracle(&Program {
@@ -2866,7 +2867,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![Term::Var("Lo"), Term::Var("K"), Term::Var("Hi")],
-                vec![named("min"), None, named("max")],
+                vec![named("min"), HeadAggrSlot::Plain, named("max")],
                 vec![lit(
                     "seed",
                     vec![Term::Var("K"), Term::Var("Lo"), Term::Var("Hi")],
@@ -2876,7 +2877,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![Term::Var("Lo"), Term::Var("T"), Term::Var("Hi")],
-                vec![named("min"), None, named("max")],
+                vec![named("min"), HeadAggrSlot::Plain, named("max")],
                 vec![
                     lit("edge", vec![Term::Var("S"), Term::Var("T")], false),
                     lit(
@@ -3125,7 +3126,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             // m(x, min w) :- m(x, _), m(w', w), edge(w', x): node x adopts
@@ -3133,7 +3134,7 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), z()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![
                     lit("m", vec![x(), y()], false),
                     lit("m", vec![Term::Var("W"), z()], false),
@@ -3350,7 +3351,7 @@ mod tests {
             rules.push(Rule::aggregated(
                 "reach_count",
                 vec![x(), y()],
-                vec![None, named("count")],
+                vec![HeadAggrSlot::Plain, named("count")],
                 vec![lit("path", vec![x(), y()], false)],
             ));
         }
@@ -3703,7 +3704,7 @@ mod tests {
         emitted: Arc<AtomicUsize>,
     ) -> EvalProgram<CrossProduct, NoFixed> {
         let body = CrossProduct::new(a, b, emitted);
-        let rule_set = EvalRuleSet::new(vec![None, None], vec![body]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain], vec![body]).unwrap();
         let mut stratum: EvalStratum<CrossProduct, NoFixed> = EvalStratum::default();
         stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
         EvalProgram::from_execution_order(vec![stratum]).unwrap()
@@ -3823,7 +3824,7 @@ mod tests {
                 muggle("aaa"),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -3833,7 +3834,7 @@ mod tests {
                 muggle("bbb"),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -3846,7 +3847,7 @@ mod tests {
                 entry_symbol(),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(0, 0, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -4048,7 +4049,7 @@ mod tests {
     }
 
     fn single_stratum_program<B: RuleBody>(symb: MagicSymbol, body: B) -> EvalProgram<B, NoFixed> {
-        let rule_set = EvalRuleSet::new(vec![None, None], vec![body]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain], vec![body]).unwrap();
         let mut stratum: EvalStratum<B, NoFixed> = EvalStratum::default();
         stratum.defs.insert(symb, EvalDefinition::Rules(rule_set));
         EvalProgram::from_execution_order(vec![stratum]).unwrap()
@@ -4130,7 +4131,7 @@ mod tests {
             muggle("s0"),
             EvalDefinition::Rules(
                 EvalRuleSet::new(
-                    vec![None, None],
+                    vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                     vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -4143,7 +4144,7 @@ mod tests {
             entry_symbol(),
             EvalDefinition::Rules(
                 EvalRuleSet::new(
-                    vec![None, None],
+                    vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                     vec![CrossProduct::new(400, 400, Arc::new(AtomicUsize::new(0)))],
                 )
                 .unwrap(),
@@ -4220,7 +4221,7 @@ mod tests {
                 muggle("s0"),
                 EvalDefinition::Rules(
                     EvalRuleSet::new(
-                        vec![None, None],
+                        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
                         vec![CrossProduct::new(100, 1, Arc::new(AtomicUsize::new(0)))],
                     )
                     .unwrap(),
@@ -4370,7 +4371,7 @@ mod tests {
             auth: Mutex::new(Some(auth)),
             emitted: emitted.clone(),
         };
-        let rule_set = EvalRuleSet::new(vec![None], vec![body]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain], vec![body]).unwrap();
         let mut stratum: EvalStratum<FloodBody, NoFixed> = EvalStratum::default();
         stratum
             .defs
@@ -4510,7 +4511,7 @@ mod tests {
                 )
             })
             .collect();
-        let rule_set = EvalRuleSet::new(vec![None, None], bodies).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain], bodies).unwrap();
         let mut stratum: EvalStratum<ModelBody, NoFixed> = EvalStratum::default();
         stratum
             .defs
@@ -4673,7 +4674,7 @@ mod tests {
 
     #[test]
     fn empty_rule_set_is_refused_at_construction() {
-        let refused = EvalRuleSet::<ModelBody>::new(vec![None], vec![]);
+        let refused = EvalRuleSet::<ModelBody>::new(vec![HeadAggrSlot::Plain], vec![]);
         assert!(matches!(refused, Err(RuleSetShapeError::Empty)));
     }
 
@@ -4696,7 +4697,7 @@ mod tests {
         // Meet at position 0, grouping at position 1 — the exact shape D3
         // used to reject.
         let rule_set =
-            EvalRuleSet::new(vec![named("min"), None], vec![body]).expect("no longer refused");
+            EvalRuleSet::new(vec![named("min"), HeadAggrSlot::Plain], vec![body]).expect("no longer refused");
         assert_eq!(
             rule_set.kind,
             HeadAggrKind::Meet {
@@ -4726,7 +4727,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "m",
             vec![y(), x()],
-            vec![named("min"), None],
+            vec![named("min"), HeadAggrSlot::Plain],
             vec![lit("obs", vec![x(), y()], false)],
         )];
         assert_matches_oracle(&Program {
@@ -4765,7 +4766,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "m",
             vec![y(), x()],
-            vec![named("min"), None],
+            vec![named("min"), HeadAggrSlot::Plain],
             vec![lit("obs", vec![x(), y()], false)],
         )];
         assert_matches_oracle(&Program {
@@ -4791,7 +4792,7 @@ mod tests {
         let rules = vec![Rule::aggregated(
             "m",
             vec![y(), y()],
-            vec![named("min"), None],
+            vec![named("min"), HeadAggrSlot::Plain],
             vec![lit("obs", vec![x(), y()], false)],
         )];
         assert_matches_oracle(&Program {
@@ -4887,7 +4888,7 @@ mod tests {
         rules.push(Rule::aggregated(
             "w",
             vec![y(), x(), y()],
-            vec![named("min"), None, named("max")],
+            vec![named("min"), HeadAggrSlot::Plain, named("max")],
             vec![lit("m", vec![y(), x()], false)],
         ));
         rules.push(Rule::plain(
@@ -4955,7 +4956,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "m",
                 vec![y(), x()],
-                vec![named("min"), None],
+                vec![named("min"), HeadAggrSlot::Plain],
                 vec![lit("obs", vec![x(), y()], false)],
             )],
             facts,
@@ -5018,7 +5019,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "m",
                 vec![y(), x()],
-                vec![named("min"), None],
+                vec![named("min"), HeadAggrSlot::Plain],
                 vec![lit("obs", vec![x(), y()], false)],
             )],
             facts,
@@ -5104,7 +5105,7 @@ mod tests {
         }
         let mut contained = BTreeMap::new();
         contained.insert(AtomOccurrence(0), muggle("ghost"));
-        let rule_set = EvalRuleSet::new(vec![None], vec![GhostBody { contained }]).unwrap();
+        let rule_set = EvalRuleSet::new(vec![HeadAggrSlot::Plain], vec![GhostBody { contained }]).unwrap();
         let mut stratum: EvalStratum<GhostBody, NoFixed> = EvalStratum::default();
         stratum
             .defs
@@ -5129,7 +5130,7 @@ mod tests {
         let body = ModelBody::new(vec![x()], vec![lit("d", vec![x()], false)], facts, idb);
         stratum.defs.insert(
             muggle("r"),
-            EvalDefinition::Rules(EvalRuleSet::new(vec![None], vec![body]).unwrap()),
+            EvalDefinition::Rules(EvalRuleSet::new(vec![HeadAggrSlot::Plain], vec![body]).unwrap()),
         );
         let err = EvalProgram::from_execution_order(vec![stratum]).expect_err("no entry");
         assert!(err.to_string().contains("no entry"), "got: {err}");

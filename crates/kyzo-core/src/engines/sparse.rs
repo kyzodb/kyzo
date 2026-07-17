@@ -111,7 +111,7 @@ use rustc_hash::FxHashMap;
 use smartstring::SmartString;
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple};
@@ -248,10 +248,7 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
 pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("dim"),
-        typing: NullableColType {
-            coltype: ColType::Int,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Int),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -263,10 +260,7 @@ pub(crate) fn sparse_index_metadata(base: &StoredRelationMetadata) -> StoredRela
     }
     let non_keys = vec![ColumnDef {
         name: SmartString::from("weight"),
-        typing: NullableColType {
-            coltype: ColType::Float,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Float),
         default_gen: None,
     }];
     StoredRelationMetadata { keys, non_keys }
@@ -563,10 +557,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1008,7 +999,7 @@ mod tests {
             args: Box::new([
                 Expr::Binding {
                     var: Symbol::new("tag", SourceSpan(0, 0)),
-                    tuple_pos: Some(1),
+                    tuple_pos: BindingPos::Resolved(1),
                 },
                 Expr::Const {
                     val: DataValue::from("keep"),

@@ -57,7 +57,7 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, miette};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::program::{
     BodyNormalizer, InputAtom, InputNamedFieldRelationApplyAtom, InputRelationApplyAtom,
     InputRuleApplyAtom, MagicFixedRuleApply, MagicSymbol, NormalFormAtom, NormalFormInlineRule,
@@ -416,7 +416,7 @@ fn convert_named_field_relation(
     for col_def in metadata.keys.iter().chain(metadata.non_keys.iter()) {
         let arg = args.remove(&col_def.name).unwrap_or_else(|| Expr::Binding {
             var: symb_gen.next_ignored(span),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         });
         new_args.push(arg);
     }
@@ -455,7 +455,7 @@ fn normalize_args(
                         binding: dup.clone(),
                         expr: Expr::Binding {
                             var,
-                            tuple_pos: None,
+                            tuple_pos: BindingPos::Unresolved,
                         },
                         one_many_unif: false,
                         span: dup.span,

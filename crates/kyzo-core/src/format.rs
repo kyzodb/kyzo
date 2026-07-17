@@ -68,10 +68,9 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::data::aggr::Aggregation;
 use crate::data::expr::{Expr, LazyOp};
 use crate::data::program::{
-    Comment, DeltaAxis, FixedRuleApply, FixedRuleArg, InputAtom, InputInlineRule,
+    Comment, DeltaAxis, FixedRuleApply, FixedRuleArg, HeadAggrSlot, InputAtom, InputInlineRule,
     InputInlineRulesOrFixed, InputNamedFieldRelationApplyAtom, InputProgram,
     InputRelationApplyAtom, InputRelationHandle, InputRuleApplyAtom, QueryAssertion,
     QueryOutOptions, RelationOp, ReturnMutation, SearchInput, Unification, ValidityClause,
@@ -203,7 +202,7 @@ fn write_inline_rule(name: &Symbol, rule: &InputInlineRule, out: &mut String) {
         if i > 0 {
             out.push_str(", ");
         }
-        write_head_arg(head, aggr.as_ref(), out);
+        write_head_arg(head, aggr, out);
     }
     out.push_str("] := ");
     for (i, atom) in rule.body.iter().enumerate() {
@@ -215,10 +214,10 @@ fn write_inline_rule(name: &Symbol, rule: &InputInlineRule, out: &mut String) {
     out.push(';');
 }
 
-fn write_head_arg(head: &Symbol, aggr: Option<&(Aggregation, Vec<DataValue>)>, out: &mut String) {
+fn write_head_arg(head: &Symbol, aggr: &HeadAggrSlot, out: &mut String) {
     match aggr {
-        None => out.push_str(&head.name),
-        Some((aggr, args)) => {
+        HeadAggrSlot::Plain => out.push_str(&head.name),
+        HeadAggrSlot::Aggregated { aggr, args } => {
             out.push_str(aggr.name);
             out.push('(');
             out.push_str(&head.name);

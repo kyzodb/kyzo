@@ -154,6 +154,7 @@ use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr, NormalAggr};
 use crate::data::bitemporal::ClaimPolarity;
+use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::query::eval::Budget;
@@ -638,9 +639,9 @@ impl Literal {
     }
 }
 
-/// One head position's aggregation, if any: the real landed [`Aggregation`]
+/// One head position's aggregation slot: the real landed [`Aggregation`]
 /// plus its compile-time arguments (only `collect` takes one today).
-pub(crate) type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+pub(crate) type HeadAggr = HeadAggrSlot;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Rule {
@@ -654,7 +655,7 @@ pub(crate) struct Rule {
 impl Rule {
     /// A rule with no aggregations.
     pub(crate) fn plain(head_rel: Rel, head_args: Vec<Term>, body: Vec<Literal>) -> Self {
-        let aggr = vec![None; head_args.len()];
+        let aggr = (0..head_args.len()).map(|_| HeadAggrSlot::Plain).collect();
         Self {
             head_rel,
             head_args,
@@ -819,10 +820,10 @@ pub(crate) fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
     per_head
         .into_iter()
         .map(|(rel, rules)| {
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_some()));
+            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let is_meet = has_aggr
                 && rules.iter().all(|r| {
-                    r.aggr.iter().all(|a| match a {
+                    r.aggr.iter().all(|a| match a.as_aggregated() {
                         None => true,
                         Some((aggr, _)) => aggr.is_meet(),
                     })
@@ -1314,13 +1315,13 @@ fn eval_normal_aggr_head(
     let key_positions: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .filter_map(|(i, a)| a.as_aggregated().map(|(aggr, args)| (i, aggr, args)))
         .collect();
     let fresh_ops = || -> Result<Vec<NormalAggr>, Rejection> {
         val_positions
@@ -1380,13 +1381,13 @@ impl MeetState {
         let key_positions = signature
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.is_none())
+            .filter(|(_, a)| !a.is_aggregated())
             .map(|(i, _)| i)
             .collect();
         let mut val_positions = Vec::new();
         let mut ops = Vec::new();
         for (i, a) in signature.iter().enumerate() {
-            if let Some((aggr, _)) = a {
+            if let Some((aggr, _)) = a.as_aggregated() {
                 // Total by classification (`is_meet` heads only), never a
                 // panic: a non-meet form here is a malformed program.
                 let op = aggr
@@ -2195,13 +2196,13 @@ fn eval_aggregating_head_incremental(
     let key_positions: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .filter_map(|(i, a)| a.as_aggregated().map(|(aggr, args)| (i, aggr, args)))
         .collect();
 
     let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
@@ -2408,10 +2409,12 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
             Literal::pos(rel, args)
         }
     }
-    fn named(name: &'static str) -> (Aggregation, Vec<DataValue>) {
-        let aggr = crate::data::aggr::parse_aggr(name)
-            .unwrap_or_else(|| panic!("corpus uses only real aggregations, missing: {name}"));
-        (aggr, vec![])
+    fn named(name: &'static str) -> HeadAggr {
+        HeadAggrSlot::Aggregated {
+            aggr: crate::data::aggr::parse_aggr(name)
+                .unwrap_or_else(|| panic!("corpus uses only real aggregations, missing: {name}")),
+            args: vec![],
+        }
     }
     let x = || Term::Var("X");
     let y = || Term::Var("Y");
@@ -2480,13 +2483,13 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     Rule::aggregated(
                         "p",
                         vec![x(), y()],
-                        vec![None, Some(named("count"))],
+                        vec![HeadAggrSlot::Plain, named("count")],
                         vec![lit("d", vec![x(), y()], false)],
                     ),
                     Rule::aggregated(
                         "p",
                         vec![x(), y()],
-                        vec![None, Some(named("count"))],
+                        vec![HeadAggrSlot::Plain, named("count")],
                         vec![lit("p", vec![x(), y()], false)],
                     ),
                 ],
@@ -2500,7 +2503,7 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                 rules: vec![Rule::aggregated(
                     "q",
                     vec![x(), y(), Term::Var("Z")],
-                    vec![None, Some(named("min")), Some(named("count"))],
+                    vec![HeadAggrSlot::Plain, named("min"), named("count")],
                     vec![lit("q", vec![x(), y(), Term::Var("Z")], false)],
                 )],
                 ..Program::default()
@@ -2512,7 +2515,7 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                 rules: vec![Rule::aggregated(
                     "m",
                     vec![x(), y()],
-                    vec![None, Some(named("min"))],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![
                         lit("d", vec![x(), y()], false),
                         lit("m", vec![x(), y()], true),
@@ -2588,10 +2591,11 @@ mod tests {
     }
     /// A real landed aggregation by name, with no arguments.
     fn named(name: &str) -> HeadAggr {
-        Some((
-            parse_aggr(name).unwrap_or_else(|| panic!("real aggregation exists: {name}")),
-            vec![],
-        ))
+        HeadAggrSlot::Aggregated {
+            aggr: parse_aggr(name)
+                .unwrap_or_else(|| panic!("real aggregation exists: {name}")),
+            args: vec![],
+        }
     }
 
     /// path(X,Y) :- edge(X,Y); path(X,Y) :- edge(X,Z), path(Z,Y).
@@ -2622,13 +2626,13 @@ mod tests {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![y(), z()],
-                vec![None, named(aggr_name)],
+                vec![HeadAggrSlot::Plain, named(aggr_name)],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![x(), z()], false),
@@ -2834,7 +2838,7 @@ mod tests {
             Rule::aggregated(
                 "total",
                 vec![x(), y(), y()],
-                vec![None, named("sum"), named("count")],
+                vec![HeadAggrSlot::Plain, named("sum"), named("count")],
                 vec![lit(rel, vec![x(), y()], false)],
             )
         };
@@ -2878,7 +2882,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "t",
                 vec![x(), y()],
-                vec![None, named("count")],
+                vec![HeadAggrSlot::Plain, named("count")],
                 vec![lit("nothing", vec![x(), y()], false)],
             )],
             ..Program::default()
@@ -2896,7 +2900,7 @@ mod tests {
         rules.push(Rule::aggregated(
             "reach_count",
             vec![x(), y()],
-            vec![None, named("count")],
+            vec![HeadAggrSlot::Plain, named("count")],
             vec![lit("path", vec![x(), y()], false)],
         ));
         let program = Program {
@@ -3200,7 +3204,7 @@ mod tests {
             rules: vec![Rule::aggregated(
                 "t",
                 vec![x(), y()],
-                vec![None, named("sum")],
+                vec![HeadAggrSlot::Plain, named("sum")],
                 vec![lit("d", vec![x(), y()], false)],
             )],
             facts,
@@ -3232,13 +3236,13 @@ mod tests {
                 Rule::aggregated(
                     "p",
                     vec![x(), y()],
-                    vec![None, named("min")],
+                    vec![HeadAggrSlot::Plain, named("min")],
                     vec![lit("d", vec![x(), y()], false)],
                 ),
                 Rule::aggregated(
                     "p",
                     vec![x(), y()],
-                    vec![None, named("count")],
+                    vec![HeadAggrSlot::Plain, named("count")],
                     vec![lit("d", vec![x(), y()], false)],
                 ),
             ],
@@ -5000,7 +5004,7 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![None, named("sum")],
+                vec![HeadAggrSlot::Plain, named("sum")],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
@@ -5043,7 +5047,7 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
@@ -5084,7 +5088,7 @@ mod tests {
             vec![Rule::aggregated(
                 "total",
                 vec![x(), y()],
-                vec![None, named("sum")],
+                vec![HeadAggrSlot::Plain, named("sum")],
                 vec![lit("p", vec![x(), y()], false)],
             )],
             vec![],
@@ -5209,8 +5213,11 @@ mod tests {
                 "q",
                 vec![x(), y()],
                 vec![
-                    None,
-                    Some((parse_aggr("min").expect("real aggregation exists"), vec![])),
+                    HeadAggrSlot::Plain,
+                    HeadAggrSlot::Aggregated {
+                        aggr: parse_aggr("min").expect("real aggregation exists"),
+                        args: vec![],
+                    },
                 ],
                 vec![lit("p", vec![x(), y()], false)],
             )]

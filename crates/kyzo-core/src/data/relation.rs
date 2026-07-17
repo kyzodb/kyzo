@@ -83,14 +83,31 @@ impl ColNullability {
     }
 }
 
+/// Column typing: private fields; nullability only via [`ColNullability`].
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct NullableColType {
-    pub coltype: ColType,
-    /// Prefer [`ColNullability`] via [`NullableColType::new`]. Remains a
-    /// public bool so off-list struct literals keep compiling; closing the
-    /// open poke (private field + sum-only storage) needs those call sites
-    /// on the allowlist.
-    pub nullable: bool,
+    coltype: ColType,
+    /// Wire key stays `nullable` (bool); in-memory authority is [`ColNullability`].
+    #[serde(rename = "nullable", with = "col_nullability_as_bool")]
+    nullability: ColNullability,
+}
+
+mod col_nullability_as_bool {
+    use super::ColNullability;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        v: &ColNullability,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        v.is_nullable().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<ColNullability, D::Error> {
+        bool::deserialize(deserializer).map(ColNullability::from_bool)
+    }
 }
 
 impl NullableColType {
@@ -98,7 +115,7 @@ impl NullableColType {
     pub fn new(coltype: ColType, nullability: ColNullability) -> NullableColType {
         NullableColType {
             coltype,
-            nullable: nullability.is_nullable(),
+            nullability,
         }
     }
 
@@ -110,12 +127,16 @@ impl NullableColType {
         Self::new(coltype, ColNullability::Optional)
     }
 
+    pub fn coltype(&self) -> &ColType {
+        &self.coltype
+    }
+
     pub fn nullability(&self) -> ColNullability {
-        ColNullability::from_bool(self.nullable)
+        self.nullability
     }
 
     pub fn is_nullable(&self) -> bool {
-        self.nullability().is_nullable()
+        self.nullability.is_nullable()
     }
 }
 
@@ -162,7 +183,7 @@ impl Display for NullableColType {
                 f.write_str("Json")?;
             }
         }
-        if self.nullable {
+        if self.is_nullable() {
             f.write_str("?")?;
         }
         Ok(())
@@ -308,7 +329,7 @@ impl StoredRelationMetadata {
                 #[error("requested column {0} has typing {1}, but the requested typing is {2}")]
                 #[diagnostic(code(eval::col_type_mismatch))]
                 struct IncompatibleTyping(String, NullableColType, NullableColType);
-                if (!col.typing.nullable || col.typing.coltype != ColType::Any)
+                if (!col.typing.is_nullable() || *col.typing.coltype() != ColType::Any)
                     && target.typing != col.typing
                 {
                     bail!(IncompatibleTyping(
@@ -344,7 +365,7 @@ impl NullableColType {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn coerce(&self, data: DataValue, cur_vld: ValidityTs) -> Result<DataValue> {
         if matches!(data, DataValue::Null) {
-            return if self.nullable {
+            return if self.is_nullable() {
                 Ok(data)
             } else {
                 #[derive(Debug, Error, Diagnostic)]

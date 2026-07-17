@@ -168,24 +168,15 @@ pub(crate) fn gazetteer_dict_metadata(entity_type: ColType) -> StoredRelationMet
     StoredRelationMetadata {
         keys: vec![ColumnDef {
             name: SmartString::from("entity"),
-            typing: NullableColType {
-                coltype: entity_type,
-                nullable: false,
-            },
+            typing: NullableColType::required(entity_type),
             default_gen: None,
         }],
         non_keys: vec![ColumnDef {
             name: SmartString::from("surfaces"),
-            typing: NullableColType {
-                coltype: ColType::List {
-                    eltype: Box::new(NullableColType {
-                        coltype: ColType::String,
-                        nullable: false,
-                    }),
-                    len: None,
-                },
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::List {
+                eltype: Box::new(NullableColType::required(ColType::String)),
+                len: None,
+            }),
             default_gen: None,
         }],
     }

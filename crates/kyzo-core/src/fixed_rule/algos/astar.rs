@@ -25,7 +25,7 @@ use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -221,7 +221,7 @@ mod tests {
     fn heuristic_guided_route() {
         let h_binding = Expr::Binding {
             var: Symbol::new("h", SourceSpan::default()),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         };
         let got = run_fixed_rule(
             &ShortestPathAStar,

@@ -15,6 +15,7 @@ use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
+use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
 use crate::data::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
@@ -465,7 +466,7 @@ impl EpochStore {
             arity,
         }
     }
-    pub(crate) fn new_meet(aggrs: &[Option<(Aggregation, Vec<DataValue>)>]) -> Result<Self> {
+    pub(crate) fn new_meet(aggrs: &[HeadAggrSlot]) -> Result<Self> {
         let probe = MeetAggrStore::new(aggrs.to_vec())?;
         Ok(Self {
             kind: LevelKind::Meet {

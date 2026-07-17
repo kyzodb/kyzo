@@ -101,6 +101,7 @@ use itertools::Itertools;
 use miette::{Result, ensure, miette};
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
+use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
 use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
 
@@ -272,18 +273,19 @@ pub(crate) struct MeetLayout {
 }
 
 impl MeetLayout {
-    /// Build from the head signature: `None` positions group, `Some`
-    /// positions aggregate. Total over any signature — the partition of
-    /// `0..arity` is exhaustive, so `interleave` never leaves a `Null`.
-    fn from_signature(aggrs: &[Option<(Aggregation, Vec<DataValue>)>]) -> Self {
+    /// Build from the head signature: [`HeadAggrSlot::Plain`] positions
+    /// group, [`HeadAggrSlot::Aggregated`] positions aggregate. Total over
+    /// any signature — the partition of `0..arity` is exhaustive, so
+    /// `interleave` never leaves a `Null`.
+    fn from_signature(aggrs: &[HeadAggrSlot]) -> Self {
         let arity = aggrs.len();
         let mut key_positions = Vec::new();
         let mut val_positions = Vec::new();
         for (i, a) in aggrs.iter().enumerate() {
-            if a.is_none() {
-                key_positions.push(i);
-            } else {
+            if a.is_aggregated() {
                 val_positions.push(i);
+            } else {
+                key_positions.push(i);
             }
         }
         Self {
@@ -482,25 +484,28 @@ impl MeetAggrStore {
         Ok(now_admissible && !was_admissible)
     }
     /// Build a meet store from a rule head's aggregation spec: one entry
-    /// per head position, `None` for grouping positions, `Some` for
-    /// aggregated ones. Compilation only routes rules whose aggregations
-    /// are all meets here (`Aggregation::is_meet`); a normal-only
-    /// aggregation in the spec is an engine bug and is refused with an
-    /// error rather than unwrapped. The argument lists are part of eval's
-    /// aggregation-spec shape but meet forms take no arguments (see
-    /// `data/aggr.rs`), so they are ignored.
-    pub(crate) fn new(aggrs: Vec<Option<(Aggregation, Vec<DataValue>)>>) -> Result<Self> {
+    /// per head position, [`HeadAggrSlot::Plain`] for grouping positions,
+    /// [`HeadAggrSlot::Aggregated`] for aggregated ones. Compilation only
+    /// routes rules whose aggregations are all meets here
+    /// (`Aggregation::is_meet`); a normal-only aggregation in the spec is
+    /// an engine bug and is refused with an error rather than unwrapped.
+    /// The argument lists are part of eval's aggregation-spec shape but
+    /// meet forms take no arguments (see `data/aggr.rs`), so they are
+    /// ignored.
+    pub(crate) fn new(aggrs: Vec<HeadAggrSlot>) -> Result<Self> {
         let layout = MeetLayout::from_signature(&aggrs);
         let mut meets = Vec::new();
-        for (aggr, _args) in aggrs.into_iter().flatten() {
-            let op = aggr.meet_op().ok_or_else(|| {
-                miette!(
-                    "internal invariant violated: normal-only aggregation '{}' \
-                     routed to a meet store",
-                    aggr.name
-                )
-            })?;
-            meets.push((aggr, op));
+        for a in aggrs {
+            if let HeadAggrSlot::Aggregated { aggr, args: _ } = a {
+                let op = aggr.meet_op().ok_or_else(|| {
+                    miette!(
+                        "internal invariant violated: normal-only aggregation '{}' \
+                         routed to a meet store",
+                        aggr.name
+                    )
+                })?;
+                meets.push((aggr, op));
+            }
         }
         Ok(Self {
             by_group: Default::default(),
@@ -944,6 +949,17 @@ mod tests {
         Tuple::from_vec(vec![DataValue::from(group), val])
     }
 
+    fn plain() -> HeadAggrSlot {
+        HeadAggrSlot::Plain
+    }
+
+    fn aggr_slot(a: Aggregation) -> HeadAggrSlot {
+        HeadAggrSlot::Aggregated {
+            aggr: a,
+            args: vec![],
+        }
+    }
+
     /// A recording sink: collects every admission, in the order reported.
     #[derive(Default)]
     struct Recorder(Vec<Tuple>);
@@ -1071,7 +1087,7 @@ mod tests {
     #[test]
     fn meet_delta_regression_changed_flag_drives_delta() {
         let or_aggr = parse_aggr("or").unwrap();
-        let spec = vec![None, Some((or_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(or_aggr)];
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
         // Epoch 0: g starts false.
@@ -1122,7 +1138,7 @@ mod tests {
     #[test]
     fn meet_put_changed_flag() {
         let or_aggr = parse_aggr("or").unwrap();
-        let spec = vec![None, Some((or_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(or_aggr)];
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(store.is_empty());
         // New group: changed.
@@ -1146,7 +1162,7 @@ mod tests {
         assert!(!store.is_empty());
 
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![None, Some((min_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(min_aggr)];
         let mut store = MeetAggrStore::new(spec).unwrap();
         assert!(
             store
@@ -1172,7 +1188,7 @@ mod tests {
     fn meet_store_rejects_normal_aggregation() {
         let count = parse_aggr("count").unwrap();
         assert!(!count.is_meet());
-        let res = MeetAggrStore::new(vec![None, Some((count, vec![]))]);
+        let res = MeetAggrStore::new(vec![plain(), aggr_slot(count)]);
         assert!(res.is_err());
     }
 
@@ -1186,7 +1202,7 @@ mod tests {
     #[test]
     fn meet_iteration_spans_key_and_value() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![None, Some((min_aggr, vec![]))];
+        let spec = vec![plain(), aggr_slot(min_aggr)];
         let mut store = EpochStore::new_meet(&spec).unwrap();
         assert_eq!(store.arity, 2);
 
@@ -1264,7 +1280,7 @@ mod tests {
     fn kind_mismatch_is_error_not_panic() {
         let mut store = EpochStore::new_normal(1);
         let min_aggr = parse_aggr("min").unwrap();
-        let meet_out = MeetAggrStore::new(vec![Some((min_aggr, vec![]))]).unwrap();
+        let meet_out = MeetAggrStore::new(vec![aggr_slot(min_aggr)]).unwrap();
         assert!(store.merge_in(meet_out.wrap(), &mut ()).is_err());
     }
 
@@ -1285,7 +1301,7 @@ mod tests {
     fn meet_layout_projection_round_trips_interleaved() {
         let min_aggr = parse_aggr("min").unwrap();
         let max_aggr = parse_aggr("max").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None, Some((max_aggr, vec![]))];
+        let spec = vec![aggr_slot(min_aggr), plain(), aggr_slot(max_aggr)];
         let layout = MeetLayout::from_signature(&spec);
         assert_eq!(layout.key_positions, vec![1]);
         assert_eq!(layout.val_positions, vec![0, 2]);
@@ -1319,7 +1335,7 @@ mod tests {
     #[test]
     fn meet_put_and_scan_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // group "a": min(4, 2, 9) = 2 ; group "b": 5.
         assert!(
@@ -1368,7 +1384,7 @@ mod tests {
     #[test]
     fn meet_admissions_follow_group_key_order_not_row_order_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         // Group "a" holds value 9, group "z" holds value 1. Group-key order
         // is a < z; head-tuple (value-first) order is (1,z) < (9,a) — the
@@ -1407,7 +1423,7 @@ mod tests {
     #[test]
     fn meet_merge_delta_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let mut store = EpochStore::new_meet(&spec).unwrap();
 
         let mut out0 = MeetAggrStore::new(spec.clone()).unwrap();
@@ -1471,7 +1487,7 @@ mod tests {
     #[test]
     fn rev_meet_views_lockstep_through_all_paths() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
 
         // meet_put: vacant, changed, unchanged.
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
@@ -1543,7 +1559,7 @@ mod tests {
     fn rev_meet_all_aggregated_single_group() {
         let min_aggr = parse_aggr("min").unwrap();
         let max_aggr = parse_aggr("max").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), Some((max_aggr, vec![]))];
+        let spec = vec![aggr_slot(min_aggr), aggr_slot(max_aggr)];
         let mut out = MeetAggrStore::new(spec.clone()).unwrap();
         assert!(out.meet_put(t(&[5, 5]).as_slice()).unwrap());
         assert!(out.meet_put(t(&[3, 9]).as_slice()).unwrap()); // min 3, max 9
@@ -1566,7 +1582,7 @@ mod tests {
     #[test]
     fn rev_meet_admissions_insertion_order_independent() {
         let min_aggr = parse_aggr("min").unwrap();
-        let spec = vec![Some((min_aggr, vec![])), None];
+        let spec = vec![aggr_slot(min_aggr), plain()];
         let rows: Vec<Tuple> = vec![
             vg(DataValue::from(9i64), "m"),
             vg(DataValue::from(1i64), "z"),

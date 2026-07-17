@@ -527,10 +527,7 @@ impl HnswIndexManifest {
 pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys: Vec<ColumnDef> = vec![ColumnDef {
         name: SmartString::from("layer"),
-        typing: NullableColType {
-            coltype: ColType::Int,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Int),
         default_gen: None,
     }];
     for prefix in ["fr", "to"] {
@@ -541,18 +538,12 @@ pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelati
         }
         keys.push(ColumnDef {
             name: SmartString::from(format!("{prefix}__field")),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         });
         keys.push(ColumnDef {
             name: SmartString::from(format!("{prefix}__sub_idx")),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         });
     }
@@ -562,26 +553,17 @@ pub(crate) fn hnsw_index_metadata(base: &StoredRelationMetadata) -> StoredRelati
             // bottom-layer (canary). Declared Any so the metadata matches
             // reality; HnswRow is the real schema of this column.
             name: SmartString::from("dist"),
-            typing: NullableColType {
-                coltype: ColType::Any,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Any),
             default_gen: None,
         },
         ColumnDef {
             name: SmartString::from("hash"),
-            typing: NullableColType {
-                coltype: ColType::Bytes,
-                nullable: true,
-            },
+            typing: NullableColType::optional(ColType::Bytes),
             default_gen: None,
         },
         ColumnDef {
             name: SmartString::from("ignore_link"),
-            typing: NullableColType {
-                coltype: ColType::Bool,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Bool),
             default_gen: None,
         },
     ];
@@ -2985,10 +2967,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }

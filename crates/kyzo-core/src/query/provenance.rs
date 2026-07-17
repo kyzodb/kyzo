@@ -42,7 +42,7 @@ use std::sync::Arc;
 use miette::Result;
 
 use crate::data::aggr::parse_aggr;
-use crate::data::program::{MagicSymbol, StoreLifetimes};
+use crate::data::program::{HeadAggrSlot, MagicSymbol, StoreLifetimes};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -580,7 +580,10 @@ fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
     }
 }
 fn named(name: &str) -> HeadAggr {
-    Some((parse_aggr(name).expect("real aggregation"), vec![]))
+    HeadAggrSlot::Aggregated {
+        aggr: parse_aggr(name).expect("real aggregation"),
+        args: vec![],
+    }
 }
 
 fn gen_positive(seed: u64, small: bool) -> Program {
@@ -1379,13 +1382,13 @@ fn aggregation_boundary_collapses_to_ground_facts() {
             Rule::aggregated(
                 "m",
                 vec![x(), y()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![lit("seed", vec![x(), y()], false)],
             ),
             Rule::aggregated(
                 "m",
                 vec![y(), z()],
-                vec![None, named("min")],
+                vec![HeadAggrSlot::Plain, named("min")],
                 vec![
                     lit("edge", vec![x(), y()], false),
                     lit("m", vec![x(), z()], false),
@@ -1461,7 +1464,11 @@ fn unattributed_body_is_refused_typed() {
         facts,
         idb,
     ));
-    let entry_set = EvalRuleSet::new(vec![None, None], vec![body]).expect("well-shaped rule set");
+    let entry_set = EvalRuleSet::new(
+        vec![HeadAggrSlot::Plain, HeadAggrSlot::Plain],
+        vec![body],
+    )
+    .expect("well-shaped rule set");
     let mut stratum = EvalStratum::default();
     stratum.defs.insert(
         entry_symbol(),

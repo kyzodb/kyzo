@@ -30,7 +30,9 @@ use smartstring::SmartString;
 use thiserror::Error;
 
 use crate::data::relation::VecElementType;
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use crate::data::relation::{
+    ColNullability, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
+};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -102,10 +104,7 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
         }
     }
     // Omitted type defaults to nullable Any only after parse completes.
-    let typing = typing.unwrap_or(NullableColType {
-        coltype: ColType::Any,
-        nullable: true,
-    });
+    let typing = typing.unwrap_or(NullableColType::optional(ColType::Any));
     let binding =
         binding_candidate.unwrap_or_else(|| Symbol::new(&name as &str, name_p.extract_span()));
     Ok((
@@ -121,7 +120,10 @@ fn parse_col(pair: Pair<'_>) -> Result<(ColumnDef, Symbol)> {
 pub(crate) fn parse_nullable_type(pair: Pair<'_>) -> Result<NullableColType> {
     let nullable = pair.as_str().ends_with('?');
     let coltype = parse_type_inner(pair.children().expect("the inner type")?)?;
-    Ok(NullableColType { coltype, nullable })
+    Ok(NullableColType::new(
+        coltype,
+        ColNullability::from_bool(nullable),
+    ))
 }
 
 fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {

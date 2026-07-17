@@ -21,7 +21,7 @@
  * empty-ruleset `unwrap`s are errors; `InputRelationHandle` is re-homed here
  * from the original's `runtime/relation.rs` (it is the *declared* output
  * relation of a query — parse-tier substance, all of its fields data-tier);
- * adornments are `Vec<bool>` (no `smallvec` dependency); the resolved index
+ * adornments are `Vec<AdornmentMark>` (no `smallvec` dependency); the resolved index
  * search atoms (HNSW/FTS/LSH) and the fixed-rule trait's runtime surface
  * land with their owning tiers.
  * Port constraints for later tiers: the parser must synthesize the
@@ -79,7 +79,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::aggr::Aggregation;
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::StoredRelationMetadata;
 use crate::data::span::SourceSpan;
 use crate::data::symb::{Symbol, SymbolKind};
@@ -480,12 +480,81 @@ pub(crate) struct Trivia {
     pub(crate) trailing: Vec<Comment>,
 }
 
-/// One parsed inline rule: head bindings (with optional aggregations,
-/// index-aligned with the head), and a body of sugared [`InputAtom`]s.
+/// Per-head-position aggregation — a structured slot, never an `Option` hole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HeadAggrSlot {
+    Plain,
+    Aggregated {
+        aggr: Aggregation,
+        args: Vec<DataValue>,
+    },
+}
+
+impl HeadAggrSlot {
+    pub(crate) fn is_aggregated(&self) -> bool {
+        matches!(self, HeadAggrSlot::Aggregated { .. })
+    }
+
+    pub(crate) fn as_aggregated(&self) -> Option<(&Aggregation, &[DataValue])> {
+        match self {
+            HeadAggrSlot::Plain => None,
+            HeadAggrSlot::Aggregated { aggr, args } => Some((aggr, args)),
+        }
+    }
+}
+
+/// One head column: binding paired with its aggregation slot — the unit of
+/// an aligned head (mint via [`aligned_head`], never by stuffing two vecs).
+#[derive(Debug, Clone)]
+pub(crate) struct HeadColumn {
+    pub(crate) binding: Symbol,
+    pub(crate) aggr: HeadAggrSlot,
+}
+
+/// Zip head bindings with aggregation slots, refusing length disagreement.
+pub(crate) fn aligned_head(
+    bindings: Vec<Symbol>,
+    aggrs: Vec<HeadAggrSlot>,
+) -> Result<(Vec<Symbol>, Vec<HeadAggrSlot>), HeadAggrLenMismatch> {
+    if bindings.len() != aggrs.len() {
+        return Err(HeadAggrLenMismatch(bindings.len(), aggrs.len()));
+    }
+    Ok((bindings, aggrs))
+}
+
+/// Split aligned [`HeadColumn`]s into the parallel head/aggr representation
+/// carried by rule tiers (same length by construction).
+pub(crate) fn split_head_columns(columns: Vec<HeadColumn>) -> (Vec<Symbol>, Vec<HeadAggrSlot>) {
+    let mut bindings = Vec::with_capacity(columns.len());
+    let mut aggrs = Vec::with_capacity(columns.len());
+    for HeadColumn { binding, aggr } in columns {
+        bindings.push(binding);
+        aggrs.push(aggr);
+    }
+    (bindings, aggrs)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeadAggrLenMismatch(pub(crate) usize, pub(crate) usize);
+
+impl std::fmt::Display for HeadAggrLenMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "head binding count {} disagrees with aggregation slot count {}",
+            self.0, self.1
+        )
+    }
+}
+
+impl std::error::Error for HeadAggrLenMismatch {}
+
+/// One parsed inline rule: head bindings with per-position [`HeadAggrSlot`]s
+/// (same length — mint through [`aligned_head`] / [`split_head_columns`]).
 #[derive(Debug, Clone)]
 pub(crate) struct InputInlineRule {
     pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+    pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<InputAtom>,
     pub(crate) span: SourceSpan,
     pub(crate) trivia: Trivia,
@@ -1142,7 +1211,7 @@ impl InputProgram {
                 };
                 let mut ret = Vec::with_capacity(last_rule.head.len());
                 for (symb, aggr) in last_rule.head.iter().zip(last_rule.aggr.iter()) {
-                    if let Some((aggr, _)) = aggr {
+                    if let Some((aggr, _)) = aggr.as_aggregated() {
                         ret.push(Symbol::new(format!("{}({})", aggr.name, symb), symb.span))
                     } else {
                         ret.push(symb.clone())
@@ -1208,7 +1277,7 @@ impl Display for InputProgram {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            if let Some((aggr, aggr_args)) = a {
+                            if let Some((aggr, aggr_args)) = a.as_aggregated() {
                                 write!(f, "{}({}", aggr.name, h)?;
                                 for aga in aggr_args {
                                     write!(f, ", {aga}")?;
@@ -1338,7 +1407,7 @@ fn normalize_ruleset(
                                 binding: new_symb.clone(),
                                 expr: Expr::Binding {
                                     var: (*old_symb).clone(),
-                                    tuple_pos: None,
+                                    tuple_pos: BindingPos::Unresolved,
                                 },
                                 one_many_unif: false,
                                 span: new_symb.span,
@@ -1369,7 +1438,7 @@ fn normalize_ruleset(
 #[derive(Debug)]
 pub(crate) struct NormalFormInlineRule {
     pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+    pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<NormalFormAtom>,
 }
 
@@ -1609,15 +1678,30 @@ impl StoreLifetimes {
 // Magic tier
 // ─────────────────────────────────────────────────────────────────────────
 
-/// An adornment: for each argument position of a rule, whether the demand
-/// pattern binds it (`true` = bound, `false` = free). Rendered `b`/`f` in
-/// debug output.
-///
-/// P054 done-when wants a Bound/Free sum (not `Vec<bool>`). That type
-/// change breaks `query/magic.rs` (`Vec::with_capacity` assign, `&[bool]`
-/// returns, `*b = false` mut iteration) which is outside this task's
-/// allowlist — keep the alias until that file is on the allowlist.
-pub(crate) type Adornment = Vec<bool>;
+/// One argument position in a demand pattern — bound or free, never a bool.
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+pub(crate) enum AdornmentMark {
+    Bound,
+    Free,
+}
+
+impl AdornmentMark {
+    pub(crate) fn is_bound(self) -> bool {
+        matches!(self, AdornmentMark::Bound)
+    }
+
+    pub(crate) fn from_bound(bound: bool) -> AdornmentMark {
+        if bound {
+            AdornmentMark::Bound
+        } else {
+            AdornmentMark::Free
+        }
+    }
+}
+
+/// An adornment: for each argument position, [`AdornmentMark::Bound`] or
+/// [`AdornmentMark::Free`]. Rendered `b`/`f` in debug output.
+pub(crate) type Adornment = Vec<AdornmentMark>;
 
 /// A rule name after the magic-sets rewrite. The variants carry the demand
 /// analysis in the name itself: evaluation of a magic program computes only
@@ -1650,7 +1734,7 @@ impl MagicSymbol {
             | MagicSymbol::Sup { inner, .. } => inner,
         }
     }
-    pub(crate) fn magic_adornment(&self) -> &[bool] {
+    pub(crate) fn magic_adornment(&self) -> &[AdornmentMark] {
         match self {
             MagicSymbol::Muggle { .. } => &[],
             MagicSymbol::Magic { adornment, .. }
@@ -1659,7 +1743,7 @@ impl MagicSymbol {
         }
     }
     pub(crate) fn has_bound_adornment(&self) -> bool {
-        self.magic_adornment().iter().any(|b| *b)
+        self.magic_adornment().iter().any(|m| m.is_bound())
     }
     pub(crate) fn is_prog_entry(&self) -> bool {
         if let MagicSymbol::Muggle { inner } = self {
@@ -1682,15 +1766,21 @@ impl Debug for MagicSymbol {
             MagicSymbol::Muggle { inner } => write!(f, "{}", inner.name),
             MagicSymbol::Magic { inner, adornment } => {
                 write!(f, "{}|M", inner.name)?;
-                for b in adornment {
-                    if *b { write!(f, "b")? } else { write!(f, "f")? }
+                for m in adornment {
+                    match m {
+                        AdornmentMark::Bound => write!(f, "b")?,
+                        AdornmentMark::Free => write!(f, "f")?,
+                    }
                 }
                 Ok(())
             }
             MagicSymbol::Input { inner, adornment } => {
                 write!(f, "{}|I", inner.name)?;
-                for b in adornment {
-                    if *b { write!(f, "b")? } else { write!(f, "f")? }
+                for m in adornment {
+                    match m {
+                        AdornmentMark::Bound => write!(f, "b")?,
+                        AdornmentMark::Free => write!(f, "f")?,
+                    }
                 }
                 Ok(())
             }
@@ -1701,8 +1791,11 @@ impl Debug for MagicSymbol {
                 sup_idx,
             } => {
                 write!(f, "{}|S.{}.{}", inner.name, rule_idx, sup_idx)?;
-                for b in adornment {
-                    if *b { write!(f, "b")? } else { write!(f, "f")? }
+                for m in adornment {
+                    match m {
+                        AdornmentMark::Bound => write!(f, "b")?,
+                        AdornmentMark::Free => write!(f, "f")?,
+                    }
                 }
                 Ok(())
             }
@@ -1714,7 +1807,7 @@ impl Debug for MagicSymbol {
 #[derive(Debug)]
 pub(crate) struct MagicInlineRule {
     pub(crate) head: Vec<Symbol>,
-    pub(crate) aggr: Vec<Option<(Aggregation, Vec<DataValue>)>>,
+    pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<MagicAtom>,
 }
 
@@ -1976,7 +2069,7 @@ mod tests {
     fn rule(head: &[&str]) -> InputInlineRule {
         InputInlineRule {
             head: head.iter().map(|h| sym(h)).collect(),
-            aggr: head.iter().map(|_| None).collect(),
+            aggr: head.iter().map(|_| HeadAggrSlot::Plain).collect(),
             body: vec![],
             span: SourceSpan(0, 0),
             trivia: Trivia::default(),
@@ -2053,7 +2146,13 @@ mod tests {
             Symbol::prog_entry(SourceSpan(0, 1)),
             rules_def(vec![InputInlineRule {
                 head: vec![sym("g"), sym("x")],
-                aggr: vec![None, Some((min, vec![]))],
+                aggr: vec![
+                    HeadAggrSlot::Plain,
+                    HeadAggrSlot::Aggregated {
+                        aggr: min,
+                        args: vec![],
+                    },
+                ],
                 body: vec![],
                 span: SourceSpan(0, 0),
                 trivia: Trivia::default(),
@@ -2105,7 +2204,7 @@ mod tests {
                 match &u.expr {
                     Expr::Binding { var, tuple_pos } => {
                         assert_eq!(var.name.as_str(), "a");
-                        assert!(tuple_pos.is_none());
+                        assert_eq!(*tuple_pos, BindingPos::Unresolved);
                     }
                     other @ Expr::Const { .. } | other @ Expr::Apply { .. } | other @ Expr::UnboundApply { .. } | other @ Expr::Cond { .. } | other @ Expr::Lazy { .. } => panic!("expected a binding, got {other:?}"),
                 }
@@ -2147,7 +2246,7 @@ mod tests {
                 NormalFormRulesOrFixed::Rules {
                     rules: vec![NormalFormInlineRule {
                         head: vec![sym("x")],
-                        aggr: vec![None],
+                        aggr: vec![HeadAggrSlot::Plain],
                         body: vec![],
                     }],
                 },
@@ -2236,7 +2335,7 @@ mod tests {
             MagicRulesOrFixed::Rules {
                 rules: vec![MagicInlineRule {
                     head: vec![sym("x")],
-                    aggr: vec![None],
+                    aggr: vec![HeadAggrSlot::Plain],
                     body: vec![],
                 }],
             },
@@ -2245,7 +2344,7 @@ mod tests {
         other.prog.insert(
             MagicSymbol::Magic {
                 inner: sym("r"),
-                adornment: vec![true, false],
+                adornment: vec![AdornmentMark::Bound, AdornmentMark::Free],
             },
             MagicRulesOrFixed::default(),
         );
@@ -2277,12 +2376,12 @@ mod tests {
         };
         let magic = MagicSymbol::Magic {
             inner: Symbol::prog_entry(SourceSpan(0, 1)),
-            adornment: vec![true],
+            adornment: vec![AdornmentMark::Bound],
         };
         assert!(muggle.is_prog_entry());
         assert!(!magic.is_prog_entry());
         assert!(magic.has_bound_adornment());
-        assert_eq!(muggle.magic_adornment(), &[] as &[bool]);
+        assert_eq!(muggle.magic_adornment(), &[] as &[AdornmentMark]);
     }
 
     /// The magic-symbol debug rendering is load-bearing for logs and error
@@ -2291,19 +2390,19 @@ mod tests {
     fn magic_symbol_debug_rendering() {
         let s = MagicSymbol::Sup {
             inner: sym("r"),
-            adornment: vec![true, false],
+            adornment: vec![AdornmentMark::Bound, AdornmentMark::Free],
             rule_idx: 2,
             sup_idx: 5,
         };
         assert_eq!(format!("{s:?}"), "r|S.2.5bf");
         let m = MagicSymbol::Magic {
             inner: sym("r"),
-            adornment: vec![false, true],
+            adornment: vec![AdornmentMark::Free, AdornmentMark::Bound],
         };
         assert_eq!(format!("{m:?}"), "r|Mfb");
         let i = MagicSymbol::Input {
             inner: sym("r"),
-            adornment: vec![true],
+            adornment: vec![AdornmentMark::Bound],
         };
         assert_eq!(format!("{i:?}"), "r|Ib");
         let mu = MagicSymbol::Muggle { inner: sym("r") };

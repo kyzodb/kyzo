@@ -115,7 +115,7 @@ use quadrature::integrate;
 use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple, append_canonical};
@@ -255,10 +255,7 @@ impl MinHashLshIndexManifest {
 pub(crate) fn lsh_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("hash"),
-        typing: NullableColType {
-            coltype: ColType::Bytes,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Bytes),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -285,16 +282,10 @@ pub(crate) fn lsh_inv_index_metadata(base: &StoredRelationMetadata) -> StoredRel
         keys: base.keys.clone(),
         non_keys: vec![ColumnDef {
             name: SmartString::from("minhash"),
-            typing: NullableColType {
-                coltype: ColType::List {
-                    eltype: Box::new(NullableColType {
-                        coltype: ColType::Bytes,
-                        nullable: false,
-                    }),
-                    len: None,
-                },
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::List {
+                eltype: Box::new(NullableColType::required(ColType::Bytes)),
+                len: None,
+            }),
             default_gen: None,
         }],
     }
@@ -1139,7 +1130,7 @@ mod tests {
             let tokenizer = m.tokenizer.build(&m.filters).unwrap();
             let extractor = Expr::Binding {
                 var: Symbol::new("v", SourceSpan(0, 0)),
-                tuple_pos: Some(1),
+                tuple_pos: BindingPos::Resolved(1),
             };
             let perms = m.get_hash_perms().unwrap();
             for (k, text) in &rows {
@@ -1183,10 +1174,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1284,7 +1272,7 @@ mod tests {
         // The compiled extractor: project the text column (position 1).
         let extractor = Expr::Binding {
             var: Symbol::new("v", SourceSpan(0, 0)),
-            tuple_pos: Some(1),
+            tuple_pos: BindingPos::Resolved(1),
         };
         let perms = manifest.get_hash_perms().unwrap();
         for (k, text) in rows {

@@ -146,7 +146,7 @@ use itertools::Itertools;
 use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::program::{DeltaAxis, MagicSymbol, ValidityClause};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -1029,10 +1029,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }
@@ -1970,7 +1967,7 @@ mod tests {
             args: Box::new([
                 Expr::Binding {
                     var: Symbol::new("c0", Default::default()),
-                    tuple_pos: Some(0),
+                    tuple_pos: BindingPos::Resolved(0),
                 },
                 Expr::Const {
                     val: DataValue::from(0),

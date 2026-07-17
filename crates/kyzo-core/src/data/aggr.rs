@@ -333,6 +333,8 @@ impl PartialEq for Aggregation {
     }
 }
 
+impl Eq for Aggregation {}
+
 impl Debug for Aggregation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Aggr<{}>", self.name)

@@ -1800,10 +1800,9 @@ impl<T: WriteTx> SessionTx<T> {
         let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());
         keys.push(crate::data::relation::ColumnDef {
             name: SmartString::from(crate::runtime::relation::TEMPORAL_POSTING_LEADING_COLUMN),
-            typing: crate::data::relation::NullableColType {
-                coltype: crate::data::relation::ColType::Validity,
-                nullable: false,
-            },
+            typing: crate::data::relation::NullableColType::required(
+                crate::data::relation::ColType::Validity,
+            ),
             default_gen: None,
         });
         keys.extend(base.metadata.keys.iter().cloned());
@@ -2271,10 +2270,7 @@ mod temporal_index_tests {
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
             name: name.into(),
-            typing: NullableColType {
-                coltype: ColType::Int,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Int),
             default_gen: None,
         }
     }

@@ -30,6 +30,7 @@ use super::*;
 
 use proptest::prelude::*;
 
+use crate::data::expr::BindingPos;
 use crate::data::functions::{OP_GE, OP_LT, OP_MOD};
 use crate::data::program::InputRelationHandle;
 use crate::data::symb::Symbol;
@@ -45,10 +46,7 @@ use crate::data::value::data_value_any;
 fn col(name: &str, coltype: ColType) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype,
-            nullable: false,
-        },
+        typing: NullableColType::required(coltype),
         default_gen: None,
     }
 }
@@ -240,7 +238,7 @@ impl FilterSpec {
         let k = Symbol::new("k", span);
         let binding = Expr::Binding {
             var: k,
-            tuple_pos: Some(0),
+            tuple_pos: BindingPos::Resolved(0),
         };
         match *self {
             FilterSpec::LessThan { threshold } => Expr::Apply {

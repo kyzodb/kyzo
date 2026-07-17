@@ -58,9 +58,9 @@ use smartstring::SmartString;
 
 use crate::data::aggr::parse_aggr;
 use crate::data::program::{
-    InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
-    MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes, StratifiedMagicProgram,
-    ValidityClause,
+    HeadAggrSlot, InputRelationHandle, MagicAtom, MagicInlineRule, MagicProgram,
+    MagicRelationApplyAtom, MagicRuleApplyAtom, MagicRulesOrFixed, MagicSymbol, StoreLifetimes,
+    StratifiedMagicProgram, ValidityClause,
 };
 use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::data::span::SourceSpan;
@@ -110,10 +110,7 @@ fn generous_budget() -> Budget {
 fn col(name: &str) -> ColumnDef {
     ColumnDef {
         name: SmartString::from(name),
-        typing: NullableColType {
-            coltype: ColType::Any,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Any),
         default_gen: None,
     }
 }
@@ -148,12 +145,12 @@ fn rel_atom_asof(name: &str, args: &[Symbol], as_of: AsOf) -> MagicAtom {
         span: sp(),
     })
 }
-type HeadAggr = Option<(crate::data::aggr::Aggregation, Vec<DataValue>)>;
+type HeadAggr = HeadAggrSlot;
 
 fn plain_rule(head: &[Symbol], body: Vec<MagicAtom>) -> MagicInlineRule {
     MagicInlineRule {
         head: head.to_vec(),
-        aggr: vec![None; head.len()],
+        aggr: (0..head.len()).map(|_| HeadAggrSlot::Plain).collect(),
         body,
     }
 }
@@ -378,7 +375,13 @@ fn aggr_program() -> StratifiedMagicProgram {
             muggle("mincost"),
             vec![aggr_rule(
                 &[x.clone(), y.clone()],
-                vec![None, Some((min, vec![]))],
+                vec![
+                    HeadAggrSlot::Plain,
+                    HeadAggrSlot::Aggregated {
+                        aggr: min,
+                        args: vec![],
+                    },
+                ],
                 vec![rel_atom("cost", &[x.clone(), y.clone()])],
             )],
         )],

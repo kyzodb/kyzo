@@ -566,7 +566,7 @@ fn write_eos(out: &mut Vec<u8>) {
 fn build_field<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     name: &str,
-    nullable: bool,
+    nullability: ArrowNullability,
     arrow_type: u8,
 ) -> WIPOffset<UOffsetT> {
     let type_offset: WIPOffset<UOffsetT> = match arrow_type {
@@ -591,7 +591,7 @@ fn build_field<'a>(
     let name_offset = fbb.create_string(name);
     let field_start = fbb.start_table();
     fbb.push_slot_always(4, name_offset); // name
-    fbb.push_slot_always::<bool>(6, nullable); // nullable
+    fbb.push_slot_always::<bool>(6, nullability.is_optional()); // nullable
     fbb.push_slot_always::<u8>(8, arrow_type); // type_type
     fbb.push_slot_always(10, type_offset); // type_
     // slots 12 (dictionary), 14 (children), 16 (custom_metadata) omitted —
@@ -605,12 +605,7 @@ fn write_schema_message(fields: &[(&str, &PlannedColumn)]) -> Vec<u8> {
     let field_offsets: Vec<WIPOffset<UOffsetT>> = fields
         .iter()
         .map(|(name, col)| {
-            build_field(
-                &mut fbb,
-                name,
-                col.nullability.is_optional(),
-                col.arrow_type,
-            )
+            build_field(&mut fbb, name, col.nullability, col.arrow_type)
         })
         .collect();
     fbb.start_vector::<UOffsetT>(field_offsets.len());

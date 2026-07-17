@@ -390,10 +390,7 @@ pub(crate) struct SpatialIndexManifest {
 pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRelationMetadata {
     let mut keys = vec![ColumnDef {
         name: SmartString::from("curve"),
-        typing: NullableColType {
-            coltype: ColType::Bytes,
-            nullable: false,
-        },
+        typing: NullableColType::required(ColType::Bytes),
         default_gen: None,
     }];
     for k in base.keys.iter() {
@@ -403,10 +400,7 @@ pub(crate) fn spatial_index_metadata(base: &StoredRelationMetadata) -> StoredRel
             default_gen: None,
         });
     }
-    let coord = || NullableColType {
-        coltype: ColType::Float,
-        nullable: false,
-    };
+    let coord = || NullableColType::required(ColType::Float);
     let non_keys = vec![
         ColumnDef {
             name: SmartString::from("lat"),
@@ -1023,10 +1017,7 @@ mod tests {
     fn col(name: &str, coltype: ColType) -> ColumnDef {
         ColumnDef {
             name: SmartString::from(name),
-            typing: NullableColType {
-                coltype,
-                nullable: false,
-            },
+            typing: NullableColType::required(coltype),
             default_gen: None,
         }
     }

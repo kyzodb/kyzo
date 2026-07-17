@@ -820,10 +820,7 @@ mod tests {
     fn col(name: &str) -> ColumnDef {
         ColumnDef {
             name: name.into(),
-            typing: NullableColType {
-                coltype: ColType::Any,
-                nullable: false,
-            },
+            typing: NullableColType::required(ColType::Any),
             default_gen: None,
         }
     }

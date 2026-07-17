@@ -448,8 +448,8 @@ impl<S: Storage> Db<S> {
 mod tests {
     use super::*;
     use crate::data::program::{
-        MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom, MagicRulesOrFixed,
-        MagicSymbol, StratifiedMagicProgram,
+        HeadAggrSlot, MagicAtom, MagicInlineRule, MagicProgram, MagicRelationApplyAtom,
+        MagicRulesOrFixed, MagicSymbol, StratifiedMagicProgram,
     };
     use crate::data::value::{DataValue, Num};
     use crate::storage::fjall::new_fjall_storage;
@@ -478,7 +478,7 @@ mod tests {
         }
     }
     fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
-        let aggr = vec![None; head.len()];
+        let aggr = (0..head.len()).map(|_| HeadAggrSlot::Plain).collect();
         MagicInlineRule {
             head: head.into_iter().map(sym).collect(),
             aggr,

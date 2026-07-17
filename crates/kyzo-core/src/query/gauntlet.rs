@@ -80,7 +80,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::data::program::MagicSymbol;
+use crate::data::program::{HeadAggrSlot, MagicSymbol};
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::{CancelFlag, NamedRows};
@@ -204,8 +204,8 @@ fn rule_text(program: &Program, rule: &Rule) -> String {
         .map(|(t, a)| {
             let base = term_text(t);
             match a {
-                Some((aggr, _args)) => format!("{}({base})", aggr.name),
-                None => base,
+                HeadAggrSlot::Aggregated { aggr, .. } => format!("{}({base})", aggr.name),
+                HeadAggrSlot::Plain => base,
             }
         })
         .collect();

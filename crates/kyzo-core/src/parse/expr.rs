@@ -38,7 +38,7 @@ use pest::pratt_parser::{Op, PrattParser};
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::expr::{Expr, LazyOp, get_op};
+use crate::data::expr::{BindingPos, Expr, LazyOp, get_op};
 use crate::data::functions::{
     OP_ADD, OP_CONCAT, OP_DIV, OP_EQ, OP_GE, OP_GT, OP_JSON_OBJECT, OP_LE, OP_LIST, OP_LT,
     OP_MAYBE_GET, OP_MINUS, OP_MOD, OP_MUL, OP_NEGATE, OP_NEQ, OP_POW, OP_SUB,
@@ -245,7 +245,7 @@ fn build_term(
     Ok(match op {
         Rule::var => Expr::Binding {
             var: Symbol::new(pair.as_str(), pair.extract_span()),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         },
         Rule::param => {
             #[derive(Error, Diagnostic, Debug)]

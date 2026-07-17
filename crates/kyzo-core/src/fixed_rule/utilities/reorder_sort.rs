@@ -23,7 +23,7 @@ use itertools::Itertools;
 use miette::{Result, bail};
 use smartstring::{LazyCompact, SmartString};
 
-use crate::data::expr::Expr;
+use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::OP_LIST;
 use crate::data::program::WrongFixedRuleOptionError;
 use crate::data::span::SourceSpan;
@@ -177,7 +177,7 @@ mod tests {
     fn binding(name: &'static str) -> Expr {
         Expr::Binding {
             var: Symbol::new(name, SourceSpan::default()),
-            tuple_pos: None,
+            tuple_pos: BindingPos::Unresolved,
         }
     }
 

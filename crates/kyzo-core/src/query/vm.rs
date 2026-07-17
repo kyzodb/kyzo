@@ -37,7 +37,7 @@
 
 use miette::Result;
 
-use crate::data::expr::{Decision, Expr};
+use crate::data::expr::{BindingPos, Decision, Expr};
 use crate::data::value::DataValue;
 use crate::query::batch::{ColumnBatch, ErrorMin, Selection};
 
@@ -129,11 +129,11 @@ fn eval_node(expr: &Expr, sel: &Selection, state: &mut BatchEval<'_>) -> Result<
     let node = state.node_id();
     match expr {
         Expr::Binding { var, tuple_pos, .. } => match tuple_pos {
-            None => {
+            BindingPos::Unresolved => {
                 use crate::data::expr::UnboundVariableError;
                 Err(UnboundVariableError(var.name.to_string(), var.span).into())
             }
-            Some(i) => {
+            BindingPos::Resolved(i) => {
                 if *i >= state.batch.width() {
                     use crate::data::expr::TupleTooShortError;
                     return Err(TupleTooShortError(
@@ -327,7 +327,7 @@ mod tests {
     fn binding(pos: usize) -> Expr {
         Expr::Binding {
             var: crate::data::symb::Symbol::new(format!("c{pos}"), Default::default()),
-            tuple_pos: Some(pos),
+            tuple_pos: BindingPos::Resolved(pos),
         }
     }
     fn apply(op: &'static crate::data::expr::Op, args: Vec<Expr>) -> Expr {
@@ -462,7 +462,7 @@ mod tests {
                 },
                 1 | 2 => Expr::Binding {
                     var: crate::data::symb::Symbol::new("c", Default::default()),
-                    tuple_pos: Some((next(rng) % 2) as usize),
+                    tuple_pos: BindingPos::Resolved((next(rng) % 2) as usize),
                 },
                 3 => Expr::Apply {
                     op: if next(rng).is_multiple_of(2) {

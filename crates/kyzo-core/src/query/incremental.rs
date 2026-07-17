@@ -73,6 +73,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::{Error, Result};
 
 use crate::data::aggr::{Aggregation, NormalAggr};
+use crate::data::program::HeadAggrSlot;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
@@ -99,11 +100,11 @@ impl Literal {
     }
 }
 
-/// One head position's aggregation, if any — the REAL landed
+/// One head position's aggregation slot — the REAL landed
 /// [`Aggregation`] from `data/aggr.rs`, the same type `laws::HeadAggr`
 /// wraps: both tiers fold through exactly the code users get, never a
 /// second hand-rolled implementation of "sum" or "min".
-pub(crate) type HeadAggr = Option<(Aggregation, Vec<DataValue>)>;
+pub(crate) type HeadAggr = HeadAggrSlot;
 
 /// One derivation rule: `head_rel(head_args) :- body`. `aggr` is always
 /// the same length as `head_args`; all-`None` marks an ordinary
@@ -556,8 +557,8 @@ fn substitute(v: &Symbol, subst: &BTreeMap<Symbol, DataValue>) -> Term {
 
 /// Translate one magic-tier rule (for the head `head_sym`) into this
 /// module's [`Rule`]. `MagicInlineRule::aggr` is already exactly this
-/// module's `HeadAggr` shape (`Option<(Aggregation, Vec<DataValue>)>`) —
-/// carried straight through, not re-derived.
+/// module's `HeadAggr` shape ([`HeadAggrSlot`]) — carried straight through,
+/// not re-derived.
 fn translate_rule(
     head_sym: &MagicSymbol,
     rule: &MagicInlineRule,
@@ -739,13 +740,13 @@ fn eval_aggregating_head_incremental(
     let key_positions: Vec<usize> = signature
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.is_none())
+        .filter(|(_, a)| !a.is_aggregated())
         .map(|(i, _)| i)
         .collect();
     let val_positions: Vec<(usize, &Aggregation, &[DataValue])> = signature
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| a.as_ref().map(|(aggr, args)| (i, aggr, args.as_slice())))
+        .filter_map(|(i, a)| a.as_aggregated().map(|(aggr, args)| (i, aggr, args)))
         .collect();
 
     let old_by_key: BTreeMap<Tuple, Tuple> = old_rows
@@ -881,7 +882,7 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(Option::is_some));
+            let has_aggr = rules.iter().any(|r| r.aggr.iter().any(|a| a.is_aggregated()));
             let delta = if has_aggr {
                 eval_aggregating_head_incremental(
                     &rules,
@@ -961,7 +962,9 @@ mod tests {
         }
     }
     fn rule(head_rel: &str, head_args: Vec<Term>, body: Vec<Literal>) -> Rule {
-        let aggr = vec![None; head_args.len()];
+        let aggr = (0..head_args.len())
+            .map(|_| HeadAggrSlot::Plain)
+            .collect();
         Rule {
             head_rel: sym(head_rel),
             head_args,
@@ -1400,7 +1403,7 @@ mod tests {
         })
     }
     fn magic_inline(head: Vec<&str>, body: Vec<MagicAtom>) -> MagicInlineRule {
-        let aggr = vec![None; head.len()];
+        let aggr = (0..head.len()).map(|_| HeadAggrSlot::Plain).collect();
         MagicInlineRule {
             head: head.into_iter().map(sym).collect(),
             aggr,
@@ -1495,13 +1498,19 @@ mod tests {
     fn translate_carries_aggregation_through() {
         let mut inline = magic_inline(vec!["X", "Y"], vec![rel_atom("p", vec!["X", "Y"], false)]);
         let sum = crate::data::aggr::parse_aggr("sum").expect("real aggregation exists");
-        inline.aggr = vec![None, Some((sum, vec![]))];
+        inline.aggr = vec![
+            HeadAggrSlot::Plain,
+            HeadAggrSlot::Aggregated {
+                aggr: sum,
+                args: vec![],
+            },
+        ];
         let magic = one_stratum_program(vec![("?", vec![inline])]);
         let program = translate(magic).expect("translation succeeds");
         let rule = &program.rules[0];
         assert_eq!(rule.aggr.len(), 2);
-        assert!(rule.aggr[0].is_none());
-        assert_eq!(rule.aggr[1].as_ref().unwrap().0, sum);
+        assert!(!rule.aggr[0].is_aggregated());
+        assert_eq!(rule.aggr[1].as_aggregated().unwrap().0, &sum);
     }
 
     #[test]
