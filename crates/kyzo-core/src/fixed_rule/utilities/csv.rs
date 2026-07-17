@@ -7,20 +7,19 @@
  */
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0). The `file://` path is fully ported (the `csv` crate is pure
- * Rust: csv-core/itoa/ryu/serde, no C toolchain). SEAM(network): the
- * original fetched any non-`file://` URL over HTTP via `minreq` behind
- * the `requests` feature; whether a pure embedded engine should carry a
- * network stack (TLS roots and all) is a product decision for the
- * maintainer, so no network dependency is added and the URL arm refuses
- * with a typed error naming the decision — DECISION(maintainer): enable
- * HTTP(S) fetching for CsvReader/JsonReader (re-adding a minreq-class
- * dependency behind a feature), or keep the engine offline. The two
- * unwraps on the `types` option after coercion are annotated as
- * structural (`coerce` to `[String]` proved the shape); the type-mismatch
- * `bail!`s gain the option's span via `WrongFixedRuleOptionError` where
- * they were bare strings. Output rows flow through the arity-checked
- * writer.
+ * (MPL-2.0). Calculation rules do not open disk or fetch network: the host
+ * loads bytes and passes them via the `content` option; `file://` URLs refuse
+ * with [`LocalFileFetchUnavailable`], non-file URLs with
+ * [`UrlFetchUnavailable`]. SEAM(network): the original fetched any non-`file://`
+ * URL over HTTP via `minreq` behind the `requests` feature; whether a pure
+ * embedded engine should carry a network stack (TLS roots and all) is a
+ * product decision for the maintainer, so no network dependency is added —
+ * DECISION(maintainer): enable HTTP(S) fetching for CsvReader/JsonReader
+ * (re-adding a minreq-class dependency behind a feature), or keep the engine
+ * offline. The two unwraps on the `types` option after coercion are annotated
+ * as structural (`coerce` to `[String]` proved the shape); the type-mismatch
+ * `bail!`s gain the option's span via `WrongFixedRuleOptionError` where they
+ * were bare strings. Output rows flow through the arity-checked writer.
  */
 
 //! `CsvReader`: reads a delimited file into a relation, coercing each
@@ -40,7 +39,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, TERMINAL_VALIDITY};
-use crate::fixed_rule::utilities::jlines::UrlFetchUnavailable;
+use crate::fixed_rule::utilities::jlines::{LocalFileFetchUnavailable, UrlFetchUnavailable};
 use crate::fixed_rule::{
     CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
     FixedRulePayload,
@@ -174,30 +173,36 @@ impl FixedRule for CsvReader {
             Ok(())
         };
 
-        let url = payload.string_option("url", None)?;
-        match url.strip_prefix("file://") {
-            Some(file_path) => {
-                let mut rdr = rdr_builder.from_path(file_path).into_diagnostic()?;
-                // The record loop is unbounded in the file's row count, so it
-                // must be interruptible. Poll every 1024 rows — a stride, not
-                // per row, since parsing one CSV record is cheap and the flag
-                // read would otherwise dominate; a cancel still lands within a
-                // bounded number of rows. `check` only reads the flag, so this
-                // never changes the rows emitted when the flag is unset.
-                for (i, record) in rdr.records().enumerate() {
-                    if i % 1024 == 0 {
-                        cancel.check()?;
-                    }
-                    let record = record.into_diagnostic()?;
-                    process_row(record)?;
+        let content = payload.string_option("content", Some(""))?;
+        if !content.is_empty() {
+            let mut rdr = rdr_builder.from_reader(content.as_bytes());
+            // The record loop is unbounded in the payload's row count, so it
+            // must be interruptible. Poll every 1024 rows — a stride, not
+            // per row, since parsing one CSV record is cheap and the flag
+            // read would otherwise dominate; a cancel still lands within a
+            // bounded number of rows. `check` only reads the flag, so this
+            // never changes the rows emitted when the flag is unset.
+            for (i, record) in rdr.records().enumerate() {
+                if i % 1024 == 0 {
+                    cancel.check()?;
                 }
+                let record = record.into_diagnostic()?;
+                process_row(record)?;
             }
-            // SEAM(network): see the header. The original fetched here via
-            // minreq behind the `requests` feature.
-            None => bail!(UrlFetchUnavailable {
-                url: url.to_string(),
-                span: payload.span(),
-            }),
+        } else {
+            let url = payload.string_option("url", None)?;
+            match url.strip_prefix("file://") {
+                Some(file_path) => bail!(LocalFileFetchUnavailable {
+                    path: file_path.to_string(),
+                    span: payload.span(),
+                }),
+                // SEAM(network): see the header. The original fetched here via
+                // minreq behind the `requests` feature.
+                None => bail!(UrlFetchUnavailable {
+                    url: url.to_string(),
+                    span: payload.span(),
+                }),
+            }
         }
         Ok(())
     }
@@ -247,14 +252,13 @@ impl FixedRule for CsvReader {
 mod tests {
     use super::*;
     use crate::fixed_rule::tests_support::run_fixed_rule;
-    use std::io::Write;
 
-    fn options(url: &str) -> BTreeMap<SmartString<LazyCompact>, Expr> {
+    fn options(content: &str) -> BTreeMap<SmartString<LazyCompact>, Expr> {
         BTreeMap::from([
             (
-                SmartString::from("url"),
+                SmartString::from("content"),
                 Expr::Const {
-                    val: DataValue::from(url),
+                    val: DataValue::from(content),
                     span: SourceSpan::default(),
                 },
             ),
@@ -279,15 +283,13 @@ mod tests {
         ])
     }
 
-    /// The local-file path reads and coerces per `types`, including a
+    /// Host-admitted content reads and coerces per `types`, including a
     /// nullable column absorbing a bad cell.
     #[test]
-    fn reads_local_file_with_typing() {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        writeln!(f, "a,1,1.5").unwrap();
-        writeln!(f, "b,2,oops").unwrap();
-        let url = format!("file://{}", f.path().display());
-        let got = run_fixed_rule(&CsvReader, vec![], options(&url), CancelFlag::default()).unwrap();
+    fn reads_content_with_typing() {
+        let content = "a,1,1.5\nb,2,oops";
+        let got =
+            run_fixed_rule(&CsvReader, vec![], options(content), CancelFlag::default()).unwrap();
         assert_eq!(got.len(), 2);
         let want: Tuple = Tuple::from_vec(vec![
             DataValue::from("a"),
@@ -304,12 +306,42 @@ mod tests {
     /// poll changes nothing when the flag is clear.
     #[test]
     fn honors_cancel() {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        writeln!(f, "a,1,1.5").unwrap();
-        let url = format!("file://{}", f.path().display());
+        let content = "a,1,1.5";
         let (auth, flag) = CancelAuthority::arm();
         let _ = auth.cancel();
-        assert!(run_fixed_rule(&CsvReader, vec![], options(&url), flag).is_err());
+        assert!(run_fixed_rule(&CsvReader, vec![], options(content), flag).is_err());
+    }
+
+    /// The `file://` arm is the filesystem seam: typed refusal, no open.
+    #[test]
+    fn file_fetch_refuses_typed() {
+        let err = run_fixed_rule(
+            &CsvReader,
+            vec![],
+            BTreeMap::from([
+                (
+                    SmartString::from("url"),
+                    Expr::Const {
+                        val: DataValue::from("file:///tmp/data.csv"),
+                        span: SourceSpan::default(),
+                    },
+                ),
+                (
+                    SmartString::from("types"),
+                    Expr::Const {
+                        val: DataValue::List(vec![
+                            DataValue::from("String"),
+                            DataValue::from("Int"),
+                            DataValue::from("Float?"),
+                        ]),
+                        span: SourceSpan::default(),
+                    },
+                ),
+            ]),
+            CancelFlag::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("filesystem"), "{err}");
     }
 
     /// The URL arm is the network seam: typed refusal, no fetch.
@@ -318,7 +350,26 @@ mod tests {
         let err = run_fixed_rule(
             &CsvReader,
             vec![],
-            options("https://example.com/data.csv"),
+            BTreeMap::from([
+                (
+                    SmartString::from("url"),
+                    Expr::Const {
+                        val: DataValue::from("https://example.com/data.csv"),
+                        span: SourceSpan::default(),
+                    },
+                ),
+                (
+                    SmartString::from("types"),
+                    Expr::Const {
+                        val: DataValue::List(vec![
+                            DataValue::from("String"),
+                            DataValue::from("Int"),
+                            DataValue::from("Float?"),
+                        ]),
+                        span: SourceSpan::default(),
+                    },
+                ),
+            ]),
             CancelFlag::default(),
         )
         .unwrap_err();
