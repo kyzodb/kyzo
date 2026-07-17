@@ -183,8 +183,8 @@ pub(crate) trait StoredRelationSchemaSource {
 #[error("stored relation '{0}' does not have field '{1}'")]
 #[diagnostic(code(eval::named_field_not_found))]
 pub(crate) struct NamedFieldNotFound(
-    pub(crate) String,
-    pub(crate) String,
+    pub(crate) Symbol,
+    pub(crate) Symbol,
     #[label] pub(crate) SourceSpan,
 );
 
@@ -548,7 +548,11 @@ fn adorn_fixed_rule_apply(
                 for k in bindings.keys() {
                     ensure!(
                         fields.contains(&k),
-                        NamedFieldNotFound(name.to_string(), k.to_string(), *span)
+                        NamedFieldNotFound(
+                            name.clone(),
+                            Symbol::new(k.clone(), *span),
+                            *span,
+                        )
                     );
                 }
                 let new_bindings = metadata

@@ -479,9 +479,9 @@ impl<'a> FixedRulePayload<'a> {
             None => match default {
                 Some(ex) => Ok(ex),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -494,18 +494,18 @@ impl<'a> FixedRulePayload<'a> {
             Some(ex) => match ex.clone().eval_to_const()? {
                 DataValue::Str(s) => Ok(s),
                 data_value_any!() => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, ex.span()),
                     span: ex.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                     help: "a string is required".to_string(),
                 }
                 .into()),
             },
             None => match default {
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
                 Some(s) => Ok(s.to_string()),
@@ -517,9 +517,9 @@ impl<'a> FixedRulePayload<'a> {
     pub fn option_span(&self, name: &str) -> Result<SourceSpan> {
         match self.manifest.options.get(name) {
             None => Err(FixedRuleOptionNotFoundError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.manifest.span),
                 span: self.manifest.span,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
             }
             .into()),
             Some(v) => Ok(v.span()),
@@ -532,16 +532,16 @@ impl<'a> FixedRulePayload<'a> {
                 Ok(DataValue::Num(n)) => match n.as_int() {
                     Some(i) => Ok(i),
                     None => Err(FixedRuleOptionNotFoundError {
-                        name: name.to_string(),
+                        name: Symbol::new(name, self.manifest.span),
                         span: self.manifest.span,
-                        rule_name: self.manifest.fixed_handle.name.to_string(),
+                        rule_name: self.manifest.fixed_handle.name.clone(),
                     }
                     .into()),
                 },
                 _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, v.span()),
                     span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                     help: "an integer is required".to_string(),
                 }
                 .into()),
@@ -549,9 +549,9 @@ impl<'a> FixedRulePayload<'a> {
             None => match default {
                 Some(v) => Ok(v),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -563,18 +563,18 @@ impl<'a> FixedRulePayload<'a> {
         ensure!(
             i > 0,
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
                 help: "a positive integer is required".to_string(),
             }
         );
         let span = self.option_span(name).unwrap_or(self.manifest.span);
         usize::try_from(i).map_err(|_| {
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, span),
                 span,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
                 help: "a positive integer fitting usize is required".to_string(),
             }
             .into()
@@ -586,18 +586,18 @@ impl<'a> FixedRulePayload<'a> {
         ensure!(
             i >= 0,
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
                 help: "a non-negative integer is required".to_string(),
             }
         );
         let span = self.option_span(name).unwrap_or(self.manifest.span);
         usize::try_from(i).map_err(|_| {
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, span),
                 span,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
                 help: "a non-negative integer fitting usize is required".to_string(),
             }
             .into()
@@ -612,9 +612,9 @@ impl<'a> FixedRulePayload<'a> {
                     Ok(f)
                 }
                 _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, v.span()),
                     span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                     help: "a floating number is required".to_string(),
                 }
                 .into()),
@@ -622,9 +622,9 @@ impl<'a> FixedRulePayload<'a> {
             None => match default {
                 Some(v) => Ok(v),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -636,9 +636,9 @@ impl<'a> FixedRulePayload<'a> {
         ensure!(
             (0. ..=1.).contains(&f),
             WrongFixedRuleOptionError {
-                name: name.to_string(),
+                name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
-                rule_name: self.manifest.fixed_handle.name.to_string(),
+                rule_name: self.manifest.fixed_handle.name.clone(),
                 help: "a number between 0. and 1. is required".to_string(),
             }
         );
@@ -650,9 +650,9 @@ impl<'a> FixedRulePayload<'a> {
             Some(v) => match v.clone().eval_to_const() {
                 Ok(DataValue::Bool(b)) => Ok(b),
                 _ => Err(WrongFixedRuleOptionError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, v.span()),
                     span: v.span(),
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                     help: "a boolean value is required".to_string(),
                 }
                 .into()),
@@ -660,9 +660,9 @@ impl<'a> FixedRulePayload<'a> {
             None => match default {
                 Some(v) => Ok(v),
                 None => Err(FixedRuleOptionNotFoundError {
-                    name: name.to_string(),
+                    name: Symbol::new(name, self.manifest.span),
                     span: self.manifest.span,
-                    rule_name: self.manifest.fixed_handle.name.to_string(),
+                    rule_name: self.manifest.fixed_handle.name.clone(),
                 }
                 .into()),
             },
@@ -1508,7 +1508,7 @@ pub(crate) mod tests_support {
     impl HarnessStoredClosed {
         fn refuse<T>(&self, name: &Symbol) -> Result<T> {
             Err(HarnessStoredClosedError {
-                name: name.to_string(),
+                name: Symbol::new(name, name.span),
                 span: name.span,
             }
             .into())

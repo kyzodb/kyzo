@@ -262,7 +262,7 @@ pub(crate) struct PlanInvariantError(pub(crate) &'static str);
 #[diagnostic(code(query::stored_row_too_short))]
 #[diagnostic(help("The stored value is truncated or corrupt. Please report it."))]
 pub(crate) struct StoredRowTooShortError(
-    pub(crate) String,
+    pub(crate) Symbol,
     pub(crate) usize,
     pub(crate) usize,
     #[label] pub(crate) SourceSpan,

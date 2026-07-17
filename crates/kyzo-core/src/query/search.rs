@@ -139,8 +139,8 @@ pub(crate) struct LshSearch {
 #[error("relation '{0}' has no index named '{1}'")]
 #[diagnostic(code(query::search_index_not_found))]
 pub(crate) struct SearchIndexNotFound(
-    pub(crate) String,
-    pub(crate) String,
+    pub(crate) Symbol,
+    pub(crate) Symbol,
     #[label] pub(crate) SourceSpan,
 );
 
@@ -306,7 +306,11 @@ pub(crate) fn resolve_search(
         .iter()
         .find(|r| r.name == inp.index.name)
         .ok_or_else(|| {
-            SearchIndexNotFound(base.name.to_string(), inp.index.name.to_string(), span)
+            SearchIndexNotFound(
+                Symbol::new(base.name.clone(), span),
+                inp.index.clone(),
+                span,
+            )
         })?
         .clone();
     let idx = handle(&idx_ref.relation_name(&base.name))?;

@@ -207,7 +207,7 @@ impl NegJoin {
                             for (l, r) in lji.iter().zip(rji.iter()) {
                                 let found_val = found.get(*r).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        v.storage.name.to_string(),
+                                        Symbol::new(v.storage.name.clone(), v.span),
                                         *r,
                                         found.len(),
                                         v.span,
@@ -267,7 +267,7 @@ impl NegJoin {
                             for (l, r) in lji.iter().zip(rji.iter()) {
                                 let found_val = found.get(*r).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        v.storage.name.to_string(),
+                                        Symbol::new(v.storage.name.clone(), v.span),
                                         *r,
                                         found.len(),
                                         v.span,

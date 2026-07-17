@@ -61,9 +61,9 @@ impl FixedRule for CsvReader {
         ensure!(
             delimiter.len() == 1,
             WrongFixedRuleOptionError {
-                name: "delimiter".to_string(),
+                name: Symbol::new("delimiter", payload.span()),
                 span: payload.span(),
-                rule_name: "CsvReader".to_string(),
+                rule_name: Symbol::new("CsvReader", payload.span()),
                 help: "'delimiter' must be a single-byte string".to_string()
             }
         );
@@ -87,9 +87,9 @@ impl FixedRule for CsvReader {
                 .get_str()
                 .expect("INVARIANT(csv_types_list): coerce proved string elements");
             let typ = parse_type(type_str).map_err(|e| WrongFixedRuleOptionError {
-                name: "types".to_string(),
+                name: Symbol::new("types", payload.span()),
                 span: payload.span(),
-                rule_name: "CsvReader".to_string(),
+                rule_name: Symbol::new("CsvReader", payload.span()),
                 help: e.to_string(),
             })?;
             types.push(typ);
@@ -227,9 +227,9 @@ impl FixedRule for CsvReader {
         let columns = options
             .get("types")
             .ok_or_else(|| FixedRuleOptionNotFoundError {
-                name: "types".to_string(),
+                name: Symbol::new("types", span),
                 span,
-                rule_name: "CsvReader".to_string(),
+                rule_name: Symbol::new("CsvReader", span),
             })?;
         let columns = columns.clone().eval_to_const()?;
         if let Some(l) = columns.get_slice() {

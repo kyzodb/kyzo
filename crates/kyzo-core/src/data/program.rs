@@ -1940,20 +1940,20 @@ pub(crate) struct MagicFixedRuleApply {
 #[error("Cannot find a required named option '{name}' for '{rule_name}'")]
 #[diagnostic(code(fixed_rule::arg_not_found))]
 pub(crate) struct FixedRuleOptionNotFoundError {
-    pub(crate) name: String,
+    pub(crate) name: Symbol,
     #[label]
     pub(crate) span: SourceSpan,
-    pub(crate) rule_name: String,
+    pub(crate) rule_name: Symbol,
 }
 
 #[derive(Error, Diagnostic, Debug)]
 #[error("Wrong value for option '{name}' of '{rule_name}'")]
 #[diagnostic(code(fixed_rule::arg_wrong))]
 pub(crate) struct WrongFixedRuleOptionError {
-    pub(crate) name: String,
+    pub(crate) name: Symbol,
     #[label]
     pub(crate) span: SourceSpan,
-    pub(crate) rule_name: String,
+    pub(crate) rule_name: Symbol,
     #[help]
     pub(crate) help: String,
 }
@@ -1975,14 +1975,14 @@ impl MagicFixedRuleApply {
             idx: usize,
             #[label]
             span: SourceSpan,
-            rule_name: String,
+            rule_name: Symbol,
         }
 
         self.rule_args.get(idx).ok_or_else(|| {
             FixedRuleNotEnoughRelationError {
                 idx,
                 span: self.span,
-                rule_name: self.fixed_handle.name.to_string(),
+                rule_name: self.fixed_handle.name.clone(),
             }
             .into()
         })

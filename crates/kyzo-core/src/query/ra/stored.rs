@@ -205,7 +205,7 @@ impl StoredRA {
                             {
                                 let found_val = found.get(*rk).ok_or_else(|| {
                                     StoredRowTooShortError(
-                                        self.storage.name.to_string(),
+                                        Symbol::new(self.storage.name.clone(), self.span),
                                         *rk,
                                         found.len(),
                                         self.span,
@@ -241,7 +241,7 @@ impl StoredRA {
                                     {
                                         let found_val = found.get(*rk).ok_or_else(|| {
                                             StoredRowTooShortError(
-                                                self.storage.name.to_string(),
+                                                Symbol::new(self.storage.name.clone(), self.span),
                                                 *rk,
                                                 found.len(),
                                                 self.span,

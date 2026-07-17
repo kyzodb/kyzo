@@ -409,7 +409,11 @@ fn convert_named_field_relation(
         .collect();
     for k in args.keys() {
         if !fields.contains(k) {
-            bail!(NamedFieldNotFound(name.to_string(), k.to_string(), span));
+            bail!(NamedFieldNotFound(
+                name.clone(),
+                Symbol::new(k.clone(), span),
+                span
+            ));
         }
     }
     let mut new_args = vec![];

@@ -59,9 +59,9 @@ impl FixedRule for ReorderSort {
             Expr::Apply { op, args, .. } if *op == OP_LIST => args.to_vec(),
             Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
                 bail!(WrongFixedRuleOptionError {
-                    name: "out".to_string(),
+                    name: Symbol::new("out", payload.span()),
                     span: payload.span(),
-                    rule_name: payload.name().to_string(),
+                    rule_name: Symbol::new(payload.name(), payload.span()),
                     help: "This option must evaluate to a list".to_string()
                 })
             }

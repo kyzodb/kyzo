@@ -74,9 +74,9 @@ impl ConstantData<'_> {
 impl Constant {
     fn wrong_option(span: SourceSpan) -> WrongFixedRuleOptionError {
         WrongFixedRuleOptionError {
-            name: "data".to_string(),
+            name: Symbol::new("data", span),
             span,
-            rule_name: "Constant".to_string(),
+            rule_name: Symbol::new("Constant", span),
             help: "a list of lists is required".to_string(),
         }
     }
