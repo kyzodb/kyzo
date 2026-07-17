@@ -26,7 +26,8 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
+    backtrace_predecessor, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    NodeNotFoundError,
 };
 
 pub(crate) struct Bfs;
@@ -111,10 +112,7 @@ impl FixedRule for Bfs {
                 // INVARIANT(bfs_pred): `ending` was reached from `starting`,
                 // and every visited node except the start got a backtrace
                 // entry when it was discovered.
-                current = backtrace
-                    .get(&current)
-                    .expect("INVARIANT(bfs_pred): discovered node has predecessor")
-                    .clone();
+                current = backtrace_predecessor(&backtrace, &current, "bfs_pred")?;
             }
             route.push(starting.clone());
             route.reverse();

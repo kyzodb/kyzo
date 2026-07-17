@@ -31,8 +31,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::{
-    BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
-    FixedRulePayload, NodeNotFoundError,
+    backtrace_predecessor, BadExprValueError, CancelFlag, FixedRule, FixedRuleInputRelation,
+    FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
 
 pub(crate) struct ShortestPathAStar;
@@ -130,10 +130,7 @@ fn astar(
                 // INVARIANT(astar_pred): every non-start node popped from
                 // the open set was inserted into `back_trace` when first
                 // relaxed, so walking predecessors from the goal cannot miss.
-                let prev = back_trace
-                    .get(&current)
-                    .expect("INVARIANT(astar_pred): open-set node has predecessor")
-                    .clone();
+                let prev = backtrace_predecessor(&back_trace, &current, "astar_pred")?;
                 ret.push(current);
                 current = prev;
             }

@@ -67,8 +67,7 @@ pub(crate) fn checked_node_count(max_endpoint: Option<u32>) -> Result<u32> {
         Some(m) => {
             let count = m.checked_add(1);
             ensure!(count.is_some(), GraphTooLargeError);
-            // INVARIANT(node_count_add): ensure! proved checked_add succeeded.
-            Ok(count.expect("INVARIANT(node_count_add): ensure! proved Some"))
+            Ok(count.ok_or(GraphTooLargeError)?)
         }
     }
 }

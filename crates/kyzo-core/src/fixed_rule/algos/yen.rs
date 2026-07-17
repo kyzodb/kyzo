@@ -44,7 +44,8 @@ use crate::fixed_rule::algos::shortest_path_dijkstra::dijkstra;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
 use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
+    FixedRulePayload,
 };
 
 pub(crate) struct KShortestPathYen;
@@ -156,7 +157,7 @@ fn k_shortest_path_yen(
         // INVARIANT(yen_k_nonempty): `k_shortest` starts with one entry and only grows.
         let (_, prev_path) = k_shortest
             .last()
-            .expect("INVARIANT(yen_k_nonempty): at least the seed path");
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("yen_k_nonempty"))?;
         for i in 0..prev_path.len() - 1 {
             // Polled at the top of the spur-search unit of work: one
             // iteration runs a full Dijkstra, so a raised flag must refuse
@@ -211,7 +212,9 @@ fn k_shortest_path_yen(
                     }
                     // INVARIANT(yen_root_edge): (seg_from, seg_to) is a
                     // consecutive pair on a path Dijkstra just returned.
-                    total_cost += best.expect("INVARIANT(yen_root_edge): root segment exists");
+                    total_cost += best.ok_or_else(|| {
+                        GraphAlgorithmInvariantError::refuse("yen_root_edge")
+                    })?;
                 }
                 let mut total_path = root_path.to_vec();
                 total_path.pop();
@@ -228,7 +231,7 @@ fn k_shortest_path_yen(
         // INVARIANT(yen_candidates): just checked non-empty above.
         let shortest = candidates
             .pop()
-            .expect("INVARIANT(yen_candidates): non-empty after check");
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("yen_candidates"))?;
         let shortest_dist = shortest.0;
         if shortest_dist.is_finite() {
             k_shortest.push(shortest);

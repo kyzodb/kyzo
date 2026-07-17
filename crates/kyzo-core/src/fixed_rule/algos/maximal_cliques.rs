@@ -58,7 +58,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    GraphAlgorithmInvariantError, CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput,
+    FixedRulePayload,
 };
 
 /// The default ceiling on enumerated maximal cliques when the caller gives no
@@ -216,11 +217,11 @@ fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
         let d = buckets
             .iter()
             .position(|b| !b.is_empty())
-            .expect("INVARIANT(degen_bucket): remaining vertex has a degree bucket");
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("degen_bucket"))?;
         let v = *buckets[d]
             .iter()
             .next()
-            .expect("INVARIANT(degen_bucket): chosen bucket is non-empty");
+            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("degen_bucket_nonempty"))?;
         buckets[d].remove(&v);
         removed[v as usize] = true;
         order.push(v);
@@ -377,7 +378,7 @@ impl Enumeration<'_> {
                 idx: 0,
             });
         }
-        let pivot = choose_pivot(&p, &x, self.adj);
+        let pivot = choose_pivot(&p, &x, self.adj)?;
         let pivot_nbrs = &self.adj[pivot as usize];
         let cands: Vec<u32> = p
             .iter()
@@ -398,7 +399,7 @@ impl Enumeration<'_> {
 /// that `P \ N(pivot)` — the branch set — is as small as possible. Ties break
 /// by smallest id for determinism. Called only on a non-terminal frame, so
 /// `P ∪ X` is non-empty.
-fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> u32 {
+fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> Result<u32> {
     let mut best: Option<(usize, u32)> = None; // (coverage, id)
     for &u in p.iter().chain(x.iter()) {
         let coverage = count_intersection(p, &adj[u as usize]);
@@ -411,8 +412,8 @@ fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> u32 {
             }
         }
     }
-    // INVARIANT(clique_pivot): `p ∪ x` non-empty on a non-terminal frame.
-    best.expect("INVARIANT(clique_pivot): non-empty p∪x yields a pivot").1
+    best.map(|(_, u)| u)
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("clique_pivot"))
 }
 
 /// Sorted-set intersection of two ascending slices.

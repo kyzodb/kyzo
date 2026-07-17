@@ -84,7 +84,7 @@
 //! `allow(dead_code)` on `fixed_rule` in `lib.rs`; unused residual symbols
 //! warn rather than hide behind a blanket.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, LazyLock, OnceLock};
 
@@ -445,9 +445,8 @@ impl<'a> FixedRuleInputRelation<'a> {
 /// honesty note on [`GraphTooLargeError`].
 fn checked_node_id(interned_so_far: usize) -> Result<u32> {
     ensure!(interned_so_far < u32::MAX as usize, GraphTooLargeError);
-    Ok(u32::try_from(interned_so_far).expect(
-        "INVARIANT(node_id_fit): ensure! proved interned_so_far < u32::MAX",
-    ))
+    u32::try_from(interned_so_far)
+        .map_err(|_| GraphAlgorithmInvariantError::refuse("node_id_fit"))
 }
 
 impl<'a> FixedRulePayload<'a> {
@@ -1431,6 +1430,93 @@ pub(crate) struct NodeNotFoundError {
     pub(crate) missing: DataValue,
     #[label]
     pub(crate) span: SourceSpan,
+}
+
+/// Typed refusal when a graph algorithm's internal proof fails — corrupt
+/// graph state or a broken algorithm invariant, never a user input shape
+/// error (those are refused earlier at the input boundary).
+#[derive(Debug, Error, Diagnostic)]
+#[error("Graph algorithm invariant violated: {invariant}")]
+#[diagnostic(code(algo::graph_invariant_violation))]
+#[diagnostic(help(
+    "The fixed-rule graph algorithm reached an internal state its proofs \
+     rule out — likely corrupt graph data or a bug in the algorithm"
+))]
+pub(crate) struct GraphAlgorithmInvariantError {
+    invariant: &'static str,
+}
+
+impl GraphAlgorithmInvariantError {
+    pub(crate) fn refuse(invariant: &'static str) -> miette::Report {
+        Self { invariant }.into()
+    }
+}
+
+/// Refuse with [`GraphAlgorithmInvariantError`] at a named proof site.
+pub(crate) fn refuse_graph_invariant<T>(invariant: &'static str) -> Result<T> {
+    Err(GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// First column of a tuple the input boundary already proved non-empty.
+pub(crate) fn tuple_first_column(tuple: &Tuple) -> Result<&DataValue> {
+    tuple
+        .as_slice()
+        .first()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("tuple_first_column"))
+}
+
+/// First column of an owned tuple (consumes the head value).
+pub(crate) fn tuple_into_first_column(tuple: Tuple) -> Result<DataValue> {
+    tuple
+        .into_iter()
+        .next()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("tuple_first_column"))
+}
+
+/// Dense node id → interned value; `indices` has one entry per graph node.
+pub(crate) fn graph_node_value(indices: &[DataValue], node: u32) -> Result<&DataValue> {
+    indices
+        .get(node as usize)
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("graph_node_index"))
+}
+
+/// Backtrace predecessor for route reconstruction.
+pub(crate) fn backtrace_predecessor(
+    backtrace: &BTreeMap<DataValue, DataValue>,
+    current: &DataValue,
+    invariant: &'static str,
+) -> Result<DataValue> {
+    backtrace
+        .get(current)
+        .cloned()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// Predecessor in a dense `Option<u32>` table (Dijkstra path walk).
+pub(crate) fn path_predecessor(
+    back_pointers: &[Option<u32>],
+    current: u32,
+    invariant: &'static str,
+) -> Result<u32> {
+    back_pointers[current as usize]
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// Edmonds–Karp BFS parent on the augmenting path.
+pub(crate) fn ek_bfs_parent(
+    prev: &[Option<(u32, usize)>],
+    node: u32,
+    invariant: &'static str,
+) -> Result<(u32, usize)> {
+    prev[node as usize].ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
+}
+
+/// The sole element of a set whose length is already known to be 1.
+pub(crate) fn btree_set_only_element(set: &BTreeSet<u32>, invariant: &'static str) -> Result<u32> {
+    set.iter()
+        .copied()
+        .next()
+        .ok_or_else(|| GraphAlgorithmInvariantError::refuse(invariant))
 }
 
 #[derive(Error, Diagnostic, Debug)]

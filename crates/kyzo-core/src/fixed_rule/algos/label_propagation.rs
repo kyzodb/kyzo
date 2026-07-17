@@ -38,7 +38,9 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::rng::SeededRng;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    GraphAlgorithmInvariantError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct LabelPropagation;
 
@@ -108,9 +110,9 @@ fn label_propagation(
                 .collect_vec();
             // INVARIANT(label_candidates): `take_while` keeps at least the
             // first element (score equals `max_score`), so never empty.
-            let new_label = *candidate_labels.choose(&mut rng).expect(
-                "INVARIANT(label_candidates): non-empty after take_while",
-            );
+            let new_label = *candidate_labels
+                .choose(&mut rng)
+                .ok_or_else(|| GraphAlgorithmInvariantError::refuse("label_candidates"))?;
             if new_label != labels[*node as usize] {
                 changed = true;
                 labels[*node as usize] = new_label;

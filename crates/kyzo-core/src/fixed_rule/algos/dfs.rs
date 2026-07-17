@@ -27,7 +27,8 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
+    backtrace_predecessor, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    NodeNotFoundError,
 };
 
 pub(crate) struct Dfs;
@@ -113,10 +114,7 @@ impl FixedRule for Dfs {
                 route.push(current.clone());
                 // INVARIANT(dfs_pred): every discovered non-start node
                 // received a backtrace entry before it was pushed to visit.
-                current = backtrace
-                    .get(&current)
-                    .expect("INVARIANT(dfs_pred): discovered node has predecessor")
-                    .clone();
+                current = backtrace_predecessor(&backtrace, &current, "dfs_pred")?;
             }
             route.push(starting.clone());
             route.reverse();

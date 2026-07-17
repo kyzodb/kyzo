@@ -38,7 +38,8 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    backtrace_predecessor, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
+    FixedRuleOutput, FixedRulePayload,
 };
 
 // A test-only observable: how many nodes the inner BFS loop has dequeued.
@@ -77,27 +78,14 @@ impl FixedRule for ShortestPathBFS {
         cancel: CancelFlag,
     ) -> Result<()> {
         let edges = payload.get_input(0)?.ensure_min_len(2)?;
-        let starting_nodes: Vec<_> = payload
-            .get_input(1)?
-            .ensure_min_len(1)?
-            .iter()?
-            // INVARIANT(sp_bfs_col): `ensure_min_len(1)` proved a first column.
-            .map_ok(|n| {
-                n.into_iter()
-                    .next()
-                    .expect("INVARIANT(sp_bfs_col): ensure_min_len(1) proved a first column")
-            })
-            .try_collect()?;
-        let ending_nodes: BTreeSet<_> = payload
-            .get_input(2)?
-            .ensure_min_len(1)?
-            .iter()?
-            .map_ok(|n| {
-                n.into_iter()
-                    .next()
-                    .expect("INVARIANT(sp_bfs_col): ensure_min_len(1) proved a first column")
-            })
-            .try_collect()?;
+        let mut starting_nodes = Vec::new();
+        for tuple in payload.get_input(1)?.ensure_min_len(1)?.iter()? {
+            starting_nodes.push(tuple_into_first_column(tuple?)?);
+        }
+        let mut ending_nodes = BTreeSet::new();
+        for tuple in payload.get_input(2)?.ensure_min_len(1)?.iter()? {
+            ending_nodes.insert(tuple_into_first_column(tuple?)?);
+        }
 
         for starting_node in starting_nodes.iter() {
             let mut pending: BTreeSet<_> = ending_nodes.clone();
@@ -149,10 +137,7 @@ impl FixedRule for ShortestPathBFS {
                         // INVARIANT(sp_bfs_pred): `ending_node` has a
                         // backtrace entry (checked above), and so does every
                         // predecessor back to the start.
-                        current = backtrace
-                            .get(&current)
-                            .expect("INVARIANT(sp_bfs_pred): path node has predecessor")
-                            .clone();
+                        current = backtrace_predecessor(&backtrace, &current, "sp_bfs_pred")?;
                     }
                     route.push(starting_node.clone());
                     route.reverse();

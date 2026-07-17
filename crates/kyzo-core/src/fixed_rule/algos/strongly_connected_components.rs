@@ -41,7 +41,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    graph_node_value, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
+    FixedRuleOutput, FixedRulePayload, GraphAlgorithmInvariantError,
 };
 
 pub(crate) struct StronglyConnectedComponent {
@@ -70,9 +71,7 @@ impl FixedRule for StronglyConnectedComponent {
             for idx in cc {
                 // INVARIANT(scc_index): Tarjan only emits node ids the graph
                 // handed it, and `indices` has an entry per graph node.
-                let val = indices.get(*idx as usize).expect(
-                    "INVARIANT(scc_index): Tarjan id is in indices",
-                );
+                let val = graph_node_value(&indices, *idx)?.clone();
                 let tuple = vec![val.clone(), DataValue::from(grp_id as i64)];
                 out.put(Tuple::from_vec(tuple))?;
             }
@@ -89,9 +88,7 @@ impl FixedRule for StronglyConnectedComponent {
             for tuple in nodes.iter()? {
                 let tuple = tuple?;
                 // INVARIANT(scc_node_col): `ensure_min_len(1)` proved a first column.
-                let node = tuple.into_iter().next().expect(
-                    "INVARIANT(scc_node_col): ensure_min_len(1) proved a first column",
-                );
+                let node = tuple_into_first_column(tuple)?;
                 if !inv_indices.contains_key(&node) {
                     inv_indices.insert(node.clone(), u32::MAX);
                     let tuple = vec![node, DataValue::from(counter)];
@@ -176,11 +173,10 @@ impl TarjanSccG {
             // so the cursor walk is linear, not quadratic, in degree.
             match self.graph.out_neighbor(at, cursor) {
                 Some(to) => {
-                    // INVARIANT(scc_frame): `last()` matched above still exists.
-                    frames
+                    let frame = frames
                         .last_mut()
-                        .expect("INVARIANT(scc_frame): frame stack non-empty")
-                        .1 += 1;
+                        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("scc_frame"))?;
+                    frame.1 += 1;
                     if self.ids[to as usize].is_none() {
                         self.open(to);
                         frames.push((to, 0));

@@ -53,7 +53,8 @@ use crate::data::value::Tuple;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
 use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+    btree_set_only_element, path_predecessor, GraphAlgorithmInvariantError, CancelAuthority,
+    CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
 };
 
 pub(crate) struct ShortestPathDijkstra;
@@ -111,11 +112,7 @@ impl FixedRule for ShortestPathDijkstra {
                 if tn.len() == 1 {
                     // INVARIANT(single_goal): `tn.len() == 1` so the set has
                     // exactly one element.
-                    let single = Some(
-                        *tn.iter()
-                            .next()
-                            .expect("INVARIANT(single_goal): len==1 implies one element"),
-                    );
+                    let single = Some(btree_set_only_element(tn, "single_goal")?);
                     if keep_ties {
                         dijkstra_keep_ties(&graph, start, &single, &(), &(), cancel.clone())?
                     } else {
@@ -302,29 +299,24 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
         }
     }
 
-    Ok(goals
-        .iter(edges.node_count())
-        .map(|target| {
-            let cost = distance[target as usize];
-            if !cost.is_finite() {
-                (target, cost, vec![])
-            } else {
-                let mut path = vec![];
-                let mut current = target;
-                while current != start {
-                    path.push(current);
-                    // INVARIANT(dijkstra_pred): a finite distance was written
-                    // only together with a predecessor, so the chain reaches
-                    // `start` without a hole.
-                    current = back_pointers[current as usize]
-                        .expect("INVARIANT(dijkstra_pred): finite path has predecessors");
-                }
-                path.push(start);
-                path.reverse();
-                (target, cost, path)
+    let mut results = Vec::new();
+    for target in goals.iter(edges.node_count()) {
+        let cost = distance[target as usize];
+        if !cost.is_finite() {
+            results.push((target, cost, vec![]));
+        } else {
+            let mut path = vec![];
+            let mut current = target;
+            while current != start {
+                path.push(current);
+                current = path_predecessor(&back_pointers, current, "dijkstra_pred")?;
             }
-        })
-        .collect_vec())
+            path.push(start);
+            path.reverse();
+            results.push((target, cost, path));
+        }
+    }
+    Ok(results)
 }
 
 pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
@@ -376,50 +368,48 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
         }
     }
 
-    let ret = goals
-        .iter(edges.node_count())
-        .flat_map(|target| {
-            let cost = distance[target as usize];
-            if !cost.is_finite() {
-                vec![(target, cost, vec![])]
-            } else {
-                struct CollectPath {
-                    collected: Vec<(u32, f32, Vec<u32>)>,
-                }
+    let mut ret = Vec::new();
+    for target in goals.iter(edges.node_count()) {
+        let cost = distance[target as usize];
+        if !cost.is_finite() {
+            ret.push((target, cost, vec![]));
+        } else {
+            struct CollectPath {
+                collected: Vec<(u32, f32, Vec<u32>)>,
+            }
 
-                impl CollectPath {
-                    fn collect(
-                        &mut self,
-                        chain: &[u32],
-                        start: u32,
-                        target: u32,
-                        cost: f32,
-                        back_pointers: &[Vec<u32>],
-                    ) {
-                        // INVARIANT(keep_ties_chain): `chain` starts as
-                        // `[target]` and only grows via `push`.
-                        let last = chain
-                            .last()
-                            .expect("INVARIANT(keep_ties_chain): non-empty path chain");
-                        let prevs = &back_pointers[*last as usize];
-                        for nxt in prevs {
-                            let mut ret = chain.to_vec();
-                            ret.push(*nxt);
-                            if *nxt == start {
-                                ret.reverse();
-                                self.collected.push((target, cost, ret));
-                            } else {
-                                self.collect(&ret, start, target, cost, back_pointers)
-                            }
+            impl CollectPath {
+                fn collect(
+                    &mut self,
+                    chain: &[u32],
+                    start: u32,
+                    target: u32,
+                    cost: f32,
+                    back_pointers: &[Vec<u32>],
+                ) -> Result<()> {
+                    let last = chain
+                        .last()
+                        .copied()
+                        .ok_or_else(|| GraphAlgorithmInvariantError::refuse("keep_ties_chain"))?;
+                    let prevs = &back_pointers[last as usize];
+                    for &nxt in prevs {
+                        let mut ret = chain.to_vec();
+                        ret.push(nxt);
+                        if nxt == start {
+                            ret.reverse();
+                            self.collected.push((target, cost, ret));
+                        } else {
+                            self.collect(&ret, start, target, cost, back_pointers)?;
                         }
                     }
+                    Ok(())
                 }
-                let mut cp = CollectPath { collected: vec![] };
-                cp.collect(&[target], start, target, cost, &back_pointers);
-                cp.collected
             }
-        })
-        .collect_vec();
+            let mut cp = CollectPath { collected: vec![] };
+            cp.collect(&[target], start, target, cost, &back_pointers)?;
+            ret.extend(cp.collected);
+        }
+    }
 
     Ok(ret)
 }

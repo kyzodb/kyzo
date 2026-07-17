@@ -43,7 +43,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::rng::SeededRng;
 use crate::fixed_rule::{
-    BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
+    GraphAlgorithmInvariantError, BadExprValueError, CancelFlag, FixedRule, FixedRuleOutput,
+    FixedRulePayload, NodeNotFoundError,
 };
 use crate::data::value::data_value_any;
 
@@ -151,9 +152,11 @@ impl FixedRule for RandomWalk {
                         &candidate_steps[dist.sample(&mut rng)]
                     } else {
                         // INVARIANT(walk_candidates): checked non-empty above.
-                        candidate_steps.choose(&mut rng).expect(
-                            "INVARIANT(walk_candidates): non-empty candidate_steps",
-                        )
+                        candidate_steps
+                            .choose(&mut rng)
+                            .ok_or_else(|| {
+                                GraphAlgorithmInvariantError::refuse("walk_candidates")
+                            })?
                     };
                     let next_node = &next_step.as_slice()[1];
                     path.push(next_node.clone());

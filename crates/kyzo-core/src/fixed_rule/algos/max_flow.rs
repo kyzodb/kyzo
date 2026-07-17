@@ -64,8 +64,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
-    CancelAuthority, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
-    FixedRulePayload, NodeNotFoundError,
+    ek_bfs_parent, tuple_into_first_column, CancelAuthority, CancelFlag, FixedRule,
+    FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload, NodeNotFoundError,
 };
 
 /// Residual-capacity threshold: values at or below this count as saturated.
@@ -160,9 +160,7 @@ fn single_node(
         .ok_or_else(|| EmptyEndpointError(which, rel.span()))??;
     // INVARIANT(endpoint_col): caller's `ensure_min_len(1)` proved every
     // tuple has a first column.
-    let dv = tuple.into_iter().next().expect(
-        "INVARIANT(endpoint_col): ensure_min_len(1) proved a first column",
-    );
+    let dv = tuple_into_first_column(tuple)?;
     inv_indices.get(&dv).copied().ok_or_else(|| {
         NodeNotFoundError {
             missing: dv,
@@ -273,8 +271,7 @@ impl ResidualNet {
             let mut v = sink;
             while v != source {
                 // INVARIANT(ek_prev): BFS set `prev` for every reached node but source.
-                let (u, ai) = prev[v as usize]
-                    .expect("INVARIANT(ek_prev): reached node has BFS parent");
+                let (u, ai) = ek_bfs_parent(&prev, v, "ek_prev")?;
                 let arc = &self.adj[u as usize][ai];
                 bottleneck = bottleneck.min(arc.cap - arc.flow);
                 v = u;
@@ -283,8 +280,7 @@ impl ResidualNet {
             // Push it: raise forward flow, lower the paired reverse arc.
             let mut v = sink;
             while v != source {
-                let (u, ai) = prev[v as usize]
-                    .expect("INVARIANT(ek_prev): reached node has BFS parent");
+                let (u, ai) = ek_bfs_parent(&prev, v, "ek_prev")?;
                 let rev = self.adj[u as usize][ai].rev;
                 self.adj[u as usize][ai].flow += bottleneck;
                 self.adj[v as usize][rev].flow -= bottleneck;

@@ -86,19 +86,16 @@ fn louvain(
     max_iter: usize,
     cancel: CancelFlag,
 ) -> Result<Vec<Vec<u32>>> {
-    let mut current = graph;
+    let mut current_graph = graph;
     let mut collected = vec![];
-    while current.node_count() > 2 {
-        let (node2comm, new_graph) = louvain_step(current, delta, max_iter, cancel.clone())?;
-        if new_graph.node_count() == current.node_count() {
+    while current_graph.node_count() > 2 {
+        let (node2comm, new_graph) = louvain_step(current_graph, delta, max_iter, cancel.clone())?;
+        if new_graph.node_count() == current_graph.node_count() {
             break;
         }
+        let idx = collected.len();
         collected.push((node2comm, new_graph));
-        // INVARIANT(louvain_collected): push above makes `collected` non-empty.
-        current = &collected
-            .last()
-            .expect("INVARIANT(louvain_collected): just pushed")
-            .1;
+        current_graph = &collected[idx].1;
     }
     Ok(collected.into_iter().map(|(a, _)| a).collect_vec())
 }
