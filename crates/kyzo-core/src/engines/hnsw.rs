@@ -261,9 +261,7 @@ impl MNeighbours {
     /// Admit a neighbour degree, or refuse `m < 2` typed.
     pub(crate) fn new(m: usize) -> Result<Self> {
         if m < 2 {
-            bail!(HnswManifestRefused(format!(
-                "m_neighbours must be >= 2 (got {m}); m=1 yields an infinite level multiplier"
-            )));
+            bail!(HnswManifestRefused::MTooSmall { got: m });
         }
         Ok(Self(m))
     }
@@ -282,10 +280,32 @@ impl MNeighbours {
 /// Typed refusal when [`HnswIndexManifest::admit`] (or [`MNeighbours::new`])
 /// is given an illegal description — zero dimension, empty identity fields,
 /// empty vec field list, non-positive `ef`, or `m < 2`.
-#[derive(Debug, Error, Diagnostic)]
-#[error("HNSW manifest refused: {0}")]
-#[diagnostic(code(hnsw::manifest_refused))]
-pub(crate) struct HnswManifestRefused(pub(crate) String);
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum HnswManifestRefused {
+    #[error(
+        "HNSW manifest refused: m_neighbours must be >= 2 (got {got}); m=1 yields an infinite level multiplier"
+    )]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    MTooSmall { got: usize },
+    #[error("HNSW manifest refused: base_relation must be non-empty")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    EmptyBaseRelation,
+    #[error("HNSW manifest refused: index_name must be non-empty")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    EmptyName,
+    #[error("HNSW manifest refused: vec_dim must be > 0")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    ZeroDim,
+    #[error("HNSW manifest refused: vec_fields must be non-empty")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    EmptyVecFields,
+    #[error("HNSW manifest refused: ef_construction must be > 0")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    ZeroEfConstruction,
+    #[error("HNSW manifest refused: HNSW m_neighbours overflow: {m} * 2 exceeds usize")]
+    #[diagnostic(code(hnsw::manifest_refused))]
+    MNeighboursOverflow { m: usize },
+}
 
 /// The persisted description of one HNSW index. Serialized (msgpack, struct
 /// maps) as the payload of the base relation's `IndexKind::Hnsw` catalog
@@ -413,33 +433,25 @@ impl HnswIndexManifest {
         keep_pruned_connections: bool,
     ) -> Result<Self> {
         if base_relation.is_empty() {
-            bail!(HnswManifestRefused(
-                "base_relation must be non-empty".into()
-            ));
+            bail!(HnswManifestRefused::EmptyBaseRelation);
         }
         if index_name.is_empty() {
-            bail!(HnswManifestRefused("index_name must be non-empty".into()));
+            bail!(HnswManifestRefused::EmptyName);
         }
         if vec_dim == 0 {
-            bail!(HnswManifestRefused("vec_dim must be > 0".into()));
+            bail!(HnswManifestRefused::ZeroDim);
         }
         if vec_fields.is_empty() {
-            bail!(HnswManifestRefused(
-                "vec_fields must be non-empty".into()
-            ));
+            bail!(HnswManifestRefused::EmptyVecFields);
         }
         if ef_construction == 0 {
-            bail!(HnswManifestRefused(
-                "ef_construction must be > 0".into()
-            ));
+            bail!(HnswManifestRefused::ZeroEfConstruction);
         }
         let m = MNeighbours::new(m_neighbours)?;
-        let m_max0 = m.get().checked_mul(2).ok_or_else(|| {
-            HnswManifestRefused(format!(
-                "HNSW m_neighbours overflow: {} * 2 exceeds usize",
-                m.get()
-            ))
-        })?;
+        let m_max0 = m
+            .get()
+            .checked_mul(2)
+            .ok_or(HnswManifestRefused::MNeighboursOverflow { m: m.get() })?;
         Ok(Self {
             base_relation,
             index_name,
