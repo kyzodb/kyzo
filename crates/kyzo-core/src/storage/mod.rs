@@ -335,9 +335,9 @@ impl fmt::Display for FormatVersion {
 ///
 /// **Retryable**: rerun the whole transaction. Prefer matching
 /// [`CommitFailure::Conflict`] on the commit outcome, or feeding
-/// [`CommitFailure`] into [`retry::RetryError`] via [`From`]. Residual
-/// Reports enter the same channel through [`retry::RetryError::classify`]
-/// on diagnostic code `storage::conflict` (never `downcast_ref`).
+/// [`CommitFailure`] / [`ConflictError`] into [`retry::RetryError`] via
+/// [`From`]. Residual Reports are never conflicts in that channel — only
+/// [`retry::RetryError::Other`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, miette::Diagnostic)]
 #[diagnostic(code(storage::conflict))]
 pub struct ConflictError;
