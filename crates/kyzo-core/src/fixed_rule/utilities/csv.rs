@@ -83,10 +83,15 @@ impl FixedRule for CsvReader {
         };
         let types_opts = typing.coerce(types_opts, TERMINAL_VALIDITY.timestamp())?;
         let mut types = vec![];
-        // Structural: `coerce` to `[String]` above proved the outer list
-        // and the element strings.
-        for type_str in types_opts.get_slice().unwrap() {
-            let type_str = type_str.get_str().unwrap();
+        // INVARIANT(csv_types_list): `coerce` to `[String]` proved the outer
+        // list and the element strings.
+        let type_slice = types_opts
+            .get_slice()
+            .expect("INVARIANT(csv_types_list): coerce proved a list");
+        for type_str in type_slice {
+            let type_str = type_str
+                .get_str()
+                .expect("INVARIANT(csv_types_list): coerce proved string elements");
             let typ = parse_type(type_str).map_err(|e| WrongFixedRuleOptionError {
                 name: "types".to_string(),
                 span: payload.span(),

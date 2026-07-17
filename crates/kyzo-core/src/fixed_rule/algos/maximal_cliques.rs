@@ -212,9 +212,15 @@ fn degeneracy_order(adj: &[Vec<u32>], cancel: &CancelFlag) -> Result<Vec<u32>> {
     for _ in 0..n {
         note_clique_degen_removal();
         cancel.check()?;
-        // Lowest non-empty bucket, smallest id within it.
-        let d = buckets.iter().position(|b| !b.is_empty()).unwrap();
-        let v = *buckets[d].iter().next().unwrap();
+        // INVARIANT(degen_bucket): n removals leave a non-empty bucket until done.
+        let d = buckets
+            .iter()
+            .position(|b| !b.is_empty())
+            .expect("INVARIANT(degen_bucket): remaining vertex has a degree bucket");
+        let v = *buckets[d]
+            .iter()
+            .next()
+            .expect("INVARIANT(degen_bucket): chosen bucket is non-empty");
         buckets[d].remove(&v);
         removed[v as usize] = true;
         order.push(v);
@@ -405,8 +411,8 @@ fn choose_pivot(p: &[u32], x: &[u32], adj: &[Vec<u32>]) -> u32 {
             }
         }
     }
-    // Structural: `p ∪ x` non-empty on a non-terminal frame.
-    best.unwrap().1
+    // INVARIANT(clique_pivot): `p ∪ x` non-empty on a non-terminal frame.
+    best.expect("INVARIANT(clique_pivot): non-empty p∪x yields a pivot").1
 }
 
 /// Sorted-set intersection of two ascending slices.

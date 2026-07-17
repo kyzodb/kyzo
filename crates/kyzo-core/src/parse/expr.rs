@@ -565,7 +565,9 @@ fn parse_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
             r"\r" => ret.push('\r'),
             r"\t" => ret.push('\t'),
             s if s.starts_with(r"\u") => {
-                let code = parse_radix_int(s, 16, pair.extract_span())? as u32;
+                let raw = parse_radix_int(s, 16, pair.extract_span())?;
+                let code =
+                    u32::try_from(raw).map_err(|_| BadIntError(pair.extract_span()))?;
                 let ch = char::from_u32(code)
                     .ok_or_else(|| InvalidUtf8Error(code, pair.extract_span()))?;
                 ret.push(ch);
@@ -597,7 +599,9 @@ fn parse_s_quoted_string(pair: Pair<'_>) -> Result<SmartString<LazyCompact>> {
             r"\r" => ret.push('\r'),
             r"\t" => ret.push('\t'),
             s if s.starts_with(r"\u") => {
-                let code = parse_radix_int(s, 16, pair.extract_span())? as u32;
+                let raw = parse_radix_int(s, 16, pair.extract_span())?;
+                let code =
+                    u32::try_from(raw).map_err(|_| BadIntError(pair.extract_span()))?;
                 let ch = char::from_u32(code)
                     .ok_or_else(|| InvalidUtf8Error(code, pair.extract_span()))?;
                 ret.push(ch);

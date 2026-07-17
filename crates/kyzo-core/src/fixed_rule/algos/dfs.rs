@@ -112,9 +112,12 @@ impl FixedRule for Dfs {
             let mut current = ending.clone();
             while current != starting {
                 route.push(current.clone());
-                // Structural: every discovered non-start node received a
-                // backtrace entry before it was pushed to visit.
-                current = backtrace.get(&current).unwrap().clone();
+                // INVARIANT(dfs_pred): every discovered non-start node
+                // received a backtrace entry before it was pushed to visit.
+                current = backtrace
+                    .get(&current)
+                    .expect("INVARIANT(dfs_pred): discovered node has predecessor")
+                    .clone();
             }
             route.push(starting.clone());
             route.reverse();

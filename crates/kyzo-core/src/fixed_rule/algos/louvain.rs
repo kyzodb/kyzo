@@ -94,8 +94,11 @@ fn louvain(
             break;
         }
         collected.push((node2comm, new_graph));
-        // Structural: the push above makes `collected` non-empty.
-        current = &collected.last().unwrap().1;
+        // INVARIANT(louvain_collected): push above makes `collected` non-empty.
+        current = &collected
+            .last()
+            .expect("INVARIANT(louvain_collected): just pushed")
+            .1;
     }
     Ok(collected.into_iter().map(|(a, _)| a).collect_vec())
 }

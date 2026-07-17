@@ -68,9 +68,11 @@ impl FixedRule for StronglyConnectedComponent {
         let tarjan = TarjanSccG::new(graph).run(cancel)?;
         for (grp_id, cc) in tarjan.iter().enumerate() {
             for idx in cc {
-                // Structural: Tarjan only emits node ids the graph handed
-                // it, and `indices` has an entry per graph node.
-                let val = indices.get(*idx as usize).unwrap();
+                // INVARIANT(scc_index): Tarjan only emits node ids the graph
+                // handed it, and `indices` has an entry per graph node.
+                let val = indices.get(*idx as usize).expect(
+                    "INVARIANT(scc_index): Tarjan id is in indices",
+                );
                 let tuple = vec![val.clone(), DataValue::from(grp_id as i64)];
                 out.put(Tuple::from_vec(tuple))?;
             }
@@ -86,9 +88,10 @@ impl FixedRule for StronglyConnectedComponent {
             let nodes = nodes.ensure_min_len(1)?;
             for tuple in nodes.iter()? {
                 let tuple = tuple?;
-                // Structural: `ensure_min_len(1)` proved every tuple has a
-                // first column.
-                let node = tuple.into_iter().next().unwrap();
+                // INVARIANT(scc_node_col): `ensure_min_len(1)` proved a first column.
+                let node = tuple.into_iter().next().expect(
+                    "INVARIANT(scc_node_col): ensure_min_len(1) proved a first column",
+                );
                 if !inv_indices.contains_key(&node) {
                     inv_indices.insert(node.clone(), u32::MAX);
                     let tuple = vec![node, DataValue::from(counter)];
@@ -173,8 +176,11 @@ impl TarjanSccG {
             // so the cursor walk is linear, not quadratic, in degree.
             match self.graph.out_neighbor(at, cursor) {
                 Some(to) => {
-                    // Structural: a `last()` that matched above still exists.
-                    frames.last_mut().unwrap().1 += 1;
+                    // INVARIANT(scc_frame): `last()` matched above still exists.
+                    frames
+                        .last_mut()
+                        .expect("INVARIANT(scc_frame): frame stack non-empty")
+                        .1 += 1;
                     if self.ids[to as usize].is_none() {
                         self.open(to);
                         frames.push((to, 0));

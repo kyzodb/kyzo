@@ -44,9 +44,11 @@ impl FixedRule for TopSort {
         let sorted = kahn_g(&graph, cancel)?;
 
         for (idx, val_id) in sorted.iter().enumerate() {
-            // Structural: `kahn_g` only emits ids of the graph's nodes,
+            // INVARIANT(top_sort_index): `kahn_g` only emits graph node ids,
             // and `indices` has an entry per node.
-            let val = indices.get(*val_id as usize).unwrap();
+            let val = indices.get(*val_id as usize).expect(
+                "INVARIANT(top_sort_index): Kahn id is in indices",
+            );
             let tuple = Tuple::from_vec(vec![DataValue::from(idx as i64), val.clone()]);
             out.put(tuple)?;
         }

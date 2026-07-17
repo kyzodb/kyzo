@@ -155,8 +155,10 @@ fn k_shortest_path_yen(
     }
 
     for _ in 1..k {
-        // Structural: `k_shortest` starts with one entry and only grows.
-        let (_, prev_path) = k_shortest.last().unwrap();
+        // INVARIANT(yen_k_nonempty): `k_shortest` starts with one entry and only grows.
+        let (_, prev_path) = k_shortest
+            .last()
+            .expect("INVARIANT(yen_k_nonempty): at least the seed path");
         for i in 0..prev_path.len() - 1 {
             // Polled at the top of the spur-search unit of work: one
             // iteration runs a full Dijkstra, so a raised flag must refuse
@@ -209,10 +211,9 @@ fn k_shortest_path_yen(
                             best = Some(best.map_or(target.value, |b: f32| b.min(target.value)));
                         }
                     }
-                    // Structural: (seg_from, seg_to) is a consecutive pair on
-                    // a path Dijkstra just returned, so a matching edge
-                    // exists.
-                    total_cost += best.unwrap();
+                    // INVARIANT(yen_root_edge): (seg_from, seg_to) is a
+                    // consecutive pair on a path Dijkstra just returned.
+                    total_cost += best.expect("INVARIANT(yen_root_edge): root segment exists");
                 }
                 let mut total_path = root_path.to_vec();
                 total_path.pop();
@@ -226,8 +227,10 @@ fn k_shortest_path_yen(
             break;
         }
         candidates.sort_by(|(a_cost, _), (b_cost, _)| b_cost.total_cmp(a_cost));
-        // Structural: `candidates` was just checked non-empty.
-        let shortest = candidates.pop().unwrap();
+        // INVARIANT(yen_candidates): just checked non-empty above.
+        let shortest = candidates
+            .pop()
+            .expect("INVARIANT(yen_candidates): non-empty after check");
         let shortest_dist = shortest.0;
         if shortest_dist.is_finite() {
             k_shortest.push(shortest);

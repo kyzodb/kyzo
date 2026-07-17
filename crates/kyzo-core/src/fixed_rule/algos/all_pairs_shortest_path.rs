@@ -168,10 +168,10 @@ pub(crate) fn dijkstra_cost_only(
 
     let mut distance = vec![f32::INFINITY; edges.node_count() as usize];
     let mut pq = PriorityQueue::new();
-    let mut back_pointers = vec![u32::MAX; edges.node_count() as usize];
     distance[start as usize] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
 
+    // Cost-only Dijkstra: no predecessor table (P078 — no `u32::MAX` sentinel).
     while let Some((node, Reverse(OrderedFloat(cost)))) = pq.pop() {
         if cost > distance[node as usize] {
             continue;
@@ -185,7 +185,6 @@ pub(crate) fn dijkstra_cost_only(
             if nxt_cost < distance[nxt_node as usize] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
                 distance[nxt_node as usize] = nxt_cost;
-                back_pointers[nxt_node as usize] = node;
             }
         }
         cancel.check()?;

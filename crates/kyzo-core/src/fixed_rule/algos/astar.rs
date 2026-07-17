@@ -128,10 +128,13 @@ fn astar(
             let mut current = node;
             let mut ret = vec![];
             while current != *start_node {
-                // Structural: every non-start node popped from the open set
-                // was inserted into `back_trace` when it was first relaxed,
-                // so walking predecessors from the goal cannot miss.
-                let prev = back_trace.get(&current).unwrap().clone();
+                // INVARIANT(astar_pred): every non-start node popped from
+                // the open set was inserted into `back_trace` when first
+                // relaxed, so walking predecessors from the goal cannot miss.
+                let prev = back_trace
+                    .get(&current)
+                    .expect("INVARIANT(astar_pred): open-set node has predecessor")
+                    .clone();
                 ret.push(current);
                 current = prev;
             }

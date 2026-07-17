@@ -109,10 +109,13 @@ impl FixedRule for Bfs {
             let mut current = ending.clone();
             while current != starting {
                 route.push(current.clone());
-                // Structural: `ending` was reached from `starting`, and
-                // every visited node except the start got a backtrace
+                // INVARIANT(bfs_pred): `ending` was reached from `starting`,
+                // and every visited node except the start got a backtrace
                 // entry when it was discovered.
-                current = backtrace.get(&current).unwrap().clone();
+                current = backtrace
+                    .get(&current)
+                    .expect("INVARIANT(bfs_pred): discovered node has predecessor")
+                    .clone();
             }
             route.push(starting.clone());
             route.reverse();

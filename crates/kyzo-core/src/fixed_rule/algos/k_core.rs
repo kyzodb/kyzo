@@ -227,12 +227,12 @@ mod tests {
         let mut core: BTreeMap<String, u32> = BTreeMap::new();
         let mut k = 0u32;
         while removed.len() < nodes.len() {
-            // Minimum current degree, smallest name on ties.
+            // INVARIANT(k_core_remaining): loop condition proves a live node.
             let v = nodes
                 .iter()
                 .filter(|v| !removed.contains(*v))
                 .min_by_key(|v| (deg[*v], (*v).clone()))
-                .unwrap()
+                .expect("INVARIANT(k_core_remaining): unremoved node exists")
                 .clone();
             k = k.max(deg[&v].max(0) as u32);
             core.insert(v.clone(), k);
@@ -240,7 +240,9 @@ mod tests {
             if let Some(nbrs) = adj.get(&v) {
                 for u in nbrs {
                     if !removed.contains(u) {
-                        *deg.get_mut(u).unwrap() -= 1;
+                        // INVARIANT(k_core_deg): adjacency keys are in `deg`.
+                        *deg.get_mut(u)
+                            .expect("INVARIANT(k_core_deg): neighbor has degree") -= 1;
                     }
                 }
             }

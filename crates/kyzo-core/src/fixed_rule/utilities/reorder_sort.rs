@@ -104,9 +104,11 @@ impl FixedRule for ReorderSort {
         let mut last: Option<&DataValue> = None;
         let take_plus_skip = take.saturating_add(skip);
         for val in &buffer {
-            // Structural: every buffered tuple ends with the sort key
-            // pushed above, so it is non-empty.
-            let sorter = val.last().unwrap();
+            // INVARIANT(reorder_sort_key): every buffered tuple ends with
+            // the sort key pushed above, so it is non-empty.
+            let sorter = val
+                .last()
+                .expect("INVARIANT(reorder_sort_key): buffered tuple has sort key");
 
             if last == Some(sorter) {
                 count += 1;

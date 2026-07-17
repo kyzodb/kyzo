@@ -104,10 +104,11 @@ fn label_propagation(
                 .take_while(|(_, score)| *score == max_score)
                 .map(|(l, _)| l)
                 .collect_vec();
-            // Structural: `take_while` keeps at least the first element
-            // (its score equals `max_score` by definition), so the
-            // candidate list is never empty.
-            let new_label = *candidate_labels.choose(&mut rng).unwrap();
+            // INVARIANT(label_candidates): `take_while` keeps at least the
+            // first element (score equals `max_score`), so never empty.
+            let new_label = *candidate_labels.choose(&mut rng).expect(
+                "INVARIANT(label_candidates): non-empty after take_while",
+            );
             if new_label != labels[*node as usize] {
                 changed = true;
                 labels[*node as usize] = new_label;

@@ -369,7 +369,9 @@ pub(crate) fn parse_query(
                     .get_int()
                     .filter(|i| *i >= 0)
                     .ok_or(OptionNotNonNegIntError("limit", span))?;
-                out_opts.limit = Some(limit as usize);
+                out_opts.limit = Some(usize::try_from(limit).map_err(|_| {
+                    OptionNotNonNegIntError("limit", span)
+                })?);
             }
             Rule::offset_option => {
                 let pair = pair.children().expect("the offset expression")?;
@@ -380,7 +382,9 @@ pub(crate) fn parse_query(
                     .get_int()
                     .filter(|i| *i >= 0)
                     .ok_or(OptionNotNonNegIntError("offset", span))?;
-                out_opts.offset = Some(offset as usize);
+                out_opts.offset = Some(usize::try_from(offset).map_err(|_| {
+                    OptionNotNonNegIntError("offset", span)
+                })?);
             }
             Rule::sort_option => {
                 for part in pair.into_inner() {

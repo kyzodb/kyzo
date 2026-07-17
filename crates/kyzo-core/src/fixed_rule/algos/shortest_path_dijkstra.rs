@@ -111,8 +111,13 @@ impl FixedRule for ShortestPathDijkstra {
         let rows_per_start = par_try_map(starts, |start| -> Result<Vec<Tuple>> {
             let res = if let Some(tn) = &termination_nodes {
                 if tn.len() == 1 {
-                    // Structural: `tn.len() == 1`.
-                    let single = Some(*tn.iter().next().unwrap());
+                    // INVARIANT(single_goal): `tn.len() == 1` so the set has
+                    // exactly one element.
+                    let single = Some(
+                        *tn.iter()
+                            .next()
+                            .expect("INVARIANT(single_goal): len==1 implies one element"),
+                    );
                     if keep_ties {
                         dijkstra_keep_ties(&graph, start, &single, &(), &(), cancel.clone())?
                     } else {
@@ -195,7 +200,8 @@ impl ForbiddenNode for BTreeSet<u32> {
 
 pub(crate) trait Goal {
     fn is_exhausted(&self) -> bool;
-    fn visit(&mut self, node: u32);
+    /// Consuming visit: drain this goal of `node` and return the residual (P084).
+    fn visit(self, node: u32) -> Self;
     fn iter(&self, total: u32) -> Box<dyn Iterator<Item = u32> + '_>;
 }
 
@@ -204,7 +210,7 @@ impl Goal for () {
         false
     }
 
-    fn visit(&mut self, _node: u32) {}
+    fn visit(self, _node: u32) -> Self {}
 
     fn iter(&self, total: u32) -> Box<dyn Iterator<Item = u32> + '_> {
         Box::new(0..total)
@@ -216,11 +222,10 @@ impl Goal for Option<u32> {
         self.is_none()
     }
 
-    fn visit(&mut self, node: u32) {
-        if let Some(u) = &self
-            && *u == node
-        {
-            self.take();
+    fn visit(self, node: u32) -> Self {
+        match self {
+            Some(u) if u == node => None,
+            other => other,
         }
     }
 
@@ -238,8 +243,9 @@ impl Goal for BTreeSet<u32> {
         self.is_empty()
     }
 
-    fn visit(&mut self, node: u32) {
+    fn visit(mut self, node: u32) -> Self {
         self.remove(&node);
+        self
     }
 
     fn iter(&self, _total: u32) -> Box<dyn Iterator<Item = u32> + '_> {
@@ -258,7 +264,8 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
     let graph_size = edges.node_count();
     let mut distance = vec![f32::INFINITY; graph_size as usize];
     let mut pq = PriorityQueue::new();
-    let mut back_pointers = vec![u32::MAX; graph_size as usize];
+    // Absence is `None` — never a reserved node id (P078).
+    let mut back_pointers: Vec<Option<u32>> = vec![None; graph_size as usize];
     distance[start as usize] = 0.;
     pq.push(start, Reverse(OrderedFloat(0.)));
     let mut goals_remaining = goals.clone();
@@ -287,11 +294,11 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
             if nxt_cost < distance[nxt_node as usize] {
                 pq.push_increase(nxt_node, Reverse(OrderedFloat(nxt_cost)));
                 distance[nxt_node as usize] = nxt_cost;
-                back_pointers[nxt_node as usize] = node;
+                back_pointers[nxt_node as usize] = Some(node);
             }
         }
 
-        goals_remaining.visit(node);
+        goals_remaining = goals_remaining.visit(node);
         if goals_remaining.is_exhausted() {
             break;
         }
@@ -308,7 +315,11 @@ pub(crate) fn dijkstra<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal + Clone>(
                 let mut current = target;
                 while current != start {
                     path.push(current);
-                    current = back_pointers[current as usize];
+                    // INVARIANT(dijkstra_pred): a finite distance was written
+                    // only together with a predecessor, so the chain reaches
+                    // `start` without a hole.
+                    current = back_pointers[current as usize]
+                        .expect("INVARIANT(dijkstra_pred): finite path has predecessors");
                 }
                 path.push(start);
                 path.reverse();
@@ -361,7 +372,7 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
             cancel.check()?;
         }
 
-        goals_remaining.visit(node);
+        goals_remaining = goals_remaining.visit(node);
         if goals_remaining.is_exhausted() {
             break;
         }
@@ -387,9 +398,11 @@ pub(crate) fn dijkstra_keep_ties<FE: ForbiddenEdge, FN: ForbiddenNode, G: Goal +
                         cost: f32,
                         back_pointers: &[Vec<u32>],
                     ) {
-                        // Structural: `chain` starts as `[target]` and only
-                        // grows.
-                        let last = chain.last().unwrap();
+                        // INVARIANT(keep_ties_chain): `chain` starts as
+                        // `[target]` and only grows via `push`.
+                        let last = chain
+                            .last()
+                            .expect("INVARIANT(keep_ties_chain): non-empty path chain");
                         let prevs = &back_pointers[*last as usize];
                         for nxt in prevs {
                             let mut ret = chain.to_vec();

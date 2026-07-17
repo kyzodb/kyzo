@@ -158,10 +158,11 @@ fn single_node(
         .iter()?
         .next()
         .ok_or_else(|| EmptyEndpointError(which, rel.span()))??;
-    // Structural: the caller's `ensure_min_len(1)` on `rel` proved every
-    // tuple has a first column (a nullary relation would otherwise yield
-    // an empty tuple here despite the row-count check above).
-    let dv = tuple.into_iter().next().unwrap();
+    // INVARIANT(endpoint_col): caller's `ensure_min_len(1)` proved every
+    // tuple has a first column.
+    let dv = tuple.into_iter().next().expect(
+        "INVARIANT(endpoint_col): ensure_min_len(1) proved a first column",
+    );
     inv_indices.get(&dv).copied().ok_or_else(|| {
         NodeNotFoundError {
             missing: dv,
@@ -271,8 +272,9 @@ impl ResidualNet {
             let mut bottleneck = f64::INFINITY;
             let mut v = sink;
             while v != source {
-                // Structural: BFS set `prev` for every reached node but source.
-                let (u, ai) = prev[v as usize].unwrap();
+                // INVARIANT(ek_prev): BFS set `prev` for every reached node but source.
+                let (u, ai) = prev[v as usize]
+                    .expect("INVARIANT(ek_prev): reached node has BFS parent");
                 let arc = &self.adj[u as usize][ai];
                 bottleneck = bottleneck.min(arc.cap - arc.flow);
                 v = u;
@@ -281,7 +283,8 @@ impl ResidualNet {
             // Push it: raise forward flow, lower the paired reverse arc.
             let mut v = sink;
             while v != source {
-                let (u, ai) = prev[v as usize].unwrap();
+                let (u, ai) = prev[v as usize]
+                    .expect("INVARIANT(ek_prev): reached node has BFS parent");
                 let rev = self.adj[u as usize][ai].rev;
                 self.adj[u as usize][ai].flow += bottleneck;
                 self.adj[v as usize][rev].flow -= bottleneck;

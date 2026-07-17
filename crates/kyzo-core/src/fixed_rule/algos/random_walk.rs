@@ -149,9 +149,10 @@ impl FixedRule for RandomWalk {
                         })?;
                         &candidate_steps[dist.sample(&mut rng)]
                     } else {
-                        // Structural: `candidate_steps` was checked
-                        // non-empty above, so `choose` cannot yield `None`.
-                        candidate_steps.choose(&mut rng).unwrap()
+                        // INVARIANT(walk_candidates): checked non-empty above.
+                        candidate_steps.choose(&mut rng).expect(
+                            "INVARIANT(walk_candidates): non-empty candidate_steps",
+                        )
                     };
                     let next_node = &next_step.as_slice()[1];
                     path.push(next_node.clone());

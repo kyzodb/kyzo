@@ -477,9 +477,9 @@ impl<'a> FixedRuleInputRelation<'a> {
 /// Mints the next dense node id at the intern site, refusing with the
 /// typed [`GraphTooLargeError`] at the 2^32-node bound — the CozoDB
 /// original's `indices.len() as u32` silently truncated there, aliasing
-/// the 2^32-th node onto id 0. The cap is `u32::MAX - 1`: `u32::MAX`
-/// itself stays reserved as the Dijkstra core's "no back-pointer"
-/// sentinel.
+/// the 2^32-th node onto id 0. The cap is `u32::MAX` mintable ids
+/// (`0..=u32::MAX - 1`); predecessor absence uses `Option` (P078), so
+/// `u32::MAX` is no longer reserved as a sentinel.
 ///
 /// The bound is untestable at scale (it would take ~4 billion interned
 /// values); it is factored into this function precisely so a unit test
@@ -487,7 +487,9 @@ impl<'a> FixedRuleInputRelation<'a> {
 /// honesty note on [`GraphTooLargeError`].
 fn checked_node_id(interned_so_far: usize) -> Result<u32> {
     ensure!(interned_so_far < u32::MAX as usize, GraphTooLargeError);
-    Ok(interned_so_far as u32)
+    Ok(u32::try_from(interned_so_far).expect(
+        "INVARIANT(node_id_fit): ensure! proved interned_so_far < u32::MAX",
+    ))
 }
 
 impl<'a> FixedRulePayload<'a> {
@@ -929,6 +931,11 @@ pub trait FixedRule: Send + Sync {
 // ─────────────────────────────────────────────────────────────────────────
 
 /// The rows of a relation, together with its header names.
+///
+/// Prefer [`Self::try_new`]: it proves every row's width equals
+/// `headers.len()`. [`Self::new`] panics on arity mismatch (legacy door
+/// for call sites that already guarantee the shape). Fields stay `pub`
+/// until outside-allowlist call sites migrate (P082 private-field follow-on).
 #[derive(Debug, Clone, Default)]
 pub struct NamedRows {
     /// The headers
@@ -939,14 +946,54 @@ pub struct NamedRows {
     pub next: Option<Box<NamedRows>>,
 }
 
+/// Header↔row width mismatch at the [`NamedRows`] door (P082).
+#[derive(Debug, Error, Diagnostic)]
+#[error(
+    "NamedRows arity mismatch: header width {header_arity}, row {row_index} has width {row_arity}"
+)]
+#[diagnostic(code(fixed_rule::named_rows_arity))]
+pub struct NamedRowsArityError {
+    pub header_arity: usize,
+    pub row_index: usize,
+    pub row_arity: usize,
+}
+
 impl NamedRows {
-    /// create a named rows with the given headers and rows
-    pub fn new(headers: Vec<String>, rows: Vec<Tuple>) -> Self {
-        Self {
+    /// Proving door: every row's width equals `headers.len()`.
+    pub fn try_new(
+        headers: Vec<String>,
+        rows: Vec<Tuple>,
+    ) -> std::result::Result<Self, NamedRowsArityError> {
+        let header_arity = headers.len();
+        for (row_index, row) in rows.iter().enumerate() {
+            let row_arity = row.len();
+            if row_arity != header_arity {
+                return Err(NamedRowsArityError {
+                    header_arity,
+                    row_index,
+                    row_arity,
+                });
+            }
+        }
+        Ok(Self {
             headers,
             rows,
             next: None,
-        }
+        })
+    }
+
+    /// Create named rows with the given headers and rows.
+    ///
+    /// # Panics
+    /// Panics when any row's width differs from `headers.len()`. Prefer
+    /// [`Self::try_new`] at fallible boundaries.
+    pub fn new(headers: Vec<String>, rows: Vec<Tuple>) -> Self {
+        Self::try_new(headers, rows).unwrap_or_else(|e| {
+            panic!(
+                "NamedRows::new arity mismatch (header {}, row {} width {}): use try_new",
+                e.header_arity, e.row_index, e.row_arity
+            )
+        })
     }
 
     /// Encode this result set as a self-contained Arrow IPC stream (story
@@ -1652,11 +1699,10 @@ mod tests {
     /// end-to-end (it needs ~4B distinct node values), so this pins the
     /// boundary arithmetic of the factored check:
     ///   - 0 interned                → id 0
-    ///   - u32::MAX - 1 interned     → id u32::MAX - 1 (the last mintable;
-    ///     u32::MAX stays free as the Dijkstra back-pointer sentinel)
-    ///   - u32::MAX interned         → GraphTooLargeError (`as u32` would
-    ///     collided with the u32::MAX Dijkstra sentinel; the wrap
-    ///     to id 0 happens one node later)
+    ///   - u32::MAX - 1 interned     → id u32::MAX - 1 (last mintable id;
+    ///     CSR `max_id + 1` must still fit in `u32`)
+    ///   - u32::MAX interned         → GraphTooLargeError (would mint id
+    ///     `u32::MAX`, making `node_count` overflow)
     #[test]
     fn intern_site_refuses_at_u32_bound() {
         assert_eq!(checked_node_id(0).unwrap(), 0);
@@ -2064,5 +2110,24 @@ mod tests {
             err.to_string().contains("more than one non-null kind"),
             "{err}"
         );
+    }
+
+    /// `try_new` proves header↔row arity (P082).
+    #[test]
+    fn named_rows_try_new_proves_arity() {
+        assert!(
+            NamedRows::try_new(
+                vec!["a".into(), "b".into()],
+                vec![Tuple::from_vec(vec![DataValue::from(1)])],
+            )
+            .is_err()
+        );
+        let ok = NamedRows::try_new(
+            vec!["a".into()],
+            vec![Tuple::from_vec(vec![DataValue::from(1)])],
+        )
+        .unwrap();
+        assert_eq!(ok.headers.len(), 1);
+        assert_eq!(ok.rows.len(), 1);
     }
 }

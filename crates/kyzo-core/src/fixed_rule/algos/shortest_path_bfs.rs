@@ -81,15 +81,22 @@ impl FixedRule for ShortestPathBFS {
             .get_input(1)?
             .ensure_min_len(1)?
             .iter()?
-            // Structural: `ensure_min_len(1)` proved every tuple has a
-            // first column.
-            .map_ok(|n| n.into_iter().next().unwrap())
+            // INVARIANT(sp_bfs_col): `ensure_min_len(1)` proved a first column.
+            .map_ok(|n| {
+                n.into_iter()
+                    .next()
+                    .expect("INVARIANT(sp_bfs_col): ensure_min_len(1) proved a first column")
+            })
             .try_collect()?;
         let ending_nodes: BTreeSet<_> = payload
             .get_input(2)?
             .ensure_min_len(1)?
             .iter()?
-            .map_ok(|n| n.into_iter().next().unwrap())
+            .map_ok(|n| {
+                n.into_iter()
+                    .next()
+                    .expect("INVARIANT(sp_bfs_col): ensure_min_len(1) proved a first column")
+            })
             .try_collect()?;
 
         for starting_node in starting_nodes.iter() {
@@ -139,10 +146,13 @@ impl FixedRule for ShortestPathBFS {
                     let mut current = ending_node.clone();
                     while current != *starting_node {
                         route.push(current.clone());
-                        // Structural: `ending_node` has a backtrace entry
-                        // (checked above), and so does every predecessor
-                        // back to the start.
-                        current = backtrace.get(&current).unwrap().clone();
+                        // INVARIANT(sp_bfs_pred): `ending_node` has a
+                        // backtrace entry (checked above), and so does every
+                        // predecessor back to the start.
+                        current = backtrace
+                            .get(&current)
+                            .expect("INVARIANT(sp_bfs_pred): path node has predecessor")
+                            .clone();
                     }
                     route.push(starting_node.clone());
                     route.reverse();
