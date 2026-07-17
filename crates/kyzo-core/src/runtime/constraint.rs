@@ -17,18 +17,19 @@
 //!
 //! Mechanics, stated plainly:
 //!
-//! - **Catalog storage.** The body is raw KyzoScript source, mirrored into
-//!   the catalog row ([`ConstraintRef`]) of *every* stored relation it
-//!   reads, so an FK fires both when a child appears and when its parent
-//!   disappears. Parsed once per session (the trigger convention; parsed
-//!   substances in the catalog are the Phase C end state).
+//! - **Catalog storage.** The body is a typed [`ConstraintRef`] substance
+//!   (parsed program + provenance source), mirrored into the catalog row of
+//!   *every* stored relation it reads, so an FK fires both when a child
+//!   appears and when its parent disappears. The one door is
+//!   [`ConstraintRef::parse`]; the catalog persists name + source and
+//!   re-materialises the program on decode — same shape as triggers.
 //! - **Enforcement point.** The mutation pipeline notes the constraints of
 //!   every relation it touches ([`SessionTx::note_constraints`]); after the
 //!   top-level query and its whole trigger cascade have run — and before
 //!   commit — [`Db::enforce_constraints`] evaluates each noted constraint
-//!   once, read-only, against the transaction's own write set
-//!   (`WriteTx: ReadTx`, so post-write state is visible). A non-empty
-//!   result is a typed, spanned [`ConstraintViolation`] naming the
+//!   once from its compiled program, read-only, against the transaction's
+//!   own write set (`WriteTx: ReadTx`, so post-write state is visible). A
+//!   non-empty result is a typed, spanned [`ConstraintViolation`] naming the
 //!   constraint and its witness rows; the abort rolls the whole
 //!   transaction back.
 //! - **Budget-armed.** Constraint bodies evaluate under the session's
@@ -78,7 +79,6 @@ use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ValidityTs};
 use crate::fixed_rule::NamedRows;
-use crate::parse::parse_script;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::{
     AccessLevel, ConstraintRef, InsufficientAccessLevel, get_relation, list_relations,
@@ -312,10 +312,9 @@ impl<S: Storage> Db<S> {
             return Ok(());
         }
         let pending = std::mem::take(&mut tx.pending_constraints);
-        let fixed = self.fixed_rules();
         let options = tx.options.clone();
-        for (name, source) in pending {
-            let program = tx.parsed_trigger(&source, &fixed, cur_vld)?;
+        for (name, constraint) in pending {
+            let program = constraint.program().clone();
             // Defensive purity re-check: the catalog row's bytes are a
             // claim, not a proof; a tampered body must not mutate.
             validate_constraint_purity(&name, program.out_opts())?;
@@ -325,12 +324,13 @@ impl<S: Storage> Db<S> {
             if !witnesses.is_empty() {
                 let total = witnesses.len();
                 let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
+                let source = constraint.source();
                 let span = SourceSpan(0, source.len());
                 return Err(ConstraintViolation {
                     name: name.to_string(),
                     total,
                     witnesses: shown,
-                    body: source,
+                    body: source.to_string(),
                     span,
                 }
                 .into());
@@ -351,10 +351,9 @@ impl<S: Storage> Db<S> {
         options: &ScriptOptions,
     ) -> Result<NamedRows> {
         let fixed = self.fixed_rules();
-        let program =
-            parse_script(source, &BTreeMap::new(), &fixed, cur_vld)?.get_single_program()?;
-        validate_constraint_purity(&name.name, program.out_opts())?;
-        let read_set = stored_read_set(&program);
+        let constraint = ConstraintRef::parse(name.name.clone(), source, &fixed, cur_vld)?;
+        validate_constraint_purity(constraint.name(), constraint.program().out_opts())?;
+        let read_set = stored_read_set(constraint.program());
         if read_set.is_empty() {
             bail!(ConstraintReadsNothing(name.to_string()));
         }
@@ -369,9 +368,9 @@ impl<S: Storage> Db<S> {
 
             // Constraint names are one global namespace: scan the catalog.
             for handle in list_relations(&tx.store)? {
-                if let Some(c) = handle.constraints.iter().find(|c| c.name == name.name) {
+                if let Some(c) = handle.constraints.iter().find(|c| c.name() == &name.name) {
                     bail!(ConstraintNameTaken(
-                        c.name.to_string(),
+                        c.name().to_string(),
                         handle.name.to_string()
                     ));
                 }
@@ -381,7 +380,13 @@ impl<S: Storage> Db<S> {
             // being. Full-state evaluation inside the creating transaction,
             // under the caller's budget.
             let witnesses = self
-                .eval_constraint_body(&tx.store, &tx.temp, program.clone(), cur_vld, options)
+                .eval_constraint_body(
+                    &tx.store,
+                    &tx.temp,
+                    constraint.program().clone(),
+                    cur_vld,
+                    options,
+                )
                 .wrap_err_with(|| {
                     format!("while checking integrity constraint '{name}' over existing data")
                 })?;
@@ -397,8 +402,8 @@ impl<S: Storage> Db<S> {
                 });
             }
 
-            // Attach: the identical spec mirrored onto every relation the
-            // body reads, kept name-sorted. Requires the trigger rung of
+            // Attach: the identical substance mirrored onto every relation
+            // the body reads, kept name-sorted. Requires the trigger rung of
             // the access ladder on each.
             for rel in &read_set {
                 let mut handle = get_relation(&tx.store, rel)?;
@@ -409,11 +414,8 @@ impl<S: Storage> Db<S> {
                         handle.access_level
                     ));
                 }
-                handle.constraints.push(ConstraintRef {
-                    name: name.name.clone(),
-                    source: source.to_string(),
-                });
-                handle.constraints.sort_by(|a, b| a.name.cmp(&b.name));
+                handle.constraints.push(constraint.clone());
+                handle.constraints.sort_by(|a, b| a.name().cmp(b.name()));
                 write_relation_row(&mut tx.store, &handle)?;
             }
             tx.store.commit()?;
@@ -438,7 +440,7 @@ impl<S: Storage> Db<S> {
             let mut found = false;
             for mut handle in list_relations(&tx.store)? {
                 let before = handle.constraints.len();
-                if handle.constraints.iter().any(|c| c.name == name.name)
+                if handle.constraints.iter().any(|c| c.name() == &name.name)
                     && handle.access_level < AccessLevel::Protected
                 {
                     bail!(InsufficientAccessLevel(
@@ -447,7 +449,7 @@ impl<S: Storage> Db<S> {
                         handle.access_level
                     ));
                 }
-                handle.constraints.retain(|c| c.name != name.name);
+                handle.constraints.retain(|c| c.name() != &name.name);
                 if handle.constraints.len() != before {
                     found = true;
                     write_relation_row(&mut tx.store, &handle)?;
@@ -473,9 +475,9 @@ impl<S: Storage> Db<S> {
         for handle in list_relations(&tx.store)? {
             for c in &handle.constraints {
                 rows.push(Tuple::from_vec(vec![
-                    DataValue::from(c.name.as_str()),
+                    DataValue::from(c.name().as_str()),
                     DataValue::from(handle.name.as_str()),
-                    DataValue::from(c.source.as_str()),
+                    DataValue::from(c.source()),
                 ]));
             }
         }

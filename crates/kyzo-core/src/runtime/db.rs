@@ -93,9 +93,9 @@ use crate::query::sort::sort_and_collect;
 use crate::runtime::callback::{CallbackCollector, EventCallbackRegistry};
 use crate::runtime::current_validity;
 use crate::runtime::relation::{
-    AccessLevel, KeyspaceKind, RelationHandle, Residency, create_relation, describe_relation,
-    destroy_relation, get_relation, list_relations, rename_relation, set_access_level,
-    set_relation_triggers, write_relation_row,
+    AccessLevel, ConstraintRef, KeyspaceKind, RelationHandle, Residency, create_relation,
+    describe_relation, destroy_relation, get_relation, list_relations, rename_relation,
+    set_access_level, set_relation_triggers, write_relation_row,
 };
 use crate::storage::temp::TempTx;
 use crate::storage::{ReadTx, Storage, WriteTx};
@@ -956,7 +956,7 @@ fn map_access_level(level: ParseAccessLevel) -> AccessLevel {
 // ─────────────────────────────────────────────────────────────────────────
 
 /// One session: a backend transaction `T` plus a private scratch store for
-/// temp (`_`-prefixed) relations and a per-session trigger-parse cache.
+/// temp (`_`-prefixed) relations.
 ///
 /// The species law: catalog reads and scans need only [`ReadTx`]; every
 /// mutation method requires `T: WriteTx`, so a mutation on a read session is
@@ -971,20 +971,15 @@ pub struct SessionTx<T> {
     >,
     pub(crate) store: T,
     pub(crate) temp: TempTx,
-    /// Trigger source → parsed program, parsed once per session. Sound
-    /// because a session has one `cur_vld`, which parsing substitutes.
-    /// Constraint bodies share this cache (same convention: raw source in
-    /// the catalog, parsed once per session).
-    pub(crate) parsed_triggers: BTreeMap<SmartString<LazyCompact>, InputProgram>,
     /// The evaluation controls for every query in this session, including
     /// triggers (which run under the parent's budget).
     pub(crate) options: ScriptOptions,
     /// Integrity constraints of every relation this transaction has
-    /// mutated, `name → body source`, deduped by name (each relation in a
-    /// constraint's read-set mirrors the identical spec). Collected by the
-    /// mutation pipeline and drained by
+    /// mutated, `name → typed [`ConstraintRef`] substance`, deduped by name
+    /// (each relation in a constraint's read-set mirrors the identical
+    /// spec). Collected by the mutation pipeline and drained by
     /// [`Db::enforce_constraints`](crate::runtime::db::Db) before commit.
-    pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, String>,
+    pub(crate) pending_constraints: BTreeMap<SmartString<LazyCompact>, ConstraintRef>,
     /// Every relation id this transaction wrote (user writes, trigger
     /// writes, index backfills alike) — drained into segment-generation
     /// bumps BEFORE the storage commit (the segments' soundness rule).
@@ -1000,7 +995,6 @@ impl<T: ReadTx> SessionTx<T> {
         Self {
             store,
             temp: TempTx::default(),
-            parsed_triggers: BTreeMap::new(),
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
@@ -1082,7 +1076,6 @@ impl<T: WriteTx> SessionTx<T> {
         Self {
             store,
             temp: TempTx::default(),
-            parsed_triggers: BTreeMap::new(),
             index_ctxs: BTreeMap::new(),
             options,
             pending_constraints: BTreeMap::new(),
@@ -1109,8 +1102,8 @@ impl<T: WriteTx> SessionTx<T> {
     pub(crate) fn note_constraints(&mut self, handle: &RelationHandle) {
         for c in &handle.constraints {
             self.pending_constraints
-                .entry(c.name.clone())
-                .or_insert_with(|| c.source.clone());
+                .entry(c.name().clone())
+                .or_insert_with(|| c.clone());
         }
     }
 
@@ -1174,24 +1167,6 @@ impl<T: WriteTx> SessionTx<T> {
         }
     }
 
-    /// Parse a trigger's source once per session and cache the program. The
-    /// session's single `cur_vld` is baked in at first parse; every later
-    /// firing clones the cached program.
-    pub(crate) fn parsed_trigger(
-        &mut self,
-        source: &str,
-        fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
-        cur_vld: ValidityTs,
-    ) -> Result<InputProgram> {
-        if let Some(prog) = self.parsed_triggers.get(source) {
-            return Ok(prog.clone());
-        }
-        let prog =
-            parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
-        self.parsed_triggers
-            .insert(SmartString::from(source), prog.clone());
-        Ok(prog)
-    }
 }
 
 #[cfg(test)]

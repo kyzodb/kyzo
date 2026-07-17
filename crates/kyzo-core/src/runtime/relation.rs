@@ -336,8 +336,10 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 // ---------------------------------------------------------------------------
 
 /// An integrity constraint attached to a stored relation: a named denial
-/// rule. The body is a pure query whose non-empty result at commit time
-/// denies the transaction; its satisfying rows are the violation witnesses.
+/// rule held as the PARSED substance with its provenance source — never
+/// re-parsed at enforcement. The one door is [`ConstraintRef::parse`], so a
+/// source that would fail its own parse can never become a `ConstraintRef`
+/// and therefore can never be stored on a [`RelationHandle`].
 ///
 /// The same `ConstraintRef` (same name, same source) is written into the
 /// catalog row of **every** stored relation the body reads — an FK
@@ -347,14 +349,111 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 /// name; the mutation pipeline dedups by name when several touched
 /// relations carry the same constraint.
 ///
-/// The body is raw KyzoScript source, parsed once per session (the trigger
-/// convention; parsed substances in the catalog are the Phase C end state).
-#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
+/// The catalog stores name + provenance source; decode re-parses through
+/// [`ConstraintRef::parse`] with the static [`DEFAULT_FIXED_RULES`] and the
+/// same sentinel instant as triggers. The in-memory value always carries
+/// the compiled program.
+#[derive(Clone)]
 pub(crate) struct ConstraintRef {
-    /// The constraint's name, unique across the whole database.
-    pub(crate) name: SmartString<LazyCompact>,
-    /// The denial rule's body: a full query script, stored as source.
-    pub(crate) source: String,
+    name: SmartString<LazyCompact>,
+    program: InputProgram,
+    source: SmartString<LazyCompact>,
+}
+
+impl ConstraintRef {
+    /// The one constructor: parse `source` into its single program, proving
+    /// it is a well-formed constraint body. A non-parsing source is refused
+    /// here, so it can never be stored.
+    pub(crate) fn parse(
+        name: impl Into<SmartString<LazyCompact>>,
+        source: &str,
+        fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
+        cur_vld: ValidityTs,
+    ) -> Result<ConstraintRef> {
+        let program =
+            parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
+        Ok(ConstraintRef {
+            name: name.into(),
+            program,
+            source: SmartString::from(source),
+        })
+    }
+
+    pub(crate) fn name(&self) -> &SmartString<LazyCompact> {
+        &self.name
+    }
+
+    pub(crate) fn program(&self) -> &InputProgram {
+        &self.program
+    }
+
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+impl PartialEq for ConstraintRef {
+    /// Provenance identity: equal iff name and source text match, matching
+    /// the catalog's byte round-trip (the program is derived from the source).
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.source == other.source
+    }
+}
+
+impl Eq for ConstraintRef {}
+
+impl Debug for ConstraintRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ConstraintRef({:?}, {:?})", self.name, self.source)
+    }
+}
+
+impl serde::Serialize for ConstraintRef {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = s.serialize_struct("ConstraintRef", 2)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("source", self.source.as_str())?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ConstraintRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::{Error as _, MapAccess, Visitor};
+        use std::fmt;
+        struct WireVisitor;
+        impl<'de> Visitor<'de> for WireVisitor {
+            type Value = (SmartString<LazyCompact>, SmartString<LazyCompact>);
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("ConstraintRef { name, source }")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut name = None;
+                let mut source = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "source" => source = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok((
+                    name.ok_or_else(|| A::Error::missing_field("name"))?,
+                    source.ok_or_else(|| A::Error::missing_field("source"))?,
+                ))
+            }
+        }
+        let (name, source) =
+            d.deserialize_struct("ConstraintRef", &["name", "source"], WireVisitor)?;
+        ConstraintRef::parse(name, &source, &DEFAULT_FIXED_RULES, trigger_decode_vld())
+            .map_err(D::Error::custom)
+    }
 }
 
 /// How the compile tier uses each argument position of a stored-relation
@@ -550,9 +649,10 @@ pub(crate) struct RelationHandle {
     /// operator tier — maintains the ordering; names are unique).
     pub(crate) indices: Vec<IndexRef>,
     pub(crate) description: SmartString<LazyCompact>,
-    /// Integrity constraints whose bodies read this relation, sorted by
-    /// name (`::constraint create` maintains the ordering; names are
-    /// globally unique).
+    /// Integrity constraints whose bodies read this relation, held as
+    /// parsed [`ConstraintRef`] substances (see that type). Sorted by name
+    /// (`::constraint create` maintains the ordering; names are globally
+    /// unique). The catalog stores name + provenance source; decode re-parses.
     pub(crate) constraints: Vec<ConstraintRef>,
     /// What this keyspace's rows are — see [`KeyspaceKind`]. Decides
     /// whether reads resolve bitemporally (facts) or exactly (algorithm
@@ -1519,7 +1619,7 @@ pub(crate) fn destroy_relation(tx: &mut impl WriteTx, name: &str) -> Result<()> 
         bail!(RelationHasConstraints(
             name.to_string(),
             "remove",
-            c.name.to_string()
+            c.name().to_string()
         ));
     }
     if store.access_level < AccessLevel::Normal {
@@ -1625,7 +1725,7 @@ pub(crate) fn rename_relation(tx: &mut impl WriteTx, old: &Symbol, new: &Symbol)
         bail!(RelationHasConstraints(
             old.to_string(),
             "rename",
-            c.name.to_string()
+            c.name().to_string()
         ));
     }
     if rel.access_level < AccessLevel::Normal {
@@ -2261,10 +2361,13 @@ mod tests {
             kind: IndexKind::Plain { mapper: vec![1, 0] },
         }];
         handle.description = SmartString::from("pinned");
-        handle.constraints = vec![ConstraintRef {
-            name: SmartString::from("no_empty_v"),
-            source: "?[k] := *pin[k, v], v == ''".to_string(),
-        }];
+        handle.constraints = vec![ConstraintRef::parse(
+            "no_empty_v",
+            "?[k] := *pin[k, v], v == ''",
+            &DEFAULT_FIXED_RULES,
+            trigger_decode_vld(),
+        )
+        .unwrap()];
 
         let bytes = handle.encode().unwrap();
         let decoded = RelationHandle::decode(&bytes).unwrap();
