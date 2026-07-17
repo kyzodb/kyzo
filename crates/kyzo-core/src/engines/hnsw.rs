@@ -220,7 +220,10 @@ use crate::data::relation::{
 };
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
-use crate::data::value::{DataValue, ScanBound, StorageKey, Vector, append_canonical, encode_owned};
+use crate::data::value::{
+    DataValue, DecodeError, RelationId, ScanBound, StorageKey, Vector, append_canonical,
+    decode_tuple_from_key, encode_owned,
+};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
 use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
@@ -675,8 +678,8 @@ const CANARY_LAYER: i64 = 1;
 ///
 /// where `id…` is `tuple_key…, Int field, Int sub` (`-1` = whole field).
 /// SHA-256 content hash of a stored vector (HNSW change-detection payload).
-/// Field is private — mint only via [`Self::from_sha256_digest`] or
-/// [`Self::from_stored`].
+/// Field is private — mint only via [`Self::from_sha256_digest`].
+/// Stored wire reclaim routes through that same door after length proof.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct VecContentHash(Vec<u8>);
@@ -688,12 +691,15 @@ const _: () = assert!(std::mem::align_of::<VecContentHash>() == std::mem::align_
 
 impl VecContentHash {
     /// Mint from the [`IndexVec::content_hash`] door (always 32 bytes).
+    /// The sole `Self(bytes)` constructor — produced and stored paths both
+    /// enter here.
     fn from_sha256_digest(bytes: Vec<u8>) -> Self {
         debug_assert_eq!(bytes.len(), SHA256_DIGEST_LEN);
         Self(bytes)
     }
 
-    /// Stored node-row hash bytes (wire decode); length must be exactly 32.
+    /// Stored node-row hash: length must be exactly 32, then mint only via
+    /// [`Self::from_sha256_digest`] (length alone is not a parallel forge).
     fn from_stored(
         bytes: Vec<u8>,
         index_name: &str,
@@ -708,7 +714,7 @@ impl VecContentHash {
                 },
             ));
         }
-        Ok(Self(bytes))
+        Ok(Self::from_sha256_digest(bytes))
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.
@@ -719,8 +725,9 @@ impl VecContentHash {
 
 
 /// Canary entry key bytes for an HNSW index row.
-/// Mint only via [`Self::from_storage_key`] (encode door) or
-/// [`Self::from_stored`] (wire decode with typed refuse).
+/// Mint only via [`Self::from_storage_key`] (encode door). Stored reclaim
+/// proves wire shape through the storage-key decode inverse, then enters
+/// that same door — never a length-only `Vec<u8>` forge.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub(crate) struct HnswEntryKey(Vec<u8>);
@@ -734,23 +741,47 @@ impl HnswEntryKey {
         Self(key.0)
     }
 
-    /// Wire decode of the canary entry-key payload; refuses keys shorter
-    /// than a storage-key relation prefix.
+    /// Wire decode of the canary entry-key payload: prove relation-prefix +
+    /// canonical column encodings (encode-door inverse), then mint only via
+    /// [`Self::from_storage_key`].
     fn from_stored(
         bytes: Vec<u8>,
         index_name: &str,
         tuple: &[DataValue],
     ) -> Result<Self> {
-        if bytes.len() < StorageKey::RELATION_PREFIX_LEN {
-            bail!(IndexRowCorrupt::new(
-                index_name,
-                tuple,
-                IndexCorruptReason::HnswCanaryEntryKeyTooShort {
-                    found: bytes.len(),
-                },
-            ));
+        let key = Self::claim_storage_key(bytes, index_name, tuple)?;
+        Ok(Self::from_storage_key(key))
+    }
+
+    /// Admit foreign bytes only when they decode as a lawful [`StorageKey`].
+    fn claim_storage_key(
+        bytes: Vec<u8>,
+        index_name: &str,
+        tuple: &[DataValue],
+    ) -> Result<StorageKey> {
+        match RelationId::raw_decode(&bytes) {
+            Ok(_) => {}
+            Err(DecodeError::Truncated) => {
+                bail!(IndexRowCorrupt::new(
+                    index_name,
+                    tuple,
+                    IndexCorruptReason::HnswCanaryEntryKeyTooShort {
+                        found: bytes.len(),
+                    },
+                ));
+            }
+            Err(err) => {
+                bail!(IndexRowCorrupt::new(
+                    index_name,
+                    tuple,
+                    IndexCorruptReason::DecodeFailed(err),
+                ));
+            }
         }
-        Ok(Self(bytes))
+        decode_tuple_from_key(&bytes, 0).map_err(|err| {
+            IndexRowCorrupt::new(index_name, tuple, IndexCorruptReason::DecodeFailed(err))
+        })?;
+        Ok(StorageKey(bytes))
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.
@@ -3070,6 +3101,7 @@ mod tests {
 
     use super::*;
     use crate::data::program::InputRelationHandle;
+    use crate::data::value::{TupleT, encode_key_with_suffix};
 
     macro_rules! knn_rows {
         ($($arg:expr),* $(,)?) => {
@@ -4119,12 +4151,9 @@ mod tests {
             },
             HnswRow::Canary {
                 bottom_layer: -3,
-                entry_key: HnswEntryKey::from_stored(
-                    vec![0u8; StorageKey::RELATION_PREFIX_LEN + 2],
-                    "t",
-                    &[],
-                )
-                .unwrap(),
+                entry_key: HnswEntryKey::from_storage_key(
+                    [DataValue::from(42i64)].encode_as_key(RelationId::SYSTEM),
+                ),
             },
         ];
         for row in rows {
@@ -4151,12 +4180,11 @@ mod tests {
         );
         let c = HnswRow::Canary {
             bottom_layer: 0,
-            entry_key: HnswEntryKey::from_stored(
-                vec![0u8; StorageKey::RELATION_PREFIX_LEN],
-                "t",
+            entry_key: HnswEntryKey::from_storage_key(encode_key_with_suffix(
+                RelationId::SYSTEM,
                 &[],
-            )
-            .unwrap(),
+                &[],
+            )),
         }
         .key_tuple(kl);
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));
