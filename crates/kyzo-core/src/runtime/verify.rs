@@ -17,11 +17,11 @@
 //! The oracle (`query/laws.rs::Program`) was built exclusively for
 //! hand-written test programs: its relation names and variable names are
 //! `&'static str`. A live, parsed KyzoScript program's names are runtime
-//! strings, so [`intern`] leaks each DISTINCT name once (deduplicated by
-//! content in a process-wide cache) to bridge the two — bounded by the
-//! catalog's vocabulary, not by verify-call volume, and it changes nothing
-//! in `laws.rs` itself (a sealed file; this is an adapter living entirely
-//! on this side of the seam).
+//! strings, so [`OracleNameBridge`] leaks each DISTINCT name once
+//! (deduplicated by content) to bridge the two — bounded by the catalog's
+//! vocabulary, not by verify-call volume, and it changes nothing in
+//! `laws.rs` itself (a sealed file; this is an adapter living entirely on
+//! this side of the seam).
 //!
 //! The translator covers plain relational Datalog: rule/relation
 //! applications (positive and negated), recursion, per-head-position
@@ -70,7 +70,7 @@
 //! escape this check, exactly as a `range_skip_scan_tuple` bug could escape
 //! the current-state check above it.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 use miette::Result;
@@ -158,34 +158,43 @@ impl VerifyOutcome {
     }
 }
 
-/// Leak-intern `s` into a genuine `&'static str`, deduplicated by content in
-/// a process-wide cache. See the module docs: this exists because
-/// `query/laws.rs`'s `Program` was built for `&'static` test literals, and
-/// growth is bounded by the distinct name vocabulary ever verified, not by
-/// call volume.
+/// Typed verify→oracle name bridge: the sole mint of `&'static str`
+/// `laws::{Rel, Term}` names from runtime [`Symbol`]s.
 ///
-/// **Design debt, named plainly (team-lead review, story #80):** this is a
-/// bridge, not the honest end state. Bounded-by-catalog-vocabulary leaking
-/// is acceptable for this cut ONLY because `::verify` is new and the
-/// catalog is finite — but every relation and variable name a caller ever
-/// verifies leaks for the life of the process, and a caller who verifies
-/// many one-off, never-repeated names (e.g. auto-generated variable names
-/// from a query builder) would grow this cache unboundedly. The honest
-/// long-term fix is `query/laws.rs`'s `Rel`/`Term::Var` owning their
-/// strings (`Cow<'static, str>` or an interned `Symbol`, not a bare
-/// `&'static str`) so `::verify` never needs to leak-bridge at all — a
-/// `laws.rs` change (touches the sealed oracle), out of scope for this cut,
-/// tracked as follow-up work rather than silently left undocumented.
-fn intern(s: &str) -> &'static str {
-    static CACHE: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut guard = cache.lock().expect("verify interner poisoned");
-    if let Some(existing) = guard.get(s) {
-        return existing;
+/// Replaces a bare `OnceLock<HashSet<&str>>` seam. Growth is still bounded
+/// by the distinct name vocabulary ever verified (leak for process life);
+/// the honest end state is `laws.rs` owning `Cow<'static, str>` / `Symbol`
+/// so this bridge disappears — until then the type is the proof that every
+/// runtime→oracle name crosses one door.
+struct OracleNameBridge {
+    by_content: Mutex<HashMap<Box<str>, &'static str>>,
+}
+
+impl OracleNameBridge {
+    fn global() -> &'static Self {
+        static BRIDGE: OnceLock<OracleNameBridge> = OnceLock::new();
+        BRIDGE.get_or_init(|| Self {
+            by_content: Mutex::new(HashMap::new()),
+        })
     }
-    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
-    guard.insert(leaked);
-    leaked
+
+    /// Leak-intern `s` into a genuine `&'static str`, deduplicated by content.
+    fn intern(&'static self, s: &str) -> &'static str {
+        let mut guard = self
+            .by_content
+            .lock()
+            .expect("INVARIANT(oracle_name_bridge): mutex not poisoned");
+        if let Some(existing) = guard.get(s) {
+            return existing;
+        }
+        let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+        guard.insert(Box::from(s), leaked);
+        leaked
+    }
+}
+
+fn intern(s: &str) -> &'static str {
+    OracleNameBridge::global().intern(s)
 }
 
 /// A construct this cut's translator refuses to carry to the oracle —

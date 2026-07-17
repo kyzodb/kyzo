@@ -22,8 +22,7 @@
 //!   stratified negation, normal aggregation, and meet aggregation in every
 //!   positional layout the landed [`crate::query::eval::EvalRuleSet`] now
 //!   accepts — suffix, position-0, and interleaved (grouping columns between
-//!   meet columns), the capability that replaced the retired `MeetNotSuffix`
-//!   refusal — plus mutual recursion, a non-self-healing two-delta join, and
+//!   meet columns) — plus mutual recursion, a non-self-healing two-delta join, and
 //!   opaque fixed rules, over generated fact sets in the thousands. Per seed,
 //!   under a **finite**
 //!   [`Budget`] (an unbudgeted random recursive program can legitimately
@@ -658,9 +657,8 @@ struct GenParams {
     fixed_rule: bool,
     meet_op: &'static str,
     /// Emit the 2-column meet `m` with its aggregated column at position 0
-    /// (grouping node at position 1) — a non-suffix layout, exercising the
-    /// positional MeetAggrStore that replaced the retired `MeetNotSuffix`
-    /// refusal. `false` keeps the classic suffix layout.
+    /// (grouping node at position 1) — a non-suffix positional layout.
+    /// `false` keeps the classic suffix layout.
     meet_pos0: bool,
     /// Also emit a 3-column *interleaved* meet `mi(min(Lo), K, max(Hi))`: two
     /// meet columns split apart by a grouping column at position 1.
@@ -773,8 +771,7 @@ fn generate(seed: u64) -> Generated {
     // Meet recursion `m` over `seed(node, val)`, propagating the folded value
     // along edges. The same fixpoint in two head layouts, chosen by seed:
     //   suffix — head m(group, agg), aggr [None, meet]  (classic)
-    //   pos0   — head m(agg, group), aggr [meet, None]  (non-suffix; the
-    //            positional MeetAggrStore that replaced MeetNotSuffix)
+    //   pos0   — head m(agg, group), aggr [meet, None]  (non-suffix positional)
     if p.meet_pos0 {
         rules.push(Rule::aggregated(
             "m",

@@ -392,7 +392,7 @@ impl Budget {
     fn ticker<'a>(&'a self, baseline: u64, rule: &'a MagicSymbol) -> InterruptTicker<'a> {
         InterruptTicker {
             budget: self,
-            countdown: INTERRUPT_STRIDE,
+            countdown: InterruptCountdown::fresh(),
             baseline,
             ceiling: self.derived_tuple_ceiling,
             rule,
@@ -404,6 +404,33 @@ impl Budget {
 /// iteration. Small enough that no scan is unkillable for long; large
 /// enough that the check does not dominate the loop.
 const INTERRUPT_STRIDE: u32 = 64;
+
+/// Proven mid-epoch interrupt stride counter: starts at [`INTERRUPT_STRIDE`]
+/// and resets there after each poll. Checked decrement — never an unnamed
+/// wrapping `u32` countdown.
+#[derive(Debug, Clone, Copy)]
+struct InterruptCountdown(u32);
+
+impl InterruptCountdown {
+    fn fresh() -> Self {
+        Self(INTERRUPT_STRIDE)
+    }
+
+    /// Count one derivation. Returns `true` when the stride elapsed and the
+    /// interrupt/spend guard must run.
+    fn tick(&mut self) -> bool {
+        self.0 = self
+            .0
+            .checked_sub(1)
+            .expect("INVARIANT(interrupt_countdown): fresh/reset always leaves a positive count");
+        if self.0 == 0 {
+            *self = Self::fresh();
+            true
+        } else {
+            false
+        }
+    }
+}
 
 /// The in-iteration interrupt-and-spend site: `tick` once per derivation;
 /// every [`INTERRUPT_STRIDE`]th tick reads the cancel poll and the deadline
@@ -493,7 +520,7 @@ const INTERRUPT_STRIDE: u32 = 64;
 /// host.
 struct InterruptTicker<'a> {
     budget: &'a Budget,
-    countdown: u32,
+    countdown: InterruptCountdown,
     /// Globally admitted total as of this epoch's barrier (fixed snapshot).
     baseline: u64,
     /// The derived-tuple ceiling, mirrored from the budget; `None` disables
@@ -511,9 +538,7 @@ impl InterruptTicker<'_> {
     /// Non-perturbation section). Every [`INTERRUPT_STRIDE`]th call polls the
     /// interrupt and enforces the mid-epoch ceiling.
     fn tick(&mut self, in_flight: usize) -> Result<()> {
-        self.countdown -= 1;
-        if self.countdown == 0 {
-            self.countdown = INTERRUPT_STRIDE;
+        if self.countdown.tick() {
             self.budget.check_interrupt()?;
             if let Some(ceiling) = self.ceiling {
                 let spent = self.baseline.saturating_add(in_flight as u64);
@@ -738,9 +763,8 @@ pub(crate) enum HeadAggrKind {
 /// The rules of one head, ready to evaluate. Construction proves what the
 /// original re-derived (or unwrapped) downstream: the rule set is
 /// non-empty and every rule shares one aggregation signature. A meet head's
-/// grouping positions may sit anywhere in the head — the landed
-/// [`MeetAggrStore`] groups positionally — so there is no suffix
-/// restriction to check (the retired `MeetNotSuffix` refusal).
+/// grouping positions may sit anywhere in the head — [`MeetAggrStore`]
+/// groups positionally via [`MeetLayout`].
 #[derive(Debug)]
 pub(crate) struct EvalRuleSet<R> {
     aggr: Vec<HeadAggr>,
@@ -770,12 +794,8 @@ impl<R> EvalRuleSet<R> {
             .iter()
             .flatten()
             .all(|(aggregation, _)| aggregation.is_meet());
-        // The landed MeetAggrStore groups positionally, so the grouping
-        // positions are simply the non-aggregated ones, wherever they sit —
-        // no suffix restriction (the retired `MeetNotSuffix` refusal, which
-        // the original needed because its store keyed by a byte prefix and
-        // silently demoted non-suffix heads to a frozen normal aggregation,
-        // dropping recursive derivations).
+        // MeetAggrStore groups positionally: key positions are every
+        // non-aggregated head slot, wherever they sit.
         let kind = match (has_aggr, all_meet) {
             (false, _) => HeadAggrKind::None,
             (true, false) => HeadAggrKind::Normal,
@@ -2580,12 +2600,12 @@ mod tests {
 
     /// The mirror image of [`meet_reach_rules`]: the exact same meet
     /// recursion, but with the meet column at position **0** and the
-    /// grouping node at position 1 — a non-suffix layout the retired
-    /// `MeetNotSuffix` refusal used to reject and the suffix-prefix store
-    /// could not represent. `m[val, node]` reads back as "node → folded
-    /// value", so the recursive body reads `m[z, x]` (value first, node
-    /// second). The oracle groups by position, so `assert_matches_oracle`
-    /// judges this against the same fixpoint as the suffix form.
+    /// grouping node at position 1 — a non-suffix layout
+    /// [`MeetAggrStore`] represents via positional [`MeetLayout`].
+    /// `m[val, node]` reads back as "node → folded value", so the recursive
+    /// body reads `m[z, x]` (value first, node second). The oracle groups
+    /// by position, so `assert_matches_oracle` judges this against the same
+    /// fixpoint as the suffix form.
     fn meet_reach_rules_pos0(aggr_name: &str) -> Vec<Rule> {
         vec![
             Rule::aggregated(

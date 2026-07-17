@@ -24,13 +24,11 @@
  * so the argument lists in the constructor spec are carried for eval's
  * interface and ignored here. A `MeetAggrStore` groups by the head's
  * non-aggregated positions **wherever they sit** (a constructed
- * `MeetLayout` proof), not only when they form a prefix as upstream cozo
- * required — full oracle positional-meet parity (`query/laws.rs`), which
- * retires the `MeetNotSuffix` refusal removed from `query/eval.rs`. It
- * keeps two views — `by_group` for the fold/delta (group-key order) and
- * `by_row` for the head-tuple-ordered scans joins issue — because for a
- * non-suffix layout those orders differ. The delta propagation in
- * `MeetAggrStore`
+ * `MeetLayout` proof) — full oracle positional-meet parity
+ * (`query/laws.rs`). It keeps two views — `by_group` for the fold/delta
+ * (group-key order) and `by_row` for the head-tuple-ordered scans joins
+ * issue — because for a non-suffix layout those orders differ. The delta
+ * propagation in `MeetAggrStore`
  * rides the *corrected* `MeetAggrObj::update` changed-flag contract — the
  * original's inverted `and`/`or` flags could announce "unchanged" on
  * exactly the update that changed a value and reach a premature fixpoint;
@@ -62,8 +60,8 @@
 //!
 //! The three stores:
 //!
-//! - [`RegularTempStore`]: a set of tuples (plus a per-tuple limiter-skip
-//!   flag for early-returned entry rules).
+//! - [`RegularTempStore`]: a set of tuples (plus a per-tuple [`LimiterSkip`]
+//!   disposition for early-returned entry rules).
 //! - [`MeetAggrStore`]: grouped tuples folded through meet (semilattice)
 //!   aggregations as they arrive; recursion through such aggregations is
 //!   sound because the fold is idempotent, associative, and monotone in
@@ -152,10 +150,29 @@ impl AdmissionSink for () {
 // RegularTempStore
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Per-tuple limiter disposition in a [`RegularTempStore`].
+///
+/// Named token (not a bare `bool`): a row either participates in the entry
+/// rule's returned set, or was derived past `:limit` and joins only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) enum LimiterSkip {
+    /// Within `:limit` — joins and early-returned rows.
+    #[default]
+    Include,
+    /// Past `:limit` — joins only; filtered from [`EpochStore::early_returned_iter`].
+    PastLimit,
+}
+
+impl LimiterSkip {
+    #[inline]
+    pub(crate) fn excludes_from_return(self) -> bool {
+        matches!(self, Self::PastLimit)
+    }
+}
+
 /// A store holding temp data during evaluation of queries: a set of tuples,
-/// each with a limiter-skip flag (`true` = the tuple was derived past an
-/// entry rule's `:limit` and participates in joins but not in the returned
-/// rows; see [`EpochStore::early_returned_iter`]).
+/// each with a [`LimiterSkip`] disposition (past `:limit` rows join but are
+/// not returned; see [`EpochStore::early_returned_iter`]).
 /// The public interface is used in custom implementations of
 /// fixed rules (algorithms/utilities).
 ///
@@ -171,7 +188,7 @@ impl AdmissionSink for () {
 /// representation-only, not a semantic change.
 #[derive(Default, Debug)]
 pub struct RegularTempStore {
-    pub(crate) inner: BTreeMap<Box<[u8]>, bool>,
+    pub(crate) inner: BTreeMap<Box<[u8]>, LimiterSkip>,
 }
 
 /// The value-part placeholder for a [`TupleInIter::Values`] whose whole
@@ -217,12 +234,14 @@ impl RegularTempStore {
     pub fn put(&mut self, tuple: Tuple) {
         self.inner.insert(
             encode_tuple_bare(tuple.as_slice()).into_boxed_slice(),
-            false,
+            LimiterSkip::Include,
         );
     }
     pub(crate) fn put_with_skip(&mut self, tuple: Tuple) {
-        self.inner
-            .insert(encode_tuple_bare(tuple.as_slice()).into_boxed_slice(), true);
+        self.inner.insert(
+            encode_tuple_bare(tuple.as_slice()).into_boxed_slice(),
+            LimiterSkip::PastLimit,
+        );
     }
 }
 
@@ -335,7 +354,9 @@ impl MeetLayout {
     /// [`DataValue::Null`] (result meaning "no input"), distinct from the
     /// in-fold Empty state.
     pub(crate) fn interleave(&self, key: &[u8], vals: &[MeetAccum]) -> Tuple {
-        let key = decode_tuple_bare(key).expect("this store's own bytes decode");
+        let key = decode_tuple_bare(key).expect(
+            "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+        );
         let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
         for (slot, i) in self.key_positions.iter().enumerate() {
             row[*i] = key[slot].clone();
@@ -630,13 +651,16 @@ impl TempStore {}
 pub(crate) enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole
     /// row in `key` — a regular row has no separate value region.
-    Bytes { key: &'a [u8], skip: bool },
+    Bytes {
+        key: &'a [u8],
+        skip: LimiterSkip,
+    },
     /// A meet store's SUFFIX-layout row: group-key bytes (the row's own
     /// head prefix — no interleave needed) + folded meet accumulators.
     MeetSuffix {
         key: &'a [u8],
         val: &'a [MeetAccum],
-        skip: bool,
+        skip: LimiterSkip,
     },
     /// A meet store's INTERLEAVED-layout row: [`MeetLayout::interleave`]
     /// has already rebuilt the full logical row as `DataValue`s (the key
@@ -645,7 +669,7 @@ pub(crate) enum TupleInIter<'a> {
     Values {
         key: &'a [DataValue],
         val: &'a [DataValue],
-        skip: bool,
+        skip: LimiterSkip,
     },
 }
 
@@ -653,16 +677,24 @@ impl<'a> TupleInIter<'a> {
     /// Construct a view over an already-interleaved (key-part, value-part,
     /// skip) triple — the non-suffix meet path, where `key`/`val` are
     /// `DataValue` projections of a fully rebuilt logical row.
-    pub(crate) fn new(key: &'a [DataValue], val: &'a [DataValue], skip: bool) -> Self {
+    pub(crate) fn new(
+        key: &'a [DataValue],
+        val: &'a [DataValue],
+        skip: LimiterSkip,
+    ) -> Self {
         TupleInIter::Values { key, val, skip }
     }
     /// Construct a view over one regular store's row bytes.
-    pub(crate) fn new_bytes(key: &'a [u8], skip: bool) -> Self {
+    pub(crate) fn new_bytes(key: &'a [u8], skip: LimiterSkip) -> Self {
         TupleInIter::Bytes { key, skip }
     }
     /// Construct a view over a suffix-layout meet store's group-key bytes
     /// plus its typed folded accumulators.
-    pub(crate) fn new_meet_suffix(key: &'a [u8], val: &'a [MeetAccum], skip: bool) -> Self {
+    pub(crate) fn new_meet_suffix(
+        key: &'a [u8],
+        val: &'a [MeetAccum],
+        skip: LimiterSkip,
+    ) -> Self {
         TupleInIter::MeetSuffix { key, val, skip }
     }
 }
@@ -670,41 +702,48 @@ impl<'a> TupleInIter<'a> {
 impl TupleInIter<'_> {
     /// Structural guarantee: callers index by positions of the rule head
     /// this store was built for (`idx < EpochStore::arity`), which is
-    /// compiled knowledge, not data — the `expect`s cannot fire on user
-    /// data.
+    /// compiled knowledge, not data — the INVARIANT cannot fire on user data.
     pub(crate) fn get(self, idx: usize) -> DataValue {
         match self {
-            TupleInIter::Bytes { key, .. } => {
-                bare_nth(key, idx).expect("compiled position within this row's arity")
-            }
+            TupleInIter::Bytes { key, .. } => bare_nth(key, idx).expect(
+                "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
+            ),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_tuple_bare(key).expect("this store's own bytes decode");
+                let key = decode_tuple_bare(key).expect(
+                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+                );
                 key.get(idx)
                     .cloned()
                     .or_else(|| val.get(idx - key.len()).map(|a| a.to_value()))
-                    .expect("compiled position within this row's arity")
+                    .expect(
+                        "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
+                    )
             }
             TupleInIter::Values { key, val, .. } => key
                 .get(idx)
                 .or_else(|| val.get(idx - key.len()))
                 .cloned()
-                .expect("compiled position within this row's arity"),
+                .expect(
+                    "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
+                ),
         }
     }
     pub(crate) fn should_skip(&self) -> bool {
         match self {
             TupleInIter::Bytes { skip, .. }
             | TupleInIter::MeetSuffix { skip, .. }
-            | TupleInIter::Values { skip, .. } => *skip,
+            | TupleInIter::Values { skip, .. } => skip.excludes_from_return(),
         }
     }
     pub(crate) fn into_tuple(self) -> Tuple {
         match self {
-            TupleInIter::Bytes { key, .. } => {
-                decode_tuple_bare(key).expect("this store's own bytes decode")
-            }
+            TupleInIter::Bytes { key, .. } => decode_tuple_bare(key).expect(
+                "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+            ),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let mut key = decode_tuple_bare(key).expect("this store's own bytes decode");
+                let mut key = decode_tuple_bare(key).expect(
+                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+                );
                 key.extend(val.iter().map(|a| a.to_value()));
                 key
             }
@@ -748,7 +787,9 @@ impl TupleInIter<'_> {
                 (*key).cmp(probe.as_slice())
             }
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_tuple_bare(key).expect("this store's own bytes decode");
+                let key = decode_tuple_bare(key).expect(
+                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+                );
                 key.iter()
                     .cloned()
                     .chain(val.iter().map(|a| a.to_value()))
@@ -856,8 +897,9 @@ impl Iterator for TupleInIterIterator<'_> {
                 if remaining.is_empty() {
                     return None;
                 }
-                let (val, next) =
-                    DataValue::decode_from_key(remaining).expect("this store's own bytes decode");
+                let (val, next) = DataValue::decode_from_key(remaining).expect(
+                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+                );
                 *remaining = next;
                 Some(val)
             }
@@ -867,8 +909,9 @@ impl Iterator for TupleInIterIterator<'_> {
                 val_idx,
             } => {
                 if !key_remaining.is_empty() {
-                    let (v, next) = DataValue::decode_from_key(key_remaining)
-                        .expect("this store's own bytes decode");
+                    let (v, next) = DataValue::decode_from_key(key_remaining).expect(
+                        "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
+                    );
                     *key_remaining = next;
                     return Some(v);
                 }
@@ -1604,8 +1647,12 @@ mod tests {
         let k1 = t(&[1]);
         let v1 = t(&[5]);
         let k2 = t(&[1, 5]);
-        let joined = TupleInIter::new(k1.as_slice(), v1.as_slice(), false);
-        let flat = TupleInIter::new(k2.as_slice(), empty_tuple_ref().as_slice(), false);
+        let joined = TupleInIter::new(k1.as_slice(), v1.as_slice(), LimiterSkip::Include);
+        let flat = TupleInIter::new(
+            k2.as_slice(),
+            empty_tuple_ref().as_slice(),
+            LimiterSkip::Include,
+        );
         assert_eq!(joined, flat);
         assert_eq!(joined.cmp(&flat), Ordering::Equal);
         assert_eq!(

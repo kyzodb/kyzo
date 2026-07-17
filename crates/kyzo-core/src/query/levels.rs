@@ -20,7 +20,8 @@ use crate::data::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
 };
 use crate::query::temp_store::{
-    AdmissionSink, Admitted, MeetAggrStore, MeetLayout, TempStore, TupleInIter, empty_tuple_ref,
+    AdmissionSink, Admitted, LimiterSkip, MeetAggrStore, MeetLayout, TempStore, TupleInIter,
+    empty_tuple_ref,
 };
 
 #[derive(Debug, Error, Diagnostic)]
@@ -116,13 +117,79 @@ impl AsRef<[u8]> for LevelBoundKey {
 }
 
 
-/// Per-row skip/refresh flags for a sealed normal level. Illegal pairs
-/// (neither skip nor refresh meaning "ordinary", etc.) stay representable
-/// as named fields — never an anonymous `(bool, bool)` soup.
+/// Per-row skip/refresh flags for a sealed normal level. Limiter disposition
+/// is [`LimiterSkip`]; refresh is a named field — never an anonymous
+/// `(bool, bool)` soup.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RowFlags {
-    pub(crate) skip: bool,
+    pub(crate) skip: LimiterSkip,
     pub(crate) refresh: bool,
+}
+
+/// Non-empty sealed-level stack: constructors seed one level; the API never
+/// exposes an empty stack, so [`Self::last`] needs no `expect`.
+#[derive(Debug)]
+pub(crate) struct LevelStack<L> {
+    levels: Vec<L>,
+}
+
+impl<L> LevelStack<L> {
+    pub(crate) fn singleton(first: L) -> Self {
+        Self {
+            levels: vec![first],
+        }
+    }
+
+    #[inline]
+    pub(crate) fn last(&self) -> &L {
+        &self.levels[self.levels.len() - 1]
+    }
+
+    pub(crate) fn as_slice(&self) -> &[L] {
+        &self.levels
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.levels.len()
+    }
+
+    pub(crate) fn push(&mut self, level: L) {
+        self.levels.push(level);
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, L> {
+        self.levels.iter()
+    }
+
+    /// Drop the newest level when it is empty and an older level remains.
+    pub(crate) fn drop_consumed_empty_delta(&mut self, is_empty: impl Fn(&L) -> bool) {
+        if self.levels.len() > 1 && is_empty(self.last()) {
+            self.levels.pop();
+        }
+    }
+
+    /// Compact while the newest level is at least half the size of the one
+    /// beneath it. `merge` receives (older, newer) and returns the merged level.
+    pub(crate) fn compact_while(
+        &mut self,
+        should_merge: impl Fn(&L, &L) -> bool,
+        mut merge: impl FnMut(L, L) -> Result<L>,
+    ) -> Result<()> {
+        while self.levels.len() >= 2 {
+            let n = self.levels.len();
+            if !should_merge(&self.levels[n - 2], &self.levels[n - 1]) {
+                break;
+            }
+            let newer = self.levels.pop().expect(
+                "INVARIANT(level_stack_nonempty): len >= 2 before compact pop",
+            );
+            let older = self.levels.pop().expect(
+                "INVARIANT(level_stack_nonempty): len >= 2 before compact pop",
+            );
+            self.levels.push(merge(older, newer)?);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -385,17 +452,17 @@ pub(crate) struct EpochStore {
 
 #[derive(Debug)]
 pub(crate) enum LevelKind {
-    Normal(Vec<NormalLevel>),
+    Normal(LevelStack<NormalLevel>),
     Meet {
         spec: MeetSpec,
-        levels: Vec<MeetLevel>,
+        levels: LevelStack<MeetLevel>,
     },
 }
 
 impl EpochStore {
     pub(crate) fn new_normal(arity: usize) -> Self {
         Self {
-            kind: LevelKind::Normal(vec![NormalLevel::default()]),
+            kind: LevelKind::Normal(LevelStack::singleton(NormalLevel::default())),
             arity,
         }
     }
@@ -407,7 +474,7 @@ impl EpochStore {
                     layout: probe.layout.clone(),
                     meets: probe.meets,
                 },
-                levels: vec![MeetLevel::default()],
+                levels: LevelStack::singleton(MeetLevel::default()),
             },
             arity: aggrs.len(),
         })
@@ -436,7 +503,10 @@ impl EpochStore {
     /// normal rule here is an engine bug, refused).
     pub(crate) fn meet_total(&self) -> Result<MeetTotalView<'_>> {
         match &self.kind {
-            LevelKind::Meet { spec, levels } => Ok(MeetTotalView { spec, levels }),
+            LevelKind::Meet { spec, levels } => Ok(MeetTotalView {
+                spec,
+                levels: levels.as_slice(),
+            }),
             LevelKind::Normal(_) => {
                 bail!("internal invariant violated: meet_total on a non-meet EpochStore")
             }
@@ -495,7 +565,7 @@ impl EpochStore {
                 // would stack one empty level per epoch). Then compact
                 // the PRE-epoch stack only: the level just sealed IS the
                 // delta and must survive whole until the next barrier.
-                drop_consumed_empty_delta(levels, NormalLevel::is_empty);
+                levels.drop_consumed_empty_delta(NormalLevel::is_empty);
                 compact_normal(levels)?;
                 levels.push(level);
                 admitted
@@ -521,7 +591,7 @@ impl EpochStore {
                             sink.admit(TupleInIter::new(
                                 row.as_slice(),
                                 empty_tuple_ref().as_slice(),
-                                false,
+                                LimiterSkip::Include,
                             ));
                         }
                         if !spec.layout.is_suffix() {
@@ -534,7 +604,7 @@ impl EpochStore {
                 if !spec.layout.is_suffix() {
                     level.by_row.sort();
                 }
-                drop_consumed_empty_delta(levels, |l| l.groups.is_empty());
+                levels.drop_consumed_empty_delta(|l| l.groups.is_empty());
                 compact_meet(spec, levels);
                 levels.push(level);
                 admitted
@@ -551,10 +621,11 @@ impl EpochStore {
     /// stores answering `false` is the fixpoint.
     pub(crate) fn has_delta(&self) -> bool {
         match &self.kind {
-            LevelKind::Normal(levels) => levels
-                .last()
-                .is_some_and(|l| (0..l.len()).any(|i| !l.row_flags_at(i).refresh)),
-            LevelKind::Meet { levels, .. } => levels.last().is_some_and(|l| !l.groups.is_empty()),
+            LevelKind::Normal(levels) => {
+                let l = levels.last();
+                (0..l.len()).any(|i| !l.row_flags_at(i).refresh)
+            }
+            LevelKind::Meet { levels, .. } => !levels.last().groups.is_empty(),
         }
     }
 
@@ -619,7 +690,7 @@ impl EpochStore {
         match &self.kind {
             LevelKind::Normal(levels) => {
                 let picked: &[NormalLevel] = if delta_only {
-                    std::slice::from_ref(levels.last().expect("a level always exists"))
+                    std::slice::from_ref(levels.last())
                 } else {
                     levels.as_slice()
                 };
@@ -640,7 +711,7 @@ impl EpochStore {
                 let mut upper = lower.clone();
                 upper.push_exclusive_sentinel();
                 let picked: &[MeetLevel] = if delta_only {
-                    std::slice::from_ref(levels.last().expect("a level always exists"))
+                    std::slice::from_ref(levels.last())
                 } else {
                     levels.as_slice()
                 };
@@ -675,7 +746,7 @@ impl EpochStore {
         match &self.kind {
             LevelKind::Normal(levels) => {
                 let picked: &[NormalLevel] = if delta_only {
-                    std::slice::from_ref(levels.last().expect("a level always exists"))
+                    std::slice::from_ref(levels.last())
                 } else {
                     levels.as_slice()
                 };
@@ -693,7 +764,7 @@ impl EpochStore {
             }
             LevelKind::Meet { spec, levels } => {
                 let picked: &[MeetLevel] = if delta_only {
-                    std::slice::from_ref(levels.last().expect("a level always exists"))
+                    std::slice::from_ref(levels.last())
                 } else {
                     levels.as_slice()
                 };
@@ -750,114 +821,108 @@ fn normal_merge_next<'s>(
     }
 }
 
-/// Drop the just-consumed delta level when it is empty — the shared step
-/// both barrier arms take before compacting (see the comment at the
-/// Normal arm's call site).
-fn drop_consumed_empty_delta<L>(levels: &mut Vec<L>, is_empty: impl Fn(&L) -> bool) {
-    if levels.len() > 1 && levels.last().is_some_and(is_empty) {
-        levels.pop();
-    }
-}
-
 /// Compact adjacent normal levels while the newer is at least half the
 /// older — the classic logarithmic-merging schedule, a pure function of
 /// sizes (deterministic on every run). Newest wins per key; shadowed
 /// copies drop; a surviving refresh row becomes the row (its flag is the
 /// current one) and stops being refresh-marked once its shadowed victim
 /// is gone.
-fn compact_normal(levels: &mut Vec<NormalLevel>) -> Result<()> {
-    while levels.len() >= 2 {
-        let n = levels.len();
-        if levels[n - 1].len() * 2 < levels[n - 2].len() {
-            break;
-        }
-        let newer = levels.pop().expect("len >= 2");
-        let older = levels.pop().expect("len >= 2");
-        let mut merged = NormalLevel::default();
-        let (mut a, mut b) = (0usize, 0usize);
-        while a < older.len() || b < newer.len() {
-            if a >= older.len() {
-                merged.push_from(&newer, b, newer.row_flags_at(b))?;
-                b += 1;
-            } else if b >= newer.len() {
-                merged.push_from(&older, a, older.row_flags_at(a))?;
-                a += 1;
-            } else {
-                match older.row_at(a).cmp(newer.row_at(b)) {
-                    Ordering::Less => {
-                        merged.push_from(&older, a, older.row_flags_at(a))?;
-                        a += 1;
-                    }
-                    Ordering::Greater => {
-                        merged.push_from(&newer, b, newer.row_flags_at(b))?;
-                        b += 1;
-                    }
-                    Ordering::Equal => {
-                        // The shadowed copy is gone; the survivor is a
-                        // plain row again whichever mark it carried.
-                        let flags = newer.row_flags_at(b);
-                        merged.push_from(
-                            &newer,
-                            b,
-                            RowFlags {
-                                skip: flags.skip,
-                                refresh: false,
-                            },
-                        )?;
-                        a += 1;
-                        b += 1;
+fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
+    levels.compact_while(
+        |older, newer| newer.len() * 2 >= older.len(),
+        |older, newer| {
+            let mut merged = NormalLevel::default();
+            let (mut a, mut b) = (0usize, 0usize);
+            while a < older.len() || b < newer.len() {
+                if a >= older.len() {
+                    merged.push_from(&newer, b, newer.row_flags_at(b))?;
+                    b += 1;
+                } else if b >= newer.len() {
+                    merged.push_from(&older, a, older.row_flags_at(a))?;
+                    a += 1;
+                } else {
+                    match older.row_at(a).cmp(newer.row_at(b)) {
+                        Ordering::Less => {
+                            merged.push_from(&older, a, older.row_flags_at(a))?;
+                            a += 1;
+                        }
+                        Ordering::Greater => {
+                            merged.push_from(&newer, b, newer.row_flags_at(b))?;
+                            b += 1;
+                        }
+                        Ordering::Equal => {
+                            // The shadowed copy is gone; the survivor is a
+                            // plain row again whichever mark it carried.
+                            let flags = newer.row_flags_at(b);
+                            merged.push_from(
+                                &newer,
+                                b,
+                                RowFlags {
+                                    skip: flags.skip,
+                                    refresh: false,
+                                },
+                            )?;
+                            a += 1;
+                            b += 1;
+                        }
                     }
                 }
             }
-        }
-        levels.push(merged);
-    }
-    Ok(())
+            Ok(merged)
+        },
+    )
 }
 
 /// As [`compact_normal`], for meet levels: newest group value wins whole.
-fn compact_meet(spec: &MeetSpec, levels: &mut Vec<MeetLevel>) {
-    while levels.len() >= 2 {
-        let n = levels.len();
-        if levels[n - 1].groups.len() * 2 < levels[n - 2].groups.len() {
-            break;
-        }
-        let newer = levels.pop().expect("len >= 2");
-        let older = levels.pop().expect("len >= 2");
-        let mut merged = MeetLevel {
-            groups: Vec::with_capacity(older.groups.len() + newer.groups.len()),
-            by_row: vec![],
-        };
-        let (mut a, mut b) = (
-            older.groups.into_iter().peekable(),
-            newer.groups.into_iter().peekable(),
-        );
-        loop {
-            match (a.peek(), b.peek()) {
-                (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
-                    Ordering::Less => merged.groups.push(a.next().expect("peeked")),
-                    Ordering::Greater => merged.groups.push(b.next().expect("peeked")),
-                    Ordering::Equal => {
-                        let g = b.next().expect("peeked");
-                        a.next();
-                        merged.groups.push(g);
+fn compact_meet(spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) {
+    levels
+        .compact_while(
+        |older, newer| newer.groups.len() * 2 >= older.groups.len(),
+        |older, newer| {
+            let mut merged = MeetLevel {
+                groups: Vec::with_capacity(older.groups.len() + newer.groups.len()),
+                by_row: vec![],
+            };
+            let (mut a, mut b) = (
+                older.groups.into_iter().peekable(),
+                newer.groups.into_iter().peekable(),
+            );
+            loop {
+                match (a.peek(), b.peek()) {
+                    (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
+                        Ordering::Less => {
+                            merged.groups.push(a.next().expect("INVARIANT(peeked): peek proved Some"))
+                        }
+                        Ordering::Greater => {
+                            merged.groups.push(b.next().expect("INVARIANT(peeked): peek proved Some"))
+                        }
+                        Ordering::Equal => {
+                            let g = b.next().expect("INVARIANT(peeked): peek proved Some");
+                            a.next();
+                            merged.groups.push(g);
+                        }
+                    },
+                    (Some(_), None) => {
+                        merged.groups.push(a.next().expect("INVARIANT(peeked): peek proved Some"))
                     }
-                },
-                (Some(_), None) => merged.groups.push(a.next().expect("peeked")),
-                (None, Some(_)) => merged.groups.push(b.next().expect("peeked")),
-                (None, None) => break,
+                    (None, Some(_)) => {
+                        merged.groups.push(b.next().expect("INVARIANT(peeked): peek proved Some"))
+                    }
+                    (None, None) => break,
+                }
             }
-        }
-        if !spec.layout.is_suffix() {
-            merged.by_row = merged
-                .groups
-                .iter()
-                .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
-                .collect();
-            merged.by_row.sort();
-        }
-        levels.push(merged);
-    }
+            if !spec.layout.is_suffix() {
+                merged.by_row = merged
+                    .groups
+                    .iter()
+                    .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
+                    .collect();
+                merged.by_row.sort();
+            }
+            Ok(merged)
+        },
+    )
+        .expect("INVARIANT(meet_compact): merge arm is infallible");
 }
 
 /// Row-ordered iteration over meet levels within a bound window, newest
@@ -912,14 +977,18 @@ fn meet_ranged<'s>(
                 let mut winner: Option<&'s (Box<[u8]>, Vec<MeetAccum>)> = None;
                 for (cur, idx) in cursors.iter_mut() {
                     while cur.peek().is_some_and(|(k, _)| k.as_ref() == key) {
-                        let g = cur.next().expect("peeked");
+                        let g = cur.next().expect("INVARIANT(peeked): peek proved Some");
                         if *idx == win_idx {
                             winner = Some(g);
                         }
                     }
                 }
-                let (k, v) = winner.expect("winner drained");
-                Some(TupleInIter::new_meet_suffix(k, v.as_slice(), false))
+                let (k, v) = winner.expect("INVARIANT(meet_merge_winner): win_idx drained a group");
+                Some(TupleInIter::new_meet_suffix(
+                    k,
+                    v.as_slice(),
+                    LimiterSkip::Include,
+                ))
             })
             .filter(move |row| within(*row)),
         )
@@ -936,7 +1005,7 @@ fn meet_ranged<'s>(
                     Some(TupleInIter::new(
                         row.as_slice(),
                         empty_tuple_ref().as_slice(),
-                        false,
+                        LimiterSkip::Include,
                     ))
                 }
             })
