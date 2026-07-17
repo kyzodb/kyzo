@@ -168,10 +168,10 @@ impl NegJoin {
                     let rji = right_join_indices;
                     Box::new(move |row: &[DataValue]| {
                         'outer: for found in
-                            storage.prefix_iter_projected(row, &left_to_prefix_indices, false)
+                            storage.prefix_iter_projected(row, &left_to_prefix_indices, false)?
                         {
                             for (l, r) in lji.iter().zip(rji.iter()) {
-                                if row[*l] != found.get(*r) {
+                                if row[*l] != found.try_get(*r)? {
                                     continue 'outer;
                                 }
                             }
@@ -181,9 +181,12 @@ impl NegJoin {
                     })
                 } else {
                     let mut right_join_vals = BTreeSet::new();
-                    for tuple in storage.all_iter() {
-                        let to_join: Box<[DataValue]> =
-                            right_join_indices.iter().map(|i| tuple.get(*i)).collect();
+                    for tuple in storage.all_iter()? {
+                        let to_join: Box<[DataValue]> = right_join_indices
+                            .iter()
+                            .map(|i| tuple.try_get(*i))
+                            .collect::<Result<Vec<_>, _>>()?
+                            .into_boxed_slice();
                         right_join_vals.insert(to_join);
                     }
                     let lji = left_join_indices;

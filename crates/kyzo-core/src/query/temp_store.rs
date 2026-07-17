@@ -101,22 +101,35 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 
 use itertools::Itertools;
-use miette::{Result, ensure, miette};
+use miette::{Diagnostic, Result, ensure, miette};
+use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
-use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
+use crate::data::value::{DecodeError, Tuple, decode_tuple_bare, encode_tuple_bare};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Own-bytes row keys (P094)
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Bare-encoded row bytes minted only via [`Self::encode`] or
-/// [`Self::from_encoded`]. Foreign slices are not admitted — decode is
-/// infallible by type because only the encode door constructs this type.
+/// Bare-encoded row bytes minted only via [`Self::encode`]. Foreign slices
+/// are unrepresentable — [`TempStoreCorruptRefuse`] is the decode refusal.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct OwnBareKey(Box<[u8]>);
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("temp store row bytes failed bare decode")]
+#[diagnostic(code(query::temp_store_corrupt))]
+pub(crate) struct TempStoreCorruptRefuse(#[source] DecodeError);
+
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum TempStoreAccessRefuse {
+    #[error(transparent)]
+    Corrupt(#[from] TempStoreCorruptRefuse),
+    #[error("head position {idx} out of range")]
+    Position { idx: usize },
+}
 
 impl Debug for OwnBareKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -127,22 +140,15 @@ impl Debug for OwnBareKey {
 impl OwnBareKey {
     /// Mint from a value slice through the bare encode door.
     pub(crate) fn encode(values: &[DataValue]) -> Box<Self> {
-        Self::from_encoded(encode_tuple_bare(values))
-    }
-
-    /// Mint from bytes already produced by the bare tuple encode door.
-    pub(crate) fn from_encoded(bytes: Vec<u8>) -> Box<Self> {
-        Box::new(Self(bytes.into_boxed_slice()))
+        Box::new(Self(encode_tuple_bare(values).into_boxed_slice()))
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
-    /// Infallible: this value exists only because the encode door minted it.
-    pub(crate) fn decode_tuple(&self) -> Tuple {
-        decode_tuple_bare(self.as_bytes())
-            .unwrap_or_else(|_| unreachable!("OwnBareKey minted at encode door"))
+    pub(crate) fn decode_tuple(&self) -> Result<Tuple, TempStoreCorruptRefuse> {
+        decode_tuple_bare(self.as_bytes()).map_err(TempStoreCorruptRefuse)
     }
 }
 
@@ -195,14 +201,16 @@ pub(crate) trait AdmissionSink {
     /// with its *current* (post-update) aggregate value — matching the
     /// provenance boundary that a meet aggregation's witness is per group,
     /// not per contributing row.
-    fn admit(&mut self, tuple: TupleInIter<'_>);
+    fn admit(&mut self, tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse>;
 }
 
 /// Recording off: the default state, compiled away.
 impl AdmissionSink for () {
     const RECORDING: bool = false;
     #[inline(always)]
-    fn admit(&mut self, _tuple: TupleInIter<'_>) {}
+    fn admit(&mut self, _tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse> {
+        Ok(())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -427,8 +435,12 @@ impl MeetLayout {
     /// `Null` placeholder survives. [`MeetAccum::Empty`] materializes as
     /// [`DataValue::Null`] (result meaning "no input"), distinct from the
     /// in-fold Empty state.
-    pub(crate) fn interleave(&self, key: &OwnBareKey, vals: &[MeetAccum]) -> Tuple {
-        let key = key.decode_tuple();
+    pub(crate) fn interleave(
+        &self,
+        key: &OwnBareKey,
+        vals: &[MeetAccum],
+    ) -> Result<Tuple, TempStoreCorruptRefuse> {
+        let key = key.decode_tuple()?;
         let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
         for (slot, p) in self.key_positions.iter().enumerate() {
             row[p.get()] = key[slot].clone();
@@ -436,7 +448,7 @@ impl MeetLayout {
         for (slot, p) in self.val_positions.iter().enumerate() {
             row[p.get()] = vals[slot].to_value();
         }
-        row
+        Ok(row)
     }
 }
 
@@ -684,7 +696,7 @@ impl TempStore {}
 /// probes, the provenance/trials iteration surfaces) working over ONE
 /// type regardless of which
 /// store produced the row and which layout (suffix or interleaved) it
-/// used. The consequence: `get`/`into_tuple`/iteration now return OWNED
+/// used. The consequence: `try_get`/`try_into_tuple`/iteration return OWNED
 /// `DataValue`s, never `&'a DataValue` — a byte-backed key has nothing to
 /// reference; decoding produces a value, not a borrow. Byte-backed rows
 /// were sealed at an encode door before reaching this view.
@@ -751,33 +763,26 @@ impl<'a> TupleInIter<'a> {
 }
 
 impl TupleInIter<'_> {
-    /// Structural guarantee: callers index by positions of the rule head
-    /// this store was built for (`idx < EpochStore::arity`), which is
-    /// compiled knowledge, not data — the INVARIANT cannot fire on user data.
-    pub(crate) fn get(&self, idx: usize) -> DataValue {
+    pub(crate) fn try_get(&self, idx: usize) -> Result<DataValue, TempStoreAccessRefuse> {
         match self {
-            TupleInIter::Bytes { key, .. } => bare_nth(key, idx).expect(
-                "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
-            ),
+            TupleInIter::Bytes { key, .. } => bare_nth(key, idx)?
+                .ok_or(TempStoreAccessRefuse::Position { idx }),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_sealed_row(key);
+                let key = decode_row_bare(key)?;
                 key.get(idx)
                     .cloned()
                     .or_else(|| val.get(idx - key.len()).map(|a| a.to_value()))
-                    .expect(
-                        "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
-                    )
+                    .ok_or(TempStoreAccessRefuse::Position { idx })
             }
             TupleInIter::Values { key, val, .. } => key
                 .get(idx)
                 .or_else(|| val.get(idx - key.len()))
                 .cloned()
-                .expect(
-                    "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
-                ),
-            TupleInIter::Owned { row, .. } => row.get(idx).cloned().expect(
-                "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
-            ),
+                .ok_or(TempStoreAccessRefuse::Position { idx }),
+            TupleInIter::Owned { row, .. } => row
+                .get(idx)
+                .cloned()
+                .ok_or(TempStoreAccessRefuse::Position { idx }),
         }
     }
     pub(crate) fn should_skip(&self) -> bool {
@@ -788,16 +793,25 @@ impl TupleInIter<'_> {
             | TupleInIter::Owned { skip, .. } => skip.excludes_from_return(),
         }
     }
-    pub(crate) fn into_tuple(self) -> Tuple {
+    pub(crate) fn try_into_tuple(self) -> Result<Tuple, TempStoreCorruptRefuse> {
         match self {
-            TupleInIter::Bytes { key, .. } => decode_sealed_row(key),
+            TupleInIter::Owned { row, .. } => Ok(row),
+            other => other.try_materialize(),
+        }
+    }
+
+    fn try_materialize(&self) -> Result<Tuple, TempStoreCorruptRefuse> {
+        match self {
+            TupleInIter::Bytes { key, .. } => decode_row_bare(key),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let mut key = decode_sealed_row(key);
+                let mut key = decode_row_bare(key)?;
                 key.extend(val.iter().map(|a| a.to_value()));
-                key
+                Ok(key)
             }
-            TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cloned().collect(),
-            TupleInIter::Owned { row, .. } => row,
+            TupleInIter::Values { key, val, .. } => {
+                Ok(key.iter().chain(val.iter()).cloned().collect())
+            }
+            TupleInIter::Owned { row, .. } => Ok(row.clone()),
         }
     }
     /// Total comparison against a plain slice, through `DataValue`'s total
@@ -841,7 +855,13 @@ impl TupleInIter<'_> {
                 (*key).cmp(probe.as_slice())
             }
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_sealed_row(key);
+                let key = match decode_row_bare(key) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        let probe = encode_tuple_bare(other);
+                        return (*key).cmp(probe.as_slice());
+                    }
+                };
                 key.iter()
                     .cloned()
                     .chain(val.iter().map(|a| a.to_value()))
@@ -853,39 +873,34 @@ impl TupleInIter<'_> {
     }
 }
 
-/// Decode row bytes sealed at an encode door (temp-store mint or level append).
-fn decode_sealed_row(bytes: &[u8]) -> Tuple {
-    decode_tuple_bare(bytes).unwrap_or_else(|_| unreachable!("row bytes sealed at encode door"))
+/// Decode bare row bytes; refuse corrupt encodings.
+fn decode_row_bare(bytes: &[u8]) -> Result<Tuple, TempStoreCorruptRefuse> {
+    decode_tuple_bare(bytes).map_err(TempStoreCorruptRefuse)
 }
 
-/// The `idx`-th self-delimiting value in `bytes`, walking from the start
-/// (bare-encoded rows carry no per-column offset table: one contiguous,
-/// self-delimiting region is the whole point). `None` if fewer than
-/// `idx + 1` values are present.
-fn bare_nth(bytes: &[u8], idx: usize) -> Option<DataValue> {
+/// The `idx`-th self-delimiting value in `bytes`, walking from the start.
+fn bare_nth(bytes: &[u8], idx: usize) -> Result<Option<DataValue>, TempStoreCorruptRefuse> {
     let mut remaining = bytes;
     for _ in 0..idx {
-        let (_, next) = DataValue::decode_from_key(remaining)
-            .unwrap_or_else(|_| unreachable!("row bytes sealed at encode door"));
+        let (_, next) = DataValue::decode_from_key(remaining).map_err(TempStoreCorruptRefuse)?;
         remaining = next;
     }
     if remaining.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let (val, _) = DataValue::decode_from_key(remaining)
-        .unwrap_or_else(|_| unreachable!("row bytes sealed at encode door"));
-    Some(val)
+    let (val, _) = DataValue::decode_from_key(remaining).map_err(TempStoreCorruptRefuse)?;
+    Ok(Some(val))
 }
 
 /// Materialize every view in a store scan.
 pub(crate) fn collect_materialized<'a>(
     iter: impl IntoIterator<Item = TupleInIter<'a>>,
-) -> Vec<Tuple> {
-    iter.into_iter().map(TupleInIter::into_tuple).collect()
+) -> Result<Vec<Tuple>, TempStoreCorruptRefuse> {
+    iter.into_iter().map(TupleInIter::try_into_tuple).collect()
 }
 
 impl<'a> IntoIterator for TupleInIter<'a> {
-    type Item = DataValue;
+    type Item = Result<DataValue, TempStoreCorruptRefuse>;
     type IntoIter = TupleInIterIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -933,7 +948,10 @@ pub(crate) struct TupleInIterIterator<'a> {
 
 impl PartialEq for TupleInIter<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.clone().into_iter().eq(other.clone().into_iter())
+        matches!(
+            (self.try_materialize(), other.try_materialize()),
+            (Ok(a), Ok(b)) if a == b
+        )
     }
 }
 
@@ -941,7 +959,12 @@ impl Eq for TupleInIter<'_> {}
 
 impl Ord for TupleInIter<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.clone().into_iter().cmp(other.clone().into_iter())
+        match (self.try_materialize(), other.try_materialize()) {
+            (Ok(a), Ok(b)) => a.cmp(&b),
+            (Err(_), Ok(_)) => Ordering::Less,
+            (Ok(_), Err(_)) => Ordering::Greater,
+            (Err(_), Err(_)) => Ordering::Equal,
+        }
     }
 }
 
@@ -953,7 +976,7 @@ impl PartialOrd for TupleInIter<'_> {
 
 impl PartialEq<[DataValue]> for TupleInIter<'_> {
     fn eq(&self, other: &'_ [DataValue]) -> bool {
-        self.clone().into_iter().eq(other.iter().cloned())
+        matches!(self.try_materialize(), Ok(row) if row.as_slice() == other)
     }
 }
 
@@ -964,7 +987,7 @@ impl PartialOrd<[DataValue]> for TupleInIter<'_> {
 }
 
 impl Iterator for TupleInIterIterator<'_> {
-    type Item = DataValue;
+    type Item = Result<DataValue, TempStoreCorruptRefuse>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.state {
@@ -972,11 +995,12 @@ impl Iterator for TupleInIterIterator<'_> {
                 if remaining.is_empty() {
                     return None;
                 }
-                let (val, next) = DataValue::decode_from_key(remaining).unwrap_or_else(|_| {
-                    unreachable!("row bytes sealed at encode door")
-                });
+                let (val, next) = match DataValue::decode_from_key(remaining) {
+                    Ok(pair) => pair,
+                    Err(e) => return Some(Err(TempStoreCorruptRefuse(e))),
+                };
                 *remaining = next;
-                Some(val)
+                Some(Ok(val))
             }
             TupleInIterState::MeetSuffix {
                 key_remaining,
@@ -984,15 +1008,16 @@ impl Iterator for TupleInIterIterator<'_> {
                 val_idx,
             } => {
                 if !key_remaining.is_empty() {
-                    let (v, next) = DataValue::decode_from_key(key_remaining).unwrap_or_else(|_| {
-                        unreachable!("row bytes sealed at encode door")
-                    });
+                    let (v, next) = match DataValue::decode_from_key(key_remaining) {
+                        Ok(pair) => pair,
+                        Err(e) => return Some(Err(TempStoreCorruptRefuse(e))),
+                    };
                     *key_remaining = next;
-                    return Some(v);
+                    return Some(Ok(v));
                 }
                 let ret = val.get(*val_idx)?.to_value();
                 *val_idx += 1;
-                Some(ret)
+                Some(Ok(ret))
             }
             TupleInIterState::Values { key, val, idx } => {
                 let ret = match key.get(*idx) {
@@ -1000,12 +1025,12 @@ impl Iterator for TupleInIterIterator<'_> {
                     None => val.get(*idx - key.len())?.clone(),
                 };
                 *idx += 1;
-                Some(ret)
+                Some(Ok(ret))
             }
             TupleInIterState::Owned { row, idx } => {
                 let ret = row.get(*idx)?.clone();
                 *idx += 1;
-                Some(ret)
+                Some(Ok(ret))
             }
         }
     }
@@ -1047,20 +1072,28 @@ mod tests {
 
     impl AdmissionSink for Recorder {
         const RECORDING: bool = true;
-        fn admit(&mut self, tuple: TupleInIter<'_>) {
-            self.0.push(tuple.into_tuple());
+        fn admit(&mut self, tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse> {
+            self.0.push(tuple.try_into_tuple()?);
+            Ok(())
         }
     }
 
     fn all(store: &EpochStore) -> Vec<Tuple> {
-        store.all_iter().map(TupleInIter::into_tuple).collect_vec()
+        store
+            .all_iter()
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     fn delta(store: &EpochStore) -> Vec<Tuple> {
         store
             .delta_all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect_vec()
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     // ── total/delta discipline ───────────────────────────────────────────
@@ -1299,14 +1332,16 @@ mod tests {
 
         let got = store
             .prefix_iter(&Tuple::from_vec(vec![DataValue::from("b")]))
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
 
         // Indexed access crosses the key/value seam.
-        let row = store.all_iter().next().unwrap();
-        assert_eq!(row.get(0), DataValue::from("a"));
-        assert_eq!(row.get(1), DataValue::from(4i64));
+        let row = store.all_iter().unwrap().next().unwrap();
+        assert_eq!(row.try_get(0).unwrap(), DataValue::from("a"));
+        assert_eq!(row.try_get(1).unwrap(), DataValue::from(4i64));
 
         // Bounded range scans over the whole head tuple (derived order).
         let bounds = |group: &str, v: i64| {
@@ -1319,13 +1354,17 @@ mod tests {
         let upper = bounds("b", 2); // exactly (b, 2)
         let got = store
             .range_iter(&lower, &upper, true)
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(got, vec![gv("b", DataValue::from(2i64))]);
         let got = store
             .range_iter(&lower, &upper, false)
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert!(got.is_empty());
     }
 
@@ -1344,15 +1383,19 @@ mod tests {
         assert_eq!(all(&store).len(), 2);
         let returned = store
             .early_returned_iter()
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(returned, vec![t(&[1])]);
 
         // Delta iteration honors the same store (first epoch: via total).
         let d = store
             .delta_prefix_iter(&Tuple::from_vec(vec![DataValue::from(2i64)]))
-            .map(TupleInIter::into_tuple)
-            .collect_vec();
+            .unwrap()
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(d, vec![t(&[2])]);
     }
 
@@ -1406,7 +1449,9 @@ mod tests {
             ]
         );
         assert_eq!(
-            layout.interleave(&OwnBareKey::encode(key.as_slice()), vals.as_slice()),
+            layout
+                .interleave(&OwnBareKey::encode(key.as_slice()), vals.as_slice())
+                .unwrap(),
             row,
             "interleave is the exact inverse of the two projections"
         );
@@ -1454,9 +1499,9 @@ mod tests {
             ]
         );
         // Indexed access spans the whole logical tuple.
-        let row = store.all_iter().next().unwrap();
-        assert_eq!(row.get(0), DataValue::from(2i64));
-        assert_eq!(row.get(1), DataValue::from("a"));
+        let row = store.all_iter().unwrap().next().unwrap();
+        assert_eq!(row.try_get(0).unwrap(), DataValue::from(2i64));
+        assert_eq!(row.try_get(1).unwrap(), DataValue::from("a"));
     }
 
     /// The determinism-critical seam: for a non-suffix layout the group-key
@@ -1549,15 +1594,12 @@ mod tests {
         let LevelKind::Meet { spec, levels } = &store.kind else {
             panic!("expected meet stores")
         };
-        let mut by_group: BTreeMap<Box<[u8]>, Tuple> = BTreeMap::new();
+        let mut by_group: BTreeMap<Box<OwnBareKey>, Tuple> = BTreeMap::new();
         for level in levels.iter() {
             for (k, v) in &level.groups {
                 by_group.insert(
                     k.clone(),
-                    spec.layout.interleave(
-                        OwnBareKey::from_encoded(k.to_vec()).as_ref(),
-                        v.as_slice(),
-                    ),
+                    spec.layout.interleave(k.as_ref(), v.as_slice()).unwrap(),
                 );
             }
         }

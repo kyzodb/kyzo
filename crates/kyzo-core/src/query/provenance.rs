@@ -168,9 +168,9 @@ impl ModelBody {
                 .get(&muggle(rel))
                 .expect("harness: IDB store present");
             if use_delta {
-                collect_materialized(store.delta_all_iter())
+                collect_materialized(store.delta_all_iter().expect("harness: store iter"))
             } else {
-                collect_materialized(store.all_iter())
+                collect_materialized(store.all_iter().expect("harness: store iter"))
             }
         } else {
             self.facts
@@ -192,8 +192,9 @@ impl ModelBody {
                 .expect("harness: IDB store present");
             store
                 .prefix_iter(probe)
+                .expect("harness: store iter")
                 .next()
-                .is_some_and(|t| t.into_tuple() == *probe)
+                .is_some_and(|t| t.try_into_tuple().ok() == Some(probe.clone()))
         } else {
             self.facts.get(rel).is_some_and(|set| set.contains(probe))
         }
@@ -545,7 +546,7 @@ fn run_pipeline(
         let store = stores.get(&muggle(rel)).expect("store retained");
         rows.insert(
             rel,
-            collect_materialized(store.all_iter()),
+            collect_materialized(store.all_iter().expect("store retained"))?,
         );
     }
     Ok(PipelineOutput { rows, graph })

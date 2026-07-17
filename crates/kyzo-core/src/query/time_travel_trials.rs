@@ -59,6 +59,7 @@ use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::laws;
 use crate::query::ra::RelAlgebra;
 use crate::query::ra::temporal;
+use crate::query::temp_store::TupleInIter;
 use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::fjall::{FjallStorage, new_fjall_storage};
@@ -224,7 +225,13 @@ fn compile_and_run(db: &FjallStorage, prog: StratifiedMagicProgram) -> BTreeSet<
         None,
     )
     .expect("evaluates");
-    outcome.store.all_iter().map(|t| t.into_tuple()).collect()
+    outcome
+        .store
+        .all_iter()
+        .expect("evaluates")
+        .map(TupleInIter::try_into_tuple)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("evaluates")
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ use crate::data::value::{
 };
 use crate::query::temp_store::{
     AdmissionSink, Admitted, LimiterSkip, MeetAggrStore, MeetLayout, OwnBareKey, TempStore,
-    TupleInIter,
+    TempStoreCorruptRefuse, TupleInIter,
 };
 
 #[derive(Debug, Error, Diagnostic)]
@@ -401,13 +401,13 @@ impl NormalLevel {
 pub(crate) struct MeetLevel {
     /// Group key bytes (story #77, same [`encode_tuple_bare`] treatment as
     /// `NormalLevel`'s rows) → folded meet accumulators.
-    pub(crate) groups: Vec<(Box<[u8]>, Vec<MeetAccum>)>,
+    pub(crate) groups: Vec<(Box<OwnBareKey>, Vec<MeetAccum>)>,
 }
 
 impl MeetLevel {
-    fn find(&self, group_key: &[u8]) -> Option<&(Box<[u8]>, Vec<MeetAccum>)> {
+    fn find(&self, group_key: &[u8]) -> Option<&(Box<OwnBareKey>, Vec<MeetAccum>)> {
         self.groups
-            .binary_search_by(|(k, _)| k.as_ref().cmp(group_key))
+            .binary_search_by(|(k, _)| k.as_ref().as_bytes().cmp(group_key))
             .ok()
             .map(|i| &self.groups[i])
     }
@@ -571,7 +571,7 @@ impl EpochStore {
                     match existing {
                         None => {
                             if S::RECORDING {
-                                sink.admit(TupleInIter::new_bytes(row_bytes.as_bytes(), skip));
+                                sink.admit(TupleInIter::new_bytes(row_bytes.as_bytes(), skip))?;
                             }
                             level.push(
                                 row_bytes.into(),
@@ -623,10 +623,10 @@ impl EpochStore {
                     };
                     if let Some(vals) = folded {
                         if S::RECORDING {
-                            let row = spec.layout.interleave(&group, vals.as_slice());
-                            sink.admit(TupleInIter::owned(row, LimiterSkip::Include));
+                            let row = spec.layout.interleave(&group, vals.as_slice())?;
+                            sink.admit(TupleInIter::owned(row, LimiterSkip::Include))?;
                         }
-                        level.groups.push((group.into(), vals));
+                        level.groups.push((group, vals));
                         admitted += 1;
                     }
                 }
@@ -660,7 +660,7 @@ impl EpochStore {
         lower: &[ScanBound],
         upper: &[ScanBound],
         upper_inclusive: bool,
-    ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
+    ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         self.ranged(
             LevelBoundKey::from_encoded(bare_bounds_lower(lower)),
             LevelBoundKey::from_encoded(bare_bounds_upper(upper)),
@@ -673,7 +673,7 @@ impl EpochStore {
         lower: &[ScanBound],
         upper: &[ScanBound],
         upper_inclusive: bool,
-    ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
+    ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         self.ranged(
             LevelBoundKey::from_encoded(bare_bounds_lower(lower)),
             LevelBoundKey::from_encoded(bare_bounds_upper(upper)),
@@ -684,7 +684,7 @@ impl EpochStore {
     pub(crate) fn prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
-    ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
+    ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         // The 0xFF tail (which no canonical encoding begins) bounds every
         // extension of `prefix`, inclusively.
         let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
@@ -695,7 +695,7 @@ impl EpochStore {
     pub(crate) fn delta_prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
-    ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
+    ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
         let mut upper = lower.clone();
         upper.push_exclusive_sentinel();
@@ -712,7 +712,7 @@ impl EpochStore {
         row: &[DataValue],
         cols: &[usize],
         delta_only: bool,
-    ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
+    ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         match &self.kind {
             LevelKind::Normal(levels) => {
                 let picked: Vec<&'s NormalLevel> = if delta_only {
@@ -727,9 +727,9 @@ impl EpochStore {
                         (l, lo, hi)
                     })
                     .collect();
-                Either::Left(std::iter::from_fn(move || {
+                Ok(Either::Left(std::iter::from_fn(move || {
                     normal_merge_next(&mut cursors, delta_only)
-                }))
+                })))
             }
             LevelKind::Meet { spec, levels } => {
                 let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
@@ -743,21 +743,29 @@ impl EpochStore {
                     all.clone()
                 };
                 let newer: Vec<&'s MeetLevel> = if delta_only { vec![] } else { all };
-                Either::Right(meet_ranged(spec, picked, newer, lower, upper, true))
+                Ok(Either::Right(meet_ranged(
+                    spec, picked, newer, lower, upper, true,
+                )?))
             }
         }
     }
 
-    pub(crate) fn all_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
+    pub(crate) fn all_iter(
+        &self,
+    ) -> Result<impl Iterator<Item = TupleInIter<'_>>, TempStoreCorruptRefuse> {
         self.prefix_iter(&Tuple::new())
     }
-    pub(crate) fn delta_all_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
+    pub(crate) fn delta_all_iter(
+        &self,
+    ) -> Result<impl Iterator<Item = TupleInIter<'_>>, TempStoreCorruptRefuse> {
         self.delta_prefix_iter(&Tuple::new())
     }
     /// The rows an early-returned (`:limit`-satisfied) entry rule actually
     /// returns: everything not flagged limiter-skipped.
-    pub(crate) fn early_returned_iter(&self) -> impl Iterator<Item = TupleInIter<'_>> {
-        self.all_iter().filter(|t| !t.should_skip())
+    pub(crate) fn early_returned_iter(
+        &self,
+    ) -> Result<impl Iterator<Item = TupleInIter<'_>>, TempStoreCorruptRefuse> {
+        Ok(self.all_iter()?.filter(|t| !t.should_skip()))
     }
 
     /// The one iterator both tiers and both scopes (total, delta) share:
@@ -769,7 +777,7 @@ impl EpochStore {
         upper: LevelBoundKey,
         upper_inclusive: bool,
         delta_only: bool,
-    ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
+    ) -> Result<impl Iterator<Item = TupleInIter<'s>> + use<'s>, TempStoreCorruptRefuse> {
         match &self.kind {
             LevelKind::Normal(levels) => {
                 let picked: Vec<&'s NormalLevel> = if delta_only {
@@ -785,9 +793,9 @@ impl EpochStore {
                         (l, lo, hi)
                     })
                     .collect();
-                Either::Left(std::iter::from_fn(move || {
+                Ok(Either::Left(std::iter::from_fn(move || {
                     normal_merge_next(&mut cursors, delta_only)
-                }))
+                })))
             }
             LevelKind::Meet { spec, levels } => {
                 let all: Vec<&'s MeetLevel> = levels.iter().collect();
@@ -797,8 +805,9 @@ impl EpochStore {
                     all.clone()
                 };
                 let newer: Vec<&'s MeetLevel> = if delta_only { vec![] } else { all };
-                let it = meet_ranged(spec, picked, newer, lower, upper, upper_inclusive);
-                Either::Right(it)
+                Ok(Either::Right(meet_ranged(
+                    spec, picked, newer, lower, upper, upper_inclusive,
+                )?))
             }
         }
     }
@@ -966,7 +975,7 @@ fn meet_ranged<'s>(
     lower: LevelBoundKey,
     upper: LevelBoundKey,
     upper_inclusive: bool,
-) -> Box<dyn Iterator<Item = TupleInIter<'s>> + 's> {
+) -> Result<Box<dyn Iterator<Item = TupleInIter<'s>> + 's>, TempStoreCorruptRefuse> {
     let within = move |row: &TupleInIter<'_>| -> bool {
         row.cmp_bare(&lower) != Ordering::Less
             && match row.cmp_bare(&upper) {
@@ -978,19 +987,19 @@ fn meet_ranged<'s>(
     if spec.layout.is_suffix() {
         // Group order is row order: k-way over `groups`, newest wins.
         let mut cursors: Vec<(
-            std::iter::Peekable<std::slice::Iter<'s, (Box<[u8]>, Vec<MeetAccum>)>>,
+            std::iter::Peekable<std::slice::Iter<'s, (Box<OwnBareKey>, Vec<MeetAccum>)>>,
             usize,
         )> = picked
             .iter()
             .enumerate()
             .map(|(idx, l)| (l.groups.iter().peekable(), idx))
             .collect();
-        Box::new(
+        Ok(Box::new(
             std::iter::from_fn(move || {
-                let mut best: Option<(&'s [u8], usize)> = None;
+                let mut best: Option<(&'s OwnBareKey, usize)> = None;
                 for (cur, idx) in cursors.iter_mut() {
                     if let Some((k, _)) = cur.peek() {
-                        let k: &'s [u8] = k.as_ref();
+                        let k: &'s OwnBareKey = k.as_ref();
                         best = match best {
                             None => Some((k, *idx)),
                             Some((bk, bidx)) => {
@@ -1004,7 +1013,7 @@ fn meet_ranged<'s>(
                     }
                 }
                 let (key, win_idx) = best?;
-                let mut winner: Option<&'s (Box<[u8]>, Vec<MeetAccum>)> = None;
+                let mut winner: Option<&'s (Box<OwnBareKey>, Vec<MeetAccum>)> = None;
                 for (cur, idx) in cursors.iter_mut() {
                     while cur.peek().is_some_and(|(k, _)| k.as_ref() == key) {
                         let g = cur.next().expect("INVARIANT(peeked): peek proved Some");
@@ -1015,13 +1024,13 @@ fn meet_ranged<'s>(
                 }
                 let (k, v) = winner.expect("INVARIANT(meet_merge_winner): win_idx drained a group");
                 Some(TupleInIter::new_meet_suffix(
-                    k.as_ref(),
+                    k.as_ref().as_bytes(),
                     v.as_slice(),
                     LimiterSkip::Include,
                 ))
             })
             .filter(move |row| within(row)),
-        )
+        ))
     } else {
         // Interleaved: derive head-tuple rows from each picked level's
         // groups; a row speaks only if no newer level owns its group.
@@ -1031,17 +1040,12 @@ fn meet_ranged<'s>(
                 let mut rows: Vec<Tuple> = l
                     .groups
                     .iter()
-                    .map(|(k, v)| {
-                        spec.layout.interleave(
-                            OwnBareKey::from_encoded(k.to_vec()).as_ref(),
-                            v.as_slice(),
-                        )
-                    })
-                    .collect();
+                    .map(|(k, v)| spec.layout.interleave(k.as_ref(), v.as_slice()))
+                    .collect::<Result<Vec<_>, _>>()?;
                 rows.sort();
-                rows
+                Ok(rows)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         // Per-level slice of newer refs so the inner filter_map owns its
         // capture — nested `move` cannot both take `all` (E0507).
         let iters = derived.into_iter().enumerate().map(move |(idx, rows)| {
@@ -1056,11 +1060,11 @@ fn meet_ranged<'s>(
                 }
             })
         });
-        Box::new(
+        Ok(Box::new(
             iters
                 .kmerge_by(|a, b| a.cmp(b) == Ordering::Less)
                 .filter(move |row| within(row)),
-        )
+        ))
     }
 }
 
@@ -1097,6 +1101,6 @@ mod tests {
             levels.len()
         );
         // Totals intact through it all.
-        assert_eq!(store.all_iter().count(), 10);
+        assert_eq!(store.all_iter().unwrap().count(), 10);
     }
 }

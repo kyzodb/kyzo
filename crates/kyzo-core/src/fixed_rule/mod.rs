@@ -107,7 +107,7 @@ use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;
 use crate::query::eval::{BudgetDimension, LimitExceeded};
 use crate::query::levels::EpochStore;
-use crate::query::temp_store::RegularTempStore;
+use crate::query::temp_store::{RegularTempStore, TupleInIter};
 use crate::data::value::data_value_any;
 
 pub(crate) mod algos;
@@ -302,7 +302,11 @@ impl<'a> FixedRuleInputRelation<'a> {
                         name.as_plain_symbol().span,
                     )
                 })?;
-                Box::new(store.all_iter().map(|t| Ok(t.into_tuple())))
+                Box::new(
+                    store
+                        .all_iter()?
+                        .map(|t| t.try_into_tuple().map_err(Into::into)),
+                )
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
                 self.stored.stored_scan_all(name, *as_of)?
@@ -320,7 +324,11 @@ impl<'a> FixedRuleInputRelation<'a> {
                     )
                 })?;
                 let t: Tuple = Tuple::from_vec(vec![prefix.clone()]);
-                Box::new(store.prefix_iter(&t).map(|t| Ok(t.into_tuple())))
+                Box::new(
+                    store
+                        .prefix_iter(&t)?
+                        .map(|t| t.try_into_tuple().map_err(Into::into)),
+                )
             }
             MagicFixedRuleRuleArg::Stored { name, as_of, .. } => {
                 self.stored.stored_scan_prefix(name, prefix, *as_of)?
@@ -1697,7 +1705,10 @@ pub(crate) mod tests_support {
             let store = out.into_store().wrap();
             let mut collected = EpochStore::new_normal(self.arity);
             collected.merge_in(store, &mut ())?;
-            Ok(collected.all_iter().map(|t| t.into_tuple()).collect_vec())
+            Ok(collected
+                .all_iter()?
+                .map(TupleInIter::try_into_tuple)
+                .collect::<Result<Vec<_>, _>>()?)
         }
     }
 

@@ -91,6 +91,7 @@ use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
 use crate::query::levels::EpochStore;
 use crate::query::normalize::{SessionFixedRule, SessionNormalizer, SessionView};
 use crate::query::sort::sort_and_collect;
+use crate::query::temp_store::TupleInIter;
 use crate::runtime::callback::{CallbackCollector, EventCallbackRegistry};
 use crate::runtime::current_validity;
 use crate::runtime::relation::{
@@ -523,11 +524,14 @@ impl<S: Storage> Db<S> {
             // opaque types, so each branch collects on its own.
             if limited {
                 result
-                    .early_returned_iter()
-                    .map(|t| t.into_tuple())
-                    .collect()
+                    .early_returned_iter()?
+                    .map(TupleInIter::try_into_tuple)
+                    .collect::<Result<Vec<_>, _>>()?
             } else {
-                result.all_iter().map(|t| t.into_tuple()).collect()
+                result
+                    .all_iter()?
+                    .map(TupleInIter::try_into_tuple)
+                    .collect::<Result<Vec<_>, _>>()?
             }
         } else {
             let sorted = sort_and_collect(result, &out_opts.sorters, head)?;

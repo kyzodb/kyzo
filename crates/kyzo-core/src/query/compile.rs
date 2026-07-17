@@ -154,7 +154,7 @@ use crate::query::eval::{
 };
 use crate::query::levels::EpochStore;
 use crate::query::ra::{PlanInvariantError, RelAlgebra, SearchRA};
-use crate::query::temp_store::RegularTempStore;
+use crate::query::temp_store::{RegularTempStore, TupleInIter};
 use crate::runtime::relation::{
     AccessLevel, IndexKind, IndexPositionUse, InsufficientAccessLevel, RelationHandle, get_relation,
 };
@@ -1284,7 +1284,13 @@ mod tests {
         .expect("binds");
         let outcome = stratified_evaluate(&program, &lifetimes, RowLimit::default(), &budget, None)
             .expect("evaluates");
-        outcome.store.all_iter().map(|t| t.into_tuple()).collect()
+        outcome
+            .store
+            .all_iter()
+            .expect("test store iter")
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("test store rows")
     }
 
     fn rows(data: &[&[i64]]) -> BTreeSet<Tuple> {

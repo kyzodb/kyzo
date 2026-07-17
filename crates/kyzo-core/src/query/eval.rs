@@ -197,8 +197,8 @@ use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
 use crate::query::temp_store::{
-    AdmissionSink, HeadPos, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
-    collect_materialized,
+    AdmissionSink, HeadPos, MeetAggrStore, RegularTempStore, TempStore, TempStoreCorruptRefuse,
+    TupleInIter, collect_materialized,
 };
 
 /// One head position's aggregation slot — the shape carried through
@@ -975,8 +975,8 @@ struct WitnessBinder<'a> {
 
 impl AdmissionSink for WitnessBinder<'_> {
     const RECORDING: bool = true;
-    fn admit(&mut self, tuple: TupleInIter<'_>) {
-        let full = tuple.into_tuple();
+    fn admit(&mut self, tuple: TupleInIter<'_>) -> Result<(), TempStoreCorruptRefuse> {
+        let full = tuple.try_into_tuple()?;
         let derivation = match self.key_mode {
             WitnessKeyMode::FullTuple => self.pending.get(&full).cloned(),
             // Project the admitted head tuple onto the grouping positions to
@@ -993,6 +993,7 @@ impl AdmissionSink for WitnessBinder<'_> {
             tuple: full,
             derivation,
         });
+        Ok(())
     }
 }
 
@@ -1408,8 +1409,8 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
     // admit edges whose rule-premises appear later in enumeration order
     // (P104: premises must be known at add_derivation).
     for (name, store) in stores {
-        for t in store.all_iter() {
-            graph.declare((PremiseSource::Rule(name.clone()), t.into_tuple()));
+        for t in store.all_iter()? {
+            graph.declare((PremiseSource::Rule(name.clone()), t.try_into_tuple()?));
         }
     }
 
@@ -1422,8 +1423,8 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 // premise it without tripping the liveness refusal below.)
                 EvalDefinition::Rules(_) | EvalDefinition::Fixed { .. } => {
                     if let Some(store) = stores.get(name) {
-                        for t in store.all_iter() {
-                            graph.add_fact((PremiseSource::Rule(name.clone()), t.into_tuple()));
+                        for t in store.all_iter()? {
+                            graph.add_fact((PremiseSource::Rule(name.clone()), t.try_into_tuple()?));
                         }
                     }
                     continue;
@@ -1473,9 +1474,9 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         if let PremiseSource::Rule(sym) = src {
                             let dep = store_of(stores, sym)?;
                             let present = dep
-                                .prefix_iter(&row)
+                                .prefix_iter(&row)?
                                 .next()
-                                .is_some_and(|t| t.into_tuple() == row);
+                                .is_some_and(|t| t.try_into_tuple().ok() == Some(row.clone()));
                             if !present {
                                 return Err(EvalInvariantError(
                                     "a premise row is missing from its attributed store",
@@ -2015,9 +2016,9 @@ mod tests {
             if self.idb.contains(rel) {
                 let store = store_of(stores, &muggle(rel))?;
                 Ok(if use_delta {
-                    collect_materialized(store.delta_all_iter())
+                    collect_materialized(store.delta_all_iter()?)
                 } else {
-                    collect_materialized(store.all_iter())
+                    collect_materialized(store.all_iter()?)
                 })
             } else {
                 Ok(self
@@ -2041,7 +2042,7 @@ mod tests {
                 // wrong question for negation).
                 let store = store_of(stores, &muggle(rel))?;
                 Ok(store
-                    .prefix_iter(probe)
+                    .prefix_iter(probe)?
                     .next()
                     .is_some_and(|t| t == probe.as_slice()[..]))
             } else {
@@ -2192,7 +2193,7 @@ mod tests {
                 .map(|rel| -> Result<BTreeSet<Tuple>> {
                     if self.idb.contains(rel) {
                         Ok(collect_materialized(
-                            store_of(stores, &muggle(rel))?.all_iter(),
+                            store_of(stores, &muggle(rel))?.all_iter()?,
                         ))
                     } else {
                         Ok(self.facts.get(rel).cloned().unwrap_or_default())
@@ -2447,7 +2448,7 @@ mod tests {
             budget,
             None,
         )?;
-        Ok(collect_materialized(outcome.store.all_iter()))
+        Ok(collect_materialized(outcome.store.all_iter()?))
     }
 
     /// Relation arities derived from the MODEL alone (rule heads and
@@ -3461,7 +3462,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = collect_materialized(outcome.store.all_iter());
+                let rows = collect_materialized(outcome.store.all_iter()?)?;
                 let witnesses = table
                     .entries()
                     .iter()
@@ -3517,7 +3518,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = collect_materialized(outcome.store.all_iter());
+                let rows = collect_materialized(outcome.store.all_iter()?)?;
                 let witnesses = table
                     .entries()
                     .iter()
@@ -4057,7 +4058,7 @@ mod tests {
             None,
         )
         .expect("exact-at-ceiling spend must COMPLETE, not refuse (kills `>=`)");
-        let rows = outcome.store.all_iter().count();
+        let rows = outcome.store.all_iter()?.count();
         assert_eq!(rows, CEILING as usize, "all exactly-ceiling rows survive");
     }
 
@@ -4243,7 +4244,7 @@ mod tests {
         let outcome =
             stratified_evaluate(&prog, &StoreLifetimes::default(), no_limit(), &budget, None)
                 .expect("a ceiling covering the true total must not refuse");
-        assert_eq!(outcome.store.all_iter().count(), 400);
+        assert_eq!(outcome.store.all_iter().unwrap().count(), 400);
     }
 
     /// F3 pin: the STREAMING harness bounds the killer shape. A 10_000×10_000
@@ -4418,9 +4419,9 @@ mod tests {
         )
         .expect("evaluates");
         assert!(outcome.limited, "the limiter engaged");
-        let returned: Vec<Tuple> = collect_materialized(outcome.store.early_returned_iter());
+        let returned: Vec<Tuple> = collect_materialized(outcome.store.early_returned_iter()?)?;
         assert_eq!(returned.len(), 2, "limit rows, offset excluded");
-        let taken: Vec<Tuple> = collect_materialized(outcome.store.all_iter());
+        let taken: Vec<Tuple> = collect_materialized(outcome.store.all_iter()?)?;
         assert_eq!(taken.len(), 3, "take = limit + offset rows produced");
         for row in taken {
             assert!(
@@ -4503,7 +4504,7 @@ mod tests {
         )
         .expect("evaluates");
         assert!(outcome.limited, "the limiter engaged");
-        let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter())
+        let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter()?)?
             .into_iter()
             .collect();
         for row in &rows {
@@ -4884,7 +4885,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = collect_materialized(outcome.store.all_iter());
+                let rows = collect_materialized(outcome.store.all_iter()?)?;
                 let witnesses = table
                     .entries()
                     .iter()

@@ -82,6 +82,7 @@ use crate::parse::{Script, parse_script};
 use crate::query::laws;
 use crate::query::normalize::{SessionNormalizer, SessionView};
 use crate::query::ra::stored::StoredWithValidityRA;
+use crate::query::temp_store::TupleInIter;
 use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
@@ -573,9 +574,9 @@ impl<S: Storage> Db<S> {
         let _ = limited;
         let _ = &head;
         let production: BTreeSet<Tuple> = result
-            .all_iter()
-            .map(crate::query::temp_store::TupleInIter::into_tuple)
-            .collect();
+            .all_iter()?
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<BTreeSet<_>, _>>()?;
 
         // Oracle: translate, refuse typed, or evaluate on the SAME snapshot.
         let (normalized, _out_opts2) = {

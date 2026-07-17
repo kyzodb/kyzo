@@ -72,6 +72,7 @@ use crate::query::compile::{
     CompiledProgram, NoFixedRules, bind_for_eval, stratified_magic_compile,
 };
 use crate::query::eval::{Budget, RowLimit, stratified_evaluate};
+use crate::query::temp_store::TupleInIter;
 use crate::runtime::relation::KeyspaceKind;
 use crate::runtime::relation::create_relation;
 use crate::storage::sim::{FaultConfig, SimRng, SimStorage, for_each_seed};
@@ -241,7 +242,11 @@ fn try_run<S: Storage>(db: &S, prog: StratifiedMagicProgram) -> Result<BTreeSet<
         &generous_budget(),
         None,
     )?;
-    Ok(outcome.store.all_iter().map(|t| t.into_tuple()).collect())
+    Ok(outcome
+        .store
+        .all_iter()?
+        .map(TupleInIter::try_into_tuple)
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 // ═════════════════════════════════════════════════════════════════════════

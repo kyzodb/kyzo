@@ -85,6 +85,7 @@ use crate::runtime::relation::{
     AccessLevel, ConstraintRef, InsufficientAccessLevel, get_relation, list_relations,
     write_relation_row,
 };
+use crate::query::temp_store::TupleInIter;
 use crate::storage::temp::TempTx;
 use crate::storage::{ReadTx, Storage, WriteTx};
 
@@ -294,7 +295,10 @@ impl<S: Storage> Db<S> {
             // committed-state segments must never serve them.
             crate::engines::segments::Segments::OFF,
         )?;
-        let mut rows: Vec<Tuple> = result.all_iter().map(|t| t.into_tuple()).collect();
+        let mut rows: Vec<Tuple> = result
+            .all_iter()?
+            .map(TupleInIter::try_into_tuple)
+            .collect::<Result<Vec<_>, _>>()?;
         rows.sort();
         rows.dedup();
         Ok(rows)

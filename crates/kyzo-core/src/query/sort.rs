@@ -36,6 +36,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
+use crate::query::temp_store::TupleInIter;
 
 /// An `:order` clause names a variable that is not in the entry head.
 /// (The CozoDB original panicked on this shape.)
@@ -64,7 +65,10 @@ pub(crate) fn sort_and_collect(
         }
     }
 
-    let mut all_data: Vec<Tuple> = original.all_iter().map(|v| v.into_tuple()).collect();
+    let mut all_data: Vec<Tuple> = original
+        .all_iter()?
+        .map(TupleInIter::try_into_tuple)
+        .collect::<Result<Vec<_>, _>>()?;
     all_data.sort_by(|a, b| {
         for (idx, dir) in &idx_sorters {
             match a[*idx].cmp(&b[*idx]) {

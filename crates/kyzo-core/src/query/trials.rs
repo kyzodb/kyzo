@@ -200,9 +200,9 @@ impl ModelBody {
                 .get(&muggle(rel))
                 .expect("harness: IDB store present");
             if use_delta {
-                collect_materialized(store.delta_all_iter())
+                collect_materialized(store.delta_all_iter().expect("harness: store iter"))
             } else {
-                collect_materialized(store.all_iter())
+                collect_materialized(store.all_iter().expect("harness: store iter"))
             }
         } else {
             self.facts
@@ -224,8 +224,9 @@ impl ModelBody {
                 .expect("harness: IDB store present");
             store
                 .prefix_iter(probe)
+                .expect("harness: store iter")
                 .next()
-                .is_some_and(|t| t.into_tuple() == *probe)
+                .is_some_and(|t| t.try_into_tuple().ok() == Some(probe.clone()))
         } else {
             self.facts.get(rel).is_some_and(|set| set.contains(probe))
         }
@@ -320,7 +321,8 @@ impl FixedRuleEval for ModelFixed {
                         stores
                             .get(&muggle(rel))
                             .expect("harness: fixed input store present")
-                            .all_iter(),
+                            .all_iter()
+                            .expect("harness: store iter"),
                     )
                 } else {
                     self.facts.get(rel).cloned().unwrap_or_default()
@@ -586,7 +588,7 @@ fn real_eval(
         budget,
         None,
     )?;
-    Ok(collect_materialized(outcome.store.all_iter()))
+    Ok(collect_materialized(outcome.store.all_iter()?))
 }
 
 fn generous_budget() -> Budget {
@@ -1044,7 +1046,7 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
             Some(&mut table),
         )
         .expect("evaluates");
-        let rows = collect_materialized(outcome.store.all_iter());
+        let rows = collect_materialized(outcome.store.all_iter()?)?;
         (rows, render_witnesses(&table))
     })
 }
@@ -1456,7 +1458,7 @@ fn run_with_witnesses(
         Some(&mut table),
     )
     .expect("evaluates");
-    let rows = collect_materialized(outcome.store.all_iter());
+    let rows = collect_materialized(outcome.store.all_iter()?)?;
     (
         rows,
         index_witnesses(&table),
