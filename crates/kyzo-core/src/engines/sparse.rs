@@ -141,6 +141,7 @@ pub(crate) struct Sparse;
 impl ProjectionKind for Sparse {
     type Query = SparseSearchParams;
     /// Result-set bound `k` — the search law's truncation contract.
+    /// Relation-backed search is [`Sparse::search_index`] (P103).
     type Candidates = usize;
 
     fn search(&self, query: &Self::Query) -> Self::Candidates {
@@ -412,6 +413,14 @@ fn decode_posting(idx_name: &str, base_key_len: usize, row: &[DataValue]) -> Res
     Ok((Tuple::from_vec(row[1..=base_key_len].to_vec()), weight))
 }
 
+/// Whether sparse search appends the score column — the **one** bind encoding
+/// (P038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SparseBindScore {
+    Omit,
+    Append,
+}
+
 /// The parameters of one sparse search; the RA operator tier constructs this
 /// from the resolved search atom.
 #[derive(Debug, Clone, Copy)]
@@ -419,7 +428,7 @@ pub(crate) struct SparseSearchParams {
     pub(crate) k: usize,
     /// Append the score as a trailing `Float` column (the RA tier maps it to a
     /// binding).
-    pub(crate) bind_score: bool,
+    pub(crate) bind_score: SparseBindScore,
 }
 
 /// Sparse dot-product search. Returns matching base-relation rows, highest
@@ -439,7 +448,22 @@ pub(crate) struct SparseSearchParams {
 /// document's score therefore accumulates in a FIXED order. Ties in score are
 /// broken by the document key's memcmp order — a total order, so the result is
 /// byte-identical across runs.
-pub(crate) fn sparse_search(
+impl Sparse {
+    /// Relation-backed sparse search — the sole sparse search door (P103).
+    /// Formerly the free function `sparse_search`.
+    pub(crate) fn search_index(
+        tx: &impl ReadTx,
+        query: &[(u32, f32)],
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &SparseSearchParams,
+        filter_code: &Option<Expr>,
+    ) -> Result<Vec<Tuple>> {
+        sparse_search_body(tx, query, base, idx, params, filter_code)
+    }
+}
+
+fn sparse_search_body(
     tx: &impl ReadTx,
     query: &[(u32, f32)],
     base: &RelationHandle,
@@ -508,7 +532,7 @@ pub(crate) fn sparse_search(
                 IndexCorruptReason::BaseRowMissing,
             ))
         })?;
-        if params.bind_score {
+        if matches!(params.bind_score, SparseBindScore::Append) {
             cand.push(DataValue::from(score as f64));
         }
         if let Some(code) = filter_code
@@ -617,14 +641,14 @@ mod tests {
     fn params(k: usize) -> SparseSearchParams {
         SparseSearchParams {
             k,
-            bind_score: true,
+            bind_score: SparseBindScore::Append,
         }
     }
 
     /// Run a search and project `(key, score)`.
     fn run(db: &impl Storage, f: &Fixture, query: &[(u32, f32)], k: usize) -> Vec<(i64, f32)> {
         let rtx = db.read_tx().unwrap();
-        let hits = sparse_search(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
+        let hits = Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(k), &None).unwrap();
         hits.iter()
             .map(|t| {
                 (
@@ -788,7 +812,7 @@ mod tests {
             let db = new_fjall_storage(dir.path()).unwrap();
             let f = setup(&db, docs);
             let rtx = db.read_tx().unwrap();
-            sparse_search(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap()
+            Sparse::search_index(&rtx, query, &f.base, &f.idx, &params(10), &None).unwrap()
         };
 
         let a = build_and_search();
@@ -818,7 +842,7 @@ mod tests {
         };
         let search_err = || -> miette::Report {
             let rtx = db.read_tx().unwrap();
-            sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &params(1), &None)
+            Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &params(1), &None)
                 .expect_err("corrupt posting must error, not panic")
         };
 
@@ -996,9 +1020,9 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let p = SparseSearchParams {
             k: 10,
-            bind_score: true,
+            bind_score: SparseBindScore::Append,
         };
-        let hits = sparse_search(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap();
+        let hits = Sparse::search_index(&rtx, &[(0, 1.0)], &f.base, &f.idx, &p, &Some(filter)).unwrap();
         let keys: Vec<i64> = hits.iter().map(|t| t[0].get_int().unwrap()).collect();
         assert_eq!(
             keys,

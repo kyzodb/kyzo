@@ -25,10 +25,9 @@
  * interface and ignored here. A `MeetAggrStore` groups by the head's
  * non-aggregated positions **wherever they sit** (a constructed
  * `MeetLayout` proof) — full oracle positional-meet parity
- * (`query/laws.rs`). It keeps two views — `by_group` for the fold/delta
- * (group-key order) and `by_row` for the head-tuple-ordered scans joins
- * issue — because for a non-suffix layout those orders differ. The delta
- * propagation in `MeetAggrStore`
+ * (`query/laws.rs`). Fold/delta authority is solely `by_group`; head-tuple
+ * order for joins is derived via [`MeetLayout::interleave`] at scan time
+ * (P036 — no `by_row` twin). The delta propagation in `MeetAggrStore`
  * rides the *corrected* `MeetAggrObj::update` changed-flag contract — the
  * original's inverted `and`/`or` flags could announce "unchanged" on
  * exactly the update that changed a value and reach a premature fixpoint;
@@ -95,7 +94,7 @@
 //! with eval's port.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 
 use itertools::Itertools;
@@ -317,11 +316,9 @@ impl MeetLayout {
     /// grouping positions are exactly the prefix `0..key_positions.len()`.
     /// When true, a head tuple is byte-for-byte `group_key ++ folded_vals`,
     /// so the group map alone reconstructs every row in head-tuple order (a
-    /// distinct group has a distinct key, and the key is the head prefix)
-    /// and the `by_row` mirror is redundant. This is the pre-fork store's
-    /// layout — the only shape that existed before positional grouping — so
-    /// a suffix store skips the mirror entirely and keeps that footprint;
-    /// only a genuinely non-suffix layout pays for `by_row`.
+    /// distinct group has a distinct key, and the key is the head prefix).
+    /// Non-suffix layouts derive head-tuple order from `by_group` via
+    /// [`Self::interleave`] at scan time — never a stored twin (P036).
     pub(crate) fn is_suffix(&self) -> bool {
         self.key_positions
             .iter()
@@ -393,18 +390,6 @@ pub(crate) struct MeetAggrStore {
     /// are [`MeetAccum`] — `Empty | Value(v)` — so a domain `Null` is never
     /// the empty sentinel.
     pub(crate) by_group: BTreeMap<Box<[u8]>, Vec<MeetAccum>>,
-    /// The current logical head tuples — each the [`MeetLayout::interleave`]
-    /// of a group key with its folded values — kept in canonical head-tuple
-    /// order for the range/prefix scans joins issue (`query/ra.rs`).
-    ///
-    /// Materialized **only for a non-suffix layout**, where head-tuple order
-    /// and group-key order genuinely differ. For that case it is a pure
-    /// mirror of `by_group`: every mutation updates both, so it is always
-    /// exactly `{ interleave(k, v) : (k, v) ∈ by_group }`. For a suffix
-    /// layout it stays empty — the group key is a head prefix, so `by_group`
-    /// alone scans in head-tuple order (see [`MeetLayout::is_suffix`]) and
-    /// the mirror would only duplicate the fold authority's memory.
-    by_row: BTreeSet<Tuple>,
     /// The meet operations, one per aggregated head position, in head
     /// order, resolved at construction. (The original stored `Option`s and
     /// unwrapped per row.)
@@ -519,7 +504,6 @@ impl MeetAggrStore {
         }
         Ok(Self {
             by_group: Default::default(),
-            by_row: Default::default(),
             meets,
             layout,
         })
@@ -539,7 +523,6 @@ impl MeetAggrStore {
     /// batch-resident row folds in without being minted, and only a NEW
     /// group allocates (its key and values).
     pub(crate) fn meet_put(&mut self, tuple: &[DataValue]) -> Result<bool> {
-        let materialize = !self.layout.is_suffix();
         // The grouping projection, encoded once (story #77: `borrow_key` is
         // always an encode now, never a zero-alloc slice borrow — see its
         // doc), and fold incoming values straight from `tuple` by position
@@ -547,22 +530,11 @@ impl MeetAggrStore {
         let key = self.layout.borrow_key(tuple);
         match self.by_group.get_mut(key.as_slice()) {
             Some(vals) => {
-                // Snapshot the pre-fold values only when the row mirror
-                // needs the old row to retract (F2b): a no-change put never
-                // materializes the interleaved clone.
-                let old_vals = materialize.then(|| vals.clone());
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
                     let incoming =
                         MeetAccum::from_derived(tuple[self.layout.val_positions[i]].clone());
                     changed |= op.update(&mut vals[i], &incoming)?;
-                }
-                if changed && materialize {
-                    let old_vals = old_vals.expect("materialize implies a snapshot");
-                    let old_row = self.layout.interleave(&key, old_vals.as_slice());
-                    let new_row = self.layout.interleave(&key, vals.as_slice());
-                    self.by_row.remove(&old_row);
-                    self.by_row.insert(new_row);
                 }
                 Ok(changed)
             }
@@ -577,10 +549,6 @@ impl MeetAggrStore {
                     let incoming =
                         MeetAccum::from_derived(tuple[self.layout.val_positions[i]].clone());
                     op.update(&mut vals[i], &incoming)?;
-                }
-                if materialize {
-                    self.by_row
-                        .insert(self.layout.interleave(&key, vals.as_slice()));
                 }
                 self.by_group.insert(key.into_boxed_slice(), vals);
                 Ok(true)
@@ -598,10 +566,6 @@ impl MeetAggrStore {
         );
         let vals: Vec<MeetAccum> = self.meets.iter().map(|(_, op)| op.init_val()).collect();
         let key = encode_tuple_bare(&[]);
-        if !self.layout.is_suffix() {
-            self.by_row
-                .insert(self.layout.interleave(&key, vals.as_slice()));
-        }
         self.by_group.insert(key.into_boxed_slice(), vals);
         Ok(true)
     }
@@ -647,7 +611,7 @@ impl TempStore {}
 /// `.into_tuple()` (whose signature is unchanged), and the one exception
 /// (`query/ra/temp.rs`'s filter-less join arm) already had a
 /// materialize-first fallback one branch away for the filtered case.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole
     /// row in `key` — a regular row has no separate value region.
@@ -671,6 +635,12 @@ pub(crate) enum TupleInIter<'a> {
         val: &'a [DataValue],
         skip: LimiterSkip,
     },
+    /// Owned head tuple — interleaved meet scans derive this from `groups`
+    /// / `by_group` so no stored `by_row` twin is required (P036).
+    Owned {
+        row: Tuple,
+        skip: LimiterSkip,
+    },
 }
 
 impl<'a> TupleInIter<'a> {
@@ -683,6 +653,10 @@ impl<'a> TupleInIter<'a> {
         skip: LimiterSkip,
     ) -> Self {
         TupleInIter::Values { key, val, skip }
+    }
+    /// Owned head-tuple view (interleaved meet derive-at-scan).
+    pub(crate) fn owned(row: Tuple, skip: LimiterSkip) -> Self {
+        TupleInIter::Owned { row, skip }
     }
     /// Construct a view over one regular store's row bytes.
     pub(crate) fn new_bytes(key: &'a [u8], skip: LimiterSkip) -> Self {
@@ -703,7 +677,7 @@ impl TupleInIter<'_> {
     /// Structural guarantee: callers index by positions of the rule head
     /// this store was built for (`idx < EpochStore::arity`), which is
     /// compiled knowledge, not data — the INVARIANT cannot fire on user data.
-    pub(crate) fn get(self, idx: usize) -> DataValue {
+    pub(crate) fn get(&self, idx: usize) -> DataValue {
         match self {
             TupleInIter::Bytes { key, .. } => bare_nth(key, idx).expect(
                 "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
@@ -726,13 +700,17 @@ impl TupleInIter<'_> {
                 .expect(
                     "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
                 ),
+            TupleInIter::Owned { row, .. } => row.get(idx).cloned().expect(
+                "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
+            ),
         }
     }
     pub(crate) fn should_skip(&self) -> bool {
         match self {
             TupleInIter::Bytes { skip, .. }
             | TupleInIter::MeetSuffix { skip, .. }
-            | TupleInIter::Values { skip, .. } => skip.excludes_from_return(),
+            | TupleInIter::Values { skip, .. }
+            | TupleInIter::Owned { skip, .. } => skip.excludes_from_return(),
         }
     }
     pub(crate) fn into_tuple(self) -> Tuple {
@@ -748,6 +726,7 @@ impl TupleInIter<'_> {
                 key
             }
             TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cloned().collect(),
+            TupleInIter::Owned { row, .. } => row,
         }
     }
     /// Total comparison against a plain slice, through `DataValue`'s total
@@ -777,6 +756,10 @@ impl TupleInIter<'_> {
                 }
                 full.as_slice().cmp(probe)
             }
+            TupleInIter::Owned { row, .. } => {
+                let full = encode_tuple_bare(row.as_slice());
+                full.as_slice().cmp(probe)
+            }
         }
     }
 
@@ -796,6 +779,7 @@ impl TupleInIter<'_> {
                     .cmp(other.iter().cloned())
             }
             TupleInIter::Values { key, val, .. } => key.iter().chain(val.iter()).cmp(other.iter()),
+            TupleInIter::Owned { row, .. } => row.iter().cmp(other.iter()),
         }
     }
 }
@@ -830,6 +814,7 @@ impl<'a> IntoIterator for TupleInIter<'a> {
                 TupleInIter::Values { key, val, .. } => {
                     TupleInIterState::Values { key, val, idx: 0 }
                 }
+                TupleInIter::Owned { row, .. } => TupleInIterState::Owned { row, idx: 0 },
             },
         }
     }
@@ -850,6 +835,10 @@ enum TupleInIterState<'a> {
         val: &'a [DataValue],
         idx: usize,
     },
+    Owned {
+        row: Tuple,
+        idx: usize,
+    },
 }
 
 pub(crate) struct TupleInIterIterator<'a> {
@@ -858,7 +847,7 @@ pub(crate) struct TupleInIterIterator<'a> {
 
 impl PartialEq for TupleInIter<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.into_iter().eq(*other)
+        self.clone().into_iter().eq(other.clone().into_iter())
     }
 }
 
@@ -866,7 +855,7 @@ impl Eq for TupleInIter<'_> {}
 
 impl Ord for TupleInIter<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.into_iter().cmp(*other)
+        self.clone().into_iter().cmp(other.clone().into_iter())
     }
 }
 
@@ -878,7 +867,7 @@ impl PartialOrd for TupleInIter<'_> {
 
 impl PartialEq<[DataValue]> for TupleInIter<'_> {
     fn eq(&self, other: &'_ [DataValue]) -> bool {
-        self.into_iter().eq(other.iter().cloned())
+        self.clone().into_iter().eq(other.iter().cloned())
     }
 }
 
@@ -924,6 +913,11 @@ impl Iterator for TupleInIterIterator<'_> {
                     Some(d) => d.clone(),
                     None => val.get(*idx - key.len())?.clone(),
                 };
+                *idx += 1;
+                Some(ret)
+            }
+            TupleInIterState::Owned { row, idx } => {
+                let ret = row.get(*idx)?.clone();
                 *idx += 1;
                 Some(ret)
             }
@@ -1184,11 +1178,11 @@ mod tests {
 
     // ── iteration surface ────────────────────────────────────────────────
 
-    /// Meet stores fold per group but iterate whole head tuples (the
-    /// `by_row` view); prefix iteration and indexed access see one logical
-    /// tuple. For this suffix layout the group key is a prefix, so scans
-    /// look like a regular store — the non-suffix cases below prove the
-    /// same surface holds when the group key is not a prefix.
+    /// Meet stores fold per group but iterate whole head tuples (derived
+    /// from `by_group` via interleave); prefix iteration and indexed access
+    /// see one logical tuple. For this suffix layout the group key is a
+    /// prefix, so scans look like a regular store — the non-suffix cases
+    /// below prove the same surface holds when the group key is not a prefix.
     #[test]
     fn meet_iteration_spans_key_and_value() {
         let min_aggr = parse_aggr("min").unwrap();
@@ -1217,7 +1211,7 @@ mod tests {
         assert_eq!(row.get(0), DataValue::from("a"));
         assert_eq!(row.get(1), DataValue::from(4i64));
 
-        // Bounded range scans over the whole head tuple in `by_row`.
+        // Bounded range scans over the whole head tuple (derived order).
         let bounds = |group: &str, v: i64| {
             vec![
                 ScanBound::Value(DataValue::from(group)),
@@ -1351,7 +1345,7 @@ mod tests {
 
         let mut store = EpochStore::new_meet(&spec).unwrap();
         store.merge_in(out.wrap(), &mut ()).unwrap();
-        // by_row (head-tuple) order: (2,"a") < (5,"b") on position 0.
+        // Head-tuple order (derived from by_group): (2,"a") < (5,"b") on position 0.
         assert_eq!(
             all(&store),
             vec![
@@ -1369,8 +1363,8 @@ mod tests {
     /// order and the head-tuple order genuinely differ, and admissions are
     /// reported in **group-key** order (the `by_group` iteration the merge
     /// barrier and provenance witnesses depend on), while the scan surface
-    /// (`by_row`) stays in head-tuple order. A store that admitted in row
-    /// order would reorder every witness table.
+    /// (derived via interleave) stays in head-tuple order. A store that
+    /// admitted in row order would reorder every witness table.
     #[test]
     fn meet_admissions_follow_group_key_order_not_row_order_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
@@ -1408,8 +1402,8 @@ mod tests {
     /// The changed-flag delta discipline holds at a non-suffix layout too:
     /// a genuinely lower value at position 0 changes the group and is the
     /// delta (carrying the updated value); a non-improving value changes
-    /// nothing and yields an empty delta (the fixpoint). The incremental
-    /// path keeps `by_group` and `by_row` in lockstep across the update.
+    /// nothing and yields an empty delta (the fixpoint). The scan surface
+    /// stays the interleave of `by_group` across the update.
     #[test]
     fn meet_merge_delta_non_suffix() {
         let min_aggr = parse_aggr("min").unwrap();
@@ -1445,65 +1439,35 @@ mod tests {
 
     // ── adversarial reviewer attacks (adopted from the hostile pass) ──────
     //
-    // The reviewer's `rev_*` store tests, adopted verbatim except this one
-    // helper: F2 (their own memory finding) makes `by_row` exist only for a
-    // non-suffix layout, so the raw-field mirror law holds only there. The
-    // helper therefore checks the exposed scan surface (which must equal the
-    // interleave of `by_group` in *both* regimes — this strengthens the
-    // original) plus the raw `by_row` invariant per regime.
+    // P036: no by_row twin. The scan surface of a sealed meet store must
+    // equal `{ interleave(k, v) : (k, v) ∈ groups }` in head-tuple order
+    // for every regime; the out-store's by_group is the sole authority.
 
-    /// The mirror law, regime-aware: the scan surface is exactly
-    /// `{ interleave(k, v) : (k, v) ∈ by_group }`, materialized in `by_row`
-    /// for a non-suffix layout and reconstructed from `by_group` (with
-    /// `by_row` left empty) for a suffix layout.
-    fn rev_assert_lockstep(store: &MeetAggrStore) {
-        let derived: BTreeSet<Tuple> = store
-            .by_group
-            .iter()
-            .map(|(k, v)| store.layout.interleave(k, v.as_slice()))
-            .collect();
-        if store.layout.is_suffix() {
-            assert!(
-                store.by_row.is_empty(),
-                "a suffix layout must not materialize the by_row mirror (F2)"
-            );
-        } else {
-            assert_eq!(
-                store.by_row, derived,
-                "by_row diverged from the interleave of by_group"
-            );
-        }
-    }
-
-    fn rev_lockstep_of(store: &EpochStore) {
-        // The mirror invariant, per level: every interleaved meet level's
-        // `by_row` is exactly its groups interleaved, sorted.
+    /// Scan surface equals the interleave of every sealed meet level's groups
+    /// (newest owner wins per group key).
+    fn rev_assert_scan_from_groups(store: &EpochStore) {
         let LevelKind::Meet { spec, levels } = &store.kind else {
             panic!("expected meet stores")
         };
-        for level in levels {
-            if spec.layout.is_suffix() {
-                assert!(level.by_row.is_empty(), "suffix layouts keep no mirror");
-                continue;
+        let mut by_group: BTreeMap<Box<[u8]>, Tuple> = BTreeMap::new();
+        for level in levels.as_slice() {
+            for (k, v) in &level.groups {
+                by_group.insert(k.clone(), spec.layout.interleave(k, v.as_slice()));
             }
-            let mut derived: Vec<Tuple> = level
-                .groups
-                .iter()
-                .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
-                .collect();
-            derived.sort();
-            assert_eq!(
-                level.by_row, derived,
-                "by_row diverged from the interleave of groups"
-            );
         }
+        let mut derived: Vec<Tuple> = by_group.into_values().collect();
+        derived.sort();
+        assert_eq!(
+            all(store),
+            derived,
+            "scan surface diverged from interleave of groups (P036)"
+        );
     }
 
     /// ATTACK 2a/2c: drive a non-suffix meet EpochStore through every
     /// mutation path — put (vacant, changed, unchanged), fast-path swap,
     /// incremental merge (vacant, changed, unchanged), empty-epoch merge —
-    /// asserting the two views stay in lockstep at every step, and that the
-    /// delta view (epoch turnover) is lockstep too.
+    /// asserting the scan surface stays the interleave of groups.
     #[test]
     fn rev_meet_views_lockstep_through_all_paths() {
         let min_aggr = parse_aggr("min").unwrap();
@@ -1515,27 +1479,23 @@ mod tests {
             out.meet_put(vg(DataValue::from(9i64), "a").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
         assert!(
             out.meet_put(vg(DataValue::from(4i64), "a").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
         assert!(
             !out.meet_put(vg(DataValue::from(7i64), "a").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
         assert!(
             out.meet_put(vg(DataValue::from(1i64), "z").as_slice())
                 .unwrap()
         );
-        rev_assert_lockstep(&out);
 
         // Fast-path swap into an empty total (use_total_for_delta epoch).
         let mut store = EpochStore::new_meet(&spec).unwrap();
         store.merge_in(out.wrap(), &mut ()).unwrap();
-        rev_lockstep_of(&store);
+        rev_assert_scan_from_groups(&store);
 
         // Incremental merge: one changed group, one unchanged, one vacant.
         let mut out1 = MeetAggrStore::new(spec.clone()).unwrap();
@@ -1546,7 +1506,7 @@ mod tests {
         out1.meet_put(vg(DataValue::from(8i64), "q").as_slice())
             .unwrap(); // vacant
         store.merge_in(out1.wrap(), &mut ()).unwrap();
-        rev_lockstep_of(&store);
+        rev_assert_scan_from_groups(&store);
         assert_eq!(
             all(&store),
             vec![
@@ -1565,13 +1525,13 @@ mod tests {
             "delta carries exactly the changed + new groups"
         );
 
-        // Empty epoch: fixpoint; totals untouched, delta empty, lockstep.
+        // Empty epoch: fixpoint; totals untouched, delta empty.
         let out2 = MeetAggrStore::new(spec.clone()).unwrap();
         store.merge_in(out2.wrap(), &mut ()).unwrap();
-        rev_lockstep_of(&store);
+        rev_assert_scan_from_groups(&store);
         assert!(!store.has_delta());
 
-        // The stale old_row must be GONE from by_row (not shadowed).
+        // The stale old row must be GONE from the scan surface (not shadowed).
         assert_eq!(all(&store).len(), 3);
         assert!(!all(&store).contains(&vg(DataValue::from(4i64), "a")));
     }

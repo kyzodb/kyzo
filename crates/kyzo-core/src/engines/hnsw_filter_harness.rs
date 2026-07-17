@@ -383,10 +383,12 @@ fn knn_params_p2(k: usize, ef: usize) -> HnswKnnParams {
         k,
         ef,
         radius: None,
-        bind_field: false,
-        bind_field_idx: false,
-        bind_distance: true,
-        bind_vector: false,
+        bind: crate::engines::hnsw::HnswBindPack {
+            field: false,
+            field_idx: false,
+            distance: true,
+            vector: false,
+        },
     }
 }
 
@@ -406,7 +408,7 @@ fn filtered_search(
 ) -> Vec<Tuple> {
     let params = knn_params_p2(k, ef);
     let fb = Some(filter.filter_expr());
-    hnsw_knn(
+    Hnsw::knn(
         tx,
         q,
         manifest,
@@ -1176,7 +1178,7 @@ fn min_k_matches_filter_matching_everything_equals_unfiltered() {
     assert_eq!(f.true_match_count(&rows), rows.len());
 
     let params = knn_params_p2(P2_K, P2_EF);
-    let unfiltered = hnsw_knn(
+    let unfiltered = Hnsw::knn(
         &rtx,
         &q,
         &m,

@@ -188,7 +188,7 @@ impl SearchRA {
                         DataValue::Vector(v) => v,
                         other @ (data_value_any!()) => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
                     };
-                    crate::engines::hnsw::hnsw_knn(
+                    crate::engines::hnsw::Hnsw::knn(
                         tx,
                         v,
                         &c.manifest,
@@ -204,7 +204,7 @@ impl SearchRA {
                         DataValue::Str(t) => t,
                         other @ (data_value_any!()) => bail!(SearchQueryTypeError(span, format!("{other:?}"))),
                     };
-                    crate::engines::fts::fts_search(
+                    crate::engines::fts::Fts::search_index(
                         &self.atom.cancel,
                         tx,
                         text,
@@ -216,7 +216,7 @@ impl SearchRA {
                         fts_n_total,
                     )?
                 }
-                SearchConfig::Lsh(c) => crate::engines::lsh::lsh_search(
+                SearchConfig::Lsh(c) => crate::engines::lsh::Lsh::search_index(
                     &self.atom.cancel,
                     tx,
                     &q,

@@ -138,6 +138,7 @@ pub(crate) struct Fts;
 impl ProjectionKind for Fts {
     type Query = FtsSearchParams;
     /// Result-set bound `k` — the search law's truncation contract.
+    /// Relation-backed search is [`Fts::search_index`] (P103).
     type Candidates = usize;
 
     fn search(&self, query: &Self::Query) -> Self::Candidates {
@@ -621,6 +622,13 @@ fn eval_near(
         .collect())
 }
 
+/// Whether FTS appends the score column — the **one** bind encoding (P038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FtsBindScore {
+    Omit,
+    Append,
+}
+
 /// The parameters of one FTS query; the RA operator tier constructs this from
 /// the resolved search atom.
 #[derive(Debug, Clone, Copy)]
@@ -629,7 +637,7 @@ pub(crate) struct FtsSearchParams {
     pub(crate) score_kind: FtsScoreKind,
     /// Append the score as a trailing `Float` column (the RA tier maps it to
     /// a binding).
-    pub(crate) bind_score: bool,
+    pub(crate) bind_score: FtsBindScore,
 }
 
 /// Full-text search. Returns matching base-relation rows, highest score
@@ -652,8 +660,29 @@ pub(crate) struct FtsSearchParams {
 /// any base row is fetched.
 ///
 /// `n_total` is [`fts_total_docs`] when `score_kind` is `TfIdf`, else `0`.
+impl Fts {
+    /// Relation-backed full-text search — the sole FTS search door (P103).
+    /// Formerly the free function `fts_search`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn search_index(
+        cancel: &crate::fixed_rule::CancelFlag,
+        tx: &impl ReadTx,
+        query: &str,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &FtsSearchParams,
+        filter_code: &Option<Expr>,
+        tokenizer: &TextAnalyzer,
+        n_total: usize,
+    ) -> Result<Vec<Tuple>> {
+        fts_search_body(
+            cancel, tx, query, base, idx, params, filter_code, tokenizer, n_total,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fts_search(
+fn fts_search_body(
     cancel: &crate::fixed_rule::CancelFlag,
     tx: &impl ReadTx,
     query: &str,
@@ -704,7 +733,7 @@ pub(crate) fn fts_search(
                 IndexCorruptReason::BaseRowMissing,
             ))
         })?;
-        if params.bind_score {
+        if matches!(params.bind_score, FtsBindScore::Append) {
             cand.push(DataValue::from(score));
         }
         if let Some(code) = filter_code
@@ -841,7 +870,7 @@ mod tests {
         FtsSearchParams {
             k,
             score_kind,
-            bind_score: true,
+            bind_score: FtsBindScore::Append,
         }
     }
 
@@ -852,7 +881,7 @@ mod tests {
         } else {
             0
         };
-        let hits = fts_search(
+        let hits = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             q,
@@ -1097,7 +1126,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let err = fts_search(
+        let err = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             "hello",
@@ -1171,7 +1200,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         // "the" and "a" are stopwords: the query tokenizes to nothing.
-        let hits = fts_search(
+        let hits = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             "the AND a",
@@ -1188,7 +1217,7 @@ mod tests {
             "stopword-only query yields no hits, no error"
         );
         // "cat" survives tokenization and matches.
-        let hits = fts_search(
+        let hits = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1222,7 +1251,7 @@ mod tests {
             span: SourceSpan(0, 0),
         };
         let p = params(0, FtsScoreKind::Tf);
-        let with_filter = fts_search(
+        let with_filter = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             "cat",
@@ -1239,7 +1268,7 @@ mod tests {
             "k=0 + filter must return 0 rows, got {}",
             with_filter.len()
         );
-        let without = fts_search(
+        let without = Fts::search_index(
             &CancelFlag::default(),
             &rtx,
             "cat",

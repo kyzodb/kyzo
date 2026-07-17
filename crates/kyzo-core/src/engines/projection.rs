@@ -18,8 +18,9 @@
 //! Kind-specific engines re-land as `K` parameterizations of this machine
 //! (story #305 T3): [`crate::engines::hnsw::Hnsw`], [`crate::engines::fts::Fts`],
 //! [`crate::engines::lsh::Lsh`], [`crate::engines::sparse::Sparse`], and
-//! [`crate::engines::spatial::Spatial`]. Relation-backed put/search math stays
-//! in those modules; this module owns the shared protocol types only.
+//! [`crate::engines::spatial::Spatial`]. Relation-backed search is owned by
+//! inherent methods on those kinds (`Hnsw::knn`, `Fts::search_index`, …) —
+//! free-fn duals are gone (P103). This module owns the shared protocol types.
 //! Segment freshness (T5) consumes [`Generation::classify`] at
 //! [`crate::engines::segments`] — staleness is [`Stale`], never an `Option`
 //! from a get-shaped call. The segment cache is rebuildable acceleration
@@ -278,10 +279,7 @@ mod tests {
                 k: 10,
                 ef: 5,
                 radius: None,
-                bind_field: false,
-                bind_field_idx: false,
-                bind_distance: false,
-                bind_vector: false,
+                bind: crate::engines::hnsw::HnswBindPack::default(),
             }),
             10,
             "HNSW search law: ef is at least k"
@@ -292,7 +290,7 @@ mod tests {
             fts.query(&FtsSearchParams {
                 k: 3,
                 score_kind: FtsScoreKind::Tf,
-                bind_score: true,
+                bind_score: crate::engines::fts::FtsBindScore::Append,
             }),
             3
         );
@@ -305,7 +303,7 @@ mod tests {
         assert_eq!(
             sparse.query(&SparseSearchParams {
                 k: 4,
-                bind_score: false,
+                bind_score: crate::engines::sparse::SparseBindScore::Omit,
             }),
             4
         );

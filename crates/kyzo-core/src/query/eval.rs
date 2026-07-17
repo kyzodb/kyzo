@@ -1408,6 +1408,15 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
     let ceiling = derivation_ceiling.get();
     let mut spent: u64 = 0;
 
+    // Pre-declare every retained store tuple so stratified re-derive may
+    // admit edges whose rule-premises appear later in enumeration order
+    // (P104: premises must be known at add_derivation).
+    for (name, store) in stores {
+        for t in store.all_iter() {
+            graph.declare((PremiseSource::Rule(name.clone()), t.into_tuple()));
+        }
+    }
+
     for stratum in &program.strata {
         for (name, def) in &stratum.defs {
             let rule_set = match def {
@@ -1418,9 +1427,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 EvalDefinition::Rules(_) | EvalDefinition::Fixed { .. } => {
                     if let Some(store) = stores.get(name) {
                         for t in store.all_iter() {
-                            graph
-                                .facts
-                                .insert((PremiseSource::Rule(name.clone()), t.into_tuple()));
+                            graph.add_fact((PremiseSource::Rule(name.clone()), t.into_tuple()));
                         }
                     }
                     continue;
@@ -1480,11 +1487,11 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                                 .into());
                             }
                         } else {
-                            graph.facts.insert((src.clone(), row.clone()));
+                            graph.add_fact((src.clone(), row.clone()));
                         }
                         premise_nodes.push((src.clone(), row));
                     }
-                    graph.derivations.push(Derivation {
+                    graph.add_derivation(Derivation {
                         head: (
                             PremiseSource::Rule(name.clone()),
                             Tuple::from_vec(head.into_owned()),
@@ -1492,7 +1499,7 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                         label: rule_n,
                         weight,
                         premises: premise_nodes,
-                    });
+                    })?;
                     Ok(ControlFlow::Continue(()))
                 })?;
             }

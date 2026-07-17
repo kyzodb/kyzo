@@ -1016,23 +1016,24 @@ fn tropical_overflow_is_a_typed_refusal() {
         TropicalAnn::new(Cost::Infinite)
     );
     // And the solver surfaces the refusal typed, not stringly.
-    let graph: DerivationGraph<u32> = DerivationGraph {
-        facts: BTreeSet::from([0u32]),
-        derivations: vec![
-            Derivation {
-                head: 1,
-                label: 0,
-                weight: NonZeroU64::new(u64::MAX).unwrap(),
-                premises: vec![0],
-            },
-            Derivation {
-                head: 2,
-                label: 0,
-                weight: NonZeroU64::new(2).unwrap(),
-                premises: vec![1, 1],
-            },
-        ],
-    };
+    let mut graph: DerivationGraph<u32> = DerivationGraph::default();
+    graph.add_fact(0u32);
+    graph
+        .add_derivation(Derivation {
+            head: 1,
+            label: 0,
+            weight: NonZeroU64::new(u64::MAX).unwrap(),
+            premises: vec![0],
+        })
+        .unwrap();
+    graph
+        .add_derivation(Derivation {
+            head: 2,
+            label: 0,
+            weight: NonZeroU64::new(2).unwrap(),
+            premises: vec![1, 1],
+        })
+        .unwrap();
     let err = solve::<TropicalAnn, _>(&graph, &generous_solver()).expect_err("must refuse");
     let refusal: &SemiringOverflow = err.downcast_ref().expect("typed SemiringOverflow");
     assert_eq!(refusal.right, u64::MAX);
@@ -1427,7 +1428,7 @@ fn aggregation_boundary_collapses_to_ground_facts() {
     for row in &out.rows["m"] {
         // The meet store's tuples enter the graph as ground facts…
         assert!(
-            out.graph.facts.contains(&rule_node("m", row)),
+            out.graph.facts().contains(&rule_node("m", row)),
             "meet row {row:?} must be a collapse-boundary ground fact"
         );
         assert_eq!(costs[&rule_node("m", row)], Cost::Finite(0));
@@ -1557,21 +1558,25 @@ fn enumeration_ceiling_refusal_is_deterministic_across_threads() {
 
 #[test]
 fn solver_pass_ceiling_is_a_typed_refusal() {
-    // A 5-link chain listed in reverse order: each pass propagates one
-    // link, so 5 passes are needed (plus one to observe quiescence).
-    let chain: Vec<Derivation<u32>> = (1..=5u32)
-        .rev()
-        .map(|i| Derivation {
-            head: i,
-            label: 0,
-            weight: NonZeroU64::new(1).unwrap(),
-            premises: vec![i - 1],
-        })
-        .collect();
-    let graph = DerivationGraph {
-        facts: BTreeSet::from([0u32]),
-        derivations: chain,
-    };
+    // A 5-link chain listed in reverse-topo edge order: each pass
+    // propagates one link, so 5 passes are needed (plus one to observe
+    // quiescence). Nodes are declared first so add_derivation may admit
+    // reverse-topo list order while staying closed-by-construction.
+    let mut graph = DerivationGraph::default();
+    graph.add_fact(0u32);
+    for i in 1..=5u32 {
+        graph.declare(i);
+    }
+    for i in (1..=5u32).rev() {
+        graph
+            .add_derivation(Derivation {
+                head: i,
+                label: 0,
+                weight: NonZeroU64::new(1).unwrap(),
+                premises: vec![i - 1],
+            })
+            .unwrap();
+    }
     let err = solve::<TropicalAnn, _>(
         &graph,
         &SolverBudget::new(NonZeroU32::new(2).unwrap()),
@@ -1596,16 +1601,15 @@ fn solver_pass_ceiling_is_a_typed_refusal() {
 
 #[test]
 fn open_graph_is_refused_by_the_closure_check() {
-    // A premise that is neither a fact nor any derivation's head would
-    // silently annotate to 0; check_closed turns that into a loud error.
-    let graph = DerivationGraph {
-        facts: BTreeSet::from([0u32]),
-        derivations: vec![Derivation {
-            head: 1,
-            label: 0,
-            weight: NonZeroU64::new(1).unwrap(),
-            premises: vec![99],
-        }],
-    };
-    assert!(graph.check_closed().is_err());
+    // A premise that is neither declared, a fact, nor a prior head is
+    // refused at add_derivation (DAG-by-construction).
+    let mut graph = DerivationGraph::default();
+    graph.add_fact(0u32);
+    let err = graph.add_derivation(Derivation {
+        head: 1,
+        label: 0,
+        weight: NonZeroU64::new(1).unwrap(),
+        premises: vec![99],
+    });
+    assert!(err.is_err());
 }

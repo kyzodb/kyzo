@@ -148,6 +148,7 @@ pub(crate) struct Lsh;
 impl ProjectionKind for Lsh {
     type Query = LshSearchParams;
     /// Optional smallest-k-by-key bound from the search law.
+    /// Relation-backed search is [`Lsh::search_index`] (P103).
     type Candidates = Option<usize>;
 
     fn search(&self, query: &Self::Query) -> Self::Candidates {
@@ -800,8 +801,30 @@ pub(crate) struct LshSearchParams {
 /// This returns a candidate SET, not a similarity ranking (see the module
 /// docs). A `Null` query yields no candidates. `perms`/`tokenizer` follow
 /// the same caller contracts as [`lsh_put`].
+impl Lsh {
+    /// Relation-backed LSH candidate search — the sole LSH search door (P103).
+    /// Formerly the free function `lsh_search`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn search_index(
+        cancel: &crate::fixed_rule::CancelFlag,
+        tx: &impl ReadTx,
+        q: &DataValue,
+        manifest: &MinHashLshIndexManifest,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &LshSearchParams,
+        filter_code: &Option<Expr>,
+        perms: &HashPermutations,
+        tokenizer: &TextAnalyzer,
+    ) -> Result<Vec<Tuple>> {
+        lsh_search_body(
+            cancel, tx, q, manifest, base, idx, params, filter_code, perms, tokenizer,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lsh_search(
+fn lsh_search_body(
     cancel: &crate::fixed_rule::CancelFlag,
     tx: &impl ReadTx,
     q: &DataValue,
@@ -1306,7 +1329,7 @@ mod tests {
         let perms = f.manifest.get_hash_perms().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = lsh_search(
+        let hits = Lsh::search_index(
             &CancelFlag::default(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),
@@ -1327,7 +1350,7 @@ mod tests {
 
         // A Null query yields nothing; a non-indexable query is an error.
         assert!(
-            lsh_search(
+            Lsh::search_index(
                 &CancelFlag::default(),
                 &rtx,
                 &DataValue::Null,
@@ -1343,7 +1366,7 @@ mod tests {
             .is_empty()
         );
         assert!(
-            lsh_search(
+            Lsh::search_index(
                 &CancelFlag::default(),
                 &rtx,
                 &DataValue::from(42),
@@ -1370,7 +1393,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = lsh_search(
+        let hits = Lsh::search_index(
             &CancelFlag::default(),
             &rtx,
             &DataValue::from("the quick brown fox jumps over the lazy dog"),

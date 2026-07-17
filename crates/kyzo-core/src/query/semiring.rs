@@ -305,18 +305,36 @@ pub(crate) struct Derivation<K> {
     pub(crate) premises: Vec<K>,
 }
 
+/// Typed index into [`DerivationGraph::derivations`] — certificates name
+/// steps by this id, never a bare `usize` (P104).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct DerivationId(usize);
+
+impl DerivationId {
+    pub(crate) fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// The grounded derivation hypergraph of one completed evaluation: ground
 /// nodes (annotation `1`) and rule applications. Nodes are keyed by the
 /// caller (`K` is `(PremiseSource, Tuple)` for the engine pipeline).
+///
+/// DAG-by-construction (P104): edges are admitted only through
+/// [`Self::add_derivation`], which requires every premise already
+/// [`Self::declare`]d or [`Self::add_fact`]ed (or a prior head) and refuses
+/// self-loops. Free struct literals cannot forge an open graph.
 #[derive(Debug)]
 pub(crate) struct DerivationGraph<K> {
     /// Ground nodes: EDB facts as attested by the rule bodies, plus the
     /// collapse boundary (tuples of aggregated / fixed-rule stores).
-    pub(crate) facts: BTreeSet<K>,
+    facts: BTreeSet<K>,
     /// Every grounded rule application, in enumeration order (canonical:
     /// stratum, then store, then rule index, then the body's own
     /// deterministic iteration order).
-    pub(crate) derivations: Vec<Derivation<K>>,
+    derivations: Vec<Derivation<K>>,
+    /// Nodes known for premise checks: facts ∪ declared ∪ derivation heads.
+    known: BTreeSet<K>,
 }
 
 // A hand-written `Default` (an empty graph). The derived one would demand
@@ -327,11 +345,62 @@ impl<K> Default for DerivationGraph<K> {
         Self {
             facts: BTreeSet::new(),
             derivations: Vec::new(),
+            known: BTreeSet::new(),
         }
     }
 }
 
 impl<K: Ord + Clone + Debug> DerivationGraph<K> {
+    /// Admit a ground fact (annotation `1`).
+    pub(crate) fn add_fact(&mut self, node: K) {
+        self.known.insert(node.clone());
+        self.facts.insert(node);
+    }
+
+    /// Declare a node known for premise checks without making it a ground
+    /// fact (annotation still starts at `0` until a derivation fires).
+    /// Used to pre-seat completed-store heads before stratified re-derive
+    /// admits edges in non-topo list order.
+    pub(crate) fn declare(&mut self, node: K) {
+        self.known.insert(node);
+    }
+
+    /// Admit one grounded rule application. Refuses a self-loop or any
+    /// premise not yet in [`Self::known`] — the graph stays closed (and
+    /// self-loop-free) by construction.
+    pub(crate) fn add_derivation(&mut self, d: Derivation<K>) -> Result<DerivationId> {
+        if d.premises.iter().any(|p| p == &d.head) {
+            return Err(ProvenanceInvariantError(
+                "a derivation premise equals its head (self-loop)",
+            )
+            .into());
+        }
+        for p in &d.premises {
+            if !self.known.contains(p) {
+                return Err(ProvenanceInvariantError(
+                    "a premise is neither a ground fact nor a derived head",
+                )
+                .into());
+            }
+        }
+        self.known.insert(d.head.clone());
+        let id = DerivationId(self.derivations.len());
+        self.derivations.push(d);
+        Ok(id)
+    }
+
+    pub(crate) fn facts(&self) -> &BTreeSet<K> {
+        &self.facts
+    }
+
+    pub(crate) fn derivations(&self) -> &[Derivation<K>] {
+        &self.derivations
+    }
+
+    pub(crate) fn derivation(&self, id: DerivationId) -> Option<&Derivation<K>> {
+        self.derivations.get(id.0)
+    }
+
     /// Every node the graph mentions, in canonical order.
     pub(crate) fn nodes(&self) -> BTreeSet<K> {
         let mut nodes = self.facts.clone();
@@ -344,11 +413,7 @@ impl<K: Ord + Clone + Debug> DerivationGraph<K> {
         nodes
     }
 
-    /// Refuse (typed) any premise that is neither a ground fact nor the
-    /// head of some derivation: such a node would silently annotate to
-    /// `0` and zero out every edge through it — a silent gap this check
-    /// turns into a loud one. The engine builder calls this after
-    /// enumeration; hand-built graphs in tests may skip it deliberately.
+    /// Defense-in-depth closure check (construction already enforces this).
     pub(crate) fn check_closed(&self) -> Result<()> {
         let heads: BTreeSet<&K> = self.derivations.iter().map(|d| &d.head).collect();
         for d in &self.derivations {
@@ -405,7 +470,7 @@ pub(crate) fn solve<A: AnnAlgebra, K: Ord + Clone + Debug>(
         .nodes()
         .into_iter()
         .map(|n| {
-            let v = if graph.facts.contains(&n) {
+            let v = if graph.facts().contains(&n) {
                 A::one()
             } else {
                 A::zero()
@@ -417,7 +482,7 @@ pub(crate) fn solve<A: AnnAlgebra, K: Ord + Clone + Debug>(
     let ceiling = budget.max_passes.get();
     for _pass in 0..ceiling {
         let mut changed = false;
-        for d in &graph.derivations {
+        for d in graph.derivations() {
             let mut v = A::lift_weight(d.weight);
             for p in &d.premises {
                 let pv = ann.get(p).ok_or(ProvenanceInvariantError(
@@ -468,13 +533,13 @@ pub(crate) fn as_cost_map<K: Ord + Clone>(ann: &BTreeMap<K, TropicalAnn>) -> BTr
 pub(crate) enum ProofNode<K> {
     /// A ground node: cost 0 by definition.
     Fact { node: K },
-    /// A rule application: `derivation` indexes [`DerivationGraph::derivations`],
-    /// `label` echoes its per-head rule index, `cost` is the claimed total
-    /// (weight plus children), and `premises` are the children in body
-    /// order.
+    /// A rule application: `derivation` is a [`DerivationId`] into the
+    /// graph, `label` echoes its per-head rule index, `cost` is the claimed
+    /// total (weight plus children), and `premises` are the children in
+    /// body order.
     Step {
         node: K,
-        derivation: usize,
+        derivation: DerivationId,
         label: usize,
         cost: u64,
         premises: Vec<ProofNode<K>>,
@@ -515,12 +580,12 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
         }
         None => return Err(NoDerivation::MissingNode.into()),
     };
-    if graph.facts.contains(target) {
+    if graph.facts().contains(target) {
         return Ok(ProofNode::Fact {
             node: target.clone(),
         });
     }
-    for (idx, d) in graph.derivations.iter().enumerate() {
+    for (idx, d) in graph.derivations().iter().enumerate() {
         if d.head != *target {
             continue;
         }
@@ -551,7 +616,7 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
                 .collect::<Result<Vec<_>>>()?;
             return Ok(ProofNode::Step {
                 node: target.clone(),
-                derivation: idx,
+                derivation: DerivationId(idx),
                 label: d.label,
                 cost: target_cost,
                 premises,
@@ -579,7 +644,7 @@ pub(crate) fn verify_proof<K: Ord + Clone + Debug>(
 ) -> Result<u64, BadCertificate> {
     match proof {
         ProofNode::Fact { node } => {
-            if graph.facts.contains(node) {
+            if graph.facts().contains(node) {
                 Ok(0)
             } else {
                 Err(BadCertificate::NotGroundFact)
@@ -593,8 +658,7 @@ pub(crate) fn verify_proof<K: Ord + Clone + Debug>(
             premises,
         } => {
             let d = graph
-                .derivations
-                .get(*derivation)
+                .derivation(*derivation)
                 .ok_or(BadCertificate::DerivationOutOfRange)?;
             if d.head != *node {
                 return Err(BadCertificate::HeadMismatch);

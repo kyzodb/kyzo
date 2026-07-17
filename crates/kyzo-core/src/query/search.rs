@@ -337,16 +337,21 @@ pub(crate) fn resolve_search(
             let bind_field_idx = take_var(&mut params, "bind_field_idx", span)?;
             let bind_distance = take_var(&mut params, "bind_distance", span)?;
             let bind_vector = take_var(&mut params, "bind_vector", span)?;
+            // One bind encoding (P038): presence pack for the engine; symbols
+            // for the RA frame — both from the same Option set, no dual bools.
+            let bind = crate::engines::hnsw::HnswBindPack {
+                field: bind_field.is_some(),
+                field_idx: bind_field_idx.is_some(),
+                distance: bind_distance.is_some(),
+                vector: bind_vector.is_some(),
+            };
             let p = HnswKnnParams {
                 k,
                 ef,
                 radius,
-                bind_field: bind_field.is_some(),
-                bind_field_idx: bind_field_idx.is_some(),
-                bind_distance: bind_distance.is_some(),
-                bind_vector: bind_vector.is_some(),
+                bind,
             };
-            // The engine appends these IN THIS ORDER (hnsw_knn's contract).
+            // The engine appends these IN THIS ORDER (Hnsw::knn's contract).
             own_bindings.extend(
                 [bind_field, bind_field_idx, bind_distance, bind_vector]
                     .into_iter()
@@ -376,7 +381,11 @@ pub(crate) fn resolve_search(
             let p = FtsSearchParams {
                 k,
                 score_kind,
-                bind_score: bind_score.is_some(),
+                bind_score: if bind_score.is_some() {
+                    crate::engines::fts::FtsBindScore::Append
+                } else {
+                    crate::engines::fts::FtsBindScore::Omit
+                },
             };
             own_bindings.extend(bind_score);
             SearchConfig::Fts(FtsSearch {

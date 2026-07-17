@@ -247,7 +247,9 @@ pub(crate) struct Hnsw;
 impl ProjectionKind for Hnsw {
     type Query = HnswKnnParams;
     /// Effective layer-0 beam: `max(ef, k)`, the RA contract that fewer than
-    /// `k` results come back if `ef < k`.
+    /// `k` results come back if `ef < k`. Relation-backed knn is [`Hnsw::knn`]
+    /// — the sole engine search door (P103); this trait method is the sealed
+    /// payload's search-law identity while `K` remains a ZST.
     type Candidates = usize;
 
     fn search(&self, query: &Self::Query) -> Self::Candidates {
@@ -2147,9 +2149,20 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     Ok(())
 }
 
+/// Which optional HNSW output columns to append — the **one** bind encoding
+/// (P038). The RA tier maps the same presence to `own_bindings` symbols at
+/// construction; the engine only reads this pack.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HnswBindPack {
+    pub(crate) field: bool,
+    pub(crate) field_idx: bool,
+    pub(crate) distance: bool,
+    pub(crate) vector: bool,
+}
+
 /// The parameters of one k-nearest-neighbours search. The RA operator tier
-/// constructs this from the resolved search atom; the `bind_*` flags say
-/// which extra output columns to append (the tier maps them to bindings).
+/// constructs this from the resolved search atom; [`Self::bind`] says which
+/// extra output columns to append.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HnswKnnParams {
     pub(crate) k: usize,
@@ -2159,10 +2172,7 @@ pub(crate) struct HnswKnnParams {
     /// Maximum distance **in the metric's own units** — for `L2` that is
     /// the SQUARED Euclidean distance (see the module docs, loudly).
     pub(crate) radius: Option<f64>,
-    pub(crate) bind_field: bool,
-    pub(crate) bind_field_idx: bool,
-    pub(crate) bind_distance: bool,
-    pub(crate) bind_vector: bool,
+    pub(crate) bind: HnswBindPack,
 }
 
 /// k-nearest-neighbours search. Returns matching base-relation rows,
@@ -2197,8 +2207,26 @@ pub(crate) struct HnswKnnParams {
 /// The query vector is admitted like any inserted vector: dimension
 /// checked, non-finite refused, and — under cosine — the zero vector
 /// refused typed and the query normalized.
+impl Hnsw {
+    /// Relation-backed k-NN — the sole HNSW search algorithm door (P103).
+    /// Formerly the free function `hnsw_knn`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn knn(
+        tx: &impl ReadTx,
+        q: &Vector,
+        manifest: &HnswIndexManifest,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        params: &HnswKnnParams,
+        filter_expr: &Option<Expr>,
+        cancel: &crate::fixed_rule::CancelFlag,
+    ) -> Result<Vec<Tuple>> {
+        hnsw_knn_body(tx, q, manifest, base, idx, params, filter_expr, cancel)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn hnsw_knn(
+fn hnsw_knn_body(
     tx: &impl ReadTx,
     q: &Vector,
     manifest: &HnswIndexManifest,
@@ -2281,7 +2309,7 @@ pub(crate) fn hnsw_knn(
         // Appended-column order is this function's contract with the RA
         // tier (the original guarded it with a "!!!" comment): field,
         // field_idx, distance, vector.
-        if params.bind_field {
+        if params.bind.field {
             let name = if cand.field < key_len {
                 base.metadata.keys[cand.field].name.clone()
             } else {
@@ -2300,16 +2328,16 @@ pub(crate) fn hnsw_knn(
             };
             cand_tuple.push(DataValue::Str(name.to_string()));
         }
-        if params.bind_field_idx {
+        if params.bind.field_idx {
             cand_tuple.push(match cand.sub {
                 None => DataValue::Null,
                 Some(s) => DataValue::from(s as i64),
             });
         }
-        if params.bind_distance {
+        if params.bind.distance {
             cand_tuple.push(DataValue::from(distance));
         }
-        if params.bind_vector {
+        if params.bind.vector {
             let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
                 miette!(IndexRowCorrupt::new(
                     &idx.name,
@@ -2474,7 +2502,7 @@ fn build_cand_tuple(
             IndexCorruptReason::BaseRowMissing,
         ))
     })?;
-    if params.bind_field {
+    if params.bind.field {
         let name = if cand.field < key_len {
             base.metadata.keys[cand.field].name.clone()
         } else {
@@ -2493,16 +2521,16 @@ fn build_cand_tuple(
         };
         cand_tuple.push(DataValue::Str(name.to_string()));
     }
-    if params.bind_field_idx {
+    if params.bind.field_idx {
         cand_tuple.push(match cand.sub {
             None => DataValue::Null,
             Some(s) => DataValue::from(s as i64),
         });
     }
-    if params.bind_distance {
+    if params.bind.distance {
         cand_tuple.push(DataValue::from(distance));
     }
-    if params.bind_vector {
+    if params.bind.vector {
         let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
@@ -3062,10 +3090,12 @@ mod tests {
             k,
             ef: 32,
             radius: None,
-            bind_field: false,
-            bind_field_idx: false,
-            bind_distance: true,
-            bind_vector: false,
+            bind: HnswBindPack {
+                field: false,
+                field_idx: false,
+                distance: true,
+                vector: false,
+            },
         }
     }
 
@@ -3622,7 +3652,7 @@ mod tests {
             truth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             let truth_ids: FxHashSet<i64> = truth[..k].iter().map(|(_, id)| *id).collect();
 
-            let hits = hnsw_knn(
+            let hits = Hnsw::knn(
                 &rtx,
                 q_vec,
                 &m,
@@ -3632,10 +3662,7 @@ mod tests {
                     k,
                     ef: 64,
                     radius: None,
-                    bind_field: false,
-                    bind_field_idx: false,
-                    bind_distance: false,
-                    bind_vector: false,
+                    bind: HnswBindPack::default(),
                 },
                 &None,
                 &CancelFlag::default(),
@@ -3675,7 +3702,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![0.9, 0.1]);
-        let hits = hnsw_knn(
+        let hits = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -3702,12 +3729,12 @@ mod tests {
         // Radius is in squared units too: 0.5 keeps only (1,0).
         let mut p = knn_params(4);
         p.radius = Some(0.5);
-        let hits = hnsw_knn(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default()).unwrap();
+        let hits = Hnsw::knn(&rtx, &q, &m, &base, &idx, &p, &None, &CancelFlag::default()).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0][0], DataValue::from(2));
 
         // k larger than the index: everything comes back, still ordered.
-        let hits = hnsw_knn(
+        let hits = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -3742,7 +3769,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![2.0, 0.0]);
-        let hits = hnsw_knn(
+        let hits = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -3786,7 +3813,7 @@ mod tests {
 
         // Query refusal.
         let rtx = db.read_tx().unwrap();
-        let err = hnsw_knn(
+        let err = Hnsw::knn(
             &rtx,
             &Vector::new(vec![0.0, 0.0]),
             &m,
@@ -3860,7 +3887,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![1.0, 0.0]);
-        let hits = hnsw_knn(
+        let hits = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -3880,7 +3907,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let hits = hnsw_knn(
+        let hits = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -3926,7 +3953,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![4.0, 4.0]);
-        let hits = hnsw_knn(
+        let hits = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -4086,7 +4113,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let q = Vector::new(vec![0.5, 0.5]);
-        let err = hnsw_knn(
+        let err = Hnsw::knn(
             &rtx,
             &q,
             &m,
@@ -4211,7 +4238,7 @@ mod tests {
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
             let q = Vector::new(vec![1.0, 0.0]);
-            let hits = hnsw_knn(
+            let hits = Hnsw::knn(
                 &rtx,
                 &q,
                 &m,

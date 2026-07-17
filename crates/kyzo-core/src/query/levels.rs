@@ -21,7 +21,6 @@ use crate::data::value::{
 };
 use crate::query::temp_store::{
     AdmissionSink, Admitted, LimiterSkip, MeetAggrStore, MeetLayout, TempStore, TupleInIter,
-    empty_tuple_ref,
 };
 
 #[derive(Debug, Error, Diagnostic)]
@@ -126,8 +125,8 @@ pub(crate) struct RowFlags {
     pub(crate) refresh: bool,
 }
 
-/// Non-empty sealed-level stack: constructors seed one level; the API never
-/// exposes an empty stack, so [`Self::last`] needs no `expect`.
+/// Non-empty sealed-level stack (P030): constructors seed one level; the API
+/// never exposes an empty stack, so [`Self::last`] needs no `expect`.
 #[derive(Debug)]
 pub(crate) struct LevelStack<L> {
     levels: Vec<L>,
@@ -355,14 +354,14 @@ impl NormalLevel {
 }
 
 /// One sealed level of a meet rule's total: groups ascending by group
-/// key, each holding its WHOLE folded accumulator; a row-order mirror rides
-/// along only when the layout interleaves (row order ≠ group order).
+/// key, each holding its WHOLE folded accumulator. Head-tuple order for
+/// interleaved layouts is derived from `groups` via
+/// [`MeetLayout::interleave`] at scan time (P036 — no `by_row` twin).
 #[derive(Debug, Default)]
 pub(crate) struct MeetLevel {
     /// Group key bytes (story #77, same [`encode_tuple_bare`] treatment as
     /// `NormalLevel`'s rows) → folded meet accumulators.
     pub(crate) groups: Vec<(Box<[u8]>, Vec<MeetAccum>)>,
-    pub(crate) by_row: Vec<Tuple>,
 }
 
 impl MeetLevel {
@@ -586,23 +585,13 @@ impl EpochStore {
                         }
                     };
                     if let Some(vals) = folded {
-                        let row = spec.layout.interleave(&group, vals.as_slice());
                         if S::RECORDING {
-                            sink.admit(TupleInIter::new(
-                                row.as_slice(),
-                                empty_tuple_ref().as_slice(),
-                                LimiterSkip::Include,
-                            ));
-                        }
-                        if !spec.layout.is_suffix() {
-                            level.by_row.push(row);
+                            let row = spec.layout.interleave(&group, vals.as_slice());
+                            sink.admit(TupleInIter::owned(row, LimiterSkip::Include));
                         }
                         level.groups.push((group, vals));
                         admitted += 1;
                     }
-                }
-                if !spec.layout.is_suffix() {
-                    level.by_row.sort();
                 }
                 levels.drop_consumed_empty_delta(|l| l.groups.is_empty());
                 compact_meet(spec, levels);
@@ -874,14 +863,13 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
 }
 
 /// As [`compact_normal`], for meet levels: newest group value wins whole.
-fn compact_meet(spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) {
+fn compact_meet(_spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) {
     levels
         .compact_while(
         |older, newer| newer.groups.len() * 2 >= older.groups.len(),
         |older, newer| {
             let mut merged = MeetLevel {
                 groups: Vec::with_capacity(older.groups.len() + newer.groups.len()),
-                by_row: vec![],
             };
             let (mut a, mut b) = (
                 older.groups.into_iter().peekable(),
@@ -911,14 +899,6 @@ fn compact_meet(spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) {
                     (None, None) => break,
                 }
             }
-            if !spec.layout.is_suffix() {
-                merged.by_row = merged
-                    .groups
-                    .iter()
-                    .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
-                    .collect();
-                merged.by_row.sort();
-            }
             Ok(merged)
         },
     )
@@ -927,8 +907,8 @@ fn compact_meet(spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) {
 
 /// Row-ordered iteration over meet levels within a bound window, newest
 /// group owner winning. Suffix layouts walk `groups` directly (group
-/// order IS row order there); interleaved layouts walk the per-level
-/// row mirrors and skip rows whose group a newer level owns.
+/// order IS row order there); interleaved layouts derive head-tuple order
+/// from `groups` via interleave (P036 — no stored twin).
 fn meet_ranged<'s>(
     spec: &'s MeetSpec,
     picked: &'s [MeetLevel],
@@ -937,7 +917,7 @@ fn meet_ranged<'s>(
     upper: LevelBoundKey,
     upper_inclusive: bool,
 ) -> Box<dyn Iterator<Item = TupleInIter<'s>> + 's> {
-    let within = move |row: TupleInIter<'_>| -> bool {
+    let within = move |row: &TupleInIter<'_>| -> bool {
         row.cmp_bare(&lower) != Ordering::Less
             && match row.cmp_bare(&upper) {
                 Ordering::Less => true,
@@ -990,30 +970,38 @@ fn meet_ranged<'s>(
                     LimiterSkip::Include,
                 ))
             })
-            .filter(move |row| within(*row)),
+            .filter(move |row| within(row)),
         )
     } else {
-        // Interleaved: walk each picked level's row mirror; a row speaks
-        // only if no newer level owns its group.
-        let iters = picked.iter().enumerate().map(move |(idx, l)| {
-            l.by_row.iter().filter_map(move |row| {
+        // Interleaved: derive head-tuple rows from each picked level's
+        // groups; a row speaks only if no newer level owns its group.
+        let derived: Vec<Vec<Tuple>> = picked
+            .iter()
+            .map(|l| {
+                let mut rows: Vec<Tuple> = l
+                    .groups
+                    .iter()
+                    .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
+                    .collect();
+                rows.sort();
+                rows
+            })
+            .collect();
+        let iters = derived.into_iter().enumerate().map(move |(idx, rows)| {
+            rows.into_iter().filter_map(move |row| {
                 let group = spec.layout.borrow_key(row.as_slice());
                 let owned_by_newer = all.iter().skip(idx + 1).any(|nl| nl.find(&group).is_some());
                 if owned_by_newer {
                     None
                 } else {
-                    Some(TupleInIter::new(
-                        row.as_slice(),
-                        empty_tuple_ref().as_slice(),
-                        LimiterSkip::Include,
-                    ))
+                    Some(TupleInIter::owned(row, LimiterSkip::Include))
                 }
             })
         });
         Box::new(
             iters
-                .kmerge_by(|a, b| a.into_iter().lt(*b))
-                .filter(move |row| within(*row)),
+                .kmerge_by(|a, b| a.cmp(b) == Ordering::Less)
+                .filter(move |row| within(row)),
         )
     }
 }
