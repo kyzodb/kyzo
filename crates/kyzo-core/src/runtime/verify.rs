@@ -105,19 +105,33 @@ pub enum VerifyOutcome {
     },
     /// The query uses a construct this cut's translator does not carry to
     /// the oracle (see the module docs' scope section). Named, not silent.
-    /// Constructed only from [`VerifyUnsupported`] (typed), then rendered.
-    Unsupported { reason: String },
+    /// Holds [`VerifyUnsupported`] typed; rendered only in [`Self::into_named_rows`].
+    Unsupported { reason: VerifyUnsupported },
     /// The oracle itself refused the translated program (unsafe or
     /// unstratifiable) — a genuine finding about the QUERY, not a verify
     /// harness bug, and not evidence of an engine defect since the
     /// production compiler independently refuses the same programs.
-    OracleRefused { reason: String },
+    /// Holds [`OracleRefusal`] typed; rendered only in [`Self::into_named_rows`].
+    OracleRefused { reason: OracleRefusal },
+}
+
+/// Typed oracle refusal carried by [`VerifyOutcome::OracleRefused`].
+/// Wraps [`laws::Rejection`]; formatting for the product row lives only in
+/// [`VerifyOutcome::into_named_rows`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OracleRefusal(pub(crate) laws::Rejection);
+
+impl From<laws::Rejection> for OracleRefusal {
+    fn from(rejection: laws::Rejection) -> Self {
+        OracleRefusal(rejection)
+    }
 }
 
 /// Named reason [`VerifyOutcome::Unsupported`] carries — never a bare
-/// `miette!` string. Rendered into the product outcome via [`Display`].
+/// `miette!` string. Display is for the product-row edge only
+/// ([`VerifyOutcome::into_named_rows`]), never stored as a `String` on the outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
-pub(crate) enum VerifyUnsupported {
+pub enum VerifyUnsupported {
     #[error(
         "::verify supports single read queries only, not sys ops or \
          imperative scripts"
@@ -142,7 +156,7 @@ pub(crate) enum VerifyUnsupported {
 /// caught at the top level and turned into [`VerifyOutcome::Unsupported`],
 /// never a hard error (an unsupported query is a normal, named outcome).
 #[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
-pub(crate) enum TranslateUnsupported {
+pub enum TranslateUnsupported {
     #[error(
         "relation atom '{name}' is an interval-derivation (@spans) or diff \
          (@delta/@delta_sys) read: these bind an extra column beyond the \
@@ -177,9 +191,7 @@ pub(crate) enum TranslateUnsupported {
 
 impl From<VerifyUnsupported> for VerifyOutcome {
     fn from(reason: VerifyUnsupported) -> Self {
-        VerifyOutcome::Unsupported {
-            reason: reason.to_string(),
-        }
+        VerifyOutcome::Unsupported { reason }
     }
 }
 
@@ -215,8 +227,12 @@ impl VerifyOutcome {
                 ),
                 format!("program:\n{program_text}\nproduction: {production:?}\noracle: {oracle:?}"),
             ),
-            VerifyOutcome::Unsupported { reason } => ("unsupported", reason, String::new()),
-            VerifyOutcome::OracleRefused { reason } => ("oracle_refused", reason, String::new()),
+            VerifyOutcome::Unsupported { reason } => {
+                ("unsupported", reason.to_string(), String::new())
+            }
+            VerifyOutcome::OracleRefused { reason } => {
+                ("oracle_refused", format!("{:?}", reason.0), String::new())
+            }
         };
         // Three headers, one width-3 row — by construction.
         crate::fixed_rule::NamedRows::verify_status_row(status, summary, detail)
@@ -648,7 +664,7 @@ impl<S: Storage> Db<S> {
                 }
             }
             Err(rejection) => Ok(VerifyOutcome::OracleRefused {
-                reason: format!("{rejection:?}"),
+                reason: OracleRefusal::from(rejection),
             }),
         }
     }
@@ -773,15 +789,13 @@ mod tests {
             )
             .expect("verify_script runs");
         match outcome {
-            VerifyOutcome::Unsupported { reason } => {
-                assert!(
-                    reason.contains("predicate"),
-                    "expected a predicate-atom refusal, got: {reason}"
-                );
-            }
+            VerifyOutcome::Unsupported {
+                reason: VerifyUnsupported::Translate(TranslateUnsupported::Predicate),
+            } => {}
             other @ (VerifyOutcome::Match { .. }
             | VerifyOutcome::Mismatch { .. }
-            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Unsupported, got {other:?}"),
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Unsupported(Predicate), got {other:?}"),
         }
     }
 
@@ -1087,15 +1101,21 @@ mod tests {
             )
             .expect("verify_script runs");
         match outcome {
-            VerifyOutcome::Unsupported { reason } => {
+            VerifyOutcome::Unsupported {
+                reason:
+                    VerifyUnsupported::Translate(TranslateUnsupported::IntervalDerivation { name }),
+            } => {
                 assert!(
-                    reason.contains("@spans") || reason.contains("interval-derivation"),
-                    "expected an @spans-named refusal, got: {reason}"
+                    name.contains("hist"),
+                    "expected the hist relation in the @spans refusal, got: {name}"
                 );
             }
             other @ (VerifyOutcome::Match { .. }
             | VerifyOutcome::Mismatch { .. }
-            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Unsupported, got {other:?}"),
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => {
+                panic!("expected Unsupported(IntervalDerivation), got {other:?}")
+            }
         }
     }
 
