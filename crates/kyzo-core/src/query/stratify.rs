@@ -93,8 +93,8 @@ use crate::query::graph::{
      (negation, non-meet aggregation, or algorithm-application)."
 ))]
 struct UnStratifiableProgram {
-    name: String,
-    scc: Vec<String>,
+    name: Symbol,
+    scc: Vec<Symbol>,
     #[label("this dependency closes a cycle it may not be part of")]
     span: SourceSpan,
 }
@@ -312,8 +312,8 @@ fn verify_no_cycle(
                     ensure!(
                         !negated || !scc.contains(v),
                         UnStratifiableProgram {
-                            name: v.to_string(),
-                            scc: scc.iter().map(|v| v.to_string()).collect(),
+                            name: (*v).clone(),
+                            scc: scc.iter().map(|s| (*s).clone()).collect(),
                             span: poison_spans.get(&(*k, *v)).copied().unwrap_or(v.span),
                         }
                     );

@@ -6,44 +6,55 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-//! One generic build→seal→query machine for every projection kind.
+//! One generic build→seal→freshness machine for every projection kind.
 //!
 //! [`ProjectionBuilder<K>`] is the building form: it exposes no query
 //! surface. A consuming [`ProjectionBuilder::seal`] yields [`Sealed<K>`],
-//! which carries its [`Generation`] in the type-visible contract and is the
-//! only form that can be queried. A generation mismatch is not an
-//! `Option`/`Err` from a get-shaped call — it is the distinct type
-//! [`Stale<K>`], which has no query method.
+//! which carries its [`Generation`] in the type-visible contract.
+//! A generation mismatch is not an `Option`/`Err` from a get-shaped call —
+//! it is the distinct type [`Stale<K>`], which has no query method.
 //!
 //! Kind-specific engines re-land as `K` parameterizations of this machine
 //! (story #305 T3): [`crate::engines::hnsw::Hnsw`], [`crate::engines::fts::Fts`],
 //! [`crate::engines::lsh::Lsh`], [`crate::engines::sparse::Sparse`], and
 //! [`crate::engines::spatial::Spatial`]. Relation-backed search is owned by
-//! inherent methods on those kinds (`Hnsw::knn`, `Fts::search_index`, …) —
-//! free-fn duals are gone (P103). This module owns the shared protocol types.
-//! Segment freshness (T5) consumes [`Generation::classify`] at
-//! [`crate::engines::segments`] — staleness is [`Stale`], never an `Option`
-//! from a get-shaped call. The segment cache is rebuildable acceleration
-//! only: meaning clocks come from [`crate::runtime::generation`]; the cache
-//! cannot own truth (P106).
+//! those kinds through [`RelationIndexSearch`] (inherent `knn` /
+//! `search_index` / `range_query` doors) — there is no `ProjectionKind`
+//! k-bound façade and no free-fn dual (P103). This module owns the shared
+//! protocol types. Segment freshness (T5) consumes [`Generation::classify`]
+//! at [`crate::engines::segments`] — staleness is [`Stale`], never an
+//! `Option` from a get-shaped call. The segment cache is rebuildable
+//! acceleration only: meaning clocks come from [`crate::runtime::generation`];
+//! the cache cannot own truth (P106).
 
 use std::fmt;
 
 use crate::data::value::RelationId;
 
-/// A projection kind's build payload and search law.
+/// A projection kind's identity in the build→seal→freshness machine.
 ///
-/// One implementation per engine; the machine is parameterized over `Self`
-/// so build→seal→query is proved once for every kind.
-pub trait ProjectionKind {
+/// Relation-backed search is **not** declared here (P103): a former
+/// `search` returning `k`/`ef` was a façade dual of the real engine doors.
+/// Engine kinds implement [`RelationIndexSearch`]; in-memory sealed search
+/// (tests) implements [`SealedQuery`].
+pub trait ProjectionKind {}
+
+/// In-memory sealed search — only for kinds whose payload answers queries
+/// without a storage transaction. Invoked only through [`Sealed::query`].
+pub trait SealedQuery: ProjectionKind {
     /// Kind-specific query input.
     type Query;
     /// Kind-specific candidate answer.
     type Candidates;
 
-    /// Search the sealed kind payload. Invoked only through [`Sealed::query`].
+    /// Search the sealed kind payload.
     fn search(&self, query: &Self::Query) -> Self::Candidates;
 }
+
+/// Marker: this kind owns relation-backed index search on its inherent
+/// methods (`knn` / `search_index` / `range_query`). The sole search seam
+/// for engine kinds — free-fn duals and ProjectionKind façades are gone (P103).
+pub(crate) trait RelationIndexSearch: ProjectionKind {}
 
 /// Generation stamp carried by a sealed projection.
 ///
@@ -123,9 +134,6 @@ impl<K> ProjectionBuilder<K> {
     }
 
     /// Access the kind payload while still building (put/insert paths).
-    ///
-    /// `pub(crate)` so external callers cannot reach [`ProjectionKind::search`]
-    /// through the builder — only [`Sealed::query`] is the query door.
     pub(crate) fn kind_mut(&mut self) -> &mut K {
         &mut self.kind
     }
@@ -135,7 +143,7 @@ impl<K> ProjectionBuilder<K> {
         &self.kind
     }
 
-    /// Consuming seal: spends the builder and yields the queryable form
+    /// Consuming seal: spends the builder and yields the sealed form
     /// stamped with `generation`.
     pub fn seal(self, generation: Generation) -> Sealed<K> {
         Sealed {
@@ -145,10 +153,11 @@ impl<K> ProjectionBuilder<K> {
     }
 }
 
-/// Queryable form of a projection — carries its [`Generation`] in contract.
+/// Sealed projection — carries its [`Generation`] in contract.
 ///
-/// Produced only by [`ProjectionBuilder::seal`]. The sole type that exposes
-/// [`Sealed::query`].
+/// Produced only by [`ProjectionBuilder::seal`]. In-memory search is
+/// [`Sealed::query`] for [`SealedQuery`] kinds; relation engines search
+/// through [`RelationIndexSearch`] inherent doors on `K`.
 #[derive(Debug, Clone)]
 pub struct Sealed<K> {
     generation: Generation,
@@ -172,10 +181,10 @@ impl<K> Sealed<K> {
     }
 }
 
-impl<K: ProjectionKind> Sealed<K> {
-    /// Query this sealed projection. Absent from [`ProjectionBuilder`] and
-    /// from [`Stale`] — querying an unsealed or stale projection is not a
-    /// method that returns an error; those types have no query method.
+impl<K: SealedQuery> Sealed<K> {
+    /// Query this sealed in-memory projection. Absent from
+    /// [`ProjectionBuilder`] and from [`Stale`] — and absent from
+    /// relation-backed engine kinds (those use [`RelationIndexSearch`]).
     pub fn query(&self, query: &K::Query) -> K::Candidates {
         self.kind.search(query)
     }
@@ -224,7 +233,9 @@ mod tests {
         hits: usize,
     }
 
-    impl ProjectionKind for DemoKind {
+    impl ProjectionKind for DemoKind {}
+
+    impl SealedQuery for DemoKind {
         type Query = usize;
         type Candidates = usize;
 
@@ -261,58 +272,25 @@ mod tests {
         assert_eq!(stale.kind(), &DemoKind { hits: 1 });
     }
 
-    /// Closure test (story #305): one machine typechecks build→seal→query
-    /// for all five engine kinds — no per-engine protocol twin.
+    /// Closure test (story #305): one machine typechecks build→seal→classify
+    /// for all five engine kinds — search is [`RelationIndexSearch`], not a
+    /// ProjectionKind façade (P103).
     #[test]
     fn five_engine_kinds_share_one_machine() {
-        use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams};
-        use crate::engines::hnsw::{Hnsw, HnswKnnParams};
-        use crate::engines::lsh::{Lsh, LshSearchParams};
-        use crate::engines::sparse::{Sparse, SparseSearchParams};
-        use crate::engines::spatial::{Spatial, SpatialQuery};
+        use crate::engines::fts::Fts;
+        use crate::engines::hnsw::Hnsw;
+        use crate::engines::lsh::Lsh;
+        use crate::engines::sparse::Sparse;
+        use crate::engines::spatial::Spatial;
 
         let generation = stamp(1);
 
-        let hnsw = ProjectionBuilder::new(Hnsw).seal(generation);
-        assert_eq!(
-            hnsw.query(&HnswKnnParams {
-                k: 10,
-                ef: 5,
-                radius: None,
-                bind: crate::engines::hnsw::HnswBindPack::default(),
-            }),
-            10,
-            "HNSW search law: ef is at least k"
-        );
+        let _hnsw = ProjectionBuilder::new(Hnsw).seal(generation);
+        let _fts = ProjectionBuilder::new(Fts).seal(generation);
+        let _lsh = ProjectionBuilder::new(Lsh).seal(generation);
+        let _sparse = ProjectionBuilder::new(Sparse).seal(generation);
+        let _spatial = ProjectionBuilder::new(Spatial).seal(generation);
 
-        let fts = ProjectionBuilder::new(Fts).seal(generation);
-        assert_eq!(
-            fts.query(&FtsSearchParams {
-                k: 3,
-                score_kind: FtsScoreKind::Tf,
-                bind_score: crate::engines::fts::FtsBindScore::Append,
-            }),
-            3
-        );
-
-        let lsh = ProjectionBuilder::new(Lsh).seal(generation);
-        assert_eq!(lsh.query(&LshSearchParams { k: Some(7) }), Some(7));
-        assert_eq!(lsh.query(&LshSearchParams { k: None }), None);
-
-        let sparse = ProjectionBuilder::new(Sparse).seal(generation);
-        assert_eq!(
-            sparse.query(&SparseSearchParams {
-                k: 4,
-                bind_score: crate::engines::sparse::SparseBindScore::Omit,
-            }),
-            4
-        );
-
-        let spatial = ProjectionBuilder::new(Spatial).seal(generation);
-        assert_eq!(spatial.query(&SpatialQuery::Range), 0);
-        assert_eq!(spatial.query(&SpatialQuery::Knn { k: 5 }), 5);
-
-        // Freshness classify works uniformly for every kind.
         let sealed = ProjectionBuilder::new(Hnsw).seal(stamp(2));
         assert!(stamp(2).classify(sealed).is_ok());
         let sealed = ProjectionBuilder::new(Fts).seal(stamp(2));

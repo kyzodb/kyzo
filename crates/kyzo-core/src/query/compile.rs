@@ -213,7 +213,7 @@ pub(crate) struct CompiledInlineRules {
     "Every definition of a rule must apply the same aggregation (with the \
      same arguments) to each head position."
 ))]
-pub(crate) struct RulesetHeadAggrMismatch(String, #[label] SourceSpan);
+pub(crate) struct RulesetHeadAggrMismatch(MagicSymbol, #[label] SourceSpan);
 
 impl CompiledInlineRules {
     /// Mint from `(signature, plan)` pairs, refusing an empty set and any
@@ -232,7 +232,7 @@ impl CompiledInlineRules {
         for (other_aggr, rule) in iter {
             ensure!(
                 other_aggr == aggr,
-                RulesetHeadAggrMismatch(name.to_string(), name.as_plain_symbol().span)
+                RulesetHeadAggrMismatch(name.clone(), name.as_plain_symbol().span)
             );
             rules.push(rule);
         }
@@ -313,13 +313,13 @@ impl MagicInlineRule {
 #[derive(Debug, Error, Diagnostic)]
 #[error("Requested rule {0} not found")]
 #[diagnostic(code(eval::rule_not_found))]
-struct RuleNotFound(String, #[label] SourceSpan);
+struct RuleNotFound(MagicSymbol, #[label] SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Arity mismatch for rule application {0}")]
 #[diagnostic(code(eval::rule_arity_mismatch))]
 #[diagnostic(help("Required arity: {1}, number of arguments given: {2}"))]
-struct ArityMismatch(String, usize, usize, #[label] SourceSpan);
+struct ArityMismatch(Symbol, usize, usize, #[label] SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Symbol '{0}' in rule head is unbound")]
@@ -327,7 +327,7 @@ struct ArityMismatch(String, usize, usize, #[label] SourceSpan);
 #[diagnostic(help(
     "Note that symbols occurring only in negated positions are not considered bound"
 ))]
-struct UnboundSymbolInRuleHead(String, #[label] SourceSpan);
+struct UnboundSymbolInRuleHead(Symbol, #[label] SourceSpan);
 
 /// Compile every stratum of a proven program into executable plans.
 ///
@@ -453,7 +453,7 @@ pub(crate) fn compile_magic_rule_body(
                 let occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
                     RuleNotFound(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.clone(),
                         rule_app.name.as_plain_symbol().span,
                     )
                 })?;
@@ -461,7 +461,7 @@ pub(crate) fn compile_magic_rule_body(
                 ensure!(
                     *store_arity == rule_app.args.len(),
                     ArityMismatch(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.as_plain_symbol().clone(),
                         *store_arity,
                         rule_app.args.len(),
                         rule_app.span
@@ -504,7 +504,7 @@ pub(crate) fn compile_magic_rule_body(
                 ensure!(
                     store.arity() == rel_app.args.len(),
                     ArityMismatch(
-                        rel_app.name.to_string(),
+                        rel_app.name.clone(),
                         store.arity(),
                         rel_app.args.len(),
                         rel_app.span
@@ -689,14 +689,14 @@ pub(crate) fn compile_magic_rule_body(
                 let negated_occurrence = next_occurrence();
                 let store_arity = store_arities.get(&rule_app.name).ok_or_else(|| {
                     RuleNotFound(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.clone(),
                         rule_app.name.as_plain_symbol().span,
                     )
                 })?;
                 ensure!(
                     *store_arity == rule_app.args.len(),
                     ArityMismatch(
-                        rule_app.name.as_plain_symbol().to_string(),
+                        rule_app.name.as_plain_symbol().clone(),
                         *store_arity,
                         rule_app.args.len(),
                         rule_app.span
@@ -739,7 +739,7 @@ pub(crate) fn compile_magic_rule_body(
                 ensure!(
                     store.arity() == rel_app.args.len(),
                     ArityMismatch(
-                        rel_app.name.to_string(),
+                        rel_app.name.clone(),
                         store.arity(),
                         rel_app.args.len(),
                         rel_app.span
@@ -930,7 +930,7 @@ pub(crate) fn compile_magic_rule_body(
         // symbol; an empty difference would mean the subset invariant
         // broke (the original `unwrap`ped it away).
         match ret_vars_set.difference(&cur_ret_set).next() {
-            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.to_string(), unbound.span)),
+            Some(unbound) => bail!(UnboundSymbolInRuleHead(unbound.clone(), unbound.span)),
             None => bail!(PlanInvariantError(
                 "plan frame disagrees with the rule head without an unbound head symbol"
             )),

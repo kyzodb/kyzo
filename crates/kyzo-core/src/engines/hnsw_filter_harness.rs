@@ -382,10 +382,10 @@ fn knn_params_p2(k: usize, ef: usize) -> HnswKnnParams {
         ef,
         radius: None,
         bind: crate::engines::hnsw::HnswBindPack {
-            field: false,
-            field_idx: false,
-            distance: true,
-            vector: false,
+            field: crate::engines::hnsw::HnswBindSlot::Omit,
+            field_idx: crate::engines::hnsw::HnswBindSlot::Omit,
+            distance: crate::engines::hnsw::HnswBindSlot::Append,
+            vector: crate::engines::hnsw::HnswBindSlot::Omit,
         },
     }
 }

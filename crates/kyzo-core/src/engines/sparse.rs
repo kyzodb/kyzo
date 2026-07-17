@@ -116,7 +116,7 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::ProjectionKind;
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
 
@@ -129,25 +129,15 @@ use crate::storage::{ReadTx, WriteTx};
 /// [`Sealed`](crate::engines::projection::Sealed).
 ///
 /// Relation-backed posting maintenance and search ([`sparse_put`],
-/// [`sparse_search`]) are the kernel algorithms — not a second build/seal/
-/// freshness protocol.
-///
-/// Constructed at seal sites once generation freshness is seated (T5 /
-/// projections-views); the type is live under the machine's tests today.
+/// [`Sparse::search_index`]) are the kernel algorithms — not a second
+/// build/seal/freshness protocol. Search is owned by [`RelationIndexSearch`]
+/// (P103).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Sparse;
 
-impl ProjectionKind for Sparse {
-    type Query = SparseSearchParams;
-    /// Result-set bound `k` — the search law's truncation contract.
-    /// Relation-backed search is [`Sparse::search_index`] (P103).
-    type Candidates = usize;
-
-    fn search(&self, query: &Self::Query) -> Self::Candidates {
-        query.k
-    }
-}
+impl ProjectionKind for Sparse {}
+impl RelationIndexSearch for Sparse {}
 
 // ---------------------------------------------------------------------------
 // Typed errors — the admission gate's refusals.

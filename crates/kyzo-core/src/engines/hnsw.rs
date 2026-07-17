@@ -220,7 +220,7 @@ use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::ProjectionKind;
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::parse::sys::HnswDistance;
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
@@ -234,28 +234,15 @@ use crate::data::value::data_value_any;
 /// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::engines::projection::Sealed).
 ///
-/// The kind carries the search-law identity for this engine. Relation-backed
-/// graph maintenance and knn ([`hnsw_put`], [`hnsw_knn`]) are the kernel
-/// algorithms — not a second build/seal/freshness protocol.
-///
-/// Constructed at seal sites once generation freshness is seated (T5 /
-/// projections-views); the type is live under the machine's tests today.
+/// Relation-backed graph maintenance and knn ([`hnsw_put`], [`Hnsw::knn`])
+/// are the kernel algorithms — not a second build/seal/freshness protocol.
+/// Search is owned by [`RelationIndexSearch`] / [`Hnsw::knn`] (P103).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Hnsw;
 
-impl ProjectionKind for Hnsw {
-    type Query = HnswKnnParams;
-    /// Effective layer-0 beam: `max(ef, k)`, the RA contract that fewer than
-    /// `k` results come back if `ef < k`. Relation-backed knn is [`Hnsw::knn`]
-    /// — the sole engine search door (P103); this trait method is the sealed
-    /// payload's search-law identity while `K` remains a ZST.
-    type Candidates = usize;
-
-    fn search(&self, query: &Self::Query) -> Self::Candidates {
-        query.ef.max(query.k)
-    }
-}
+impl ProjectionKind for Hnsw {}
+impl RelationIndexSearch for Hnsw {}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.
@@ -2131,15 +2118,30 @@ pub(crate) fn hnsw_remove<T: WriteTx>(
     Ok(())
 }
 
+/// Whether one optional HNSW output column is appended (P038 — sum, not bool).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum HnswBindSlot {
+    #[default]
+    Omit,
+    Append,
+}
+
+impl HnswBindSlot {
+    #[inline]
+    pub(crate) fn append(self) -> bool {
+        matches!(self, HnswBindSlot::Append)
+    }
+}
+
 /// Which optional HNSW output columns to append — the **one** bind encoding
-/// (P038). The RA tier maps the same presence to `own_bindings` symbols at
-/// construction; the engine only reads this pack.
+/// (P038). Dual bool packs are gone; the RA tier maps the same presence to
+/// `own_bindings` symbols at construction; the engine only reads this pack.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HnswBindPack {
-    pub(crate) field: bool,
-    pub(crate) field_idx: bool,
-    pub(crate) distance: bool,
-    pub(crate) vector: bool,
+    pub(crate) field: HnswBindSlot,
+    pub(crate) field_idx: HnswBindSlot,
+    pub(crate) distance: HnswBindSlot,
+    pub(crate) vector: HnswBindSlot,
 }
 
 /// The parameters of one k-nearest-neighbours search. The RA operator tier
@@ -2291,7 +2293,7 @@ fn hnsw_knn_body(
         // Appended-column order is this function's contract with the RA
         // tier (the original guarded it with a "!!!" comment): field,
         // field_idx, distance, vector.
-        if params.bind.field {
+        if params.bind.field.append() {
             let name = if cand.field < key_len {
                 base.metadata.keys[cand.field].name.clone()
             } else {
@@ -2310,16 +2312,16 @@ fn hnsw_knn_body(
             };
             cand_tuple.push(DataValue::Str(name.to_string()));
         }
-        if params.bind.field_idx {
+        if params.bind.field_idx.append() {
             cand_tuple.push(match cand.sub {
                 None => DataValue::Null,
                 Some(s) => DataValue::from(s as i64),
             });
         }
-        if params.bind.distance {
+        if params.bind.distance.append() {
             cand_tuple.push(DataValue::from(distance));
         }
-        if params.bind.vector {
+        if params.bind.vector.append() {
             let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
                 miette!(IndexRowCorrupt::new(
                     &idx.name,
@@ -2484,7 +2486,7 @@ fn build_cand_tuple(
             IndexCorruptReason::BaseRowMissing,
         ))
     })?;
-    if params.bind.field {
+    if params.bind.field.append() {
         let name = if cand.field < key_len {
             base.metadata.keys[cand.field].name.clone()
         } else {
@@ -2503,16 +2505,16 @@ fn build_cand_tuple(
         };
         cand_tuple.push(DataValue::Str(name.to_string()));
     }
-    if params.bind.field_idx {
+    if params.bind.field_idx.append() {
         cand_tuple.push(match cand.sub {
             None => DataValue::Null,
             Some(s) => DataValue::from(s as i64),
         });
     }
-    if params.bind.distance {
+    if params.bind.distance.append() {
         cand_tuple.push(DataValue::from(distance));
     }
-    if params.bind.vector {
+    if params.bind.vector.append() {
         let field_val = cand_tuple.get(cand.field).ok_or_else(|| {
             miette!(IndexRowCorrupt::new(
                 &idx.name,
@@ -3070,10 +3072,10 @@ mod tests {
             ef: 32,
             radius: None,
             bind: HnswBindPack {
-                field: false,
-                field_idx: false,
-                distance: true,
-                vector: false,
+                field: HnswBindSlot::Omit,
+                field_idx: HnswBindSlot::Omit,
+                distance: HnswBindSlot::Append,
+                vector: HnswBindSlot::Omit,
             },
         }
     }

@@ -322,8 +322,9 @@ impl DerivationId {
 ///
 /// DAG-by-construction (P104): edges are admitted only through
 /// [`Self::add_derivation`], which requires every premise already
-/// [`Self::declare`]d or [`Self::add_fact`]ed (or a prior head) and refuses
-/// self-loops. Free struct literals cannot forge an open graph.
+/// [`Self::declare`]d or [`Self::add_fact`]ed (or a prior head), refuses
+/// self-loops, and refuses any edge that would create a cycle. Free struct
+/// literals cannot forge an open or cyclic graph.
 #[derive(Debug)]
 pub(crate) struct DerivationGraph<K> {
     /// Ground nodes: EDB facts as attested by the rule bodies, plus the
@@ -365,9 +366,10 @@ impl<K: Ord + Clone + Debug> DerivationGraph<K> {
         self.known.insert(node);
     }
 
-    /// Admit one grounded rule application. Refuses a self-loop or any
-    /// premise not yet in [`Self::known`] — the graph stays closed (and
-    /// self-loop-free) by construction.
+    /// Admit one grounded rule application. Refuses a self-loop, any
+    /// premise not yet in [`Self::known`], or any edge that would create a
+    /// cycle (following premise→head edges, `head` must not already reach a
+    /// premise) — the graph stays a closed DAG by construction.
     pub(crate) fn add_derivation(&mut self, d: Derivation<K>) -> Result<DerivationId> {
         if d.premises.iter().any(|p| p == &d.head) {
             return Err(ProvenanceInvariantError(
@@ -382,11 +384,40 @@ impl<K: Ord + Clone + Debug> DerivationGraph<K> {
                 )
                 .into());
             }
+            if self.reaches(&d.head, p) {
+                return Err(ProvenanceInvariantError(
+                    "admitting this derivation would create a cycle",
+                )
+                .into());
+            }
         }
         self.known.insert(d.head.clone());
         let id = DerivationId(self.derivations.len());
         self.derivations.push(d);
         Ok(id)
+    }
+
+    /// Whether `from` can reach `to` following existing premise→head edges.
+    fn reaches(&self, from: &K, to: &K) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut stack = vec![from.clone()];
+        let mut seen = BTreeSet::new();
+        while let Some(n) = stack.pop() {
+            if !seen.insert(n.clone()) {
+                continue;
+            }
+            for d in &self.derivations {
+                if d.premises.iter().any(|p| p == &n) {
+                    if d.head == *to {
+                        return true;
+                    }
+                    stack.push(d.head.clone());
+                }
+            }
+        }
+        false
     }
 
     pub(crate) fn facts(&self) -> &BTreeSet<K> {

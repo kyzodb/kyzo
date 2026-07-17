@@ -337,13 +337,21 @@ pub(crate) fn resolve_search(
             let bind_field_idx = take_var(&mut params, "bind_field_idx", span)?;
             let bind_distance = take_var(&mut params, "bind_distance", span)?;
             let bind_vector = take_var(&mut params, "bind_vector", span)?;
-            // One bind encoding (P038): presence pack for the engine; symbols
-            // for the RA frame — both from the same Option set, no dual bools.
+            // One bind encoding (P038): HnswBindSlot sum pack for the engine;
+            // symbols for the RA frame — both from the same Option set.
+            use crate::engines::hnsw::HnswBindSlot;
+            let slot = |o: &Option<_>| {
+                if o.is_some() {
+                    HnswBindSlot::Append
+                } else {
+                    HnswBindSlot::Omit
+                }
+            };
             let bind = crate::engines::hnsw::HnswBindPack {
-                field: bind_field.is_some(),
-                field_idx: bind_field_idx.is_some(),
-                distance: bind_distance.is_some(),
-                vector: bind_vector.is_some(),
+                field: slot(&bind_field),
+                field_idx: slot(&bind_field_idx),
+                distance: slot(&bind_distance),
+                vector: slot(&bind_vector),
             };
             let p = HnswKnnParams {
                 k,

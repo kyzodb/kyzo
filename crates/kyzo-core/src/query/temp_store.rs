@@ -1466,7 +1466,7 @@ mod tests {
             panic!("expected meet stores")
         };
         let mut by_group: BTreeMap<Box<[u8]>, Tuple> = BTreeMap::new();
-        for level in levels.as_slice() {
+        for level in levels.iter() {
             for (k, v) in &level.groups {
                 by_group.insert(k.clone(), spec.layout.interleave(k, v.as_slice()));
             }

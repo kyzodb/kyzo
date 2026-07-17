@@ -115,7 +115,7 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, ScanBound, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::ProjectionKind;
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::runtime::relation::RelationHandle;
 use crate::storage::{ReadTx, WriteTx};
 
@@ -128,37 +128,15 @@ use crate::storage::{ReadTx, WriteTx};
 /// [`Sealed`](crate::engines::projection::Sealed).
 ///
 /// Relation-backed curve maintenance and search ([`spatial_put`],
-/// [`spatial_range_query`], [`spatial_knn`]) are the kernel algorithms — not
-/// a second build/seal/freshness protocol.
-///
-/// Constructed at seal sites once generation freshness is seated (T5 /
-/// projections-views); the type is live under the machine's tests today.
+/// [`Spatial::range_query`], [`Spatial::knn`]) are the kernel algorithms —
+/// not a second build/seal/freshness protocol. Search is owned by
+/// [`RelationIndexSearch`] (P103).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Spatial;
 
-/// Query surface for a sealed [`Spatial`] projection: range or k-NN.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum SpatialQuery {
-    /// Bounding-box range — no `k` truncation in the search law itself.
-    Range,
-    /// Expanding-ring k-NN with result-set bound `k`.
-    Knn { k: usize },
-}
-
-impl ProjectionKind for Spatial {
-    type Query = SpatialQuery;
-    /// For range: `0` (unbounded by k). For knn: the `k` bound.
-    type Candidates = usize;
-
-    fn search(&self, query: &Self::Query) -> Self::Candidates {
-        match *query {
-            SpatialQuery::Range => 0,
-            SpatialQuery::Knn { k } => k,
-        }
-    }
-}
+impl ProjectionKind for Spatial {}
+impl RelationIndexSearch for Spatial {}
 
 // ---------------------------------------------------------------------------
 // Format constants (on-disk).
@@ -774,9 +752,8 @@ fn scan_box(
     Ok(out)
 }
 
-/// Bounding-box search: the base rows whose point lies in `bbox`, in canonical
-/// ascending `(curve, src_key)` order.
-pub(crate) fn spatial_range_query(
+/// Bounding-box search body.
+fn spatial_range_query_body(
     tx: &impl ReadTx,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -792,12 +769,43 @@ pub(crate) fn spatial_range_query(
 // k-nearest-neighbour by expanding ring.
 // ---------------------------------------------------------------------------
 
+/// Whether spatial k-NN appends the distance column (P038 — sum, not bool).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum SpatialBindDistance {
+    #[default]
+    Omit,
+    Append,
+}
+
 /// The parameters of one k-NN query.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct KnnParams {
     pub(crate) k: usize,
     /// Append the angular great-circle distance (radians) as a trailing `Float`.
-    pub(crate) bind_distance: bool,
+    pub(crate) bind_distance: SpatialBindDistance,
+}
+
+impl Spatial {
+    /// Relation-backed bounding-box search — sole spatial range door (P103).
+    pub(crate) fn range_query(
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        bbox: &BoundingBox,
+    ) -> Result<Vec<Tuple>> {
+        spatial_range_query_body(tx, base, idx, bbox)
+    }
+
+    /// Relation-backed k-NN — sole spatial knn door (P103).
+    pub(crate) fn knn(
+        tx: &impl ReadTx,
+        base: &RelationHandle,
+        idx: &RelationHandle,
+        query: &GeoPoint,
+        params: &KnnParams,
+    ) -> Result<Vec<Tuple>> {
+        spatial_knn_body(tx, base, idx, query, params)
+    }
 }
 
 /// The angular great-circle distance (radians) between two points given in
@@ -914,7 +922,7 @@ const KNN_SEED_HALF_DEG: f64 = 1.0;
 /// nearest first, ties broken by `src_key`, each optionally extended by its
 /// angular distance (radians). Exact — the curve only decides which rows to
 /// re-score.
-pub(crate) fn spatial_knn(
+fn spatial_knn_body(
     tx: &impl ReadTx,
     base: &RelationHandle,
     idx: &RelationHandle,
@@ -966,7 +974,7 @@ pub(crate) fn spatial_knn(
         .into_iter()
         .map(|c| {
             let mut row = fetch_base(tx, base, idx, c.src_key.as_slice())?;
-            if params.bind_distance {
+            if matches!(params.bind_distance, SpatialBindDistance::Append) {
                 row.push(DataValue::from(c.dist.0));
             }
             Ok(row)
@@ -1108,7 +1116,7 @@ mod tests {
 
     fn range_ids(db: &impl Storage, f: &Fixture, bbox: &BoundingBox) -> Vec<i64> {
         let rtx = db.read_tx().unwrap();
-        spatial_range_query(&rtx, &f.base, &f.idx, bbox)
+        Spatial::range_query(&rtx, &f.base, &f.idx, bbox)
             .unwrap()
             .iter()
             .map(|t| t[0].get_int().unwrap())
@@ -1117,14 +1125,14 @@ mod tests {
 
     fn knn_ids(db: &impl Storage, f: &Fixture, q: &GeoPoint, k: usize) -> Vec<(i64, f64)> {
         let rtx = db.read_tx().unwrap();
-        spatial_knn(
+        Spatial::knn(
             &rtx,
             &f.base,
             &f.idx,
             q,
             &KnnParams {
                 k,
-                bind_distance: true,
+                bind_distance: SpatialBindDistance::Append,
             },
         )
         .unwrap()
@@ -1563,7 +1571,7 @@ mod tests {
 
         let rtx = db.read_tx().unwrap();
         let bbox = BoundingBox::admit(9.0, 19.0, 11.0, 21.0).unwrap();
-        let err = spatial_range_query(&rtx, &f.base, &f.idx, &bbox)
+        let err = Spatial::range_query(&rtx, &f.base, &f.idx, &bbox)
             .expect_err("corrupt posting must error, not panic");
         assert!(
             err.downcast_ref::<crate::engines::IndexRowCorrupt>()

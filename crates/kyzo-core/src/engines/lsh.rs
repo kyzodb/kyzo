@@ -120,7 +120,7 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, Tuple, append_canonical};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::ProjectionKind;
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::TokenizerConfig;
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::runtime::relation::RelationHandle;
@@ -136,25 +136,15 @@ use crate::data::value::data_value_any;
 /// [`Sealed`](crate::engines::projection::Sealed).
 ///
 /// Relation-backed signature maintenance and candidate search ([`lsh_put`],
-/// [`lsh_search`]) are the kernel algorithms — not a second build/seal/
-/// freshness protocol.
-///
-/// Constructed at seal sites once generation freshness is seated (T5 /
-/// projections-views); the type is live under the machine's tests today.
+/// [`Lsh::search_index`]) are the kernel algorithms — not a second
+/// build/seal/freshness protocol. Search is owned by [`RelationIndexSearch`]
+/// (P103).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Lsh;
 
-impl ProjectionKind for Lsh {
-    type Query = LshSearchParams;
-    /// Optional smallest-k-by-key bound from the search law.
-    /// Relation-backed search is [`Lsh::search_index`] (P103).
-    type Candidates = Option<usize>;
-
-    fn search(&self, query: &Self::Query) -> Self::Candidates {
-        query.k
-    }
-}
+impl ProjectionKind for Lsh {}
+impl RelationIndexSearch for Lsh {}
 
 // ---------------------------------------------------------------------------
 // The manifest: the index's persisted description.

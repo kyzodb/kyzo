@@ -110,7 +110,7 @@ use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationM
 use crate::data::span::SourceSpan;
 use crate::data::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::engines::{IndexCorruptReason, IndexRowCorrupt};
-use crate::engines::projection::ProjectionKind;
+use crate::engines::projection::{ProjectionKind, RelationIndexSearch};
 use crate::engines::text::ast::{FtsExpr, FtsLiteral, FtsNear};
 use crate::engines::text::tokenizer::TextAnalyzer;
 use crate::parse::fts::parse_fts_query;
@@ -126,25 +126,16 @@ use crate::data::value::data_value_any;
 /// [`ProjectionBuilder`](crate::engines::projection::ProjectionBuilder) /
 /// [`Sealed`](crate::engines::projection::Sealed).
 ///
-/// Relation-backed posting maintenance and search ([`fts_put`], [`fts_search`])
-/// are the kernel algorithms — not a second build/seal/freshness protocol.
-///
-/// Constructed at seal sites once generation freshness is seated (T5 /
-/// projections-views); the type is live under the machine's tests today.
+/// Relation-backed posting maintenance and search ([`fts_put`],
+/// [`Fts::search_index`]) are the kernel algorithms — not a second
+/// build/seal/freshness protocol. Search is owned by [`RelationIndexSearch`]
+/// (P103).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct Fts;
 
-impl ProjectionKind for Fts {
-    type Query = FtsSearchParams;
-    /// Result-set bound `k` — the search law's truncation contract.
-    /// Relation-backed search is [`Fts::search_index`] (P103).
-    type Candidates = usize;
-
-    fn search(&self, query: &Self::Query) -> Self::Candidates {
-        query.k
-    }
-}
+impl ProjectionKind for Fts {}
+impl RelationIndexSearch for Fts {}
 
 // ---------------------------------------------------------------------------
 // Scoring vocabulary.
