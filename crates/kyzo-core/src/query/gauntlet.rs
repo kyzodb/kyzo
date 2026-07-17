@@ -187,7 +187,7 @@ fn literal_text(program: &Program, lit: &Literal) -> String {
     let args: Vec<String> = lit.args.iter().map(term_text).collect();
     format!(
         "{}{sigil}{}[{}]",
-        if lit.negated { "not " } else { "" },
+        if lit.is_negated() { "not " } else { "" },
         lit.rel,
         args.join(", ")
     )

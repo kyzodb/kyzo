@@ -149,6 +149,9 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use miette::{Diagnostic, Result};
+use thiserror::Error;
+
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr, NormalAggr};
 use crate::data::bitemporal::ClaimPolarity;
 use crate::data::value::DataValue;
@@ -520,10 +523,18 @@ pub(crate) fn diff(history: &[Event], from: AsOf, to: AsOf) -> BTreeSet<SignedFa
 /// that changes and changes back within the composed window). The
 /// executable form of the compositionality law
 /// `diff(a,c) == diff(a,b) ⊕ diff(b,c)`.
+/// Net tally outside `{-1, 0, +1}` — well-formed patches never produce it.
+#[derive(Debug, Error, Diagnostic)]
+#[error("compose net tally {net} is outside {{-1, 0, +1}}")]
+#[diagnostic(code(query::compose_net_out_of_range))]
+pub(crate) struct ComposeNetOutOfRange {
+    pub(crate) net: i32,
+}
+
 pub(crate) fn compose(
     first: &BTreeSet<SignedFact>,
     second: &BTreeSet<SignedFact>,
-) -> BTreeSet<SignedFact> {
+) -> Result<BTreeSet<SignedFact>> {
     let mut tally: BTreeMap<&Tuple, i32> = BTreeMap::new();
     for patch in [first, second] {
         for fact in patch {
@@ -534,21 +545,34 @@ pub(crate) fn compose(
             *tally.entry(t).or_insert(0) += delta;
         }
     }
-    tally
-        .into_iter()
-        .filter_map(|(t, net)| match net {
-            0 => None,
-            n if n > 0 => Some(SignedFact::Plus(t.clone())),
-            _ => Some(SignedFact::Minus(t.clone())),
-        })
-        .collect()
+    let mut out = BTreeSet::new();
+    for (t, net) in tally {
+        match net {
+            0 => {}
+            1 => {
+                out.insert(SignedFact::Plus(t.clone()));
+            }
+            -1 => {
+                out.insert(SignedFact::Minus(t.clone()));
+            }
+            n => return Err(ComposeNetOutOfRange { net: n }.into()),
+        }
+    }
+    Ok(out)
+}
+
+/// Body-literal polarity: positive read vs negation gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Polarity {
+    Positive,
+    Negative,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Literal {
     pub rel: Rel,
     pub args: Vec<Term>,
-    pub negated: bool,
+    pub polarity: Polarity,
     /// The literal's own bitemporal read coordinate, overriding the
     /// query-level default (`naive_eval_at`'s parameter) when present.
     /// Meaningful only on a literal reading a relation with an entry in
@@ -560,6 +584,11 @@ pub(crate) struct Literal {
 }
 
 impl Literal {
+    /// Whether this literal is a negation gate.
+    pub(crate) fn is_negated(&self) -> bool {
+        matches!(self.polarity, Polarity::Negative)
+    }
+
     /// A positive body literal, current/untimed (no explicit as-of) — the
     /// one seam every call site should construct through, so a future
     /// field on `Literal` fans out from here instead of from every file's
@@ -569,7 +598,7 @@ impl Literal {
         Literal {
             rel,
             args,
-            negated: false,
+            polarity: Polarity::Positive,
             as_of: None,
         }
     }
@@ -578,7 +607,7 @@ impl Literal {
         Literal {
             rel,
             args,
-            negated: true,
+            polarity: Polarity::Negative,
             as_of: None,
         }
     }
@@ -587,7 +616,7 @@ impl Literal {
         Literal {
             rel,
             args,
-            negated: false,
+            polarity: Polarity::Positive,
             as_of: Some(at),
         }
     }
@@ -603,7 +632,7 @@ impl Literal {
         Literal {
             rel,
             args,
-            negated: true,
+            polarity: Polarity::Negative,
             as_of: Some(at),
         }
     }
@@ -742,7 +771,7 @@ pub(crate) fn check_safety(program: &Program) -> Result<(), Rejection> {
         let positive_vars: HashSet<&str> = rule
             .body
             .iter()
-            .filter(|l| !l.negated)
+            .filter(|l| !l.is_negated())
             .flat_map(literal_vars)
             .collect();
         for t in &rule.head_args {
@@ -752,7 +781,7 @@ pub(crate) fn check_safety(program: &Program) -> Result<(), Rejection> {
                 return Err(Rejection::Unsafe(rule.head_rel));
             }
         }
-        for l in rule.body.iter().filter(|l| l.negated) {
+        for l in rule.body.iter().filter(|l| l.is_negated()) {
             if !literal_vars(l).is_subset(&positive_vars) {
                 return Err(Rejection::Unsafe(rule.head_rel));
             }
@@ -828,12 +857,12 @@ fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
                 if class.is_meet && dep == head {
                     // The one legal aggregation inside recursion: a meet
                     // head folding its own positive derivations.
-                    lit.negated
+                    lit.is_negated()
                 } else {
                     true
                 }
             } else {
-                lit.negated || fixed_heads.contains(dep) || is_meet(dep)
+                lit.is_negated() || fixed_heads.contains(dep) || is_meet(dep)
             };
             edges.push((head, dep, forcing));
         }
@@ -1225,15 +1254,15 @@ fn body_bindings_from(
     default_as_of: AsOf,
     initial: Bindings,
 ) -> Vec<Bindings> {
-    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
-    ordered.extend(rule.body.iter().filter(|l| l.negated));
+    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
+    ordered.extend(rule.body.iter().filter(|l| l.is_negated()));
 
     let mut frontier: Vec<Bindings> = vec![initial];
     for lit in ordered {
         let rows = literal_rows(program, db, lit, default_as_of);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -1968,19 +1997,19 @@ fn contribute_candidates_subset(
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && !l.negated)
+        .filter(|(i, l)| !subset.contains(i) && !l.is_negated())
         .map(|(_, l)| l);
     let remaining_negated = rule
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && l.negated)
+        .filter(|(i, l)| !subset.contains(i) && l.is_negated())
         .map(|(_, l)| l);
     for lit in remaining_positive.chain(remaining_negated) {
         let rows = literal_rows(program, total, lit, default_as_of);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -4544,7 +4573,11 @@ mod tests {
             let ab = diff(&history, a, b);
             let bc = diff(&history, b, c);
             let ac = diff(&history, a, c);
-            assert_eq!(compose(&ab, &bc), ac, "seed {seed}: valid-axis composition");
+            assert_eq!(
+                compose(&ab, &bc).expect("unit net"),
+                ac,
+                "seed {seed}: valid-axis composition"
+            );
             cases += 1;
 
             let fixed_valid = 3;
@@ -4563,7 +4596,11 @@ mod tests {
             let ab = diff(&history, a, b);
             let bc = diff(&history, b, c);
             let ac = diff(&history, a, c);
-            assert_eq!(compose(&ab, &bc), ac, "seed {seed}: sys-axis composition");
+            assert_eq!(
+                compose(&ab, &bc).expect("unit net"),
+                ac,
+                "seed {seed}: sys-axis composition"
+            );
             cases += 1;
         }
         assert!(

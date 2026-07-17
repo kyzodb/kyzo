@@ -181,7 +181,7 @@ pub(crate) use search::SearchRA;
 pub(crate) use stored::{StoredRA, StoredWithValidityRA};
 pub(crate) use temp::TempStoreRA;
 pub(crate) use temporal::{DeltaRA, SpansRA};
-pub(crate) use transform::{FilteredRA, ReorderRA, UnificationRA};
+pub(crate) use transform::{FilteredRA, ReorderRA, UnificationKind, UnificationRA};
 
 /// A lazy stream of fallible tuples: what iterating an operator yields.
 /// (The original homed this alias in `data/tuple.rs`; it is operator-tier
@@ -426,7 +426,6 @@ impl RelAlgebra {
             storage_key,
             occurrence,
             filters: vec![],
-            filters_bytecodes: vec![],
             span,
         })
     }
@@ -453,7 +452,6 @@ impl RelAlgebra {
                 bindings,
                 storage,
                 filters: vec![],
-                filters_bytecodes: vec![],
                 span,
             })),
             Some(ValidityClause::At(vld)) => {
@@ -463,7 +461,6 @@ impl RelAlgebra {
                     bindings,
                     storage,
                     filters: vec![],
-                    filters_bytecodes: vec![],
                     as_of: vld,
                     span,
                 }))
@@ -500,8 +497,8 @@ impl RelAlgebra {
                     // Resolved separately, after this constructor returns
                     // (it needs catalog access this constructor does not
                     // have) — see `query/compile.rs`'s Delta-clause arm and
-                    // `DeltaRA::posting`'s own doc.
-                    posting: None,
+                    // `DeltaRA::scan`'s own doc.
+                    scan: crate::query::ra::temporal::DeltaScan::Naive,
                 }))
             }
         }
@@ -532,7 +529,6 @@ impl RelAlgebra {
                 RelAlgebra::Filter(FilteredRA {
                     parent: Box::new(s),
                     filters: vec![filter],
-                    filters_bytecodes: vec![],
                     to_eliminate: Default::default(),
                     span,
                 })
@@ -540,7 +536,6 @@ impl RelAlgebra {
             RelAlgebra::Filter(FilteredRA {
                 parent,
                 filters: mut pred,
-                filters_bytecodes,
                 to_eliminate,
                 span,
             }) => {
@@ -548,7 +543,6 @@ impl RelAlgebra {
                 RelAlgebra::Filter(FilteredRA {
                     parent,
                     filters: pred,
-                    filters_bytecodes,
                     to_eliminate,
                     span,
                 })
@@ -558,7 +552,6 @@ impl RelAlgebra {
                 storage_key,
                 occurrence,
                 mut filters,
-                filters_bytecodes,
                 span,
             }) => {
                 filters.push(filter);
@@ -567,7 +560,6 @@ impl RelAlgebra {
                     storage_key,
                     occurrence,
                     filters,
-                    filters_bytecodes,
                     span,
                 })
             }
@@ -575,7 +567,6 @@ impl RelAlgebra {
                 bindings,
                 storage,
                 mut filters,
-                filters_bytecodes,
                 span,
             }) => {
                 filters.push(filter);
@@ -583,7 +574,6 @@ impl RelAlgebra {
                     bindings,
                     storage,
                     filters,
-                    filters_bytecodes,
                     span,
                 })
             }
@@ -591,7 +581,6 @@ impl RelAlgebra {
                 bindings,
                 storage,
                 mut filters,
-                filters_bytecodes,
                 span,
                 as_of,
             }) => {
@@ -602,7 +591,6 @@ impl RelAlgebra {
                     filters,
                     span,
                     as_of,
-                    filters_bytecodes,
                 })
             }
             RelAlgebra::Join(inner) => {
@@ -646,7 +634,6 @@ impl RelAlgebra {
                     joined = RelAlgebra::Filter(FilteredRA {
                         parent: Box::new(joined),
                         filters: remaining,
-                        filters_bytecodes: vec![],
                         to_eliminate: Default::default(),
                         span,
                     });
@@ -660,14 +647,14 @@ impl RelAlgebra {
         self,
         binding: Symbol,
         expr: Expr,
-        is_multi: bool,
+        kind: UnificationKind,
         span: SourceSpan,
     ) -> Self {
         RelAlgebra::Unification(UnificationRA {
             parent: Box::new(self),
             binding,
             expr,
-            is_multi,
+            kind,
             to_eliminate: Default::default(),
             span,
         })
@@ -1145,7 +1132,7 @@ mod tests {
                 val: DataValue::List(vec![v(1), v(2), v(3)]),
                 span: sp(),
             },
-            true,
+            UnificationKind::Spread,
             sp(),
         );
         let left = RelAlgebra::Fixed(InlineFixedRA {
@@ -1264,7 +1251,7 @@ mod tests {
                 val: DataValue::List(vec![v(1), v(2), v(3)]),
                 span: sp(),
             },
-            true,
+            UnificationKind::Spread,
             sp(),
         );
         ra.fill_binding_indices_and_compile().unwrap();
@@ -1288,7 +1275,7 @@ mod tests {
                 val: v(7),
                 span: sp(),
             },
-            true,
+            UnificationKind::Spread,
             sp(),
         );
         bad.fill_binding_indices_and_compile().unwrap();
@@ -1640,7 +1627,6 @@ mod tests {
             storage_key: storage_key.clone(),
             occurrence: AtomOccurrence(0),
             filters: vec![],
-            filters_bytecodes: vec![],
             span: sp(),
         });
         let mut ra = left
@@ -1909,7 +1895,6 @@ mod tests {
             bindings: vec![sym("z2"), sym("w")],
             storage: right_handle,
             filters: vec![],
-            filters_bytecodes: vec![],
             span: sp(),
         };
         let join_indices = || -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) };

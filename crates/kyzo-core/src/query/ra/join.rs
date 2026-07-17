@@ -45,11 +45,11 @@ pub(crate) fn flatten_err<T, E1: Into<miette::Error>, E2: Into<miette::Error>>(
 }
 
 pub(crate) fn filter_iter(
-    filters_bytecodes: Vec<Expr>,
+    filters: Vec<Expr>,
     it: impl Iterator<Item = Result<Tuple>>,
 ) -> impl Iterator<Item = Result<Tuple>> {
     it.filter_map_ok(move |t| -> Option<Result<Tuple>> {
-        for p in filters_bytecodes.iter() {
+        for p in filters.iter() {
             match p.eval_pred(&t) {
                 Ok(false) => return None,
                 Err(e) => return Some(Err(e)),
@@ -154,7 +154,7 @@ pub(crate) struct PrefixProbeBatchJoin<'a> {
     /// row-at-a-time path's per-tuple closure would yield before the left
     /// prefix is appended.
     pub(crate) probe: Box<dyn FnMut(&[DataValue]) -> Result<TupleIter<'a>> + 'a>,
-    pub(crate) filters_bytecodes: &'a [Expr],
+    pub(crate) filters: &'a [Expr],
     pub(crate) eliminate_indices: BTreeSet<usize>,
     /// The left batch currently being probed, and the cursor into it.
     pub(crate) cur: Option<(Batch, usize)>,
@@ -205,7 +205,12 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     }
                 }
                 let left_row = {
-                    let (b, idx) = self.cur.as_ref().unwrap();
+                    let Some((b, idx)) = self.cur.as_ref() else {
+                        return Some(Err(crate::query::ra::PlanInvariantError(
+                            "join left cursor missing after batch advance",
+                        )
+                        .into()));
+                    };
                     match b.row(*idx) {
                         Ok(r) => r,
                         Err(e) => return Some(Err(e.into())),
@@ -217,13 +222,23 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                 }
             }
 
-            let (b, idx) = self.cur.as_ref().unwrap();
+            let Some((b, idx)) = self.cur.as_ref() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "join left cursor missing while probing",
+                )
+                .into()));
+            };
             let left_row = match b.row(*idx) {
                 Ok(r) => r,
                 Err(e) => return Some(Err(e.into())),
             };
             let mut exhausted = false;
-            let active = self.active.as_mut().unwrap();
+            let Some(active) = self.active.as_mut() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "join active probe missing after setup",
+                )
+                .into()));
+            };
             while out.len() < BATCH_ROWS {
                 match active.next() {
                     None => {
@@ -233,7 +248,7 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                     Some(Err(e)) => return Some(Err(e)),
                     Some(Ok(found)) => {
                         let mut keep = true;
-                        for p in self.filters_bytecodes.iter() {
+                        for p in self.filters.iter() {
                             match p.eval_pred(&found) {
                                 Ok(true) => {}
                                 Ok(false) => {

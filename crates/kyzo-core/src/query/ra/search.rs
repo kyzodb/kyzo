@@ -267,7 +267,10 @@ impl SearchBatches<'_> {
             // Drain in-flight hits for the current parent row first.
             if self.hit_idx < self.hits.len() {
                 let Some(batch) = &self.parent_batch else {
-                    unreachable!("hits in flight imply a parent batch")
+                    return Err(crate::query::ra::PlanInvariantError(
+                        "hits in flight imply a parent batch",
+                    )
+                    .into());
                 };
                 let row = match batch.row(self.parent_row) {
                     Ok(r) => r.to_vec(),

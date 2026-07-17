@@ -189,7 +189,7 @@ impl SignedFact {
 pub(crate) fn compose(
     first: &BTreeSet<SignedFact>,
     second: &BTreeSet<SignedFact>,
-) -> BTreeSet<SignedFact> {
+) -> Result<BTreeSet<SignedFact>> {
     let mut tally: BTreeMap<&Tuple, i32> = BTreeMap::new();
     for patch in [first, second] {
         for fact in patch {
@@ -200,14 +200,22 @@ pub(crate) fn compose(
             *tally.entry(fact.tuple()).or_insert(0) += delta;
         }
     }
-    tally
-        .into_iter()
-        .filter_map(|(t, net)| match net {
-            0 => None,
-            n if n > 0 => Some(SignedFact::Plus(t.clone())),
-            _ => Some(SignedFact::Minus(t.clone())),
-        })
-        .collect()
+    let mut out = BTreeSet::new();
+    for (t, net) in tally {
+        match net {
+            0 => {}
+            1 => {
+                out.insert(SignedFact::Plus(t.clone()));
+            }
+            -1 => {
+                out.insert(SignedFact::Minus(t.clone()));
+            }
+            n => {
+                return Err(crate::query::laws::ComposeNetOutOfRange { net: n }.into());
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Interval derivation: `*rel{k, v} @spans iv[, sys]` — one output row per
@@ -231,6 +239,14 @@ pub(crate) struct SpansRA {
     pub(crate) span: SourceSpan,
 }
 
+/// How [`DeltaRA`] computes its signed patch — naive dual snapshot, or
+/// posting-index acceleration when compile resolved a temporal index.
+#[derive(Debug)]
+pub(crate) enum DeltaScan {
+    Naive,
+    Accelerated { posting: RelationHandle },
+}
+
 /// Axis-parameterized net diff: `*rel{k} @delta(a, b) sgn` (valid axis,
 /// fixed at the current system snapshot) or `@delta_sys(a, b) sgn`
 /// (system axis, fixed at the current valid instant). `from`/`to` are
@@ -244,13 +260,11 @@ pub(crate) struct DeltaRA {
     pub(crate) from: AsOf,
     pub(crate) to: AsOf,
     pub(crate) span: SourceSpan,
-    /// The `IndexKind::Temporal` posting index attached to `storage`, if
-    /// the compile tier found and resolved one for this clause (`Valid`
-    /// axis only — see the module doc's "posting-index fast path"
-    /// section). `None` for every other case, including a fresh
-    /// relation with no posting index attached yet: `iter_batched` falls
-    /// back to the naive two-snapshot diff exactly as before this chunk.
-    pub(crate) posting: Option<RelationHandle>,
+    /// Scan strategy: [`DeltaScan::Accelerated`] when compile resolved an
+    /// `IndexKind::Temporal` posting for this clause (`Valid` axis only);
+    /// [`DeltaScan::Naive`] otherwise (including a fresh relation with no
+    /// posting index yet).
+    pub(crate) scan: DeltaScan,
 }
 
 /// `+1`: the fact holds at `to` but not at `from`.
@@ -605,13 +619,13 @@ impl DeltaRA {
     /// `SignedFact` shape this module's doc names, computed here through
     /// the production type rather than a bare sign column built ad hoc.
     /// Two routes to the same `BTreeSet<SignedFact>`: the posting-index
-    /// fast path when `self.posting` is attached (module doc's "posting-
+    /// fast path when [`DeltaScan::Accelerated`] (module doc's "posting-
     /// index fast path" section), the naive full-snapshot diff otherwise —
     /// see [`Self::patch_naive`]/[`Self::patch_via_posting`].
     pub(crate) fn iter_batched<'a>(&'a self, tx: &'a impl ReadTx) -> Result<BatchIter<'a>> {
-        let patch = match &self.posting {
-            Some(posting) => self.patch_via_posting(tx, posting)?,
-            None => self.patch_naive(tx)?,
+        let patch = match &self.scan {
+            DeltaScan::Accelerated { posting } => self.patch_via_posting(tx, posting)?,
+            DeltaScan::Naive => self.patch_naive(tx)?,
         };
         let mut rows: Vec<Tuple> = patch
             .into_iter()
@@ -699,7 +713,7 @@ impl DeltaRA {
                 to_patch.insert(SignedFact::Plus(t));
             }
         }
-        Ok(compose(&from_patch, &to_patch))
+        compose(&from_patch, &to_patch)
     }
 }
 
@@ -1053,7 +1067,7 @@ mod tests {
         from: AsOf,
         to: AsOf,
     ) -> Vec<(i64, i64, i64)> {
-        delta_rows_with_posting(db, handle, from, to, None)
+        delta_rows_with_posting(db, handle, from, to, DeltaScan::Naive)
     }
 
     fn delta_rows_with_posting(
@@ -1061,7 +1075,7 @@ mod tests {
         handle: &RelationHandle,
         from: AsOf,
         to: AsOf,
-        posting: Option<RelationHandle>,
+        scan: DeltaScan,
     ) -> Vec<(i64, i64, i64)> {
         let ra = DeltaRA {
             bindings: vec![sym("k"), sym("val"), sym("sgn")],
@@ -1069,7 +1083,7 @@ mod tests {
             from,
             to,
             span: sp(),
-            posting,
+            scan,
         };
         let rtx = db.read_tx().expect("read tx");
         let mut out = vec![];
@@ -1256,7 +1270,15 @@ mod tests {
         to: AsOf,
     ) {
         let naive = delta_rows(db, base, from, to);
-        let fast = delta_rows_with_posting(db, base, from, to, Some(idx.clone()));
+        let fast = delta_rows_with_posting(
+            db,
+            base,
+            from,
+            to,
+            DeltaScan::Accelerated {
+                posting: idx.clone(),
+            },
+        );
         assert_eq!(
             naive, fast,
             "fast path disagreed with the naive path at from={from:?} to={to:?}"

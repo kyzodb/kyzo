@@ -22,7 +22,9 @@
 //! in those modules; this module owns the shared protocol types only.
 //! Segment freshness (T5) consumes [`Generation::classify`] at
 //! [`crate::engines::segments`] — staleness is [`Stale`], never an `Option`
-//! from a get-shaped call.
+//! from a get-shaped call. The segment cache is rebuildable acceleration
+//! only: meaning clocks come from [`crate::runtime::generation`]; the cache
+//! cannot own truth (P106).
 
 use std::fmt;
 

@@ -250,15 +250,15 @@ impl RuleBody for ModelBody {
             .body
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.negated)
+            .filter(|(_, l)| !l.is_negated())
             .collect();
-        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
+        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.is_negated()));
 
         let mut frontier: Vec<(Bindings, Vec<Tuple>)> = vec![(Bindings::new(), Vec::new())];
         for (body_pos, l) in ordered {
-            let is_delta = !l.negated && delta_from == Some(AtomOccurrence(body_pos));
+            let is_delta = !l.is_negated() && delta_from == Some(AtomOccurrence(body_pos));
             let mut next = Vec::new();
-            if l.negated {
+            if l.is_negated() {
                 for (bound, premises) in &frontier {
                     let probe = ground(&l.args, bound);
                     if !self.negated_probe_hits(stores, l.rel, &probe) {
@@ -358,12 +358,12 @@ fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
         for l in &rule.body {
             let forcing = if class.has_aggr {
                 if class.is_meet && l.rel == head {
-                    l.negated
+                    l.is_negated()
                 } else {
                     true
                 }
             } else {
-                l.negated || fixed_heads.contains(l.rel) || is_meet(l.rel)
+                l.is_negated() || fixed_heads.contains(l.rel) || is_meet(l.rel)
             };
             edges.push((head, l.rel, forcing));
         }
@@ -1261,7 +1261,7 @@ fn reconstruct(
     let w = witnesses.get(&(rel.to_string(), tuple.clone()))?;
     let (rule_idx, premise_rows) = w.derivation.as_ref()?;
     let rule = &per_head[rel][*rule_idx];
-    let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
+    let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
     // The witness records exactly one premise row per positive literal, in
     // body order — the order `ModelBody` grounds them.
     if positives.len() != premise_rows.len() {
@@ -1343,13 +1343,13 @@ fn verify(
             if rule.head_rel != *rel {
                 return Err(format!("rule head '{}' ≠ claimed '{rel}'", rule.head_rel));
             }
-            if rule.body.iter().any(|l| l.negated) {
+            if rule.body.iter().any(|l| l.is_negated()) {
                 return Err(format!(
                     "boundary: rule for '{rel}' has a negated premise, not \
                      independently checkable from a proof tree"
                 ));
             }
-            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
+            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
             if positives.len() != premises.len() {
                 return Err(format!(
                     "'{rel}': {} premises for {} positive body literals",
@@ -2095,7 +2095,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let bc = diff(&history, b, c);
         let ac = diff(&history, a, c);
         assert_eq!(
-            compose(&ab, &bc),
+            compose(&ab, &bc).expect("unit net"),
             ac,
             "seed {seed}: valid axis a={av} b={bv} c={cv}"
         );
@@ -2119,7 +2119,7 @@ fn diff_composition_law_holds_with_randomized_bounds_over_generated_histories() 
         let bc = diff(&history, b, c);
         let ac = diff(&history, a, c);
         assert_eq!(
-            compose(&ab, &bc),
+            compose(&ab, &bc).expect("unit net"),
             ac,
             "seed {seed}: sys axis a={asys} b={bsys} c={csys}"
         );

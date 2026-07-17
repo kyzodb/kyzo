@@ -217,18 +217,18 @@ impl RuleBody for ModelBody {
             .body
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.negated)
+            .filter(|(_, l)| !l.is_negated())
             .collect();
-        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
+        ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.is_negated()));
 
         let mut frontier: Vec<(Bindings, Vec<Tuple>)> = vec![(Bindings::new(), Vec::new())];
         for (body_pos, l) in ordered {
             // This literal's OWN occurrence (its position in the original
             // body, stable across the positive/negated reordering above)
             // must match `delta_from` exactly.
-            let is_delta = !l.negated && delta_from == Some(AtomOccurrence(body_pos));
+            let is_delta = !l.is_negated() && delta_from == Some(AtomOccurrence(body_pos));
             let mut next = Vec::new();
-            if l.negated {
+            if l.is_negated() {
                 for (bound, premises) in &frontier {
                     let probe = ground(&l.args, bound);
                     if !self.negated_probe_hits(stores, l.rel, &probe) {
@@ -275,12 +275,15 @@ impl RuleBody for ModelBody {
         Some(
             self.body
                 .iter()
-                .filter(|l| !l.negated)
+                .filter(|l| !l.is_negated())
                 .map(|l| {
                     if self.idb.contains(l.rel) {
                         PremiseSource::Rule(muggle(l.rel))
                     } else {
-                        PremiseSource::Fact(l.rel.to_string())
+                        PremiseSource::Fact(crate::data::symb::Symbol::new(
+                            l.rel,
+                            crate::data::span::SourceSpan(0, 0),
+                        ))
                     }
                 })
                 .collect(),
@@ -344,12 +347,12 @@ fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
         for l in &rule.body {
             let forcing = if class.has_aggr {
                 if class.is_meet && l.rel == head {
-                    l.negated
+                    l.is_negated()
                 } else {
                     true
                 }
             } else {
-                l.negated || is_meet(l.rel)
+                l.is_negated() || is_meet(l.rel)
             };
             edges.push((head, l.rel, forcing));
         }
@@ -713,7 +716,7 @@ fn rule_instantiations(
     db: &BTreeMap<Rel, BTreeSet<Tuple>>,
 ) -> Vec<(Tuple, Vec<(Rel, Tuple)>)> {
     assert!(
-        rule.body.iter().all(|l| !l.negated),
+        rule.body.iter().all(|l| !l.is_negated()),
         "reference covers the positive fragment only"
     );
     let mut frontier: Vec<(Bindings, Vec<(Rel, Tuple)>)> = vec![(Bindings::new(), Vec::new())];
@@ -825,7 +828,7 @@ fn per_head_rules(model: &Program) -> BTreeMap<Rel, Vec<Rule>> {
 fn node_rel_name(node: &ProvNode) -> String {
     match &node.0 {
         PremiseSource::Rule(sym) => sym.as_plain_symbol().name.to_string(),
-        PremiseSource::Fact(name) => name.clone(),
+        PremiseSource::Fact(name) => name.name.to_string(),
     }
 }
 
@@ -846,7 +849,7 @@ fn verify_model_proof(
                 PremiseSource::Fact(name) => {
                     let is_fact = facts
                         .iter()
-                        .any(|(rel, rows)| *rel == name.as_str() && rows.contains(tuple));
+                        .any(|(rel, rows)| *rel == name.name.as_str() && rows.contains(tuple));
                     if is_fact {
                         Ok(0)
                     } else {
@@ -874,12 +877,12 @@ fn verify_model_proof(
             let rule = rules
                 .get(*label)
                 .ok_or_else(|| format!("rule index {label} out of range for '{rel_name}'"))?;
-            if rule.body.iter().any(|l| l.negated) {
+            if rule.body.iter().any(|l| l.is_negated()) {
                 return Err(format!(
                     "boundary: rule {label} of '{rel_name}' has a negated premise"
                 ));
             }
-            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
+            let positives: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
             if positives.len() != premises.len() {
                 return Err(format!(
                     "'{rel_name}': {} premises for {} positive body literals",

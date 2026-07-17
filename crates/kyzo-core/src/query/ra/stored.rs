@@ -46,8 +46,8 @@ use std::sync::Arc;
 pub(crate) struct StoredRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
+    /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) span: SourceSpan,
 }
 
@@ -62,7 +62,6 @@ impl StoredRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push(e.clone());
         }
         Ok(())
     }
@@ -198,7 +197,9 @@ impl StoredRA {
                             .map(|&i| left_row[i].clone())
                             .collect();
                         for i in seg.prefix_range(&prefix) {
-                            let found = seg.row(i);
+                            let Some(found) = seg.row(i) else {
+                                continue;
+                            };
                             let mut matches = true;
                             for (lk, rk) in left_join_indices.iter().zip(right_join_indices.iter())
                             {
@@ -292,7 +293,9 @@ impl StoredRA {
                                     .collect();
                                 let s = s.clone();
                                 let range = s.prefix_range(&prefix);
-                                Box::new(range.map(move |i| Ok(Tuple::from_vec(s.row(i).to_vec()))))
+                                Box::new(range.filter_map(move |i| {
+                                    s.row(i).map(|r| Ok(Tuple::from_vec(r.to_vec())))
+                                }))
                             }
                             None => self.storage.scan_prefix_projected(
                                 tx,
@@ -307,7 +310,7 @@ impl StoredRA {
         Ok(Box::new(PrefixProbeBatchJoin {
             left,
             probe,
-            filters_bytecodes: &self.filters_bytecodes,
+            filters: &self.filters,
             eliminate_indices,
             cur: None,
             active: None,
@@ -339,7 +342,10 @@ impl Iterator for SegmentScanBatches {
             }
             let mut out = Batch::new();
             while self.next_row < self.seg.len() && !out.is_full() {
-                let row = self.seg.row(self.next_row);
+                let Some(row) = self.seg.row(self.next_row) else {
+                    self.done = true;
+                    return None;
+                };
                 if let Err(e) = out.push_with(|buf| {
                     buf.extend_from_slice(row);
                     Ok(())
@@ -374,8 +380,8 @@ impl Iterator for SegmentScanBatches {
 pub(crate) struct StoredWithValidityRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
+    /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) as_of: AsOf,
     pub(crate) span: SourceSpan,
 }
@@ -402,7 +408,6 @@ impl StoredWithValidityRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push(e.clone());
         }
         Ok(())
     }
@@ -465,7 +470,7 @@ impl StoredWithValidityRA {
         Ok(Box::new(PrefixProbeBatchJoin {
             left,
             probe,
-            filters_bytecodes: &self.filters_bytecodes,
+            filters: &self.filters,
             eliminate_indices,
             cur: None,
             active: None,
@@ -557,7 +562,6 @@ mod segment_gate_tests {
             bindings: vec![sym("k"), sym("v")],
             storage: handle.clone(),
             filters: vec![],
-            filters_bytecodes: vec![],
             span: sp(),
         }
     }

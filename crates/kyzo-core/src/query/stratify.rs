@@ -807,7 +807,7 @@ mod tests {
                     rule.body
                         .iter()
                         .map(|l| {
-                            if l.negated {
+                            if l.is_negated() {
                                 neg_dep(l.rel)
                             } else {
                                 dep(l.rel)

@@ -90,7 +90,13 @@ pub(crate) enum Term {
 pub(crate) struct Literal {
     pub(crate) rel: Symbol,
     pub(crate) args: Vec<Term>,
-    pub(crate) negated: bool,
+    pub(crate) polarity: crate::query::laws::Polarity,
+}
+
+impl Literal {
+    pub(crate) fn is_negated(&self) -> bool {
+        matches!(self.polarity, crate::query::laws::Polarity::Negative)
+    }
 }
 
 /// One head position's aggregation, if any — the REAL landed
@@ -376,19 +382,19 @@ fn contribute_candidates_subset(
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && !l.negated)
+        .filter(|(i, l)| !subset.contains(i) && !l.is_negated())
         .map(|(_, l)| l);
     let remaining_negated = rule
         .body
         .iter()
         .enumerate()
-        .filter(|(i, l)| !subset.contains(i) && l.negated)
+        .filter(|(i, l)| !subset.contains(i) && l.is_negated())
         .map(|(_, l)| l);
     for lit in remaining_positive.chain(remaining_negated) {
         let rows = literal_rows(state, lit);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -431,15 +437,15 @@ fn head_is_derivable(rules: &[&Rule], state: &MaintainedState, target: &Tuple) -
 /// Positives first, so safety guarantees negated literals are fully
 /// bound when probed — the same ordering `laws::body_bindings` uses.
 fn body_bindings_from(rule: &Rule, state: &MaintainedState, initial: Bindings) -> Vec<Bindings> {
-    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.negated).collect();
-    ordered.extend(rule.body.iter().filter(|l| l.negated));
+    let mut ordered: Vec<&Literal> = rule.body.iter().filter(|l| !l.is_negated()).collect();
+    ordered.extend(rule.body.iter().filter(|l| l.is_negated()));
 
     let mut frontier: Vec<Bindings> = vec![initial];
     for lit in ordered {
         let rows = literal_rows(state, lit);
         let mut next = Vec::new();
         for bound in &frontier {
-            if lit.negated {
+            if lit.is_negated() {
                 let probe = ground(&lit.args, bound);
                 if !rows.contains(&probe) {
                     next.push(bound.clone());
@@ -476,7 +482,7 @@ pub(crate) enum IncrementalRejection {
 // and `Symbol`s are gone — there is nothing left to translate. `MagicAtom`
 // still names its variables by `Symbol` and already separates
 // `Rule`/`NegatedRule` and `Relation`/`NegatedRelation` as distinct
-// variants, matching this module's `Literal.negated` directly.
+// variants, matching this module's `Literal.is_negated()` directly.
 //
 // One real subtlety, not a free structural match: after the magic
 // rewrite, a CONSTANT never appears inline in a `Relation`/`Rule` atom's
@@ -529,7 +535,9 @@ fn collect_const_substitutions(
                 ));
             }
             let crate::data::expr::Expr::Const { val, .. } = &u.expr else {
-                unreachable!("Unification::is_const just proved this is Expr::Const");
+                return Err(TranslationRejection::Unsupported(
+                    "a non-constant unification (is_const disagreed with Expr shape)",
+                ));
             };
             subst.insert(u.binding.clone(), val.clone());
         }
@@ -573,7 +581,11 @@ fn translate_rule(
         body.push(Literal {
             rel,
             args: args.iter().map(|v| substitute(v, &subst)).collect(),
-            negated,
+            polarity: if negated {
+                crate::query::laws::Polarity::Negative
+            } else {
+                crate::query::laws::Polarity::Positive
+            },
         });
     }
     let head_args = rule.head.iter().map(|v| substitute(v, &subst)).collect();
@@ -941,7 +953,11 @@ mod tests {
         Literal {
             rel: sym(rel),
             args,
-            negated,
+            polarity: if negated {
+                crate::query::laws::Polarity::Negative
+            } else {
+                crate::query::laws::Polarity::Positive
+            },
         }
     }
     fn rule(head_rel: &str, head_args: Vec<Term>, body: Vec<Literal>) -> Rule {
@@ -1115,7 +1131,7 @@ mod tests {
         Literal {
             rel: sym(l.rel),
             args: l.args.iter().map(conv_term).collect(),
-            negated: l.negated,
+            polarity: l.polarity,
         }
     }
     fn conv_rule(r: &laws::Rule) -> Rule {
@@ -1419,9 +1435,9 @@ mod tests {
         assert_eq!(rule.head_args, vec![x()]);
         assert_eq!(rule.body.len(), 2);
         assert_eq!(rule.body[0].rel, sym("p"));
-        assert!(!rule.body[0].negated);
+        assert!(!rule.body[0].is_negated());
         assert_eq!(rule.body[1].rel, sym("r"));
-        assert!(rule.body[1].negated);
+        assert!(rule.body[1].is_negated());
     }
 
     /// A rule reference (not a stored relation) uses the referenced

@@ -49,8 +49,8 @@ pub(crate) struct TempStoreRA {
     /// the key `delta_from` compares against (`compile.rs`'s shared
     /// numbering, `atom_occurrences`).
     pub(crate) occurrence: AtomOccurrence,
+    /// Residual predicates; binding indices filled in place at compile.
     pub(crate) filters: Vec<Expr>,
-    pub(crate) filters_bytecodes: Vec<Expr>,
     pub(crate) span: SourceSpan,
 }
 
@@ -65,7 +65,6 @@ impl TempStoreRA {
             .collect();
         for e in self.filters.iter_mut() {
             e.fill_binding_indices(&bindings)?;
-            self.filters_bytecodes.push(e.clone())
         }
         Ok(())
     }
@@ -243,7 +242,12 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                     }
                 }
                 let left_row = {
-                    let (b, idx) = self.cur.as_ref().unwrap();
+                    let Some((b, idx)) = self.cur.as_ref() else {
+                        return Some(Err(crate::query::ra::PlanInvariantError(
+                            "temp-store join left cursor missing after batch advance",
+                        )
+                        .into()));
+                    };
                     match b.row(*idx) {
                         Ok(r) => r,
                         Err(e) => return Some(Err(e.into())),
@@ -252,12 +256,22 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                 self.active = Some(self.probe(left_row));
             }
 
-            let (b, idx) = self.cur.as_ref().unwrap();
+            let Some((b, idx)) = self.cur.as_ref() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "temp-store join left cursor missing while probing",
+                )
+                .into()));
+            };
             let left_row = match b.row(*idx) {
                 Ok(r) => r,
                 Err(e) => return Some(Err(e.into())),
             };
-            let active = self.active.as_mut().unwrap();
+            let Some(active) = self.active.as_mut() else {
+                return Some(Err(crate::query::ra::PlanInvariantError(
+                    "temp-store join active probe missing after setup",
+                )
+                .into()));
+            };
             let mut exhausted = false;
             while out.len() < BATCH_ROWS {
                 match active.next() {
@@ -278,7 +292,7 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                         } else {
                             let found_tuple = found.into_tuple();
                             let mut keep = true;
-                            for p in self.inner.filters_bytecodes.iter() {
+                            for p in self.inner.filters.iter() {
                                 match p.eval_pred(&found_tuple) {
                                     Ok(true) => {}
                                     Ok(false) => {

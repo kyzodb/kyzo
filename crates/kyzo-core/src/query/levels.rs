@@ -11,7 +11,8 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 
 use itertools::{Either, Itertools};
-use miette::{Result, bail};
+use miette::{Diagnostic, Result, bail};
+use thiserror::Error;
 
 use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::value::DataValue;
@@ -21,6 +22,14 @@ use crate::data::value::{
 use crate::query::temp_store::{
     AdmissionSink, Admitted, MeetAggrStore, MeetLayout, TempStore, TupleInIter, empty_tuple_ref,
 };
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("level arena overflow: flattened byte length {len} exceeds u32::MAX")]
+#[diagnostic(code(query::level_arena_overflow))]
+struct LevelArenaOverflow {
+    len: usize,
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────
 // The level tier: a rule's total as sealed sorted runs
@@ -70,33 +79,51 @@ impl std::ops::DerefMut for LevelArenaBytes {
 impl AsRef<[u8]> for LevelArenaBytes {
     fn as_ref(&self) -> &[u8] { &self.0 }
 }
-impl From<Vec<u8>> for LevelArenaBytes {
-    fn from(v: Vec<u8>) -> Self { Self(v) }
+impl LevelArenaBytes {
+    /// Empty arena — the only open mint beside appending encoded row bytes.
+    pub(crate) fn new() -> Self {
+        Self(Vec::new())
+    }
 }
 
-
 /// Inclusive/exclusive scan bound key bytes for stored levels.
+/// Mint only via [`LevelBoundKey::from_encoded`] (encode-door bytes).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
-pub(crate) struct LevelBoundKey(pub(crate) Vec<u8>);
+pub(crate) struct LevelBoundKey(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<LevelBoundKey>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<LevelBoundKey>() == std::mem::align_of::<Vec<u8>>());
+
+impl LevelBoundKey {
+    /// Bound key from bytes already produced by the bare tuple encode door.
+    pub(crate) fn from_encoded(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// Extend an exclusive upper bound (successor sentinel byte).
+    pub(crate) fn push_exclusive_sentinel(&mut self) {
+        self.0.push(0xFF);
+    }
+}
 
 impl std::ops::Deref for LevelBoundKey {
     type Target = [u8];
     fn deref(&self) -> &[u8] { &self.0 }
 }
-impl std::ops::DerefMut for LevelBoundKey {
-    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
-}
 impl AsRef<[u8]> for LevelBoundKey {
     fn as_ref(&self) -> &[u8] { &self.0 }
 }
-impl From<Vec<u8>> for LevelBoundKey {
-    fn from(v: Vec<u8>) -> Self { Self(v) }
-}
 
+
+/// Per-row skip/refresh flags for a sealed normal level. Illegal pairs
+/// (neither skip nor refresh meaning "ordinary", etc.) stay representable
+/// as named fields — never an anonymous `(bool, bool)` soup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RowFlags {
+    pub(crate) skip: bool,
+    pub(crate) refresh: bool,
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct NormalLevel {
@@ -109,7 +136,7 @@ pub(crate) struct NormalLevel {
     values: LevelArenaBytes,
     /// `offsets[i]` is the END of row `i` in `values` (row 0 starts at 0).
     offsets: Vec<u32>,
-    flags: Vec<(bool, bool)>,
+    flags: Vec<RowFlags>,
 }
 
 impl NormalLevel {
@@ -119,7 +146,14 @@ impl NormalLevel {
     pub(crate) fn is_empty(&self) -> bool {
         self.offsets.is_empty()
     }
-    pub(crate) fn row(&self, i: usize) -> &[u8] {
+    /// Row bytes at index `i`, or `None` when out of bounds.
+    pub(crate) fn row(&self, i: usize) -> Option<&[u8]> {
+        (i < self.len()).then(|| self.row_at(i))
+    }
+
+    /// INVARIANT(level_row_in_bounds): `i < self.len()`.
+    fn row_at(&self, i: usize) -> &[u8] {
+        debug_assert!(i < self.len());
         let start = if i == 0 {
             0
         } else {
@@ -127,32 +161,54 @@ impl NormalLevel {
         };
         &self.values[start..self.offsets[i] as usize]
     }
-    fn row_flags(&self, i: usize) -> (bool, bool) {
+
+    /// INVARIANT(level_row_in_bounds): `i < self.len()`.
+    fn row_flags_at(&self, i: usize) -> RowFlags {
+        debug_assert!(i < self.flags.len());
         self.flags[i]
     }
     /// Seal an admitted row's bytes into the level — one arena append, no
     /// per-row heap allocation beyond the byte string `RegularTempStore`
-    /// already minted at derivation.
-    fn push(&mut self, row: Box<[u8]>, skip: bool, refresh: bool) {
+    /// already minted at derivation. Refuses when the arena end would
+    /// overflow the `u32` offset encoding.
+    fn push(&mut self, row: Box<[u8]>, flags: RowFlags) -> Result<()> {
         self.values.0.extend_from_slice(&row);
-        self.offsets.push(self.values.len() as u32);
-        self.flags.push((skip, refresh));
+        let end = u32::try_from(self.values.len()).map_or_else(
+            |_| {
+                bail!(LevelArenaOverflow {
+                    len: self.values.len()
+                })
+            },
+            Ok,
+        )?;
+        self.offsets.push(end);
+        self.flags.push(flags);
+        Ok(())
     }
 
     /// Copy a row across a compaction merge (the survivor outlives its
     /// source level, so this one copy per compacted row is the cost of
     /// dropping the shadowed copy).
-    fn push_from(&mut self, other: &NormalLevel, i: usize, skip: bool, refresh: bool) {
-        self.values.0.extend_from_slice(other.row(i));
-        self.offsets.push(self.values.len() as u32);
-        self.flags.push((skip, refresh));
+    fn push_from(&mut self, other: &NormalLevel, i: usize, flags: RowFlags) -> Result<()> {
+        self.values.0.extend_from_slice(other.row_at(i));
+        let end = u32::try_from(self.values.len()).map_or_else(
+            |_| {
+                bail!(LevelArenaOverflow {
+                    len: self.values.len()
+                })
+            },
+            Ok,
+        )?;
+        self.offsets.push(end);
+        self.flags.push(flags);
+        Ok(())
     }
     fn find(&self, key_bytes: &[u8]) -> Option<usize> {
         let mut lo = 0usize;
         let mut hi = self.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            match self.row(mid).cmp(key_bytes) {
+            match self.row_at(mid).cmp(key_bytes) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
                 Ordering::Equal => return Some(mid),
@@ -169,7 +225,7 @@ impl NormalLevel {
         let projected: Vec<DataValue> = cols.iter().map(|&c| row[c].clone()).collect();
         let probe = encode_tuple_bare(&projected);
         let cmp = |i: usize| -> Ordering {
-            let stored = self.row(i);
+            let stored = self.row_at(i);
             match bare_prefix_len(stored, cols.len()) {
                 Some(boundary) => stored[..boundary].cmp(probe.as_slice()),
                 None => Ordering::Less,
@@ -205,7 +261,7 @@ impl NormalLevel {
         let mut hi = self.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if self.row(mid) < lower.as_slice() {
+            if self.row_at(mid) < lower.as_slice() {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -217,9 +273,9 @@ impl NormalLevel {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let below = if upper_inclusive {
-                self.row(mid) <= upper.as_slice()
+                self.row_at(mid) <= upper.as_slice()
             } else {
-                self.row(mid) < upper.as_slice()
+                self.row_at(mid) < upper.as_slice()
             };
             if below {
                 lo = mid + 1;
@@ -405,19 +461,31 @@ impl EpochStore {
                     let existing = levels
                         .iter()
                         .rev()
-                        .find_map(|l| l.find(&row_bytes).map(|i| l.row_flags(i)));
+                        .find_map(|l| l.find(&row_bytes).map(|i| l.row_flags_at(i)));
                     match existing {
                         None => {
                             if S::RECORDING {
                                 sink.admit(TupleInIter::new_bytes(&row_bytes, skip));
                             }
-                            level.push(row_bytes, skip, false);
+                            level.push(
+                                row_bytes,
+                                RowFlags {
+                                    skip,
+                                    refresh: false,
+                                },
+                            )?;
                             admitted += 1;
                         }
-                        Some((old_skip, _)) if old_skip != skip => {
+                        Some(old) if old.skip != skip => {
                             // Re-derivation refreshing the limiter flag:
                             // shadows the old row, admitted nowhere.
-                            level.push(row_bytes, skip, true);
+                            level.push(
+                                row_bytes,
+                                RowFlags {
+                                    skip,
+                                    refresh: true,
+                                },
+                            )?;
                         }
                         Some(_) => {}
                     }
@@ -428,7 +496,7 @@ impl EpochStore {
                 // the PRE-epoch stack only: the level just sealed IS the
                 // delta and must survive whole until the next barrier.
                 drop_consumed_empty_delta(levels, NormalLevel::is_empty);
-                compact_normal(levels);
+                compact_normal(levels)?;
                 levels.push(level);
                 admitted
             }
@@ -485,7 +553,7 @@ impl EpochStore {
         match &self.kind {
             LevelKind::Normal(levels) => levels
                 .last()
-                .is_some_and(|l| (0..l.len()).any(|i| !l.row_flags(i).1)),
+                .is_some_and(|l| (0..l.len()).any(|i| !l.row_flags_at(i).refresh)),
             LevelKind::Meet { levels, .. } => levels.last().is_some_and(|l| !l.groups.is_empty()),
         }
     }
@@ -497,8 +565,8 @@ impl EpochStore {
         upper_inclusive: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         self.ranged(
-            LevelBoundKey(bare_bounds_lower(lower)),
-            LevelBoundKey(bare_bounds_upper(upper)),
+            LevelBoundKey::from_encoded(bare_bounds_lower(lower)),
+            LevelBoundKey::from_encoded(bare_bounds_upper(upper)),
             upper_inclusive,
             false,
         )
@@ -510,8 +578,8 @@ impl EpochStore {
         upper_inclusive: bool,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         self.ranged(
-            LevelBoundKey(bare_bounds_lower(lower)),
-            LevelBoundKey(bare_bounds_upper(upper)),
+            LevelBoundKey::from_encoded(bare_bounds_lower(lower)),
+            LevelBoundKey::from_encoded(bare_bounds_upper(upper)),
             upper_inclusive,
             true,
         )
@@ -522,18 +590,18 @@ impl EpochStore {
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
         // The 0xFF tail (which no canonical encoding begins) bounds every
         // extension of `prefix`, inclusively.
-        let lower = LevelBoundKey(encode_tuple_bare(prefix.as_slice()));
+        let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
         let mut upper = lower.clone();
-        upper.0.push(0xFF);
+        upper.push_exclusive_sentinel();
         self.ranged(lower, upper, true, false)
     }
     pub(crate) fn delta_prefix_iter<'s>(
         &'s self,
         prefix: &Tuple,
     ) -> impl Iterator<Item = TupleInIter<'s>> + use<'s> {
-        let lower = LevelBoundKey(encode_tuple_bare(prefix.as_slice()));
+        let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
         let mut upper = lower.clone();
-        upper.0.push(0xFF);
+        upper.push_exclusive_sentinel();
         self.ranged(lower, upper, true, true)
     }
     /// [`prefix_iter`](Self::prefix_iter)/[`delta_prefix_iter`](Self::delta_prefix_iter)
@@ -568,9 +636,9 @@ impl EpochStore {
             }
             LevelKind::Meet { spec, levels } => {
                 let prefix: Tuple = cols.iter().map(|&c| row[c].clone()).collect();
-                let lower = LevelBoundKey(encode_tuple_bare(prefix.as_slice()));
+                let lower = LevelBoundKey::from_encoded(encode_tuple_bare(prefix.as_slice()));
                 let mut upper = lower.clone();
-                upper.0.push(0xFF);
+                upper.push_exclusive_sentinel();
                 let picked: &[MeetLevel] = if delta_only {
                     std::slice::from_ref(levels.last().expect("a level always exists"))
                 } else {
@@ -650,7 +718,7 @@ fn normal_merge_next<'s>(
         let mut best: Option<(&'s [u8], usize)> = None;
         for (ci, (l, next, end)) in cursors.iter().enumerate() {
             if next < end {
-                let t = l.row(*next);
+                let t = l.row_at(*next);
                 best = match best {
                     None => Some((t, ci)),
                     Some((bt, bci)) => {
@@ -667,18 +735,18 @@ fn normal_merge_next<'s>(
         // Advance every cursor sharing the winning key; the winner's row
         // index is remembered before advancing.
         let win_row = cursors[win_ci].1;
-        let key: Vec<u8> = cursors[win_ci].0.row(win_row).to_vec();
+        let key: Vec<u8> = cursors[win_ci].0.row_at(win_row).to_vec();
         for (l, next, end) in cursors.iter_mut() {
-            while *next < *end && l.row(*next) == key.as_slice() {
+            while *next < *end && l.row_at(*next) == key.as_slice() {
                 *next += 1;
             }
         }
         let l = cursors[win_ci].0;
-        let (skip, refresh) = l.row_flags(win_row);
-        if delta_only && refresh {
+        let flags = l.row_flags_at(win_row);
+        if delta_only && flags.refresh {
             continue;
         }
-        return Some(TupleInIter::new_bytes(l.row(win_row), skip));
+        return Some(TupleInIter::new_bytes(l.row_at(win_row), flags.skip));
     }
 }
 
@@ -697,7 +765,7 @@ fn drop_consumed_empty_delta<L>(levels: &mut Vec<L>, is_empty: impl Fn(&L) -> bo
 /// copies drop; a surviving refresh row becomes the row (its flag is the
 /// current one) and stops being refresh-marked once its shadowed victim
 /// is gone.
-fn compact_normal(levels: &mut Vec<NormalLevel>) {
+fn compact_normal(levels: &mut Vec<NormalLevel>) -> Result<()> {
     while levels.len() >= 2 {
         let n = levels.len();
         if levels[n - 1].len() * 2 < levels[n - 2].len() {
@@ -709,30 +777,33 @@ fn compact_normal(levels: &mut Vec<NormalLevel>) {
         let (mut a, mut b) = (0usize, 0usize);
         while a < older.len() || b < newer.len() {
             if a >= older.len() {
-                let (skip, refresh) = newer.row_flags(b);
-                merged.push_from(&newer, b, skip, refresh);
+                merged.push_from(&newer, b, newer.row_flags_at(b))?;
                 b += 1;
             } else if b >= newer.len() {
-                let (skip, refresh) = older.row_flags(a);
-                merged.push_from(&older, a, skip, refresh);
+                merged.push_from(&older, a, older.row_flags_at(a))?;
                 a += 1;
             } else {
-                match older.row(a).cmp(newer.row(b)) {
+                match older.row_at(a).cmp(newer.row_at(b)) {
                     Ordering::Less => {
-                        let (skip, refresh) = older.row_flags(a);
-                        merged.push_from(&older, a, skip, refresh);
+                        merged.push_from(&older, a, older.row_flags_at(a))?;
                         a += 1;
                     }
                     Ordering::Greater => {
-                        let (skip, refresh) = newer.row_flags(b);
-                        merged.push_from(&newer, b, skip, refresh);
+                        merged.push_from(&newer, b, newer.row_flags_at(b))?;
                         b += 1;
                     }
                     Ordering::Equal => {
                         // The shadowed copy is gone; the survivor is a
                         // plain row again whichever mark it carried.
-                        let (skip, _) = newer.row_flags(b);
-                        merged.push_from(&newer, b, skip, false);
+                        let flags = newer.row_flags_at(b);
+                        merged.push_from(
+                            &newer,
+                            b,
+                            RowFlags {
+                                skip: flags.skip,
+                                refresh: false,
+                            },
+                        )?;
                         a += 1;
                         b += 1;
                     }
@@ -741,6 +812,7 @@ fn compact_normal(levels: &mut Vec<NormalLevel>) {
         }
         levels.push(merged);
     }
+    Ok(())
 }
 
 /// As [`compact_normal`], for meet levels: newest group value wins whole.

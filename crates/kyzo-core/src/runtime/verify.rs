@@ -416,7 +416,6 @@ fn scan_edb_facts(
             bindings,
             storage: handle,
             filters: vec![],
-            filters_bytecodes: vec![],
             as_of,
             span: crate::data::span::SourceSpan(0, 0),
         };

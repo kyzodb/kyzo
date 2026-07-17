@@ -279,7 +279,14 @@ impl Segment {
         self.offsets.is_empty()
     }
 
-    pub(crate) fn row(&self, i: usize) -> &[DataValue] {
+    /// Row at index `i`, or `None` when out of bounds.
+    pub(crate) fn row(&self, i: usize) -> Option<&[DataValue]> {
+        (i < self.len()).then(|| self.row_at(i))
+    }
+
+    /// INVARIANT(segment_row_in_bounds): `i < self.len()`.
+    fn row_at(&self, i: usize) -> &[DataValue] {
+        debug_assert!(i < self.len());
         let start = if i == 0 {
             0
         } else {
@@ -290,7 +297,7 @@ impl Segment {
 
     /// Compare stored row `i` against a probe prefix, coordinate-wise.
     fn cmp_prefix(&self, i: usize, prefix: &[DataValue]) -> std::cmp::Ordering {
-        let row = self.row(i);
+        let row = self.row_at(i);
         for (v, p) in row.iter().zip(prefix) {
             match v.cmp(p) {
                 std::cmp::Ordering::Equal => continue,
@@ -363,7 +370,7 @@ mod tests {
                 .unwrap_or(rows.len());
             assert_eq!(got, want_lo..want_hi.max(want_lo), "prefix a={a}");
             for i in got {
-                assert_eq!(s.row(i), rows[i].as_slice());
+                assert_eq!(s.row(i), Some(rows[i].as_slice()));
             }
         }
     }
@@ -401,7 +408,10 @@ mod tests {
             Segment::build(std::iter::once(row(&[1, 2]))).unwrap(),
             live,
         );
-        assert_eq!(handle.row(0), &[DataValue::from(1), DataValue::from(2)]);
+        assert_eq!(
+            handle.row(0),
+            Some([DataValue::from(1), DataValue::from(2)].as_slice())
+        );
         assert!(engine.get(relation, live).is_ok());
 
         engine.bump_before_commit(relation);

@@ -567,7 +567,9 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.posting = Some(idx_store);
+                            delta.scan = crate::query::ra::temporal::DeltaScan::Accelerated {
+                                posting: idx_store,
+                            };
                         }
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret = ret.join(right, prev_joiner_vars, right_joiner_vars, rel_app.span)?;
@@ -794,7 +796,9 @@ pub(crate) fn compile_magic_rule_body(
                         if let (RelAlgebra::Delta(delta), Some(idx_store)) =
                             (&mut right, delta_posting)
                         {
-                            delta.posting = Some(idx_store);
+                            delta.scan = crate::query::ra::temporal::DeltaScan::Accelerated {
+                                posting: idx_store,
+                            };
                         }
                         debug_assert_eq!(prev_joiner_vars.len(), right_joiner_vars.len());
                         ret =
@@ -895,7 +899,16 @@ pub(crate) fn compile_magic_rule_body(
                     ret = ret.filter(expr)?;
                 } else {
                     seen_variables.insert(u.binding.clone());
-                    ret = ret.unify(u.binding.clone(), u.expr.clone(), u.one_many_unif, u.span);
+                    ret = ret.unify(
+                        u.binding.clone(),
+                        u.expr.clone(),
+                        if u.one_many_unif {
+                            crate::query::ra::UnificationKind::Spread
+                        } else {
+                            crate::query::ra::UnificationKind::Single
+                        },
+                        u.span,
+                    );
                 }
             }
         }
@@ -1771,12 +1784,12 @@ mod tests {
             for l in &rule.body {
                 let forcing = if has_aggr {
                     if head_meet && l.rel == head {
-                        l.negated
+                        l.is_negated()
                     } else {
                         true
                     }
                 } else {
-                    l.negated || is_meet(l.rel)
+                    l.is_negated() || is_meet(l.rel)
                 };
                 edges.push((head, l.rel, forcing));
             }
@@ -1831,7 +1844,7 @@ mod tests {
                 }
             }
         }
-        let atom = match (idb.contains(l.rel), l.negated) {
+        let atom = match (idb.contains(l.rel), l.is_negated()) {
             (true, false) => rule_atom(l.rel, &args),
             (true, true) => neg_rule_atom(l.rel, &args),
             (false, false) => rel_atom(l.rel, &args),
@@ -1876,10 +1889,10 @@ mod tests {
                     // Positives first, then negatives: negation is safe
                     // only over bound variables (the reorder tier's job in
                     // the real pipeline).
-                    for l in r.body.iter().filter(|l| !l.negated) {
+                    for l in r.body.iter().filter(|l| !l.is_negated()) {
                         literal_atoms(l, &idb, &mut const_serial, &mut body);
                     }
-                    for l in r.body.iter().filter(|l| l.negated) {
+                    for l in r.body.iter().filter(|l| l.is_negated()) {
                         literal_atoms(l, &idb, &mut const_serial, &mut body);
                     }
                     let head_syms: Vec<Symbol> = r

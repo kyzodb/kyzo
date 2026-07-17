@@ -105,19 +105,39 @@ pub(crate) struct ProvenanceLimitExceeded {
     pub(crate) ceiling: u64,
 }
 
-/// A proof failed verification. The message names the first offending
+/// A proof failed verification. The variant names the first offending
 /// step; a certificate is all-or-nothing.
 #[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
-#[error("provenance certificate rejected: {0}")]
 #[diagnostic(code(provenance::bad_certificate))]
-pub(crate) struct BadCertificate(pub(crate) String);
+pub(crate) enum BadCertificate {
+    #[error("provenance certificate rejected: leaf is not a ground fact")]
+    NotGroundFact,
+    #[error("provenance certificate rejected: derivation index out of range")]
+    DerivationOutOfRange,
+    #[error("provenance certificate rejected: derivation head mismatch")]
+    HeadMismatch,
+    #[error("provenance certificate rejected: rule label mismatch")]
+    LabelMismatch,
+    #[error("provenance certificate rejected: premise arity mismatch")]
+    PremiseArityMismatch,
+    #[error("provenance certificate rejected: premise node mismatch")]
+    PremiseMismatch,
+    #[error("provenance certificate rejected: cost arithmetic overflows u64")]
+    CostOverflow,
+    #[error("provenance certificate rejected: claimed cost disagrees with verified cost")]
+    CostMismatch,
+}
 
 /// Certificate extraction was asked for an underivable tuple (annotation
 /// `0` / infinite cost), or for a node the graph does not contain.
 #[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
-#[error("no derivation to certify: {0}")]
 #[diagnostic(code(provenance::no_derivation))]
-pub(crate) struct NoDerivation(pub(crate) String);
+pub(crate) enum NoDerivation {
+    #[error("no derivation to certify: target has no finite-cost derivation")]
+    NoFiniteCost,
+    #[error("no derivation to certify: target is not in the graph")]
+    MissingNode,
+}
 
 /// A cross-stage invariant the graph construction should have made
 /// impossible (e.g. "a solved min cost is achieved by some edge").
@@ -491,9 +511,9 @@ pub(crate) fn extract_min_cost_proof<K: Ord + Clone + Debug>(
     let target_cost = match costs.get(target) {
         Some(Cost::Finite(c)) => *c,
         Some(Cost::Infinite) => {
-            return Err(NoDerivation(format!("{target:?} has no finite-cost derivation")).into());
+            return Err(NoDerivation::NoFiniteCost.into());
         }
-        None => return Err(NoDerivation(format!("{target:?} is not in the graph")).into()),
+        None => return Err(NoDerivation::MissingNode.into()),
     };
     if graph.facts.contains(target) {
         return Ok(ProofNode::Fact {
@@ -562,9 +582,7 @@ pub(crate) fn verify_proof<K: Ord + Clone + Debug>(
             if graph.facts.contains(node) {
                 Ok(0)
             } else {
-                Err(BadCertificate(format!(
-                    "leaf {node:?} is not a ground fact"
-                )))
+                Err(BadCertificate::NotGroundFact)
             }
         }
         ProofNode::Step {
@@ -574,46 +592,31 @@ pub(crate) fn verify_proof<K: Ord + Clone + Debug>(
             cost,
             premises,
         } => {
-            let d = graph.derivations.get(*derivation).ok_or_else(|| {
-                BadCertificate(format!("derivation index {derivation} out of range"))
-            })?;
+            let d = graph
+                .derivations
+                .get(*derivation)
+                .ok_or(BadCertificate::DerivationOutOfRange)?;
             if d.head != *node {
-                return Err(BadCertificate(format!(
-                    "derivation {derivation} derives {:?}, not {node:?}",
-                    d.head
-                )));
+                return Err(BadCertificate::HeadMismatch);
             }
             if d.label != *label {
-                return Err(BadCertificate(format!(
-                    "derivation {derivation} is rule {}, certificate claims {label}",
-                    d.label
-                )));
+                return Err(BadCertificate::LabelMismatch);
             }
             if d.premises.len() != premises.len() {
-                return Err(BadCertificate(format!(
-                    "derivation {derivation} has {} premises, certificate carries {}",
-                    d.premises.len(),
-                    premises.len()
-                )));
+                return Err(BadCertificate::PremiseArityMismatch);
             }
             let mut total: u64 = d.weight.get();
             for (want, child) in d.premises.iter().zip(premises) {
                 if child.node() != want {
-                    return Err(BadCertificate(format!(
-                        "premise mismatch: derivation {derivation} wants {want:?}, \
-                         certificate supplies {:?}",
-                        child.node()
-                    )));
+                    return Err(BadCertificate::PremiseMismatch);
                 }
                 let child_cost = verify_proof(child, graph)?;
                 total = total
                     .checked_add(child_cost)
-                    .ok_or_else(|| BadCertificate("cost arithmetic overflows u64".to_string()))?;
+                    .ok_or(BadCertificate::CostOverflow)?;
             }
             if total != *cost {
-                return Err(BadCertificate(format!(
-                    "claimed cost {cost} ≠ verified cost {total} at {node:?}"
-                )));
+                return Err(BadCertificate::CostMismatch);
             }
             Ok(total)
         }

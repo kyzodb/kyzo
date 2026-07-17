@@ -1950,7 +1950,7 @@ fn delta_composition_law_holds_through_the_real_engine() {
             let ab = to_signed(run_delta(a, b));
             let bc = to_signed(run_delta(b, c));
             let ac = to_signed(run_delta(a, c));
-            let composed = laws::compose(&ab, &bc);
+            let composed = laws::compose(&ab, &bc).expect("unit net");
             assert_eq!(
                 composed, ac,
                 "seed {seed} a={a} b={b} c={c}: diff(a,c) != diff(a,b)⊕diff(b,c)"
@@ -2014,7 +2014,7 @@ fn production_compose_matches_the_composition_law_on_real_engine_output() {
             let ab = to_signed(run_delta(a, b));
             let bc = to_signed(run_delta(b, c));
             let ac = to_signed(run_delta(a, c));
-            let composed = temporal::compose(&ab, &bc);
+            let composed = temporal::compose(&ab, &bc).expect("unit net");
             assert_eq!(
                 composed, ac,
                 "seed {seed} a={a} b={b} c={c}: production compose diverged from diff(a,c)"

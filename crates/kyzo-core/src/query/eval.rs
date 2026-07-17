@@ -191,6 +191,7 @@ use thiserror::Error;
 use crate::data::aggr::{Aggregation, NormalAggr};
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
+use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::query::levels::EpochStore;
@@ -263,7 +264,7 @@ pub(crate) struct LimitExceeded {
     pub(crate) ceiling: u64,
     /// The rule whose in-flight materialization crossed the ceiling
     /// (mid-epoch dimension only); `None` for the barrier dimensions.
-    pub(crate) rule: Option<String>,
+    pub(crate) rule: Option<MagicSymbol>,
     /// The offending rule's source span, so the diagnostic points back at
     /// the query text. `None` for the barrier dimensions.
     #[label("this rule's in-flight derivations crossed the budget ceiling")]
@@ -522,7 +523,7 @@ impl InterruptTicker<'_> {
                         dimension: BudgetDimension::InFlightDerivations,
                         spent,
                         ceiling,
-                        rule: Some(symb.name.to_string()),
+                        rule: Some(self.rule.clone()),
                         span: Some(symb.span),
                     }
                     .into());
@@ -590,7 +591,7 @@ pub(crate) enum PremiseSource {
     /// The literal reads a base (ground-fact) relation, by name. The rows
     /// are attested by the body that read them; the independent
     /// certificate checker re-verifies membership from the model.
-    Fact(String),
+    Fact(Symbol),
 }
 
 /// Private supertrait seal for [`RuleBody`]: only types this crate admits
@@ -1338,7 +1339,7 @@ fn note_pending(
     )
 )]
 pub(crate) struct ProvenanceUnsupported {
-    pub(crate) store: String,
+    pub(crate) store: MagicSymbol,
     pub(crate) reason: &'static str,
 }
 
@@ -1413,13 +1414,13 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
                 let sources = body
                     .premise_sources()
                     .ok_or_else(|| ProvenanceUnsupported {
-                        store: name.as_plain_symbol().name.to_string(),
+                        store: name.clone(),
                         reason: "a rule body does not attribute its premises",
                     })?;
                 for dep in body.contained_rules().values() {
                     if !stores.contains_key(dep) {
                         return Err(ProvenanceUnsupported {
-                            store: dep.as_plain_symbol().name.to_string(),
+                            store: dep.clone(),
                             reason: "a premised store was not retained to the final stratum",
                         }
                         .into());
@@ -2062,7 +2063,7 @@ mod tests {
                 return f(Cow::Owned(head.into_vec()), arg);
             }
             let (body_pos, l) = ordered[idx];
-            if l.negated {
+            if l.is_negated() {
                 let probe = ground(&l.args, bound);
                 if self.negated_probe_hits(stores, l.rel, &probe)? {
                     return Ok(ControlFlow::Continue(()));
@@ -2125,9 +2126,9 @@ mod tests {
                 .body
                 .iter()
                 .enumerate()
-                .filter(|(_, l)| !l.negated)
+                .filter(|(_, l)| !l.is_negated())
                 .collect();
-            ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.negated));
+            ordered.extend(self.body.iter().enumerate().filter(|(_, l)| l.is_negated()));
             let mut premises: Vec<Tuple> = Vec::new();
             // The driver ignores the break/continue verdict: a break here
             // just means the visitor stopped early, which is fine at the top.
@@ -2231,12 +2232,12 @@ mod tests {
             for l in &rule.body {
                 let forcing = if class.has_aggr {
                     if class.is_meet && l.rel == head {
-                        l.negated
+                        l.is_negated()
                     } else {
                         true
                     }
                 } else {
-                    l.negated || fixed_heads.contains(l.rel) || is_meet(l.rel)
+                    l.is_negated() || fixed_heads.contains(l.rel) || is_meet(l.rel)
                 };
                 edges.push((head, l.rel, forcing));
             }
