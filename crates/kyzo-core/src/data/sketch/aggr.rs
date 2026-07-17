@@ -247,7 +247,10 @@ impl NormalAggrObj for AggrQuantile {
     }
     fn get(&self) -> Result<DataValue> {
         let digest = TDigest::from_values(&self.buf, DEFAULT_COMPRESSION)?;
-        Ok(DataValue::from(digest.quantile(self.q)))
+        Ok(match digest.quantile(self.q) {
+            Some(v) => DataValue::from(v),
+            None => DataValue::Null,
+        })
     }
 }
 
