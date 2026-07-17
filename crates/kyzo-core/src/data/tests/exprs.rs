@@ -75,21 +75,21 @@ fn conditional_without_catch_all() {
 // own. This is what proves the class is unrepresentable at the BOUNDARY,
 // not merely guarded case by case.
 
-const POISONED_SCALAR: Op = Op {
-    name: "OP_POISONED_SCALAR_TEST_ONLY",
-    min_arity: 0,
-    vararg: true,
-    deterministic: true,
-    inner: |_| Ok(DataValue::from(f64::NAN)),
-};
+const POISONED_SCALAR: Op = Op::define(
+    "OP_POISONED_SCALAR_TEST_ONLY",
+    0,
+    true,
+    true,
+    |_| Ok(DataValue::from(f64::NAN)),
+);
 
-const POISONED_VECTOR: Op = Op {
-    name: "OP_POISONED_VECTOR_TEST_ONLY",
-    min_arity: 0,
-    vararg: true,
-    deterministic: true,
-    inner: |_| Ok(DataValue::Vector(Vector::new(vec![1.0f64, f64::NAN]))),
-};
+const POISONED_VECTOR: Op = Op::define(
+    "OP_POISONED_VECTOR_TEST_ONLY",
+    0,
+    true,
+    true,
+    |_| Ok(DataValue::Vector(Vector::new(vec![1.0f64, f64::NAN]))),
+);
 
 fn assert_domain_refusal(res: miette::Result<DataValue>) {
     let err = res.expect_err("a NaN op result must be a typed Err, not Ok(NaN)");

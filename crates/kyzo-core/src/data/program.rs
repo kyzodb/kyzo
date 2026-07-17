@@ -1611,9 +1611,12 @@ impl StoreLifetimes {
 
 /// An adornment: for each argument position of a rule, whether the demand
 /// pattern binds it (`true` = bound, `false` = free). Rendered `b`/`f` in
-/// debug output. (The original used `SmallVec<[bool; 8]>`; the workspace
-/// carries no `smallvec` dependency and adornments are arity-bounded, so a
-/// `Vec` serves until profiling says otherwise.)
+/// debug output.
+///
+/// P054 done-when wants a Bound/Free sum (not `Vec<bool>`). That type
+/// change breaks `query/magic.rs` (`Vec::with_capacity` assign, `&[bool]`
+/// returns, `*b = false` mut iteration) which is outside this task's
+/// allowlist — keep the alias until that file is on the allowlist.
 pub(crate) type Adornment = Vec<bool>;
 
 /// A rule name after the magic-sets rewrite. The variants carry the demand

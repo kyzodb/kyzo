@@ -285,16 +285,10 @@ mod tests {
     }
 
     fn analyzer(tk: &str, filters: &[(&str, Vec<DataValue>)]) -> TextAnalyzer {
-        let tk = TokenizerConfig {
-            name: tk.into(),
-            args: vec![],
-        };
+        let tk = TokenizerConfig::admit(tk, vec![]).expect("test tokenizer");
         let filters: Vec<_> = filters
             .iter()
-            .map(|(n, args)| TokenizerConfig {
-                name: (*n).into(),
-                args: args.clone(),
-            })
+            .map(|(n, args)| TokenizerConfig::admit(*n, args.clone()).expect("test filter"))
             .collect();
         tk.build(&filters).unwrap()
     }

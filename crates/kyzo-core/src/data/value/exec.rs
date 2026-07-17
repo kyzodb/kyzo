@@ -354,7 +354,7 @@ mod tests {
             .map(|&(a, b)| (intern(arena, a), intern(arena, b)))
             .collect();
         let f = arena.frame();
-        let mut rows = Rows::new_in(Arity::new_unchecked(2), &f);
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &f);
         for (a, b) in stamps {
             rows.push_row(&[a, b]).expect("lawful push");
         }
@@ -394,7 +394,7 @@ mod tests {
         let rows = rows_of(&mut arena, &[(1, 2), (2, 3), (1, 2)]);
         let f = arena.frame();
         let e = ExecRows::admit(&rows, &f).expect("lawful admit");
-        let mut dedup = ExecDedup::new(e.domain(), Arity::new_unchecked(2));
+        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).expect("test arity 2"));
         let new = dedup.absorb(&e).expect("lawful absorb");
         assert_eq!(new, 2, "the duplicate (1,2) must not be a new tuple");
         assert_eq!(dedup.len(), 2);
@@ -425,7 +425,7 @@ mod tests {
         let step2 = step1
             .join_project(&e, 1, 0, &[(Side::Left, 0), (Side::Right, 1)])
             .expect("lawful join");
-        let mut dedup = ExecDedup::new(e.domain(), Arity::new_unchecked(2));
+        let mut dedup = ExecDedup::new(e.domain(), Arity::try_new(2).expect("test arity 2"));
         dedup.absorb(&e).expect("lawful absorb");
         dedup.absorb(&step1).expect("lawful absorb");
         dedup.absorb(&step2).expect("lawful absorb");
@@ -464,7 +464,7 @@ mod tests {
         let rows = rows_of(&mut arena, &[(1, 2)]);
         let f = arena.frame();
         let e = ExecRows::admit(&rows, &f).expect("lawful admit");
-        assert_eq!(e.arity(), Arity::new_unchecked(2));
+        assert_eq!(e.arity(), Arity::try_new(2).expect("test arity 2"));
     }
 
     /// DIFFERENTIAL: `join_project` on codes equals a naive nested-loop

@@ -192,9 +192,11 @@ impl Heap {
     /// # Panics
     ///
     /// Panics if a single value exceeds `u32::MAX` bytes or the chunk id
-    /// space is exhausted.
+    /// space is exhausted (typed `None` from the quantity doors, surfaced
+    /// here as the heap's documented capacity refusal).
     pub fn push(&mut self, value: &[u8]) -> Span {
-        let vlen = ByteLen::from_usize(value.len());
+        let vlen = ByteLen::from_usize(value.len())
+            .expect("byte length exceeds u32 span space");
         if value.len() >= CHUNK_SIZE {
             // Oversize value: a chunk of its own.
             self.freeze_live();
@@ -210,7 +212,8 @@ impl Heap {
             self.freeze_live();
         }
         let chunk = self.chunk_id();
-        let off = ByteOff::from_usize(self.live.len());
+        let off = ByteOff::from_usize(self.live.len())
+            .expect("byte offset exceeds u32 span space");
         self.live.extend_from_slice(value);
         Span {
             chunk,
@@ -229,7 +232,7 @@ impl Heap {
     }
 
     fn chunk_id(&self) -> ChunkId {
-        ChunkId::from_usize(self.frozen.len())
+        ChunkId::from_usize(self.frozen.len()).expect("heap chunk id space exhausted")
     }
 
     pub fn get(&self, span: Span) -> &[u8] {
@@ -527,6 +530,8 @@ pub enum Denial {
     ArityMismatch { expected: usize, got: usize },
     /// Domain extent would wrap past `u32::MAX`.
     ExtentOverflow,
+    /// Epoch remap produced a code past `u32::MAX` (checked add overflow).
+    CodeRemapOverflow,
 }
 
 /// Thin alias for [`Admission`] — existing call sites keep this name; the
@@ -763,8 +768,9 @@ impl EpochRemap {
     /// [`Admission::prove_shared`].
     pub fn apply(&self, sc: StampedCode) -> Result<StampedCode, Denial> {
         Admission::prove_shared(self.arena, self.from, sc.arena(), sc.epoch())?;
+        let code = self.apply_raw(sc.code()).ok_or(Denial::CodeRemapOverflow)?;
         Ok(StampedCode::mint(
-            self.apply_raw(sc.code()),
+            code,
             self.to,
             self.arena,
             StampMintAuthority(()),
@@ -773,7 +779,8 @@ impl EpochRemap {
 
     /// The raw morphism, for bulk gathers by epoch-stamped containers
     /// (which carry one stamp for all their codes and verify it once).
-    pub(super) fn apply_raw(&self, code: Code) -> Code {
+    /// `None` on checked-add overflow into the `u32` code space.
+    pub(super) fn apply_raw(&self, code: Code) -> Option<Code> {
         let c = code.0;
         if c < self.from_sealed_len {
             // Old sealed rank r moves to the r-th position not occupied
@@ -792,7 +799,9 @@ impl EpochRemap {
                     hi = mid;
                 }
             }
-            Code((r + lo) as u32)
+            r.checked_add(lo)
+                .and_then(|n| u32::try_from(n).ok())
+                .map(Code)
         } else {
             let a = (c - self.from_sealed_len) as usize;
             assert!(
@@ -801,7 +810,7 @@ impl EpochRemap {
                 c,
                 self.from
             );
-            Code(self.tail[a])
+            Some(Code(self.tail[a]))
         }
     }
 

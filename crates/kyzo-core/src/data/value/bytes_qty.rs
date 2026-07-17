@@ -39,13 +39,18 @@ const _: () = assert!(std::mem::align_of::<ByteLen>() == std::mem::align_of::<u3
 impl ByteLen {
     pub(super) const ZERO: ByteLen = ByteLen(0);
 
-    /// Construct from a `usize`; panics if `n > u32::MAX`.
+    /// Construct from a `usize`; `None` if `n > u32::MAX`.
     ///
     /// This is the one construction point: every byte length that enters a
     /// `Span` passes through here, so the stored field can never silently
     /// truncate.
-    pub(super) fn from_usize(n: usize) -> ByteLen {
-        ByteLen(u32::try_from(n).expect("byte length exceeds u32 span space"))
+    pub(super) fn from_usize(n: usize) -> Option<ByteLen> {
+        u32::try_from(n).ok().map(ByteLen)
+    }
+
+    /// [`TryFrom`] door — same refusal as [`from_usize`].
+    pub(super) fn try_from_usize(n: usize) -> Result<ByteLen, ()> {
+        Self::from_usize(n).ok_or(())
     }
 
     /// Extract to `usize` for slice indexing (not for further stored-byte
@@ -80,9 +85,14 @@ const _: () = assert!(std::mem::align_of::<ByteOff>() == std::mem::align_of::<u3
 impl ByteOff {
     pub(super) const ZERO: ByteOff = ByteOff(0);
 
-    /// Construct from a `usize`; panics if `n > u32::MAX`.
-    pub(super) fn from_usize(n: usize) -> ByteOff {
-        ByteOff(u32::try_from(n).expect("byte offset exceeds u32 span space"))
+    /// Construct from a `usize`; `None` if `n > u32::MAX`.
+    pub(super) fn from_usize(n: usize) -> Option<ByteOff> {
+        u32::try_from(n).ok().map(ByteOff)
+    }
+
+    /// [`TryFrom`] door — same refusal as [`from_usize`].
+    pub(super) fn try_from_usize(n: usize) -> Result<ByteOff, ()> {
+        Self::from_usize(n).ok_or(())
     }
 
     /// Extract to `usize` for slice indexing.
@@ -108,9 +118,14 @@ const _: () = assert!(std::mem::size_of::<ChunkId>() == std::mem::size_of::<u32>
 const _: () = assert!(std::mem::align_of::<ChunkId>() == std::mem::align_of::<u32>());
 
 impl ChunkId {
-    /// Construct from a `usize`; panics if `n > u32::MAX`.
-    pub(super) fn from_usize(n: usize) -> ChunkId {
-        ChunkId(u32::try_from(n).expect("heap chunk id space exhausted"))
+    /// Construct from a `usize`; `None` if `n > u32::MAX`.
+    pub(super) fn from_usize(n: usize) -> Option<ChunkId> {
+        u32::try_from(n).ok().map(ChunkId)
+    }
+
+    /// [`TryFrom`] door — same refusal as [`from_usize`].
+    pub(super) fn try_from_usize(n: usize) -> Result<ChunkId, ()> {
+        Self::from_usize(n).ok_or(())
     }
 
     pub(super) fn as_usize(self) -> usize {

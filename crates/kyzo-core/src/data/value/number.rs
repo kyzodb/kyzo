@@ -200,7 +200,13 @@ impl Num {
                         out.extend_from_slice(&[0xFF; 9]);
                     }
                     Magnitude::Finite { e, frac72 } => {
-                        let off = (e + EXP_OFFSET) as u16;
+                        // E ∈ [-1073, 1024] ⇒ E+EXP_OFFSET ∈ [7, 2104] ⊂ u16
+                        // and strictly below the Inf sentinel. Prove the
+                        // range, then try_into — never truncate in release.
+                        let biased = e.checked_add(EXP_OFFSET).expect("INVARIANT(num_exp_bias): finite E fits i32+EXP_OFFSET");
+                        debug_assert!((7..=2104).contains(&biased));
+                        let off = u16::try_from(biased)
+                            .expect("INVARIANT(num_exp_u16): finite biased exponent fits u16");
                         debug_assert!(off < EXP_INF);
                         out.extend_from_slice(&off.to_be_bytes());
                         let fb = frac72.to_be_bytes(); // 16 bytes; the low 9 hold the 72-bit field
@@ -447,8 +453,24 @@ impl Ord for Num {
 /// places `Int < Float` on equal reals. Two total orders = two types;
 /// expression compare/eq/min/max must go through this newtype, never
 /// through a second method on [`Num`].
+///
+/// Private field: the only mint is [`NumericOrd::of`].
 #[derive(Clone, Copy, Debug)]
-pub struct NumericOrd(pub Num);
+pub struct NumericOrd(Num);
+
+impl NumericOrd {
+    /// Wrap a [`Num`] for query-semantic numeric order.
+    #[inline]
+    pub const fn of(n: Num) -> NumericOrd {
+        NumericOrd(n)
+    }
+
+    /// The wrapped number (read-only; construction stays at [`of`]).
+    #[inline]
+    pub const fn get(self) -> Num {
+        self.0
+    }
+}
 
 impl PartialEq for NumericOrd {
     fn eq(&self, other: &Self) -> bool {
@@ -744,26 +766,26 @@ mod tests {
     #[test]
     fn numeric_ord_is_value_order_with_ties_equal() {
         assert_eq!(
-            NumericOrd(Num::int(1)).cmp(&NumericOrd(Num::float(1.0))),
+            NumericOrd::of(Num::int(1)).cmp(&NumericOrd::of(Num::float(1.0))),
             Ordering::Equal
         );
         assert_eq!(
-            NumericOrd(Num::float(1.0)).cmp(&NumericOrd(Num::int(1))),
+            NumericOrd::of(Num::float(1.0)).cmp(&NumericOrd::of(Num::int(1))),
             Ordering::Equal
         );
-        assert_eq!(NumericOrd(Num::int(1)), NumericOrd(Num::float(1.0)));
+        assert_eq!(NumericOrd::of(Num::int(1)), NumericOrd::of(Num::float(1.0)));
         assert_eq!(
-            NumericOrd(Num::int(1)).cmp(&NumericOrd(Num::float(1.5))),
+            NumericOrd::of(Num::int(1)).cmp(&NumericOrd::of(Num::float(1.5))),
             Ordering::Less
         );
         assert_eq!(
-            NumericOrd(Num::float(2.5)).cmp(&NumericOrd(Num::int(2))),
+            NumericOrd::of(Num::float(2.5)).cmp(&NumericOrd::of(Num::int(2))),
             Ordering::Greater
         );
         // Beyond 2^53: floats cannot represent the int; NOT equal.
         assert_ne!(
-            NumericOrd(Num::int((1 << 53) + 1))
-                .cmp(&NumericOrd(Num::float(9_007_199_254_740_992.0))),
+            NumericOrd::of(Num::int((1 << 53) + 1))
+                .cmp(&NumericOrd::of(Num::float(9_007_199_254_740_992.0))),
             Ordering::Equal
         );
         // Storage keeps its tie-break; NumericOrd drops it. Both named.
@@ -774,7 +796,7 @@ mod tests {
         extend_random(&mut c, 300, 0xACE);
         for &a in &c {
             for &b in &c {
-                let num = NumericOrd(a).cmp(&NumericOrd(b));
+                let num = NumericOrd::of(a).cmp(&NumericOrd::of(b));
                 let sto = a.cmp(&b);
                 if num != sto {
                     assert_eq!(num, Ordering::Equal, "authorities may differ only on ties");

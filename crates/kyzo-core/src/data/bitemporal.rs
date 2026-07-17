@@ -16,13 +16,62 @@
 //! kernel ([`check_key_for_bitemporal`]) and the value-side polarity
 //! ([`ClaimPolarity`]).
 
-use miette::{Result, bail};
+use miette::{Diagnostic, Result, bail};
+use thiserror::Error;
 
 use crate::data::value::{
     AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
     decode_tuple_from_key, decode_values_all,
 };
 use crate::data::value::data_value_any;
+
+/// Named refusals on the bitemporal decode / polarity path — never a bare
+/// `bail!(String)`.
+#[derive(Debug, Error, Diagnostic)]
+pub enum BitemporalDecodeError {
+    #[error("corrupt bitemporal value: shorter than its header and polarity byte")]
+    #[diagnostic(code(bitemporal::value_truncated))]
+    ValueTruncated,
+    #[error("corrupt bitemporal value: unknown polarity byte {0:#04x}")]
+    #[diagnostic(code(bitemporal::unknown_polarity))]
+    UnknownPolarity(u8),
+    #[error("bitemporal scan over a key too short to carry its two time slots")]
+    #[diagnostic(code(bitemporal::key_too_short))]
+    KeyTooShort,
+    #[error("bitemporal scan over a key without a valid-time slot")]
+    #[diagnostic(code(bitemporal::missing_valid_slot))]
+    MissingValidSlot,
+    #[error("bitemporal scan over a key with trailing bytes inside its valid-time slot")]
+    #[diagnostic(code(bitemporal::valid_slot_trailing))]
+    ValidSlotTrailing,
+    #[error("bitemporal scan over a key without a system-time slot")]
+    #[diagnostic(code(bitemporal::missing_sys_slot))]
+    MissingSysSlot,
+    #[error("bitemporal scan over a key with trailing bytes after its system-time slot")]
+    #[diagnostic(code(bitemporal::sys_slot_trailing))]
+    SysSlotTrailing,
+    #[error(
+        "bitemporal scan over a key with a retract flag in a time slot \
+         (polarity lives in the value; stored slot flags are pinned)"
+    )]
+    #[diagnostic(code(bitemporal::slot_retract_flag))]
+    SlotRetractFlag,
+    #[error("bitemporal key too short to carry its two time slots")]
+    #[diagnostic(code(bitemporal::stamp_key_too_short))]
+    StampKeyTooShort,
+    #[error("bitemporal key without a system-time slot")]
+    #[diagnostic(code(bitemporal::stamp_missing_sys))]
+    StampMissingSys,
+    #[error("bitemporal key with trailing bytes after its system-time slot")]
+    #[diagnostic(code(bitemporal::stamp_sys_trailing))]
+    StampSysTrailing,
+    #[error(
+        "bitemporal key with a retract flag in its system-time slot \
+         (polarity lives in the value; stored slot flags are pinned)"
+    )]
+    #[diagnostic(code(bitemporal::stamp_sys_retract))]
+    StampSysRetract,
+}
 
 /// Fact-payload format v1: a stored row VALUE opens directly with its
 /// polarity byte (no header precedes it); the non-key columns' canonical
@@ -70,13 +119,13 @@ impl ClaimPolarity {
 
 pub fn claim_polarity_of_value(val: &[u8]) -> Result<ClaimPolarity> {
     let Some(&byte) = val.get(VALUE_HEADER_LEN) else {
-        bail!("corrupt bitemporal value: shorter than its header and polarity byte");
+        bail!(BitemporalDecodeError::ValueTruncated);
     };
     match byte {
         POLARITY_ASSERT => Ok(ClaimPolarity::Assert),
         POLARITY_RETRACT => Ok(ClaimPolarity::Retract),
         POLARITY_ERASE => Ok(ClaimPolarity::Erase),
-        other => bail!("corrupt bitemporal value: unknown polarity byte {other:#04x}"),
+        other => bail!(BitemporalDecodeError::UnknownPolarity(other)),
     }
 }
 
@@ -87,29 +136,26 @@ pub fn check_key_for_bitemporal(
     size_hint: Option<usize>,
 ) -> Result<(Option<Tuple>, Vec<u8>)> {
     if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
-        bail!("bitemporal scan over a key too short to carry its two time slots");
+        bail!(BitemporalDecodeError::KeyTooShort);
     }
     let valid_off = key.len() - StorageKey::BITEMPORAL_TAIL_LEN;
     let sys_off = key.len() - StorageKey::VALIDITY_TAIL_LEN;
     let (valid_val, rest) = DataValue::decode_from_key(&key[valid_off..sys_off])?;
     let DataValue::Validity(valid) = valid_val else {
-        bail!("bitemporal scan over a key without a valid-time slot");
+        bail!(BitemporalDecodeError::MissingValidSlot);
     };
     if !rest.is_empty() {
-        bail!("bitemporal scan over a key with trailing bytes inside its valid-time slot");
+        bail!(BitemporalDecodeError::ValidSlotTrailing);
     }
     let (sys_val, rest) = DataValue::decode_from_key(&key[sys_off..])?;
     let DataValue::Validity(sys) = sys_val else {
-        bail!("bitemporal scan over a key without a system-time slot");
+        bail!(BitemporalDecodeError::MissingSysSlot);
     };
     if !rest.is_empty() {
-        bail!("bitemporal scan over a key with trailing bytes after its system-time slot");
+        bail!(BitemporalDecodeError::SysSlotTrailing);
     }
     if !valid.is_assert() || !sys.is_assert() {
-        bail!(
-            "bitemporal scan over a key with a retract flag in a time slot \
-             (polarity lives in the value; stored slot flags are pinned)"
-        );
+        bail!(BitemporalDecodeError::SlotRetractFlag);
     }
 
     // Bounds live in the claimed-bytes domain, exactly as in the
@@ -189,28 +235,25 @@ pub fn check_key_for_bitemporal(
 /// `check_key_for_bitemporal` implements.
 pub(crate) fn system_stamp_of_key(key: &[u8]) -> Result<ValidityTs> {
     if key.len() < StorageKey::RELATION_PREFIX_LEN + StorageKey::BITEMPORAL_TAIL_LEN {
-        bail!("bitemporal key too short to carry its two time slots");
+        bail!(BitemporalDecodeError::StampKeyTooShort);
     }
     let sys_off = key.len() - StorageKey::VALIDITY_TAIL_LEN;
     let (sys_val, rest) = DataValue::decode_from_key(&key[sys_off..])?;
     let DataValue::Validity(sys) = sys_val else {
-        bail!("bitemporal key without a system-time slot");
+        bail!(BitemporalDecodeError::StampMissingSys);
     };
     if !rest.is_empty() {
-        bail!("bitemporal key with trailing bytes after its system-time slot");
+        bail!(BitemporalDecodeError::StampSysTrailing);
     }
     if !sys.is_assert() {
-        bail!(
-            "bitemporal key with a retract flag in its system-time slot \
-             (polarity lives in the value; stored slot flags are pinned)"
-        );
+        bail!(BitemporalDecodeError::StampSysRetract);
     }
     Ok(sys.timestamp())
 }
 
 pub fn extend_tuple_from_bitemporal_v(key: &mut Tuple, val: &[u8]) -> Result<()> {
     let Some(payload) = val.get(BITEMPORAL_VALUE_HEADER_LEN..) else {
-        bail!("corrupt bitemporal value: shorter than its header and polarity byte");
+        bail!(BitemporalDecodeError::ValueTruncated);
     };
     if payload.is_empty() {
         return Ok(());

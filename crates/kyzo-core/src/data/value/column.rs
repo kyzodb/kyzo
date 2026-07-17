@@ -235,15 +235,15 @@ impl CodeColumn {
             remap.source_epoch(),
         )?;
         let mut extent = 0u32;
-        let codes: Vec<u32> = self
-            .codes
-            .into_iter()
-            .map(|c| {
-                let n = remap.apply_raw(super::code::Code(c)).raw();
-                extent = extent.max(n + 1);
-                n
-            })
-            .collect();
+        let mut codes = Vec::with_capacity(self.codes.len());
+        for c in self.codes {
+            let n = remap
+                .apply_raw(super::code::Code(c))
+                .ok_or(Denial::CodeRemapOverflow)?
+                .raw();
+            extent = extent.max(n.saturating_add(1));
+            codes.push(n);
+        }
         Ok(CodeColumn {
             domain: Domain {
                 arena: self.domain.arena,
@@ -436,17 +436,14 @@ impl WordColumn {
             remap.source_epoch(),
         )?;
         let mut extent = 0u32;
-        let words: Vec<Value> = self
-            .words
-            .into_iter()
-            .map(|w| {
-                let g = w.gathered(remap);
-                if let Some(code) = g.code() {
-                    extent = extent.max(code.raw() + 1);
-                }
-                g
-            })
-            .collect();
+        let mut words = Vec::with_capacity(self.words.len());
+        for w in self.words {
+            let g = w.gathered(remap).ok_or(Denial::CodeRemapOverflow)?;
+            if let Some(code) = g.code() {
+                extent = extent.max(code.raw().saturating_add(1));
+            }
+            words.push(g);
+        }
         Ok(WordColumn {
             domain: Domain {
                 arena: self.domain.arena,

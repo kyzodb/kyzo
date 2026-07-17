@@ -289,7 +289,7 @@ fn append_bounds(out: &mut Vec<u8>, bounds: &[ScanBound], upper: bool) {
 /// @status established #303
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
-pub struct TupleKey(pub(crate) Vec<u8>);
+pub struct TupleKey(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<TupleKey>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<TupleKey>() == std::mem::align_of::<Vec<u8>>());
@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn written_form_is_durable_across_seals_while_codes_move() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         for i in 0..30i64 {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(i * 7 % 13)));
             let b = stamp_of(
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn encoded_key_order_is_tuple_semantic_order() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let tuples: [(i64, &str); 5] = [(3, "b"), (1, "zzz"), (3, "a"), (-5, "x"), (1, "a")];
         for (n, s) in tuples {
             let a = stamp_of(&mut arena, Datum::Num(Num::int(n)));
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn push_encoded_round_trips_and_refuses_totally() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(42)));
         let b = stamp_of(&mut arena, Datum::Str("hello"));
         rows.push_row(&[a, b]).expect("lawful push");
@@ -650,7 +650,7 @@ mod tests {
             rows.admit(&f).expect("lawful admit").encode_row(0)
         };
         // Re-enter through the bytes door.
-        let mut rows2 = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
+        let mut rows2 = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         rows2.push_encoded(&key, &mut arena).expect("lawful key");
         {
             let f = arena.frame();
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn from_stored_is_a_validating_door() {
         let mut arena = Arena::new();
-        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         let a = stamp_of(&mut arena, Datum::Num(Num::int(1)));
         let b = stamp_of(&mut arena, Datum::Str("s"));
         rows.push_row(&[a, b]).expect("lawful push");
@@ -875,7 +875,7 @@ mod tests {
     fn arity_is_enforced_at_the_write_door() {
         let mut arena = Arena::new();
         let sc = stamp_of(&mut arena, Datum::Null);
-        let mut rows = Rows::new_in(Arity::new_unchecked(2), &arena.frame());
+        let mut rows = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
         assert!(
             matches!(
                 rows.push_row(&[sc]),

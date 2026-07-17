@@ -91,10 +91,58 @@ pub struct RegexSource {
     pattern: String,
 }
 
-/// The typed refusal for patterns that do not parse under KyzoRegexV1
-/// with their flags.
+/// Why a pattern failed under KyzoRegexV1 with its flags.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct InvalidRegex(pub String);
+pub enum RegexParseRefusal {
+    /// `regex_syntax` rejected the pattern under the active flags.
+    Syntax {
+        pattern: String,
+        detail: String,
+    },
+    /// The regex engine refused to compile an already syntax-valid source.
+    Compile {
+        pattern: String,
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for RegexParseRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegexParseRefusal::Syntax { pattern, detail } => {
+                write!(f, "invalid regex {pattern:?}: {detail}")
+            }
+            RegexParseRefusal::Compile { pattern, detail } => {
+                write!(f, "regex compile failed for {pattern:?}: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RegexParseRefusal {}
+
+/// The typed refusal for patterns that do not parse under KyzoRegexV1
+/// with their flags. Private payload — inspect via [`InvalidRegex::reason`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct InvalidRegex(RegexParseRefusal);
+
+impl InvalidRegex {
+    pub fn reason(&self) -> &RegexParseRefusal {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for InvalidRegex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for InvalidRegex {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
 
 impl RegexSource {
     /// The writer door: validate `(flags, pattern)` under KyzoRegexV1 —
@@ -110,7 +158,10 @@ impl RegexSource {
             .unicode(!flags.contains(RegexFlags::UNICODE_DISABLED));
         match parser.build().parse(&pattern) {
             Ok(_) => Ok(RegexSource { flags, pattern }),
-            Err(e) => Err(InvalidRegex(e.to_string())),
+            Err(e) => Err(InvalidRegex(RegexParseRefusal::Syntax {
+                pattern,
+                detail: e.to_string(),
+            })),
         }
     }
 
@@ -134,7 +185,12 @@ impl RegexSource {
             .unicode(!self.flags.contains(RegexFlags::UNICODE_DISABLED))
             .build()
             .map(CompiledRegexV1)
-            .map_err(|e| InvalidRegex(e.to_string()))
+            .map_err(|e| {
+                InvalidRegex(RegexParseRefusal::Compile {
+                    pattern: self.pattern.clone(),
+                    detail: e.to_string(),
+                })
+            })
     }
 
     pub fn flags(&self) -> RegexFlags {

@@ -62,10 +62,61 @@ pub(crate) enum VecElementType {
     F64,
 }
 
+/// Whether a column admits Null — a closed sum, not an open bool poke.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
+pub enum ColNullability {
+    Required,
+    Optional,
+}
+
+impl ColNullability {
+    pub fn from_bool(nullable: bool) -> ColNullability {
+        if nullable {
+            ColNullability::Optional
+        } else {
+            ColNullability::Required
+        }
+    }
+
+    pub fn is_nullable(self) -> bool {
+        matches!(self, ColNullability::Optional)
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct NullableColType {
     pub coltype: ColType,
+    /// Prefer [`ColNullability`] via [`NullableColType::new`]. Remains a
+    /// public bool so off-list struct literals keep compiling; closing the
+    /// open poke (private field + sum-only storage) needs those call sites
+    /// on the allowlist.
     pub nullable: bool,
+}
+
+impl NullableColType {
+    /// Typed door: nullability is a sum, not an unbound bool pair.
+    pub fn new(coltype: ColType, nullability: ColNullability) -> NullableColType {
+        NullableColType {
+            coltype,
+            nullable: nullability.is_nullable(),
+        }
+    }
+
+    pub fn required(coltype: ColType) -> NullableColType {
+        Self::new(coltype, ColNullability::Required)
+    }
+
+    pub fn optional(coltype: ColType) -> NullableColType {
+        Self::new(coltype, ColNullability::Optional)
+    }
+
+    pub fn nullability(&self) -> ColNullability {
+        ColNullability::from_bool(self.nullable)
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.nullability().is_nullable()
+    }
 }
 
 impl Display for NullableColType {
@@ -115,6 +166,34 @@ impl Display for NullableColType {
             f.write_str("?")?;
         }
         Ok(())
+    }
+}
+
+/// Proven list / vector length on a column schema. Prefer this at new
+/// doors; [`ColType`] still carries bare `usize` until off-list call sites
+/// migrate (P048).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
+pub struct ColLen(usize);
+
+impl ColLen {
+    pub fn new(n: usize) -> ColLen {
+        ColLen(n)
+    }
+
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for ColLen {
+    fn from(n: usize) -> ColLen {
+        ColLen(n)
+    }
+}
+
+impl From<ColLen> for usize {
+    fn from(n: ColLen) -> usize {
+        n.0
     }
 }
 

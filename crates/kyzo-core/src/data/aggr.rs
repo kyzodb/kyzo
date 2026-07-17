@@ -1062,16 +1062,15 @@ impl NormalAggrObj for AggrProduct {
 
 meet_aggr!(AGGR_MIN, "min", Min, MeetAggrMin, Min, AggrMin);
 
-/// The numerical minimum, ignoring nulls; `Null` when no row had a number.
+/// The numerical minimum, ignoring nulls; `Null` *result* when no row had
+/// a number. In-state absence is [`Option::None`], never a Null sentinel.
 pub(crate) struct AggrMin {
-    found: DataValue,
+    found: Option<DataValue>,
 }
 
 impl Default for AggrMin {
     fn default() -> Self {
-        Self {
-            found: DataValue::Null,
-        }
+        Self { found: None }
     }
 }
 
@@ -1082,25 +1081,29 @@ impl NormalAggrObj for AggrMin {
         if *value == DataValue::Null {
             return Ok(());
         }
-        if self.found == DataValue::Null {
-            self.found = value.clone();
-            return Ok(());
-        }
-        // Compare via `Num`'s exact total order (the same order the memcmp
-        // key encoding preserves): upstream compared through `f64`, where
-        // distinct integers beyond 2^53 collide and tie.
-        let (found, new) = match (&self.found, value) {
-            (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-            _ => bail!("'min' applied to non-numerical values"),
-        };
-        if new < found {
-            self.found = value.clone();
+        match &self.found {
+            None => {
+                self.found = Some(value.clone());
+                return Ok(());
+            }
+            Some(found) => {
+                // Compare via `Num`'s exact total order (the same order the
+                // memcmp key encoding preserves): upstream compared through
+                // `f64`, where distinct integers beyond 2^53 collide and tie.
+                let (found_n, new) = match (found, value) {
+                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
+                    _ => bail!("'min' applied to non-numerical values"),
+                };
+                if new < found_n {
+                    self.found = Some(value.clone());
+                }
+            }
         }
         Ok(())
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone())
+        Ok(self.found.clone().unwrap_or(DataValue::Null))
     }
 }
 
@@ -1150,16 +1153,15 @@ impl MeetAggrObj for MeetAggrMin {
 
 meet_aggr!(AGGR_MAX, "max", Max, MeetAggrMax, Max, AggrMax);
 
-/// The numerical maximum, ignoring nulls; `Null` when no row had a number.
+/// The numerical maximum, ignoring nulls; `Null` *result* when no row had
+/// a number. In-state absence is [`Option::None`], never a Null sentinel.
 pub(crate) struct AggrMax {
-    found: DataValue,
+    found: Option<DataValue>,
 }
 
 impl Default for AggrMax {
     fn default() -> Self {
-        Self {
-            found: DataValue::Null,
-        }
+        Self { found: None }
     }
 }
 
@@ -1170,23 +1172,26 @@ impl NormalAggrObj for AggrMax {
         if *value == DataValue::Null {
             return Ok(());
         }
-        if self.found == DataValue::Null {
-            self.found = value.clone();
-            return Ok(());
-        }
-        // Exact `Num` comparison; see `AggrMin::set`.
-        let (found, new) = match (&self.found, value) {
-            (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-            _ => bail!("'max' applied to non-numerical values"),
-        };
-        if new > found {
-            self.found = value.clone();
+        match &self.found {
+            None => {
+                self.found = Some(value.clone());
+                return Ok(());
+            }
+            Some(found) => {
+                let (found_n, new) = match (found, value) {
+                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
+                    _ => bail!("'max' applied to non-numerical values"),
+                };
+                if new > found_n {
+                    self.found = Some(value.clone());
+                }
+            }
         }
         Ok(())
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone())
+        Ok(self.found.clone().unwrap_or(DataValue::Null))
     }
 }
 
@@ -1234,16 +1239,17 @@ impl MeetAggrObj for MeetAggrMax {
 normal_aggr!(AGGR_LATEST_BY, "latest_by", LatestBy, AggrLatestBy);
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts greatest.
+/// No-candidate state is [`Option::None`], never [`DataValue::Null`].
 pub(crate) struct AggrLatestBy {
-    found: DataValue,
-    cost: DataValue,
+    found: Option<DataValue>,
+    cost: Option<DataValue>,
 }
 
 impl Default for AggrLatestBy {
     fn default() -> Self {
         Self {
-            found: DataValue::Null,
-            cost: DataValue::Null,
+            found: None,
+            cost: None,
         }
     }
 }
@@ -1257,9 +1263,13 @@ impl NormalAggrObj for AggrLatestBy {
                 let [payload, cost] = &l[..] else {
                     bail!("'latest_by' requires a list of exactly two items as argument")
                 };
-                if *cost > self.cost {
-                    self.cost = cost.clone();
-                    self.found = payload.clone();
+                let take = match &self.cost {
+                    None => true,
+                    Some(prev) => *cost > *prev,
+                };
+                if take {
+                    self.cost = Some(cost.clone());
+                    self.found = Some(payload.clone());
                 }
                 Ok(())
             }
@@ -1268,23 +1278,24 @@ impl NormalAggrObj for AggrLatestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone())
+        Ok(self.found.clone().unwrap_or(DataValue::Null))
     }
 }
 
 normal_aggr!(AGGR_SMALLEST_BY, "smallest_by", SmallestBy, AggrSmallestBy);
 
 /// Of `[payload, cost]` pairs, the payload whose cost sorts least.
+/// No-candidate state is [`Option::None`], never [`DataValue::Null`].
 pub(crate) struct AggrSmallestBy {
-    found: DataValue,
-    cost: DataValue,
+    found: Option<DataValue>,
+    cost: Option<DataValue>,
 }
 
 impl Default for AggrSmallestBy {
     fn default() -> Self {
         Self {
-            found: DataValue::Null,
-            cost: DataValue::Null,
+            found: None,
+            cost: None,
         }
     }
 }
@@ -1298,9 +1309,13 @@ impl NormalAggrObj for AggrSmallestBy {
                 let [payload, cost] = &l[..] else {
                     bail!("'smallest_by' requires a list of exactly two items as argument")
                 };
-                if self.cost == DataValue::Null || *cost < self.cost {
-                    self.cost = cost.clone();
-                    self.found = payload.clone();
+                let take = match &self.cost {
+                    None => true,
+                    Some(prev) => *cost < *prev,
+                };
+                if take {
+                    self.cost = Some(cost.clone());
+                    self.found = Some(payload.clone());
                 }
                 Ok(())
             }
@@ -1309,7 +1324,7 @@ impl NormalAggrObj for AggrSmallestBy {
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone())
+        Ok(self.found.clone().unwrap_or(DataValue::Null))
     }
 }
 
@@ -1323,16 +1338,17 @@ meet_aggr!(
 );
 
 /// Of `[payload, cost]` pairs, the pair with the numerically least cost.
+/// Absence of a candidate is [`Option::None`], never `f64::INFINITY`.
 pub(crate) struct AggrMinCost {
-    found: DataValue,
-    cost: f64,
+    found: Option<DataValue>,
+    cost: Option<f64>,
 }
 
 impl Default for AggrMinCost {
     fn default() -> Self {
         Self {
-            found: DataValue::Null,
-            cost: f64::INFINITY,
+            found: None,
+            cost: None,
         }
     }
 }
@@ -1349,9 +1365,13 @@ impl NormalAggrObj for AggrMinCost {
                 let cost = cost
                     .get_float()
                     .ok_or_else(|| miette!("Cost must be numeric"))?;
-                if cost < self.cost {
-                    self.cost = cost;
-                    self.found = payload.clone();
+                let take = match self.cost {
+                    None => true,
+                    Some(prev) => cost < prev,
+                };
+                if take {
+                    self.cost = Some(cost);
+                    self.found = Some(payload.clone());
                 }
                 Ok(())
             }
@@ -1360,9 +1380,12 @@ impl NormalAggrObj for AggrMinCost {
     }
 
     fn get(&self) -> Result<DataValue> {
+        // Empty accumulator → Null pair. Never encode absence as +Inf.
         Ok(DataValue::List(vec![
-            self.found.clone(),
-            DataValue::from(self.cost),
+            self.found.clone().unwrap_or(DataValue::Null),
+            self.cost
+                .map(DataValue::from)
+                .unwrap_or(DataValue::Null),
         ]))
     }
 }
@@ -1375,10 +1398,8 @@ impl seal::Sealed for MeetAggrMinCost {}
 
 impl MeetAggrObj for MeetAggrMinCost {
     fn init_val(&self) -> MeetAccum {
-        MeetAccum::Value(DataValue::List(vec![
-            DataValue::Null,
-            DataValue::from(f64::INFINITY),
-        ]))
+        // Empty lattice — never a Null/Inf sentinel pair.
+        MeetAccum::Empty
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
@@ -1510,15 +1531,14 @@ meet_aggr!(
 );
 
 /// An arbitrary non-null row: the first one seen wins.
+/// No-candidate state is [`Option::None`], never [`DataValue::Null`].
 pub(crate) struct AggrChoice {
-    found: DataValue,
+    found: Option<DataValue>,
 }
 
 impl Default for AggrChoice {
     fn default() -> Self {
-        Self {
-            found: DataValue::Null,
-        }
+        Self { found: None }
     }
 }
 
@@ -1526,14 +1546,14 @@ impl seal::Sealed for AggrChoice {}
 
 impl NormalAggrObj for AggrChoice {
     fn set(&mut self, value: &DataValue) -> Result<()> {
-        if self.found == DataValue::Null {
-            self.found = value.clone();
+        if self.found.is_none() {
+            self.found = Some(value.clone());
         }
         Ok(())
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.found.clone())
+        Ok(self.found.clone().unwrap_or(DataValue::Null))
     }
 }
 

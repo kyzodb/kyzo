@@ -19,7 +19,7 @@ use std::num::NonZeroUsize;
 ///
 /// Private field; the only public door is [`Arity::new`] over a proven
 /// [`NonZeroUsize`]. Call sites that still hold a bare `usize` lift through
-/// [`Arity::try_new`] (or crate-internal unchecked after a local proof).
+/// [`Arity::try_new`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Arity(NonZeroUsize);
 
@@ -33,20 +33,11 @@ impl Arity {
     }
 
     /// Fallible lift from a bare count at a boundary that has not yet
-    /// proven non-zero.
+    /// proven non-zero. The only door from a bare `usize`.
     pub const fn try_new(width: usize) -> Option<Self> {
         match NonZeroUsize::new(width) {
             Some(n) => Some(Self(n)),
             None => None,
-        }
-    }
-
-    /// Sites that already hold the proof (literals, derived widths after a
-    /// local `max(1)` / checked lift). Never a public escape hatch.
-    pub(crate) const fn new_unchecked(width: usize) -> Self {
-        match NonZeroUsize::new(width) {
-            Some(n) => Self(n),
-            None => panic!("Arity::new_unchecked requires width >= 1"),
         }
     }
 

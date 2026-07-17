@@ -65,13 +65,13 @@ use serde_json::Value as JsonValue;
 /// invocation, five facts, zero drift.
 macro_rules! define_op {
     ($name:ident, $min_arity:expr, $vararg:expr, $deterministic:expr) => {
-        pub(crate) const $name: Op = Op {
-            name: stringify!($name),
-            min_arity: $min_arity,
-            vararg: $vararg,
-            deterministic: $deterministic,
-            inner: ::casey::lower!($name),
-        };
+        pub(crate) const $name: Op = Op::define(
+            stringify!($name),
+            $min_arity,
+            $vararg,
+            $deterministic,
+            ::casey::lower!($name),
+        );
     };
 }
 
@@ -348,7 +348,7 @@ pub(crate) fn op_eq(args: &[DataValue]) -> Result<DataValue> {
     // the inherited lossy `i as f64` — EXACT beyond 2^53), identity for
     // every other kind. Numeric order lives on [`NumericOrd`], not [`Num`].
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => NumericOrd(*a) == NumericOrd(*b),
+        (DataValue::Num(a), DataValue::Num(b)) => NumericOrd::of(*a) == NumericOrd::of(*b),
         (a, b) => a == b,
     }))
 }
@@ -383,7 +383,7 @@ pub(crate) fn op_is_in(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_NEQ, 2, false, true);
 pub(crate) fn op_neq(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match (&args[0], &args[1]) {
-        (DataValue::Num(a), DataValue::Num(b)) => NumericOrd(*a) != NumericOrd(*b),
+        (DataValue::Num(a), DataValue::Num(b)) => NumericOrd::of(*a) != NumericOrd::of(*b),
         (a, b) => a != b,
     }))
 }
@@ -393,7 +393,7 @@ pub(crate) fn op_gt(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
         (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd(*a).cmp(&NumericOrd(*b)) == std::cmp::Ordering::Greater
+            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) == std::cmp::Ordering::Greater
         }
         (a, b) => a.cmp(b) == std::cmp::Ordering::Greater,
     }))
@@ -404,7 +404,7 @@ pub(crate) fn op_ge(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
         (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd(*a).cmp(&NumericOrd(*b)) != std::cmp::Ordering::Less
+            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) != std::cmp::Ordering::Less
         }
         (a, b) => a.cmp(b) != std::cmp::Ordering::Less,
     }))
@@ -415,7 +415,7 @@ pub(crate) fn op_lt(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
         (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd(*a).cmp(&NumericOrd(*b)) == std::cmp::Ordering::Less
+            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) == std::cmp::Ordering::Less
         }
         (a, b) => a.cmp(b) == std::cmp::Ordering::Less,
     }))
@@ -426,7 +426,7 @@ pub(crate) fn op_le(args: &[DataValue]) -> Result<DataValue> {
     ensure_same_value_type(&args[0], &args[1])?;
     Ok(DataValue::from(match (&args[0], &args[1]) {
         (DataValue::Num(a), DataValue::Num(b)) => {
-            NumericOrd(*a).cmp(&NumericOrd(*b)) != std::cmp::Ordering::Greater
+            NumericOrd::of(*a).cmp(&NumericOrd::of(*b)) != std::cmp::Ordering::Greater
         }
         (a, b) => a.cmp(b) != std::cmp::Ordering::Greater,
     }))
@@ -599,7 +599,7 @@ pub(crate) fn op_max(args: &[DataValue]) -> Result<DataValue> {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
             (Some(DataValue::Num(a)), DataValue::Num(b)) => {
                 // Ties keep `a` — deterministic and accumulation-friendly.
-                let chosen = if NumericOrd(a) < NumericOrd(*b) { *b } else { a };
+                let chosen = if NumericOrd::of(a) < NumericOrd::of(*b) { *b } else { a };
                 Ok(Some(DataValue::Num(chosen)))
             }
             _ => bail!("'max can only be applied to numbers'"),
@@ -618,7 +618,7 @@ pub(crate) fn op_min(args: &[DataValue]) -> Result<DataValue> {
             (None, d @ DataValue::Num(_)) => Ok(Some(d.clone())),
             (Some(DataValue::Num(a)), DataValue::Num(b)) => {
                 // Ties keep `a`.
-                let chosen = if NumericOrd(a) > NumericOrd(*b) { *b } else { a };
+                let chosen = if NumericOrd::of(a) > NumericOrd::of(*b) { *b } else { a };
                 Ok(Some(DataValue::Num(chosen)))
             }
             _ => bail!("'min' can only be applied to numbers"),
@@ -2064,7 +2064,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
         DataValue::Null => false,
         DataValue::Bool(b) => *b,
-        DataValue::Num(n) => NumericOrd(*n) != NumericOrd(Num::int(0)),
+        DataValue::Num(n) => NumericOrd::of(*n) != NumericOrd::of(Num::int(0)),
         DataValue::Str(s) => !s.is_empty(),
         DataValue::Bytes(b) => !b.is_empty(),
         DataValue::Uuid(u) => !u.as_uuid().is_nil(),
@@ -2077,7 +2077,7 @@ pub(crate) fn op_to_bool(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Json(json) => match json {
             Json::Null => false,
             Json::Bool(b) => *b,
-            Json::Num(n) => NumericOrd(n.num()) != NumericOrd(Num::int(0)),
+            Json::Num(n) => NumericOrd::of(n.num()) != NumericOrd::of(Num::int(0)),
             Json::Str(s) => !s.is_empty(),
             Json::Arr(a) => !a.is_empty(),
             Json::Obj(o) => !o.entries().is_empty(),
@@ -2090,7 +2090,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
     Ok(DataValue::from(match &args[0] {
         DataValue::Null => 0,
         DataValue::Bool(b) => *b as i64,
-        DataValue::Num(n) => (NumericOrd(*n) != NumericOrd(Num::int(0))) as i64,
+        DataValue::Num(n) => (NumericOrd::of(*n) != NumericOrd::of(Num::int(0))) as i64,
         DataValue::Str(s) => i64::from(!s.is_empty()),
         DataValue::Bytes(b) => i64::from(!b.is_empty()),
         DataValue::Uuid(u) => i64::from(!u.as_uuid().is_nil()),
@@ -2103,7 +2103,7 @@ pub(crate) fn op_to_unity(args: &[DataValue]) -> Result<DataValue> {
         DataValue::Json(json) => match json {
             Json::Null => 0,
             Json::Bool(b) => *b as i64,
-            Json::Num(n) => (NumericOrd(n.num()) != NumericOrd(Num::int(0))) as i64,
+            Json::Num(n) => (NumericOrd::of(n.num()) != NumericOrd::of(Num::int(0))) as i64,
             Json::Str(s) => !s.is_empty() as i64,
             Json::Arr(a) => !a.is_empty() as i64,
             Json::Obj(o) => !o.entries().is_empty() as i64,

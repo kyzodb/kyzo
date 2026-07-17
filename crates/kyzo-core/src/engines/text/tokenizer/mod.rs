@@ -206,10 +206,7 @@ pub(crate) mod tests {
         use crate::engines::text::TokenizerConfig;
 
         fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
-            TokenizerConfig {
-                name: name.into(),
-                args,
-            }
+            TokenizerConfig::admit(name, args).expect("test stage name")
         }
 
         fn tokenizer_configs() -> Vec<TokenizerConfig> {

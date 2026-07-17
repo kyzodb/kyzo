@@ -40,6 +40,7 @@ use crate::engines::text::tokenizer::{
 };
 use jieba_rs::Jieba;
 use miette::{Diagnostic, Result, bail, ensure, miette};
+use serde::Deserialize;
 use sha2::digest::FixedOutput;
 use sha2::{Digest, Sha256};
 use smartstring::{LazyCompact, SmartString};
@@ -78,11 +79,40 @@ pub(crate) struct FtsIndexManifest {
 /// A tokenizer or token-filter *as configuration*: a name and its arguments,
 /// exactly as written in the index definition. Pure data — see the module
 /// docs for when it is proven runnable.
+///
+/// Name proof: [`TokenizerConfig::admit`] (and serde deserialize through
+/// that door) refuse unknown stage names so they are unstorable. Argument
+/// shape is still proven at [`validate`] / [`build`].
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize)]
 pub struct TokenizerConfig {
     pub name: SmartString<LazyCompact>,
     pub args: Vec<DataValue>,
+}
+
+/// Unknown tokenizer / token-filter name refused at the admit door.
+#[derive(Debug, Error, Diagnostic)]
+#[error("unknown tokenizer or token-filter name: {0}")]
+#[diagnostic(code(fts::unknown_stage_name))]
+pub struct UnknownTokenizerStageName(pub SmartString<LazyCompact>);
+
+fn is_known_stage_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Raw"
+            | "Simple"
+            | "Whitespace"
+            | "NGram"
+            | "Cangjie"
+            | "AlphaNumOnly"
+            | "AsciiFolding"
+            | "LowerCase"
+            | "Lowercase"
+            | "RemoveLong"
+            | "SplitCompoundWords"
+            | "Stemmer"
+            | "Stopwords"
+    )
 }
 
 /// `RemoveLong` configured with a non-positive length. Typed because the
@@ -102,6 +132,19 @@ pub struct TokenizerConfig {
 struct NonPositiveRemoveLong(i64);
 
 impl TokenizerConfig {
+    /// Typed name-proof door: unknown stage names are unrepresentable as a
+    /// stored config. Argument legality remains at [`validate`] / [`build`].
+    pub fn admit(
+        name: impl Into<SmartString<LazyCompact>>,
+        args: Vec<DataValue>,
+    ) -> std::result::Result<TokenizerConfig, UnknownTokenizerStageName> {
+        let name = name.into();
+        if !is_known_stage_name(&name) {
+            return Err(UnknownTokenizerStageName(name));
+        }
+        Ok(TokenizerConfig { name, args })
+    }
+
     /// The cache key for one full analyzer pipeline (this tokenizer plus
     /// `filters`): sha256 over each stage's name and memcmp-encoded args.
     ///
@@ -314,6 +357,46 @@ impl TokenizerConfig {
     }
 }
 
+impl<'de> Deserialize<'de> for TokenizerConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{Error as _, MapAccess, Visitor};
+        use std::fmt;
+        struct RawVisitor;
+        impl<'de> Visitor<'de> for RawVisitor {
+            type Value = (SmartString<LazyCompact>, Vec<DataValue>);
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("TokenizerConfig { name, args }")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut name = None;
+                let mut args = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "args" => args = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok((
+                    name.ok_or_else(|| A::Error::missing_field("name"))?,
+                    args.ok_or_else(|| A::Error::missing_field("args"))?,
+                ))
+            }
+        }
+        let (name, args) =
+            deserializer.deserialize_struct("TokenizerConfig", &["name", "args"], RawVisitor)?;
+        TokenizerConfig::admit(name, args).map_err(serde::de::Error::custom)
+    }
+}
+
 /// The per-database analyzer cache: index name → analyzer, and config hash →
 /// analyzer, so N indices sharing one pipeline share one live instance.
 #[derive(Default)]
@@ -372,9 +455,14 @@ mod tests {
     use super::*;
 
     fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
-        TokenizerConfig {
-            name: name.into(),
-            args,
+        // Tests intentionally exercise unknown names via struct literal /
+        // admit-bypass for negative cases; known names go through admit.
+        match TokenizerConfig::admit(name, args.clone()) {
+            Ok(c) => c,
+            Err(_) => TokenizerConfig {
+                name: name.into(),
+                args,
+            },
         }
     }
 

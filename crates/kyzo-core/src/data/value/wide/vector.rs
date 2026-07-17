@@ -106,14 +106,21 @@ pub struct Vector {
 
 impl Vector {
     /// Admit door: brand every raw float, prove the dimension fits `u32`.
-    pub fn new(components: Vec<f64>) -> Vector {
+    /// `None` when the component count exceeds the wire dimension.
+    pub fn try_new(components: Vec<f64>) -> Option<Vector> {
         let components: Vec<f64> = components
             .into_iter()
             .map(|raw| VectorComponent::admit(raw).get())
             .collect();
-        let dim = VectorDimension::try_from_len(components.len())
-            .expect("vector dimension exceeds u32");
-        Vector { dim, components }
+        let dim = VectorDimension::try_from_len(components.len())?;
+        Some(Vector { dim, components })
+    }
+
+    /// Admit door for lengths already known to fit `u32` (ordinary vectors).
+    /// Panics only if the component count exceeds `u32::MAX` — prefer
+    /// [`try_new`] at hostile boundaries.
+    pub fn new(components: Vec<f64>) -> Vector {
+        Self::try_new(components).expect("vector dimension exceeds u32")
     }
 
     /// Proven components as [`VectorComponent`] (re-brand of private store).
@@ -173,8 +180,8 @@ mod tests {
 
     #[test]
     fn component_identity_follows_num_law() {
-        let a = encode(Datum::Vector(&[0.0, 1.0]));
-        let b = encode(Datum::Vector(&[-0.0, 1.0]));
+        let a = encode(Datum::Vector(&Vector::new(vec![0.0, 1.0])));
+        let b = encode(Datum::Vector(&Vector::new(vec![-0.0, 1.0])));
         assert_eq!(a, b);
         let v = Vector::new(vec![-0.0, 1.0]);
         assert_eq!(v.dimension(), VectorDimension::try_from_len(2).unwrap());

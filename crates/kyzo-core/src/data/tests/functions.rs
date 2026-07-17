@@ -1761,10 +1761,7 @@ fn test_pre_epoch_timestamps() {
 
     // The schema boundary obeys the same law: coercing a pre-epoch validity
     // string yields negative microseconds.
-    let typing = NullableColType {
-        coltype: ColType::Validity,
-        nullable: false,
-    };
+    let typing = NullableColType::required(ColType::Validity);
     let coerced = typing
         .coerce(
             DataValue::Str("1969-07-20T20:17:00Z".into()),
@@ -1952,10 +1949,7 @@ fn vld_micros(s: &str) -> Result<i64, String> {
 }
 // Validity coercion path (`data/relation.rs`) -> (micros, is_assert).
 fn coerce_vld(s: &str) -> Result<(i64, bool), String> {
-    let typing = NullableColType {
-        coltype: ColType::Validity,
-        nullable: false,
-    };
+    let typing = NullableColType::required(ColType::Validity);
     typing
         .coerce(DataValue::Str(s.into()), ValidityTs::from_raw(999))
         .map(|v| match v {

@@ -123,8 +123,9 @@ pub enum Datum<'a> {
     /// executability is `CompiledRegexV1`'s claim, never this variant's.
     Regex(&'a RegexSource),
     Json(&'a Json),
-    /// Components pass through Num's float law at encode.
-    Vector(&'a [f64]),
+    /// Proven vector (dimension already admitted); components pass through
+    /// Num's float law at encode. Bare `&[f64]` is not a mint surface.
+    Vector(&'a Vector),
     Validity(Validity),
     Interval(Interval),
 }
@@ -474,15 +475,11 @@ fn encode_into(out: &mut Vec<u8>, d: Datum<'_>) {
             let h = fnv1a64(&out[start..]);
             out.extend_from_slice(&h.to_be_bytes());
         }
-        Datum::Vector(components) => {
+        Datum::Vector(vec) => {
             out.push(Tag::Vector.byte());
-            assert!(
-                components.len() <= u32::MAX as usize,
-                "vector dimension exceeds u32"
-            );
-            out.extend_from_slice(&(components.len() as u32).to_be_bytes());
-            for &c in components {
-                Num::float(c).encode_key(out);
+            out.extend_from_slice(&vec.dimension().get().to_be_bytes());
+            for c in vec.components() {
+                Num::float(c.get()).encode_key(out);
             }
         }
         Datum::Validity(v) => {
@@ -1339,7 +1336,10 @@ mod tests {
         );
         // Vector storage order is dimension-first: fewer dimensions sort
         // before more, regardless of component values.
-        assert!(encode(Datum::Vector(&[9e300])) < encode(Datum::Vector(&[0.0, 0.0])));
+        assert!(
+            encode(Datum::Vector(&Vector::new(vec![9e300])))
+                < encode(Datum::Vector(&Vector::new(vec![0.0, 0.0])))
+        );
     }
 
     /// Randomized order embedding + round-trip: generated scalars and
@@ -1484,7 +1484,7 @@ mod tests {
         let re_a = RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid");
         assert_eq!(hex(&encode(Datum::Regex(&re_a))), "3000610000");
         assert_eq!(
-            hex(&encode(Datum::Vector(&[1.0]))),
+            hex(&encode(Datum::Vector(&Vector::new(vec![1.0])))),
             "400000000103043980000000000000000001"
         );
         assert_eq!(

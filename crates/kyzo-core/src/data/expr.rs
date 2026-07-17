@@ -97,11 +97,10 @@ pub enum Expr {
         /// binding within the tuple.
         ///
         /// Two-phase: `None` between parsing and `fill_binding_indices`,
-        /// `Some` afterwards, and evaluation errors on `None`. A typestate
-        /// split (unresolved vs. resolved expression) would put that law in
-        /// the types; it spans the whole program representation, so it is
-        /// deliberately deferred to the program-tier port, not redesigned
-        /// here.
+        /// `Some` afterwards, and evaluation errors on `None`. P049
+        /// typestate (`Unresolved` vs `Resolved`) replaces this `Option`
+        /// once off-list constructors (`parse/*`, `query/*`, engines) are
+        /// on the allowlist — they still pass `None`/`Some` literals.
         tuple_pos: Option<usize>,
     },
     /// Constant expression containing a value
@@ -262,6 +261,12 @@ enum ExprDe {
         #[serde(skip)]
         span: SourceSpan,
     },
+    Lazy {
+        op: LazyOp,
+        args: Box<[Expr]>,
+        #[serde(skip)]
+        span: SourceSpan,
+    },
 }
 
 impl ExprDe {
@@ -281,6 +286,7 @@ impl ExprDe {
             }
             ExprDe::UnboundApply { op, args, span } => Expr::UnboundApply { op, args, span },
             ExprDe::Cond { clauses, span } => Expr::Cond { clauses, span },
+            ExprDe::Lazy { op, args, span } => Expr::Lazy { op, args, span },
         })
     }
 }
@@ -589,7 +595,7 @@ impl Expr {
             // into a single per-query number. If per-query-constant semantics
             // is ever wanted for `now()`, that is an engine decision to make
             // deliberately later, not a side effect of folding.
-            if all_evaluated && op.deterministic {
+            if all_evaluated && op.is_deterministic() {
                 let result = self.eval(vec![])?;
                 *self = Expr::Const { val: result, span };
             }
@@ -934,6 +940,9 @@ impl Default for ValueRange {
 /// compile-time fact about the operation, declared once in `define_op!` so
 /// the name, the implementing function, the arity, and the determinism claim
 /// cannot drift apart.
+///
+/// `vararg` / `deterministic` are private — sealed at [`Op::define`] (via
+/// `define_op!`). Hot-path reads of name / arity / body stay `pub(crate)`.
 #[derive(Clone)]
 pub struct Op {
     /// The const's own name (`"OP_ADD"`); `define_op!` stringifies it, so
@@ -943,11 +952,11 @@ pub struct Op {
     /// without, it is exact.
     pub(crate) min_arity: usize,
     /// Whether the op accepts more than `min_arity` arguments.
-    pub(crate) vararg: bool,
+    vararg: bool,
     /// Same arguments ⇒ same result. `false` for the clock and randomness
     /// ops; a `false` here forbids constant folding, so the op evaluates
     /// per row at runtime.
-    pub(crate) deterministic: bool,
+    deterministic: bool,
     /// The implementation. Total: returns a value or an error for any
     /// argument slice satisfying the declared arity; never panics.
     pub(crate) inner: fn(&[DataValue]) -> Result<DataValue>,
@@ -1207,11 +1216,40 @@ pub(crate) fn get_op(name: &str) -> Option<&'static Op> {
 }
 
 impl Op {
+    /// The sole mint for a built-in op — used by `define_op!` and by
+    /// test-only synthetic ops. Keeps name / arity / determinism / body
+    /// welded together at one door.
+    pub(crate) const fn define(
+        name: &'static str,
+        min_arity: usize,
+        vararg: bool,
+        deterministic: bool,
+        inner: fn(&[DataValue]) -> Result<DataValue>,
+    ) -> Op {
+        Op {
+            name,
+            min_arity,
+            vararg,
+            deterministic,
+            inner,
+        }
+    }
+
+    /// Whether this op accepts more than [`Self::min_arity`] arguments.
+    pub(crate) const fn is_vararg(&self) -> bool {
+        self.vararg
+    }
+
+    /// Whether same arguments always yield the same result (foldable).
+    pub(crate) const fn is_deterministic(&self) -> bool {
+        self.deterministic
+    }
+
     /// Whether `n` arguments satisfy this op's declared arity: at least
     /// `min_arity` when vararg, exactly `min_arity` otherwise. The parser
     /// and the serde boundary both enforce arity through this one predicate.
     pub(crate) fn arity_matches(&self, n: usize) -> bool {
-        if self.vararg {
+        if self.is_vararg() {
             n >= self.min_arity
         } else {
             n == self.min_arity
@@ -1220,7 +1258,7 @@ impl Op {
 
     /// Human phrasing of the arity law, for diagnostics.
     pub(crate) fn arity_requirement(&self) -> String {
-        if self.vararg {
+        if self.is_vararg() {
             format!("at least {}", self.min_arity)
         } else {
             format!("exactly {}", self.min_arity)
