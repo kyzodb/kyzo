@@ -33,13 +33,12 @@
 //! crate root, so arbitrary values are built directly with no visibility
 //! widening either.
 
-use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use arbitrary::{Arbitrary, Unstructured};
-use kyzo::fuzz_api::{fuzz_encode_tuple_key, fuzz_interval, fuzz_regex};
+use kyzo::fuzz_api::{fuzz_encode_tuple_key, fuzz_interval, fuzz_regex, fuzz_validity};
 use kyzo::{
-    DataValue, Tuple, UuidWrapper, Validity, ValidityTs, Vector, decode_tuple_from_key,
+    DataValue, Tuple, UuidWrapper, Vector, decode_tuple_from_key,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -116,7 +115,8 @@ fn gen_value(u: &mut Unstructured, depth: usize) -> arbitrary::Result<DataValue>
             for _ in 0..len {
                 v.push(f64::from_bits(u64::arbitrary(u)?));
             }
-            DataValue::Vector(Vector::new(v))
+            // Public admit is try_new; len 0..=8 always fits the wire dimension.
+            DataValue::Vector(Vector::try_new(v).expect("fuzz vector len fits u32"))
         }
         9 => {
             // Re-parsed through the same `to_string` the codec itself uses
@@ -130,10 +130,20 @@ fn gen_value(u: &mut Unstructured, depth: usize) -> arbitrary::Result<DataValue>
                 serde_json::from_str(&j.to_string()).unwrap_or(serde_json::Value::Null);
             DataValue::from(normalized)
         }
-        10 => DataValue::Validity(Validity {
-            timestamp: ValidityTs::from_raw(i64::arbitrary(u)?),
-            is_assert: Reverse(bool::arbitrary(u)?),
-        }),
+        10 => {
+            // Lawful Validity only — assert+i64::MAX and other sealed-out
+            // states are refused by fuzz_validity (for_assertion + Validity::new).
+            // Resample a few times; fall back to Null if every draw is refused
+            // so the generator stays total on short inputs.
+            let mut out = DataValue::Null;
+            for _ in 0..8 {
+                if let Some(v) = fuzz_validity(i64::arbitrary(u)?, bool::arbitrary(u)?) {
+                    out = v;
+                    break;
+                }
+            }
+            out
+        },
         11 => {
             // `fuzz_interval` canonicalizes (empty denotations collapse to
             // the empty interval), so every input quadruple is a lawful

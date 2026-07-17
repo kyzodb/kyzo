@@ -145,3 +145,15 @@ pub fn fuzz_regex(pattern: String) -> Option<DataValue> {
             .ok()?;
     Some(DataValue::Regex(source))
 }
+
+/// Lawful `DataValue::Validity` mint for memcmp Ord↔bytes fuzzing.
+/// Uses [`ValidityTs::for_assertion`] + [`Validity::new`] only — assert+`i64::MAX`
+/// and other unrepresentable Validity states are refused (`None`), never forged
+/// via struct literals or `from_raw` past the purity seals.
+pub fn fuzz_validity(ts_micros: i64, is_assert: bool) -> Option<DataValue> {
+    use crate::data::value::{Validity, ValidityTs};
+    let ts = ValidityTs::for_assertion(ts_micros)?;
+    let v = Validity::new(ts, is_assert)?;
+    Some(DataValue::Validity(v.into()))
+}
+
