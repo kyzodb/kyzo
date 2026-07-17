@@ -175,16 +175,40 @@ pub(crate) struct SparseDuplicateDimension {
     pub(crate) dim: u32,
 }
 
+/// An admitted sparse vector: finite non-negative weights, unique dimensions,
+/// sorted ascending by dimension. The only construction door is
+/// [`admit_sparse`] — a raw `Vec<(u32, f32)>` is never type-equal to this.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SparseVector {
+    pairs: Vec<(u32, f32)>,
+}
+
+impl SparseVector {
+    /// Whether this vector carries no dimensions.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+}
+
+impl IntoIterator for SparseVector {
+    type Item = (u32, f32);
+    type IntoIter = std::vec::IntoIter<(u32, f32)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.pairs.into_iter()
+    }
+}
+
 /// Validate and canonicalize a sparse vector: refuse NaN/infinite/negative
 /// weights ([`SparseWeightInvalid`]) and repeated dimensions
-/// ([`SparseDuplicateDimension`]), and return the pairs sorted by dimension
-/// ascending — the canonical memcmp order that fixes the summation order of
-/// every score (see the module docs).
+/// ([`SparseDuplicateDimension`]), and return a sealed [`SparseVector`] whose
+/// pairs are sorted by dimension ascending — the canonical memcmp order that
+/// fixes the summation order of every score (see the module docs).
 ///
 /// This is the engine's single admission gate: both [`sparse_put`] and
 /// [`sparse_search`] pass their input through it, so a weight that cannot
 /// participate in an honest dot product is unrepresentable downstream.
-fn admit_sparse(vector: &[(u32, f32)]) -> Result<Vec<(u32, f32)>> {
+fn admit_sparse(vector: &[(u32, f32)]) -> Result<SparseVector> {
     let mut out = Vec::with_capacity(vector.len());
     for &(dim, weight) in vector {
         if !weight.is_finite() {
@@ -207,7 +231,7 @@ fn admit_sparse(vector: &[(u32, f32)]) -> Result<Vec<(u32, f32)>> {
             bail!(SparseDuplicateDimension { dim: pair[0].0 });
         }
     }
-    Ok(out)
+    Ok(SparseVector { pairs: out })
 }
 
 // ---------------------------------------------------------------------------
