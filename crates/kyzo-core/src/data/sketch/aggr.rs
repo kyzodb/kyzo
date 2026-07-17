@@ -64,7 +64,7 @@ impl NormalAggrObj for AggrHll {
         Ok(())
     }
     fn get(&self) -> Result<DataValue> {
-        Ok(DataValue::from(self.hll.estimate_count()))
+        Ok(DataValue::from(self.hll.estimate().round_count()))
     }
 }
 

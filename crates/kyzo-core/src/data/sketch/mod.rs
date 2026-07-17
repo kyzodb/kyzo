@@ -65,6 +65,8 @@ pub(crate) mod count_min;
 pub(crate) mod hll;
 pub(crate) mod tdigest;
 
+pub(crate) use hll::HllEstimate;
+
 use crate::data::value::DataValue;
 
 // xxHash64 primes, from the published specification.

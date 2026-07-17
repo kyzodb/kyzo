@@ -117,6 +117,33 @@ impl<const M: usize> std::ops::DerefMut for HllRegisters<M> {
     }
 }
 
+/// Proven distinct-count estimate from a HyperLogLog.
+///
+/// The raw magnitude is private and mintable only inside this module via
+/// [`HyperLogLog::estimate`]. Bare `f64` is not a construction or return
+/// surface for the estimate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HllEstimate {
+    raw: f64,
+}
+
+impl HllEstimate {
+    fn mint(raw: f64) -> Self {
+        Self { raw }
+    }
+
+    /// Round to a non-negative integer distinct count.
+    pub(crate) fn round_count(self) -> i64 {
+        self.raw.round() as i64
+    }
+
+    /// Read the minted magnitude (relative-error arithmetic, tests).
+    /// Not a construction door.
+    pub(crate) fn as_f64(self) -> f64 {
+        self.raw
+    }
+}
+
 /// A HyperLogLog over `M = 2^p` one-byte registers. Register count is the
 /// const-generic type law; precision is `log2(M)`.
 ///
@@ -200,7 +227,7 @@ impl<const M: usize> HyperLogLog<M> {
 
     /// The estimated number of distinct elements seen. A pure function of
     /// the register bytes: equal sketches always return the same estimate.
-    pub(crate) fn estimate(&self) -> f64 {
+    pub(crate) fn estimate(&self) -> HllEstimate {
         let m = self.num_registers() as f64;
         let alpha = alpha(self.num_registers());
 
@@ -217,15 +244,15 @@ impl<const M: usize> HyperLogLog<M> {
         // Small-range correction: when many registers are still empty the
         // raw estimate is biased, and linear counting is more accurate.
         if raw <= 2.5 * m && zeros != 0 {
-            m * (m / zeros as f64).ln()
+            HllEstimate::mint(m * (m / zeros as f64).ln())
         } else {
-            raw
+            HllEstimate::mint(raw)
         }
     }
 
     /// The estimate rounded to a non-negative integer count.
     pub(crate) fn estimate_count(&self) -> i64 {
-        self.estimate().round() as i64
+        self.estimate().round_count()
     }
 
     /// Serialize to the portable stored form: `[FORMAT_TAG, precision,
@@ -315,7 +342,7 @@ mod tests {
             let mut sq_sum = 0.0f64;
             let mut worst = 0.0f64;
             for salt in 0..TRIALS {
-                let est = sketch_of::<M>(n, salt + 1).estimate();
+                let est = sketch_of::<M>(n, salt + 1).estimate().as_f64();
                 let rel = (est - n as f64) / n as f64;
                 sq_sum += rel * rel;
                 worst = worst.max(rel.abs());
@@ -407,7 +434,7 @@ mod tests {
             b.add(&val(i));
         }
         a.merge(&b);
-        let est = a.estimate();
+        let est = a.estimate().as_f64();
         let rel = (est - 20_000.0).abs() / 20_000.0;
         assert!(
             rel < 3.0 * std_error(14),
