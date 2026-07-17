@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(JsonValue::from(&dv), json!(uuid::Uuid::nil().to_string()));
 
         let v = Validity::new(ValidityTs::from_raw(5), true).expect("non-reserved");
-        assert_eq!(JsonValue::from(&DataValue::Validity(v)), json!([5, true]));
+        assert_eq!(JsonValue::from(&DataValue::Validity(v.into())), json!([5, true]));
     }
 
     #[test]

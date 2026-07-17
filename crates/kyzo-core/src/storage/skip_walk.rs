@@ -255,7 +255,7 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{DataValue, Validity, ValiditySlot, ValidityTs};
     use crate::data::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(9).expect("below cap");
@@ -331,8 +331,8 @@ mod tests {
         ValidityTs::from_raw(t)
     }
 
-    fn slot(t: i64) -> Validity {
-        Validity::from_stored(vts(t), true)
+    fn slot(t: i64) -> ValiditySlot {
+        ValiditySlot::from_stored(vts(t), true)
     }
 
     /// A bitemporal key: `[int fact, valid(ts), sys(ts)]` under `REL`,

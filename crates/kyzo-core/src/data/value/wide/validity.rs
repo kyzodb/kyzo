@@ -31,13 +31,13 @@
 //! instant; [`TERMINAL_VALIDITY`] below is a slot value (the maximum
 //! slot ENCODING), not a magic timestamp.
 //!
-//! Construction doors (P001–P004):
+//! Construction doors (P001–P004 / P002):
 //! - [`ValidityTs::for_assertion`] — user write coordinate; refuses the
 //!   reserved terminal tick.
 //! - [`ValidityTs::from_raw`] — crate storage-decode / seek coordinate.
-//! - [`Validity::new`] — checked value mint; refuses assert+reserved.
-//! - [`Validity::from_stored`] — crate slot/seek encoding (may hold the
-//!   reserved terminal as an assert slot bound).
+//! - [`Validity::new`] — sole [`Validity`] mint; refuses assert+reserved.
+//! - [`ValiditySlot::from_stored`] — wire/seek payload; assert+reserved is
+//!   a [`ValiditySeekBound`], never a [`Validity`].
 //! - [`AsOf::current`] / [`AsOf::at`] — only as-of pair mints.
 //! - [`StoredValiditySlot::new`] — only stored-slot mint.
 
@@ -100,10 +100,10 @@ pub const TERMINAL_VALIDITY: Validity = Validity {
 };
 
 impl Validity {
-    /// Checked constructor: consumes a proven [`ValidityTs`] coordinate.
-    /// Refuses assert of the reserved terminal tick (`i64::MAX`) — that
-    /// state is unrepresentable through this door. Storage decode and
-    /// seek-slot builders use [`from_stored`].
+    /// Sole [`Validity`] mint. Refuses assert of the reserved terminal
+    /// tick (`i64::MAX`) — that state is unrepresentable as [`Validity`].
+    /// Wire/seek open-end bounds use [`ValiditySlot::from_stored`] /
+    /// [`ValiditySeekBound`].
     pub fn new(timestamp: ValidityTs, is_assert: bool) -> Option<Validity> {
         if is_assert && timestamp.raw() == i64::MAX {
             None
@@ -112,16 +112,6 @@ impl Validity {
                 timestamp,
                 is_assert: Reverse(is_assert),
             })
-        }
-    }
-
-    /// Slot / seek / storage-decode door: any coordinate and polarity,
-    /// including assert of the reserved terminal used as an open-end
-    /// seek bound. Not a user-assertion path.
-    pub(crate) fn from_stored(timestamp: ValidityTs, is_assert: bool) -> Validity {
-        Validity {
-            timestamp,
-            is_assert: Reverse(is_assert),
         }
     }
 
@@ -146,6 +136,96 @@ impl Validity {
     }
 }
 
+/// Sealed seek/slot bound that may hold assert+`i64::MAX`. Not a
+/// [`Validity`] — that type cannot represent open-end assert.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ValiditySeekBound {
+    timestamp: ValidityTs,
+    is_assert: Reverse<bool>,
+}
+
+impl ValiditySeekBound {
+    pub(crate) fn new(timestamp: ValidityTs, is_assert: bool) -> ValiditySeekBound {
+        ValiditySeekBound {
+            timestamp,
+            is_assert: Reverse(is_assert),
+        }
+    }
+
+    pub fn timestamp(self) -> ValidityTs {
+        self.timestamp
+    }
+
+    pub fn ts_micros(self) -> i64 {
+        self.timestamp.raw()
+    }
+
+    pub fn is_assert(self) -> bool {
+        self.is_assert.0
+    }
+
+    /// Lift to [`Validity`] when the bound is a representable value.
+    pub fn try_into_validity(self) -> Option<Validity> {
+        Validity::new(self.timestamp, self.is_assert())
+    }
+}
+
+/// Tag::Validity wire/key payload: a proven [`Validity`], or a sealed
+/// [`ValiditySeekBound`] when the open-end assert terminal is required.
+/// Assert+`i64::MAX` is never a [`Validity`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum ValiditySlot {
+    Value(Validity),
+    Seek(ValiditySeekBound),
+}
+
+impl ValiditySlot {
+    /// Storage-decode / seek-slot door. Assert of the reserved terminal
+    /// becomes [`ValiditySeekBound`]; every other pair is [`Validity`].
+    pub(crate) fn from_stored(timestamp: ValidityTs, is_assert: bool) -> ValiditySlot {
+        match Validity::new(timestamp, is_assert) {
+            Some(v) => ValiditySlot::Value(v),
+            None => ValiditySlot::Seek(ValiditySeekBound::new(timestamp, is_assert)),
+        }
+    }
+
+    pub fn timestamp(self) -> ValidityTs {
+        match self {
+            ValiditySlot::Value(v) => v.timestamp(),
+            ValiditySlot::Seek(s) => s.timestamp(),
+        }
+    }
+
+    pub fn ts_micros(self) -> i64 {
+        self.timestamp().raw()
+    }
+
+    pub fn is_assert(self) -> bool {
+        match self {
+            ValiditySlot::Value(v) => v.is_assert(),
+            ValiditySlot::Seek(s) => s.is_assert(),
+        }
+    }
+
+    pub fn cmp_as_of_order(self, other: ValiditySlot) -> std::cmp::Ordering {
+        self.cmp(&other)
+    }
+
+    /// Proven value only — `None` for a sealed open-end seek bound.
+    pub fn as_validity(self) -> Option<Validity> {
+        match self {
+            ValiditySlot::Value(v) => Some(v),
+            ValiditySlot::Seek(_) => None,
+        }
+    }
+}
+
+impl From<Validity> for ValiditySlot {
+    fn from(v: Validity) -> ValiditySlot {
+        ValiditySlot::Value(v)
+    }
+}
+
 /// A stored key-slot builder: slot flags are PINNED to assert (polarity
 /// lives in row values, per the guardrail), so a slot is fully
 /// determined by its coordinate.
@@ -163,11 +243,17 @@ impl StoredValiditySlot {
     }
 
     pub fn as_datavalue(self) -> super::super::DataValue {
-        super::super::DataValue::Validity(self.as_validity())
+        super::super::DataValue::Validity(self.as_slot())
     }
 
-    pub fn as_validity(self) -> Validity {
-        Validity::from_stored(self.0, true)
+    /// Slot as wire payload — assert+terminal is [`ValiditySeekBound`].
+    pub fn as_slot(self) -> ValiditySlot {
+        ValiditySlot::from_stored(self.0, true)
+    }
+
+    /// Proven [`Validity`] when the slot is not the open-end assert bound.
+    pub fn as_validity(self) -> Option<Validity> {
+        self.as_slot().as_validity()
     }
 }
 
@@ -213,8 +299,11 @@ mod tests {
     use super::*;
 
     fn v(ts: i64, is_assert: bool) -> Validity {
-        Validity::new(ValidityTs::from_raw(ts), is_assert)
-            .unwrap_or_else(|| Validity::from_stored(ValidityTs::from_raw(ts), is_assert))
+        Validity::new(ValidityTs::from_raw(ts), is_assert).expect("representable Validity")
+    }
+
+    fn slot(ts: i64, is_assert: bool) -> ValiditySlot {
+        ValiditySlot::from_stored(ValidityTs::from_raw(ts), is_assert)
     }
 
     #[test]
@@ -230,6 +319,12 @@ mod tests {
             v(10, true).cmp_as_of_order(v(5, true)),
             std::cmp::Ordering::Less
         );
+        // Open-end assert lives only on ValiditySlot/SeekBound.
+        assert!(matches!(
+            slot(i64::MAX, true),
+            ValiditySlot::Seek(_)
+        ));
+        assert!(slot(i64::MAX, true).as_validity().is_none());
     }
 
     #[test]
@@ -241,14 +336,18 @@ mod tests {
         // Terminal sorts after every ordinary slot.
         assert!(v(i64::MIN, true) < TERMINAL_VALIDITY);
         assert!(v(i64::MAX, false) < TERMINAL_VALIDITY);
-        // Stored slots are pinned to assert.
-        let slot = StoredValiditySlot::new(ValidityTs::from_raw(7)).as_validity();
-        assert!(slot.is_assert());
-        assert_eq!(slot.ts_micros(), 7);
+        // Stored slots are pinned to assert; ordinary slots are Validity.
+        let ordinary = StoredValiditySlot::new(ValidityTs::from_raw(7)).as_validity();
+        assert_eq!(ordinary.map(|s| s.ts_micros()), Some(7));
+        assert!(ordinary.is_some_and(|s| s.is_assert()));
+        // Open-end assert slot is SeekBound, never Validity.
+        let open = StoredValiditySlot::new(MAX_VALIDITY_TS).as_slot();
+        assert!(matches!(open, ValiditySlot::Seek(_)));
+        assert!(open.as_validity().is_none());
         // The user-assertion door refuses exactly the terminal tick.
         assert!(ValidityTs::for_assertion(i64::MAX).is_none());
         assert_eq!(ValidityTs::for_assertion(0), Some(ValidityTs::from_raw(0)));
-        // Assert of the reserved terminal is unrepresentable via `new`.
+        // Assert of the reserved terminal is unrepresentable as Validity.
         assert!(Validity::new(MAX_VALIDITY_TS, true).is_none());
         assert!(Validity::new(MAX_VALIDITY_TS, false).is_some());
         // AsOf::current pins system time to the latest coordinate.

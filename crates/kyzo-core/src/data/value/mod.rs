@@ -67,7 +67,8 @@ pub use wide::interval::{Bound, Interval};
 pub use wide::json::{Json, JsonNum, JsonObj};
 pub use wide::regex::{CompiledRegexV1, RegexFlags, RegexSource};
 pub use wide::validity::{
-    AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValidityTs,
+    AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValiditySeekBound,
+    ValiditySlot, ValidityTs,
 };
 pub use wide::{Vector, VectorComponent, VectorDimension};
 
@@ -113,7 +114,7 @@ pub enum DataValue {
     /// Canonical set form by construction: `BTreeSet` under the storage
     /// order.
     Set(BTreeSet<DataValue>),
-    Validity(Validity),
+    Validity(ValiditySlot),
     Interval(Interval),
 }
 
@@ -225,7 +226,7 @@ impl DataValue {
         let DataValue::Validity(v) = self else {
             return None;
         };
-        Some(*v)
+        v.as_validity()
     }
 
     pub fn get_json(&self) -> Option<&Json> {
@@ -900,9 +901,7 @@ mod facade_tests {
             10 => {
                 let ts = ValidityTs::from_raw(rng.next() as i64);
                 let is_assert = rng.next().is_multiple_of(2);
-                DataValue::Validity(
-                    Validity::new(ts, is_assert).unwrap_or_else(|| Validity::from_stored(ts, is_assert)),
-                )
+                DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
                 Interval::EMPTY

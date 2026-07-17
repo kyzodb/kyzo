@@ -70,7 +70,7 @@ use super::tag::{STRUCT_SEQ_END, STRUCT_STRING, Tag};
 use super::wide::interval::{Hi, Interval, Lo};
 use super::wide::json::{Json, JsonNum, JsonObj, fnv1a64};
 use super::wide::regex::{RegexFlags, RegexSource};
-use super::wide::validity::{Validity, ValidityTs};
+use super::wide::validity::{Validity, ValiditySlot, ValidityTs};
 use super::{DataValue, UuidWrapper, Vector};
 
 /// A lawful canonical encoding: mintable only by [`encode`]. Derived
@@ -765,7 +765,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 None => return Err(DecodeError::Truncated),
             };
             Ok((
-                DataValue::Validity(Validity::from_stored(ValidityTs::from_raw(ts), is_assert)),
+                DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(ts), is_assert)),
                 10,
             ))
         }
@@ -1189,12 +1189,16 @@ mod tests {
         out.push(DataValue::Vector(Vector::new(vec![0.0])));
         out.push(DataValue::Vector(Vector::new(vec![-1.5, f64::NAN])));
         out.push(DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(0), true).expect("non-reserved"),
+            Validity::new(ValidityTs::from_raw(0), true)
+                .expect("non-reserved")
+                .into(),
         ));
         out.push(DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(0), false).expect("retract admits every tick"),
+            Validity::new(ValidityTs::from_raw(0), false)
+                .expect("retract admits every tick")
+                .into(),
         ));
-        out.push(DataValue::Validity(Validity::from_stored(
+        out.push(DataValue::Validity(ValiditySlot::from_stored(
             ValidityTs::from_raw(i64::MAX),
             true,
         )));
@@ -1419,9 +1423,7 @@ mod tests {
             10 => {
                 let ts = ValidityTs::from_raw(rng.next() as i64);
                 let is_assert = rng.next().is_multiple_of(2);
-                DataValue::Validity(
-                    Validity::new(ts, is_assert).unwrap_or_else(|| Validity::from_stored(ts, is_assert)),
-                )
+                DataValue::Validity(ValiditySlot::from_stored(ts, is_assert))
             }
             _ => DataValue::Json(random_json(rng, 0)),
         }

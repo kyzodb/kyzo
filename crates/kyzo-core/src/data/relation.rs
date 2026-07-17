@@ -552,10 +552,12 @@ impl NullableColType {
                             let Some(v) = Validity::new(cur_vld, true) else {
                                 bail!(InvalidValidity(DataValue::Str("ASSERT".into())));
                             };
-                            DataValue::Validity(v)
+                            DataValue::Validity(v.into())
                         }
                         "RETRACT" => DataValue::Validity(
-                            Validity::new(cur_vld, false).expect("retract admits every tick"),
+                            Validity::new(cur_vld, false)
+                                .expect("retract admits every tick")
+                                .into(),
                         ),
                         s => {
                             let (is_assert, ts_str) = match s.strip_prefix('~') {
@@ -580,7 +582,8 @@ impl NullableColType {
 
                             DataValue::Validity(
                                 Validity::new(ValidityTs::from_raw(microseconds), is_assert)
-                                    .expect("reserved filtered above"),
+                                    .expect("reserved filtered above")
+                                    .into(),
                             )
                         }
                     },
@@ -594,7 +597,8 @@ impl NullableColType {
                                 }
                                 return Ok(DataValue::Validity(
                                     Validity::new(ValidityTs::from_raw(ts), is_assert)
-                                        .expect("reserved filtered above"),
+                                        .expect("reserved filtered above")
+                                        .into(),
                                 ));
                             }
                         }

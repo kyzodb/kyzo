@@ -20,8 +20,8 @@ use miette::{Diagnostic, Result, bail};
 use thiserror::Error;
 
 use crate::data::value::{
-    AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValidityTs, append_canonical,
-    decode_tuple_from_key, decode_values_all,
+    AsOf, DataValue, StorageKey, TERMINAL_VALIDITY, Tuple, Validity, ValiditySlot, ValidityTs,
+    append_canonical, decode_tuple_from_key, decode_values_all,
 };
 use crate::data::value::data_value_any;
 
@@ -162,14 +162,14 @@ pub fn check_key_for_bitemporal(
     // single-axis kernel: only the tails were proven above, and blessing
     // the prefix into `StorageKey` would launder unproven bytes into a
     // type whose possession means provenance.
-    let splice_both = |v: Validity, s: Validity| -> Vec<u8> {
+    let splice_both = |v: ValiditySlot, s: ValiditySlot| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..valid_off]);
         append_canonical(&mut nxt, &DataValue::Validity(v));
         append_canonical(&mut nxt, &DataValue::Validity(s));
         nxt
     };
-    let splice_sys = |s: Validity| -> Vec<u8> {
+    let splice_sys = |s: ValiditySlot| -> Vec<u8> {
         let mut nxt = Vec::with_capacity(key.len());
         nxt.extend_from_slice(&key[..sys_off]);
         append_canonical(&mut nxt, &DataValue::Validity(s));
@@ -184,8 +184,8 @@ pub fn check_key_for_bitemporal(
         return Ok((
             None,
             splice_both(
-                Validity::from_stored(as_of.valid(), true),
-                Validity::from_stored(as_of.sys(), true),
+                ValiditySlot::from_stored(as_of.valid(), true),
+                ValiditySlot::from_stored(as_of.sys(), true),
             ),
         ));
     }
@@ -193,7 +193,7 @@ pub fn check_key_for_bitemporal(
         // Right instant, but this system version postdates the system
         // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
-        return Ok((None, splice_sys(Validity::from_stored(as_of.sys(), true))));
+        return Ok((None, splice_sys(ValiditySlot::from_stored(as_of.sys(), true))));
     }
     // This row IS the instant's governing version at sys_at. Its polarity
     // decides. TERMINAL_VALIDITY is the maximum slot encoding, so the
@@ -204,19 +204,19 @@ pub fn check_key_for_bitemporal(
         ClaimPolarity::Erase => {
             // Unrecorded at sys_at: this instant contributes nothing; the
             // scan falls onto the fact's next older instant.
-            Ok((None, splice_sys(TERMINAL_VALIDITY)))
+            Ok((None, splice_sys(TERMINAL_VALIDITY.into())))
         }
         ClaimPolarity::Retract => {
             // The fact is retracted from this instant on: absent at the
             // coordinates. Skip every older version of the fact.
-            Ok((None, splice_both(TERMINAL_VALIDITY, TERMINAL_VALIDITY)))
+            Ok((None, splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into())))
         }
         ClaimPolarity::Assert => {
             // A hit. Emit, then skip every older version of the fact.
             let decoded = decode_tuple_from_key(key, size_hint.unwrap_or(DEFAULT_SIZE_HINT))?;
             Ok((
                 Some(decoded),
-                splice_both(TERMINAL_VALIDITY, TERMINAL_VALIDITY),
+                splice_both(TERMINAL_VALIDITY.into(), TERMINAL_VALIDITY.into()),
             ))
         }
     }
@@ -278,9 +278,9 @@ mod tests {
         AsOf::at(vts(0), vts(0))
     }
 
-    fn slot(t: i64) -> Validity {
+    fn slot(t: i64) -> ValiditySlot {
         // Stored slot flags are pinned to assert; polarity lives in the value.
-        Validity::from_stored(vts(t), true)
+        ValiditySlot::from_stored(vts(t), true)
     }
 
     fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
@@ -508,7 +508,7 @@ mod tests {
         );
         let flagged = [
             DataValue::from(1i64),
-            DataValue::Validity(Validity::new(vts(10), false).expect("retract admits every tick")),
+            DataValue::Validity(Validity::new(vts(10), false).expect("retract admits every tick").into()),
             DataValue::Validity(slot(5)),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))
@@ -520,8 +520,8 @@ mod tests {
         );
         let terminal = [
             DataValue::from(1i64),
-            DataValue::Validity(TERMINAL_VALIDITY),
-            DataValue::Validity(TERMINAL_VALIDITY),
+            DataValue::Validity(TERMINAL_VALIDITY.into()),
+            DataValue::Validity(TERMINAL_VALIDITY.into()),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))
         .as_bytes()

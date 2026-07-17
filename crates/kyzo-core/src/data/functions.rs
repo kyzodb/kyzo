@@ -2800,7 +2800,7 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
     let vld = Validity::new(coord, is_assert).ok_or_else(|| {
         miette!("'validity' refuses assert of the reserved terminal tick (i64::MAX)")
     })?;
-    Ok(DataValue::Validity(vld))
+    Ok(DataValue::Validity(vld.into()))
 }
 
 /// Extracts both arguments as `Interval`s for a two-interval predicate op, or

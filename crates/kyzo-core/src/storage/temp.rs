@@ -280,7 +280,7 @@ mod tests {
 
     use super::*;
     use crate::data::bitemporal::ClaimPolarity;
-    use crate::data::value::{DataValue, Validity, ValidityTs};
+    use crate::data::value::{DataValue, Validity, ValiditySlot, ValidityTs};
     use crate::data::value::{RelationId, TupleT};
 
     const REL: RelationId = RelationId::new(7).expect("below cap");
@@ -289,7 +289,7 @@ mod tests {
     /// flags pinned to assert (the row's polarity lives in the value).
     fn bk(x: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
         let slot = |ts: i64| {
-            DataValue::Validity(Validity::from_stored(ValidityTs::from_raw(ts), true))
+            DataValue::Validity(ValiditySlot::from_stored(ValidityTs::from_raw(ts), true))
         };
         vec![DataValue::from(x), slot(valid_ts), slot(sys_ts)]
             .encode_as_key(REL)
