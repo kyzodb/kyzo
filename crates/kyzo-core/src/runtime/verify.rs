@@ -96,10 +96,10 @@ use crate::storage::{ReadTx, Storage};
 pub enum VerifyOutcome {
     /// Production and the oracle agree, set-for-set.
     Match { row_count: usize },
-    /// A real disagreement: the reproducible bug report. `program_text` is
-    /// the exact script re-run to reproduce it.
+    /// A real disagreement: the reproducible bug report. `program` is the
+    /// typed input that Display-renders to the script re-run to reproduce it.
     Mismatch {
-        program_text: String,
+        program: MismatchProgram,
         production: BTreeSet<Tuple>,
         oracle: BTreeSet<Tuple>,
     },
@@ -113,6 +113,18 @@ pub enum VerifyOutcome {
     /// production compiler independently refuses the same programs.
     /// Holds [`OracleRefusal`] typed; rendered only in [`Self::into_named_rows`].
     OracleRefused { reason: OracleRefusal },
+}
+
+/// Typed program carried by [`VerifyOutcome::Mismatch`].
+/// Wraps [`InputProgram`]; formatting for the product row lives only in
+/// [`VerifyOutcome::into_named_rows`].
+#[derive(Debug, Clone)]
+pub struct MismatchProgram(pub(crate) InputProgram);
+
+impl std::fmt::Display for MismatchProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
 }
 
 /// Typed oracle refusal carried by [`VerifyOutcome::OracleRefused`].
@@ -164,7 +176,7 @@ pub enum TranslateUnsupported {
          point-in-time @ read just landed — not yet translated"
     )]
     #[diagnostic(code(verify::translate::interval_derivation))]
-    IntervalDerivation { name: String },
+    IntervalDerivation { name: Symbol },
     #[error(
         "predicate (filter expression) atoms are not translated — the oracle's Term \
          model has no arbitrary-expression evaluation"
@@ -186,7 +198,7 @@ pub enum TranslateUnsupported {
          model"
     )]
     #[diagnostic(code(verify::translate::fixed_rule))]
-    FixedRule { rel: String, fixed: String },
+    FixedRule { rel: Symbol, fixed: Symbol },
 }
 
 impl From<VerifyUnsupported> for VerifyOutcome {
@@ -215,7 +227,7 @@ impl VerifyOutcome {
                 ("match", format!("{row_count} row(s) agree"), String::new())
             }
             VerifyOutcome::Mismatch {
-                program_text,
+                program,
                 production,
                 oracle,
             } => (
@@ -225,7 +237,7 @@ impl VerifyOutcome {
                     production.len(),
                     oracle.len()
                 ),
-                format!("program:\n{program_text}\nproduction: {production:?}\noracle: {oracle:?}"),
+                format!("program:\n{program}\nproduction: {production:?}\noracle: {oracle:?}"),
             ),
             VerifyOutcome::Unsupported { reason } => {
                 ("unsupported", reason.to_string(), String::new())
@@ -304,7 +316,7 @@ fn translate_atom(
                 }
                 Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
                     Err(TranslateUnsupported::IntervalDerivation {
-                        name: a.name.to_string(),
+                        name: a.name.clone(),
                     })
                 }
             }
@@ -323,7 +335,7 @@ fn translate_atom(
                 }
                 Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
                     Err(TranslateUnsupported::IntervalDerivation {
-                        name: a.name.to_string(),
+                        name: a.name.clone(),
                     })
                 }
             }
@@ -355,7 +367,7 @@ fn translate_inline_rule(
 }
 
 fn translate_def(
-    name_rel: laws::Rel,
+    name: &Symbol,
     def: &NormalFormRulesOrFixed,
     rules: &mut Vec<laws::Rule>,
     edb_names: &mut BTreeSet<laws::Rel>,
@@ -363,10 +375,11 @@ fn translate_def(
 ) -> std::result::Result<(), TranslateUnsupported> {
     match def {
         NormalFormRulesOrFixed::Fixed { fixed } => Err(TranslateUnsupported::FixedRule {
-            rel: name_rel.to_string(),
-            fixed: fixed.fixed_handle.name.to_string(),
+            rel: name.clone(),
+            fixed: fixed.fixed_handle.name.clone(),
         }),
         NormalFormRulesOrFixed::Rules { rules: inline } => {
+            let name_rel = oracle_name(name);
             for r in inline {
                 rules.push(translate_inline_rule(
                     name_rel.clone(),
@@ -394,17 +407,16 @@ fn translate(
     let mut historical_names = BTreeSet::new();
 
     for (name, def) in program.rules() {
-        let rel = oracle_name(name);
-        translate_def(rel, def, &mut rules, &mut edb_names, &mut historical_names)?;
+        translate_def(name, def, &mut rules, &mut edb_names, &mut historical_names)?;
     }
-    let entry_rel = oracle_name(program.entry_name());
     translate_def(
-        entry_rel.clone(),
+        program.entry_name(),
         program.entry(),
         &mut rules,
         &mut edb_names,
         &mut historical_names,
     )?;
+    let entry_rel = oracle_name(program.entry_name());
 
     // The XOR: a relation read with ANY `@` clause anywhere resolves
     // wholly through `histories` — including its clause-less reads
@@ -601,9 +613,9 @@ impl<S: Storage> Db<S> {
         }
 
         // Captured before `program` is consumed below (`into_normalized_program`
-        // takes it by value): `InputProgram`'s `Display` renders it back as
-        // canonical KyzoScript, the reproduction text for a MISMATCH bundle.
-        let program_text = program.to_string();
+        // takes it by value): the typed program for a MISMATCH bundle —
+        // rendered to KyzoScript only in [`VerifyOutcome::into_named_rows`].
+        let mismatch_program = MismatchProgram(program.clone());
 
         let tx = SessionTx::new_read(self.storage.read_tx()?, options.clone());
 
@@ -657,7 +669,7 @@ impl<S: Storage> Db<S> {
                     })
                 } else {
                     Ok(VerifyOutcome::Mismatch {
-                        program_text,
+                        program: mismatch_program,
                         production,
                         oracle,
                     })
