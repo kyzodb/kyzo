@@ -895,11 +895,11 @@ mod facade_tests {
                 RegexSource::validated(RegexFlags::NONE, ["a", "b+", ""][rng.below(3)].into())
                     .expect("valid"),
             ),
-            9 => DataValue::Vector(Vector::new(
+            9 => DataValue::Vector(Vector::try_new(
                 (0..rng.below(3))
                     .map(|_| f64::from_bits(rng.next()))
                     .collect(),
-            )),
+            ).unwrap()),
             10 => {
                 let ts = ValidityTs::from_raw(rng.next() as i64);
                 let is_assert = rng.next().is_multiple_of(2);
@@ -943,12 +943,12 @@ mod facade_tests {
     #[test]
     fn identity_laws_flow_through_the_facade() {
         assert_eq!(
-            DataValue::Vector(Vector::new(vec![0.0])),
-            DataValue::Vector(Vector::new(vec![-0.0]))
+            DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![-0.0]).unwrap())
         );
         assert_eq!(
-            DataValue::Vector(Vector::new(vec![f64::NAN])),
-            DataValue::Vector(Vector::new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]))
+            DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
+            DataValue::Vector(Vector::try_new(vec![f64::from_bits(0xFFF8_0000_0000_0001)]).unwrap())
         );
         let a: DataValue = DataValue::Set(
             [DataValue::from(2i64), DataValue::from(1i64)]

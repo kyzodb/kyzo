@@ -80,7 +80,7 @@ impl VectorDimension {
         u32::try_from(len).ok().map(VectorDimension)
     }
 
-    /// Post-proof mint: length already proven at [`Vector::new`].
+    /// Post-proof mint: length already proven at [`Vector::try_new`].
     pub(crate) fn from_len_unchecked(len: u32) -> VectorDimension {
         VectorDimension(len)
     }
@@ -94,7 +94,7 @@ impl VectorDimension {
     }
 }
 
-/// A vector value: proven [`VectorComponent`]s held after [`Vector::new`]
+/// A vector value: proven [`VectorComponent`]s held after [`Vector::try_new`]
 /// admits every raw `f64`. Identity is dimensionality + exact component bits.
 #[derive(Clone, Debug)]
 pub struct Vector {
@@ -111,13 +111,6 @@ impl Vector {
             components.into_iter().map(VectorComponent::admit).collect();
         let dim = VectorDimension::try_from_len(components.len())?;
         Some(Vector { dim, components })
-    }
-
-    /// In-crate admit for lengths already known to fit `u32`.
-    /// Hostile / public boundaries use [`try_new`] — this door is not public
-    /// so a panicking escape cannot be reached from the crate root API.
-    pub(crate) fn new(components: Vec<f64>) -> Vector {
-        Self::try_new(components).expect("vector dimension exceeds u32")
     }
 
     /// Proven components.
@@ -174,10 +167,10 @@ mod tests {
 
     #[test]
     fn component_identity_follows_num_law() {
-        let a = encode(Datum::Vector(&Vector::new(vec![0.0, 1.0])));
-        let b = encode(Datum::Vector(&Vector::new(vec![-0.0, 1.0])));
+        let a = encode(Datum::Vector(&Vector::try_new(vec![0.0, 1.0]).unwrap()));
+        let b = encode(Datum::Vector(&Vector::try_new(vec![-0.0, 1.0]).unwrap()));
         assert_eq!(a, b);
-        let v = Vector::new(vec![-0.0, 1.0]);
+        let v = Vector::try_new(vec![-0.0, 1.0]).unwrap();
         assert_eq!(v.dimension(), VectorDimension::try_from_len(2).unwrap());
         assert_eq!(
             v.components().map(|c| c.get()).collect::<Vec<_>>(),

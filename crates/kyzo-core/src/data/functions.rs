@@ -496,15 +496,21 @@ fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(x)))
 }
 
+/// Admit a float component slice as a vector, or refuse when the
+/// dimension does not fit the wire `u32` count.
+fn vec_value(components: Vec<f64>) -> Result<Vector> {
+    Vector::try_new(components).ok_or_else(|| miette!("vector dimension exceeds u32"))
+}
+
 /// The vector-lane counterpart of [`no_nan`]: an element-wise result with
 /// any `NaN` left in it is refused rather than returned poisoned (the
-/// refusal runs BEFORE `Vector::new`, whose canonicalization would
+/// refusal runs BEFORE [`vec_value`], whose canonicalization would
 /// otherwise normalize the poison into a legal value).
 fn no_nan_vec(op: &'static str, v: Vec<f64>) -> Result<DataValue> {
     if v.iter().any(|x| x.is_nan()) {
         bail!(DomainError { op: op.into() });
     }
-    Ok(DataValue::Vector(Vector::new(v)))
+    Ok(DataValue::Vector(vec_value(v)?))
 }
 
 /// Whether a function-op's result is carrying a poison `NaN` — as the
@@ -563,29 +569,29 @@ fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
             if a.len() != b.len() {
                 bail!("can only add vectors of the same length");
             }
-            Ok(DataValue::Vector(Vector::new(
+            Ok(DataValue::Vector(vec_value(
                 a.to_f64s()
                     .iter()
                     .zip(b.to_f64s().iter())
                     .map(|(x, y)| x + y)
                     .collect(),
-            )))
+            )?))
         }
         (DataValue::Vector(a), b) => {
             let f = b
                 .get_float()
                 .ok_or_else(|| miette!("can only add numbers to vectors"))?;
-            Ok(DataValue::Vector(Vector::new(
+            Ok(DataValue::Vector(vec_value(
                 a.to_f64s().iter().map(|x| x + f).collect(),
-            )))
+            )?))
         }
         (a, DataValue::Vector(b)) => {
             let f = a
                 .get_float()
                 .ok_or_else(|| miette!("can only add numbers to vectors"))?;
-            Ok(DataValue::Vector(Vector::new(
+            Ok(DataValue::Vector(vec_value(
                 b.to_f64s().iter().map(|x| x + f).collect(),
-            )))
+            )?))
         }
         _ => bail!("addition requires numbers"),
     }
@@ -645,25 +651,25 @@ pub(crate) fn op_sub(args: &[DataValue]) -> Result<DataValue> {
             if a.len() != b.len() {
                 bail!("can only subtract vectors of the same length");
             }
-            DataValue::Vector(Vector::new(
+            DataValue::Vector(vec_value(
                 a.to_f64s()
                     .iter()
                     .zip(b.to_f64s().iter())
                     .map(|(x, y)| x - y)
                     .collect(),
-            ))
+            )?)
         }
         (DataValue::Vector(a), b) => {
             let b = b
                 .get_float()
                 .ok_or_else(|| miette!("can only subtract numbers from vectors"))?;
-            DataValue::Vector(Vector::new(a.to_f64s().iter().map(|x| *x - b).collect()))
+            DataValue::Vector(vec_value(a.to_f64s().iter().map(|x| *x - b).collect())?)
         }
         (a, DataValue::Vector(b)) => {
             let a = a
                 .get_float()
                 .ok_or_else(|| miette!("can only subtract vectors from numbers"))?;
-            DataValue::Vector(Vector::new(b.to_f64s().iter().map(|x| a - x).collect()))
+            DataValue::Vector(vec_value(b.to_f64s().iter().map(|x| a - x).collect())?)
         }
         _ => bail!("subtraction requires numbers"),
     })
@@ -710,29 +716,29 @@ fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
             if a.len() != b.len() {
                 bail!("can only multiply vectors of the same length");
             }
-            Ok(DataValue::Vector(Vector::new(
+            Ok(DataValue::Vector(vec_value(
                 a.to_f64s()
                     .iter()
                     .zip(b.to_f64s().iter())
                     .map(|(x, y)| *x * *y)
                     .collect(),
-            )))
+            )?))
         }
         (DataValue::Vector(a), b) => {
             let f = b
                 .get_float()
                 .ok_or_else(|| miette!("can only multiply vectors by numbers"))?;
-            Ok(DataValue::Vector(Vector::new(
+            Ok(DataValue::Vector(vec_value(
                 a.to_f64s().iter().map(|x| x * f).collect(),
-            )))
+            )?))
         }
         (a, DataValue::Vector(b)) => {
             let f = a
                 .get_float()
                 .ok_or_else(|| miette!("can only multiply vectors by numbers"))?;
-            Ok(DataValue::Vector(Vector::new(
+            Ok(DataValue::Vector(vec_value(
                 b.to_f64s().iter().map(|x| x * f).collect(),
-            )))
+            )?))
         }
         _ => bail!("multiplication requires numbers"),
     }
@@ -755,25 +761,25 @@ pub(crate) fn op_div(args: &[DataValue]) -> Result<DataValue> {
             if a.len() != b.len() {
                 bail!("can only divide vectors of the same length");
             }
-            DataValue::Vector(Vector::new(
+            DataValue::Vector(vec_value(
                 a.to_f64s()
                     .iter()
                     .zip(b.to_f64s().iter())
                     .map(|(x, y)| x / y)
                     .collect(),
-            ))
+            )?)
         }
         (DataValue::Vector(a), b) => {
             let b = b
                 .get_float()
                 .ok_or_else(|| miette!("can only divide vectors by numbers"))?;
-            DataValue::Vector(Vector::new(a.to_f64s().iter().map(|x| *x / b).collect()))
+            DataValue::Vector(vec_value(a.to_f64s().iter().map(|x| *x / b).collect())?)
         }
         (a, DataValue::Vector(b)) => {
             let a = a
                 .get_float()
                 .ok_or_else(|| miette!("can only divide numbers by vectors"))?;
-            DataValue::Vector(Vector::new(b.to_f64s().iter().map(|x| a / x).collect()))
+            DataValue::Vector(vec_value(b.to_f64s().iter().map(|x| a / x).collect())?)
         }
         _ => bail!("division requires numbers"),
     })
@@ -790,7 +796,7 @@ pub(crate) fn op_minus(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Float(f) => DataValue::Num(Num::float(-f)),
         },
         DataValue::Vector(v) => {
-            DataValue::Vector(Vector::new(v.to_f64s().iter().map(|x| -*x).collect()))
+            DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| -*x).collect())?)
         }
         data_value_any!() => bail!("minus can only be applied to numbers"),
     })
@@ -807,7 +813,7 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
             NumRepr::Float(f) => DataValue::Num(Num::float(f.abs())),
         },
         DataValue::Vector(v) => {
-            DataValue::Vector(Vector::new(v.to_f64s().iter().map(|x| x.abs()).collect()))
+            DataValue::Vector(vec_value(v.to_f64s().iter().map(|x| x.abs()).collect())?)
         }
         data_value_any!() => bail!("'abs' requires numbers"),
     })
@@ -873,9 +879,9 @@ pub(crate) fn op_exp(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.exp()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'exp' requires numbers"),
     };
@@ -887,9 +893,9 @@ pub(crate) fn op_exp2(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.exp2()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'exp2' requires numbers"),
     };
@@ -960,9 +966,9 @@ pub(crate) fn op_sin(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.sin()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'sin' requires numbers"),
     };
@@ -974,9 +980,9 @@ pub(crate) fn op_cos(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.cos()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'cos' requires numbers"),
     };
@@ -988,9 +994,9 @@ pub(crate) fn op_tan(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.tan()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'tan' requires numbers"),
     };
@@ -1042,9 +1048,9 @@ pub(crate) fn op_atan(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.atan()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'atan' requires numbers"),
     };
@@ -1070,9 +1076,9 @@ pub(crate) fn op_sinh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.sinh()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'sinh' requires numbers"),
     };
@@ -1084,9 +1090,9 @@ pub(crate) fn op_cosh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.cosh()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'cosh' requires numbers"),
     };
@@ -1098,9 +1104,9 @@ pub(crate) fn op_tanh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.tanh()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'tanh' requires numbers"),
     };
@@ -1112,9 +1118,9 @@ pub(crate) fn op_asinh(args: &[DataValue]) -> Result<DataValue> {
     let a = match &args[0] {
         DataValue::Num(n) => n.to_f64(),
         DataValue::Vector(v) => {
-            return Ok(DataValue::Vector(Vector::new(
+            return Ok(DataValue::Vector(vec_value(
                 v.to_f64s().iter().map(|x| x.asinh()).collect(),
-            )));
+            )?));
         }
         data_value_any!() => bail!("'asinh' requires numbers"),
     };
@@ -2216,7 +2222,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                 };
                 components.push(quantize(n.num().to_f64()));
             }
-            Ok(DataValue::Vector(Vector::new(components)))
+            Ok(DataValue::Vector(vec_value(components)?))
         }
         DataValue::List(l) => {
             let mut components = Vec::with_capacity(l.len());
@@ -2226,11 +2232,11 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                     .ok_or_else(|| miette!("'vec' requires a list of numbers"))?;
                 components.push(quantize(f));
             }
-            Ok(DataValue::Vector(Vector::new(components)))
+            Ok(DataValue::Vector(vec_value(components)?))
         }
-        DataValue::Vector(v) => Ok(DataValue::Vector(Vector::new(
+        DataValue::Vector(v) => Ok(DataValue::Vector(vec_value(
             v.to_f64s().iter().map(|&f| quantize(f)).collect(),
-        ))),
+        )?)),
         DataValue::Str(s) => {
             // Base64-encoded raw floats, decoded little-endian by definition.
             // Trailing bytes short of a full element are an error (the
@@ -2262,7 +2268,7 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                     .map(|c| f64::from_le_bytes(c.try_into().expect("chunk of 8")))
                     .collect(),
             };
-            Ok(DataValue::Vector(Vector::new(components)))
+            Ok(DataValue::Vector(vec_value(components)?))
         }
         data_value_any!() => bail!("'vec' requires a list or a vector"),
     }
@@ -2285,7 +2291,7 @@ pub(crate) fn op_rand_vec(args: &[DataValue]) -> Result<DataValue> {
             VecElementType::F64 => rng.random::<f64>(),
         })
         .collect();
-    Ok(DataValue::Vector(Vector::new(components)))
+    Ok(DataValue::Vector(vec_value(components)?))
 }
 
 define_op!(OP_L2_NORMALIZE, 1, false, true);

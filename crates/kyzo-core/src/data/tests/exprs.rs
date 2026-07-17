@@ -88,7 +88,7 @@ const POISONED_VECTOR: Op = Op::define(
     0,
     true,
     true,
-    |_| Ok(DataValue::Vector(Vector::new(vec![1.0f64, f64::NAN]))),
+    |_| Ok(DataValue::Vector(Vector::try_new(vec![1.0f64, f64::NAN]).unwrap())),
 );
 
 fn assert_domain_refusal(res: miette::Result<DataValue>) {

@@ -593,6 +593,8 @@ pub enum DecodeError {
     BadPolarity,
     /// A vector component that is not a float-representation Num key.
     VectorComponentNotFloat,
+    /// Vector dimension count exceeds the wire `u32` limit.
+    VectorDimensionOverflow,
     BadJsonMarker(u8),
     /// Object keys not strictly ascending and unique.
     JsonNotCanonical,
@@ -749,7 +751,8 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 .into_iter()
                 .map(|n| n.as_float().expect("validated float component"))
                 .collect();
-            Ok((DataValue::Vector(Vector::new(floats)), 1 + used))
+            let vector = Vector::try_new(floats).ok_or(DecodeError::VectorDimensionOverflow)?;
+            Ok((DataValue::Vector(vector), 1 + used))
         }
         Tag::Validity => {
             let ts_bytes = body.get(..8).ok_or(DecodeError::Truncated)?;
@@ -1185,9 +1188,9 @@ mod tests {
             ])
             .expect("lawful"),
         )));
-        out.push(DataValue::Vector(Vector::new(vec![])));
-        out.push(DataValue::Vector(Vector::new(vec![0.0])));
-        out.push(DataValue::Vector(Vector::new(vec![-1.5, f64::NAN])));
+        out.push(DataValue::Vector(Vector::try_new(vec![]).unwrap()));
+        out.push(DataValue::Vector(Vector::try_new(vec![0.0]).unwrap()));
+        out.push(DataValue::Vector(Vector::try_new(vec![-1.5, f64::NAN]).unwrap()));
         out.push(DataValue::Validity(
             Validity::new(ValidityTs::from_raw(0), true)
                 .expect("non-reserved")
@@ -1341,8 +1344,8 @@ mod tests {
         // Vector storage order is dimension-first: fewer dimensions sort
         // before more, regardless of component values.
         assert!(
-            encode(Datum::Vector(&Vector::new(vec![9e300])))
-                < encode(Datum::Vector(&Vector::new(vec![0.0, 0.0])))
+            encode(Datum::Vector(&Vector::try_new(vec![9e300]).unwrap()))
+                < encode(Datum::Vector(&Vector::try_new(vec![0.0, 0.0]).unwrap()))
         );
     }
 
@@ -1416,9 +1419,9 @@ mod tests {
             }
             9 => {
                 let len = rng.below(3);
-                DataValue::Vector(Vector::new(
+                DataValue::Vector(Vector::try_new(
                     (0..len).map(|_| f64::from_bits(rng.next())).collect(),
-                ))
+                ).unwrap())
             }
             10 => {
                 let ts = ValidityTs::from_raw(rng.next() as i64);
@@ -1486,7 +1489,7 @@ mod tests {
         let re_a = RegexSource::validated(RegexFlags::NONE, "a".into()).expect("valid");
         assert_eq!(hex(&encode(Datum::Regex(&re_a))), "3000610000");
         assert_eq!(
-            hex(&encode(Datum::Vector(&Vector::new(vec![1.0])))),
+            hex(&encode(Datum::Vector(&Vector::try_new(vec![1.0]).unwrap()))),
             "400000000103043980000000000000000001"
         );
         assert_eq!(

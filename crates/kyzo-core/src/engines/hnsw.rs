@@ -1107,7 +1107,9 @@ impl IndexVec {
                 bail!(ZeroVectorRefused);
             }
         }
-        Ok(IndexVec(Vector::new(components)))
+        Ok(IndexVec(
+            Vector::try_new(components).ok_or_else(|| miette!("vector dimension exceeds u32"))?,
+        ))
     }
 
     /// Content hash of the admitted vector (change detection on re-put):
@@ -3131,7 +3133,7 @@ mod tests {
     }
 
     fn vec2(x: f64, y: f64) -> DataValue {
-        DataValue::Vector(Vector::new(vec![x, y]))
+        DataValue::Vector(Vector::try_new(vec![x, y]).unwrap())
     }
 
     fn row(k: i64, x: f64, y: f64) -> Tuple {
@@ -3196,7 +3198,7 @@ mod tests {
             let unit = (bits >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
             v.push(unit * 2.0 - 1.0);
         }
-        DataValue::Vector(Vector::new(v))
+        DataValue::Vector(Vector::try_new(v).unwrap())
     }
 
     /// Build an `n`-vector index inside ONE write transaction (mirrors the
@@ -3791,7 +3793,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![0.9, 0.1]);
+        let q = Vector::try_new(vec![0.9, 0.1]).unwrap();
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -3856,7 +3858,7 @@ mod tests {
         let (base, idx, m) = setup(&db, HnswDistance::Cosine, &rows);
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![2.0, 0.0]);
+        let q = Vector::try_new(vec![2.0, 0.0]).unwrap();
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -3902,7 +3904,7 @@ mod tests {
         let rtx = db.read_tx().unwrap();
         let err = Hnsw::knn(
             &rtx,
-            &Vector::new(vec![0.0, 0.0]),
+            &Vector::try_new(vec![0.0, 0.0]).unwrap(),
             &m,
             &base,
             &idx,
@@ -3953,7 +3955,7 @@ mod tests {
         // Dimension mismatches are typed too.
         let bad_dim = vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::new(vec![1.0, 2.0, 3.0])),
+            DataValue::Vector(Vector::try_new(vec![1.0, 2.0, 3.0]).unwrap()),
         ];
         let err = hnsw_put(&mut tx, &m2, &base2, &idx2, None, bad_dim.as_slice()).unwrap_err();
         assert!(err.downcast_ref::<VectorDimMismatch>().is_some());
@@ -3973,7 +3975,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![1.0, 0.0]);
+        let q = Vector::try_new(vec![1.0, 0.0]).unwrap();
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4037,7 +4039,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![4.0, 4.0]);
+        let q = Vector::try_new(vec![4.0, 4.0]).unwrap();
         let hits = knn_rows!(
             &rtx,
             &q,
@@ -4064,8 +4066,8 @@ mod tests {
             prop_assume!(bx.abs() + by.abs() > 1e-3);
             let na = (ax * ax + ay * ay).sqrt();
             let nb = (bx * bx + by * by).sqrt();
-            let a = Vector::new(vec![ax / na, ay / na]);
-            let b = Vector::new(vec![bx / nb, by / nb]);
+            let a = Vector::try_new(vec![ax / na, ay / na]).unwrap();
+            let b = Vector::try_new(vec![bx / nb, by / nb]).unwrap();
             for m in [&m_cos, &m_l2, &m_ip] {
                 let va = IndexVec::admit(&a, m).unwrap();
                 let vb = IndexVec::admit(&b, m).unwrap();
@@ -4196,7 +4198,7 @@ mod tests {
         tx.commit().unwrap();
 
         let rtx = db.read_tx().unwrap();
-        let q = Vector::new(vec![0.5, 0.5]);
+        let q = Vector::try_new(vec![0.5, 0.5]).unwrap();
         let err = Hnsw::knn(
             &rtx,
             &q,
@@ -4321,7 +4323,7 @@ mod tests {
             let rows: Vec<Tuple> = (1..=6).map(|k| row(k, 1.0, 0.0)).collect();
             let (base, idx, m) = setup(&db, HnswDistance::L2, &rows);
             let rtx = db.read_tx().unwrap();
-            let q = Vector::new(vec![1.0, 0.0]);
+            let q = Vector::try_new(vec![1.0, 0.0]).unwrap();
             let hits = knn_rows!(
                 &rtx,
                 &q,

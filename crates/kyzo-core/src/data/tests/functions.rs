@@ -114,7 +114,7 @@ fn test_mul() {
 }
 
 fn f64_vec(xs: &[f64]) -> DataValue {
-    DataValue::Vector(Vector::new(xs.to_vec()))
+    DataValue::Vector(Vector::try_new(xs.to_vec()).unwrap())
 }
 
 // Regression for the upstream bug where multiplying three or more vectors
@@ -681,13 +681,13 @@ fn test_math_domain_errors_typed() {
 /// position.
 #[test]
 fn test_math_domain_errors_vector() {
-    let has_negative = Vector::new(vec![1.0, -1.0, 4.0]);
+    let has_negative = Vector::try_new(vec![1.0, -1.0, 4.0]).unwrap();
     assert!(op_sqrt(&[DataValue::Vector(has_negative)]).is_err());
 
-    let has_out_of_range = Vector::new(vec![0.0f64, 2.0]);
+    let has_out_of_range = Vector::try_new(vec![0.0f64, 2.0]).unwrap();
     assert!(op_asin(&[DataValue::Vector(has_out_of_range)]).is_err());
 
-    let has_non_positive = Vector::new(vec![1.0, 0.0]);
+    let has_non_positive = Vector::try_new(vec![1.0, 0.0]).unwrap();
     assert!(op_ln(&[DataValue::Vector(has_non_positive)]).is_err());
 }
 
@@ -753,8 +753,8 @@ fn test_math_valid_inputs_unaffected() {
 /// vectors still compute.
 #[test]
 fn test_vector_distance_domain_errors() {
-    let zero = DataValue::Vector(Vector::new(vec![0.0, 0.0]));
-    let unit = DataValue::Vector(Vector::new(vec![1.0, 1.0]));
+    let zero = DataValue::Vector(Vector::try_new(vec![0.0, 0.0]).unwrap());
+    let unit = DataValue::Vector(Vector::try_new(vec![1.0, 1.0]).unwrap());
 
     for res in [
         op_cos_dist(&[zero.clone(), unit.clone()]),
@@ -777,8 +777,8 @@ fn test_vector_distance_domain_errors() {
     assert!(op_l2_normalize(&[unit]).is_ok());
 
     // The F32 lane is guarded identically.
-    let zero32 = DataValue::Vector(Vector::new(vec![0.0f64, 0.0]));
-    let unit32 = DataValue::Vector(Vector::new(vec![1.0f64, 1.0]));
+    let zero32 = DataValue::Vector(Vector::try_new(vec![0.0f64, 0.0]).unwrap());
+    let unit32 = DataValue::Vector(Vector::try_new(vec![1.0f64, 1.0]).unwrap());
     assert!(op_cos_dist(&[zero32.clone(), unit32.clone()]).is_err());
     assert!(op_l2_normalize(&[zero32]).is_err());
     assert!(op_cos_dist(&[unit32.clone(), unit32]).is_ok());
@@ -1895,7 +1895,7 @@ fn test_vec_rejects_non_array_json() {
             [1.0, 2.0]
         )))])
         .unwrap(),
-        DataValue::Vector(Vector::new(vec![1.0f64, 2.0]))
+        DataValue::Vector(Vector::try_new(vec![1.0f64, 2.0]).unwrap())
     );
 }
 

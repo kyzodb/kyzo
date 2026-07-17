@@ -116,19 +116,19 @@ fn corpus() -> Vec<DataValue> {
         ),
         // Vectors: negative values (raw-bit ordering breaks here), length
         // before content, both element widths.
-        DataValue::Vector(Vector::new(vec![-2.5f64, 0.0, 1.0])),
-        DataValue::Vector(Vector::new(vec![-2.5f64, 0.5, 1.0])),
-        DataValue::Vector(Vector::new(vec![1.0f64])),
-        DataValue::Vector(Vector::new(vec![f64::NAN])),
+        DataValue::Vector(Vector::try_new(vec![-2.5f64, 0.0, 1.0]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![-2.5f64, 0.5, 1.0]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![1.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![f64::NAN]).unwrap()),
         // Signed zero: `OrderedFloat` treats -0.0 == 0.0 (unlike scalar
         // `Num`, which distinguishes them below), so these two must encode
         // byte-identically — see `law_vector_signed_zero_canonicalizes`.
-        DataValue::Vector(Vector::new(vec![-0.0f64])),
-        DataValue::Vector(Vector::new(vec![0.0f64])),
-        DataValue::Vector(Vector::new(vec![-7.5f64])),
-        DataValue::Vector(Vector::new(vec![0.25f64, -7.5])),
-        DataValue::Vector(Vector::new(vec![-0.0f64])),
-        DataValue::Vector(Vector::new(vec![0.0f64])),
+        DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![-7.5f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![0.25f64, -7.5]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap()),
+        DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap()),
         DataValue::Json(crate::data::json::json_from_serde(
             &serde_json::json!({"a": 1}),
         )),
@@ -231,7 +231,7 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         any::<u128>()
             .prop_map(|u| { DataValue::Uuid(crate::UuidWrapper::new(uuid::Uuid::from_u128(u))) }),
         proptest::collection::vec(any::<f64>(), 0..6)
-            .prop_map(|v| DataValue::Vector(Vector::new(v))),
+            .prop_map(|v| DataValue::Vector(Vector::try_new(v).unwrap())),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| {
             let vts = ValidityTs::from_raw(ts);
             DataValue::Validity(ValiditySlot::from_stored(vts, a))
@@ -325,8 +325,8 @@ proptest! {
 /// vector, exactly as it already does for the two NaN encodings.
 #[test]
 fn law_vector_signed_zero_canonicalizes() {
-    let neg_f32 = DataValue::Vector(Vector::new(vec![-0.0f64]));
-    let pos_f32 = DataValue::Vector(Vector::new(vec![0.0f64]));
+    let neg_f32 = DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap());
+    let pos_f32 = DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap());
     assert_eq!(neg_f32.cmp(&pos_f32), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f32),
@@ -334,8 +334,8 @@ fn law_vector_signed_zero_canonicalizes() {
         "-0.0 and +0.0 are semantically Equal in a Vector lane but encoded to different bytes"
     );
 
-    let neg_f64 = DataValue::Vector(Vector::new(vec![-0.0f64]));
-    let pos_f64 = DataValue::Vector(Vector::new(vec![0.0f64]));
+    let neg_f64 = DataValue::Vector(Vector::try_new(vec![-0.0f64]).unwrap());
+    let pos_f64 = DataValue::Vector(Vector::try_new(vec![0.0f64]).unwrap());
     assert_eq!(neg_f64.cmp(&pos_f64), std::cmp::Ordering::Equal);
     assert_eq!(
         encode(&neg_f64),
@@ -344,8 +344,8 @@ fn law_vector_signed_zero_canonicalizes() {
     );
 
     // Mixed sign, multi-element: only the zero lane should collapse.
-    let neg_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, -0.0, 2.5]));
-    let pos_mixed = DataValue::Vector(Vector::new(vec![-1.5f64, 0.0, 2.5]));
+    let neg_mixed = DataValue::Vector(Vector::try_new(vec![-1.5f64, -0.0, 2.5]).unwrap());
+    let pos_mixed = DataValue::Vector(Vector::try_new(vec![-1.5f64, 0.0, 2.5]).unwrap());
     assert_eq!(neg_mixed.cmp(&pos_mixed), std::cmp::Ordering::Equal);
     assert_eq!(encode(&neg_mixed), encode(&pos_mixed));
 }

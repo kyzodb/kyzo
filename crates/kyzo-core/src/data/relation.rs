@@ -465,7 +465,9 @@ impl NullableColType {
                                 .ok_or_else(make_err)
                         })
                         .try_collect()?;
-                    DataValue::Vector(Vector::new(collected))
+                    DataValue::Vector(
+                        Vector::try_new(collected).ok_or_else(|| make_err())?,
+                    )
                 }
                 DataValue::Vector(arr) => {
                     if len.get() != arr.len() {
@@ -522,7 +524,9 @@ impl NullableColType {
                                 .collect()
                         }
                     };
-                    DataValue::Vector(Vector::new(collected))
+                    DataValue::Vector(
+                        Vector::try_new(collected).ok_or_else(|| make_err())?,
+                    )
                 }
                 data_value_any!() => bail!(make_err()),
             },

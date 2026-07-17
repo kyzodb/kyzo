@@ -100,7 +100,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
     (0..n)
         .map(|k| {
             let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-            vec![DataValue::from(k), DataValue::Vector(Vector::new(comps))]
+            vec![DataValue::from(k), DataValue::Vector(Vector::try_new(comps).unwrap())]
         })
         .map(Tuple::from_vec)
         .collect()
@@ -109,7 +109,7 @@ fn seeded_rows(n: i64, dim: usize, seed: u64) -> Vec<Tuple> {
 fn seeded_query(dim: usize, seed: u64) -> Vector {
     let mut state = seed ^ 0x0F0F_F0F0_DEAD_BEEF;
     let comps: Vec<f64> = (0..dim).map(|_| next_f32(&mut state)).collect();
-    Vector::new(comps)
+    Vector::try_new(comps).unwrap()
 }
 
 /// A deterministic (Fisher–Yates, splitmix-seeded) permutation of `rows` — the
@@ -490,27 +490,27 @@ fn oracle_is_exact_and_total_ordered() {
     let rows: Vec<Tuple> = vec![
         Tuple::from_vec(vec![
             DataValue::from(0),
-            DataValue::Vector(Vector::new(vec![3.0, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![3.0, 0.0]).unwrap()),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(1),
-            DataValue::Vector(Vector::new(vec![0.1, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![0.1, 0.0]).unwrap()),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(2),
-            DataValue::Vector(Vector::new(vec![1.0, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![1.0, 0.0]).unwrap()),
         ]),
         Tuple::from_vec(vec![
             DataValue::from(3),
-            DataValue::Vector(Vector::new(vec![0.2, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![0.2, 0.0]).unwrap()),
         ]),
         // key 4 sits at the SAME distance as key 2 -> tie broken by key.
         Tuple::from_vec(vec![
             DataValue::from(4),
-            DataValue::Vector(Vector::new(vec![-1.0, 0.0])),
+            DataValue::Vector(Vector::try_new(vec![-1.0, 0.0]).unwrap()),
         ]),
     ];
-    let q = Vector::new(vec![0.0, 0.0]);
+    let q = Vector::try_new(vec![0.0, 0.0]).unwrap();
     let even = FilterSpec::ModLessThan {
         modulus: 2,
         accept: 1,
@@ -849,7 +849,7 @@ fn engine_ordering_is_total_under_ties() {
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector
             Tuple::from_vec(vec![
                 DataValue::from(i),
-                DataValue::Vector(Vector::new(comps)),
+                DataValue::Vector(Vector::try_new(comps).unwrap()),
             ])
         })
         .collect();
@@ -857,7 +857,7 @@ fn engine_ordering_is_total_under_ties() {
     let db = new_fjall_storage(dir.path()).unwrap();
     let (base, idx, m) = hsetup(&db, dim, HnswDistance::L2, &rows);
     let rtx = db.read_tx().unwrap();
-    let q = Vector::new(vec![0.0f64; dim]);
+    let q = Vector::try_new(vec![0.0f64; dim]).unwrap();
     // A filter that passes every row: (k mod 1) < 1 is always true.
     let f = FilterSpec::ModLessThan {
         modulus: 1,
@@ -1028,7 +1028,7 @@ fn near_far_cluster_corpus(dim: usize) -> (i64, i64, Vec<Tuple>) {
             };
             Tuple::from_vec(vec![
                 DataValue::from(k),
-                DataValue::Vector(Vector::new(v.clone())),
+                DataValue::Vector(Vector::try_new(v.clone()).unwrap()),
             ])
         })
         .collect();
@@ -1379,7 +1379,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
             comps[(i as usize) % dim] = 1.0; // a distinct axis unit vector per residue class
             Tuple::from_vec(vec![
                 DataValue::from(i),
-                DataValue::Vector(Vector::new(comps)),
+                DataValue::Vector(Vector::try_new(comps).unwrap()),
             ])
         })
         .collect();
@@ -1390,7 +1390,7 @@ fn graph_plan_tie_break_at_k_boundary_is_thread_count_invariant() {
     // Every row is EXACTLY equidistant (squared L2 = 1.0, bit-exact) from the
     // all-zero query, so only the `(distance, encoded-key)` tie-break decides
     // the k survivors.
-    let q = Vector::new(vec![0.0f64; dim]);
+    let q = Vector::try_new(vec![0.0f64; dim]).unwrap();
     // Even keys only (`k mod 2 == 0 < 1`): a genuine filter (not
     // all-matching), ~half the corpus — enough matches (~2000) to force the
     // Graph plan, not Scan.
