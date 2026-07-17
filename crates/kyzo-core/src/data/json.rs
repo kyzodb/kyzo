@@ -249,6 +249,12 @@ impl From<&JsonValue> for DataValue {
     }
 }
 
+/// Named door for JSON → `DataValue`: same total mapping as [`From<&JsonValue>`].
+/// Fixed-rule readers call this; they do not carry a twin conversion.
+pub(crate) fn json_to_datavalue(v: &JsonValue) -> DataValue {
+    DataValue::from(v)
+}
+
 impl From<&DataValue> for JsonValue {
     fn from(v: &DataValue) -> Self {
         match v {

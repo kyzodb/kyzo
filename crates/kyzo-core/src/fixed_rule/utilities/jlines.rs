@@ -14,12 +14,8 @@
  * is added — the URL arm refuses with the typed [`UrlFetchUnavailable`],
  * pending DECISION(maintainer): should a pure embedded engine carry an
  * HTTP(S) client for the reader utilities? (See `csv.rs`, same seam.)
- * SEAM(json): the JSON→DataValue conversion lived in upstream
- * `data/json.rs`, which the kernel port dropped as then-unused; the
- * conversion is local here (`json_to_datavalue`) and re-homes to
- * `data/json.rs` when that file is reinstated (`ColType::Json` coercion
- * needs it too — one name per concept, tracked in the reconciliation
- * notes). `log::error!` on fetch failure is gone with the fetch.
+ * JSON→DataValue uses the single kernel door `data::json::json_to_datavalue`
+ * (no local twin). `log::error!` on fetch failure is gone with the fetch.
  */
 
 //! `JsonReader`: reads a JSON-lines file (or a single JSON array of
@@ -36,7 +32,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
-use crate::data::json::JsonValue;
+use crate::data::json::{JsonValue, json_to_datavalue};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -60,29 +56,6 @@ pub(crate) struct UrlFetchUnavailable {
     pub(crate) url: String,
     #[label]
     pub(crate) span: SourceSpan,
-}
-
-/// JSON value → engine value, the upstream `data/json.rs` mapping:
-/// numbers become ints when integral (falling back to floats, then to the
-/// decimal string for numbers representable as neither); arrays recurse
-/// into lists; objects stay opaque `Json` values.
-pub(crate) fn json_to_datavalue(v: &JsonValue) -> DataValue {
-    match v {
-        JsonValue::Null => DataValue::Null,
-        JsonValue::Bool(b) => DataValue::Bool(*b),
-        JsonValue::Number(n) => match n.as_i64() {
-            Some(i) => DataValue::from(i),
-            None => match n.as_f64() {
-                Some(f) => DataValue::from(f),
-                None => DataValue::from(n.to_string()),
-            },
-        },
-        JsonValue::String(s) => DataValue::Str(s.into()),
-        JsonValue::Array(arr) => DataValue::List(arr.iter().map(json_to_datavalue).collect()),
-        JsonValue::Object(d) => DataValue::Json(crate::data::json::json_from_serde(
-            &JsonValue::Object(d.clone()),
-        )),
-    }
 }
 
 pub(crate) struct JsonReader;
@@ -300,7 +273,7 @@ mod tests {
         assert!(err.to_string().contains("network"), "{err}");
     }
 
-    /// The local JSON→DataValue mapping (re-homes to `data/json.rs`).
+    /// Kernel JSON→DataValue door (via `data::json::json_to_datavalue`).
     #[test]
     fn json_conversion() {
         let v: JsonValue =
