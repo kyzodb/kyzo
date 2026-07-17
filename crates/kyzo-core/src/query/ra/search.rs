@@ -19,15 +19,18 @@
 
 use super::RelAlgebra;
 use crate::data::program::MagicSymbol;
-use crate::data::value::DataValue;
-use crate::data::value::SearchHits;
+use crate::data::span::SourceSpan;
+use crate::data::value::data_value_any;
+use crate::data::value::{DataValue, SearchHits, Tag};
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
 use crate::query::levels::EpochStore;
+use crate::query::search::SearchConfig;
 use crate::storage::ReadTx;
-use miette::Result;
+use miette::{Diagnostic, Result, bail};
 use std::collections::BTreeMap;
+use thiserror::Error;
 
 /// An index search driven once per parent row: the query expression is
 /// evaluated against the parent tuple, the engine's pure search function
@@ -39,6 +42,16 @@ use std::collections::BTreeMap;
 pub(crate) struct SearchRA {
     pub(crate) parent: Box<RelAlgebra>,
     pub(crate) atom: crate::query::search::SearchAtom,
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("search query has wrong type for this index: expected {expected:?}, got {got:?}")]
+#[diagnostic(code(query::search_query_type_error))]
+pub(crate) struct SearchQueryTypeError {
+    pub(crate) expected: Tag,
+    pub(crate) got: Tag,
+    #[label]
+    pub(crate) span: SourceSpan,
 }
 
 impl SearchRA {
@@ -79,7 +92,6 @@ impl SearchRA {
         stores: &'a BTreeMap<MagicSymbol, EpochStore>,
         segments: Segments<'a>,
     ) -> Result<BatchIter<'a>> {
-        use crate::query::search::SearchConfig;
         let span = self.atom.span;
         let fts_n_total = match &self.atom.cfg {
             SearchConfig::Fts(c)
@@ -98,14 +110,37 @@ impl SearchRA {
         let search = move |row: &[DataValue]| -> Result<SearchHits> {
             cancel.check()?;
             let q = query_expr.eval(row)?;
-            cfg.search_relation(
-                tx,
-                &q,
-                &filter_expr,
-                &cancel,
-                fts_n_total,
-                span,
-            )
+            match cfg {
+                SearchConfig::Hnsw(c) => {
+                    let v = match &q {
+                        DataValue::Vector(v) => v,
+                        other @ (data_value_any!()) => {
+                            bail!(SearchQueryTypeError {
+                                expected: Tag::Vector,
+                                got: other.tag(),
+                                span,
+                            })
+                        }
+                    };
+                    c.search_relation(tx, v, &filter_expr, &cancel)
+                }
+                SearchConfig::Fts(c) => {
+                    let text = match &q {
+                        DataValue::Str(t) => t.as_str(),
+                        other @ (data_value_any!()) => {
+                            bail!(SearchQueryTypeError {
+                                expected: Tag::Str,
+                                got: other.tag(),
+                                span,
+                            })
+                        }
+                    };
+                    c.search_relation(tx, text, &filter_expr, &cancel, fts_n_total)
+                }
+                SearchConfig::Lsh(c) => {
+                    c.search_relation(tx, &q, &filter_expr, &cancel)
+                }
+            }
         };
 
         Ok(Box::new(SearchBatches {

@@ -41,7 +41,7 @@ use crate::data::expr::Expr;
 use crate::data::program::{SearchInput, TempSymbGen};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
-use crate::data::value::{DataValue, SearchHits, Vector, data_value_any};
+use crate::data::value::{DataValue, SearchHits, Vector};
 use crate::engines::fts::{Fts, FtsScoreKind, FtsSearchParams, FtsSearchRequest};
 use crate::engines::hnsw::{Hnsw, HnswKnnParams, HnswSearchRequest};
 use crate::engines::lsh::{HashPermutations, Lsh, LshSearchParams, LshSearchRequest};
@@ -89,44 +89,6 @@ impl SearchConfig {
             SearchConfig::Hnsw(c) => &c.base,
             SearchConfig::Fts(c) => &c.base,
             SearchConfig::Lsh(c) => &c.base,
-        }
-    }
-
-    /// Run the resolved index search through [`RelationIndexSearch`] (P103).
-    ///
-    /// This is the query-tier live path into the engine doors — not a façade
-    /// that invents `k`/`ef` answers. Kind-specific UFCS aliases
-    /// (`Hnsw::knn` / `Fts::search_index` / `Lsh::search_index`) construct
-    /// the same `Request` and call the same trait method.
-    pub(crate) fn search_relation(
-        &self,
-        tx: &impl ReadTx,
-        query: &DataValue,
-        filter: &Option<Expr>,
-        cancel: &crate::fixed_rule::CancelFlag,
-        fts_n_total: usize,
-        span: SourceSpan,
-    ) -> Result<SearchHits> {
-        match self {
-            SearchConfig::Hnsw(c) => {
-                let q = match query {
-                    DataValue::Vector(v) => v,
-                    other @ (data_value_any!()) => {
-                        bail!(SearchQueryWrongType(format!("{other:?}"), span))
-                    }
-                };
-                c.search_relation(tx, q, filter, cancel)
-            }
-            SearchConfig::Fts(c) => {
-                let text = match query {
-                    DataValue::Str(t) => t.as_str(),
-                    other @ (data_value_any!()) => {
-                        bail!(SearchQueryWrongType(format!("{other:?}"), span))
-                    }
-                };
-                c.search_relation(tx, text, filter, cancel, fts_n_total)
-            }
-            SearchConfig::Lsh(c) => c.search_relation(tx, query, filter, cancel),
         }
     }
 }
@@ -269,19 +231,19 @@ pub(crate) struct SearchIndexNotFound(
 #[diagnostic(help(
     "plain and temporal indices are chosen automatically by the planner; query the relation"
 ))]
-pub(crate) struct SearchOverPlainIndex(pub(crate) String, #[label] pub(crate) SourceSpan);
+pub(crate) struct SearchOverPlainIndex(pub(crate) Symbol, #[label] pub(crate) SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("search binding for '{0}' must be a plain variable")]
 #[diagnostic(code(query::search_binding_not_variable))]
-pub(crate) struct SearchBindingNotVariable(pub(crate) String, #[label] pub(crate) SourceSpan);
+pub(crate) struct SearchBindingNotVariable(pub(crate) Symbol, #[label] pub(crate) SourceSpan);
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("'{0}' is not a column of relation '{1}'")]
 #[diagnostic(code(query::search_column_not_found))]
 pub(crate) struct SearchColumnNotFound(
-    pub(crate) String,
-    pub(crate) String,
+    pub(crate) Symbol,
+    pub(crate) Symbol,
     #[label] pub(crate) SourceSpan,
 );
 
@@ -290,12 +252,26 @@ pub(crate) struct SearchColumnNotFound(
 #[diagnostic(code(query::search_param_required))]
 pub(crate) struct SearchParamRequired(pub(crate) &'static str, #[label] pub(crate) SourceSpan);
 
+#[derive(Debug, Clone, Copy, Error)]
+pub(crate) enum SearchParamInvalidReason {
+    #[error("must be a constant")]
+    MustBeConstant,
+    #[error("must be a positive integer")]
+    MustBePositiveInteger,
+    #[error("must be a number")]
+    MustBeNumber,
+    #[error("must be 'tf' or 'tf_idf'")]
+    MustBeTfOrTfIdf,
+    #[error("is not a parameter of this index kind")]
+    UnknownParameter,
+}
+
 #[derive(Debug, Error, Diagnostic)]
 #[error("search parameter '{0}' {1}")]
 #[diagnostic(code(query::search_param_invalid))]
 pub(crate) struct SearchParamInvalid(
-    pub(crate) String,
-    pub(crate) &'static str,
+    pub(crate) Symbol,
+    pub(crate) SearchParamInvalidReason,
     #[label] pub(crate) SourceSpan,
 );
 
@@ -308,21 +284,18 @@ pub(crate) struct SearchParamInvalid(
 ))]
 pub(crate) struct NegatedSearchUnsupported(#[label] pub(crate) SourceSpan);
 
-#[derive(Debug, Error, Diagnostic)]
-#[error("search query has wrong type for this index: {0}")]
-#[diagnostic(code(query::search_query_wrong_type))]
-pub(crate) struct SearchQueryWrongType(pub(crate) String, #[label] pub(crate) SourceSpan);
-
 // ─────────────────────────────────────────────────────────────────────────
 // Resolution
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Extract a plain variable from a binding/parameter expression, refusing
 /// anything computed.
-fn expr_as_var(what: &str, e: &Expr, span: SourceSpan) -> Result<Symbol> {
+fn expr_as_var(name: impl AsRef<str>, e: &Expr, span: SourceSpan) -> Result<Symbol> {
     match e {
         Expr::Binding { var, .. } => Ok(var.clone()),
-        Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => bail!(SearchBindingNotVariable(what.to_string(), span)),
+        Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => {
+            bail!(SearchBindingNotVariable(Symbol::new(name.as_ref(), span), span))
+        }
     }
 }
 
@@ -336,7 +309,13 @@ fn take_const(
         Some(e) => {
             let v = e
                 .eval_to_const()
-                .map_err(|_| SearchParamInvalid(name.to_string(), "must be a constant", span))?;
+                .map_err(|_| {
+                    SearchParamInvalid(
+                        Symbol::new(name, span),
+                        SearchParamInvalidReason::MustBeConstant,
+                        span,
+                    )
+                })?;
             Ok(Some(v))
         }
     }
@@ -351,22 +330,22 @@ fn take_pos_int(
         None => Ok(None),
         Some(DataValue::Num(n)) => {
             let i = n.as_int().ok_or(SearchParamInvalid(
-                name.to_string(),
-                "must be a positive integer",
+                Symbol::new(name, span),
+                SearchParamInvalidReason::MustBePositiveInteger,
                 span,
             ))?;
             if i <= 0 {
                 bail!(SearchParamInvalid(
-                    name.to_string(),
-                    "must be a positive integer",
+                    Symbol::new(name, span),
+                    SearchParamInvalidReason::MustBePositiveInteger,
                     span
                 ));
             }
             Ok(Some(i as usize))
         }
         Some(_) => bail!(SearchParamInvalid(
-            name.to_string(),
-            "must be a positive integer",
+            Symbol::new(name, span),
+            SearchParamInvalidReason::MustBePositiveInteger,
             span
         )),
     }
@@ -407,8 +386,8 @@ fn base_frame(
     }
     if let Some((name, _)) = bindings.into_iter().next() {
         bail!(SearchColumnNotFound(
-            name.to_string(),
-            base.name.to_string(),
+            Symbol::new(name, span),
+            Symbol::new(base.name.clone(), span),
             span
         ));
     }
@@ -448,7 +427,7 @@ pub(crate) fn resolve_search(
 
     let cfg = match idx_ref.kind {
         IndexKind::Plain { .. } | IndexKind::Temporal => {
-            bail!(SearchOverPlainIndex(inp.index.name.to_string(), span))
+            bail!(SearchOverPlainIndex(inp.index.clone(), span))
         }
         IndexKind::Hnsw(manifest) => {
             let k = take_pos_int(&mut params, "k", span)?.ok_or(SearchParamRequired("k", span))?;
@@ -456,8 +435,8 @@ pub(crate) fn resolve_search(
             let radius = match take_const(&mut params, "radius", span)? {
                 None => None,
                 Some(v) => Some(v.get_float().ok_or(SearchParamInvalid(
-                    "radius".to_string(),
-                    "must be a number",
+                    Symbol::new("radius", span),
+                    SearchParamInvalidReason::MustBeNumber,
                     span,
                 ))?),
             };
@@ -508,8 +487,8 @@ pub(crate) fn resolve_search(
                 Some(DataValue::Str(s)) if s == "tf_idf" => FtsScoreKind::TfIdf,
                 Some(DataValue::Str(s)) if s == "tf" => FtsScoreKind::Tf,
                 Some(_) => bail!(SearchParamInvalid(
-                    "score_kind".to_string(),
-                    "must be 'tf' or 'tf_idf'",
+                    Symbol::new("score_kind", span),
+                    SearchParamInvalidReason::MustBeTfOrTfIdf,
                     span
                 )),
             };
@@ -551,8 +530,8 @@ pub(crate) fn resolve_search(
 
     if let Some((name, _)) = params.into_iter().next() {
         bail!(SearchParamInvalid(
-            name.to_string(),
-            "is not a parameter of this index kind",
+            Symbol::new(name, span),
+            SearchParamInvalidReason::UnknownParameter,
             span
         ));
     }
