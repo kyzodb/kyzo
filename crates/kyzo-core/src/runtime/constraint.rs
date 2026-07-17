@@ -65,6 +65,7 @@
 //! guards the present instant only. This boundary is stated, not silently
 //! assumed.
 
+use std::num::NonZeroUsize;
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{Diagnostic, Result, WrapErr, bail};
@@ -94,7 +95,7 @@ pub(crate) const WITNESS_CAP: usize = 8;
 
 /// How many commit attempts a constraint catalog op replays on a typed
 /// conflict (the same policy as [`Db`]'s script path).
-const MAX_COMMIT_ATTEMPTS: usize = 32;
+const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 
 /// A transaction was denied: an integrity constraint's body is satisfiable
 /// against the post-write state. Carries the violating rows (the body's

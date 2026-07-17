@@ -37,20 +37,17 @@ fn report_is_conflict(err: &miette::Report) -> bool {
 /// commit — so each retry sees a fresh snapshot. Non-conflict errors
 /// propagate immediately. `max_attempts` bounds pathological contention;
 /// exhausting it returns the final [`crate::storage::ConflictError`].
-/// Zero attempts are refused at the door (not an `expect` after a zero-trip
-/// loop): callers still pass `usize` for ABI stability with the session
-/// tier; the budget is proven [`NonZeroUsize`] before any attempt runs.
+/// Zero attempts are unrepresentable: the budget is [`NonZeroUsize`] at the
+/// API, not a runtime check after mint.
 ///
 /// Hot retry is for harnesses whose conflicts are injected or simulated
 /// (the DST campaigns): pausing there wastes wall-clock on races that
 /// virtual time already resolves. Real concurrent sessions retry through
 /// [`retry_on_conflict_with_backoff`] instead.
 pub fn retry_on_conflict<T>(
-    max_attempts: usize,
+    max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    let max_attempts = NonZeroUsize::new(max_attempts)
-        .ok_or_else(|| miette!("retry max_attempts must be non-zero"))?;
     let mut last_err = None;
     for _ in 0..max_attempts.get() {
         match attempt() {
@@ -74,11 +71,9 @@ pub fn retry_on_conflict<T>(
 /// retries through this. Timing is the only thing affected; answers
 /// never depend on it.
 pub fn retry_on_conflict_with_backoff<T>(
-    max_attempts: usize,
+    max_attempts: NonZeroUsize,
     mut attempt: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    let max_attempts = NonZeroUsize::new(max_attempts)
-        .ok_or_else(|| miette!("retry max_attempts must be non-zero"))?;
     let mut last_err = None;
     for n in 0..max_attempts.get() {
         match attempt() {

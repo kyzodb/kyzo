@@ -65,6 +65,7 @@
 //! pipeline, and a system op reads or edits the catalog. The result is a
 //! [`NamedRows`].
 
+use std::num::NonZeroUsize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -115,7 +116,7 @@ pub(crate) const DEFAULT_EPOCH_CEILING: u32 = 1_000_000;
 /// not failing.
 ///
 /// [`ConflictError`]: crate::storage::ConflictError
-const MAX_COMMIT_ATTEMPTS: usize = 128;
+const MAX_COMMIT_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(128).unwrap();
 
 /// A script asked for the imperative genus (`?[…] <- …` control flow), which
 /// the session tier executes for queries and system ops but not yet for
