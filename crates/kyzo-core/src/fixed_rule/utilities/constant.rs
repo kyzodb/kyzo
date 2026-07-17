@@ -13,10 +13,10 @@
  * unwrapped its way to the data (`expr_option(..).unwrap()`,
  * `get_const().unwrap()`, `get_slice().unwrap()`), trusting that
  * `init_options` had normalized the option; those unwraps are the
- * `proven_data` path here, and drift (arity called before init_options,
- * or the option replaced after normalization) is reported as the
- * wrong-option error instead of aborting the engine. Output rows flow
- * through the arity-checked writer.
+ * sealed [`ConstantData`] path here. Drift (arity called before
+ * init_options, or the option replaced after normalization) is reported
+ * as the wrong-option error instead of aborting the engine. Output rows
+ * flow through the arity-checked writer.
  */
 
 //! The fixed rule that yields a constant relation: its `data` option, a
@@ -33,34 +33,40 @@ use crate::data::expr::Expr;
 use crate::data::program::WrongFixedRuleOptionError;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
+use crate::data::value::data_value_any;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
-use crate::data::value::data_value_any;
 
 pub(crate) struct Constant;
 
+/// Rows sealed by [`Constant::init_options`]: a rectangular list-of-lists.
+/// `arity`/`run` read this proof; they do not re-validate row shape (P085).
+struct ConstantData<'a>(&'a [DataValue]);
+
 impl Constant {
-    /// The `data` option as `init_options` proved it: a constant list.
-    /// Failure here means `arity`/`run` was called before `init_options`,
-    /// or the option was replaced after normalization — drift, reported as
-    /// the same wrong-option error rather than an abort.
+    fn wrong_option(span: SourceSpan) -> WrongFixedRuleOptionError {
+        WrongFixedRuleOptionError {
+            name: "data".to_string(),
+            span,
+            rule_name: "Constant".to_string(),
+            help: "a list of lists is required".to_string(),
+        }
+    }
+
+    /// Read the sealed `data` option. Failure means `arity`/`run` ran
+    /// before `init_options`, or the option was replaced after
+    /// normalization — drift, not a second validation of list shape.
     fn proven_data(
         options: &BTreeMap<SmartString<LazyCompact>, Expr>,
         span: SourceSpan,
-    ) -> Result<&[DataValue]> {
-        options
-            .get("data")
-            .and_then(|d| d.get_const())
-            .and_then(|v| v.get_slice())
-            .ok_or_else(|| {
-                WrongFixedRuleOptionError {
-                    name: "data".to_string(),
-                    span,
-                    rule_name: "Constant".to_string(),
-                    help: "a list of lists is required".to_string(),
-                }
-                .into()
-            })
+    ) -> Result<ConstantData<'_>> {
+        match options.get("data") {
+            Some(Expr::Const {
+                val: DataValue::List(rows),
+                ..
+            }) => Ok(ConstantData(rows.as_slice())),
+            _ => Err(Self::wrong_option(span).into()),
+        }
     }
 }
 
@@ -72,17 +78,12 @@ impl FixedRule for Constant {
         _cancel: CancelFlag,
     ) -> Result<()> {
         let data = Constant::proven_data(&payload.manifest.options, payload.span())?;
-        for row in data {
-            // `init_options` proved every row is a list; a non-list here
-            // is drift, reported as the wrong-option error.
+        for row in data.0 {
+            // INVARIANT(constant_row_list): `init_options` sealed every
+            // row as a `DataValue::List`.
             let tuple = Tuple::from_vec(
                 row.get_slice()
-                    .ok_or_else(|| WrongFixedRuleOptionError {
-                        name: "data".to_string(),
-                        span: payload.span(),
-                        rule_name: "Constant".to_string(),
-                        help: "a list of lists is required".to_string(),
-                    })?
+                    .expect("INVARIANT(constant_row_list): sealed row is a list")
                     .to_vec(),
             );
             out.put(tuple)?
@@ -97,7 +98,7 @@ impl FixedRule for Constant {
         span: SourceSpan,
     ) -> Result<usize> {
         let data = Constant::proven_data(options, span)?;
-        match data.first() {
+        match data.0.first() {
             None => match rule_head.len() {
                 0 => {
                     #[derive(Error, Debug, Diagnostic)]
@@ -111,38 +112,25 @@ impl FixedRule for Constant {
                 }
                 i => Ok(i),
             },
-            Some(first_row) => first_row
+            Some(first_row) => Ok(first_row
                 .get_slice()
-                .map(|s| s.len())
-                // `init_options` proved every row is a list; a non-list
-                // here is drift, reported as the wrong-option error.
-                .ok_or_else(|| {
-                    WrongFixedRuleOptionError {
-                        name: "data".to_string(),
-                        span,
-                        rule_name: "Constant".to_string(),
-                        help: "a list of lists is required".to_string(),
-                    }
-                    .into()
-                }),
+                .expect("INVARIANT(constant_row_list): sealed row is a list")
+                .len()),
         }
     }
 
     fn init_options(
         &self,
-        options: &mut BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: BTreeMap<SmartString<LazyCompact>, Expr>,
         span: SourceSpan,
-    ) -> Result<()> {
-        let wrong_option = || WrongFixedRuleOptionError {
-            name: "data".to_string(),
-            span,
-            rule_name: "Constant".to_string(),
-            help: "a list of lists is required".to_string(),
-        };
-        let data = options.get("data").ok_or_else(wrong_option)?;
+    ) -> Result<BTreeMap<SmartString<LazyCompact>, Expr>> {
+        let mut options = options;
+        let data = options
+            .get("data")
+            .ok_or_else(|| Self::wrong_option(span))?;
         let data = match data.clone().eval_to_const()? {
             DataValue::List(l) => l,
-            data_value_any!() => bail!(wrong_option()),
+            data_value_any!() => bail!(Self::wrong_option(span)),
         };
 
         let mut tuples = vec![];
@@ -190,8 +178,7 @@ impl FixedRule for Constant {
                 span,
             },
         );
-
-        Ok(())
+        Ok(options)
     }
 }
 
@@ -239,7 +226,7 @@ mod tests {
         assert!(err.to_string().contains("Wrong value"), "{err}");
 
         // Ragged rows are refused at normalization.
-        let mut options = BTreeMap::from([(
+        let options = BTreeMap::from([(
             SmartString::from("data"),
             Expr::Const {
                 val: DataValue::List(vec![
@@ -250,7 +237,7 @@ mod tests {
             },
         )]);
         let err = Constant
-            .init_options(&mut options, SourceSpan::default())
+            .init_options(options, SourceSpan::default())
             .unwrap_err();
         assert!(err.to_string().contains("same arity"), "{err}");
     }

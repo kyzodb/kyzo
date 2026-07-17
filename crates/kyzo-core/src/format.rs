@@ -719,7 +719,7 @@ enum Assoc {
 /// `cond`) never needs parens as anyone's operand.
 const ATOMIC: u8 = 100;
 
-/// `(precedence, associativity, surface symbol)` for a 2-argument
+/// `(precedence, associativity, surface symbol, args)` for a 2-argument
 /// [`Expr::Apply`]/[`Expr::Lazy`] this grammar also accepts as an infix
 /// operator — `None` for anything that must render as a function call
 /// (wrong arity for its op, or no infix spelling at all). Numbers match
@@ -727,49 +727,71 @@ const ATOMIC: u8 = 100;
 /// against it (higher binds tighter): `||`1 `&&`2 cmp3 `==`/`!=`4 `%`5
 /// `+`/`-`/`++`6 `*`/`/`7 `^`8 `~`9 — then the unary prefixes at 10/11 (see
 /// [`prefix_form`]) and `->` at 12 tighter still.
-fn infix_form(e: &Expr) -> Option<(u8, Assoc, &'static str)> {
+///
+/// Args ride with the form so [`write_expr`] never re-matches Expr arms
+/// (P088: no `unreachable!` on Apply/Lazy drift).
+fn infix_form(e: &Expr) -> Option<(u8, Assoc, &'static str, &[Expr])> {
     match e {
-        Expr::Apply { op, args, .. } if args.len() == 2 => Some(match op.name {
-            "OP_GT" => (3, Assoc::Left, ">"),
-            "OP_LT" => (3, Assoc::Left, "<"),
-            "OP_GE" => (3, Assoc::Left, ">="),
-            "OP_LE" => (3, Assoc::Left, "<="),
-            "OP_EQ" => (4, Assoc::Left, "=="),
-            "OP_NEQ" => (4, Assoc::Left, "!="),
-            "OP_MOD" => (5, Assoc::Left, "%"),
-            "OP_ADD" => (6, Assoc::Left, "+"),
-            "OP_SUB" => (6, Assoc::Left, "-"),
-            "OP_CONCAT" => (6, Assoc::Left, "++"),
-            "OP_MUL" => (7, Assoc::Left, "*"),
-            "OP_DIV" => (7, Assoc::Left, "/"),
-            "OP_POW" => (8, Assoc::Right, "^"),
-            "OP_MAYBE_GET" => (12, Assoc::Left, "->"),
-            _ => return None,
-        }),
-        Expr::Lazy { op, args, .. } if args.len() == 2 => Some(match op {
-            LazyOp::Or => (1, Assoc::Left, "||"),
-            LazyOp::And => (2, Assoc::Left, "&&"),
-            LazyOp::Coalesce => (9, Assoc::Left, "~"),
-        }),
-        Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => None,
+        Expr::Apply { op, args, .. } if args.len() == 2 => {
+            let (p, a, s) = match op.name {
+                "OP_GT" => (3, Assoc::Left, ">"),
+                "OP_LT" => (3, Assoc::Left, "<"),
+                "OP_GE" => (3, Assoc::Left, ">="),
+                "OP_LE" => (3, Assoc::Left, "<="),
+                "OP_EQ" => (4, Assoc::Left, "=="),
+                "OP_NEQ" => (4, Assoc::Left, "!="),
+                "OP_MOD" => (5, Assoc::Left, "%"),
+                "OP_ADD" => (6, Assoc::Left, "+"),
+                "OP_SUB" => (6, Assoc::Left, "-"),
+                "OP_CONCAT" => (6, Assoc::Left, "++"),
+                "OP_MUL" => (7, Assoc::Left, "*"),
+                "OP_DIV" => (7, Assoc::Left, "/"),
+                "OP_POW" => (8, Assoc::Right, "^"),
+                "OP_MAYBE_GET" => (12, Assoc::Left, "->"),
+                _ => return None,
+            };
+            Some((p, a, s, args.as_ref()))
+        }
+        Expr::Lazy { op, args, .. } if args.len() == 2 => {
+            let (p, a, s) = match op {
+                LazyOp::Or => (1, Assoc::Left, "||"),
+                LazyOp::And => (2, Assoc::Left, "&&"),
+                LazyOp::Coalesce => (9, Assoc::Left, "~"),
+            };
+            Some((p, a, s, args.as_ref()))
+        }
+        Expr::Binding { .. }
+        | Expr::Const { .. }
+        | Expr::Apply { .. }
+        | Expr::UnboundApply { .. }
+        | Expr::Cond { .. }
+        | Expr::Lazy { .. } => None,
     }
 }
 
-/// `(precedence, prefix symbol)` for a 1-argument [`Expr::Apply`] this
-/// grammar also accepts as a unary prefix. A prefix's own child, when it
-/// is itself another prefix application, never needs parens regardless of
-/// these numbers (see [`write_prefix_operand`]): `unary_op*` in the
+/// `(precedence, prefix symbol, operand)` for a 1-argument [`Expr::Apply`]
+/// this grammar also accepts as a unary prefix. A prefix's own child, when
+/// it is itself another prefix application, never needs parens regardless
+/// of these numbers (see [`write_prefix_operand`]): `unary_op*` in the
 /// grammar is a plain repetition glued to one term, not a recursive
 /// precedence climb, so a straight prefix chain always re-parses to the
 /// same nesting order it was written in.
-fn prefix_form(e: &Expr) -> Option<(u8, &'static str)> {
+///
+/// The operand rides with the form so [`write_expr`] never re-matches
+/// Expr arms (P088: no `unreachable!`).
+fn prefix_form(e: &Expr) -> Option<(u8, &'static str, &Expr)> {
     match e {
         Expr::Apply { op, args, .. } if args.len() == 1 => match op.name {
-            "OP_MINUS" => Some((10, "-")),
-            "OP_NEGATE" => Some((11, "!")),
+            "OP_MINUS" => Some((10, "-", &args[0])),
+            "OP_NEGATE" => Some((11, "!", &args[0])),
             _ => None,
         },
-        Expr::Binding { .. } | Expr::Const { .. } | Expr::Apply { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => None,
+        Expr::Binding { .. }
+        | Expr::Const { .. }
+        | Expr::Apply { .. }
+        | Expr::UnboundApply { .. }
+        | Expr::Cond { .. }
+        | Expr::Lazy { .. } => None,
     }
 }
 
@@ -777,19 +799,14 @@ fn precedence(e: &Expr) -> u8 {
     if let Some((p, ..)) = infix_form(e) {
         return p;
     }
-    if let Some((p, _)) = prefix_form(e) {
+    if let Some((p, ..)) = prefix_form(e) {
         return p;
     }
     ATOMIC
 }
 
 fn write_expr(e: &Expr, out: &mut String) {
-    if let Some((prec, assoc, sym)) = infix_form(e) {
-        let args: &[Expr] = match e {
-            Expr::Apply { args, .. } => args,
-            Expr::Lazy { args, .. } => args,
-            Expr::Binding { .. } | Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } => unreachable!("infix_form only returns Some for Apply/Lazy"),
-        };
+    if let Some((prec, assoc, sym, args)) = infix_form(e) {
         write_operand(&args[0], prec, assoc == Assoc::Left, out);
         out.push(' ');
         out.push_str(sym);
@@ -797,12 +814,8 @@ fn write_expr(e: &Expr, out: &mut String) {
         write_operand(&args[1], prec, assoc == Assoc::Right, out);
         return;
     }
-    if let Some((prec, sym)) = prefix_form(e) {
+    if let Some((prec, sym, inner)) = prefix_form(e) {
         out.push_str(sym);
-        let inner = match e {
-            Expr::Apply { args, .. } => &args[0],
-            Expr::Binding { .. } | Expr::Const { .. } | Expr::UnboundApply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => unreachable!("prefix_form only returns Some for Apply"),
-        };
         write_prefix_operand(inner, prec, out);
         return;
     }

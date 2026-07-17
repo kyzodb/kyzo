@@ -1327,7 +1327,7 @@ pub(crate) fn make_const_rule(
         },
     );
     let fixed_impl = Arc::new(Constant);
-    fixed_impl.init_options(&mut options, SourceSpan::default())?;
+    let options = fixed_impl.init_options(options, SourceSpan::default())?;
     let bindings_arity = bindings.len();
     program.insert_rule(
         rule_symbol,

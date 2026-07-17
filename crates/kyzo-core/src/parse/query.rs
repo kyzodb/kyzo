@@ -283,7 +283,7 @@ pub(crate) fn parse_query(
                     name: Symbol::new("Constant", span),
                 };
                 let fixed_impl = Constant;
-                fixed_impl.init_options(&mut options, span)?;
+                options = fixed_impl.init_options(options, span)?;
                 let arity = fixed_impl.arity(&options, &head, span)?;
 
                 ensure!(arity != 0, EmptyRowForConstRule(span));
@@ -1447,7 +1447,7 @@ fn parse_fixed_rule(
     let fixed_impl = fixed_rules
         .get(&fixed.name as &str)
         .ok_or_else(|| FixedRuleNotFoundError(fixed.name.to_string(), name_pair.extract_span()))?;
-    fixed_impl.init_options(&mut options, args_list_span)?;
+    options = fixed_impl.init_options(options, args_list_span)?;
     let arity = fixed_impl.arity(&options, &head, name_pair.extract_span())?;
 
     ensure!(

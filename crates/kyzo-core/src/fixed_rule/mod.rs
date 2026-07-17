@@ -892,16 +892,14 @@ mod fixed_rule_output_budget_tests {
 
 /// Trait for an implementation of an algorithm or a utility
 pub trait FixedRule: Send + Sync {
-    /// Called to initialize the options given.
-    /// Will always be called once, before anything else.
-    /// You can mutate the options if you need to.
-    /// The default implementation does nothing.
+    /// Consuming option normalize (P086). Called once before `arity`/`run`.
+    /// Returns the (possibly rewritten) options map; the default is identity.
     fn init_options(
         &self,
-        _options: &mut BTreeMap<SmartString<LazyCompact>, Expr>,
+        options: BTreeMap<SmartString<LazyCompact>, Expr>,
         _span: SourceSpan,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<BTreeMap<SmartString<LazyCompact>, Expr>> {
+        Ok(options)
     }
     /// You must return the row width of the returned relation and it must be accurate.
     /// This function may be called multiple times.
@@ -934,16 +932,17 @@ pub trait FixedRule: Send + Sync {
 ///
 /// Prefer [`Self::try_new`]: it proves every row's width equals
 /// `headers.len()`. [`Self::new`] panics on arity mismatch (legacy door
-/// for call sites that already guarantee the shape). Fields stay `pub`
-/// until outside-allowlist call sites migrate (P082 private-field follow-on).
+/// for call sites that already guarantee the shape). Fields are
+/// `pub(crate)` so outside crates cannot forge an illegal shape (P082);
+/// same-crate callers still migrate to accessors where practical.
 #[derive(Debug, Clone, Default)]
 pub struct NamedRows {
     /// The headers
-    pub headers: Vec<String>,
+    pub(crate) headers: Vec<String>,
     /// The rows
-    pub rows: Vec<Tuple>,
+    pub(crate) rows: Vec<Tuple>,
     /// Contains the next named rows, if exists
-    pub next: Option<Box<NamedRows>>,
+    pub(crate) next: Option<Box<NamedRows>>,
 }
 
 /// Header↔row width mismatch at the [`NamedRows`] door (P082).
@@ -996,6 +995,26 @@ impl NamedRows {
         })
     }
 
+    /// Header names.
+    pub fn headers(&self) -> &[String] {
+        &self.headers
+    }
+
+    /// Result rows.
+    pub fn rows(&self) -> &[Tuple] {
+        &self.rows
+    }
+
+    /// Follow-on page, when present.
+    pub fn next(&self) -> Option<&NamedRows> {
+        self.next.as_deref()
+    }
+
+    /// Consume into headers, rows, and optional follow-on page.
+    pub fn into_parts(self) -> (Vec<String>, Vec<Tuple>, Option<Box<NamedRows>>) {
+        (self.headers, self.rows, self.next)
+    }
+
     /// Encode this result set as a self-contained Arrow IPC stream (story
     /// #77's export boundary): a Schema message naming every header, one
     /// RecordBatch message, and the end-of-stream marker — readable by any
@@ -1021,42 +1040,84 @@ impl IntoIterator for NamedRows {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// SimpleFixedRule
+// SimpleFixedRule — typed body owner (P083: no Box<dyn Fn>)
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Simple wrapper for custom fixed rule. You have less control than implementing [FixedRule] directly,
-/// but implementation is simpler.
-pub struct SimpleFixedRule {
-    return_arity: usize,
-    rule: Box<
-        dyn Fn(Vec<NamedRows>, BTreeMap<String, DataValue>) -> Result<NamedRows>
-            + Send
-            + Sync
-            + 'static,
-    >,
+/// Typed body for a simple fixed rule. Prefer a named `FixedRule` impl for
+/// production algorithms; this trait is the reduced door for host/test
+/// rules that already work over realized [`NamedRows`].
+pub(crate) trait SimpleRuleBody: Send + Sync + 'static {
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows>;
 }
 
-impl SimpleFixedRule {
+impl<F> SimpleRuleBody for F
+where
+    F: Fn(Vec<NamedRows>, BTreeMap<String, DataValue>) -> Result<NamedRows>
+        + Send
+        + Sync
+        + 'static,
+{
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        self(inputs, options)
+    }
+}
+
+/// Channel-backed simple-rule body: one typed owner instead of an erased
+/// `dyn Fn` closure (P083).
+struct ChannelRuleBody {
+    db2app: SyncSender<(
+        Vec<NamedRows>,
+        BTreeMap<String, DataValue>,
+        SyncSender<Result<NamedRows>>,
+    )>,
+}
+
+impl SimpleRuleBody for ChannelRuleBody {
+    fn apply(
+        &self,
+        inputs: Vec<NamedRows>,
+        options: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows> {
+        let (app2db_sender, app2db_receiver) = sync_channel(0);
+        self.db2app
+            .send((inputs, options, app2db_sender))
+            .map_err(|_| DisconnectedChannelRule)?;
+        app2db_receiver
+            .recv()
+            .map_err(|_| DisconnectedChannelRule)?
+    }
+}
+
+/// Simple wrapper for custom fixed rule. You have less control than implementing [FixedRule] directly,
+/// but implementation is simpler. The body is a typed [`SimpleRuleBody`] —
+/// not a `Box<dyn Fn…>` (P083).
+pub struct SimpleFixedRule<B> {
+    return_arity: usize,
+    body: B,
+}
+
+impl<B: SimpleRuleBody> SimpleFixedRule<B> {
     /// Construct a SimpleFixedRule.
     ///
     /// * `return_arity`: The return arity of this rule.
-    /// * `rule`:  The rule implementation as a closure.
-    //    The first argument is a vector of input relations, realized into NamedRows,
-    //    and the second argument is a JSON object of passed in options.
-    //    The returned NamedRows is the return relation of the application of this rule.
-    //    Every row of the returned relation must have length equal to `return_arity`.
-    pub fn new<R>(return_arity: usize, rule: R) -> Self
-    where
-        R: Fn(Vec<NamedRows>, BTreeMap<String, DataValue>) -> Result<NamedRows>
-            + Send
-            + Sync
-            + 'static,
-    {
+    /// * `body`: The typed rule body ([`SimpleRuleBody`], including closures).
+    pub fn new(return_arity: usize, body: B) -> Self {
         Self {
             return_arity,
-            rule: Box::new(rule),
+            body,
         }
     }
+}
+
+impl SimpleFixedRule<ChannelRuleBody> {
     /// Construct a SimpleFixedRule that uses channels for communication.
     /// (The original returned `crossbeam` channel halves; a std rendezvous
     /// channel — `sync_channel(0)` ≡ crossbeam's `bounded(0)` — carries the
@@ -1064,7 +1125,7 @@ impl SimpleFixedRule {
     pub fn rule_with_channel(
         return_arity: usize,
     ) -> (
-        Self,
+        impl FixedRule,
         Receiver<(
             Vec<NamedRows>,
             BTreeMap<String, DataValue>,
@@ -1073,17 +1134,11 @@ impl SimpleFixedRule {
     ) {
         let (db2app_sender, db2app_receiver) = sync_channel(0);
         (
-            Self {
+            SimpleFixedRule {
                 return_arity,
-                rule: Box::new(move |inputs, options| -> Result<NamedRows> {
-                    let (app2db_sender, app2db_receiver) = sync_channel(0);
-                    db2app_sender
-                        .send((inputs, options, app2db_sender))
-                        .map_err(|_| DisconnectedChannelRule)?;
-                    app2db_receiver
-                        .recv()
-                        .map_err(|_| DisconnectedChannelRule)?
-                }),
+                body: ChannelRuleBody {
+                    db2app: db2app_sender,
+                },
             },
             db2app_receiver,
         )
@@ -1095,7 +1150,7 @@ impl SimpleFixedRule {
 #[diagnostic(code(algo::channel_rule_disconnected))]
 struct DisconnectedChannelRule;
 
-impl FixedRule for SimpleFixedRule {
+impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
     fn arity(
         &self,
         _options: &BTreeMap<SmartString<LazyCompact>, Expr>,
@@ -1140,7 +1195,7 @@ impl FixedRule for SimpleFixedRule {
                 Ok(NamedRows::new(headers, rows))
             })
             .try_collect()?;
-        let results: NamedRows = (self.rule)(inputs, options)?;
+        let results: NamedRows = self.body.apply(inputs, options)?;
         for row in results.rows {
             // The row-width check the original performed here per rule is
             // now `out`'s own contract, enforced for every fixed rule.
@@ -1417,7 +1472,7 @@ pub(crate) mod tests_support {
         mut options: BTreeMap<SmartString<LazyCompact>, Expr>,
     ) -> Result<PreparedFixedRule> {
         let span = SourceSpan::default();
-        rule.init_options(&mut options, span)?;
+        options = rule.init_options(options, span)?;
         let mut stores = BTreeMap::new();
         let mut rule_args = vec![];
         for (i, input) in inputs.into_iter().enumerate() {
