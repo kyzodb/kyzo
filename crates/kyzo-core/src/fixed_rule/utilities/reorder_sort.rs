@@ -24,7 +24,7 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::data::expr::{BindingPos, Expr};
 use crate::data::functions::OP_LIST;
-use crate::data::program::WrongFixedRuleOptionError;
+use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
@@ -61,7 +61,7 @@ impl FixedRule for ReorderSort {
                     name: Symbol::new("out", payload.span()),
                     span: payload.span(),
                     rule_name: Symbol::new(payload.name(), payload.span()),
-                    help: "This option must evaluate to a list".to_string()
+                    help: WrongFixedRuleOptionHelp::OptionMustBeList,
                 })
             }
         };

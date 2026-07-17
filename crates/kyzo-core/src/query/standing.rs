@@ -64,7 +64,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Receiver;
 
-use miette::{Result, miette};
+use miette::{Diagnostic, Result};
+use thiserror::Error;
 
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -80,6 +81,23 @@ use crate::runtime::current_validity;
 use crate::runtime::db::{Db, ScriptOptions, SessionTx};
 use crate::runtime::relation::get_relation;
 use crate::storage::Storage;
+
+/// Named refusal when [`Db::register_standing`] is given a non-standing script.
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum StandingRegisterRefusal {
+    #[error(
+        "register_standing needs a single read query, not a system op or an \
+         imperative script"
+    )]
+    #[diagnostic(code(standing::not_single_read))]
+    NotSingleRead,
+    #[error(
+        "register_standing needs a pure read query, not a mutation — a standing query \
+         maintains its OWN state from EDB commits, it does not write one"
+    )]
+    #[diagnostic(code(standing::mutation))]
+    Mutation,
+}
 
 /// KyzoScript's own canonical name for the entry relation — the same
 /// identity `InputProgram::entry_name` carries and this module's
@@ -160,7 +178,7 @@ impl<S: Storage> StandingQuery<S> {
         db: &Db<S>,
         magic: crate::data::program::StratifiedMagicProgram,
     ) -> Result<Self> {
-        let program = incremental::translate(magic).map_err(|e| miette!("{e}"))?;
+        let program = incremental::translate(magic)?;
         let edb = incremental::edb_relations_pub(&program);
 
         let mut subscriptions = BTreeMap::new();
@@ -218,8 +236,7 @@ impl<S: Storage> StandingQuery<S> {
             .map(|rel| (rel.clone(), BTreeSet::new()))
             .collect();
         let (_deltas, full_state) =
-            incremental::incremental_eval(&program, &edb_only_state, &seed_patch)
-                .map_err(|e| miette!("{e}"))?;
+            incremental::incremental_eval(&program, &edb_only_state, &seed_patch)?;
 
         Ok(StandingQuery {
             db: db.clone(),
@@ -333,8 +350,7 @@ impl<S: Storage> StandingQuery<S> {
             return Ok(BTreeMap::new());
         }
         let (deltas, new_state) =
-            incremental::incremental_eval(&self.program, &self.state, &edb_patch)
-                .map_err(|e| miette!("{e}"))?;
+            incremental::incremental_eval(&self.program, &self.state, &edb_patch)?;
         debug_assert!(
             self.subscriptions.iter().all(|(rel, sub)| {
                 new_state
@@ -416,17 +432,11 @@ impl<S: Storage> Db<S> {
         let program = match parse_script(query, &params, &fixed, cur_vld)? {
             Script::Single(prog) => *prog,
             Script::Sys(_) | Script::Imperative(_) => {
-                return Err(miette!(
-                    "register_standing needs a single read query, not a system op or an \
-                     imperative script"
-                ));
+                return Err(StandingRegisterRefusal::NotSingleRead.into());
             }
         };
         if program.out_opts().store_relation.is_some() {
-            return Err(miette!(
-                "register_standing needs a pure read query, not a mutation — a standing query \
-                 maintains its OWN state from EDB commits, it does not write one"
-            ));
+            return Err(StandingRegisterRefusal::Mutation.into());
         }
 
         let tx = SessionTx::new_read(self.storage.read_tx()?, ScriptOptions::default());

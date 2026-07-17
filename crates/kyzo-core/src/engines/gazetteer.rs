@@ -146,14 +146,11 @@ pub(crate) struct GazetteerEmptySurface {
 
 /// The Aho-Corasick automaton could not be built from the dictionary's
 /// surface forms (e.g. the combined pattern set exceeds the automaton's size
-/// limits). Carries the underlying reason; the dictionary relation is intact
-/// and can be pruned and recompiled.
+/// limits). The dictionary relation is intact and can be pruned and recompiled.
 #[derive(Debug, Error, Diagnostic)]
-#[error("gazetteer automaton build failed: {reason}")]
+#[error("gazetteer automaton build failed")]
 #[diagnostic(code(index::gazetteer::build_failed))]
-pub(crate) struct GazetteerBuildFailed {
-    pub(crate) reason: String,
-}
+pub(crate) struct GazetteerBuildFailed;
 
 // ---------------------------------------------------------------------------
 // The dictionary relation's schema.
@@ -308,9 +305,7 @@ pub(crate) fn compile_dictionary(
             .match_kind(MatchKind::LeftmostLongest)
             .ascii_case_insensitive(config.case_insensitive)
             .build(&patterns)
-            .map_err(|e| GazetteerBuildFailed {
-                reason: e.to_string(),
-            })?;
+            .map_err(|_| GazetteerBuildFailed)?;
         Some(ac)
     };
 

@@ -69,7 +69,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use miette::Result;
+use miette::{Diagnostic, Result};
+use thiserror::Error;
 
 use crate::data::program::{
     InputProgram, NormalFormAtom, NormalFormInlineRule, NormalFormRulesOrFixed,
@@ -104,12 +105,90 @@ pub enum VerifyOutcome {
     },
     /// The query uses a construct this cut's translator does not carry to
     /// the oracle (see the module docs' scope section). Named, not silent.
+    /// Constructed only from [`VerifyUnsupported`] (typed), then rendered.
     Unsupported { reason: String },
     /// The oracle itself refused the translated program (unsafe or
     /// unstratifiable) — a genuine finding about the QUERY, not a verify
     /// harness bug, and not evidence of an engine defect since the
     /// production compiler independently refuses the same programs.
     OracleRefused { reason: String },
+}
+
+/// Named reason [`VerifyOutcome::Unsupported`] carries — never a bare
+/// `miette!` string. Rendered into the product outcome via [`Display`].
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum VerifyUnsupported {
+    #[error(
+        "::verify supports single read queries only, not sys ops or \
+         imperative scripts"
+    )]
+    #[diagnostic(code(verify::not_single_read))]
+    NotSingleRead,
+    #[error("::verify supports pure read queries only, not mutations")]
+    #[diagnostic(code(verify::mutation))]
+    Mutation,
+    #[error(
+        ":order / :limit / :offset are not supported by this cut of \
+         ::verify — it compares full, unordered answer sets"
+    )]
+    #[diagnostic(code(verify::order_limit_offset))]
+    OrderLimitOffset,
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Translate(TranslateUnsupported),
+}
+
+/// A construct this cut's translator refuses to carry to the oracle —
+/// caught at the top level and turned into [`VerifyOutcome::Unsupported`],
+/// never a hard error (an unsupported query is a normal, named outcome).
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+pub(crate) enum TranslateUnsupported {
+    #[error(
+        "relation atom '{name}' is an interval-derivation (@spans) or diff \
+         (@delta/@delta_sys) read: these bind an extra column beyond the \
+         relation's own arity, a distinct translator shape from the \
+         point-in-time @ read just landed — not yet translated"
+    )]
+    #[diagnostic(code(verify::translate::interval_derivation))]
+    IntervalDerivation { name: String },
+    #[error(
+        "predicate (filter expression) atoms are not translated — the oracle's Term \
+         model has no arbitrary-expression evaluation"
+    )]
+    #[diagnostic(code(verify::translate::predicate))]
+    Predicate,
+    #[error(
+        "unification ('=' / 'in') atoms are not translated — the oracle's Term model \
+         has no arbitrary-expression evaluation"
+    )]
+    #[diagnostic(code(verify::translate::unification))]
+    Unification,
+    #[error("index-search atoms (~rel:idx{{...}}) have no oracle-model equivalent")]
+    #[diagnostic(code(verify::translate::search))]
+    Search,
+    #[error(
+        "'{rel}' is defined by a fixed-rule application ('{fixed}'); ::verify has no generic \
+         bridge from a live fixed-rule implementation to the oracle's plain-function \
+         model"
+    )]
+    #[diagnostic(code(verify::translate::fixed_rule))]
+    FixedRule { rel: String, fixed: String },
+}
+
+impl From<VerifyUnsupported> for VerifyOutcome {
+    fn from(reason: VerifyUnsupported) -> Self {
+        VerifyOutcome::Unsupported {
+            reason: reason.to_string(),
+        }
+    }
+}
+
+/// Named refusal when `:timeout` is not a usable finite duration.
+#[derive(Debug, Clone, PartialEq, Error, Diagnostic)]
+#[error("timeout {secs} is not a usable duration")]
+#[diagnostic(code(verify::unusable_timeout))]
+struct UnusableTimeout {
+    secs: f64,
 }
 
 impl VerifyOutcome {
@@ -150,12 +229,6 @@ fn oracle_name(sym: &Symbol) -> laws::Name {
     laws::Name::owned(sym.name.as_str())
 }
 
-/// A construct this cut's translator refuses to carry to the oracle —
-/// caught at the top level and turned into [`VerifyOutcome::Unsupported`],
-/// never a hard error (an unsupported query is a normal, named outcome).
-#[derive(Debug)]
-struct Unsupported(String);
-
 /// The oracle-bound program plus the EDB relation names it reads (still to
 /// be scanned) and the entry relation's oracle name.
 struct Translated {
@@ -189,7 +262,7 @@ fn translate_atom(
     atom: &NormalFormAtom,
     edb_names: &mut BTreeSet<laws::Rel>,
     historical_names: &mut BTreeSet<laws::Rel>,
-) -> std::result::Result<laws::Literal, Unsupported> {
+) -> std::result::Result<laws::Literal, TranslateUnsupported> {
     use crate::data::program::ValidityClause;
 
     match atom {
@@ -214,13 +287,9 @@ fn translate_atom(
                     Ok(laws::Literal::pos_at(rel, args, to_oracle_asof(*as_of)))
                 }
                 Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
-                    Err(Unsupported(format!(
-                        "relation atom '{}' is an interval-derivation (@spans) or diff \
-                         (@delta/@delta_sys) read: these bind an extra column beyond the \
-                         relation's own arity, a distinct translator shape from the \
-                         point-in-time @ read just landed — not yet translated",
-                        a.name
-                    )))
+                    Err(TranslateUnsupported::IntervalDerivation {
+                        name: a.name.to_string(),
+                    })
                 }
             }
         }
@@ -237,29 +306,15 @@ fn translate_atom(
                     Ok(laws::Literal::neg_at(rel, args, to_oracle_asof(*as_of)))
                 }
                 Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
-                    Err(Unsupported(format!(
-                        "relation atom '{}' is an interval-derivation (@spans) or diff \
-                         (@delta/@delta_sys) read: these bind an extra column beyond the \
-                         relation's own arity, a distinct translator shape from the \
-                         point-in-time @ read just landed — not yet translated",
-                        a.name
-                    )))
+                    Err(TranslateUnsupported::IntervalDerivation {
+                        name: a.name.to_string(),
+                    })
                 }
             }
         }
-        NormalFormAtom::Predicate(_) => Err(Unsupported(
-            "predicate (filter expression) atoms are not translated — the oracle's Term \
-             model has no arbitrary-expression evaluation"
-                .to_string(),
-        )),
-        NormalFormAtom::Unification(_) => Err(Unsupported(
-            "unification ('=' / 'in') atoms are not translated — the oracle's Term model \
-             has no arbitrary-expression evaluation"
-                .to_string(),
-        )),
-        NormalFormAtom::Search(_) => Err(Unsupported(
-            "index-search atoms (~rel:idx{...}) have no oracle-model equivalent".to_string(),
-        )),
+        NormalFormAtom::Predicate(_) => Err(TranslateUnsupported::Predicate),
+        NormalFormAtom::Unification(_) => Err(TranslateUnsupported::Unification),
+        NormalFormAtom::Search(_) => Err(TranslateUnsupported::Search),
     }
 }
 
@@ -268,7 +323,7 @@ fn translate_inline_rule(
     rule: &NormalFormInlineRule,
     edb_names: &mut BTreeSet<laws::Rel>,
     historical_names: &mut BTreeSet<laws::Rel>,
-) -> std::result::Result<laws::Rule, Unsupported> {
+) -> std::result::Result<laws::Rule, TranslateUnsupported> {
     let head_args: Vec<laws::Term> = rule.head.iter().map(translate_term).collect();
     let body = rule
         .body
@@ -289,14 +344,12 @@ fn translate_def(
     rules: &mut Vec<laws::Rule>,
     edb_names: &mut BTreeSet<laws::Rel>,
     historical_names: &mut BTreeSet<laws::Rel>,
-) -> std::result::Result<(), Unsupported> {
+) -> std::result::Result<(), TranslateUnsupported> {
     match def {
-        NormalFormRulesOrFixed::Fixed { fixed } => Err(Unsupported(format!(
-            "'{}' is defined by a fixed-rule application ('{}'); ::verify has no generic \
-             bridge from a live fixed-rule implementation to the oracle's plain-function \
-             model",
-            name_rel, fixed.fixed_handle.name
-        ))),
+        NormalFormRulesOrFixed::Fixed { fixed } => Err(TranslateUnsupported::FixedRule {
+            rel: name_rel.to_string(),
+            fixed: fixed.fixed_handle.name.to_string(),
+        }),
         NormalFormRulesOrFixed::Rules { rules: inline } => {
             for r in inline {
                 rules.push(translate_inline_rule(
@@ -317,15 +370,16 @@ fn translate_def(
 /// the entry — harmless: an unused oracle rule never affects the entry's
 /// fixpoint, and `laws.rs` infers IDB-ness from which relations are some
 /// rule's head, not from a separately declared set.
-fn translate(program: &crate::data::program::NormalFormProgram) -> Result<Translated> {
+fn translate(
+    program: &crate::data::program::NormalFormProgram,
+) -> std::result::Result<Translated, TranslateUnsupported> {
     let mut rules = Vec::new();
     let mut edb_names = BTreeSet::new();
     let mut historical_names = BTreeSet::new();
 
     for (name, def) in program.rules() {
         let rel = oracle_name(name);
-        translate_def(rel, def, &mut rules, &mut edb_names, &mut historical_names)
-            .map_err(|Unsupported(reason)| miette::miette!("{reason}"))?;
+        translate_def(rel, def, &mut rules, &mut edb_names, &mut historical_names)?;
     }
     let entry_rel = oracle_name(program.entry_name());
     translate_def(
@@ -334,8 +388,7 @@ fn translate(program: &crate::data::program::NormalFormProgram) -> Result<Transl
         &mut rules,
         &mut edb_names,
         &mut historical_names,
-    )
-    .map_err(|Unsupported(reason)| miette::miette!("{reason}"))?;
+    )?;
 
     // The XOR: a relation read with ANY `@` clause anywhere resolves
     // wholly through `histories` — including its clause-less reads
@@ -419,15 +472,14 @@ fn scan_full_histories(
                     valid,
                     sys,
                     payload,
-                } => laws::Event::assert(key_tuple, payload, valid.raw(), sys.raw()),
+                } => laws::Event::assert(key_tuple, payload, valid.raw(), sys.raw())?,
                 crate::query::ra::temporal::RawVersion::Retract { valid, sys } => {
-                    laws::Event::retract(key_tuple, valid.raw(), sys.raw())
+                    laws::Event::retract(key_tuple, valid.raw(), sys.raw())?
                 }
                 crate::query::ra::temporal::RawVersion::Erase { valid, sys } => {
-                    laws::Event::erase(key_tuple, valid.raw(), sys.raw())
+                    laws::Event::erase(key_tuple, valid.raw(), sys.raw())?
                 }
-            }
-            .map_err(|e| miette::miette!("{e}"))?;
+            };
             events.push(event);
         }
         histories.insert(rel.clone(), events);
@@ -464,7 +516,7 @@ fn oracle_budget(options: &ScriptOptions) -> Result<crate::query::eval::Budget> 
     );
     if let Some(secs) = options.timeout_secs.filter(|s| *s > 0.0) {
         let duration = std::time::Duration::try_from_secs_f64(secs)
-            .map_err(|_| miette::miette!("timeout {secs} is not a usable duration"))?;
+            .map_err(|_| UnusableTimeout { secs })?;
         budget = budget.with_timeout(duration);
     }
     Ok(budget)
@@ -487,11 +539,7 @@ impl<S: Storage> Db<S> {
         let program: InputProgram = match script {
             Script::Single(prog) => *prog,
             Script::Sys(_) | Script::Imperative(_) => {
-                return Ok(VerifyOutcome::Unsupported {
-                    reason: "::verify supports single read queries only, not sys ops or \
-                             imperative scripts"
-                        .to_string(),
-                });
+                return Ok(VerifyUnsupported::NotSingleRead.into());
             }
         };
         self.verify_program(program, cur_vld, &options, &|_| {})
@@ -527,19 +575,13 @@ impl<S: Storage> Db<S> {
         sabotage_oracle_facts: &dyn Fn(&mut BTreeMap<laws::Rel, BTreeSet<Tuple>>),
     ) -> Result<VerifyOutcome> {
         if program.out_opts().store_relation.is_some() {
-            return Ok(VerifyOutcome::Unsupported {
-                reason: "::verify supports pure read queries only, not mutations".to_string(),
-            });
+            return Ok(VerifyUnsupported::Mutation.into());
         }
         if !program.out_opts().sorters.is_empty()
             || program.out_opts().limit.is_some()
             || program.out_opts().offset.is_some()
         {
-            return Ok(VerifyOutcome::Unsupported {
-                reason: ":order / :limit / :offset are not supported by this cut of \
-                         ::verify — it compares full, unordered answer sets"
-                    .to_string(),
-            });
+            return Ok(VerifyUnsupported::OrderLimitOffset.into());
         }
 
         // Captured before `program` is consumed below (`into_normalized_program`
@@ -579,9 +621,7 @@ impl<S: Storage> Db<S> {
         let translated = match translate(&normalized) {
             Ok(t) => t,
             Err(e) => {
-                return Ok(VerifyOutcome::Unsupported {
-                    reason: e.to_string(),
-                });
+                return Ok(VerifyUnsupported::Translate(e).into());
             }
         };
         let mut facts = scan_edb_facts(&tx.store, &translated.edb_names, cur_vld)?;
@@ -669,7 +709,9 @@ mod tests {
                 // 6 pairs (1,2)(1,3)(1,4)(2,3)(2,4)(3,4).
                 assert_eq!(row_count, 6, "unexpected row count for the seeded chain");
             }
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -712,7 +754,9 @@ mod tests {
                     "sabotage must be visible in the oracle's answer"
                 );
             }
-            other @ VerifyOutcome::Match { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Mismatch, got {other:?}"),
+            other @ (VerifyOutcome::Match { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Mismatch, got {other:?}"),
         }
     }
 
@@ -735,7 +779,9 @@ mod tests {
                     "expected a predicate-atom refusal, got: {reason}"
                 );
             }
-            other @ VerifyOutcome::Match { .. } | other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Unsupported, got {other:?}"),
+            other @ (VerifyOutcome::Match { .. }
+            | VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
@@ -840,7 +886,9 @@ mod tests {
             .expect("verify_script runs");
         match outcome {
             VerifyOutcome::Match { .. } => {}
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -940,7 +988,9 @@ mod tests {
             .expect("verify_script runs");
         match at_100 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match at valid=100, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Match at valid=100, got {other:?}"),
         }
 
         let at_200 = db
@@ -952,7 +1002,9 @@ mod tests {
             .expect("verify_script runs");
         match at_200 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 1),
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match at valid=200, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Match at valid=200, got {other:?}"),
         }
 
         // Before the fact existed at all: empty, not a refusal.
@@ -965,7 +1017,9 @@ mod tests {
             .expect("verify_script runs");
         match at_50 {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 0),
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected an empty Match at valid=50, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected an empty Match at valid=50, got {other:?}"),
         }
     }
 
@@ -1003,7 +1057,9 @@ mod tests {
             // At valid=50 nothing existed in hist yet, so both probe pairs
             // pass the negation.
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 2),
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Match, got {other:?}"),
         }
     }
 
@@ -1037,7 +1093,9 @@ mod tests {
                     "expected an @spans-named refusal, got: {reason}"
                 );
             }
-            other @ VerifyOutcome::Match { .. } | other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Unsupported, got {other:?}"),
+            other @ (VerifyOutcome::Match { .. }
+            | VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
@@ -1095,7 +1153,9 @@ mod tests {
             .expect("verify_script runs");
         match outcome {
             VerifyOutcome::Match { row_count } => assert_eq!(row_count, 6),
-            other @ VerifyOutcome::Mismatch { .. } | other @ VerifyOutcome::Unsupported { .. } | other @ VerifyOutcome::OracleRefused { .. } => panic!("expected Match, got {other:?}"),
+            other @ (VerifyOutcome::Mismatch { .. }
+            | VerifyOutcome::Unsupported { .. }
+            | VerifyOutcome::OracleRefused { .. }) => panic!("expected Match, got {other:?}"),
         }
     }
 

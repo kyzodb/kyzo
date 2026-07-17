@@ -186,10 +186,7 @@ impl SearchBatches<'_> {
                     Err(e) => return Err(e.into()),
                 };
                 while self.hit_idx < self.hits.len() {
-                    let hit = self
-                        .hits
-                        .materialize_hit(self.hit_idx)
-                        .map_err(|e| miette::miette!("search hit materialization refused: {e:?}"))?;
+                    let hit = self.hits.materialize_hit(self.hit_idx)?;
                     out.push_with(|buf| {
                         buf.extend_from_slice(&row);
                         buf.extend(hit);

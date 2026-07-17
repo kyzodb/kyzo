@@ -341,6 +341,15 @@ pub(crate) enum Event {
     },
 }
 
+/// Named refusal when an event claims the reserved `@ 'END'` valid instant.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
+#[error(
+    "valid instant i64::MAX is reserved for the `@ 'END'` write-side \
+     sentinel; no event may claim it as its own coordinate"
+)]
+#[diagnostic(code(laws::reserved_valid_end))]
+pub(crate) struct ReservedValidInstant;
+
 impl Event {
     /// The valid instant `i64::MAX` is RESERVED for the `@ 'END'`
     /// write-side sentinel (`parse/query.rs`'s end-sentinel resolution,
@@ -352,12 +361,9 @@ impl Event {
     /// (Hostile-review ruling, issue #62 comment 4882951801: the write
     /// path's own refusal of the same instant is a separate, later
     /// change; this is the oracle's side of the reservation.)
-    fn check_valid_not_reserved(valid: i64) -> miette::Result<()> {
+    fn check_valid_not_reserved(valid: i64) -> Result<(), ReservedValidInstant> {
         if valid == i64::MAX {
-            miette::bail!(
-                "valid instant i64::MAX is reserved for the `@ 'END'` write-side \
-                 sentinel; no event may claim it as its own coordinate"
-            );
+            return Err(ReservedValidInstant);
         }
         Ok(())
     }
@@ -816,7 +822,7 @@ impl Program {
 /// Why a program is refused, or an evaluation failed. The real compiler
 /// must refuse the same programs, for the same reasons; evaluation errors
 /// are values (law 5), never panics.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Rejection {
     /// A head variable is not bound by any positive body literal, or a
     /// negated literal uses a variable no positive literal binds.

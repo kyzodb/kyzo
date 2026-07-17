@@ -10,7 +10,14 @@
 
 use super::{BoxTokenStream, Token, TokenFilter, TokenStream};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
-use miette::{IntoDiagnostic, Result};
+use miette::{Diagnostic, Result};
+use thiserror::Error;
+
+/// Named refusal when the compound-words dictionary automaton cannot be built.
+#[derive(Debug, Error, Diagnostic)]
+#[error("Failed to load compound-words dictionary")]
+#[diagnostic(code(fts::compound_dict_build))]
+pub(crate) struct CompoundDictionaryBuildFailed;
 
 /// A [`TokenFilter`] which splits compound words into their parts
 /// based on a given dictionary.
@@ -66,7 +73,7 @@ impl SplitCompoundWords {
         let dict = AhoCorasickBuilder::new()
             .match_kind(MatchKind::LeftmostLongest)
             .build(dict)
-            .into_diagnostic()?;
+            .map_err(|_| CompoundDictionaryBuildFailed)?;
 
         Ok(Self::from_automaton(dict))
     }

@@ -62,8 +62,9 @@ use std::fmt;
 use miette::Diagnostic;
 use thiserror::Error;
 
+use crate::data::value::{DecodeError, SearchHits, Tuple};
 use crate::data::value::DataValue;
-use crate::data::value::{SearchHits, Tuple};
+use self::lsh::LshPermutationDecodeRefused;
 
 /// A stored index row (or a base row an index points at) failed to decode as
 /// what the index format says it must be. Corruption is an error, never a
@@ -88,7 +89,7 @@ pub(crate) enum IndexCorruptReason {
     RowShorterThanKey,
     WrongColumnCount { found: usize, expected: usize },
     BaseRowMissing,
-    DecodeFailed { detail: String },
+    DecodeFailed(DecodeError),
 
     SpatialCurveNot8Bytes,
     SpatialLatNotNumber,
@@ -97,7 +98,7 @@ pub(crate) enum IndexCorruptReason {
     SparseWeightNotFloat,
     SparseWeightNotFiniteNonNeg,
 
-    LshPermutations { detail: String },
+    LshPermutations(LshPermutationDecodeRefused),
     LshInvChunkNotBytes,
     LshInvNotChunkList,
     LshEmptyPosting,
@@ -150,8 +151,8 @@ impl fmt::Display for IndexCorruptReason {
             Self::BaseRowMissing => {
                 write!(f, "index references a base row that does not exist")
             }
-            Self::DecodeFailed { detail } => {
-                write!(f, "stored row bytes did not decode: {detail}")
+            Self::DecodeFailed(err) => {
+                write!(f, "stored row bytes did not decode: {err}")
             }
             Self::SpatialCurveNot8Bytes => {
                 write!(f, "spatial posting curve column is not 8 bytes")
@@ -162,8 +163,8 @@ impl fmt::Display for IndexCorruptReason {
             Self::SparseWeightNotFiniteNonNeg => {
                 write!(f, "sparse posting weight is not a finite non-negative float")
             }
-            Self::LshPermutations { detail } => {
-                write!(f, "stored LSH permutations: {detail}")
+            Self::LshPermutations(err) => {
+                write!(f, "stored LSH permutations: {err}")
             }
             Self::LshInvChunkNotBytes => {
                 write!(f, "inverse LSH row holds a non-bytes chunk")
@@ -267,8 +268,8 @@ pub(crate) fn index_rows<'a>(
 ) -> impl Iterator<Item = miette::Result<crate::data::value::Tuple>> + 'a {
     scan.map(move |r| {
         r.map_err(|e| {
-            if e.code().is_some_and(|c| c.to_string() == "value::decode") {
-                IndexRowCorrupt::from_decode(index_name, e).into()
+            if let Some(de) = e.downcast_ref::<DecodeError>().copied() {
+                IndexRowCorrupt::from_decode(index_name, de).into()
             } else {
                 e
             }
@@ -278,15 +279,12 @@ pub(crate) fn index_rows<'a>(
 
 /// Admit decoded relation-search rows at the engine→query seam.
 pub(crate) fn admit_relation_search_hits(tuples: Vec<Tuple>) -> miette::Result<SearchHits> {
-    SearchHits::admit_decoded(tuples).map_err(|d| {
-        miette::miette!("search hit admission refused: {d:?}")
-    })
+    Ok(SearchHits::admit_decoded(tuples)?)
 }
 
 /// Materialize admitted search hits for test assertions (output boundary).
 pub(crate) fn search_rows(hits: SearchHits) -> miette::Result<Vec<Tuple>> {
-    hits.materialize_all_tuples()
-        .map_err(|e| miette::miette!("search hit materialization refused: {e:?}"))
+    Ok(hits.materialize_all_tuples()?)
 }
 
 impl IndexRowCorrupt {
@@ -302,13 +300,11 @@ impl IndexRowCorrupt {
     /// could become a tuple: wrap that raw decode failure as this index's
     /// own typed corruption error, so a `DecodeError` never leaks out of
     /// an engine as the engine's contract.
-    pub(crate) fn from_decode(index: &str, err: impl std::fmt::Display) -> Self {
+    pub(crate) fn from_decode(index: &str, err: DecodeError) -> Self {
         IndexRowCorrupt {
             index: index.to_string(),
             row: "<undecodable bytes>".to_string(),
-            reason: IndexCorruptReason::DecodeFailed {
-                detail: err.to_string(),
-            },
+            reason: IndexCorruptReason::DecodeFailed(err),
         }
     }
 }

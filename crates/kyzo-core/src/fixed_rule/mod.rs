@@ -96,7 +96,7 @@ use thiserror::Error;
 use crate::data::expr::Expr;
 use crate::data::program::{
     FixedRuleOptionNotFoundError, MagicFixedRuleApply, MagicFixedRuleRuleArg, MagicSymbol,
-    WrongFixedRuleOptionError,
+    WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -504,7 +504,7 @@ impl<'a> FixedRulePayload<'a> {
                     name: Symbol::new(name, ex.span()),
                     span: ex.span(),
                     rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: "a string is required".to_string(),
+                    help: WrongFixedRuleOptionHelp::StringRequired,
                 }
                 .into()),
             },
@@ -549,7 +549,7 @@ impl<'a> FixedRulePayload<'a> {
                     name: Symbol::new(name, v.span()),
                     span: v.span(),
                     rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: "an integer is required".to_string(),
+                    help: WrongFixedRuleOptionHelp::IntegerRequired,
                 }
                 .into()),
             },
@@ -573,7 +573,7 @@ impl<'a> FixedRulePayload<'a> {
                 name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: "a positive integer is required".to_string(),
+                help: WrongFixedRuleOptionHelp::PositiveIntegerRequired,
             }
         );
         let span = self.option_span(name).unwrap_or(self.manifest.span);
@@ -582,7 +582,7 @@ impl<'a> FixedRulePayload<'a> {
                 name: Symbol::new(name, span),
                 span,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: "a positive integer fitting usize is required".to_string(),
+                help: WrongFixedRuleOptionHelp::PositiveIntegerFitsUsizeRequired,
             }
             .into()
         })
@@ -596,7 +596,7 @@ impl<'a> FixedRulePayload<'a> {
                 name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: "a non-negative integer is required".to_string(),
+                help: WrongFixedRuleOptionHelp::NonNegIntegerRequired,
             }
         );
         let span = self.option_span(name).unwrap_or(self.manifest.span);
@@ -605,7 +605,7 @@ impl<'a> FixedRulePayload<'a> {
                 name: Symbol::new(name, span),
                 span,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: "a non-negative integer fitting usize is required".to_string(),
+                help: WrongFixedRuleOptionHelp::NonNegIntegerFitsUsizeRequired,
             }
             .into()
         })
@@ -622,7 +622,7 @@ impl<'a> FixedRulePayload<'a> {
                     name: Symbol::new(name, v.span()),
                     span: v.span(),
                     rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: "a floating number is required".to_string(),
+                    help: WrongFixedRuleOptionHelp::FloatRequired,
                 }
                 .into()),
             },
@@ -646,7 +646,7 @@ impl<'a> FixedRulePayload<'a> {
                 name: Symbol::new(name, self.option_span(name)?),
                 span: self.option_span(name)?,
                 rule_name: self.manifest.fixed_handle.name.clone(),
-                help: "a number between 0. and 1. is required".to_string(),
+                help: WrongFixedRuleOptionHelp::UnitIntervalRequired,
             }
         );
         Ok(f)
@@ -660,7 +660,7 @@ impl<'a> FixedRulePayload<'a> {
                     name: Symbol::new(name, v.span()),
                     span: v.span(),
                     rule_name: self.manifest.fixed_handle.name.clone(),
-                    help: "a boolean value is required".to_string(),
+                    help: WrongFixedRuleOptionHelp::BoolRequired,
                 }
                 .into()),
             },

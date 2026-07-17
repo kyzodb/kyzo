@@ -242,9 +242,7 @@ impl MinHashLshIndexManifest {
             miette!(IndexRowCorrupt::new(
                 &self.index_name,
                 &[],
-                IndexCorruptReason::LshPermutations {
-                    detail: reason.to_string(),
-                },
+                IndexCorruptReason::LshPermutations(reason),
             ))
         })
     }

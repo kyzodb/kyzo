@@ -1980,7 +1980,52 @@ pub(crate) struct WrongFixedRuleOptionError {
     pub(crate) span: SourceSpan,
     pub(crate) rule_name: Symbol,
     #[help]
-    pub(crate) help: String,
+    pub(crate) help: WrongFixedRuleOptionHelp,
+}
+
+/// Named help for [`WrongFixedRuleOptionError`] — String identity is
+/// unrepresentable; every construction site picks a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WrongFixedRuleOptionHelp {
+    StringRequired,
+    IntegerRequired,
+    PositiveIntegerRequired,
+    PositiveIntegerFitsUsizeRequired,
+    NonNegIntegerRequired,
+    NonNegIntegerFitsUsizeRequired,
+    FloatRequired,
+    UnitIntervalRequired,
+    BoolRequired,
+    ListOfListsRequired,
+    DelimiterSingleByte,
+    OptionMustBeList,
+    TypesNotColType,
+}
+
+impl Display for WrongFixedRuleOptionHelp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StringRequired => write!(f, "a string is required"),
+            Self::IntegerRequired => write!(f, "an integer is required"),
+            Self::PositiveIntegerRequired => write!(f, "a positive integer is required"),
+            Self::PositiveIntegerFitsUsizeRequired => {
+                write!(f, "a positive integer fitting usize is required")
+            }
+            Self::NonNegIntegerRequired => write!(f, "a non-negative integer is required"),
+            Self::NonNegIntegerFitsUsizeRequired => {
+                write!(f, "a non-negative integer fitting usize is required")
+            }
+            Self::FloatRequired => write!(f, "a floating number is required"),
+            Self::UnitIntervalRequired => write!(f, "a number between 0. and 1. is required"),
+            Self::BoolRequired => write!(f, "a boolean value is required"),
+            Self::ListOfListsRequired => write!(f, "a list of lists is required"),
+            Self::DelimiterSingleByte => write!(f, "'delimiter' must be a single-byte string"),
+            Self::OptionMustBeList => write!(f, "This option must evaluate to a list"),
+            Self::TypesNotColType => {
+                write!(f, "each element of 'types' must be a valid column type")
+            }
+        }
+    }
 }
 
 impl MagicFixedRuleApply {

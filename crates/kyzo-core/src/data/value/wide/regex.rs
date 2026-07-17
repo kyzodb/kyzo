@@ -95,25 +95,19 @@ pub struct RegexSource {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RegexParseRefusal {
     /// `regex_syntax` rejected the pattern under the active flags.
-    Syntax {
-        pattern: String,
-        detail: String,
-    },
+    Syntax { pattern: String },
     /// The regex engine refused to compile an already syntax-valid source.
-    Compile {
-        pattern: String,
-        detail: String,
-    },
+    Compile { pattern: String },
 }
 
 impl std::fmt::Display for RegexParseRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RegexParseRefusal::Syntax { pattern, detail } => {
-                write!(f, "invalid regex {pattern:?}: {detail}")
+            RegexParseRefusal::Syntax { pattern } => {
+                write!(f, "invalid regex {pattern:?}")
             }
-            RegexParseRefusal::Compile { pattern, detail } => {
-                write!(f, "regex compile failed for {pattern:?}: {detail}")
+            RegexParseRefusal::Compile { pattern } => {
+                write!(f, "regex compile failed for {pattern:?}")
             }
         }
     }
@@ -158,10 +152,7 @@ impl RegexSource {
             .unicode(!flags.contains(RegexFlags::UNICODE_DISABLED));
         match parser.build().parse(&pattern) {
             Ok(_) => Ok(RegexSource { flags, pattern }),
-            Err(e) => Err(InvalidRegex(RegexParseRefusal::Syntax {
-                pattern,
-                detail: e.to_string(),
-            })),
+            Err(_) => Err(InvalidRegex(RegexParseRefusal::Syntax { pattern })),
         }
     }
 
@@ -185,10 +176,9 @@ impl RegexSource {
             .unicode(!self.flags.contains(RegexFlags::UNICODE_DISABLED))
             .build()
             .map(CompiledRegexV1)
-            .map_err(|e| {
+            .map_err(|_| {
                 InvalidRegex(RegexParseRefusal::Compile {
                     pattern: self.pattern.clone(),
-                    detail: e.to_string(),
                 })
             })
     }

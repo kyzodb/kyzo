@@ -530,6 +530,36 @@ pub enum Denial {
     CodeRemapOverflow,
 }
 
+impl std::fmt::Display for Denial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Denial::ArenaMismatch { left, right } => {
+                write!(f, "arena mismatch ({left:?} vs {right:?})")
+            }
+            Denial::EpochMismatch { left, right } => {
+                write!(f, "epoch mismatch ({left:?} vs {right:?})")
+            }
+            Denial::VisibilityOverflow { required, visible } => {
+                write!(f, "visibility overflow (required {required}, visible {visible})")
+            }
+            Denial::EmptyProjection => write!(f, "empty projection"),
+            Denial::ArityMismatch { expected, got } => {
+                write!(f, "arity mismatch (expected {expected}, got {got})")
+            }
+            Denial::ExtentOverflow => write!(f, "extent overflow"),
+            Denial::CodeRemapOverflow => write!(f, "code remap overflow"),
+        }
+    }
+}
+
+impl std::error::Error for Denial {}
+
+impl miette::Diagnostic for Denial {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        Some(Box::new("value::denial"))
+    }
+}
+
 /// Thin alias for [`Admission`] — existing call sites keep this name; the
 /// vocabulary module ([`super::admission`]) is the one door.
 pub type DomainCtx = Admission;

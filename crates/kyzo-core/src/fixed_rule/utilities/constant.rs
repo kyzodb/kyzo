@@ -30,7 +30,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::expr::Expr;
-use crate::data::program::WrongFixedRuleOptionError;
+use crate::data::program::{WrongFixedRuleOptionError, WrongFixedRuleOptionHelp};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::data_value_any;
@@ -80,7 +80,7 @@ impl Constant {
             name: Symbol::new("data", span),
             span,
             rule_name: Symbol::new("Constant", span),
-            help: "a list of lists is required".to_string(),
+            help: WrongFixedRuleOptionHelp::ListOfListsRequired,
         }
     }
 

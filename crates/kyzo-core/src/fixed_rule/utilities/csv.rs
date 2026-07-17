@@ -33,7 +33,9 @@ use smartstring::{LazyCompact, SmartString};
 
 use crate::data::expr::Expr;
 use crate::data::functions::{op_to_float, op_to_uuid};
-use crate::data::program::{FixedRuleOptionNotFoundError, WrongFixedRuleOptionError};
+use crate::data::program::{
+    FixedRuleOptionNotFoundError, WrongFixedRuleOptionError, WrongFixedRuleOptionHelp,
+};
 use crate::data::relation::{ColType, NullableColType};
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -63,7 +65,7 @@ impl FixedRule for CsvReader {
                 name: Symbol::new("delimiter", payload.span()),
                 span: payload.span(),
                 rule_name: Symbol::new("CsvReader", payload.span()),
-                help: "'delimiter' must be a single-byte string".to_string()
+                help: WrongFixedRuleOptionHelp::DelimiterSingleByte,
             }
         );
         let delimiter = delimiter[0];
@@ -84,11 +86,11 @@ impl FixedRule for CsvReader {
             let type_str = type_str.get_str().ok_or_else(|| {
                 crate::fixed_rule::FixedRuleInvariantError::refuse("csv_types_list")
             })?;
-            let typ = parse_type(type_str).map_err(|e| WrongFixedRuleOptionError {
+            let typ = parse_type(type_str).map_err(|_| WrongFixedRuleOptionError {
                 name: Symbol::new("types", payload.span()),
                 span: payload.span(),
                 rule_name: Symbol::new("CsvReader", payload.span()),
-                help: e.to_string(),
+                help: WrongFixedRuleOptionHelp::TypesNotColType,
             })?;
             types.push(typ);
         }

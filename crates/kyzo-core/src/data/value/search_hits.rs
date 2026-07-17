@@ -133,6 +133,38 @@ pub(crate) enum MaterializeError {
     Denial(Denial),
 }
 
+impl std::fmt::Display for MaterializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaterializeError::RowOutOfRange { index, len } => {
+                write!(f, "search hit row {index} out of range (len {len})")
+            }
+            MaterializeError::Decode(e) => write!(f, "search hit decode refused: {e}"),
+            MaterializeError::Denial(d) => write!(f, "search hit materialization denied: {d}"),
+        }
+    }
+}
+
+impl std::error::Error for MaterializeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MaterializeError::Decode(e) => Some(e),
+            MaterializeError::Denial(d) => Some(d),
+            MaterializeError::RowOutOfRange { .. } => None,
+        }
+    }
+}
+
+impl miette::Diagnostic for MaterializeError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        Some(Box::new(match self {
+            MaterializeError::RowOutOfRange { .. } => "value::search_hit_out_of_range",
+            MaterializeError::Decode(_) => "value::decode",
+            MaterializeError::Denial(_) => "value::denial",
+        }))
+    }
+}
+
 impl From<Denial> for MaterializeError {
     fn from(d: Denial) -> Self {
         MaterializeError::Denial(d)

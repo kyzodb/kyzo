@@ -588,6 +588,12 @@ impl Debug for RelationHandle {
 ))]
 pub(crate) struct RelationDeserError;
 
+/// Named refusal when msgpack serialization of a catalog record fails.
+#[derive(Debug, Error, Diagnostic)]
+#[error("cannot serialize catalog record")]
+#[diagnostic(code(catalog::serialize))]
+pub(crate) struct CatalogSerializeRefused;
+
 #[derive(Debug, Error, Diagnostic)]
 #[error("Arity mismatch for stored relation {name}: expect {expect_arity}, got {actual_arity}")]
 #[diagnostic(code(eval::stored_rel_arity_mismatch))]
@@ -621,7 +627,7 @@ struct StoredRelArityMismatch {
 /// refuses at the door.
 mod catalog {
     use super::{RelationDeserError, RelationHandle};
-    use miette::{Result, miette};
+    use miette::Result;
     use rmp_serde::Serializer;
     use serde::Serialize;
 
@@ -666,7 +672,7 @@ mod catalog {
     pub(super) fn encode_catalog_record(rec: &impl CatalogRecord) -> Result<Vec<u8>> {
         let mut ret = vec![];
         rec.serialize(&mut Serializer::new(&mut ret).with_struct_map())
-            .map_err(|e| miette!("cannot serialize catalog record: {e}"))?;
+            .map_err(|_| super::CatalogSerializeRefused)?;
         Ok(ret)
     }
 

@@ -41,7 +41,7 @@ use crate::engines::text::tokenizer::{
     TextAnalyzer, Tokenizer, WhitespaceTokenizer,
 };
 use jieba_rs::Jieba;
-use miette::{Diagnostic, Result, bail, ensure, miette};
+use miette::{Diagnostic, Result, ensure};
 use serde::Deserialize;
 use sha2::digest::FixedOutput;
 use sha2::{Digest, Sha256};
@@ -132,6 +132,70 @@ fn is_known_stage_name(name: &str) -> bool {
      negative) nothing at all."
 ))]
 struct NonPositiveRemoveLong(i64);
+
+/// Named refusal when tokenizer / token-filter arguments are unlawful.
+/// String/`miette!`/`bail!` identity is unrepresentable — every build path
+/// picks a variant.
+#[derive(Debug, Error, Diagnostic)]
+pub(crate) enum TokenizerBuildRefusal {
+    #[error("First argument `min_gram` must be an integer")]
+    #[diagnostic(code(fts::ngram_min_not_int))]
+    NgramMinNotInt,
+    #[error("Second argument `max_gram` must be an integer")]
+    #[diagnostic(code(fts::ngram_max_not_int))]
+    NgramMaxNotInt,
+    #[error("Third argument `prefix_only` must be a boolean")]
+    #[diagnostic(code(fts::ngram_prefix_not_bool))]
+    NgramPrefixNotBool,
+    #[error("min_gram must be >= 1")]
+    #[diagnostic(code(fts::ngram_min_too_small))]
+    NgramMinTooSmall,
+    #[error("max_gram must be >= min_gram")]
+    #[diagnostic(code(fts::ngram_max_below_min))]
+    NgramMaxBelowMin,
+    #[error("Second argument `use_hmm` to Cangjie must be a boolean")]
+    #[diagnostic(code(fts::cangjie_hmm_not_bool))]
+    CangjieHmmNotBool,
+    #[error("First argument `kind` to Cangjie must be a string")]
+    #[diagnostic(code(fts::cangjie_kind_not_str))]
+    CangjieKindNotStr,
+    #[error("Unknown Cangjie kind: {0}")]
+    #[diagnostic(code(fts::cangjie_unknown_kind))]
+    CangjieUnknownKind(SmartString<LazyCompact>),
+    #[error("Unknown tokenizer: {0}")]
+    #[diagnostic(code(fts::unknown_tokenizer))]
+    UnknownTokenizer(SmartString<LazyCompact>),
+    #[error("Missing first argument `min_length`")]
+    #[diagnostic(code(fts::remove_long_missing_arg))]
+    RemoveLongMissingArg,
+    #[error("First argument `min_length` must be an integer")]
+    #[diagnostic(code(fts::remove_long_not_int))]
+    RemoveLongNotInt,
+    #[error("Missing first argument `compound_words_list`")]
+    #[diagnostic(code(fts::compound_missing_arg))]
+    CompoundMissingArg,
+    #[error("First argument `compound_words_list` must be a list of strings")]
+    #[diagnostic(code(fts::compound_not_str_list))]
+    CompoundNotStrList,
+    #[error("Missing first argument `language` to Stemmer")]
+    #[diagnostic(code(fts::stemmer_missing_lang))]
+    StemmerMissingLang,
+    #[error("First argument `language` to Stemmer must be a string")]
+    #[diagnostic(code(fts::stemmer_lang_not_str))]
+    StemmerLangNotStr,
+    #[error("Unsupported language: {0}")]
+    #[diagnostic(code(fts::stemmer_unsupported_lang))]
+    StemmerUnsupportedLang(SmartString<LazyCompact>),
+    #[error("Filter Stopwords requires language name or a list of stopwords")]
+    #[diagnostic(code(fts::stopwords_bad_arg))]
+    StopwordsBadArg,
+    #[error("First argument `stopwords` must be a list of strings")]
+    #[diagnostic(code(fts::stopwords_not_str_list))]
+    StopwordsNotStrList,
+    #[error("Unknown token filter: {0}")]
+    #[diagnostic(code(fts::unknown_token_filter))]
+    UnknownTokenFilter(SmartString<LazyCompact>),
+}
 
 impl TokenizerConfig {
     /// Typed name-proof door: unknown stage names are unrepresentable as a
@@ -227,21 +291,21 @@ impl TokenizerConfig {
                     .first()
                     .unwrap_or(&DataValue::from(1))
                     .get_int()
-                    .ok_or_else(|| miette!("First argument `min_gram` must be an integer"))?;
+                    .ok_or(TokenizerBuildRefusal::NgramMinNotInt)?;
                 let max_gram = self
                     .args
                     .get(1)
                     .unwrap_or(&DataValue::from(min_gram))
                     .get_int()
-                    .ok_or_else(|| miette!("Second argument `max_gram` must be an integer"))?;
+                    .ok_or(TokenizerBuildRefusal::NgramMaxNotInt)?;
                 let prefix_only = self
                     .args
                     .get(2)
                     .unwrap_or(&DataValue::Bool(false))
                     .get_bool()
-                    .ok_or_else(|| miette!("Third argument `prefix_only` must be a boolean"))?;
-                ensure!(min_gram >= 1, "min_gram must be >= 1");
-                ensure!(max_gram >= min_gram, "max_gram must be >= min_gram");
+                    .ok_or(TokenizerBuildRefusal::NgramPrefixNotBool)?;
+                ensure!(min_gram >= 1, TokenizerBuildRefusal::NgramMinTooSmall);
+                ensure!(max_gram >= min_gram, TokenizerBuildRefusal::NgramMaxBelowMin);
                 Box::new(NgramTokenizer::new(
                     min_gram as usize,
                     max_gram as usize,
@@ -251,22 +315,24 @@ impl TokenizerConfig {
             "Cangjie" => {
                 let hmm = match self.args.get(1) {
                     None => false,
-                    Some(d) => d.get_bool().ok_or_else(|| {
-                        miette!("Second argument `use_hmm` to Cangjie must be a boolean")
-                    })?,
+                    Some(d) => d
+                        .get_bool()
+                        .ok_or(TokenizerBuildRefusal::CangjieHmmNotBool)?,
                 };
                 let option = match self.args.first() {
                     None => cangjie::options::TokenizerOption::Default { hmm },
                     Some(d) => {
-                        let s = d.get_str().ok_or_else(|| {
-                            miette!("First argument `kind` to Cangjie must be a string")
-                        })?;
+                        let s = d
+                            .get_str()
+                            .ok_or(TokenizerBuildRefusal::CangjieKindNotStr)?;
                         match s {
                             "default" => cangjie::options::TokenizerOption::Default { hmm },
                             "all" => cangjie::options::TokenizerOption::All,
                             "search" => cangjie::options::TokenizerOption::ForSearch { hmm },
                             "unicode" => cangjie::options::TokenizerOption::Unicode,
-                            _ => bail!("Unknown Cangjie kind: {}", s),
+                            _ => {
+                                return Err(TokenizerBuildRefusal::CangjieUnknownKind(s.into()).into());
+                            }
                         }
                     }
                 };
@@ -275,7 +341,9 @@ impl TokenizerConfig {
                     option,
                 })
             }
-            _ => bail!("Unknown tokenizer: {}", self.name),
+            _ => {
+                return Err(TokenizerBuildRefusal::UnknownTokenizer(self.name.clone()).into());
+            }
         })
     }
     pub(crate) fn construct_token_filter(&self) -> Result<BoxTokenFilter> {
@@ -287,9 +355,9 @@ impl TokenizerConfig {
                 let limit = self
                     .args
                     .first()
-                    .ok_or_else(|| miette!("Missing first argument `min_length`"))?
+                    .ok_or(TokenizerBuildRefusal::RemoveLongMissingArg)?
                     .get_int()
-                    .ok_or_else(|| miette!("First argument `min_length` must be an integer"))?;
+                    .ok_or(TokenizerBuildRefusal::RemoveLongNotInt)?;
                 ensure!(limit > 0, NonPositiveRemoveLong(limit));
                 RemoveLongFilter::limit(limit as usize).into()
             }
@@ -298,32 +366,29 @@ impl TokenizerConfig {
                 match self
                     .args
                     .first()
-                    .ok_or_else(|| miette!("Missing first argument `compound_words_list`"))?
+                    .ok_or(TokenizerBuildRefusal::CompoundMissingArg)?
                 {
                     DataValue::List(l) => {
                         for v in l {
-                            list_values.push(v.get_str().ok_or_else(|| {
-                                miette!(
-                                    "First argument `compound_words_list` must be a list of strings"
-                                )
-                            })?);
+                            list_values.push(
+                                v.get_str()
+                                    .ok_or(TokenizerBuildRefusal::CompoundNotStrList)?,
+                            );
                         }
                     }
-                    data_value_any!() => bail!("First argument `compound_words_list` must be a list of strings"),
+                    data_value_any!() => {
+                        return Err(TokenizerBuildRefusal::CompoundNotStrList.into());
+                    }
                 }
-                SplitCompoundWords::from_dictionary(list_values)
-                    .map_err(|e| miette!("Failed to load dictionary: {}", e))?
-                    .into()
+                SplitCompoundWords::from_dictionary(list_values)?.into()
             }
             "Stemmer" => {
                 let language = match self
                     .args
                     .first()
-                    .ok_or_else(|| miette!("Missing first argument `language` to Stemmer"))?
+                    .ok_or(TokenizerBuildRefusal::StemmerMissingLang)?
                     .get_str()
-                    .ok_or_else(|| {
-                        miette!("First argument `language` to Stemmer must be a string")
-                    })?
+                    .ok_or(TokenizerBuildRefusal::StemmerLangNotStr)?
                     .to_lowercase()
                     .as_str()
                 {
@@ -345,34 +410,42 @@ impl TokenizerConfig {
                     "swedish" => Language::Swedish,
                     "tamil" => Language::Tamil,
                     "turkish" => Language::Turkish,
-                    lang => bail!("Unsupported language: {}", lang),
+                    lang => {
+                        return Err(
+                            TokenizerBuildRefusal::StemmerUnsupportedLang(lang.into()).into(),
+                        );
+                    }
                 };
                 Stemmer::new(language).into()
             }
             "Stopwords" => {
-                match self.args.first().ok_or_else(|| {
-                    miette!("Filter Stopwords requires language name or a list of stopwords")
-                })? {
+                match self
+                    .args
+                    .first()
+                    .ok_or(TokenizerBuildRefusal::StopwordsBadArg)?
+                {
                     DataValue::Str(name) => StopWordFilter::for_lang(name)?.into(),
                     DataValue::List(l) => {
                         let mut stopwords = Vec::new();
                         for v in l {
                             stopwords.push(
                                 v.get_str()
-                                    .ok_or_else(|| {
-                                        miette!(
-                                            "First argument `stopwords` must be a list of strings"
-                                        )
-                                    })?
+                                    .ok_or(TokenizerBuildRefusal::StopwordsNotStrList)?
                                     .to_string(),
                             );
                         }
                         StopWordFilter::new(stopwords).into()
                     }
-                    data_value_any!() => bail!("Filter Stopwords requires language name or a list of stopwords"),
+                    data_value_any!() => {
+                        return Err(TokenizerBuildRefusal::StopwordsBadArg.into());
+                    }
                 }
             }
-            _ => bail!("Unknown token filter: {:?}", self.name),
+            _ => {
+                return Err(
+                    TokenizerBuildRefusal::UnknownTokenFilter(self.name.clone()).into(),
+                );
+            }
         })
     }
 }
