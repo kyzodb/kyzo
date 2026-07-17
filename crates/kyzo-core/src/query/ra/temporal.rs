@@ -227,7 +227,7 @@ pub(crate) struct SpansRA {
     pub(crate) bindings: Vec<Symbol>,
     pub(crate) storage: RelationHandle,
     /// The fixed system snapshot the sweep resolves against.
-    pub(crate) sys: i64,
+    pub(crate) sys: ValidityTs,
     pub(crate) span: SourceSpan,
 }
 
@@ -271,22 +271,22 @@ const SIGN_MINUS: i64 = -1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RawVersion {
     Assert {
-        valid: i64,
-        sys: i64,
+        valid: ValidityTs,
+        sys: ValidityTs,
         payload: Tuple,
     },
     Retract {
-        valid: i64,
-        sys: i64,
+        valid: ValidityTs,
+        sys: ValidityTs,
     },
     Erase {
-        valid: i64,
-        sys: i64,
+        valid: ValidityTs,
+        sys: ValidityTs,
     },
 }
 
 impl RawVersion {
-    pub(crate) fn valid(&self) -> i64 {
+    pub(crate) fn valid(&self) -> ValidityTs {
         match self {
             RawVersion::Assert { valid, .. }
             | RawVersion::Retract { valid, .. }
@@ -294,7 +294,7 @@ impl RawVersion {
         }
     }
 
-    pub(crate) fn sys(&self) -> i64 {
+    pub(crate) fn sys(&self) -> ValidityTs {
         match self {
             RawVersion::Assert { sys, .. }
             | RawVersion::Retract { sys, .. }
@@ -360,8 +360,8 @@ pub(crate) fn decode_raw_version(
         );
     }
     let polarity = claim_polarity_of_value(val)?;
-    let valid = valid_slot.timestamp().raw();
-    let sys = sys_slot.timestamp().raw();
+    let valid = valid_slot.timestamp();
+    let sys = sys_slot.timestamp();
     let version = match polarity {
         ClaimPolarity::Assert => {
             let mut row = full.clone();
@@ -400,21 +400,24 @@ pub(crate) fn decode_raw_version(
 fn resolve_at(
     group: &[RawVersion],
     key: &[DataValue],
-    at_valid: i64,
-    at_sys: i64,
+    at_valid: ValidityTs,
+    at_sys: ValidityTs,
 ) -> Option<Tuple> {
+    // Chronological (raw) order — not ValidityTs seek order (Reverse).
+    let at_valid_raw = at_valid.raw();
+    let at_sys_raw = at_sys.raw();
     let mut instants: Vec<i64> = group
         .iter()
-        .map(|e| e.valid())
-        .filter(|v| *v <= at_valid)
+        .map(|e| e.valid().raw())
+        .filter(|v| *v <= at_valid_raw)
         .collect();
     instants.sort_unstable();
     instants.dedup();
     for instant in instants.into_iter().rev() {
         let governing = group
             .iter()
-            .filter(|e| e.valid() == instant && e.sys() <= at_sys)
-            .max_by_key(|e| e.sys());
+            .filter(|e| e.valid().raw() == instant && e.sys().raw() <= at_sys_raw)
+            .max_by_key(|e| e.sys().raw());
         match governing {
             Some(RawVersion::Assert { payload, .. }) => {
                 let mut tuple: Tuple = Tuple::from_vec(key.to_vec());
@@ -435,8 +438,13 @@ fn resolve_at(
 /// coalescing is definitional (un-coalesced output is unrepresentable),
 /// exactly mirroring `laws::derive_intervals`. Returns one `key ++
 /// payload ++ Interval` row per maximal run.
-fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Result<Vec<Tuple>> {
-    let mut breaks: Vec<i64> = group.iter().map(|e| e.valid()).collect();
+fn derive_group(
+    group: &[RawVersion],
+    key: &[DataValue],
+    fixed_sys: ValidityTs,
+) -> Result<Vec<Tuple>> {
+    // Chronological (raw) breakpoints — Interval bounds are i64 micros.
+    let mut breaks: Vec<i64> = group.iter().map(|e| e.valid().raw()).collect();
     breaks.sort_unstable();
     breaks.dedup();
 
@@ -444,13 +452,14 @@ fn derive_group(group: &[RawVersion], key: &[DataValue], fixed_sys: i64) -> Resu
     let mut i = 0;
     while i < breaks.len() {
         let start = breaks[i];
-        let Some(tuple) = resolve_at(group, key, start, fixed_sys) else {
+        let Some(tuple) = resolve_at(group, key, ValidityTs::from_raw(start), fixed_sys) else {
             i += 1;
             continue;
         };
         let mut j = i;
         while j + 1 < breaks.len()
-            && resolve_at(group, key, breaks[j + 1], fixed_sys).as_ref() == Some(&tuple)
+            && resolve_at(group, key, ValidityTs::from_raw(breaks[j + 1]), fixed_sys).as_ref()
+                == Some(&tuple)
         {
             j += 1;
         }
@@ -513,7 +522,7 @@ struct SpansScanBatches<'a> {
     /// over so each row is decoded exactly once.
     pending_key: Option<(Slice, Slice)>,
     key_len: usize,
-    sys_fixed: i64,
+    sys_fixed: ValidityTs,
     done: bool,
 }
 
@@ -888,7 +897,7 @@ mod tests {
     fn spans_rows(
         db: &crate::storage::fjall::FjallStorage,
         handle: &RelationHandle,
-        sys: i64,
+        sys: ValidityTs,
     ) -> Vec<(i64, i64, i64, Option<i64>)> {
         let ra = SpansRA {
             bindings: vec![sym("k"), sym("val"), sym("iv")],
@@ -928,7 +937,7 @@ mod tests {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_single", 1);
         assert_at(&db, &h, 1, 10, 100);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
@@ -938,7 +947,7 @@ mod tests {
         let h = make_relation(&db, "spans_retract", 1);
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, Some(19))]);
     }
 
@@ -948,7 +957,7 @@ mod tests {
         let h = make_relation(&db, "spans_split", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 200);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 200, 20, None)]);
     }
 
@@ -958,7 +967,7 @@ mod tests {
         let h = make_relation(&db, "spans_idempotent", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 20, 100);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
@@ -969,7 +978,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         retract_at(&db, &h, 1, 20);
         assert_at(&db, &h, 1, 30, 100);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, Some(19)), (1, 100, 30, None)]);
     }
 
@@ -978,7 +987,7 @@ mod tests {
         let db = new_fjall_storage(tempfile_dir()).expect("storage");
         let h = make_relation(&db, "spans_dangling_retract", 1);
         retract_at(&db, &h, 1, 10);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert!(rows.is_empty());
     }
 
@@ -991,7 +1000,7 @@ mod tests {
         assert_at(&db, &h, 1, 0, 100);
         assert_at(&db, &h, 1, 10, 200);
         erase_at(&db, &h, 1, 10);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         // Instant 10 is erased, so the payload is 100 throughout (the
         // instant-0 assert governs everywhere it would have fallen
         // through to) — one interval, not two.
@@ -1004,7 +1013,7 @@ mod tests {
         let h = make_relation(&db, "spans_no_zero_width", 1);
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 1, 10, 200); // same instant, later sys: corrects it
-        for (start, end, _, _) in spans_rows(&db, &h, i64::MAX)
+        for (start, end, _, _) in spans_rows(&db, &h, MAX_VALIDITY_TS)
             .into_iter()
             .map(|(k, val, s, e)| (s, e, k, val))
         {
@@ -1020,7 +1029,7 @@ mod tests {
         let db2 = new_fjall_storage(tempfile_dir()).expect("storage");
         let h2 = make_relation(&db2, "spans_no_zero_width2", 1);
         assert_at(&db2, &h2, 1, 10, 100);
-        let rows = spans_rows(&db2, &h2, i64::MAX);
+        let rows = spans_rows(&db2, &h2, MAX_VALIDITY_TS);
         assert_eq!(rows, vec![(1, 100, 10, None)]);
     }
 
@@ -1031,7 +1040,7 @@ mod tests {
         assert_at(&db, &h, 1, 10, 100);
         assert_at(&db, &h, 2, 5, 900);
         retract_at(&db, &h, 2, 15);
-        let rows = spans_rows(&db, &h, i64::MAX);
+        let rows = spans_rows(&db, &h, MAX_VALIDITY_TS);
         assert_eq!(
             rows.into_iter().sorted().collect_vec(),
             vec![(1, 100, 10, None), (2, 900, 5, Some(14))]

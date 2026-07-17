@@ -473,7 +473,7 @@ impl RelAlgebra {
                 Ok(Self::Spans(SpansRA {
                     bindings,
                     storage,
-                    sys: sys.raw(),
+                    sys,
                     span,
                 }))
             }

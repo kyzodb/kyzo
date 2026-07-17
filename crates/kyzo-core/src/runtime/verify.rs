@@ -458,12 +458,12 @@ fn scan_full_histories(
                     valid,
                     sys,
                     payload,
-                } => laws::Event::assert(key_tuple, payload, valid, sys),
+                } => laws::Event::assert(key_tuple, payload, valid.raw(), sys.raw()),
                 crate::query::ra::temporal::RawVersion::Retract { valid, sys } => {
-                    laws::Event::retract(key_tuple, valid, sys)
+                    laws::Event::retract(key_tuple, valid.raw(), sys.raw())
                 }
                 crate::query::ra::temporal::RawVersion::Erase { valid, sys } => {
-                    laws::Event::erase(key_tuple, valid, sys)
+                    laws::Event::erase(key_tuple, valid.raw(), sys.raw())
                 }
             }
             .map_err(|e| miette::miette!("{e}"))?;
