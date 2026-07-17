@@ -475,7 +475,7 @@ impl NullableColType {
                     // the f64-canonical components, not a storage variant.
                     if matches!(eltype, VecElementType::F32)
                         && arr
-                            .as_slice()
+                            .to_f64s()
                             .iter()
                             .any(|&f| (f as f32 as f64) != f && !f.is_nan())
                     {
@@ -651,7 +651,7 @@ impl NullableColType {
                     }
                     DataValue::Vector(v) => {
                         let mut arr = Vec::with_capacity(v.len());
-                        for el in v.as_slice() {
+                        for el in v.to_f64s() {
                             arr.push(json!(el));
                         }
                         arr.into()

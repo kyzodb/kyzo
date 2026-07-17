@@ -1035,8 +1035,8 @@ impl IndexVec {
         // through f32 precision (the graph's stored working precision
         // until #122's quantized residency owns this decision).
         let mut components: Vec<f64> = match manifest.dtype {
-            VecElementType::F32 => v.as_slice().to_vec(),
-            VecElementType::F64 => v.as_slice().to_vec(),
+            VecElementType::F32 => v.to_f64s(),
+            VecElementType::F64 => v.to_f64s(),
         };
         if !components.iter().all(|x| x.is_finite()) {
             bail!(NonFiniteVectorRefused);
@@ -1079,9 +1079,9 @@ impl IndexVec {
     pub(crate) fn dist(&self, other: &Self, metric: HnswDistance) -> f64 {
         #[cfg(test)]
         probe::DIST_CALLS.with(|c| c.set(c.get() + 1));
-        let (a, b) = (self.0.as_slice(), other.0.as_slice());
+        let (a, b) = (self.0.to_f64s(), other.0.to_f64s());
         debug_assert_eq!(a.len(), b.len(), "IndexVec pair must share dimension");
-        dist_dispatch(a, b, metric)
+        dist_dispatch(&a, &b, metric)
     }
 }
 
@@ -3589,7 +3589,7 @@ mod tests {
             let DataValue::Vector(ref arr) = v else {
                 unreachable!()
             };
-            stored.push(arr.as_slice().to_vec());
+            stored.push(arr.to_f64s());
             let r = vec![DataValue::from(k as i64), v];
             base.put_fact(
                 &mut tx,
@@ -3616,7 +3616,7 @@ mod tests {
 
             // Independent oracle: brute-force squared L2 over every stored
             // vector, sorted, top-k ids.
-            let qa = q_vec.as_slice();
+            let qa = q_vec.to_f64s(); let qa = qa.as_slice();
             let mut truth: Vec<(f64, i64)> = stored
                 .iter()
                 .enumerate()

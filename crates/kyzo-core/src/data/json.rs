@@ -283,7 +283,7 @@ impl From<&DataValue> for JsonValue {
             DataValue::Set(s) => JsonValue::Array(s.iter().map(JsonValue::from).collect()),
             DataValue::Regex(r) => json!(r.pattern()),
             DataValue::Uuid(u) => json!(u.as_uuid().to_string()),
-            DataValue::Vector(v) => json!(v.as_slice()),
+            DataValue::Vector(v) => json!(v.to_f64s()),
             DataValue::Validity(v) => json!([v.ts_micros(), v.is_assert()]),
             DataValue::Interval(iv) => match iv.ends() {
                 None => JsonValue::Null,

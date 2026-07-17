@@ -20,8 +20,8 @@
 //! component as Num's order-preserving float key (see
 //! [`super::super::canonical`]).
 //!
-//! After the admit door, dimension is a proven newtype and components
-//! are private canonical floats — bare `Vec<f64>` is not a public mint.
+//! After the admit door, dimension is a proven newtype and the store is
+//! [`Vec<VectorComponent>`] — bare `Vec<f64>` is not a post-door store.
 
 use super::super::number::Num;
 
@@ -94,24 +94,21 @@ impl VectorDimension {
     }
 }
 
-/// A vector value: private canonical floats held after [`Vector::new`]
-/// admits every raw `f64` through [`VectorComponent::admit`]. Identity is
-/// dimensionality + exact component bits.
+/// A vector value: proven [`VectorComponent`]s held after [`Vector::new`]
+/// admits every raw `f64`. Identity is dimensionality + exact component bits.
 #[derive(Clone, Debug)]
 pub struct Vector {
     dim: VectorDimension,
-    /// Canonical component magnitudes; private — not a pub mint surface.
-    components: Vec<f64>,
+    /// Proven components only — never a bare `Vec<f64>` after the door.
+    components: Vec<VectorComponent>,
 }
 
 impl Vector {
     /// Admit door: brand every raw float, prove the dimension fits `u32`.
     /// `None` when the component count exceeds the wire dimension.
     pub fn try_new(components: Vec<f64>) -> Option<Vector> {
-        let components: Vec<f64> = components
-            .into_iter()
-            .map(|raw| VectorComponent::admit(raw).get())
-            .collect();
+        let components: Vec<VectorComponent> =
+            components.into_iter().map(VectorComponent::admit).collect();
         let dim = VectorDimension::try_from_len(components.len())?;
         Some(Vector { dim, components })
     }
@@ -123,12 +120,9 @@ impl Vector {
         Self::try_new(components).expect("vector dimension exceeds u32")
     }
 
-    /// Proven components as [`VectorComponent`] (re-brand of private store).
+    /// Proven components.
     pub fn components(&self) -> impl Iterator<Item = VectorComponent> + '_ {
-        self.components
-            .iter()
-            .copied()
-            .map(VectorComponent::from_canonical)
+        self.components.iter().copied()
     }
 
     /// Proven dimensionality (wire `u32` count).
@@ -136,9 +130,14 @@ impl Vector {
         self.dim
     }
 
-    /// Canonical float view after the admit door (read-only; not a mint).
-    pub fn as_slice(&self) -> &[f64] {
+    /// Proven component store after the admit door (read-only; not a mint).
+    pub fn as_slice(&self) -> &[VectorComponent] {
         &self.components
+    }
+
+    /// Canonical float magnitudes copied out of the proven store.
+    pub fn to_f64s(&self) -> Vec<f64> {
+        self.components.iter().map(|c| c.get()).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -152,12 +151,7 @@ impl Vector {
 
 impl PartialEq for Vector {
     fn eq(&self, other: &Self) -> bool {
-        self.dim == other.dim
-            && self
-                .components
-                .iter()
-                .zip(other.components.iter())
-                .all(|(a, b)| a.to_bits() == b.to_bits())
+        self.dim == other.dim && self.components == other.components
     }
 }
 
@@ -167,7 +161,7 @@ impl std::hash::Hash for Vector {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.dim.hash(state);
         for c in &self.components {
-            state.write_u64(c.to_bits());
+            c.hash(state);
         }
     }
 }

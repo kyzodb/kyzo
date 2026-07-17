@@ -1048,7 +1048,7 @@ fn write_const(val: &DataValue, out: &mut String) {
         }
         DataValue::Vector(a) => {
             out.push_str("vec([");
-            for (i, x) in a.as_slice().iter().enumerate() {
+            for (i, x) in a.to_f64s().iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
                 }
