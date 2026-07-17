@@ -518,7 +518,7 @@ fn eval_ast(
         }
         FtsExpr::Near(FtsNear { literals, distance }) => eval_near(
             tx,
-            literals,
+            literals.as_slice(),
             *distance,
             idx,
             base_key_len,

@@ -76,10 +76,40 @@ impl FtsLiteral {
     }
 }
 
+/// Non-empty Near literals. Empty proximity is unrepresentable through
+/// [`Self::admit`] / [`FtsExpr::near`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct NonEmptyFtsLiterals {
+    literals: Vec<FtsLiteral>,
+}
+
+impl NonEmptyFtsLiterals {
+    pub(crate) fn admit(literals: Vec<FtsLiteral>) -> Option<Self> {
+        if literals.is_empty() {
+            None
+        } else {
+            Some(Self { literals })
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[FtsLiteral] {
+        &self.literals
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.literals.len()
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<FtsLiteral> {
+        self.literals
+    }
+}
+
 /// A proximity group: literals that must occur within `distance` tokens.
+/// Literals are non-empty by construction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct FtsNear {
-    pub(crate) literals: Vec<FtsLiteral>,
+    pub(crate) literals: NonEmptyFtsLiterals,
     pub(crate) distance: u32,
 }
 
@@ -175,6 +205,14 @@ impl FtsExpr {
         }
     }
 
+    /// Proximity door: refuses empty literals (returns [`Self::empty_node`]).
+    pub(crate) fn near(literals: Vec<FtsLiteral>, distance: u32) -> Self {
+        match NonEmptyFtsLiterals::admit(literals) {
+            Some(l) => FtsExpr::Near(FtsNear { literals: l, distance }),
+            None => Self::empty_node(),
+        }
+    }
+
     /// Rewrite every literal through the index's analyzer, then
     /// [`flatten`](Self::flatten). A literal that tokenizes to several terms
     /// becomes a conjunction of them; one that tokenizes to nothing (all
@@ -186,7 +224,7 @@ impl FtsExpr {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             FtsExpr::Literal(l) => l.booster == 0. || l.value.is_empty(),
-            FtsExpr::Near(FtsNear { literals, .. }) => literals.is_empty(),
+            FtsExpr::Near(_) => false,
             // NonEmptyFtsExprs is never empty by construction.
             FtsExpr::And(_) | FtsExpr::Or(_) => false,
             FtsExpr::Not(lhs, _) => lhs.is_empty(),
@@ -260,13 +298,10 @@ impl FtsExpr {
             }
             FtsExpr::Near(FtsNear { literals, distance }) => {
                 let mut tokens = vec![];
-                for l in literals {
+                for l in literals.into_vec() {
                     l.tokenize(tokenizer, &mut tokens);
                 }
-                FtsExpr::Near(FtsNear {
-                    literals: tokens,
-                    distance,
-                })
+                FtsExpr::near(tokens, distance)
             }
             FtsExpr::And(exprs) => FtsExpr::and(
                 exprs
@@ -320,13 +355,8 @@ mod tests {
         assert!(NonEmptyFtsExprs::admit(vec![]).is_none());
         assert!(FtsExpr::and(vec![]).is_empty());
         assert!(FtsExpr::or(vec![]).is_empty());
-        assert!(
-            FtsExpr::Near(FtsNear {
-                literals: vec![],
-                distance: 10
-            })
-            .is_empty()
-        );
+        assert!(NonEmptyFtsLiterals::admit(vec![]).is_none());
+        assert!(FtsExpr::near(vec![], 10).is_empty());
         // Not is empty iff its keep-side is empty.
         assert!(FtsExpr::Not(Box::new(lit("")), Box::new(lit("x"))).is_empty());
         assert!(!FtsExpr::Not(Box::new(lit("x")), Box::new(lit(""))).is_empty());
@@ -404,20 +434,20 @@ mod tests {
         let p = FtsExpr::Literal(FtsLiteral::new("Runni".into(), true, 2.0.into()));
         assert_eq!(p.clone().tokenize(&an), p);
         // Near re-tokenizes its members but keeps the distance.
-        let e = FtsExpr::Near(FtsNear {
-            literals: vec![
+        let e = FtsExpr::near(
+            vec![
                 FtsLiteral::new("Running".into(), false, 1.0.into()),
                 FtsLiteral::new("Dogs".into(), false, 1.0.into()),
             ],
-            distance: 3,
-        })
+            3,
+        )
         .tokenize(&an);
         match e {
             FtsExpr::Near(FtsNear { literals, distance }) => {
                 assert_eq!(distance, 3);
                 assert_eq!(literals.len(), 2);
-                assert_eq!(literals[0].value, "run");
-                assert_eq!(literals[1].value, "dog");
+                assert_eq!(literals.as_slice()[0].value, "run");
+                assert_eq!(literals.as_slice()[1].value, "dog");
             }
             other @ FtsExpr::Literal(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected Near, got {other:?}"),
         }
