@@ -58,6 +58,12 @@
 //! comments needs the grammar itself to capture them as trivia attached to
 //! AST nodes — a `parse`-tier and `data::program`-tier design change, not a
 //! rendering one. Stated here rather than silently unmet.
+//!
+//! **P112 residual door.** [`format_program`] / [`format_program_with_comments`]
+//! are the typed host doors for format-document / format-on-save. The lib
+//! build keeps `mod format` under `allow(dead_code)` in `lib.rs` until
+//! `kyzo-lsp` calls them; that allow names this residual, not a lie. The
+//! in-module property suite exercises the doors regardless.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;

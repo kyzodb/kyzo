@@ -40,8 +40,36 @@ use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload
 pub(crate) struct Constant;
 
 /// Rows sealed by [`Constant::init_options`]: a rectangular list-of-lists.
-/// `arity`/`run` read this proof; they do not re-validate row shape (P085).
+///
+/// `arity`/`run` read only through this type's methods — they do not
+/// re-validate rectangularity or list shape (P085). The sole list-row
+/// proof lives in [`Self::row_cells`] behind
+/// `INVARIANT(constant_row_list)`.
 struct ConstantData<'a>(&'a [DataValue]);
+
+impl ConstantData<'_> {
+    /// Width of every sealed row. `None` when the relation has no rows.
+    fn width(&self) -> Option<usize> {
+        self.0.first().map(|row| Self::row_cells(row).len())
+    }
+
+    /// Emit every sealed row through the arity-checked writer.
+    fn emit(&self, out: &mut FixedRuleOutput) -> Result<()> {
+        for row in self.0 {
+            out.put(Tuple::from_vec(Self::row_cells(row).to_vec()))?;
+        }
+        Ok(())
+    }
+
+    /// INVARIANT(constant_row_list): `init_options` sealed every element
+    /// as `DataValue::List`.
+    fn row_cells(row: &DataValue) -> &[DataValue] {
+        match row {
+            DataValue::List(cells) => cells.as_slice(),
+            _ => panic!("INVARIANT(constant_row_list): sealed row is a list"),
+        }
+    }
+}
 
 impl Constant {
     fn wrong_option(span: SourceSpan) -> WrongFixedRuleOptionError {
@@ -77,18 +105,7 @@ impl FixedRule for Constant {
         out: &mut FixedRuleOutput,
         _cancel: CancelFlag,
     ) -> Result<()> {
-        let data = Constant::proven_data(&payload.manifest.options, payload.span())?;
-        for row in data.0 {
-            // INVARIANT(constant_row_list): `init_options` sealed every
-            // row as a `DataValue::List`.
-            let tuple = Tuple::from_vec(
-                row.get_slice()
-                    .expect("INVARIANT(constant_row_list): sealed row is a list")
-                    .to_vec(),
-            );
-            out.put(tuple)?
-        }
-        Ok(())
+        Constant::proven_data(&payload.manifest.options, payload.span())?.emit(out)
     }
 
     fn arity(
@@ -98,7 +115,7 @@ impl FixedRule for Constant {
         span: SourceSpan,
     ) -> Result<usize> {
         let data = Constant::proven_data(options, span)?;
-        match data.0.first() {
+        match data.width() {
             None => match rule_head.len() {
                 0 => {
                     #[derive(Error, Debug, Diagnostic)]
@@ -112,10 +129,7 @@ impl FixedRule for Constant {
                 }
                 i => Ok(i),
             },
-            Some(first_row) => Ok(first_row
-                .get_slice()
-                .expect("INVARIANT(constant_row_list): sealed row is a list")
-                .len()),
+            Some(w) => Ok(w),
         }
     }
 
@@ -240,5 +254,10 @@ mod tests {
             .init_options(options, SourceSpan::default())
             .unwrap_err();
         assert!(err.to_string().contains("same arity"), "{err}");
+    }
+
+    #[test]
+    fn constant_data_empty_has_no_width() {
+        assert_eq!(ConstantData(&[]).width(), None);
     }
 }

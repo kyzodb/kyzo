@@ -77,7 +77,8 @@
 //! - [`DEFAULT_FIXED_RULES`], the registry of the built-ins declared in
 //!   `algos/` (graph algorithms) and `utilities/`.
 //! - [`SimpleFixedRule`], the reduced-boilerplate wrapper for user-defined
-//!   rules over realized [`NamedRows`].
+//!   rules over realized [`NamedRows`] — typed [`SimpleRuleBody`] owner,
+//!   never a `Box<dyn Fn…>` (P083).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -262,6 +263,11 @@ pub(crate) struct StoredInputUnavailable {
 /// refuses, typed. Superseded in production by `query/normalize.rs`'s
 /// `SessionView`, which implements the trait for real; kept here only for
 /// its own regression test (`fixed_rule_stored_input_is_a_refusing_seam`).
+///
+/// **P112 residual door.** Production never constructs this; the module-
+/// level `allow(dead_code)` on `fixed_rule` in `lib.rs` names this
+/// placeholder (and sibling unused items), not a missing consumer for the
+/// live `SessionView` path.
 pub(crate) struct NoStoredInputs;
 
 impl NoStoredInputs {
@@ -928,13 +934,20 @@ pub trait FixedRule: Send + Sync {
 // needs is declared here).
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Private seal: any private field blocks struct-literal minting outside
+/// this module, so header/row/next cannot be forged past [`NamedRows::try_new`]
+/// / [`NamedRows::new`] (P082 / NamedRows private fields).
+#[derive(Debug, Clone, Default)]
+struct NamedRowsSeal;
+
 /// The rows of a relation, together with its header names.
 ///
 /// Prefer [`Self::try_new`]: it proves every row's width equals
 /// `headers.len()`. [`Self::new`] panics on arity mismatch (legacy door
-/// for call sites that already guarantee the shape). Fields are
-/// `pub(crate)` so outside crates cannot forge an illegal shape (P082);
-/// same-crate callers still migrate to accessors where practical.
+/// for call sites that already guarantee the shape). Payload fields stay
+/// `pub(crate)` for same-crate readers mid-migration to accessors; the
+/// private [`NamedRowsSeal`] makes struct-literal minting impossible
+/// outside this module (P082).
 #[derive(Debug, Clone, Default)]
 pub struct NamedRows {
     /// The headers
@@ -943,6 +956,7 @@ pub struct NamedRows {
     pub(crate) rows: Vec<Tuple>,
     /// Contains the next named rows, if exists
     pub(crate) next: Option<Box<NamedRows>>,
+    _seal: NamedRowsSeal,
 }
 
 /// Header↔row width mismatch at the [`NamedRows`] door (P082).
@@ -978,6 +992,7 @@ impl NamedRows {
             headers,
             rows,
             next: None,
+            _seal: NamedRowsSeal,
         })
     }
 
@@ -1196,7 +1211,7 @@ impl<B: SimpleRuleBody> FixedRule for SimpleFixedRule<B> {
             })
             .try_collect()?;
         let results: NamedRows = self.body.apply(inputs, options)?;
-        for row in results.rows {
+        for row in results {
             // The row-width check the original performed here per rule is
             // now `out`'s own contract, enforced for every fixed rule.
             out.put(row)?;
@@ -2182,7 +2197,7 @@ mod tests {
             vec![Tuple::from_vec(vec![DataValue::from(1)])],
         )
         .unwrap();
-        assert_eq!(ok.headers.len(), 1);
-        assert_eq!(ok.rows.len(), 1);
+        assert_eq!(ok.headers().len(), 1);
+        assert_eq!(ok.rows().len(), 1);
     }
 }

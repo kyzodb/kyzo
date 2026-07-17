@@ -280,6 +280,12 @@ impl<'a> IntoChildren<'a> for Pair<'a> {
 
 /// This represents a full KyzoScript script, as you'd pass to `run_script`:
 /// the genus over the language's three species.
+///
+/// **P112 residual door.** [`Script::Imperative`] parses and is a typed
+/// refusal at execution (`runtime/db.rs`); its AST fields stay unused in a
+/// release lib build. The module-level `allow(dead_code)` on `parse` in
+/// `lib.rs` names that Imperative residual — not a missing query/sys
+/// consumer (`parse_script` is live for those genera).
 #[derive(Debug)]
 pub enum Script {
     /// Boxed: a program is hundreds of bytes and the other species are
