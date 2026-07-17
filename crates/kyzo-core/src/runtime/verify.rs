@@ -218,8 +218,8 @@ fn translate_term(sym: &Symbol) -> laws::Term {
 /// `asof_mirror_matches_bitemporal_kernel_on_a_shared_fixture` proves.
 fn to_oracle_asof(real: crate::data::value::AsOf) -> laws::AsOf {
     laws::AsOf {
-        valid: real.valid.raw(),
-        sys: real.sys.raw(),
+        valid: real.valid().raw(),
+        sys: real.sys().raw(),
     }
 }
 

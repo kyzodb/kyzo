@@ -773,7 +773,7 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(DataValue, usize), DecodeErr
                 None => return Err(DecodeError::Truncated),
             };
             Ok((
-                DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), is_assert)),
+                DataValue::Validity(Validity::from_stored(ValidityTs::from_raw(ts), is_assert)),
                 10,
             ))
         }
@@ -1194,15 +1194,13 @@ mod tests {
         out.push(DataValue::Vector(Vector::new(vec![])));
         out.push(DataValue::Vector(Vector::new(vec![0.0])));
         out.push(DataValue::Vector(Vector::new(vec![-1.5, f64::NAN])));
-        out.push(DataValue::Validity(Validity::new(
-            ValidityTs::from_raw(0),
-            true,
-        )));
-        out.push(DataValue::Validity(Validity::new(
-            ValidityTs::from_raw(0),
-            false,
-        )));
-        out.push(DataValue::Validity(Validity::new(
+        out.push(DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(0), true).expect("non-reserved"),
+        ));
+        out.push(DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(0), false).expect("retract admits every tick"),
+        ));
+        out.push(DataValue::Validity(Validity::from_stored(
             ValidityTs::from_raw(i64::MAX),
             true,
         )));
@@ -1421,10 +1419,13 @@ mod tests {
                     (0..len).map(|_| f64::from_bits(rng.next())).collect(),
                 ))
             }
-            10 => DataValue::Validity(Validity::new(
-                ValidityTs::from_raw(rng.next() as i64),
-                rng.next().is_multiple_of(2),
-            )),
+            10 => {
+                let ts = ValidityTs::from_raw(rng.next() as i64);
+                let is_assert = rng.next().is_multiple_of(2);
+                DataValue::Validity(
+                    Validity::new(ts, is_assert).unwrap_or_else(|| Validity::from_stored(ts, is_assert)),
+                )
+            }
             _ => DataValue::Json(random_json(rng, 0)),
         }
     }
@@ -1490,10 +1491,9 @@ mod tests {
             "400000000103043980000000000000000001"
         );
         assert_eq!(
-            hex(&encode(Datum::Validity(Validity::new(
-                ValidityTs::from_raw(0),
-                true
-            )))),
+            hex(&encode(Datum::Validity(
+                Validity::new(ValidityTs::from_raw(0), true).expect("non-reserved")
+            ))),
             "587fffffffffffffff00"
         );
         assert_eq!(hex(&encode(Datum::Interval(Interval::EMPTY))), "6001");

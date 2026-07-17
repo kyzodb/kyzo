@@ -332,7 +332,7 @@ mod tests {
     }
 
     fn slot(t: i64) -> Validity {
-        Validity::new(vts(t), true)
+        Validity::from_stored(vts(t), true)
     }
 
     /// A bitemporal key: `[int fact, valid(ts), sys(ts)]` under `REL`,

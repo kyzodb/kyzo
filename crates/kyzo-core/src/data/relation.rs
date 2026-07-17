@@ -440,8 +440,15 @@ impl NullableColType {
                 match data {
                     vld @ DataValue::Validity(_) => vld,
                     DataValue::Str(s) => match &s as &str {
-                        "ASSERT" => DataValue::Validity(Validity::new(cur_vld, true)),
-                        "RETRACT" => DataValue::Validity(Validity::new(cur_vld, false)),
+                        "ASSERT" => {
+                            let Some(v) = Validity::new(cur_vld, true) else {
+                                bail!(InvalidValidity(DataValue::Str("ASSERT".into())));
+                            };
+                            DataValue::Validity(v)
+                        }
+                        "RETRACT" => DataValue::Validity(
+                            Validity::new(cur_vld, false).expect("retract admits every tick"),
+                        ),
                         s => {
                             let (is_assert, ts_str) = match s.strip_prefix('~') {
                                 None => (true, s),
@@ -463,10 +470,10 @@ impl NullableColType {
                                 bail!(InvalidValidity(DataValue::Str(s.into())))
                             }
 
-                            DataValue::Validity(Validity::new(
-                                ValidityTs::from_raw(microseconds),
-                                is_assert,
-                            ))
+                            DataValue::Validity(
+                                Validity::new(ValidityTs::from_raw(microseconds), is_assert)
+                                    .expect("reserved filtered above"),
+                            )
                         }
                     },
                     DataValue::List(l) => {
@@ -477,10 +484,10 @@ impl NullableColType {
                                 if ts == i64::MAX || ts == i64::MIN {
                                     bail!(InvalidValidity(DataValue::List(l)))
                                 }
-                                return Ok(DataValue::Validity(Validity::new(
-                                    ValidityTs::from_raw(ts),
-                                    is_assert,
-                                )));
+                                return Ok(DataValue::Validity(
+                                    Validity::new(ValidityTs::from_raw(ts), is_assert)
+                                        .expect("reserved filtered above"),
+                                ));
                             }
                         }
                         bail!(InvalidValidity(DataValue::List(l)))

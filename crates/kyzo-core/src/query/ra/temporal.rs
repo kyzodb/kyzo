@@ -667,8 +667,8 @@ impl DeltaRA {
         tx: &impl ReadTx,
         posting: &RelationHandle,
     ) -> Result<BTreeSet<SignedFact>> {
-        let from_valid = self.from.valid.raw();
-        let to_valid = self.to.valid.raw();
+        let from_valid = self.from.valid().raw();
+        let to_valid = self.to.valid().raw();
         let lo = from_valid.min(to_valid);
         let hi = from_valid.max(to_valid);
         let base_key_len = self.storage.metadata.keys.len();

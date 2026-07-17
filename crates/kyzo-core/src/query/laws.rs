@@ -174,9 +174,9 @@ pub(crate) enum Term {
 /// the coordinate their generated histories bridge against directly.
 ///
 /// **The exact correspondence.** `laws::AsOf { valid: v, sys: s }` is
-/// `data::value::AsOf { valid: ValidityTs::from_raw(v), sys:
-/// ValidityTs::from_raw(s) }` — wrap each field in `ValidityTs::from_raw(_)`
-/// to go from this type to the real one. Because `Reverse` inverts
+/// `data::value::AsOf::at(ValidityTs::from_raw(s), ValidityTs::from_raw(v))`
+/// — wrap each field in `ValidityTs::from_raw(_)` and mint through the
+/// real type's `at` / `current` doors. Because `Reverse` inverts
 /// comparison, this module's ascending `t <= v` ("instant `t` is at or
 /// before coordinate `v`") is the real type's DESCENDING `ValidityTs(t) >=
 /// ValidityTs(v)` — the two types encode the identical total order
@@ -3861,7 +3861,7 @@ mod tests {
             ValidityTs::from_raw(t)
         }
         fn slot(t: i64) -> Validity {
-            Validity::new(vts(t), true)
+            Validity::from_stored(vts(t), true)
         }
         fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
             [
@@ -3895,10 +3895,7 @@ mod tests {
                 let (ret, nxt) = check_key_for_bitemporal(
                     k,
                     *polarity,
-                    crate::data::value::AsOf {
-                        sys: vts(sys_at),
-                        valid: vts(valid_at),
-                    },
+                    crate::data::value::AsOf::at(vts(sys_at), vts(valid_at)),
                     None,
                 )
                 .expect("well-formed test key");

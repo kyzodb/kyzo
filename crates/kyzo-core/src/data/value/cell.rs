@@ -309,10 +309,10 @@ mod tests {
             &mut arena
         ));
         assert!(inline(
-            &encode(Datum::Validity(Validity::new(
-                ValidityTs::from_raw(i64::MAX),
-                false
-            ))),
+            &encode(Datum::Validity(
+                Validity::new(ValidityTs::from_raw(i64::MAX), false)
+                    .expect("retract admits every tick"),
+            )),
             &mut arena
         ));
         assert!(inline(

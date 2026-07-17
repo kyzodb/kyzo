@@ -570,12 +570,12 @@ fn write_read_validity(validity: Option<&ValidityClause>, out: &mut String) {
 fn write_at_clause(as_of: &AsOf, out: &mut String) {
     out.push('@');
     out.push(' ');
-    if as_of.sys == MAX_VALIDITY_TS {
-        write_vld(as_of.valid, out);
+    if as_of.sys() == MAX_VALIDITY_TS {
+        write_vld(as_of.valid(), out);
     } else {
-        write_vld(as_of.sys, out);
+        write_vld(as_of.sys(), out);
         out.push_str(", ");
-        write_vld(as_of.valid, out);
+        write_vld(as_of.valid(), out);
     }
 }
 

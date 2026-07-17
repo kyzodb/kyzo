@@ -2785,10 +2785,10 @@ pub(crate) fn op_validity(args: &[DataValue]) -> Result<DataValue> {
             .get_bool()
             .ok_or_else(|| miette!("'validity' expects a boolean as second argument"))?
     };
-    Ok(DataValue::Validity(Validity::new(
-        ValidityTs::from_raw(ts),
-        is_assert,
-    )))
+    let vld = Validity::new(ValidityTs::from_raw(ts), is_assert).ok_or_else(|| {
+        miette!("'validity' refuses assert of the reserved terminal tick (i64::MAX)")
+    })?;
+    Ok(DataValue::Validity(vld))
 }
 
 /// Extracts both arguments as `Interval`s for a two-interval predicate op, or

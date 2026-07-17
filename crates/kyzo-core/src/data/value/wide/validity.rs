@@ -30,6 +30,16 @@
 //! this kind treats every `i64` — including `i64::MAX` — as an ordinary
 //! instant; [`TERMINAL_VALIDITY`] below is a slot value (the maximum
 //! slot ENCODING), not a magic timestamp.
+//!
+//! Construction doors (P001–P004):
+//! - [`ValidityTs::for_assertion`] — user write coordinate; refuses the
+//!   reserved terminal tick.
+//! - [`ValidityTs::from_raw`] — crate storage-decode / seek coordinate.
+//! - [`Validity::new`] — checked value mint; refuses assert+reserved.
+//! - [`Validity::from_stored`] — crate slot/seek encoding (may hold the
+//!   reserved terminal as an assert slot bound).
+//! - [`AsOf::current`] / [`AsOf::at`] — only as-of pair mints.
+//! - [`StoredValiditySlot::new`] — only stored-slot mint.
 
 use std::cmp::Reverse;
 
@@ -38,13 +48,16 @@ use std::cmp::Reverse;
 /// stored key slots sort.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
-pub struct ValidityTs(pub Reverse<i64>);
+pub struct ValidityTs(Reverse<i64>);
 
 const _: () = assert!(std::mem::size_of::<ValidityTs>() == std::mem::size_of::<Reverse<i64>>());
 const _: () = assert!(std::mem::align_of::<ValidityTs>() == std::mem::align_of::<Reverse<i64>>());
 
 impl ValidityTs {
-    pub fn from_raw(ts_micros: i64) -> ValidityTs {
+    /// Storage-decode / seek-coordinate door: any `i64` instant, including
+    /// the reserved terminal. Not a user-assertion path — that is
+    /// [`for_assertion`].
+    pub(crate) fn from_raw(ts_micros: i64) -> ValidityTs {
         ValidityTs(Reverse(ts_micros))
     }
 
@@ -87,14 +100,25 @@ pub const TERMINAL_VALIDITY: Validity = Validity {
 };
 
 impl Validity {
-    /// The one checked constructor: consumes a proven [`ValidityTs`]
-    /// coordinate. There is no raw-`i64` door — a user-asserted write
-    /// coordinate is proven through [`ValidityTs::for_assertion`] (which
-    /// refuses the reserved terminal tick) before it can become a
-    /// `Validity`, so the reserved state `for_assertion` refuses cannot be
-    /// reconstructed at the assertion boundary. Storage decode and slot
-    /// builders supply an already-legal coordinate directly.
-    pub fn new(timestamp: ValidityTs, is_assert: bool) -> Validity {
+    /// Checked constructor: consumes a proven [`ValidityTs`] coordinate.
+    /// Refuses assert of the reserved terminal tick (`i64::MAX`) — that
+    /// state is unrepresentable through this door. Storage decode and
+    /// seek-slot builders use [`from_stored`].
+    pub fn new(timestamp: ValidityTs, is_assert: bool) -> Option<Validity> {
+        if is_assert && timestamp.raw() == i64::MAX {
+            None
+        } else {
+            Some(Validity {
+                timestamp,
+                is_assert: Reverse(is_assert),
+            })
+        }
+    }
+
+    /// Slot / seek / storage-decode door: any coordinate and polarity,
+    /// including assert of the reserved terminal used as an open-end
+    /// seek bound. Not a user-assertion path.
+    pub(crate) fn from_stored(timestamp: ValidityTs, is_assert: bool) -> Validity {
         Validity {
             timestamp,
             is_assert: Reverse(is_assert),
@@ -127,7 +151,7 @@ impl Validity {
 /// determined by its coordinate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
-pub struct StoredValiditySlot(pub ValidityTs);
+pub struct StoredValiditySlot(ValidityTs);
 
 const _: () = assert!(std::mem::size_of::<StoredValiditySlot>() == std::mem::size_of::<ValidityTs>());
 const _: () =
@@ -143,7 +167,7 @@ impl StoredValiditySlot {
     }
 
     pub fn as_validity(self) -> Validity {
-        Validity::new(self.0, true)
+        Validity::from_stored(self.0, true)
     }
 }
 
@@ -152,8 +176,8 @@ impl StoredValiditySlot {
 /// value — no clock in the plane; "now" is the runtime tier's word.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct AsOf {
-    pub valid: ValidityTs,
-    pub sys: ValidityTs,
+    valid: ValidityTs,
+    sys: ValidityTs,
 }
 
 impl AsOf {
@@ -174,6 +198,14 @@ impl AsOf {
     pub fn at(sys: ValidityTs, valid: ValidityTs) -> AsOf {
         AsOf { valid, sys }
     }
+
+    pub fn valid(self) -> ValidityTs {
+        self.valid
+    }
+
+    pub fn sys(self) -> ValidityTs {
+        self.sys
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +214,7 @@ mod tests {
 
     fn v(ts: i64, is_assert: bool) -> Validity {
         Validity::new(ValidityTs::from_raw(ts), is_assert)
+            .unwrap_or_else(|| Validity::from_stored(ValidityTs::from_raw(ts), is_assert))
     }
 
     #[test]
@@ -215,9 +248,12 @@ mod tests {
         // The user-assertion door refuses exactly the terminal tick.
         assert!(ValidityTs::for_assertion(i64::MAX).is_none());
         assert_eq!(ValidityTs::for_assertion(0), Some(ValidityTs::from_raw(0)));
+        // Assert of the reserved terminal is unrepresentable via `new`.
+        assert!(Validity::new(MAX_VALIDITY_TS, true).is_none());
+        assert!(Validity::new(MAX_VALIDITY_TS, false).is_some());
         // AsOf::current pins system time to the latest coordinate.
         let a = AsOf::current(ValidityTs::from_raw(9));
-        assert_eq!(a.sys, MAX_VALIDITY_TS);
-        assert_eq!(a.valid.raw(), 9);
+        assert_eq!(a.sys(), MAX_VALIDITY_TS);
+        assert_eq!(a.valid().raw(), 9);
     }
 }

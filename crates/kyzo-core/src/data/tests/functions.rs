@@ -2001,7 +2001,9 @@ fn format_timestamp_numeric_agreed() {
 fn format_timestamp_validity_input_agreed() {
     use crate::data::value::Validity;
     let f = |micros: i64| {
-        let vld = DataValue::Validity(Validity::new(ValidityTs::from_raw(micros), true));
+        let vld = DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(micros), true).expect("non-reserved"),
+        );
         fmt(&[vld]).unwrap()
     };
     // Validity stores microseconds; the op divides by 1000 to milliseconds.

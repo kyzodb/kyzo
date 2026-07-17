@@ -947,10 +947,13 @@ mod facade_tests {
                     .map(|_| f64::from_bits(rng.next()))
                     .collect(),
             )),
-            10 => DataValue::Validity(Validity::new(
-                ValidityTs::from_raw(rng.next() as i64),
-                rng.next().is_multiple_of(2),
-            )),
+            10 => {
+                let ts = ValidityTs::from_raw(rng.next() as i64);
+                let is_assert = rng.next().is_multiple_of(2);
+                DataValue::Validity(
+                    Validity::new(ts, is_assert).unwrap_or_else(|| Validity::from_stored(ts, is_assert)),
+                )
+            }
             11 => DataValue::Interval(if rng.next().is_multiple_of(4) {
                 Interval::EMPTY
             } else {

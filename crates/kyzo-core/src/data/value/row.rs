@@ -855,11 +855,11 @@ mod tests {
     fn validity_slot_width_is_pinned() {
         use super::super::wide::validity::{Validity, ValidityTs};
         let enc = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(123), true),
+            Validity::new(ValidityTs::from_raw(123), true).expect("non-reserved"),
         ));
         assert_eq!(enc.len(), StorageKey::VALIDITY_TAIL_LEN);
         let enc2 = super::super::canonical::encode_owned(&super::super::DataValue::Validity(
-            Validity::new(ValidityTs::from_raw(i64::MIN), false),
+            Validity::new(ValidityTs::from_raw(i64::MIN), false).expect("retract admits every tick"),
         ));
         assert_eq!(enc2.len(), StorageKey::VALIDITY_TAIL_LEN);
     }

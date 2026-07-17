@@ -130,7 +130,7 @@ pub fn check_key_for_bitemporal(
         nxt
     };
 
-    if valid.timestamp() < as_of.valid {
+    if valid.timestamp() < as_of.valid() {
         // Instant newer than the valid coordinate (`Reverse` order:
         // smaller means later). Seek to the newest instant at or before
         // `valid_at`, landing directly at the newest system version at or
@@ -138,16 +138,16 @@ pub fn check_key_for_bitemporal(
         return Ok((
             None,
             splice_both(
-                Validity::new(as_of.valid, true),
-                Validity::new(as_of.sys, true),
+                Validity::from_stored(as_of.valid(), true),
+                Validity::from_stored(as_of.sys(), true),
             ),
         ));
     }
-    if sys.timestamp() < as_of.sys {
+    if sys.timestamp() < as_of.sys() {
         // Right instant, but this system version postdates the system
         // coordinate: seek to the newest version at or before `sys_at`
         // within the SAME instant.
-        return Ok((None, splice_sys(Validity::new(as_of.sys, true))));
+        return Ok((None, splice_sys(Validity::from_stored(as_of.sys(), true))));
     }
     // This row IS the instant's governing version at sys_at. Its polarity
     // decides. TERMINAL_VALIDITY is the maximum slot encoding, so the
@@ -232,15 +232,12 @@ mod tests {
     }
 
     fn zero_as_of() -> AsOf {
-        AsOf {
-            sys: vts(0),
-            valid: vts(0),
-        }
+        AsOf::at(vts(0), vts(0))
     }
 
     fn slot(t: i64) -> Validity {
         // Stored slot flags are pinned to assert; polarity lives in the value.
-        Validity::new(vts(t), true)
+        Validity::from_stored(vts(t), true)
     }
 
     fn bikey(fact: i64, valid_ts: i64, sys_ts: i64) -> Vec<u8> {
@@ -274,10 +271,7 @@ mod tests {
             let (ret, nxt) = check_key_for_bitemporal(
                 k,
                 *polarity,
-                AsOf {
-                    sys: vts(sys_at),
-                    valid: vts(valid_at),
-                },
+                AsOf::at(vts(sys_at), vts(valid_at)),
                 None,
             )?;
             bound = if nxt.as_slice() > k.as_slice() {
@@ -471,7 +465,7 @@ mod tests {
         );
         let flagged = [
             DataValue::from(1i64),
-            DataValue::Validity(Validity::new(vts(10), false)),
+            DataValue::Validity(Validity::new(vts(10), false).expect("retract admits every tick")),
             DataValue::Validity(slot(5)),
         ]
         .encode_as_key(RelationId::new(7).expect("below cap"))

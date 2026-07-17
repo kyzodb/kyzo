@@ -1048,10 +1048,10 @@ fn parse_at_expr_clause(
         None => AsOf::current(first),
         // `@ system, valid`: what the record said at `system` about the
         // world at `valid`.
-        Some(second) => AsOf {
-            sys: first,
-            valid: expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?,
-        },
+        Some(second) => AsOf::at(
+            first,
+            expr2vld_spec(build_expr(second, param_pool)?, cur_vld)?,
+        ),
     })
 }
 

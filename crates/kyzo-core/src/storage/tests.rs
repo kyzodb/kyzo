@@ -135,9 +135,11 @@ fn corpus() -> Vec<DataValue> {
         DataValue::Json(crate::data::json::json_from_serde(&serde_json::json!([
             1, 2, 3
         ]))),
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), true)),
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), false)),
-        DataValue::Validity(Validity::new(ValidityTs::from_raw(41), true)),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(42), true).expect("non-reserved")),
+        DataValue::Validity(
+            Validity::new(ValidityTs::from_raw(42), false).expect("retract admits every tick"),
+        ),
+        DataValue::Validity(Validity::new(ValidityTs::from_raw(41), true).expect("non-reserved")),
         // Intervals: the i64::MIN/MAX boundaries, adjacent pairs (meets: end
         // of one equals start of the next), an overlapping pair, and an
         // open-ended interval (end == i64::MAX, the plain-max-tick "END"
@@ -231,7 +233,10 @@ fn arb_value() -> impl Strategy<Value = DataValue> {
         proptest::collection::vec(any::<f64>(), 0..6)
             .prop_map(|v| DataValue::Vector(Vector::new(v))),
         (any::<i64>(), any::<bool>()).prop_map(|(ts, a)| {
-            DataValue::Validity(Validity::new(ValidityTs::from_raw(ts), a))
+            let vts = ValidityTs::from_raw(ts);
+            DataValue::Validity(
+                Validity::new(vts, a).unwrap_or_else(|| Validity::from_stored(vts, a)),
+            )
         }),
         // Two arbitrary i64s, ordered into a closed interval (a tie is the
         // single-instant interval, a lawful value of the kind).
@@ -497,7 +502,7 @@ fn del_range_kills_own_writes_too() {
 /// A bitemporal key: `[name, valid(ts), sys(sys_ts)]`, slot flags pinned
 /// (the row's polarity lives in the value — see [`pol_val`]).
 fn bitemp_key(rel: RelationId, name: &str, ts: i64, sys_ts: i64) -> StorageKey {
-    let slot = |t: i64| DataValue::Validity(Validity::new(ValidityTs::from_raw(t), true));
+    let slot = |t: i64| DataValue::Validity(Validity::from_stored(ValidityTs::from_raw(t), true));
     let tuple: Tuple = Tuple::from_vec(vec![DataValue::Str(name.into()), slot(ts), slot(sys_ts)]);
     tuple.encode_as_key(rel)
 }
@@ -688,7 +693,7 @@ fn stamped_row(
     valid_ts: i64,
     sys: ValidityTs,
 ) -> (StorageKey, Vec<u8>) {
-    let slot = |ts: ValidityTs| DataValue::Validity(Validity::new(ts, true));
+    let slot = |ts: ValidityTs| DataValue::Validity(Validity::from_stored(ts, true));
     let tuple: Tuple = Tuple::from_vec(vec![
         DataValue::Str(name.into()),
         slot(ValidityTs::from_raw(valid_ts)),
@@ -934,7 +939,7 @@ fn corrupt_inputs_error_never_panic() {
     let mut enc = vec![];
     crate::data::value::append_canonical(
         &mut enc,
-        &DataValue::Validity(Validity::new(ValidityTs::from_raw(1), true)),
+        &DataValue::Validity(Validity::new(ValidityTs::from_raw(1), true).expect("non-reserved")),
     );
     k.extend(enc);
     let _ = crate::data::bitemporal::check_key_for_bitemporal(
@@ -3136,7 +3141,7 @@ fn concurrent_increments_lose_nothing_at_the_storage_layer() {
     };
     // Version key of the one fact at (valid=stamp, sys=stamp).
     let key_at = |stamp: ValidityTs| -> StorageKey {
-        let slot = DataValue::Validity(Validity::new(stamp, true));
+        let slot = DataValue::Validity(Validity::from_stored(stamp, true));
         let tuple: Tuple = Tuple::from_vec(vec![DataValue::from(0), slot.clone(), slot]);
         tuple.encode_as_key(rel)
     };

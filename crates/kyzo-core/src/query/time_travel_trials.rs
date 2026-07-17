@@ -1475,19 +1475,13 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
 
     // As the record stood at s1: the original claim.
     assert_eq!(
-        read_at(AsOf {
-            sys: s1,
-            valid: vts(150)
-        }),
+        read_at(AsOf::at(s1, vts(150))),
         BTreeSet::from([Tuple::from_vec(vec![v(1), s("original")])]),
         "before the correction was recorded, the original governs"
     );
     // As the record stands at s2 (and currently): the correction.
     assert_eq!(
-        read_at(AsOf {
-            sys: s2,
-            valid: vts(150)
-        }),
+        read_at(AsOf::at(s2, vts(150))),
         BTreeSet::from([Tuple::from_vec(vec![v(1), s("corrected")])]),
         "from the correction's stamp on, it governs"
     );
@@ -1498,11 +1492,7 @@ fn two_coordinate_asof_sees_the_record_as_it_was() {
     );
     // Valid-axis still resolves under both system cuts.
     assert!(
-        read_at(AsOf {
-            sys: s2,
-            valid: vts(50)
-        })
-        .is_empty(),
+        read_at(AsOf::at(s2, vts(50))).is_empty(),
         "before the valid instant, the fact does not hold at any system cut"
     );
 }
