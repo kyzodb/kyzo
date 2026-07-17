@@ -78,6 +78,11 @@
 //! - [`SimpleFixedRule`], the reduced-boilerplate wrapper for user-defined
 //!   rules over realized [`NamedRows`] — named [`SimpleRuleBody`] owner
 //!   types only (P083: no `Fn`/`dyn Fn` body).
+//!
+//! **P112.** Production host door is `FixedRule::run` (via
+//! `runtime/db.rs` / `SessionFixedRule`). No module-level
+//! `allow(dead_code)` on `fixed_rule` in `lib.rs`; unused residual symbols
+//! warn rather than hide behind a blanket.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};

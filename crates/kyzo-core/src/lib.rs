@@ -218,18 +218,17 @@
 //! substrate everything else stands on. The **engine is live end to end**:
 //! the public surface is the kernel re-exports plus the [`Db`] session
 //! entrypoint below; the tiers between (parse, query, engines, runtime,
-//! fixed_rule) stay `pub(crate)` — internal organs, not API. Remaining
-//! `allow(dead_code)` attributes below mark either surface whose consuming
-//! operator has not landed yet (`format`, awaiting the LSP tier) or the
-//! residual unused items behind an already-landed tier (e.g. the provenance
-//! plumbing in `query::eval`, the `Script::Imperative` AST in `parse`); each
-//! module's own comment says which, and each attribute narrows or vanishes
-//! as its items gain a caller. What refuses *today*,
-//! typed and (where it has a source location) spanned: malformed query text
-//! (parser), unstratifiable programs (stratifier), budget exhaustion,
-//! fixed-rule arity mismatch, format-version mismatch, and transaction
-//! conflict. No claim here is aspirational; every type and law named above
-//! exists as named in the tree.
+//! fixed_rule) stay `pub(crate)` — internal organs, not API. `format`,
+//! `parse`, and `fixed_rule` carry no module-level `allow(dead_code)` —
+//! their host doors are real (`format_program` / `parse_script` /
+//! `FixedRule::run`); any unused residual is a rustc warning, not a
+//! blanket lie about a consumer that "lands later". Other tiers may still
+//! narrow item-level allows where a residual is documented. What refuses
+//! *today*, typed and (where it has a source location) spanned: malformed
+//! query text (parser), unstratifiable programs (stratifier), budget
+//! exhaustion, fixed-rule arity mismatch, format-version mismatch, and
+//! transaction conflict. No claim here is aspirational; every type and law
+//! named above exists as named in the tree.
 
 // Zero `unsafe` is a compiler guarantee in this crate, not a convention;
 // CI checks that this attribute stays. `forbid`, not `deny`: the strongest
@@ -258,27 +257,21 @@
 pub(crate) mod capacity;
 pub(crate) mod data;
 pub(crate) mod engines;
-// The formatter's consumer (kyzo-lsp's format-on-save/format-document
-// request, story #92) lands later. Same dead-code posture as `parse`:
-// exercised in-file by its own property-test suite, dead in the lib build.
-#[allow(dead_code)]
+// Formatter host doors: `format::format_program` /
+// `format_program_with_comments` (P112). Exercised by the in-module
+// property suite and by parse's comment-meaning guardrail; kyzo-lsp
+// format-document will call the same doors. No module-level
+// `allow(dead_code)` — unused helpers warn honestly until that call site.
 pub(crate) mod format;
-// The fixed-rule tier's consumer (runtime/db.rs::compile_and_eval, via
-// `query/normalize.rs`'s `SessionFixedRule` bridging `MagicFixedRuleApply`
-// to `FixedRule::run`) has landed: registration, evaluation, and the
-// stored-input seam (`StoredInputSource`, served for real by
-// `SessionView`) all run in production. `#[allow(dead_code)]` stays for
-// residual items no production path reaches yet (P112 named residual —
-// not the demolished `NoStoredInputs` placeholder; see `fixed_rule/mod.rs`).
-#[allow(dead_code)]
+// Fixed-rule production consumer landed (`runtime/db.rs` →
+// `SessionFixedRule` → `FixedRule::run`, plus `StoredInputSource` via
+// `SessionView`). No module-level `allow(dead_code)` (P112); residual
+// unused symbols warn rather than hide behind a blanket.
 pub(crate) mod fixed_rule;
-// The parse tier's production consumer (runtime/db.rs, via
-// `parse::parse_script`) has landed for the query and system genera, which
-// `run_script` executes. `#[allow(dead_code)]` stays because the
-// `Script::Imperative` genus is a typed refusal, never executed (see
-// `runtime/db.rs`'s own note), so that genus's AST fields stay dead in a
-// release build; the in-file tests exercise them regardless.
-#[allow(dead_code)]
+// Parse production consumer landed (`runtime/db.rs` via `parse_script`)
+// for query and system genera. `Script::Imperative` is a typed refusal at
+// execution (`ImperativeNotWired`); its AST is still constructed by the
+// parser and exercised in-file — no module-level `allow(dead_code)` (P112).
 pub(crate) mod parse;
 pub(crate) mod query;
 pub(crate) mod runtime;
