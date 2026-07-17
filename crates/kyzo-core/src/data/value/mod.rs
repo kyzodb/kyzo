@@ -69,59 +69,7 @@ pub use wide::regex::{CompiledRegexV1, RegexFlags, RegexSource};
 pub use wide::validity::{
     AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValidityTs,
 };
-
-/// A vector value: f64 components held in canonical identity form
-/// (constructed through [`Vector::new`], which applies Num's float law to
-/// every component: `-0.0 → +0.0`, one canonical NaN). Identity is
-/// dimensionality + exact component bits — lawful because the bits are
-/// normalized at the door.
-#[derive(Clone, Debug)]
-pub struct Vector(Vec<f64>);
-
-impl Vector {
-    pub fn new(components: Vec<f64>) -> Vector {
-        Vector(
-            components
-                .into_iter()
-                .map(|c| Num::float(c).as_float().expect("float stays float"))
-                .collect(),
-        )
-    }
-
-    pub fn as_slice(&self) -> &[f64] {
-        &self.0
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl PartialEq for Vector {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.len() == other.0.len()
-            && self
-                .0
-                .iter()
-                .zip(other.0.iter())
-                .all(|(a, b)| a.to_bits() == b.to_bits())
-    }
-}
-
-impl Eq for Vector {}
-
-impl std::hash::Hash for Vector {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_usize(self.0.len());
-        for c in &self.0 {
-            state.write_u64(c.to_bits());
-        }
-    }
-}
+pub use wide::{Vector, VectorComponent, VectorDimension};
 
 /// The engine-facing UUID value (16 bytes; identity and order are the
 /// bytes, per the uuid face's law). Field is private — construction and
@@ -365,15 +313,17 @@ impl Ord for DataValue {
                 .then_with(|| a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
             (DataValue::Json(a), DataValue::Json(b)) => json_storage_cmp(a, b),
             (DataValue::Vector(a), DataValue::Vector(b)) => {
-                a.0.len().cmp(&b.0.len()).then_with(|| {
-                    for (x, y) in a.0.iter().zip(b.0.iter()) {
-                        let c = Num::float(*x).cmp(&Num::float(*y));
-                        if c != Ordering::Equal {
-                            return c;
+                a.dimension()
+                    .cmp(&b.dimension())
+                    .then_with(|| {
+                        for (x, y) in a.components().zip(b.components()) {
+                            let c = Num::float(x.get()).cmp(&Num::float(y.get()));
+                            if c != Ordering::Equal {
+                                return c;
+                            }
                         }
-                    }
-                    Ordering::Equal
-                })
+                        Ordering::Equal
+                    })
             }
             (DataValue::List(a), DataValue::List(b)) => {
                 for (x, y) in a.iter().zip(b.iter()) {
@@ -504,11 +454,11 @@ impl std::fmt::Display for DataValue {
             DataValue::Json(_) => write!(f, "json(…)"),
             DataValue::Vector(v) => {
                 write!(f, "vec[")?;
-                for (i, c) in v.as_slice().iter().enumerate() {
+                for (i, c) in v.components().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{c:?}")?;
+                    write!(f, "{:?}", c.get())?;
                 }
                 write!(f, "]")
             }

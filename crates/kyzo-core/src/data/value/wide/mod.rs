@@ -19,3 +19,5 @@ pub mod regex;
 pub mod uuid;
 pub mod validity;
 pub mod vector;
+
+pub use vector::{Vector, VectorComponent, VectorDimension};

@@ -350,14 +350,9 @@ fn encode_owned_into(out: &mut Vec<u8>, v: &DataValue) {
         }
         DataValue::Vector(vec) => {
             out.push(Tag::Vector.byte());
-            let components = vec.as_slice();
-            assert!(
-                components.len() <= u32::MAX as usize,
-                "vector dimension exceeds u32"
-            );
-            out.extend_from_slice(&(components.len() as u32).to_be_bytes());
-            for &c in components {
-                Num::float(c).encode_key(out);
+            out.extend_from_slice(&vec.dimension().get().to_be_bytes());
+            for c in vec.components() {
+                Num::float(c.get()).encode_key(out);
             }
         }
         DataValue::List(items) => {
@@ -1023,15 +1018,17 @@ mod tests {
                 .cmp(&b.flags().bits())
                 .then(a.pattern().as_bytes().cmp(b.pattern().as_bytes())),
             (DataValue::Json(x), DataValue::Json(y)) => semantic_json_cmp(x, y),
-            (DataValue::Vector(x), DataValue::Vector(y)) => x.len().cmp(&y.len()).then_with(|| {
-                for (i, j) in x.as_slice().iter().zip(y.as_slice().iter()) {
-                    let c = Num::float(*i).cmp(&Num::float(*j));
-                    if c != Ordering::Equal {
-                        return c;
+            (DataValue::Vector(x), DataValue::Vector(y)) => {
+                x.dimension().cmp(&y.dimension()).then_with(|| {
+                    for (i, j) in x.components().zip(y.components()) {
+                        let c = Num::float(i.get()).cmp(&Num::float(j.get()));
+                        if c != Ordering::Equal {
+                            return c;
+                        }
                     }
-                }
-                Ordering::Equal
-            }),
+                    Ordering::Equal
+                })
+            }
             (DataValue::Validity(x), DataValue::Validity(y)) => x.cmp_as_of_order(*y),
             (DataValue::Interval(x), DataValue::Interval(y)) => semantic_interval_cmp(x, y),
             _ => unreachable!("tags equal"),
