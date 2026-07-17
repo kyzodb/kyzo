@@ -626,37 +626,41 @@ impl MeetAggrObj for MeetAggrUnion {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        let (MeetAccum::Value(left), MeetAccum::Value(right)) = (left, right) else {
-            unreachable!("Empty handled above");
-        };
-        if let DataValue::List(l) = left {
-            let set: BTreeSet<_> = l.iter().cloned().collect();
-            *left = DataValue::Set(set);
-        }
-        Ok(match (left, right) {
-            (DataValue::Set(l), DataValue::Set(s)) => {
-                let mut inserted = false;
-                for v in s.iter() {
-                    inserted |= l.insert(v.clone());
+        match left {
+            MeetAccum::Empty => {
+                if matches!(right, MeetAccum::Empty) {
+                    return Ok(false);
                 }
-                inserted
+                *left = right.clone();
+                Ok(true)
             }
-            (DataValue::Set(l), DataValue::List(s)) => {
-                let mut inserted = false;
-                for v in s.iter() {
-                    inserted |= l.insert(v.clone());
+            MeetAccum::Value(left) => match right {
+                MeetAccum::Empty => Ok(false),
+                MeetAccum::Value(right) => {
+                    if let DataValue::List(l) = left {
+                        let set: BTreeSet<_> = l.iter().cloned().collect();
+                        *left = DataValue::Set(set);
+                    }
+                    Ok(match (left, right) {
+                        (DataValue::Set(l), DataValue::Set(s)) => {
+                            let mut inserted = false;
+                            for v in s.iter() {
+                                inserted |= l.insert(v.clone());
+                            }
+                            inserted
+                        }
+                        (DataValue::Set(l), DataValue::List(s)) => {
+                            let mut inserted = false;
+                            for v in s.iter() {
+                                inserted |= l.insert(v.clone());
+                            }
+                            inserted
+                        }
+                        (_, v) => bail!("cannot compute 'union' for value {:?}", v),
+                    })
                 }
-                inserted
-            }
-            (_, v) => bail!("cannot compute 'union' for value {:?}", v),
-        })
+            },
+        }
     }
 }
 
@@ -718,44 +722,48 @@ impl MeetAggrObj for MeetAggrIntersection {
     }
 
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
-        }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        let (MeetAccum::Value(left), MeetAccum::Value(right)) = (left, right) else {
-            unreachable!("Empty handled above");
-        };
-        if let DataValue::List(l) = left {
-            let set: BTreeSet<_> = l.iter().cloned().collect();
-            *left = DataValue::Set(set);
-        }
-        Ok(match (left, right) {
-            (DataValue::Set(l), DataValue::Set(s)) => {
-                let old_len = l.len();
-                let new_set = l.intersection(s).cloned().collect::<BTreeSet<_>>();
-                if old_len == new_set.len() {
-                    false
-                } else {
-                    *l = new_set;
-                    true
+        match left {
+            MeetAccum::Empty => {
+                if matches!(right, MeetAccum::Empty) {
+                    return Ok(false);
                 }
+                *left = right.clone();
+                Ok(true)
             }
-            (DataValue::Set(l), DataValue::List(s)) => {
-                let old_len = l.len();
-                let s: BTreeSet<_> = s.iter().cloned().collect();
-                let new_set = l.intersection(&s).cloned().collect::<BTreeSet<_>>();
-                if old_len == new_set.len() {
-                    false
-                } else {
-                    *l = new_set;
-                    true
+            MeetAccum::Value(left) => match right {
+                MeetAccum::Empty => Ok(false),
+                MeetAccum::Value(right) => {
+                    if let DataValue::List(l) = left {
+                        let set: BTreeSet<_> = l.iter().cloned().collect();
+                        *left = DataValue::Set(set);
+                    }
+                    Ok(match (left, right) {
+                        (DataValue::Set(l), DataValue::Set(s)) => {
+                            let old_len = l.len();
+                            let new_set = l.intersection(s).cloned().collect::<BTreeSet<_>>();
+                            if old_len == new_set.len() {
+                                false
+                            } else {
+                                *l = new_set;
+                                true
+                            }
+                        }
+                        (DataValue::Set(l), DataValue::List(s)) => {
+                            let old_len = l.len();
+                            let s: BTreeSet<_> = s.iter().cloned().collect();
+                            let new_set = l.intersection(&s).cloned().collect::<BTreeSet<_>>();
+                            if old_len == new_set.len() {
+                                false
+                            } else {
+                                *l = new_set;
+                                true
+                            }
+                        }
+                        (_, v) => bail!("cannot compute 'intersection' for value {:?}", v),
+                    })
                 }
-            }
-            (_, v) => bail!("cannot compute 'intersection' for value {:?}", v),
-        })
+            },
+        }
     }
 }
 
@@ -1156,26 +1164,27 @@ impl MeetAggrObj for MeetAggrMin {
         if *right_v == DataValue::Null {
             return Ok(false);
         }
-        // A materialized Empty (`Null` result) must not linger as a
-        // candidate — Min never accumulates Null.
-        if matches!(left, MeetAccum::Empty) || matches!(left, MeetAccum::Value(DataValue::Null)) {
-            *left = right.clone();
-            return Ok(true);
+        match left {
+            MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
+                // A materialized Empty (`Null` result) must not linger as a
+                // candidate — Min never accumulates Null.
+                *left = right.clone();
+                Ok(true)
+            }
+            MeetAccum::Value(left_v) => {
+                // Exact `Num` comparison; see `AggrMin::set`.
+                let (l, r) = match (&*left_v, right_v) {
+                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
+                    _ => bail!("'min' applied to non-numerical values"),
+                };
+                Ok(if r < l {
+                    *left_v = right_v.clone();
+                    true
+                } else {
+                    false
+                })
+            }
         }
-        let MeetAccum::Value(left_v) = left else {
-            unreachable!("Empty/Null handled above");
-        };
-        // Exact `Num` comparison; see `AggrMin::set`.
-        let (l, r) = match (&*left_v, right_v) {
-            (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-            _ => bail!("'min' applied to non-numerical values"),
-        };
-        Ok(if r < l {
-            *left_v = right_v.clone();
-            true
-        } else {
-            false
-        })
     }
 }
 
@@ -1242,25 +1251,26 @@ impl MeetAggrObj for MeetAggrMax {
         if *right_v == DataValue::Null {
             return Ok(false);
         }
-        // Same as Min: Null is never a Max candidate, only Empty is empty.
-        if matches!(left, MeetAccum::Empty) || matches!(left, MeetAccum::Value(DataValue::Null)) {
-            *left = right.clone();
-            return Ok(true);
+        match left {
+            MeetAccum::Empty | MeetAccum::Value(DataValue::Null) => {
+                // Same as Min: Null is never a Max candidate, only Empty is empty.
+                *left = right.clone();
+                Ok(true)
+            }
+            MeetAccum::Value(left_v) => {
+                // Exact `Num` comparison; see `AggrMin::set`.
+                let (l, r) = match (&*left_v, right_v) {
+                    (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
+                    _ => bail!("'max' applied to non-numerical values"),
+                };
+                Ok(if r > l {
+                    *left_v = right_v.clone();
+                    true
+                } else {
+                    false
+                })
+            }
         }
-        let MeetAccum::Value(left_v) = left else {
-            unreachable!("Empty/Null handled above");
-        };
-        // Exact `Num` comparison; see `AggrMin::set`.
-        let (l, r) = match (&*left_v, right_v) {
-            (DataValue::Num(l), DataValue::Num(r)) => (*l, *r),
-            _ => bail!("'max' applied to non-numerical values"),
-        };
-        Ok(if r > l {
-            *left_v = right_v.clone();
-            true
-        } else {
-            false
-        })
     }
 }
 

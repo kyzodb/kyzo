@@ -313,8 +313,10 @@ impl RuleBody for UnattributedBody {
 }
 
 /// A fixed-rule type for the `EvalProgram` parameter; never constructed
-/// (these trials use inline rules only).
-struct NoFixed;
+/// (these trials use inline rules only). Uninhabited — "running" one is
+/// unrepresentable (`match *self {}`), never `unreachable!`.
+#[derive(Debug)]
+enum NoFixed {}
 
 impl FixedRuleEval for NoFixed {
     fn run(
@@ -324,7 +326,7 @@ impl FixedRuleEval for NoFixed {
         _budget: &Budget,
         _baseline: u64,
     ) -> Result<()> {
-        unreachable!("NoFixed is never installed in a program")
+        match *self {}
     }
 }
 

@@ -603,6 +603,12 @@ pub(crate) struct VectorDimMismatch {
     pub(crate) got: usize,
 }
 
+/// Admitted component count exceeds the wire `u32` dimension bound.
+#[derive(Debug, Error, Diagnostic)]
+#[error("vector dimension exceeds the wire u32 bound")]
+#[diagnostic(code(index::hnsw::dimension_exceeds_u32))]
+pub(crate) struct VectorDimensionExceedsU32;
+
 // ---------------------------------------------------------------------------
 // VectorId: which vector of which base row.
 // ---------------------------------------------------------------------------
@@ -637,6 +643,15 @@ impl VectorId {
         key.push(DataValue::from(self.field as i64));
         key.push(DataValue::from(self.sub_wire()));
     }
+}
+
+/// A caller asked for a cached vector that was never [`ensure`](VectorCache::ensure)d —
+/// internal invariant broken, typed refuse (not a string `miette!`).
+#[derive(Debug, Error, Diagnostic)]
+#[error("internal invariant broken: HNSW vector cache miss for {id:?}")]
+#[diagnostic(code(index::hnsw::vector_cache_miss))]
+pub(crate) struct HnswVectorCacheMiss {
+    pub(crate) id: VectorId,
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,7 +1155,7 @@ impl IndexVec {
             }
         }
         Ok(IndexVec(
-            Vector::try_new(components).ok_or_else(|| miette!("vector dimension exceeds u32"))?,
+            Vector::try_new(components).ok_or(VectorDimensionExceedsU32)?,
         ))
     }
 
@@ -1311,9 +1326,10 @@ impl<'m> VectorCache<'m> {
     /// A cached vector. Callers [`ensure`](Self::ensure) first; a miss is
     /// an internal-invariant error (typed, not the original's `unwrap`).
     fn get(&self, id: &VectorId) -> Result<&IndexVec> {
-        self.cache
+        Ok(self
+            .cache
             .get(id)
-            .ok_or_else(|| miette!("internal invariant broken: HNSW vector cache miss for {id:?}"))
+            .ok_or_else(|| HnswVectorCacheMiss { id: id.clone() })?)
     }
 
     fn v_dist(&self, q: &IndexVec, id: &VectorId) -> Result<f64> {

@@ -116,23 +116,27 @@ impl MeetAggrObj for MeetAggrHllUnion {
         MeetAccum::Value(HyperLogLog::default_precision().to_value())
     }
     fn update(&self, left: &mut MeetAccum, right: &MeetAccum) -> Result<bool> {
-        if matches!(right, MeetAccum::Empty) {
-            return Ok(false);
+        match left {
+            MeetAccum::Empty => {
+                if matches!(right, MeetAccum::Empty) {
+                    return Ok(false);
+                }
+                *left = right.clone();
+                Ok(true)
+            }
+            MeetAccum::Value(left_v) => match right {
+                MeetAccum::Empty => Ok(false),
+                MeetAccum::Value(right_v) => {
+                    let mut l = as_hll(left_v)?;
+                    let r = as_hll(right_v)?;
+                    let changed = l.merge(&r);
+                    if changed {
+                        *left_v = l.to_value();
+                    }
+                    Ok(changed)
+                }
+            },
         }
-        if matches!(left, MeetAccum::Empty) {
-            *left = right.clone();
-            return Ok(true);
-        }
-        let (MeetAccum::Value(left_v), MeetAccum::Value(right_v)) = (left, right) else {
-            unreachable!("Empty handled above");
-        };
-        let mut l = as_hll(left_v)?;
-        let r = as_hll(right_v)?;
-        let changed = l.merge(&r);
-        if changed {
-            *left_v = l.to_value();
-        }
-        Ok(changed)
     }
 }
 

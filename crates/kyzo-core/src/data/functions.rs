@@ -496,6 +496,23 @@ fn no_nan(op: &'static str, x: f64) -> Result<DataValue> {
     Ok(DataValue::Num(Num::float(x)))
 }
 
+/// A vector op was invoked with an empty argument slice after the
+/// single-argument early return — unrepresentable under `op_add` /
+/// `op_mul`'s calling contract (a `Vector` argument implies `len >= 1`).
+#[derive(Debug, Error, Diagnostic)]
+#[error("'{op}' vector lane requires a non-empty argument slice")]
+#[diagnostic(code(eval::vec_op_empty_args))]
+struct VecOpEmptyArgs {
+    op: &'static str,
+}
+
+/// RFC3339 formatting into a `String` buffer refused — typed, never
+/// `expect` on the product path.
+#[derive(Debug, Error, Diagnostic)]
+#[error("timestamp formatting into a string buffer failed")]
+#[diagnostic(code(eval::timestamp_format_refused))]
+struct TimestampFormatRefused;
+
 /// Admit a float component slice as a vector, or refuse when the
 /// dimension does not fit the wire `u32` count.
 fn vec_value(components: Vec<f64>) -> Result<Vector> {
@@ -562,7 +579,9 @@ fn add_vecs(args: &[DataValue]) -> Result<DataValue> {
     }
     // Non-empty: only called from `op_add`/`op_mul` after a `Vec` argument
     // was seen (so len >= 1), and the len == 1 case returned above.
-    let (last, first) = args.split_last().expect("args non-empty");
+    let Some((last, first)) = args.split_last() else {
+        bail!(VecOpEmptyArgs { op: "add" });
+    };
     let first = add_vecs(first)?;
     match (first, last) {
         (DataValue::Vector(a), DataValue::Vector(b)) => {
@@ -705,7 +724,9 @@ fn mul_vecs(args: &[DataValue]) -> Result<DataValue> {
         return Ok(args[0].clone());
     }
     // Non-empty: see `add_vecs`.
-    let (last, first) = args.split_last().expect("args non-empty");
+    let Some((last, first)) = args.split_last() else {
+        bail!(VecOpEmptyArgs { op: "mul" });
+    };
     // The CozoDB original recursed into `add_vecs` here, so multiplying
     // three or more vector arguments *added* the prefix before multiplying
     // by the last: `v1 * v2 * v3` computed `(v1 + v2) * v3`. Fixed to
@@ -822,21 +843,20 @@ pub(crate) fn op_abs(args: &[DataValue]) -> Result<DataValue> {
 define_op!(OP_SIGNUM, 1, false, true);
 pub(crate) fn op_signum(args: &[DataValue]) -> Result<DataValue> {
     Ok(match &args[0] {
-        DataValue::Num(n) if n.as_int().is_some() => {
-            DataValue::Num(Num::int(n.as_int().expect("guarded int").signum()))
-        }
-        DataValue::Num(n) => {
-            let f = n.as_float().expect("Num is int or float");
-            if f.signum() < 0. {
-                DataValue::from(-1)
-            } else if f == 0. {
-                DataValue::from(0)
-            } else if f > 0. {
-                DataValue::from(1)
-            } else {
-                DataValue::from(f64::NAN)
+        DataValue::Num(n) => match n.repr() {
+            NumRepr::Int(i) => DataValue::Num(Num::int(i.signum())),
+            NumRepr::Float(f) => {
+                if f.signum() < 0. {
+                    DataValue::from(-1)
+                } else if f == 0. {
+                    DataValue::from(0)
+                } else if f > 0. {
+                    DataValue::from(1)
+                } else {
+                    DataValue::from(f64::NAN)
+                }
             }
-        }
+        },
         data_value_any!() => bail!("'signum' requires numbers"),
     })
 }
@@ -2260,12 +2280,14 @@ pub(crate) fn op_vec(args: &[DataValue]) -> Result<DataValue> {
                 VecElementType::F32 => bytes
                     .chunks_exact(4)
                     // In bounds: `chunks_exact(4)` yields 4-byte chunks.
-                    .map(|c| f32::from_le_bytes(c.try_into().expect("chunk of 4")) as f64)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64)
                     .collect(),
                 VecElementType::F64 => bytes
                     .chunks_exact(8)
                     // In bounds: `chunks_exact(8)` yields 8-byte chunks.
-                    .map(|c| f64::from_le_bytes(c.try_into().expect("chunk of 8")))
+                    .map(|c| {
+                        f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
+                    })
                     .collect(),
             };
             Ok(DataValue::Vector(vec_value(components)?))
@@ -2617,18 +2639,18 @@ fn autosi_precision(subsec_nanos: i32) -> Option<u8> {
 // and AutoSi subsecond digits. jiff's zoned printer appends an IANA/offset zone
 // annotation (`...+08:00[+08:00]`) that chrono never emits, so we truncate at
 // the `[`.
-fn format_rfc3339(ts: jiff::Timestamp, off: Offset) -> String {
+fn format_rfc3339(ts: jiff::Timestamp, off: Offset) -> Result<String> {
     let prec = autosi_precision(ts.subsec_nanosecond());
     let zoned = ts.to_zoned(TimeZone::fixed(off));
     let mut buf = String::new();
     jiff::fmt::temporal::DateTimePrinter::new()
         .precision(prec)
         .print_zoned(&zoned, &mut buf)
-        .expect("formatting a timestamp into a String is infallible");
+        .map_err(|_| TimestampFormatRefused)?;
     if let Some(i) = buf.rfind('[') {
         buf.truncate(i);
     }
-    buf
+    Ok(buf)
 }
 
 define_op!(OP_FORMAT_TIMESTAMP, 1, true, true);
@@ -2655,7 +2677,7 @@ pub(crate) fn op_format_timestamp(args: &[DataValue]) -> Result<DataValue> {
         }
         None => Offset::UTC,
     };
-    Ok(DataValue::Str(format_rfc3339(ts, off)))
+    Ok(DataValue::Str(format_rfc3339(ts, off)?))
 }
 
 // Microseconds since the Unix epoch for a parsed timestamp, FLOORED toward

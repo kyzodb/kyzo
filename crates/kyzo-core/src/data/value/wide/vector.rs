@@ -36,8 +36,10 @@ const _: () = assert!(std::mem::align_of::<VectorComponent>() == std::mem::align
 
 impl VectorComponent {
     /// Admit door: apply Num's float law, then brand the result.
+    /// `Num::float` always stores a float (never Int), so `to_f64` is the
+    /// canonical magnitude — no `Option`/`expect` on the product path.
     pub fn admit(raw: f64) -> VectorComponent {
-        VectorComponent(Num::float(raw).as_float().expect("float stays float"))
+        VectorComponent(Num::float(raw).to_f64())
     }
 
     /// Post-proof mint: the float is already in Num's canonical form.
