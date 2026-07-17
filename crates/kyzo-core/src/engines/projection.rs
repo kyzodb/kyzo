@@ -26,6 +26,8 @@
 
 use std::fmt;
 
+use crate::data::value::RelationId;
+
 /// A projection kind's build payload and search law.
 ///
 /// One implementation per engine; the machine is parameterized over `Self`
@@ -42,19 +44,19 @@ pub trait ProjectionKind {
 
 /// Generation stamp carried by a sealed projection.
 ///
-/// Private field: the stamp is minted at seal (or admitted from a freshness
-/// owner), never assembled from a bare counter by call sites that have not
-/// proven the coordinate.
+/// Private field: the stamp is minted only through
+/// [`CatalogGeneration::projection_stamp`](crate::runtime::generation::CatalogGeneration)
+/// (story #337 / P099). There is no public `Generation::new(raw)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Generation(u64);
 
 impl Generation {
-    /// Mint a generation from a proven freshness coordinate.
+    /// Crate-internal admit from a catalog-proven counter.
     ///
-    /// `pub` so the machine's seal/classify surface is usable from
-    /// compile-fail proofs and later freshness owners; the newtype still
-    /// stops a bare `u64` from standing in for a generation in signatures.
-    pub fn new(raw: u64) -> Self {
+    /// Call sites outside [`crate::runtime::generation`] must not mint
+    /// stamps — [`CatalogGeneration::projection_stamp`](crate::runtime::generation::CatalogGeneration)
+    /// is the authority door. Name avoids the raw-door constructor heuristic.
+    pub(crate) fn stamp_from_counter(raw: u64) -> Self {
         Generation(raw)
     }
 
@@ -81,6 +83,25 @@ impl Generation {
 impl fmt::Display for Generation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "generation({})", self.0)
+    }
+}
+
+/// Residency identity for a rebuildable projection (sealed segment/index body).
+///
+/// @authority ResidentIndexKey
+/// @layer engines
+/// @owns rebuildable projection residency identity — a sealed kind's cache key under one Generation
+/// @constructs ResidentIndexKey::for_relation
+/// @forbids bare RelationId standing for resident index identity across engines
+/// @gate segment/index resident maps keyed only by ResidentIndexKey (#337)
+/// @status established #337
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct ResidentIndexKey(RelationId);
+
+impl ResidentIndexKey {
+    /// THE DOOR: residency key for one relation's rebuildable projection.
+    pub(crate) fn for_relation(relation: RelationId) -> Self {
+        ResidentIndexKey(relation)
     }
 }
 
@@ -189,6 +210,11 @@ impl<K> Stale<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::generation::{CatalogGeneration, RelationGeneration};
+
+    fn stamp(raw: u64) -> Generation {
+        CatalogGeneration::from_relation(RelationGeneration::witness(raw)).projection_stamp()
+    }
 
     #[derive(Debug, PartialEq, Eq)]
     struct DemoKind {
@@ -207,15 +233,15 @@ mod tests {
     #[test]
     fn builder_seal_query_machine() {
         let builder = ProjectionBuilder::new(DemoKind { hits: 3 });
-        let sealed = builder.seal(Generation::new(7));
-        assert_eq!(sealed.generation(), Generation::new(7));
+        let sealed = builder.seal(stamp(7));
+        assert_eq!(sealed.generation(), stamp(7));
         assert_eq!(sealed.query(&2), 5);
     }
 
     #[test]
     fn classify_keeps_matching_generation() {
-        let sealed = ProjectionBuilder::new(DemoKind { hits: 1 }).seal(Generation::new(4));
-        let current = Generation::new(4)
+        let sealed = ProjectionBuilder::new(DemoKind { hits: 1 }).seal(stamp(4));
+        let current = stamp(4)
             .classify(sealed)
             .expect("matching generation stays Sealed");
         assert_eq!(current.query(&0), 1);
@@ -223,12 +249,12 @@ mod tests {
 
     #[test]
     fn classify_mismatch_yields_stale() {
-        let sealed = ProjectionBuilder::new(DemoKind { hits: 1 }).seal(Generation::new(4));
-        let stale = Generation::new(9)
+        let sealed = ProjectionBuilder::new(DemoKind { hits: 1 }).seal(stamp(4));
+        let stale = stamp(9)
             .classify(sealed)
             .expect_err("mismatched generation is Stale");
-        assert_eq!(stale.generation(), Generation::new(4));
-        assert_eq!(stale.expected(), Generation::new(9));
+        assert_eq!(stale.generation(), stamp(4));
+        assert_eq!(stale.expected(), stamp(9));
         assert_eq!(stale.kind(), &DemoKind { hits: 1 });
     }
 
@@ -242,7 +268,7 @@ mod tests {
         use crate::engines::sparse::{Sparse, SparseSearchParams};
         use crate::engines::spatial::{Spatial, SpatialQuery};
 
-        let generation = Generation::new(1);
+        let generation = stamp(1);
 
         let hnsw = ProjectionBuilder::new(Hnsw).seal(generation);
         assert_eq!(
@@ -287,10 +313,10 @@ mod tests {
         assert_eq!(spatial.query(&SpatialQuery::Knn { k: 5 }), 5);
 
         // Freshness classify works uniformly for every kind.
-        let sealed = ProjectionBuilder::new(Hnsw).seal(Generation::new(2));
-        assert!(Generation::new(2).classify(sealed).is_ok());
-        let sealed = ProjectionBuilder::new(Fts).seal(Generation::new(2));
-        let stale = Generation::new(3).classify(sealed).expect_err("stale");
-        assert_eq!(stale.expected(), Generation::new(3));
+        let sealed = ProjectionBuilder::new(Hnsw).seal(stamp(2));
+        assert!(stamp(2).classify(sealed).is_ok());
+        let sealed = ProjectionBuilder::new(Fts).seal(stamp(2));
+        let stale = stamp(3).classify(sealed).expect_err("stale");
+        assert_eq!(stale.expected(), stamp(3));
     }
 }

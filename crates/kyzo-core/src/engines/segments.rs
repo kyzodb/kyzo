@@ -48,7 +48,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use crate::data::value::{DataValue, RelationId, Tuple};
-use crate::engines::projection::{Generation, ProjectionBuilder, Sealed, Stale};
+use crate::engines::projection::{Generation, ProjectionBuilder, ResidentIndexKey, Sealed, Stale};
+use crate::runtime::generation::RelationGeneration;
 use crate::storage::ReadTx;
 
 /// Consecutive misses at one live generation before a rebuild is admitted.
@@ -103,26 +104,29 @@ pub(crate) enum SegmentMiss {
 /// all its transactions.
 #[derive(Debug, Default)]
 pub(crate) struct SegmentEngine {
-    marks: Mutex<BTreeMap<RelationId, Arc<AtomicU64>>>,
-    segments: Mutex<BTreeMap<RelationId, Sealed<SegmentHandle>>>,
-    misses: Mutex<BTreeMap<RelationId, (Generation, u32)>>,
+    marks: Mutex<BTreeMap<ResidentIndexKey, Arc<AtomicU64>>>,
+    segments: Mutex<BTreeMap<ResidentIndexKey, Sealed<SegmentHandle>>>,
+    misses: Mutex<BTreeMap<ResidentIndexKey, (Generation, u32)>>,
 }
 
 impl SegmentEngine {
     fn slot(&self, relation: RelationId) -> Arc<AtomicU64> {
+        let key = ResidentIndexKey::for_relation(relation);
         let mut marks = self.marks.lock().expect("generation lock poisoned");
-        marks.entry(relation).or_default().clone()
+        marks.entry(key).or_default().clone()
     }
 
     /// Live generation for `relation`, sampled only after `tx` proves a
     /// snapshot is open — the racy "read mark then open snapshot" order is
-    /// unrepresentable.
+    /// unrepresentable. Freshness is witnessed as [`RelationGeneration`] and
+    /// stamped only through the catalog authority (no bare `Generation::new`).
     pub(crate) fn generation_after_snapshot(
         &self,
         _tx: &impl ReadTx,
         relation: RelationId,
     ) -> Generation {
-        Generation::new(self.slot(relation).load(AtomicOrdering::Acquire))
+        RelationGeneration::witness(self.slot(relation).load(AtomicOrdering::Acquire))
+            .projection_stamp()
     }
 
     /// Record an imminent committed write to `relation` — called BEFORE the
@@ -156,8 +160,9 @@ impl SegmentEngine {
         relation: RelationId,
         live: Generation,
     ) -> Result<SegmentHandle, SegmentMiss> {
+        let key = ResidentIndexKey::for_relation(relation);
         let segments = self.segments.lock().expect("segment lock poisoned");
-        let Some(sealed) = segments.get(&relation) else {
+        let Some(sealed) = segments.get(&key) else {
             return Err(SegmentMiss::Absent);
         };
         match live.classify(sealed.clone()) {
@@ -171,14 +176,15 @@ impl SegmentEngine {
     /// resets the streak. Declining is always sound — the caller falls
     /// back to storage.
     pub(crate) fn should_build(&self, relation: RelationId, live: Generation) -> bool {
+        let key = ResidentIndexKey::for_relation(relation);
         let mut misses = self.misses.lock().expect("miss lock poisoned");
-        match misses.get_mut(&relation) {
+        match misses.get_mut(&key) {
             Some((recorded, count)) if *recorded == live => {
                 *count = count.saturating_add(1);
                 *count >= REBUILD_AFTER_STABLE_MISSES
             }
             _ => {
-                misses.insert(relation, (live, 1));
+                misses.insert(key, (live, 1));
                 false
             }
         }
@@ -192,16 +198,17 @@ impl SegmentEngine {
         segment: Segment,
         generation: Generation,
     ) -> SegmentHandle {
+        let key = ResidentIndexKey::for_relation(relation);
         let handle = SegmentHandle(Arc::new(segment));
         let sealed = ProjectionBuilder::new(handle.clone()).seal(generation);
         self.segments
             .lock()
             .expect("segment lock poisoned")
-            .insert(relation, sealed);
+            .insert(key, sealed);
         self.misses
             .lock()
             .expect("miss lock poisoned")
-            .remove(&relation);
+            .remove(&key);
         handle
     }
 
@@ -209,18 +216,19 @@ impl SegmentEngine {
     /// outright (destructive schema ops: the relation identity itself is
     /// being reused or destroyed).
     pub(crate) fn evict(&self, relation: RelationId) {
+        let key = ResidentIndexKey::for_relation(relation);
         self.segments
             .lock()
             .expect("segment lock poisoned")
-            .remove(&relation);
+            .remove(&key);
         self.misses
             .lock()
             .expect("miss lock poisoned")
-            .remove(&relation);
+            .remove(&key);
         self.marks
             .lock()
             .expect("generation lock poisoned")
-            .remove(&relation);
+            .remove(&key);
     }
 }
 

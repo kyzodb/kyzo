@@ -47,6 +47,8 @@ pub(crate) mod constraint;
 pub(crate) mod db;
 #[cfg(test)]
 mod db_battery;
+/// Catalog / relation / index freshness authorities (story #337).
+pub(crate) mod generation;
 pub(crate) mod json;
 // The mutation tier and catalog carry surface that is lib-dead until its
 // operator lands (`::index drop` variants, schema-compat checks used by

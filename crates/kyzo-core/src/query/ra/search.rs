@@ -21,7 +21,6 @@ use super::RelAlgebra;
 use crate::data::program::MagicSymbol;
 use crate::data::span::SourceSpan;
 use crate::data::value::DataValue;
-use crate::data::value::Tuple;
 use crate::engines::segments::Segments;
 use crate::query::batch_ops::{Batch, BatchIter};
 use crate::query::eval::AtomOccurrence;
@@ -32,6 +31,81 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use thiserror::Error;
 use crate::data::value::data_value_any;
+
+/// Admitted search-hit rows as codes into this admission's private value
+/// table. Engine decoded tuples never cross the SearchRA seam — they enter
+/// only through [`QueryDomainAdmission::admit_hits`].
+///
+/// @authority QueryDomainAdmission
+/// @layer query
+/// @owns admission of engine search hits into the query execution currency as codes; decoded engine tuples never cross the SearchRA seam
+/// @constructs QueryDomainAdmission::admit_hits
+/// @forbids holding decoded engine Tuple vectors as the SearchRA hit currency
+/// @gate SearchRA hit currency is QueryDomainAdmission codes only (#337)
+/// @status established #337
+pub(crate) struct QueryDomainAdmission {
+    /// Row-major codes; each code indexes `table`.
+    codes: Vec<u32>,
+    /// End offset of each hit row in `codes`.
+    row_ends: Vec<usize>,
+    /// Intern table: code → value. Codes are local to this admission.
+    table: Vec<DataValue>,
+}
+
+impl QueryDomainAdmission {
+    /// No hits yet — the batch executor's idle state before the first search.
+    pub(crate) fn empty() -> Self {
+        QueryDomainAdmission {
+            codes: Vec::new(),
+            row_ends: Vec::new(),
+            table: Vec::new(),
+        }
+    }
+
+    /// THE DOOR: admit engine search results as codes under this admission.
+    ///
+    /// Consumes decoded engine hit rows at the boundary; SearchRA never
+    /// stores them as a decoded-tuple vector.
+    pub(crate) fn admit_hits(
+        hits: impl IntoIterator<Item = impl IntoIterator<Item = DataValue>>,
+    ) -> Self {
+        let mut table = Vec::new();
+        let mut codes = Vec::new();
+        let mut row_ends = Vec::new();
+        for hit in hits {
+            for cell in hit {
+                let code = match table.iter().position(|v| v == &cell) {
+                    Some(i) => i as u32,
+                    None => {
+                        let i = table.len() as u32;
+                        table.push(cell);
+                        i
+                    }
+                };
+                codes.push(code);
+            }
+            row_ends.push(codes.len());
+        }
+        QueryDomainAdmission {
+            codes,
+            row_ends,
+            table,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.row_ends.len()
+    }
+
+    /// Resolve hit `i`'s codes through the admission table.
+    pub(crate) fn hit_cells(&self, i: usize) -> impl Iterator<Item = &DataValue> + '_ {
+        let start = if i == 0 { 0 } else { self.row_ends[i - 1] };
+        let end = self.row_ends[i];
+        self.codes[start..end]
+            .iter()
+            .map(|&c| &self.table[c as usize])
+    }
+}
 
 /// An index search driven once per parent row: the query expression is
 /// evaluated against the parent tuple, the engine's pure search function
@@ -105,10 +179,10 @@ impl SearchRA {
         let cancel = self.atom.cancel.clone();
         let cfg = &self.atom.cfg;
 
-        let search = move |row: &[DataValue]| -> Result<Vec<Tuple>> {
+        let search = move |row: &[DataValue]| -> Result<QueryDomainAdmission> {
             cancel.check()?;
             let q = query_expr.eval(row)?;
-            Ok(match cfg {
+            let hits = match cfg {
                 SearchConfig::Hnsw(c) => {
                     let v = match &q {
                         DataValue::Vector(v) => v,
@@ -154,14 +228,17 @@ impl SearchRA {
                     &c.perms,
                     &c.analyzer,
                 )?,
-            })
+            };
+            Ok(QueryDomainAdmission::admit_hits(
+                hits.into_iter().map(|t| t.into_vec()),
+            ))
         };
 
         Ok(Box::new(SearchBatches {
             parent: self.parent.iter_batched(tx, delta_rule, stores, segments)?,
             parent_batch: None,
             parent_row: 0,
-            hits: Vec::new(),
+            hits: QueryDomainAdmission::empty(),
             hit_idx: 0,
             search: Box::new(search),
             pending_err: None,
@@ -174,9 +251,9 @@ struct SearchBatches<'a> {
     parent: BatchIter<'a>,
     parent_batch: Option<Batch>,
     parent_row: usize,
-    hits: Vec<Tuple>,
+    hits: QueryDomainAdmission,
     hit_idx: usize,
-    search: Box<dyn FnMut(&[DataValue]) -> Result<Vec<Tuple>> + 'a>,
+    search: Box<dyn FnMut(&[DataValue]) -> Result<QueryDomainAdmission> + 'a>,
     pending_err: Option<miette::Error>,
 }
 
@@ -192,12 +269,13 @@ impl SearchBatches<'_> {
                 let Some(batch) = &self.parent_batch else {
                     unreachable!("hits in flight imply a parent batch")
                 };
-                let row = batch.row(self.parent_row);
+                let row = batch.row(self.parent_row).to_vec();
                 while self.hit_idx < self.hits.len() {
-                    let hit = &self.hits[self.hit_idx];
+                    let hit: Vec<DataValue> =
+                        self.hits.hit_cells(self.hit_idx).cloned().collect();
                     out.push_with(|buf| {
-                        buf.extend_from_slice(row);
-                        buf.extend_from_slice(hit.as_slice());
+                        buf.extend_from_slice(&row);
+                        buf.extend(hit.iter().cloned());
                         Ok(())
                     })?;
                     self.hit_idx += 1;
