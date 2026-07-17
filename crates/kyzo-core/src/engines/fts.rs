@@ -781,15 +781,10 @@ mod tests {
     /// Simple whitespace-ish tokenizer, lowercased: the same analyzer used to
     /// build and to query.
     fn analyzer() -> TextAnalyzer {
-        TokenizerConfig {
-            name: SmartString::from("Simple"),
-            args: vec![],
-        }
-        .build(&[TokenizerConfig {
-            name: SmartString::from("Lowercase"),
-            args: vec![],
-        }])
-        .unwrap()
+        TokenizerConfig::admit("Simple", vec![])
+            .unwrap()
+            .build(&[TokenizerConfig::admit("Lowercase", vec![]).unwrap()])
+            .unwrap()
     }
 
     /// The compiled extractor: project the text column (position 1).
@@ -1133,24 +1128,20 @@ mod tests {
         let db = new_fjall_storage(dir.path()).unwrap();
         let meta = base_meta();
         // Analyzer with a stopword filter: "the"/"a" tokenize away.
-        let a = TokenizerConfig {
-            name: SmartString::from("Simple"),
-            args: vec![],
-        }
-        .build(&[
-            TokenizerConfig {
-                name: SmartString::from("Lowercase"),
-                args: vec![],
-            },
-            TokenizerConfig {
-                name: SmartString::from("Stopwords"),
-                args: vec![DataValue::List(vec![
-                    DataValue::from("the"),
-                    DataValue::from("a"),
-                ])],
-            },
-        ])
-        .unwrap();
+        let a = TokenizerConfig::admit("Simple", vec![])
+            .unwrap()
+            .build(&[
+                TokenizerConfig::admit("Lowercase", vec![]).unwrap(),
+                TokenizerConfig::admit(
+                    "Stopwords",
+                    vec![DataValue::List(vec![
+                        DataValue::from("the"),
+                        DataValue::from("a"),
+                    ])],
+                )
+                .unwrap(),
+            ])
+            .unwrap();
         let ex = extractor();
         let mut tx = db.write_tx().unwrap();
         let base = create_relation(

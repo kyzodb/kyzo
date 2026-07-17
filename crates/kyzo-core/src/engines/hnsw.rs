@@ -215,7 +215,9 @@ use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::relation::VecElementType;
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use crate::data::relation::{
+    ColLen, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
+};
 use crate::data::span::SourceSpan;
 use crate::data::value::Tuple;
 use crate::data::value::{DataValue, ScanBound, Vector, append_canonical, encode_owned};
@@ -3001,7 +3003,7 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: 2,
+                    len: ColLen::new(2),
                 },
             )],
         }
@@ -3112,7 +3114,7 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: dim,
+                    len: ColLen::new(dim),
                 },
             )],
         };
@@ -3189,7 +3191,7 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: dim,
+                    len: ColLen::new(dim),
                 },
             )],
         };
@@ -3304,7 +3306,7 @@ mod tests {
                     "v",
                     ColType::Vec {
                         eltype: VecElementType::F32,
-                        len: dim,
+                        len: ColLen::new(dim),
                     },
                 )],
             };
@@ -3553,7 +3555,7 @@ mod tests {
                 "v",
                 ColType::Vec {
                     eltype: VecElementType::F32,
-                    len: dim,
+                    len: ColLen::new(dim),
                 },
             )],
         };

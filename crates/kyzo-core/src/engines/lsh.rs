@@ -1200,10 +1200,7 @@ mod tests {
             extractor: crate::parse::parse_expressions("v", &std::collections::BTreeMap::new())
                 .unwrap(),
             n_gram: 3,
-            tokenizer: TokenizerConfig {
-                name: SmartString::from("Simple"),
-                args: vec![],
-            },
+            tokenizer: TokenizerConfig::admit("Simple", vec![]).unwrap(),
             filters: vec![],
             num_perm: perm_seeds.len(),
             n_bands: params.b,

@@ -15,21 +15,23 @@
 
 //! Full-text search: tokenizer configuration and the analyzer cache.
 //!
-//! A [`TokenizerConfig`] is pure data — a name plus [`DataValue`] arguments —
-//! stored verbatim in an FTS index manifest. It becomes a runnable
-//! [`TextAnalyzer`] only through [`TokenizerConfig::build`], which is where
-//! unknown names and malformed arguments are refused.
+//! A [`TokenizerConfig`] is pure data — a proven stage name plus
+//! [`DataValue`] arguments — stored in an FTS index manifest. Unknown names
+//! are refused at [`TokenizerConfig::admit`] (and on serde decode), so they
+//! are unstorable. It becomes a runnable [`TextAnalyzer`] only through
+//! [`TokenizerConfig::build`], which still refuses malformed arguments.
 //!
 //! Two moments of truth, by design:
 //!
-//! - **Definition time**: the operator tier (`::fts create`) must call
-//!   [`TokenizerConfig::validate`] so a bad config is refused before the
-//!   manifest is ever written. (New over the CozoDB original, where a
-//!   manifest with an unknown tokenizer name was storable and only failed
-//!   at first use.)
-//! - **Use time**: [`TokenizerConfig::build`] stays lazily fallible anyway —
-//!   a manifest written by an older or foreign build is data, and data is
-//!   never trusted to be well-formed just because it was once stored.
+//! - **Name / store time**: [`TokenizerConfig::admit`] (parse, builder, serde)
+//!   refuses unknown stage names before a config can exist.
+//! - **Definition time**: the operator tier (`::fts create`) calls
+//!   [`TokenizerConfig::validate`] so unlawful *arguments* are refused before
+//!   the manifest is written.
+//! - **Use time**: [`TokenizerConfig::build`] stays lazily fallible for
+//!   argument shape — a manifest written by an older or foreign build is
+//!   data, and data is never trusted to be well-formed just because it was
+//!   once stored.
 
 use crate::DataValue;
 use crate::engines::text::cangjie::tokenizer::CangJieTokenizer;
@@ -80,14 +82,14 @@ pub(crate) struct FtsIndexManifest {
 /// exactly as written in the index definition. Pure data — see the module
 /// docs for when it is proven runnable.
 ///
-/// Name proof: [`TokenizerConfig::admit`] (and serde deserialize through
-/// that door) refuse unknown stage names so they are unstorable. Argument
-/// shape is still proven at [`validate`] / [`build`].
+/// Name proof: private fields; the only mints are [`TokenizerConfig::admit`]
+/// (and serde deserialize through that door). Unknown stage names are
+/// unstorable. Argument shape is still proven at [`validate`] / [`build`].
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde_derive::Serialize)]
 pub struct TokenizerConfig {
-    pub name: SmartString<LazyCompact>,
-    pub args: Vec<DataValue>,
+    name: SmartString<LazyCompact>,
+    args: Vec<DataValue>,
 }
 
 /// Unknown tokenizer / token-filter name refused at the admit door.
@@ -143,6 +145,21 @@ impl TokenizerConfig {
             return Err(UnknownTokenizerStageName(name));
         }
         Ok(TokenizerConfig { name, args })
+    }
+
+    /// Default stage used by staged FTS/LSH builders before an override —
+    /// `Simple` is always an admitted name.
+    pub fn simple() -> TokenizerConfig {
+        // INVARIANT(known_stage_simple): "Simple" is in `is_known_stage_name`.
+        TokenizerConfig::admit("Simple", vec![]).expect("INVARIANT(known_stage_simple)")
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn args(&self) -> &[DataValue] {
+        &self.args
     }
 
     /// The cache key for one full analyzer pipeline (this tokenizer plus
@@ -455,15 +472,7 @@ mod tests {
     use super::*;
 
     fn cfg(name: &str, args: Vec<DataValue>) -> TokenizerConfig {
-        // Tests intentionally exercise unknown names via struct literal /
-        // admit-bypass for negative cases; known names go through admit.
-        match TokenizerConfig::admit(name, args.clone()) {
-            Ok(c) => c,
-            Err(_) => TokenizerConfig {
-                name: name.into(),
-                args,
-            },
-        }
+        TokenizerConfig::admit(name, args).expect("test stage name must be admitted")
     }
 
     fn hex(h: impl AsRef<[u8]>) -> String {
@@ -610,19 +619,15 @@ mod tests {
         );
     }
 
-    /// The lazy path stays lazy: an unknown name is representable as config
-    /// (a stored manifest may carry it) and fails only when constructed...
+    /// Unknown names are refused at the admit door — unstorable as config.
     #[test]
-    fn unknown_tokenizer_fails_at_construction() {
-        let bad = cfg("NoSuchTokenizer", vec![]);
-        assert!(bad.construct_tokenizer().is_err());
-        assert!(bad.build(&[]).is_err());
-        let bad_filter = cfg("NoSuchFilter", vec![]);
-        assert!(bad_filter.construct_token_filter().is_err());
+    fn unknown_tokenizer_refused_at_admit() {
+        assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
+        assert!(TokenizerConfig::admit("NoSuchFilter", vec![]).is_err());
     }
 
-    /// ...and `validate` is the definition-time proof the operator tier
-    /// calls before writing a manifest.
+    /// `validate` is the definition-time proof the operator tier calls
+    /// before writing a manifest (known name, argument legality).
     #[test]
     fn validate_proves_config_at_definition_time() {
         cfg("Simple", vec![])
@@ -636,8 +641,8 @@ mod tests {
             ])
             .unwrap();
 
-        // Unknown tokenizer name.
-        assert!(cfg("NoSuchTokenizer", vec![]).validate(&[]).is_err());
+        // Unknown tokenizer name — refuse at admit, not at validate.
+        assert!(TokenizerConfig::admit("NoSuchTokenizer", vec![]).is_err());
         // Known name, unlawful args.
         assert!(
             cfg("NGram", vec![DataValue::from(0)])

@@ -190,10 +190,9 @@ impl Display for NullableColType {
     }
 }
 
-/// Proven list / vector length on a column schema. Prefer this at new
-/// doors; [`ColType`] still carries bare `usize` until off-list call sites
-/// migrate (P048).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
+/// Proven list / vector length on a column schema — the only length
+/// type [`ColType`] may carry.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, serde_derive::Deserialize, serde_derive::Serialize)]
 pub struct ColLen(usize);
 
 impl ColLen {
@@ -218,6 +217,12 @@ impl From<ColLen> for usize {
     }
 }
 
+impl Display for ColLen {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Deserialize, serde_derive::Serialize)]
 pub enum ColType {
     Any,
@@ -229,11 +234,11 @@ pub enum ColType {
     Uuid,
     List {
         eltype: Box<NullableColType>,
-        len: Option<usize>,
+        len: Option<ColLen>,
     },
     Vec {
         eltype: VecElementType,
-        len: usize,
+        len: ColLen,
     },
     Tuple(Vec<NullableColType>),
     Validity,
@@ -430,7 +435,10 @@ impl NullableColType {
             ColType::List { eltype, len } => {
                 if let DataValue::List(l) = data {
                     if let Some(expected) = len {
-                        ensure!(*expected == l.len(), BadListLength(self.clone(), l.len()))
+                        ensure!(
+                            expected.get() == l.len(),
+                            BadListLength(self.clone(), l.len())
+                        )
                     }
                     DataValue::List(
                         l.into_iter()
@@ -443,7 +451,7 @@ impl NullableColType {
             }
             ColType::Vec { eltype, len } => match &data {
                 DataValue::List(l) => {
-                    if l.len() != *len {
+                    if l.len() != len.get() {
                         bail!(BadListLength(self.clone(), l.len()))
                     }
                     let collected: Vec<f64> = l
@@ -460,7 +468,7 @@ impl NullableColType {
                     DataValue::Vector(Vector::new(collected))
                 }
                 DataValue::Vector(arr) => {
-                    if *len != arr.len() {
+                    if len.get() != arr.len() {
                         bail!(make_err())
                     }
                     // The declared element type is a precision constraint on
@@ -488,7 +496,7 @@ impl NullableColType {
                         VecElementType::F32 => {
                             // Division form: the multiplication form wraps in
                             // release on a pathological declared length.
-                            if bytes.len() / size_of::<f32>() != *len
+                            if bytes.len() / size_of::<f32>() != len.get()
                                 || !bytes.len().is_multiple_of(size_of::<f32>())
                             {
                                 bail!(make_err())
@@ -502,7 +510,7 @@ impl NullableColType {
                                 .collect()
                         }
                         VecElementType::F64 => {
-                            if bytes.len() / size_of::<f64>() != *len
+                            if bytes.len() / size_of::<f64>() != len.get()
                                 || !bytes.len().is_multiple_of(size_of::<f64>())
                             {
                                 bail!(make_err())

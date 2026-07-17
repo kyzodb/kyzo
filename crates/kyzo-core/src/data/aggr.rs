@@ -800,16 +800,17 @@ normal_aggr!(AGGR_CHOICE_RAND, "choice_rand", ChoiceRand, AggrChoiceRand);
 
 /// A uniformly random row, by reservoir sampling with a reservoir of one:
 /// the n-th row replaces the choice with probability 1/n.
+/// Empty accumulator is [`Option::None`], never [`DataValue::Null`] as absence.
 pub(crate) struct AggrChoiceRand {
     count: usize,
-    value: DataValue,
+    value: Option<DataValue>,
 }
 
 impl Default for AggrChoiceRand {
     fn default() -> Self {
         Self {
             count: 0,
-            value: DataValue::Null,
+            value: None,
         }
     }
 }
@@ -822,13 +823,13 @@ impl NormalAggrObj for AggrChoiceRand {
         let prob = 1. / (self.count as f64);
         let rd = rand::rng().random::<f64>();
         if rd < prob {
-            self.value = value.clone();
+            self.value = Some(value.clone());
         }
         Ok(())
     }
 
     fn get(&self) -> Result<DataValue> {
-        Ok(self.value.clone())
+        Ok(self.value.clone().unwrap_or(DataValue::Null))
     }
 }
 

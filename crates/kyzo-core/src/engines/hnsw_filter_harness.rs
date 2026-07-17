@@ -136,7 +136,7 @@ fn hbase_metadata(dim: usize) -> StoredRelationMetadata {
             "v",
             ColType::Vec {
                 eltype: VecElementType::F32,
-                len: dim,
+                len: ColLen::new(dim),
             },
         )],
     }

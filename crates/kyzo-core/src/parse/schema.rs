@@ -31,7 +31,7 @@ use thiserror::Error;
 
 use crate::data::relation::VecElementType;
 use crate::data::relation::{
-    ColNullability, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
+    ColLen, ColNullability, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
 };
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
@@ -169,7 +169,9 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
 
                     let n = dv.get_int().ok_or(BadListLenSpec(dv, span))?;
                     ensure!(n >= 0, BadListLenSpec(DataValue::from(n), span));
-                    Some(usize::try_from(n).map_err(|_| BadListLenSpec(DataValue::from(n), span))?)
+                    Some(ColLen::new(
+                        usize::try_from(n).map_err(|_| BadListLenSpec(DataValue::from(n), span))?,
+                    ))
                 }
             };
             ColType::List {
@@ -197,11 +199,13 @@ fn parse_type_inner(pair: Pair<'_>) -> Result<ColType> {
             ))]
             struct BadVecDimension(String, #[label("not a valid vector dimension")] SourceSpan);
 
-            let len = len_p
-                .as_str()
-                .replace('_', "")
-                .parse::<usize>()
-                .map_err(|_| BadVecDimension(len_p.as_str().to_string(), span))?;
+            let len = ColLen::new(
+                len_p
+                    .as_str()
+                    .replace('_', "")
+                    .parse::<usize>()
+                    .map_err(|_| BadVecDimension(len_p.as_str().to_string(), span))?,
+            );
             ColType::Vec { eltype, len }
         }
         Rule::tuple_type => {

@@ -215,10 +215,7 @@ impl FtsConfigBuilder<Unset> {
                 val: DataValue::Null,
                 span: SourceSpan(0, 0),
             },
-            tokenizer: TokenizerConfig {
-                name: Default::default(),
-                args: Default::default(),
-            },
+            tokenizer: TokenizerConfig::simple(),
             filters: vec![],
             _required: PhantomData,
         }
@@ -324,10 +321,7 @@ impl MinHashLshConfigBuilder<Unset> {
                 val: DataValue::Null,
                 span: SourceSpan(0, 0),
             },
-            tokenizer: TokenizerConfig {
-                name: Default::default(),
-                args: Default::default(),
-            },
+            tokenizer: TokenizerConfig::simple(),
             filters: vec![],
             n_gram: 1,
             n_perm: 200,
@@ -925,10 +919,7 @@ pub(crate) fn parse_sys(
                     let rel = inner.expect("the relation's name")?;
                     let name = inner.expect("the index's name")?;
                     let mut filters = vec![];
-                    let mut tokenizer = TokenizerConfig {
-                        name: Default::default(),
-                        args: Default::default(),
-                    };
+                    let mut tokenizer = TokenizerConfig::simple();
                     let mut extractor: Option<Expr> = None;
                     let mut extract_filter: Option<Expr> = None;
                     let mut n_gram = 1;
@@ -1132,10 +1123,7 @@ pub(crate) fn parse_sys(
                     let rel = inner.expect("the relation's name")?;
                     let name = inner.expect("the index's name")?;
                     let mut filters = vec![];
-                    let mut tokenizer = TokenizerConfig {
-                        name: Default::default(),
-                        args: Default::default(),
-                    };
+                    let mut tokenizer = TokenizerConfig::simple();
                     let mut extractor: Option<Expr> = None;
                     let mut extract_filter: Option<Expr> = None;
                     for opt_pair in inner {
@@ -1431,14 +1419,12 @@ fn parse_tokenizer_expr(expr: Expr) -> Result<TokenizerConfig> {
                 let v = arg.clone().eval_to_const()?;
                 targs.push(v);
             }
-            Ok(TokenizerConfig {
-                name: op,
-                args: targs,
+            TokenizerConfig::admit(op, targs).map_err(|e| {
+                IndexOptionError(e.to_string(), span).into()
             })
         }
-        Expr::Binding { var, .. } => Ok(TokenizerConfig {
-            name: var.name,
-            args: vec![],
+        Expr::Binding { var, .. } => TokenizerConfig::admit(var.name, vec![]).map_err(|e| {
+            IndexOptionError(e.to_string(), span).into()
         }),
         Expr::Const { .. } | Expr::Apply { .. } | Expr::Cond { .. } | Expr::Lazy { .. } => Err(IndexOptionError(
             "Tokenizer must be a symbol or a call for an existing tokenizer".to_string(),
