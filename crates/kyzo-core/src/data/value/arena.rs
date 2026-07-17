@@ -920,13 +920,15 @@ impl<'a, S: Store> View<'a, S> {
     }
 
     /// The `k`-th smallest interned value across sealed and delta.
-    fn select(&self, k: usize) -> &'a [u8] {
-        assert!(
-            k < self.len(),
-            "select {k} out of range: view holds {}",
-            self.len()
-        );
-        self.store.payload(self.select_global(k).span)
+    fn select(&self, k: usize) -> Result<&'a [u8], Denial> {
+        let visible = self.len();
+        if k >= visible {
+            return Err(Denial::VisibilityOverflow {
+                required: k + 1,
+                visible,
+            });
+        }
+        Ok(self.store.payload(self.select_global(k).span))
     }
 
     /// Select the sealed value of rank `k` across the disjoint runs: in
@@ -1164,7 +1166,7 @@ impl<'a> Frame<'a> {
     /// # Panics
     ///
     /// Panics if `k >= len()`.
-    pub fn select(&self, k: usize) -> &'a [u8] {
+    pub fn select(&self, k: usize) -> Result<&'a [u8], Denial> {
         self.view().select(k)
     }
 }
@@ -1283,7 +1285,7 @@ impl Snapshot {
     /// # Panics
     ///
     /// Panics if `k >= len()`.
-    pub fn select(&self, k: usize) -> &[u8] {
+    pub fn select(&self, k: usize) -> Result<&[u8], Denial> {
         self.view().select(k)
     }
 }
@@ -1833,7 +1835,7 @@ mod tests {
         // Global rank/select agree with the sorted union.
         let union = naive.union_sorted();
         for (k, v) in union.iter().enumerate() {
-            assert_eq!(f.select(k), v.as_slice(), "select({k}) wrong");
+            assert_eq!(f.select(k).expect("in-range"), v.as_slice(), "select({k}) wrong");
             assert_eq!(f.rank(v), Ok(k), "rank of {v:?} wrong");
         }
         // cmp_codes is the byte order, over every live pair.
@@ -1870,7 +1872,11 @@ mod tests {
         }
         let union = frozen.union_sorted();
         for (k, v) in union.iter().enumerate() {
-            assert_eq!(snap.select(k), v.as_slice(), "snapshot select({k}) drifted");
+            assert_eq!(
+                snap.select(k).expect("in-range"),
+                v.as_slice(),
+                "snapshot select({k}) drifted"
+            );
             assert_eq!(snap.rank(v), Ok(k), "snapshot rank drifted");
         }
         if snap.len() <= 64 {
@@ -2825,9 +2831,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out of range")]
-    fn select_out_of_range_panics() {
+    fn select_out_of_range_refuses_typed() {
         let arena = Arena::new();
-        arena.frame().select(0);
+        assert!(
+            matches!(
+                arena.frame().select(0),
+                Err(Denial::VisibilityOverflow { required: 1, visible: 0 })
+            ),
+            "OOB select must refuse typed — never abort the process"
+        );
     }
 }
