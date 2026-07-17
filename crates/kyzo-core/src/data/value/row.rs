@@ -193,32 +193,32 @@ impl<'a, O: BulkObserver> AdmittedRows<'a, O> {
     }
 
     /// Canonical bytes of cell `(row, col)`.
-    pub fn resolve_cell(&self, row: usize, col: usize) -> &'a [u8] {
+    pub fn resolve_cell(&self, row: usize, col: usize) -> Result<&'a [u8], Denial> {
         self.codes.resolve(row * self.arity.get() + col)
     }
 
     /// Semantic tuple order: elementwise value order (which is exactly
     /// what the written form's byte order embeds).
-    pub fn cmp_rows(&self, i: usize, j: usize) -> std::cmp::Ordering {
+    pub fn cmp_rows(&self, i: usize, j: usize) -> Result<std::cmp::Ordering, Denial> {
         let w = self.arity.get();
         for k in 0..w {
-            let c = self.codes.cmp_at(i * w + k, j * w + k);
+            let c = self.codes.cmp_at(i * w + k, j * w + k)?;
             if c != std::cmp::Ordering::Equal {
-                return c;
+                return Ok(c);
             }
         }
-        std::cmp::Ordering::Equal
+        Ok(std::cmp::Ordering::Equal)
     }
 
     /// The execution→bytes door: the written form of row `i`. Minted only
     /// here — an `TupleKey` in hand is proof its bytes are concatenated
     /// canonical encodings.
-    pub fn encode_row(&self, i: usize) -> TupleKey {
+    pub fn encode_row(&self, i: usize) -> Result<TupleKey, Denial> {
         let mut out = Vec::new();
         for k in 0..self.arity.get() {
-            out.extend_from_slice(self.resolve_cell(i, k));
+            out.extend_from_slice(self.resolve_cell(i, k)?);
         }
-        TupleKey(out)
+        Ok(TupleKey(out))
     }
 
 }
@@ -587,7 +587,9 @@ mod tests {
         let keys_before: Vec<TupleKey> = {
             let f = arena.frame();
             let adm = rows.admit(&f).expect("lawful admit");
-            (0..adm.len()).map(|i| adm.encode_row(i)).collect()
+            (0..adm.len())
+                .map(|i| adm.encode_row(i).expect("lawful"))
+                .collect()
         };
         let raw_before: Vec<Vec<u32>> = {
             let f = arena.frame();
@@ -595,7 +597,7 @@ mod tests {
             (0..adm.len()).map(|i| adm.row(i).to_vec()).collect()
         };
         // Seal + gather: the execution currency moves...
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let rows = rows.gather(&remap).expect("lawful gather");
         // ...and moves visibly (something re-ranked: 13 distinct nums +
         // 2 strings all started as tail codes).
@@ -609,7 +611,7 @@ mod tests {
         // ...while the written form is byte-identical, row for row.
         for (i, k) in keys_before.iter().enumerate() {
             assert_eq!(
-                &adm.encode_row(i),
+                &adm.encode_row(i).expect("lawful"),
                 k,
                 "the durable form moved with the seal"
             );
@@ -632,8 +634,10 @@ mod tests {
         for i in 0..adm.len() {
             for j in 0..adm.len() {
                 assert_eq!(
-                    adm.encode_row(i).cmp(&adm.encode_row(j)),
-                    adm.cmp_rows(i, j),
+                    adm.encode_row(i)
+                        .expect("lawful")
+                        .cmp(&adm.encode_row(j).expect("lawful")),
+                    adm.cmp_rows(i, j).expect("lawful"),
                     "key byte order diverged from tuple order at ({i},{j})"
                 );
             }
@@ -651,7 +655,7 @@ mod tests {
         rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).expect("lawful admit").encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
         };
         // Re-enter through the bytes door.
         let mut rows2 = Rows::new_in(Arity::try_new(2).expect("test arity 2"), &arena.frame());
@@ -659,7 +663,7 @@ mod tests {
         {
             let f = arena.frame();
             let adm2 = rows2.admit(&f).expect("lawful admit");
-            assert_eq!(adm2.encode_row(0), key, "bytes door changed the tuple");
+            assert_eq!(adm2.encode_row(0).expect("lawful"), key, "bytes door changed the tuple");
             // Same epoch + arena dedup ⟹ same codes: tuple identity holds.
             let adm = rows.admit(&f).expect("lawful admit");
             assert_eq!(adm.row(0), adm2.row(0));
@@ -722,7 +726,7 @@ mod tests {
                 total.push_row(&[*sc]).expect("lawful push");
                 let f = arena.frame();
                 let adm = total.admit(&f).expect("lawful admit");
-                frontier.push(adm.resolve_cell(adm.len() - 1, 0).to_vec());
+                frontier.push(adm.resolve_cell(adm.len() - 1, 0).expect("lawful").to_vec());
             }
             assert_eq!(arena.epoch(), epoch0, "no seal mid-fixpoint");
             assert!(rounds < 32, "fixpoint diverged");
@@ -732,16 +736,18 @@ mod tests {
         let keys_at_fixpoint: Vec<TupleKey> = {
             let f = arena.frame();
             let adm = total.admit(&f).expect("lawful admit");
-            (0..adm.len()).map(|i| adm.encode_row(i)).collect()
+            (0..adm.len())
+                .map(|i| adm.encode_row(i).expect("lawful"))
+                .collect()
         };
         // COMMIT BOUNDARY: seal once, gather the held container, and the
         // durable form is untouched.
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let total = total.gather(&remap).expect("lawful gather");
         let f = arena.frame();
         let adm = total.admit(&f).expect("lawful admit");
         for (i, k) in keys_at_fixpoint.iter().enumerate() {
-            assert_eq!(&adm.encode_row(i), k);
+            assert_eq!(&adm.encode_row(i).expect("lawful"), k);
         }
     }
 
@@ -756,7 +762,7 @@ mod tests {
         rows.push_row(&[a, b]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).expect("lawful admit").encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
         };
         // Lawful bytes round-trip through the storage door.
         let reclaimed = TupleKey::from_stored(key.as_bytes().to_vec(), 2).expect("lawful");
@@ -777,10 +783,10 @@ mod tests {
         rows.push_row(&[a]).expect("lawful push");
         let key = {
             let f = arena.frame();
-            rows.admit(&f).expect("lawful admit").encode_row(0)
+            rows.admit(&f).expect("lawful admit").encode_row(0).expect("lawful")
         };
         // Stale: the container predates the seal.
-        arena.seal();
+        arena.seal().expect("lawful seal");
         assert!(matches!(
             rows.push_encoded(&key, &mut arena),
             Err(PushError::StaleDomain { .. })

@@ -381,11 +381,10 @@ impl Run {
     /// sealed codes rank over the RUN UNION, so cascades are
     /// rank-invariant and the only remap anyone needs is the seal's
     /// compact [`EpochRemap`].)
-    fn merge(a: &Run, b: &Run, heap: &Heap) -> Run {
-        assert!(
-            a.entries.len() + b.entries.len() <= u32::MAX as usize,
-            "merged run exceeds u32 position space"
-        );
+    fn merge(a: &Run, b: &Run, heap: &Heap) -> Result<Run, Denial> {
+        if a.entries.len() + b.entries.len() > u32::MAX as usize {
+            return Err(Denial::ExtentOverflow);
+        }
         let mut merged = Vec::with_capacity(a.entries.len() + b.entries.len());
         let (mut i, mut j) = (0, 0);
         while i < a.entries.len() && j < b.entries.len() {
@@ -407,7 +406,7 @@ impl Run {
         }
         merged.extend_from_slice(&a.entries[i..]);
         merged.extend_from_slice(&b.entries[j..]);
-        Run { entries: merged }
+        Ok(Run { entries: merged })
     }
 
     pub fn len(&self) -> usize {
@@ -762,15 +761,15 @@ impl EpochRemap {
 
     /// Restamp an old-epoch code into the new epoch.
     ///
-    /// Typed refusal on a foreign arena or wrong-epoch stamp. Panics only
-    /// if the code was not live in the source epoch (minting discipline).
+    /// Typed refusal on a foreign arena, wrong-epoch stamp, remap overflow,
+    /// or a code not live in the source epoch.
     ///
     /// **Coexisting-arena boundary:** remaps and stamps are owned values
     /// that outlive any nest brand; arena/epoch proof stays mint-checked
     /// [`Admission::prove_shared`].
     pub fn apply(&self, sc: StampedCode) -> Result<StampedCode, Denial> {
         Admission::prove_shared(self.arena, self.from, sc.arena(), sc.epoch())?;
-        let code = self.apply_raw(sc.code()).ok_or(Denial::CodeRemapOverflow)?;
+        let code = self.apply_raw(sc.code())?;
         Ok(StampedCode::mint(
             code,
             self.to,
@@ -781,9 +780,10 @@ impl EpochRemap {
 
     /// The raw morphism, for bulk gathers by epoch-stamped containers
     /// (which carry one stamp for all their codes and verify it once).
-    /// `None` on checked-add overflow into the `u32` code space.
-    pub(super) fn apply_raw(&self, code: Code) -> Option<Code> {
+    /// Typed [`Denial`] on overflow or a code not live in the source epoch.
+    pub(super) fn apply_raw(&self, code: Code) -> Result<Code, Denial> {
         let c = code.0;
+        let visible = self.from_sealed_len as usize + self.tail.len();
         if c < self.from_sealed_len {
             // Old sealed rank r moves to the r-th position not occupied
             // by an inserted value: r + k, where k counts the inserted
@@ -804,15 +804,16 @@ impl EpochRemap {
             r.checked_add(lo)
                 .and_then(|n| u32::try_from(n).ok())
                 .map(Code)
+                .ok_or(Denial::CodeRemapOverflow)
         } else {
             let a = (c - self.from_sealed_len) as usize;
-            assert!(
-                a < self.tail.len(),
-                "code {} was not live in epoch {:?}",
-                c,
-                self.from
-            );
-            Some(Code(self.tail[a]))
+            if a >= self.tail.len() {
+                return Err(Denial::VisibilityOverflow {
+                    required: c as usize + 1,
+                    visible,
+                });
+            }
+            Ok(Code(self.tail[a]))
         }
     }
 
@@ -839,63 +840,65 @@ impl<'a, S: Store> View<'a, S> {
     }
 
     /// The entry behind a live code (sealed: rank-select; tail: arrival).
-    fn entry_of(&self, c: usize) -> Entry {
+    fn entry_of(&self, c: usize) -> Result<Entry, Denial> {
         if c < self.sealed_len {
             // Steady state after cascades collapse: one run, and a sealed
             // code is a literal index — the O(1) read the sealed scope
             // promises at rest.
             if self.runs.len() == 1 {
-                return self.runs[0].entries[c];
+                return Ok(self.runs[0].entries[c]);
             }
-            self.select_sealed(c)
+            Ok(self.select_sealed(c))
         } else {
             let a = c - self.sealed_len;
-            assert!(
-                a < self.arrivals.len(),
-                "code {c} not live: view holds {}",
-                self.len()
-            );
-            self.arrivals[a]
+            if a >= self.arrivals.len() {
+                return Err(Denial::VisibilityOverflow {
+                    required: c + 1,
+                    visible: self.len(),
+                });
+            }
+            Ok(self.arrivals[a])
         }
     }
 
-    fn resolve(&self, c: usize) -> &'a [u8] {
-        self.store.payload(self.entry_of(c).span)
+    fn resolve(&self, c: usize) -> Result<&'a [u8], Denial> {
+        Ok(self.store.payload(self.entry_of(c)?.span))
     }
 
     /// Semantic comparison of two live codes: rank order is byte order
     /// when both are sealed; any tail code involved goes prefix-first.
-    fn cmp(&self, ca: usize, cb: usize) -> Ordering {
-        assert!(
-            ca < self.len(),
-            "code {ca} not live: view holds {}",
-            self.len()
-        );
-        assert!(
-            cb < self.len(),
-            "code {cb} not live: view holds {}",
-            self.len()
-        );
+    fn cmp(&self, ca: usize, cb: usize) -> Result<Ordering, Denial> {
+        if ca >= self.len() {
+            return Err(Denial::VisibilityOverflow {
+                required: ca + 1,
+                visible: self.len(),
+            });
+        }
+        if cb >= self.len() {
+            return Err(Denial::VisibilityOverflow {
+                required: cb + 1,
+                visible: self.len(),
+            });
+        }
         if ca == cb {
-            return Ordering::Equal;
+            return Ok(Ordering::Equal);
         }
         if ca < self.sealed_len && cb < self.sealed_len {
-            return ca.cmp(&cb);
+            return Ok(ca.cmp(&cb));
         }
-        let ea = self.entry_of(ca);
-        let eb = self.entry_of(cb);
-        ea.cmp_entry(&eb, self.store)
+        let ea = self.entry_of(ca)?;
+        let eb = self.entry_of(cb)?;
+        Ok(ea.cmp_entry(&eb, self.store))
     }
 
     /// Global ordered rank of `value` across sealed and delta together:
-    /// `Ok(rank)` if interned, `Err(rank it would take)` if not.
-    fn rank(&self, value: &[u8]) -> Result<usize, usize> {
-        // Prefix-first compares narrow lengths to u32; a >4GiB needle
-        // would wrap and mis-compare, so it is refused up front.
-        assert!(
-            value.len() <= u32::MAX as usize,
-            "needle exceeds u32 compare space"
-        );
+    /// `Ok(Ok(rank))` if interned, `Ok(Err(rank it would take))` if not.
+    /// Refuses with [`Denial::ExtentOverflow`] when the needle exceeds the
+    /// `u32` compare space — never a process abort.
+    fn rank(&self, value: &[u8]) -> Result<Result<usize, usize>, Denial> {
+        if value.len() > u32::MAX as usize {
+            return Err(Denial::ExtentOverflow);
+        }
         let np = prefix4(value);
         let mut rank = 0usize;
         let mut found = false;
@@ -918,7 +921,11 @@ impl<'a, S: Store> View<'a, S> {
             }
             Err(pos) => rank += pos,
         }
-        if found { Ok(rank) } else { Err(rank) }
+        if found {
+            Ok(Ok(rank))
+        } else {
+            Ok(Err(rank))
+        }
     }
 
     /// The `k`-th smallest interned value across sealed and delta.
@@ -1139,7 +1146,7 @@ impl<'a> Frame<'a> {
     /// Typed refusal on a foreign-arena or stale stamp (see [`Frame::admits`]).
     pub fn resolve(&self, sc: StampedCode) -> Result<&'a [u8], Denial> {
         let c = self.check(sc)?;
-        Ok(self.view().resolve(c))
+        self.view().resolve(c)
     }
 
     /// Semantic comparison of two stamped codes: integer compare when
@@ -1153,13 +1160,14 @@ impl<'a> Frame<'a> {
         b: StampedCode,
     ) -> Result<Ordering, Denial> {
         let (ca, cb) = (self.check(a)?, self.check(b)?);
-        Ok(self.view().cmp(ca, cb))
+        self.view().cmp(ca, cb)
     }
 
-    /// Global ordered rank of `value` across sealed and delta: `Ok(rank)`
-    /// if interned, `Err(rank it would take)` if not. The order
-    /// authority.
-    pub fn rank(&self, value: &[u8]) -> Result<usize, usize> {
+    /// Global ordered rank of `value` across sealed and delta: `Ok(Ok(rank))`
+    /// if interned, `Ok(Err(rank it would take))` if not. Refuses with
+    /// [`Denial::ExtentOverflow`] when the needle exceeds the `u32` compare
+    /// space — never a process abort.
+    pub fn rank(&self, value: &[u8]) -> Result<Result<usize, usize>, Denial> {
         self.view().rank(value)
     }
 
@@ -1261,7 +1269,7 @@ impl Snapshot {
     /// Typed refusal on a wrong-epoch, foreign-arena, or past-cut stamp.
     pub fn resolve(&self, sc: StampedCode) -> Result<&[u8], Denial> {
         let c = self.check(sc)?;
-        Ok(self.view().resolve(c))
+        self.view().resolve(c)
     }
 
     /// Semantic comparison of two stamped codes (see
@@ -1274,11 +1282,13 @@ impl Snapshot {
         b: StampedCode,
     ) -> Result<Ordering, Denial> {
         let (ca, cb) = (self.check(a)?, self.check(b)?);
-        Ok(self.view().cmp(ca, cb))
+        self.view().cmp(ca, cb)
     }
 
-    /// Global ordered rank of `value` as of this snapshot.
-    pub fn rank(&self, value: &[u8]) -> Result<usize, usize> {
+    /// Global ordered rank of `value` as of this snapshot. Refuses with
+    /// [`Denial::ExtentOverflow`] when the needle exceeds the `u32` compare
+    /// space — never a process abort.
+    pub fn rank(&self, value: &[u8]) -> Result<Result<usize, usize>, Denial> {
         self.view().rank(value)
     }
 
@@ -1295,35 +1305,37 @@ impl Snapshot {
 mod sealed {
     use std::cmp::Ordering;
 
+    use super::Denial;
+
     /// Observer sealing PLUS the unchecked raw read core. The raw methods
     /// are reachable only inside this module and from
     /// [`super::BulkSpendAuthority`] spend paths / [`super::BulkPass`] —
     /// never as a public forge surface on a bare [`super::Frame`].
     pub trait Sealed {
-        fn raw_bytes(&self, c: usize) -> &[u8];
-        fn raw_cmp(&self, a: usize, b: usize) -> Ordering;
+        fn raw_bytes(&self, c: usize) -> Result<&[u8], Denial>;
+        fn raw_cmp(&self, a: usize, b: usize) -> Result<Ordering, Denial>;
     }
 
     impl Sealed for super::Frame<'_> {
         #[inline]
-        fn raw_bytes(&self, c: usize) -> &[u8] {
+        fn raw_bytes(&self, c: usize) -> Result<&[u8], Denial> {
             self.view().resolve(c)
         }
 
         #[inline]
-        fn raw_cmp(&self, a: usize, b: usize) -> Ordering {
+        fn raw_cmp(&self, a: usize, b: usize) -> Result<Ordering, Denial> {
             self.view().cmp(a, b)
         }
     }
 
     impl Sealed for super::Snapshot {
         #[inline]
-        fn raw_bytes(&self, c: usize) -> &[u8] {
+        fn raw_bytes(&self, c: usize) -> Result<&[u8], Denial> {
             self.view().resolve(c)
         }
 
         #[inline]
-        fn raw_cmp(&self, a: usize, b: usize) -> Ordering {
+        fn raw_cmp(&self, a: usize, b: usize) -> Result<Ordering, Denial> {
             self.view().cmp(a, b)
         }
     }
@@ -1375,12 +1387,12 @@ pub(super) struct BulkPass<'a, O: BulkObserver> {
 
 impl<'a, O: BulkObserver> BulkPass<'a, O> {
     #[inline]
-    pub(super) fn resolve(&self, c: usize) -> &'a [u8] {
+    pub(super) fn resolve(&self, c: usize) -> Result<&'a [u8], Denial> {
         sealed::Sealed::raw_bytes(self.obs, c)
     }
 
     #[inline]
-    pub(super) fn cmp(&self, a: usize, b: usize) -> Ordering {
+    pub(super) fn cmp(&self, a: usize, b: usize) -> Result<Ordering, Denial> {
         sealed::Sealed::raw_cmp(self.obs, a, b)
     }
 }
@@ -1405,14 +1417,14 @@ pub trait BulkObserver: sealed::Sealed {
 
     /// One-shot spend: consumes `proof`. Reuse of the same binding after
     /// this call is a move error.
-    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> &[u8] {
+    fn resolve_raw(&self, c: usize, proof: BulkSpendAuthority) -> Result<&[u8], Denial> {
         let BulkSpendAuthority(()) = proof;
         sealed::Sealed::raw_bytes(self, c)
     }
 
     /// One-shot spend: consumes `proof`. Reuse of the same binding after
     /// this call is a move error.
-    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Ordering {
+    fn cmp_raw(&self, a: usize, b: usize, proof: BulkSpendAuthority) -> Result<Ordering, Denial> {
         let BulkSpendAuthority(()) = proof;
         sealed::Sealed::raw_cmp(self, a, b)
     }
@@ -1607,7 +1619,10 @@ impl Arena {
     /// cascade merges — rank-invariant, since sealed codes rank over the
     /// union), advance the epoch, and mint the [`EpochRemap`] every held
     /// code crosses through. Rides commit boundaries.
-    pub fn seal(&mut self) -> EpochRemap {
+    ///
+    /// Refuses with [`Denial::ExtentOverflow`] when a cascade merge would
+    /// exceed the `u32` position space — never a process abort.
+    pub fn seal(&mut self) -> Result<EpochRemap, Denial> {
         let from = self.epoch;
         let from_sealed_len = self.sealed_len as u32;
         let delta_n = self.delta.len();
@@ -1657,7 +1672,7 @@ impl Arena {
                 }
                 let b = self.runs.pop().expect("len checked");
                 let a = self.runs.pop().expect("len checked");
-                let merged = Run::merge(&a, &b, &self.heap);
+                let merged = Run::merge(&a, &b, &self.heap)?;
                 self.runs.push(Arc::new(merged));
             }
             self.sealed_len += delta_n;
@@ -1669,14 +1684,14 @@ impl Arena {
                 .checked_add(1)
                 .expect("epoch counter is monotone, never wraps"),
         );
-        EpochRemap {
+        Ok(EpochRemap {
             arena: self.id,
             from,
             to: self.epoch,
             from_sealed_len,
             inserted,
             tail,
-        }
+        })
     }
 }
 
@@ -1848,7 +1863,7 @@ mod tests {
         let union = naive.union_sorted();
         for (k, v) in union.iter().enumerate() {
             assert_eq!(f.select(k).expect("in-range"), v.as_slice(), "select({k}) wrong");
-            assert_eq!(f.rank(v), Ok(k), "rank of {v:?} wrong");
+            assert_eq!(f.rank(v), Ok(Ok(k)), "rank of {v:?} wrong");
         }
         // cmp_codes is the byte order, over every live pair.
         for i in 0..f.len() {
@@ -1889,7 +1904,7 @@ mod tests {
                 v.as_slice(),
                 "snapshot select({k}) drifted"
             );
-            assert_eq!(snap.rank(v), Ok(k), "snapshot rank drifted");
+            assert_eq!(snap.rank(v), Ok(Ok(k)), "snapshot rank drifted");
         }
         if snap.len() <= 64 {
             for i in 0..snap.len() {
@@ -1956,7 +1971,7 @@ mod tests {
                             .collect()
                     };
                     let from_sealed = arena.sealed_len();
-                    let remap = arena.seal();
+                    let remap = arena.seal().expect("lawful seal");
                     let expect = naive.seal();
                     assert_eq!(remap.source_epoch(), source_epoch);
                     assert_eq!(remap.target_epoch(), arena.epoch());
@@ -2126,7 +2141,7 @@ mod tests {
     fn stale_stamp_is_refused_not_misread() {
         let mut arena = Arena::new();
         let sc_b = must_intern(&mut arena, b"b");
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         // Post-seal: intern something smaller so the old code's rank is
         // genuinely wrong if smuggled.
         must_intern(&mut arena, b"a");
@@ -2144,7 +2159,7 @@ mod tests {
     fn remap_refuses_wrong_epoch_input() {
         let mut arena = Arena::new();
         must_intern(&mut arena, b"x");
-        let r1 = arena.seal();
+        let r1 = arena.seal().expect("lawful seal");
         let sc_new = must_intern(&mut arena, b"y"); // epoch 1
         assert!(
             matches!(
@@ -2197,8 +2212,8 @@ mod tests {
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         let pass = auth.open_pass(&f);
-        assert_eq!(pass.resolve(sc.code().raw() as usize), b"x");
-        assert_eq!(pass.resolve(sc.code().raw() as usize), b"x");
+        assert_eq!(pass.resolve(sc.code().raw() as usize).expect("lawful"), b"x");
+        assert_eq!(pass.resolve(sc.code().raw() as usize).expect("lawful"), b"x");
         // `auth` was moved into `open_pass` — a second use would be E0382.
         // Absence of Clone/Copy is locked in `super::proofs`.
     }
@@ -2211,7 +2226,7 @@ mod tests {
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         assert_eq!(
-            f.resolve_raw(sc.code().raw() as usize, auth),
+            f.resolve_raw(sc.code().raw() as usize, auth).expect("lawful"),
             b"y"
         );
         // `auth` spent — reuse would be E0382 (see `super::proofs`).
@@ -2249,7 +2264,7 @@ mod tests {
     fn stale_stamp_refuses_in_frame_spend() {
         let mut arena = Arena::new();
         let sc = must_intern(&mut arena, b"x");
-        arena.seal();
+        arena.seal().expect("lawful seal");
         assert!(
             matches!(
                 arena.frame().resolve(sc),
@@ -2263,7 +2278,7 @@ mod tests {
     fn snapshot_refuses_wrong_epoch_stamp() {
         let mut arena = Arena::new();
         let sc = must_intern(&mut arena, b"x");
-        let _remap = arena.seal();
+        let _remap = arena.seal().expect("lawful seal");
         let snap = arena.snapshot();
         assert!(
             matches!(
@@ -2334,7 +2349,7 @@ mod tests {
         let mut b = Arena::new();
         must_intern(&mut a, b"alpha");
         let sb = must_intern(&mut b, b"beta");
-        let remap = a.seal();
+        let remap = a.seal().expect("lawful seal");
         assert!(
             matches!(
                 remap.apply(sb),
@@ -2353,7 +2368,7 @@ mod tests {
     fn same_epoch_observers_agree_on_shared_codes() {
         let mut arena = Arena::new();
         must_intern(&mut arena, b"m");
-        arena.seal();
+        arena.seal().expect("lawful seal");
         let a = must_intern(&mut arena, b"zz");
         let early = arena.snapshot();
         let b = must_intern(&mut arena, b"aa");
@@ -2381,7 +2396,7 @@ mod tests {
     fn tail_codes_are_arrival_stable_within_an_epoch() {
         let mut arena = Arena::new();
         must_intern(&mut arena, b"m");
-        arena.seal();
+        arena.seal().expect("lawful seal");
         let c_z = must_intern(&mut arena, b"z");
         let c_a = must_intern(&mut arena, b"a"); // smaller than everything sealed
         let c_q = must_intern(&mut arena, b"q");
@@ -2395,10 +2410,10 @@ mod tests {
         assert_eq!(c_q.code().raw(), 3);
         // The order authority is rank(), not tail-code arithmetic.
         let f = arena.frame();
-        assert_eq!(f.rank(b"a"), Ok(0));
-        assert_eq!(f.rank(b"m"), Ok(1));
-        assert_eq!(f.rank(b"q"), Ok(2));
-        assert_eq!(f.rank(b"z"), Ok(3));
+        assert_eq!(f.rank(b"a"), Ok(Ok(0)));
+        assert_eq!(f.rank(b"m"), Ok(Ok(1)));
+        assert_eq!(f.rank(b"q"), Ok(Ok(2)));
+        assert_eq!(f.rank(b"z"), Ok(Ok(3)));
     }
 
     #[test]
@@ -2408,14 +2423,14 @@ mod tests {
         for v in [b"delta".as_slice(), b"alpha", b"omega"] {
             held.push((must_intern(&mut arena, v), v.to_vec()));
         }
-        let r1 = arena.seal();
+        let r1 = arena.seal().expect("lawful seal");
         for (sc, _) in held.iter_mut() {
             *sc = r1.apply(*sc).expect("lawful");
         }
         for v in [b"aaaa".as_slice(), b"zzzz"] {
             held.push((must_intern(&mut arena, v), v.to_vec()));
         }
-        let r2 = arena.seal();
+        let r2 = arena.seal().expect("lawful seal");
         let f = arena.frame();
         for (sc, v) in &held {
             let crossed = r2.apply(*sc).expect("lawful");
@@ -2539,7 +2554,7 @@ mod tests {
         for i in 0..500u32 {
             interned.push(must_intern(&mut arena, &i.to_be_bytes()));
         }
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let codes: Vec<_> = interned
             .into_iter()
             .map(|c| remap.apply(c).expect("lawful"))
@@ -2563,6 +2578,7 @@ mod tests {
             .map(|&i| {
                 f.rank(f.resolve(codes[i as usize]).expect("lawful"))
                     .expect("interned")
+                    .expect("found")
             })
             .collect();
         assert!(
@@ -2579,7 +2595,7 @@ mod tests {
             v.extend_from_slice(b"-payload-tail");
             must_intern(&mut arena, &v);
         }
-        arena.seal();
+        arena.seal().expect("lawful seal");
         assert_eq!(
             arena.compare_derefs(),
             0,
@@ -2619,7 +2635,7 @@ mod tests {
             let sc = must_intern(&mut arena, v);
             live.push((sc, i));
             if (i + 1) % seal_every == 0 {
-                let remap = arena.seal();
+                let remap = arena.seal().expect("lawful seal");
                 for (sc, _) in live.iter_mut() {
                     *sc = remap.apply(*sc).expect("lawful");
                 }
@@ -2649,7 +2665,7 @@ mod tests {
                 );
             }
         }
-        let final_remap = arena.seal();
+        let final_remap = arena.seal().expect("lawful seal");
         let f = arena.frame();
         for (sc, i) in live.iter_mut() {
             *sc = final_remap.apply(*sc).expect("lawful");
@@ -2665,7 +2681,7 @@ mod tests {
                 v.as_slice(),
                 "rank {k} wrong at scale"
             );
-            assert_eq!(f.rank(v), Ok(k));
+            assert_eq!(f.rank(v), Ok(Ok(k)));
         }
         // The early snapshot still answers its pinned world exactly.
         if let Some((snap, expect)) = pinned {
@@ -2724,10 +2740,10 @@ mod tests {
     fn empty_seal_advances_epoch_and_is_identity() {
         let mut arena = Arena::new();
         let sc = must_intern(&mut arena, b"x");
-        let r1 = arena.seal();
+        let r1 = arena.seal().expect("lawful seal");
         assert_eq!(r1.tail_len(), 1);
         let crossed = r1.apply(sc).expect("lawful");
-        let r2 = arena.seal();
+        let r2 = arena.seal().expect("lawful seal");
         assert_eq!(arena.epoch(), Epoch(2));
         assert_eq!(r2.tail_len(), 0);
         let twice = r2.apply(crossed).expect("lawful");
@@ -2745,7 +2761,7 @@ mod tests {
         let mut arena = Arena::new();
         let sc = must_intern(&mut arena, b"");
         assert_eq!(sc.code().raw(), 0);
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let crossed = remap.apply(sc).expect("lawful");
         assert_eq!(crossed.code().raw(), 0);
         let f = arena.frame();
@@ -2781,7 +2797,7 @@ mod tests {
                 assert_eq!(f.resolve(*sc).expect("lawful"), v.as_slice());
             }
         }
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let f = arena.frame();
         for (sc, v) in &held {
             assert_eq!(
@@ -2798,7 +2814,7 @@ mod tests {
         for i in 0..5_000u32 {
             must_intern(&mut arena, format!("v-{i:05}").as_bytes());
         }
-        arena.seal();
+        arena.seal().expect("lawful seal");
         must_intern(&mut arena, b"tail-one");
         let snap = arena.snapshot();
         let world: Vec<Vec<u8>> = (0..snap.len())
@@ -2814,7 +2830,7 @@ mod tests {
             for i in 0..5_000u32 {
                 must_intern(&mut arena, format!("post-{round}-{i}").as_bytes());
             }
-            arena.seal();
+            arena.seal().expect("lawful seal");
         }
         for (c, v) in world.iter().enumerate() {
             assert_eq!(

@@ -199,7 +199,7 @@ impl ExecRows {
         col: usize,
     ) -> Result<&'o [u8], Denial> {
         let proof = self.domain.admit(o)?;
-        Ok(o.resolve_raw(self.row(row)[col] as usize, proof))
+        Ok(o.resolve_raw(self.row(row)[col] as usize, proof)?)
     }
 
     /// The compare/identity context for raw handles in these rows.

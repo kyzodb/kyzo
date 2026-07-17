@@ -233,14 +233,14 @@ impl Value {
     /// already verified arena + epoch against the remap — called bare,
     /// this is the raw-code remap smuggle at word level. Its only caller
     /// is `WordColumn::gather`; keep it that way.
-    pub(super) fn gathered(self, remap: &super::arena::EpochRemap) -> Option<Value> {
+    pub(super) fn gathered(self, remap: &super::arena::EpochRemap) -> Result<Value, Denial> {
         match self.code() {
-            None => Some(self),
+            None => Ok(self),
             Some(code) => {
                 let mapped = remap.apply_raw(code)?;
                 let mut bytes = self.bytes;
                 bytes[6..10].copy_from_slice(&mapped.raw().to_be_bytes());
-                Some(Value { bytes })
+                Ok(Value { bytes })
             }
         }
     }

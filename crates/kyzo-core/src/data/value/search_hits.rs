@@ -102,7 +102,7 @@ impl SearchHits {
         let w = self.rows.arity().get();
         let mut out = Vec::with_capacity(w);
         for col in 0..w {
-            let bytes = admitted.resolve_cell(i, col);
+            let bytes = admitted.resolve_cell(i, col)?;
             out.push(canonical::decode(bytes).map_err(MaterializeError::Decode)?);
         }
         Ok(out)

@@ -238,8 +238,7 @@ impl CodeColumn {
         let mut codes = Vec::with_capacity(self.codes.len());
         for c in self.codes {
             let n = remap
-                .apply_raw(super::code::Code(c))
-                .ok_or(Denial::CodeRemapOverflow)?
+                .apply_raw(super::code::Code(c))?
                 .raw();
             extent = extent.max(n.saturating_add(1));
             codes.push(n);
@@ -311,21 +310,21 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
     }
 
     /// The canonical bytes of the value at `i`.
-    pub fn resolve(&self, i: usize) -> &'a [u8] {
+    pub fn resolve(&self, i: usize) -> Result<&'a [u8], Denial> {
         self.pass.resolve(self.codes[i] as usize)
     }
 
     /// Semantic (byte-order) comparison of two positions: raw-handle
     /// identity / sealed identity-order under [`Admission`], else
     /// prefix-first through the observer.
-    pub fn cmp_at(&self, i: usize, j: usize) -> Ordering {
+    pub fn cmp_at(&self, i: usize, j: usize) -> Result<Ordering, Denial> {
         let a = Code(self.codes[i]);
         let b = Code(self.codes[j]);
         if self.ctx.same_handle(a, b) {
-            return Ordering::Equal;
+            return Ok(Ordering::Equal);
         }
         if self.all_sealed {
-            return self.ctx.cmp_identity(a, b);
+            return Ok(self.ctx.cmp_identity(a, b));
         }
         self.pass.cmp(a.raw() as usize, b.raw() as usize)
     }
@@ -346,7 +345,10 @@ impl<'a, O: BulkObserver> AdmittedCodes<'a, O> {
                 )
             });
         } else {
-            idx.sort_by(|&i, &j| self.cmp_at(i as usize, j as usize));
+            idx.sort_by(|&i, &j| {
+                self.cmp_at(i as usize, j as usize)
+                    .expect("lawful admission extent")
+            });
         }
         idx
     }
@@ -438,7 +440,7 @@ impl WordColumn {
         let mut extent = 0u32;
         let mut words = Vec::with_capacity(self.words.len());
         for w in self.words {
-            let g = w.gathered(remap).ok_or(Denial::CodeRemapOverflow)?;
+            let g = w.gathered(remap)?;
             if let Some(code) = g.code() {
                 extent = extent.max(code.raw().saturating_add(1));
             }
@@ -487,28 +489,28 @@ impl<'a, O: BulkObserver> AdmittedWords<'a, O> {
 
     /// The canonical bytes of the word at `i` (inline: rebuilt; wide:
     /// resolved through the observer).
-    pub fn canonical(&self, i: usize) -> Vec<u8> {
+    pub fn canonical(&self, i: usize) -> Result<Vec<u8>, Denial> {
         let w = &self.words[i];
         match w.inline_canonical() {
-            Some(bytes) => bytes,
-            None => self
+            Some(bytes) => Ok(bytes),
+            None => Ok(self
                 .pass
-                .resolve(w.code().expect("non-inline word carries a code").raw() as usize)
-                .to_vec(),
+                .resolve(w.code().expect("non-inline word carries a code").raw() as usize)?
+                .to_vec()),
         }
     }
 
     /// Storage-order comparison: physical word identity under
     /// [`Admission`] first, then the word's local knowledge (tags, inline
     /// bytes, prefixes), the observer only on a remaining tie.
-    pub fn cmp_at(&self, i: usize, j: usize) -> Ordering {
+    pub fn cmp_at(&self, i: usize, j: usize) -> Result<Ordering, Denial> {
         let (a, b) = (&self.words[i], &self.words[j]);
         if a.same_word(b, &self.ctx) {
-            return Ordering::Equal;
+            return Ok(Ordering::Equal);
         }
         match a.try_cmp_storage(b) {
-            Some(o) => o,
-            None => self.canonical(i).cmp(&self.canonical(j)),
+            Some(o) => Ok(o),
+            None => Ok(self.canonical(i)?.cmp(&self.canonical(j)?)),
         }
     }
 }
@@ -578,7 +580,7 @@ mod tests {
     fn write_door_refuses_stale_stamps() {
         let mut arena = Arena::new();
         let sc = intern_num(&mut arena, 1);
-        arena.seal();
+        arena.seal().expect("lawful seal");
         let f = arena.frame();
         let mut col = CodeColumn::new_in(&f);
         assert!(
@@ -619,7 +621,7 @@ mod tests {
             c.push(sc).expect("lawful push");
             c
         };
-        arena.seal();
+        arena.seal().expect("lawful seal");
         let f = arena.frame();
         assert!(
             matches!(
@@ -659,7 +661,7 @@ mod tests {
         }
         let adm = col.admit(&f).expect("lawful admit");
         for i in 0..adm.len() {
-            assert!(!adm.resolve(i).is_empty());
+            assert!(!adm.resolve(i).expect("lawful").is_empty());
         }
     }
 
@@ -674,7 +676,7 @@ mod tests {
         for i in [5i64, -3, 99, 0, 42] {
             intern_num(&mut arena, i);
         }
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let _ = remap;
         // Re-intern: all sealed hits now.
         let stamps: Vec<StampedCode> = [5i64, -3, 99, 0, 42, -3]
@@ -692,11 +694,21 @@ mod tests {
         let perm = adm.sort_permutation();
         // The permutation must equal the byte-order sort, exactly.
         let mut expect: Vec<u32> = (0..adm.len() as u32).collect();
-        expect.sort_by(|&i, &j| adm.resolve(i as usize).cmp(adm.resolve(j as usize)));
+        expect.sort_by(|&i, &j| {
+            adm.resolve(i as usize)
+                .expect("lawful")
+                .cmp(adm.resolve(j as usize).expect("lawful"))
+        });
         // Stable comparison: resolve-order and permutation order agree
         // pairwise (indices with equal values may swap; compare values).
-        let by_perm: Vec<&[u8]> = perm.iter().map(|&i| adm.resolve(i as usize)).collect();
-        let by_expect: Vec<&[u8]> = expect.iter().map(|&i| adm.resolve(i as usize)).collect();
+        let by_perm: Vec<&[u8]> = perm
+            .iter()
+            .map(|&i| adm.resolve(i as usize).expect("lawful"))
+            .collect();
+        let by_expect: Vec<&[u8]> = expect
+            .iter()
+            .map(|&i| adm.resolve(i as usize).expect("lawful"))
+            .collect();
         assert_eq!(by_perm, by_expect);
     }
 
@@ -704,7 +716,7 @@ mod tests {
     fn tail_bearing_columns_leave_the_fast_lane_and_still_order_correctly() {
         let mut arena = Arena::new();
         intern_num(&mut arena, 10);
-        arena.seal();
+        arena.seal().expect("lawful seal");
         // Mixed: sealed hit + fresh tail codes, deliberately out of
         // arrival order vs value order.
         let stamps = vec![
@@ -721,7 +733,10 @@ mod tests {
         assert!(!adm.all_sealed());
         assert!(adm.raw_sealed().is_none());
         let perm = adm.sort_permutation();
-        let sorted: Vec<&[u8]> = perm.iter().map(|&i| adm.resolve(i as usize)).collect();
+        let sorted: Vec<&[u8]> = perm
+            .iter()
+            .map(|&i| adm.resolve(i as usize).expect("lawful"))
+            .collect();
         let mut expect = sorted.clone();
         expect.sort();
         assert_eq!(sorted, expect, "tail path diverged from byte order");
@@ -750,14 +765,16 @@ mod tests {
         let before: Vec<Vec<u8>> = {
             let f = arena.frame();
             let adm = col.admit(&f).expect("lawful admit");
-            (0..adm.len()).map(|i| adm.resolve(i).to_vec()).collect()
+            (0..adm.len())
+                .map(|i| adm.resolve(i).expect("lawful").to_vec())
+                .collect()
         };
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let col = col.gather(&remap).expect("lawful gather");
         let f = arena.frame();
         let adm = col.admit(&f).expect("lawful admit"); // readmits in the new epoch
         for (i, b) in before.iter().enumerate() {
-            assert_eq!(adm.resolve(i), b.as_slice(), "gather moved a value");
+            assert_eq!(adm.resolve(i).expect("lawful"), b.as_slice(), "gather moved a value");
         }
         // Monotone remap: a sorted sealed container stays sorted.
         let mut arena2 = Arena::new();
@@ -766,12 +783,12 @@ mod tests {
             let sc = intern_num(&mut arena2, i);
             sorted_col.push(sc).expect("lawful push");
         }
-        let r1 = arena2.seal();
+        let r1 = arena2.seal().expect("lawful seal");
         let sorted_col = sorted_col.gather(&r1).expect("lawful gather");
         // Everything was tail (arrival = insertion order 0..20 which is
         // also value order); after seal, codes are sealed ranks.
         intern_num(&mut arena2, -1000); // will re-rank on next seal
-        let r2 = arena2.seal();
+        let r2 = arena2.seal().expect("lawful seal");
         let sorted_col = sorted_col.gather(&r2).expect("lawful gather");
         let f2 = arena2.frame();
         let adm2 = sorted_col.admit(&f2).expect("lawful admit");
@@ -788,10 +805,10 @@ mod tests {
         let sc = intern_num(&mut arena, 1);
         let mut col = CodeColumn::new_in(&arena.frame());
         col.push(sc).expect("lawful push");
-        let r1 = arena.seal();
+        let r1 = arena.seal().expect("lawful seal");
         let col = col.gather(&r1).expect("lawful gather");
-        let _r2_skipped = arena.seal();
-        let r3 = arena.seal();
+        let _r2_skipped = arena.seal().expect("lawful seal");
+        let r3 = arena.seal().expect("lawful seal");
         // col is at epoch 1; r3 reads epoch 2.
         assert!(
             matches!(
@@ -820,17 +837,20 @@ mod tests {
         {
             let f = arena.frame();
             let adm = col.admit(&f).expect("lawful admit");
-            assert_eq!(adm.canonical(0), small.as_bytes());
-            assert_eq!(adm.canonical(1), big.as_bytes());
-            assert_eq!(adm.cmp_at(0, 1), small.as_bytes().cmp(big.as_bytes()));
+            assert_eq!(adm.canonical(0).expect("lawful"), small.as_bytes());
+            assert_eq!(adm.canonical(1).expect("lawful"), big.as_bytes());
+            assert_eq!(
+                adm.cmp_at(0, 1).expect("lawful"),
+                small.as_bytes().cmp(big.as_bytes())
+            );
         }
-        let remap = arena.seal();
+        let remap = arena.seal().expect("lawful seal");
         let col = col.gather(&remap).expect("lawful gather");
         let f = arena.frame();
         let adm = col.admit(&f).expect("lawful admit");
-        assert_eq!(adm.canonical(0), small.as_bytes());
+        assert_eq!(adm.canonical(0).expect("lawful"), small.as_bytes());
         assert_eq!(
-            adm.canonical(1),
+            adm.canonical(1).expect("lawful"),
             big.as_bytes(),
             "gather moved a word's value"
         );
@@ -841,7 +861,7 @@ mod tests {
         let mut arena = Arena::new();
         let big = encode(Datum::Str("a string well past the inline max"));
         let minted = Value::mint(&big, &mut arena).expect("mint");
-        arena.seal();
+        arena.seal().expect("lawful seal");
         let mut col = WordColumn::new_in(&arena.frame());
         assert!(
             matches!(
