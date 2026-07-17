@@ -80,10 +80,10 @@
 //!   scan/write methods the temp store's transaction instead. Nothing here
 //!   fakes a temp store; [`create_relation`] refuses temp names with a
 //!   typed error until the router exists.
-//! - **Triggers** are stored as raw KyzoScript source strings, re-parsed at
-//!   fire time — exactly the original's shape. The ratified end state
-//!   stores them as parsed substances with provenance once the parse tier's
-//!   program types are consumable here (Phase C).
+//! - **Triggers** and **constraints** persist sealed [`InputProgram`]
+//!   substance on the catalog wire (msgpack). Admit doors
+//!   ([`Trigger::parse`], [`ConstraintRef::parse`]) lift script text at
+//!   create/set time; catalog decode never calls `parse_script`.
 //! - **Index manifests** (HNSW / FTS / LSH) are operator-tier substances
 //!   that have landed: [`IndexKind::Hnsw`]/`Fts`/`Lsh` carry their real
 //!   manifest payloads (`runtime/mutate.rs`'s `::hnsw|fts|lsh create`
@@ -336,12 +336,12 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 // ---------------------------------------------------------------------------
 
 /// An integrity constraint attached to a stored relation: a named denial
-/// rule held as the PARSED substance with its provenance source — never
-/// re-parsed at enforcement. The one door is [`ConstraintRef::parse`], so a
-/// source that would fail its own parse can never become a `ConstraintRef`
-/// and therefore can never be stored on a [`RelationHandle`].
+/// rule held as sealed [`InputProgram`] substance — never re-parsed at
+/// enforcement or catalog decode. The admit door is [`ConstraintRef::parse`],
+/// so a source that would fail its own parse can never become a
+/// `ConstraintRef` and therefore can never be stored on a [`RelationHandle`].
 ///
-/// The same `ConstraintRef` (same name, same source) is written into the
+/// The same `ConstraintRef` (same name, same program) is written into the
 /// catalog row of **every** stored relation the body reads — an FK
 /// constraint `deny child-without-parent` sits on both the child and the
 /// parent, so deleting a parent row triggers the check exactly like
@@ -349,21 +349,19 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 /// name; the mutation pipeline dedups by name when several touched
 /// relations carry the same constraint.
 ///
-/// The catalog stores name + provenance source; decode re-parses through
-/// [`ConstraintRef::parse`] with the static [`DEFAULT_FIXED_RULES`] and the
-/// same sentinel instant as triggers. The in-memory value always carries
-/// the compiled program.
-#[derive(Clone)]
+/// The catalog stores `{ name, program }` — sealed substance is the store
+/// form. Decode deserializes the program graph; it does not call
+/// `parse_script`.
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct ConstraintRef {
     name: SmartString<LazyCompact>,
     program: InputProgram,
-    source: SmartString<LazyCompact>,
 }
 
 impl ConstraintRef {
     /// The one constructor: parse `source` into its single program, proving
     /// it is a well-formed constraint body. A non-parsing source is refused
-    /// here, so it can never be stored.
+    /// here, so it can never be stored. Only the sealed program is retained.
     pub(crate) fn parse(
         name: impl Into<SmartString<LazyCompact>>,
         source: &str,
@@ -375,7 +373,6 @@ impl ConstraintRef {
         Ok(ConstraintRef {
             name: name.into(),
             program,
-            source: SmartString::from(source),
         })
     }
 
@@ -386,17 +383,12 @@ impl ConstraintRef {
     pub(crate) fn program(&self) -> &InputProgram {
         &self.program
     }
-
-    pub(crate) fn source(&self) -> &str {
-        &self.source
-    }
 }
 
 impl PartialEq for ConstraintRef {
-    /// Provenance identity: equal iff name and source text match, matching
-    /// the catalog's byte round-trip (the program is derived from the source).
+    /// Catalog identity: equal iff name and sealed program wire match.
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.source == other.source
+        self.name == other.name && program_wire_eq(&self.program, &other.program)
     }
 }
 
@@ -404,55 +396,7 @@ impl Eq for ConstraintRef {}
 
 impl Debug for ConstraintRef {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ConstraintRef({:?}, {:?})", self.name, self.source)
-    }
-}
-
-impl serde::Serialize for ConstraintRef {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut state = s.serialize_struct("ConstraintRef", 2)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("source", self.source.as_str())?;
-        state.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for ConstraintRef {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        use serde::de::{Error as _, MapAccess, Visitor};
-        use std::fmt;
-        struct WireVisitor;
-        impl<'de> Visitor<'de> for WireVisitor {
-            type Value = (SmartString<LazyCompact>, SmartString<LazyCompact>);
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("ConstraintRef { name, source }")
-            }
-            fn visit_map<A: MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> std::result::Result<Self::Value, A::Error> {
-                let mut name = None;
-                let mut source = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "name" => name = Some(map.next_value()?),
-                        "source" => source = Some(map.next_value()?),
-                        _ => {
-                            let _: serde::de::IgnoredAny = map.next_value()?;
-                        }
-                    }
-                }
-                Ok((
-                    name.ok_or_else(|| A::Error::missing_field("name"))?,
-                    source.ok_or_else(|| A::Error::missing_field("source"))?,
-                ))
-            }
-        }
-        let (name, source) =
-            d.deserialize_struct("ConstraintRef", &["name", "source"], WireVisitor)?;
-        ConstraintRef::parse(name, &source, &DEFAULT_FIXED_RULES, trigger_decode_vld())
-            .map_err(D::Error::custom)
+        write!(f, "ConstraintRef({:?}, {})", self.name, self.program)
     }
 }
 
@@ -519,39 +463,53 @@ pub(crate) enum Residency {
     Temp,
 }
 
-/// A relation trigger: a KyzoScript program run on mutation, held as the
-/// PARSED substance with its provenance source — never re-parsed at fire
-/// time. The one door is [`Trigger::parse`], which parses at construction,
-/// so a source that would fail its own parse can never become a `Trigger`
-/// and therefore can never be stored on a [`RelationHandle`] — closing the
-/// "a value that would fail its own parse is storable" window.
+/// A relation trigger: a KyzoScript program run on mutation, held as sealed
+/// [`InputProgram`] substance — never re-parsed at fire time or catalog
+/// decode. The admit door is [`Trigger::parse`], which parses at
+/// construction, so a source that would fail its own parse can never become
+/// a `Trigger` and therefore can never be stored on a [`RelationHandle`].
 ///
 /// The parsed `program`'s write validity stays SYMBOLIC (`WriteValidity::Now`
 /// resolves at fire time against the firing session's instant), so the
-/// substance is independent of the `cur_vld` it was parsed under. That
-/// independence is load-bearing: the catalog decode below re-materialises a
-/// stored trigger with the static [`DEFAULT_FIXED_RULES`] and a sentinel
-/// instant, and `set_relation_triggers` refuses any trigger that would break
-/// that reproduction (a session-custom fixed rule, or a constant `@`
-/// coordinate) — so the durable source always decodes to the exact program
-/// the firing session runs.
-#[derive(Clone)]
+/// substance is independent of the `cur_vld` it was parsed under.
+/// `set_relation_triggers` still admits through [`Trigger::parse`] with
+/// [`DEFAULT_FIXED_RULES`] and a sentinel instant so session-custom fixed
+/// rules cannot enter the durable catalog. Decode deserializes the sealed
+/// program; it does not call `parse_script`.
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+#[serde(transparent)]
 pub(crate) struct Trigger {
     program: InputProgram,
-    source: SmartString<LazyCompact>,
 }
 
-/// The sentinel instant used when re-parsing a stored trigger at catalog
-/// decode. Sound because a stored trigger's program is `cur_vld`-independent
-/// (see [`Trigger`]); its value never reaches the decoded program.
+/// The sentinel instant used when admitting a trigger source at the store
+/// boundary ([`Trigger::parse`] / [`set_relation_triggers`]). Sound because a
+/// stored trigger's program is `cur_vld`-independent (see [`Trigger`]).
 fn trigger_decode_vld() -> ValidityTs {
     ValidityTs::from_raw(0)
+}
+
+/// Catalog identity for sealed programs: compare the durable msgpack form
+/// (spans/trivia skipped), matching encode/decode round-trip.
+fn program_wire_eq(a: &InputProgram, b: &InputProgram) -> bool {
+    use rmp_serde::Serializer;
+    use serde::Serialize;
+    let enc = |p: &InputProgram| -> Option<Vec<u8>> {
+        let mut ret = vec![];
+        p.serialize(&mut Serializer::new(&mut ret).with_struct_map())
+            .ok()?;
+        Some(ret)
+    };
+    match (enc(a), enc(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 impl Trigger {
     /// The one constructor: parse `source` into its single program, proving
     /// it is a well-formed trigger body. A non-parsing source is refused
-    /// here, so it can never be stored.
+    /// here, so it can never be stored. Only the sealed program is retained.
     pub(crate) fn parse(
         source: &str,
         fixed_rules: &BTreeMap<String, Arc<dyn FixedRule>>,
@@ -559,64 +517,27 @@ impl Trigger {
     ) -> Result<Trigger> {
         let program =
             parse_script(source, &BTreeMap::new(), fixed_rules, cur_vld)?.get_single_program()?;
-        Ok(Trigger {
-            program,
-            source: SmartString::from(source),
-        })
+        Ok(Trigger { program })
     }
 
     pub(crate) fn program(&self) -> &InputProgram {
         &self.program
     }
-
-    pub(crate) fn source(&self) -> &str {
-        &self.source
-    }
 }
 
 impl PartialEq for Trigger {
-    /// Provenance identity: equal iff the source text is, matching the
-    /// catalog's byte round-trip (the program is derived from the source).
+    /// Catalog identity: equal iff sealed program wire matches.
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
+        program_wire_eq(&self.program, &other.program)
     }
 }
+
+impl Eq for Trigger {}
 
 impl Debug for Trigger {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Trigger({:?})", self.source)
+        write!(f, "Trigger({})", self.program)
     }
-}
-
-/// Serialize a trigger list to the durable catalog form: its provenance
-/// sources. The parsed programs are derived and never written.
-fn serialize_triggers<S: serde::Serializer>(
-    triggers: &[Trigger],
-    s: S,
-) -> std::result::Result<S::Ok, S::Error> {
-    use serde::Serialize;
-    let sources: Vec<&str> = triggers.iter().map(Trigger::source).collect();
-    sources.serialize(s)
-}
-
-/// Re-materialise a trigger list from stored sources, lifting each through
-/// [`Trigger::parse`] with the static default registry and the sentinel
-/// instant. A stored source that no longer parses is a typed decode failure
-/// (surfacing as [`RelationDeserError`] up the stack), never a silent bad
-/// handle.
-fn deserialize_triggers<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<Vec<Trigger>, D::Error> {
-    use serde::Deserialize;
-    use serde::de::Error as _;
-    let sources: Vec<SmartString<LazyCompact>> = Vec::deserialize(d)?;
-    sources
-        .into_iter()
-        .map(|src| {
-            Trigger::parse(&src, &DEFAULT_FIXED_RULES, trigger_decode_vld())
-                .map_err(D::Error::custom)
-        })
-        .collect()
 }
 
 #[derive(Clone, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
@@ -624,25 +545,14 @@ pub(crate) struct RelationHandle {
     pub(crate) name: SmartString<LazyCompact>,
     pub(crate) id: RelationId,
     pub(crate) metadata: StoredRelationMetadata,
-    /// Triggers run on put/rm/replace, held as parsed [`Trigger`] substances
-    /// (see that type). The catalog stores their sources; decode re-parses.
-    #[serde(
-        serialize_with = "serialize_triggers",
-        deserialize_with = "deserialize_triggers",
-        default
-    )]
+    /// Triggers run on put/rm/replace, held as sealed [`Trigger`] substances
+    /// (see that type). The catalog stores [`InputProgram`] bodies; decode
+    /// does not re-parse source.
+    #[serde(default)]
     pub(crate) put_triggers: Vec<Trigger>,
-    #[serde(
-        serialize_with = "serialize_triggers",
-        deserialize_with = "deserialize_triggers",
-        default
-    )]
+    #[serde(default)]
     pub(crate) rm_triggers: Vec<Trigger>,
-    #[serde(
-        serialize_with = "serialize_triggers",
-        deserialize_with = "deserialize_triggers",
-        default
-    )]
+    #[serde(default)]
     pub(crate) replace_triggers: Vec<Trigger>,
     pub(crate) access_level: AccessLevel,
     /// Attached indices, by reference, sorted by name (the attach hook —
@@ -650,9 +560,10 @@ pub(crate) struct RelationHandle {
     pub(crate) indices: Vec<IndexRef>,
     pub(crate) description: SmartString<LazyCompact>,
     /// Integrity constraints whose bodies read this relation, held as
-    /// parsed [`ConstraintRef`] substances (see that type). Sorted by name
+    /// sealed [`ConstraintRef`] substances (see that type). Sorted by name
     /// (`::constraint create` maintains the ordering; names are globally
-    /// unique). The catalog stores name + provenance source; decode re-parses.
+    /// unique). The catalog stores `{ name, program }`; decode does not
+    /// re-parse source.
     pub(crate) constraints: Vec<ConstraintRef>,
     /// What this keyspace's rows are — see [`KeyspaceKind`]. Decides
     /// whether reads resolve bitemporally (facts) or exactly (algorithm
@@ -1650,12 +1561,10 @@ pub(crate) fn set_access_level(
 }
 
 /// Parse a list of trigger sources into [`Trigger`] substances at the store
-/// boundary. Uses the exact fixed context ([`DEFAULT_FIXED_RULES`] + the
-/// sentinel instant) that catalog decode uses, so a source accepted here is
-/// guaranteed to reproduce the identical program on decode — and a source
-/// that does not parse (malformed, or referencing a session-custom fixed
-/// rule the durable catalog cannot carry) is a typed refusal HERE, never a
-/// stored value that fails its own re-parse.
+/// boundary. Uses [`DEFAULT_FIXED_RULES`] + the sentinel instant so a source
+/// referencing a session-custom fixed rule is refused HERE — the durable
+/// catalog cannot carry it. Catalog decode deserializes sealed programs and
+/// never re-parses these sources.
 fn parse_triggers(sources: &[String]) -> Result<Vec<Trigger>> {
     sources
         .iter()
@@ -1912,9 +1821,9 @@ mod tests {
             name: SmartString<LazyCompact>,
             id: u64,
             metadata: StoredRelationMetadata,
-            put_triggers: Vec<String>,
-            rm_triggers: Vec<String>,
-            replace_triggers: Vec<String>,
+            put_triggers: Vec<Trigger>,
+            rm_triggers: Vec<Trigger>,
+            replace_triggers: Vec<Trigger>,
             access_level: AccessLevel,
             indices: Vec<IndexRef>,
             description: SmartString<LazyCompact>,
@@ -1926,21 +1835,9 @@ mod tests {
             name: handle.name.clone(),
             id: crate::data::value::RelationId::CAP + 1, // out of the allocatable range
             metadata: handle.metadata.clone(),
-            put_triggers: handle
-                .put_triggers
-                .iter()
-                .map(|t| t.source().to_string())
-                .collect(),
-            rm_triggers: handle
-                .rm_triggers
-                .iter()
-                .map(|t| t.source().to_string())
-                .collect(),
-            replace_triggers: handle
-                .replace_triggers
-                .iter()
-                .map(|t| t.source().to_string())
-                .collect(),
+            put_triggers: handle.put_triggers.clone(),
+            rm_triggers: handle.rm_triggers.clone(),
+            replace_triggers: handle.replace_triggers.clone(),
             access_level: handle.access_level,
             indices: handle.indices.clone(),
             description: handle.description.clone(),
@@ -2325,7 +2222,14 @@ mod tests {
         let tx = db.read_tx().unwrap();
         let handle = get_relation(&tx, "t").unwrap();
         assert_eq!(handle.put_triggers.len(), 1);
-        assert_eq!(handle.put_triggers[0].source(), "?[k, v] := *t[k, v]");
+        // Display uses `:rel` for stored-relation atoms; substance is the program.
+        assert!(
+            handle.put_triggers[0]
+                .program()
+                .to_string()
+                .contains("t[k, v]"),
+            "trigger program retained stored-relation body"
+        );
         assert!(handle.has_triggers());
     }
 
@@ -2384,9 +2288,9 @@ mod tests {
     }
 
     /// The pinned wire bytes of the canonical handle above (msgpack,
-    /// struct maps; FormatVersion v2). Regenerate ONLY as part of a
-    /// deliberate format migration — the version stamp refuses mismatched
-    /// stores, so there is exactly one catalog format per FormatVersion
-    /// and no cross-version decode path.
-    const PINNED_HANDLE_HEX: &str = "8ba46e616d65a370696ea2696407a86d6574616461746182a46b6579739183a46e616d65a16ba6747970696e6782a7636f6c74797065a3496e74a86e756c6c61626c65c2ab64656661756c745f67656ec0a86e6f6e5f6b6579739183a46e616d65a176a6747970696e6782a7636f6c74797065a6537472696e67a86e756c6c61626c65c2ab64656661756c745f67656ec0ac7075745f747269676765727391b53f5b6b2c20765d203a3d202a70696e5b6b2c20765dab726d5f747269676765727390b07265706c6163655f747269676765727390ac6163636573735f6c6576656ca8526561644f6e6c79a7696e64696365739182a46e616d65a462795f76a46b696e6481a5506c61696e81a66d6170706572920100ab6465736372697074696f6ea670696e6e6564ab636f6e73747261696e74739182a46e616d65aa6e6f5f656d7074795f76a6736f75726365bb3f5b6b5d203a3d202a70696e5b6b2c20765d2c2076203d3d202727ad6b657973706163655f6b696e64a54661637473";
+    /// struct maps; FormatVersion v6 — sealed InputProgram triggers/constraints).
+    /// Regenerate ONLY as part of a deliberate format migration — the version
+    /// stamp refuses mismatched stores, so there is exactly one catalog format
+    /// per FormatVersion and no cross-version decode path.
+    const PINNED_HANDLE_HEX: &str = include_str!("pinned_handle.hex");
 }

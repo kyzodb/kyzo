@@ -182,7 +182,7 @@ impl<T: WriteTx> SessionTx<T> {
                         if err.source_code().is_some() {
                             err
                         } else {
-                            err.with_source_code(trigger.source().to_string())
+                            err.with_source_code(trigger.program().to_string())
                         }
                     })?;
                 }
@@ -745,7 +745,7 @@ impl<T: WriteTx> SessionTx<T> {
                         if err.source_code().is_some() {
                             err
                         } else {
-                            err.with_source_code(format!("{} ", trigger.source()))
+                            err.with_source_code(format!("{} ", trigger.program()))
                         }
                     })?;
                 }
@@ -960,7 +960,7 @@ impl<T: WriteTx> SessionTx<T> {
                     if err.source_code().is_some() {
                         err
                     } else {
-                        err.with_source_code(format!("{} ", trigger.source()))
+                        err.with_source_code(format!("{} ", trigger.program()))
                     }
                 })?;
             }

@@ -50,6 +50,8 @@ use std::fmt::{Debug, Formatter};
 
 use miette::{Result, bail, ensure, miette};
 use rand::prelude::*;
+use serde::de::{Error as DeError, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::data::value::{DataValue, Num, NumRepr};
 use crate::data::value::data_value_any;
@@ -338,6 +340,29 @@ impl Eq for Aggregation {}
 impl Debug for Aggregation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Aggr<{}>", self.name)
+    }
+}
+
+/// Catalog wire: the user-facing name only. Factories rebind via [`parse_aggr`].
+impl Serialize for Aggregation {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name)
+    }
+}
+
+impl<'de> Deserialize<'de> for Aggregation {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct AggrVisitor;
+        impl<'de> Visitor<'de> for AggrVisitor {
+            type Value = Aggregation;
+            fn expecting(&self, f: &mut Formatter) -> std::fmt::Result {
+                f.write_str("aggregation name")
+            }
+            fn visit_str<E: DeError>(self, v: &str) -> std::result::Result<Aggregation, E> {
+                parse_aggr(v).ok_or_else(|| E::custom(format!("unknown aggregation: {v}")))
+            }
+        }
+        deserializer.deserialize_str(AggrVisitor)
     }
 }
 

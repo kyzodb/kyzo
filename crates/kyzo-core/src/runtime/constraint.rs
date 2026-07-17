@@ -18,11 +18,11 @@
 //! Mechanics, stated plainly:
 //!
 //! - **Catalog storage.** The body is a typed [`ConstraintRef`] substance
-//!   (parsed program + provenance source), mirrored into the catalog row of
+//!   (sealed [`InputProgram`]), mirrored into the catalog row of
 //!   *every* stored relation it reads, so an FK fires both when a child
 //!   appears and when its parent disappears. The one door is
-//!   [`ConstraintRef::parse`]; the catalog persists name + source and
-//!   re-materialises the program on decode — same shape as triggers.
+//!   [`ConstraintRef::parse`]; the catalog persists `{ name, program }` and
+//!   deserializes the sealed body on decode — never re-parses source.
 //! - **Enforcement point.** The mutation pipeline notes the constraints of
 //!   every relation it touches ([`SessionTx::note_constraints`]); after the
 //!   top-level query and its whole trigger cascade have run — and before
@@ -325,13 +325,13 @@ impl<S: Storage> Db<S> {
             if !witnesses.is_empty() {
                 let total = witnesses.len();
                 let shown: Vec<Tuple> = witnesses.into_iter().take(WITNESS_CAP).collect();
-                let source = constraint.source();
-                let span = SourceSpan(0, source.len());
+                let body = constraint.program().to_string();
+                let span = SourceSpan(0, body.len());
                 return Err(ConstraintViolation {
                     name: name.to_string(),
                     total,
                     witnesses: shown,
-                    body: source.to_string(),
+                    body,
                     span,
                 }
                 .into());
@@ -472,7 +472,7 @@ impl<S: Storage> Db<S> {
                 rows.push(Tuple::from_vec(vec![
                     DataValue::from(c.name().as_str()),
                     DataValue::from(handle.name.as_str()),
-                    DataValue::from(c.source()),
+                    DataValue::from(c.program().to_string()),
                 ]));
             }
         }

@@ -745,7 +745,7 @@ impl<S: Storage> Db<S> {
                 {
                     rows.push(Tuple::from_vec(vec![
                         DataValue::from(kind),
-                        DataValue::from(src.source()),
+                        DataValue::from(src.program().to_string()),
                     ]));
                 }
                 Ok(NamedRows::try_new(vec!["kind".into(), "source".into()], rows)?)

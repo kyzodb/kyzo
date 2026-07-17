@@ -1261,7 +1261,7 @@ pub(crate) struct CannotDetermineArity(
 
 /// The name under which a fixed rule is registered. (Re-homed here from
 /// its seam declaration in `data/program.rs`.)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct FixedRuleHandle {
     pub(crate) name: Symbol,
 }

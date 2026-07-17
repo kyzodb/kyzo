@@ -1008,7 +1008,7 @@ fn format_version_stamp_and_mismatch() {
 
 /// The #119 migration boundary, made explicit and executable. The value
 /// plane changed the on-disk VALUE format (canonical bytes replace the old
-/// self-describing payload), so `FormatVersion::CURRENT` is 5. Per the
+/// self-describing payload), so `FormatVersion::CURRENT` is 6. Per the
 /// prime directive there are no deployed stores and no in-place migration:
 /// a store written by any PRE-#119 build (version 4) must simply REFUSE to
 /// open, never be silently misread by the new decoder. This pins that the
@@ -1018,7 +1018,7 @@ fn format_version_stamp_and_mismatch() {
 fn pre_value_plane_stores_v4_refuse_to_open() {
     use crate::storage::FormatVersion;
     // CURRENT is 5, and 5 is what a fresh store stamps.
-    assert_eq!(FormatVersion::CURRENT, FormatVersion::parse(b"5").unwrap());
+    assert_eq!(FormatVersion::CURRENT, FormatVersion::parse(b"6").unwrap());
     // The immediately-previous format (4) is a DIFFERENT version and so is
     // refused at the door — the value format is incompatible.
     let v4 = FormatVersion::parse(b"4").unwrap();
@@ -1751,7 +1751,7 @@ fn retry_on_conflict_reaches_completion_under_contention() {
 #[test]
 fn format_version_rejects_noncanonical_stamps() {
     use crate::storage::FormatVersion;
-    assert_eq!(FormatVersion::parse(b"5").unwrap(), FormatVersion::CURRENT);
+    assert_eq!(FormatVersion::parse(b"6").unwrap(), FormatVersion::CURRENT);
     // An older stamp still parses (so the mismatch refusal can NAME it) —
     // it is simply not CURRENT.
     assert_ne!(FormatVersion::parse(b"4").unwrap(), FormatVersion::CURRENT);

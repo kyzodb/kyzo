@@ -66,6 +66,25 @@ impl ValidityTs {
     }
 }
 
+impl serde::Serialize for ValidityTs {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_i64(self.raw())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ValidityTs {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Ok(ValidityTs::from_raw(<i64 as serde::Deserialize>::deserialize(
+            deserializer,
+        )?))
+    }
+}
+
 impl ValidityTs {
     /// The user-assertion door: a user-asserted write validity can never
     /// be the reserved terminal tick (`i64::MAX` / `'END'`), the instant
@@ -291,6 +310,33 @@ impl AsOf {
 
     pub fn sys(self) -> ValidityTs {
         self.sys
+    }
+}
+
+impl serde::Serialize for AsOf {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("AsOf", 2)?;
+        state.serialize_field("valid", &self.valid)?;
+        state.serialize_field("sys", &self.sys)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AsOf {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(serde_derive::Deserialize)]
+        struct AsOfDe {
+            valid: ValidityTs,
+            sys: ValidityTs,
+        }
+        let AsOfDe { valid, sys } = <AsOfDe as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(AsOf { valid, sys })
     }
 }
 

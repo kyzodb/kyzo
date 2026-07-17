@@ -97,28 +97,34 @@ pub(crate) use crate::fixed_rule::{FixedRule, FixedRuleHandle};
 
 /// A `:assert none` / `:assert some` clause: the query fails unless its
 /// result set is empty / non-empty.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum QueryAssertion {
-    AssertNone(SourceSpan),
-    AssertSome(SourceSpan),
+    AssertNone(#[serde(skip)] SourceSpan),
+    AssertSome(#[serde(skip)] SourceSpan),
 }
 
 /// Whether a mutating query reports the mutated rows back (`:returning`).
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum ReturnMutation {
     NotReturning,
     Returning,
 }
 
 /// Sort direction in an `:order` clause.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum SortDir {
     Asc,
     Dsc,
 }
 
 /// What a query does to its output stored relation.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum RelationOp {
     Create,
     Replace,
@@ -137,7 +143,7 @@ pub(crate) enum RelationOp {
 /// engine-minted stamp (`SessionTx::system_stamp_routed`); a script has no
 /// syntax to set it, which is what keeps "system time" meaning "when the
 /// database learned this" rather than something a writer can forge.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum WriteValidity {
     /// No `@` clause: every row lands at the transaction's own system
     /// stamp — byte-for-byte the pre-`@` behavior.
@@ -215,7 +221,7 @@ pub(crate) struct InputRelationHandle {
 /// Fields are `pub(crate)`: the parser assembles these incrementally and the
 /// runtime reads them piecemeal; they carry no cross-field invariant that a
 /// constructor could prove.
-#[derive(Clone, PartialEq, Default)]
+#[derive(Clone, PartialEq, Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct QueryOutOptions {
     pub(crate) limit: Option<usize>,
     pub(crate) offset: Option<usize>,
@@ -481,7 +487,7 @@ pub(crate) struct Trivia {
 }
 
 /// Per-head-position aggregation — a structured slot, never an `Option` hole.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum HeadAggrSlot {
     Plain,
     Aggregated {
@@ -551,18 +557,20 @@ impl std::error::Error for HeadAggrLenMismatch {}
 
 /// One parsed inline rule: head bindings with per-position [`HeadAggrSlot`]s
 /// (same length — mint through [`aligned_head`] / [`split_head_columns`]).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputInlineRule {
     pub(crate) head: Vec<Symbol>,
     pub(crate) aggr: Vec<HeadAggrSlot>,
     pub(crate) body: Vec<InputAtom>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
+    #[serde(skip)]
     pub(crate) trivia: Trivia,
 }
 
 /// What a name is defined as in a program: a set of inline rules, or a
 /// fixed-rule application.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum InputInlineRulesOrFixed {
     Rules { rules: Vec<InputInlineRule> },
     Fixed { fixed: FixedRuleApply },
@@ -583,6 +591,8 @@ impl InputInlineRulesOrFixed {
 ///
 /// Carries the live implementation (`fixed_impl`) from parse time onward:
 /// possession of a `FixedRuleApply` is proof the rule name resolved.
+/// Catalog wire stores the handle name + args/options/head/arity and rebinds
+/// `fixed_impl` from [`crate::fixed_rule::DEFAULT_FIXED_RULES`] on decode.
 #[derive(Clone)]
 pub(crate) struct FixedRuleApply {
     pub(crate) fixed_handle: FixedRuleHandle,
@@ -614,25 +624,78 @@ impl Debug for FixedRuleApply {
     }
 }
 
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+struct FixedRuleApplyWire {
+    fixed_handle: FixedRuleHandle,
+    rule_args: Vec<FixedRuleArg>,
+    options: BTreeMap<SmartString<LazyCompact>, Expr>,
+    head: Vec<Symbol>,
+    arity: usize,
+}
+
+impl serde::Serialize for FixedRuleApply {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(
+            &FixedRuleApplyWire {
+                fixed_handle: self.fixed_handle.clone(),
+                rule_args: self.rule_args.clone(),
+                options: (*self.options).clone(),
+                head: self.head.clone(),
+                arity: self.arity,
+            },
+            serializer,
+        )
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FixedRuleApply {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let wire = <FixedRuleApplyWire as serde::Deserialize>::deserialize(deserializer)?;
+        let name: &str = &wire.fixed_handle.name;
+        let fixed_impl = crate::fixed_rule::DEFAULT_FIXED_RULES
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                D::Error::custom(format!(
+                    "fixed rule '{name}' not in DEFAULT_FIXED_RULES on catalog decode"
+                ))
+            })?;
+        Ok(FixedRuleApply {
+            fixed_handle: wire.fixed_handle,
+            rule_args: wire.rule_args,
+            options: Arc::new(wire.options),
+            head: wire.head,
+            arity: wire.arity,
+            span: SourceSpan::default(),
+            fixed_impl,
+            trivia: Trivia::default(),
+        })
+    }
+}
+
 /// A positional argument to a fixed rule: an in-memory rule, a stored
 /// relation, or a stored relation addressed by named fields.
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum FixedRuleArg {
     InMem {
         name: Symbol,
         bindings: Vec<Symbol>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     Stored {
         name: Symbol,
         bindings: Vec<Symbol>,
         as_of: Option<AsOf>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     NamedStored {
         name: Symbol,
         bindings: BTreeMap<SmartString<LazyCompact>, Symbol>,
         as_of: Option<AsOf>,
+        #[serde(skip)]
         span: SourceSpan,
     },
 }
@@ -670,7 +733,7 @@ impl Display for FixedRuleArg {
 /// A body atom as parsed: still sugared (conjunctions, disjunctions,
 /// negations, named-field relations, index searches), normalized away by
 /// [`InputProgram::into_normalized_program`].
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum InputAtom {
     Rule {
         inner: InputRuleApplyAtom,
@@ -686,14 +749,17 @@ pub(crate) enum InputAtom {
     },
     Negation {
         inner: Box<InputAtom>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     Conjunction {
         inner: Vec<InputAtom>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     Disjunction {
         inner: Vec<InputAtom>,
+        #[serde(skip)]
         span: SourceSpan,
     },
     /// `x = y` or `x in y`
@@ -813,27 +879,31 @@ impl Display for InputAtom {
 /// bindings, and raw parameters. Purely syntactic — the resolved forms
 /// (HNSW/FTS/LSH searches holding live relation handles and manifests) are
 /// index-tier substances and land with that tier.
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct SearchInput {
     pub(crate) relation: Symbol,
     pub(crate) index: Symbol,
     pub(crate) bindings: BTreeMap<SmartString<LazyCompact>, Expr>,
     pub(crate) parameters: BTreeMap<SmartString<LazyCompact>, Expr>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// A rule application in a parsed body: `name[args…]` with expression args.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputRuleApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Expr>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// Which axis an [`ValidityClause::Delta`] varies, the other held at the
 /// record's current belief — mirrors [`crate::query::laws::Axis`], the
 /// oracle's own copy of this same distinction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde_derive::Serialize, serde_derive::Deserialize,
+)]
 pub(crate) enum DeltaAxis {
     /// `@delta(a, b)`: valid-time net diff at the current system snapshot.
     Valid,
@@ -856,7 +926,7 @@ pub(crate) enum DeltaAxis {
 /// (`compile.rs`) appends it to the atom's bindings rather than folding it
 /// into `args`, so relation arity checks against `args` stay exactly what
 /// they were.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) enum ValidityClause {
     /// `@ expr` (one or two coordinates): resolve at this bitemporal
     /// coordinate. Unchanged surface and unchanged meaning.
@@ -892,32 +962,35 @@ impl ValidityClause {
 
 /// A stored-relation application addressed by named fields:
 /// `*name{field: expr, …}`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputNamedFieldRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: BTreeMap<SmartString<LazyCompact>, Expr>,
     pub(crate) validity: Option<ValidityClause>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// A stored-relation application with positional args: `*name[args…]`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputRelationApplyAtom {
     pub(crate) name: Symbol,
     pub(crate) args: Vec<Expr>,
     pub(crate) validity: Option<ValidityClause>,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
 /// `binding = expr` (or `binding in expr` when `one_many_unif`: one row per
 /// element of the list `expr` evaluates to).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct Unification {
     /// Symbol to bind expression to.
     pub(crate) binding: Symbol,
     pub(crate) expr: Expr,
     /// If false, `=`; if true, `in`.
     pub(crate) one_many_unif: bool,
+    #[serde(skip)]
     pub(crate) span: SourceSpan,
 }
 
@@ -938,7 +1011,10 @@ impl Unification {
 /// so every downstream stage may rely on the entry structurally instead of
 /// re-deriving `Symbol::new("?", …)` with a dummy span. The stored
 /// `entry_name` keeps the real source span of the `?` the user wrote.
-#[derive(Debug, Clone)]
+///
+/// Catalog durability serializes the sealed program graph (spans/trivia
+/// skipped); decode never re-parses source text.
+#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct InputProgram {
     /// The `?` symbol as written, with its real span.
     entry_name: Symbol,
@@ -962,7 +1038,9 @@ pub(crate) struct InputProgram {
     /// the one that matters in practice: every comment after the last
     /// rule clause in the source, not sharing its line. Filled by
     /// [`Self::attach_comment_trivia`]; empty (the default) until then.
+    #[serde(skip)]
     pub(crate) leading_trivia: Vec<Comment>,
+    #[serde(skip)]
     pub(crate) trailing_trivia: Vec<Comment>,
 }
 
