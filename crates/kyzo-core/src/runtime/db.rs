@@ -41,7 +41,7 @@
  *   evaluation are both wired: a query that APPLIES a fixed rule builds the
  *   `FixedRuleEval` adapter ([`crate::query::normalize::SessionFixedRule`])
  *   that bridges `MagicFixedRuleApply` to `FixedRule::run`, sharing the
- *   budget's kill flag as the rule's `CancelFlag`. This includes the
+ *   budget's cancel poll as the rule's `CancelFlag`. This includes the
  *   `Constant` rule behind every `<- [[…]]` inline datum.
  *
  * INTERIM (named, not smoothed over):
@@ -67,7 +67,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU32, NonZeroU64};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -82,7 +82,7 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue, ValidityTs};
-use crate::fixed_rule::{CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
+use crate::fixed_rule::{CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, NamedRows};
 use crate::parse::sys::{AccessLevel as ParseAccessLevel, SysOp};
 use crate::parse::{Script, parse_script};
 use crate::query::compile::stratified_magic_compile;
@@ -471,12 +471,12 @@ impl<S: Storage> Db<S> {
         let out_opts = program.out_opts().clone();
         let head = program.get_entry_out_head_or_default()?;
 
-        // One kill flag shared by the budget (checked at epoch barriers),
-        // every fixed rule's `CancelFlag` (checked inside long algorithms),
-        // and every search atom (checked once per search invocation), so a
-        // cancelled or deadline-exceeded query stops them all.
-        let kill = Arc::new(AtomicBool::new(false));
-        let cancel = CancelFlag(kill.clone());
+        // One cancel lifecycle shared by the budget (checked at epoch
+        // barriers), every fixed rule's `CancelFlag` (checked inside long
+        // algorithms), and every search atom (checked once per search
+        // invocation), so a cancelled or deadline-exceeded query stops
+        // them all. `_auth` is retained for a future `::kill` door.
+        let (_auth, cancel) = CancelAuthority::arm();
 
         let mut normalizer = SessionNormalizer::new(view, cancel.clone());
         let (nf, _) = program.into_normalized_program(&mut normalizer)?;
@@ -504,7 +504,7 @@ impl<S: Storage> Db<S> {
         };
 
         let _ = cur_vld;
-        let budget = build_budget(options, &out_opts, kill)?;
+        let budget = build_budget(options, &out_opts, cancel)?;
         let outcome = stratified_evaluate(&eval_prog, &lifetimes, limit, &budget, None)?;
         Ok((outcome.store, outcome.limited, head, out_opts))
     }
@@ -888,11 +888,11 @@ impl<S: Storage> Db<S> {
 fn build_budget(
     options: &ScriptOptions,
     out_opts: &QueryOutOptions,
-    kill: Arc<AtomicBool>,
+    cancel: CancelFlag,
 ) -> Result<Budget> {
     let ceiling = options.epoch_ceiling.unwrap_or(DEFAULT_EPOCH_CEILING);
     let ceiling = NonZeroU32::new(ceiling.max(1)).expect("max(1) is nonzero");
-    let mut budget = Budget::new(ceiling).with_kill_flag(kill);
+    let mut budget = Budget::new(ceiling).with_cancel(cancel);
     let derived_tuple_ceiling = options
         .derived_tuple_ceiling
         .unwrap_or(DEFAULT_DERIVED_TUPLE_CEILING);

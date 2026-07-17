@@ -31,7 +31,7 @@
  *    `make_fixed` factory produces. It assembles a rule's payload (in-memory
  *    rule inputs from the epoch stores, stored-relation inputs through the
  *    session view), brands the output with the manifest arity, and shares
- *    the budget's kill flag as the rule's [`CancelFlag`]. This is what lets
+ *    the budget's cancel poll as the rule's [`CancelFlag`]. This is what lets
  *    a query APPLY a fixed rule, including the `Constant` rule behind every
  *    `<- [[…]]` inline datum.
  *
@@ -697,7 +697,7 @@ fn convert_to_well_ordered_rule(rule: NormalFormInlineRule) -> Result<NormalForm
 /// It assembles the payload (in-memory rule inputs from the epoch stores,
 /// stored-relation inputs through the session view), brands the output store
 /// with the manifest arity (never a caller-supplied one), and shares the
-/// budget's kill flag as the rule's [`CancelFlag`] so a cancelled query stops
+/// budget's cancel poll as the rule's [`CancelFlag`] so a cancelled query stops
 /// the rule too. This is the concrete `F` that `bind_for_eval`'s `make_fixed`
 /// factory produces — the seam that lets a stored/derived query APPLY a fixed
 /// rule (including the `Constant` rule behind every `<- [[…]]` inline datum).

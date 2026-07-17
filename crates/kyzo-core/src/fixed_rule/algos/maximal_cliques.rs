@@ -57,7 +57,9 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 /// The default ceiling on enumerated maximal cliques when the caller gives no
 /// `max_cliques` option. Generous, but finite: enumeration must never be
@@ -75,7 +77,7 @@ pub(crate) const DEFAULT_MAX_CLIQUES: usize = 1 << 20;
 thread_local! {
     static CLIQUE_DEGEN_REMOVALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static CLIQUE_EXPANSION_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static CANCEL_AT_EXPANSION_STEP: std::cell::RefCell<Option<(u64, CancelFlag)>> =
+    static CANCEL_AT_EXPANSION_STEP: std::cell::RefCell<Option<(u64, CancelAuthority)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -91,10 +93,12 @@ fn note_clique_expansion_step() {
         c.get()
     });
     CANCEL_AT_EXPANSION_STEP.with(|h| {
-        if let Some((at, flag)) = h.borrow().as_ref()
+        let mut slot = h.borrow_mut();
+        if let Some((at, _)) = slot.as_ref()
             && now == *at
+            && let Some((_, auth)) = slot.take()
         {
-            flag.cancel();
+            let _ = auth.cancel();
         }
     });
 }
@@ -802,9 +806,9 @@ mod tests {
             "baseline should remove every vertex, got {full_removals}"
         );
 
-        // Pre-set flag: the degeneracy poll must refuse before ordering.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the degeneracy poll must refuse before ordering.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&MaximalCliques, flag);
         let (cancel_removals, cancel_steps) = take_clique_counters();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));
@@ -835,9 +839,9 @@ mod tests {
         let inputs = vec![TestInput::new(vec!["fr", "to"], edges)];
         let prepared = prepare_fixed_rule(&MaximalCliques, inputs, BTreeMap::new()).unwrap();
 
-        let flag = CancelFlag::default();
+        let (auth, flag) = CancelAuthority::arm();
         take_clique_counters();
-        CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = Some((5, flag.clone())));
+        CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = Some((5, auth)));
         let cancelled = prepared.run(&MaximalCliques, flag);
         CANCEL_AT_EXPANSION_STEP.with(|h| *h.borrow_mut() = None);
         let (removals, steps) = take_clique_counters();

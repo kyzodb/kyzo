@@ -721,7 +721,7 @@ pub(crate) enum Rejection {
     /// [`naive_eval_at_budgeted`]'s budget ran out (epoch ceiling, deadline,
     /// or kill) — never raised by the unbudgeted [`naive_eval_at`]/
     /// [`naive_eval`], whose whole reason to exist is the unbounded true
-    /// reference answer. Carries the real `eval::LimitExceeded`/`Killed`
+    /// reference answer. Carries the real `eval::LimitExceeded`/`Cancelled`
     /// message, not a re-derived one.
     BudgetExceeded(String),
 }

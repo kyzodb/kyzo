@@ -40,7 +40,9 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct StronglyConnectedComponent {
     strong: bool,
@@ -276,8 +278,8 @@ mod tests {
     #[test]
     fn cancellation_inside_dfs() {
         let graph = DirectedCsrGraph::from_edges([(0u32, 1u32, ()), (1, 0, ())]).unwrap();
-        let flag = CancelFlag::default();
-        flag.cancel();
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(TarjanSccG::new(graph).run(flag).is_err());
     }
 }

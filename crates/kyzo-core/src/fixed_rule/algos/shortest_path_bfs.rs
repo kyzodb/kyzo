@@ -37,7 +37,9 @@ use crate::data::expr::Expr;
 use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 // A test-only observable: how many nodes the inner BFS loop has dequeued.
 // It lets `honors_cancel_pins_inner_poll` assert a *deterministic* effect of
@@ -276,9 +278,9 @@ mod tests {
             "baseline should expand the whole chain, got {full_expanded}"
         );
 
-        // Pre-set flag: the inner poll must refuse before expanding the graph.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the inner poll must refuse before expanding the graph.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&ShortestPathBFS, flag);
         let cancel_expanded = take_bfs_nodes_expanded();
         assert!(cancelled.is_err());

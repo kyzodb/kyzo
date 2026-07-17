@@ -38,7 +38,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::{
-    CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
+    CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
+    FixedRulePayload,
 };
 use crate::data::value::data_value_any;
 
@@ -255,8 +256,8 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, r#"{{"id": 1, "name": "a"}}"#).unwrap();
         let url = format!("file://{}", f.path().display());
-        let flag = CancelFlag::default();
-        flag.cancel();
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(run_fixed_rule(&JsonReader, vec![], options(&url), flag).is_err());
     }
 

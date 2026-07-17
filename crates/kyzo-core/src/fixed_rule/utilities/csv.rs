@@ -42,7 +42,8 @@ use crate::data::value::Tuple;
 use crate::data::value::{DataValue, TERMINAL_VALIDITY};
 use crate::fixed_rule::utilities::jlines::UrlFetchUnavailable;
 use crate::fixed_rule::{
-    CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput, FixedRulePayload,
+    CancelAuthority, CancelFlag, CannotDetermineArity, FixedRule, FixedRuleOutput,
+    FixedRulePayload,
 };
 use crate::parse::parse_type;
 
@@ -307,8 +308,8 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "a,1,1.5").unwrap();
         let url = format!("file://{}", f.path().display());
-        let flag = CancelFlag::default();
-        flag.cancel();
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(run_fixed_rule(&CsvReader, vec![], options(&url), flag).is_err());
     }
 

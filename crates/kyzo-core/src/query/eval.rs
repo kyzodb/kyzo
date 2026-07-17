@@ -20,8 +20,10 @@
  *   check site, including inside rule iteration ([`InterruptTicker`]),
  *   which closes the original's unkillable-scan gap (poison was checked
  *   once per rule, after the whole scan) and retires the sleeper thread.
- *   Poison survives only as the user-kill flag folded into the same
- *   sites. Refusals are typed: [`LimitExceeded`] and [`Killed`].
+ *   Poison survives as the cancel lifecycle
+ *   ([`crate::fixed_rule::CancelFlag`] shared with fixed rules; request via
+ *   consuming [`crate::fixed_rule::CancelAuthority::cancel`]). Refusals are
+ *   typed: [`LimitExceeded`] and [`crate::fixed_rule::Cancelled`].
  * - **No unbounded fixpoint exists.** The epoch loop is
  *   `0..budget.epoch_ceiling`; exhausting it without a fixpoint is a
  *   deterministic [`LimitExceeded`] refusal.
@@ -152,7 +154,7 @@
 //!   point a function of the data alone. Non-entry rules never advance the
 //!   counter, so the parallel batch reads it stably.
 //!
-//! The deadline and the user-kill flag are *interrupts*, not deterministic
+//! The deadline and the cancel poll are *interrupts*, not deterministic
 //! dimensions: they are checked at every barrier and (unlike the original)
 //! inside rule iteration, so no scan is unkillable, but *when* they fire
 //! depends on the wall clock and the user.
@@ -268,13 +270,6 @@ pub(crate) struct LimitExceeded {
     pub(crate) span: Option<SourceSpan>,
 }
 
-/// The user killed the query. The flag is *read* at the same check sites
-/// as the deadline — the original's `Poison`, minus its sleeper thread.
-#[derive(Debug, Error, Diagnostic)]
-#[error("query killed")]
-#[diagnostic(code(eval::killed))]
-pub(crate) struct Killed;
-
 /// A cross-stage invariant that construction should have made impossible
 /// (e.g. "every referenced rule has a store"). Surfaced as an error, never
 /// an abort, so corruption of the proof is loud but recoverable.
@@ -300,14 +295,14 @@ struct Deadline {
 /// epoch ceiling is not optional — no unbounded fixpoint exists in KyzoDB.
 ///
 /// Deterministic dimensions (`epoch_ceiling`, `derived_tuple_ceiling`) are
-/// checked at epoch barriers only. The deadline and the kill flag are
+/// checked at epoch barriers only. The deadline and the cancel poll are
 /// checked at every barrier *and* inside rule iteration.
 #[derive(Debug, Clone)]
 pub(crate) struct Budget {
     epoch_ceiling: NonZeroU32,
     derived_tuple_ceiling: Option<u64>,
     deadline: Option<Deadline>,
-    kill: Option<Arc<AtomicBool>>,
+    cancel: Option<crate::fixed_rule::CancelFlag>,
 }
 
 impl Budget {
@@ -320,7 +315,7 @@ impl Budget {
             epoch_ceiling,
             derived_tuple_ceiling: None,
             deadline: None,
-            kill: None,
+            cancel: None,
         }
     }
 
@@ -356,22 +351,22 @@ impl Budget {
         self
     }
 
-    /// Attach the user-kill flag (the session sets it; eval only reads).
-    pub(crate) fn with_kill_flag(mut self, kill: Arc<AtomicBool>) -> Self {
-        self.kill = Some(kill);
+    /// Attach the cancel poll (session arms
+    /// [`crate::fixed_rule::CancelAuthority`]; eval only reads via
+    /// [`crate::fixed_rule::CancelFlag::check`]).
+    pub(crate) fn with_cancel(mut self, cancel: crate::fixed_rule::CancelFlag) -> Self {
+        self.cancel = Some(cancel);
         self
     }
 
-    /// The interrupt check: user kill, then deadline. Called at every
+    /// The interrupt check: user cancel, then deadline. Called at every
     /// epoch barrier and, via [`InterruptTicker`], inside rule iteration.
     /// `pub(crate)` (story #80): `laws.rs`'s naive oracle calls this
     /// directly at its own barrier points (visibility only; the check
     /// itself is unchanged).
     pub(crate) fn check_interrupt(&self) -> Result<()> {
-        if let Some(kill) = &self.kill
-            && kill.load(Ordering::Relaxed)
-        {
-            return Err(Killed.into());
+        if let Some(cancel) = &self.cancel {
+            cancel.check()?;
         }
         if let Some(deadline) = &self.deadline {
             let elapsed = deadline.started.elapsed();
@@ -410,7 +405,7 @@ impl Budget {
 const INTERRUPT_STRIDE: u32 = 64;
 
 /// The in-iteration interrupt-and-spend site: `tick` once per derivation;
-/// every [`INTERRUPT_STRIDE`]th tick reads the kill flag and the deadline
+/// every [`INTERRUPT_STRIDE`]th tick reads the cancel poll and the deadline
 /// (closing the original's unkillable-scan gap — it checked poison once per
 /// rule, *after* the scan finished) **and** enforces the mid-epoch
 /// derived-tuple ceiling.
@@ -4288,13 +4283,17 @@ mod tests {
     }
 
     /// The unkillable-scan gap is closed: a rule mid-iteration observes
-    /// the kill flag and stops, long before its scan would finish. The
-    /// original checked poison once per rule, *after* the full scan.
+    /// a spent [`CancelAuthority`] and stops, long before its scan would
+    /// finish. The original checked poison once per rule, *after* the full
+    /// scan.
     #[test]
     fn kill_flag_interrupts_inside_rule_iteration() {
+        use crate::fixed_rule::{CancelAuthority, Cancelled};
+        use std::sync::Mutex;
+
         struct FloodBody {
             contained: BTreeMap<AtomOccurrence, MagicSymbol>,
-            kill: Arc<AtomicBool>,
+            auth: Mutex<Option<CancelAuthority>>,
             emitted: Arc<AtomicUsize>,
         }
         impl crate::query::eval::seal::Sealed for FloodBody {}
@@ -4308,8 +4307,11 @@ mod tests {
                 f: &mut dyn FnMut(Cow<'_, [DataValue]>, Premises<'_>) -> Result<ControlFlow<()>>,
             ) -> Result<()> {
                 for i in 0..1_000_000i64 {
-                    if i == 10 {
-                        self.kill.store(true, Ordering::Relaxed);
+                    if i == 10
+                        && let Ok(mut slot) = self.auth.lock()
+                        && let Some(auth) = slot.take()
+                    {
+                        let _ = auth.cancel();
                     }
                     self.emitted.fetch_add(1, Ordering::Relaxed);
                     if f(Cow::Owned(vec![v(i)]), Premises::NotRequested)?.is_break() {
@@ -4322,11 +4324,11 @@ mod tests {
                 &self.contained
             }
         }
-        let kill = Arc::new(AtomicBool::new(false));
+        let (auth, cancel) = CancelAuthority::arm();
         let emitted = Arc::new(AtomicUsize::new(0));
         let body = FloodBody {
             contained: BTreeMap::new(),
-            kill: kill.clone(),
+            auth: Mutex::new(Some(auth)),
             emitted: emitted.clone(),
         };
         let rule_set = EvalRuleSet::new(vec![None], vec![body]).unwrap();
@@ -4335,7 +4337,7 @@ mod tests {
             .defs
             .insert(entry_symbol(), EvalDefinition::Rules(rule_set));
         let program = EvalProgram::from_execution_order(vec![stratum]).unwrap();
-        let budget = generous_budget().with_kill_flag(kill);
+        let budget = generous_budget().with_cancel(cancel);
         let err = stratified_evaluate(
             &program,
             &StoreLifetimes::default(),
@@ -4345,8 +4347,8 @@ mod tests {
         )
         .expect_err("killed");
         assert!(
-            err.downcast_ref::<Killed>().is_some(),
-            "typed Killed refusal"
+            err.downcast_ref::<Cancelled>().is_some(),
+            "typed Cancelled refusal"
         );
         let count = emitted.load(Ordering::Relaxed);
         assert!(

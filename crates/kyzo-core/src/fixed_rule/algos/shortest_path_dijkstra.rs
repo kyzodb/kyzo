@@ -52,7 +52,9 @@ use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct ShortestPathDijkstra;
 
@@ -666,9 +668,9 @@ mod tests {
         // Unset flag: the search completes, path 0→3 costs 3.
         let ok = dijkstra(&graph, 0, &Some(3u32), &(), &(), CancelFlag::default()).unwrap();
         assert_eq!(ok, vec![(3, 3.0, vec![0, 1, 2, 3])]);
-        // Raised flag: the very first pop refuses.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the very first pop refuses.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(dijkstra(&graph, 0, &Some(3u32), &(), &(), flag).is_err());
     }
 }

@@ -44,7 +44,9 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 // A test-only observable: how many vertices the peel loop has processed.
 // Mirrors `shortest_path_bfs::BFS_NODES_EXPANDED` (see that comment for the
@@ -419,9 +421,9 @@ mod tests {
             "baseline should peel every vertex, got {full_peeled}"
         );
 
-        // Pre-set flag: the inner poll must refuse before peeling the graph.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the inner poll must refuse before peeling the graph.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&KCoreDecomposition, flag);
         let cancel_peeled = take_kcore_verts_peeled();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));

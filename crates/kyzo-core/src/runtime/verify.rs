@@ -610,9 +610,7 @@ impl<S: Storage> Db<S> {
                 store: &tx.store,
                 temp: &tx.temp,
             };
-            let cancel = CancelFlag(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                false,
-            )));
+            let cancel = CancelFlag::inert();
             let mut normalizer = SessionNormalizer::new(view, cancel);
             program.into_normalized_program(&mut normalizer)?
         };

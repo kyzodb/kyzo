@@ -55,7 +55,9 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct PageRank;
 
@@ -529,13 +531,13 @@ mod tests {
         );
     }
 
-    /// Cancellation is honoured: a pre-cancelled flag refuses before any
+    /// Cancellation is honoured: a spent authority refuses before any
     /// iteration completes.
     #[test]
     fn cancellation_refuses() {
         let graph = graph_of(&pseudo_random_edges(200, 1000));
-        let cancel = CancelFlag::default();
-        cancel.cancel();
+        let (auth, cancel) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let res = page_rank(&graph, 0.85, 0.0, 30, cancel);
         assert!(res.is_err());
     }

@@ -64,8 +64,8 @@ use crate::data::symb::Symbol;
 use crate::data::value::{DataValue, Tuple};
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput, FixedRulePayload,
-    NodeNotFoundError,
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleInputRelation, FixedRuleOutput,
+    FixedRulePayload, NodeNotFoundError,
 };
 
 /// Residual-capacity threshold: values at or below this count as saturated.
@@ -648,9 +648,9 @@ mod tests {
             "baseline should dequeue the whole chain, got {full_pops}"
         );
 
-        // Pre-set flag: the inner poll must refuse before walking the chain.
-        let flag = CancelFlag::default();
-        flag.cancel();
+        // Spent authority: the inner poll must refuse before walking the chain.
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let cancelled = prepared.run(&MaxFlow, flag);
         let cancel_pops = take_maxflow_bfs_pops();
         assert!(cancelled.unwrap_err().to_string().contains("killed"));

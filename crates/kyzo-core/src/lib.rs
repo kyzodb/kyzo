@@ -157,15 +157,15 @@
 //! algorithms and utilities) that consumes whole input relations and fills a
 //! `FixedRuleOutput` branded with its declared arity — a lying arity is
 //! refused at the first wrong row, not fed as mis-shaped tuples into
-//! downstream joins. Long-running algorithms poll a `CancelFlag` — the single
-//! cooperative kill point for outside cancellation; the kill-switch and
-//! budget-deadline wiring that pulls it arrives with the unlanded session
-//! tier — and draw any randomness from a seeded PRNG, so the same
-//! facts and query answer identically run to run. (Full-text analysis lives
-//! with the engines: a `TokenizerConfig` is pure data in an index manifest,
-//! validated at definition time and re-checked fallibly at use time, because
-//! stored data is never trusted to be well-formed just because it was once
-//! written.)
+//! downstream joins. Long-running algorithms poll a `CancelFlag` from the
+//! cancel lifecycle (`CancelAuthority` → consuming `Cancelled`); the
+//! session arms one authority shared with the budget interrupt path —
+//! and draw any randomness from a seeded PRNG, so the same facts and
+//! query answer identically run to run. (Full-text analysis lives with
+//! the engines: a `TokenizerConfig` is pure data in an index manifest,
+//! validated at definition time and re-checked fallibly at use time,
+//! because stored data is never trusted to be well-formed just because
+//! it was once written.)
 //!
 //! # The enforcement ladder: compiler > constructor > test
 //!
@@ -314,7 +314,8 @@ pub use engines::projection::{
 };
 
 pub use fixed_rule::{
-    CancelFlag, FixedRule, FixedRuleInputRelation, FixedRulePayload, NamedRows, SimpleFixedRule,
+    CancelAuthority, CancelFlag, Cancelled, FixedRule, FixedRuleInputRelation, FixedRulePayload,
+    NamedRows, SimpleFixedRule,
 };
 pub use runtime::callback::{CallbackEvent, CallbackOp};
 pub use runtime::db::{Db, ScriptOptions};

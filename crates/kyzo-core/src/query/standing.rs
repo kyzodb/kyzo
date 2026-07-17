@@ -62,8 +62,6 @@
 //! event contributes `Minus` from "old" only; "new" is never a fact.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 
 use miette::{Result, miette};
@@ -436,7 +434,7 @@ impl<S: Storage> Db<S> {
             store: &tx.store,
             temp: &tx.temp,
         };
-        let cancel = CancelFlag(Arc::new(AtomicBool::new(false)));
+        let cancel = CancelFlag::inert();
         let mut normalizer = SessionNormalizer::new(view, cancel);
         let (nf, _out_opts) = program.into_normalized_program(&mut normalizer)?;
         let (strat, _lifetimes) = nf.into_stratified_program()?;

@@ -43,7 +43,9 @@ use crate::data::value::Tuple;
 use crate::fixed_rule::algos::shortest_path_dijkstra::dijkstra;
 use crate::fixed_rule::graph::DirectedCsrGraph;
 use crate::fixed_rule::parallel::par_try_map;
-use crate::fixed_rule::{CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload};
+use crate::fixed_rule::{
+    CancelAuthority, CancelFlag, FixedRule, FixedRuleOutput, FixedRulePayload,
+};
 
 pub(crate) struct KShortestPathYen;
 
@@ -358,8 +360,8 @@ mod tests {
             (0, 2, 3.0),
         ])
         .unwrap();
-        let flag = CancelFlag::default();
-        flag.cancel();
+        let (auth, flag) = CancelAuthority::arm();
+        let _ = auth.cancel();
         assert!(k_shortest_path_yen(3, &graph, 0, 3, flag).is_err());
     }
 
@@ -442,8 +444,8 @@ mod tests {
     /// any of them.
     #[test]
     fn cancellation_stops_spur_search() {
-        let cancel = CancelFlag::default();
-        cancel.cancel();
+        let (auth, cancel) = CancelAuthority::arm();
+        let _ = auth.cancel();
         let err = run_fixed_rule(
             &KShortestPathYen,
             vec![

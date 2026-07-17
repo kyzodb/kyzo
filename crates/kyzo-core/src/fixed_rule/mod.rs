@@ -28,10 +28,10 @@
  *   constructed with the arity the rule declared: every `put` is checked,
  *   for every rule, and a mismatch is a typed error, not corrupt rows
  *   downstream ("SimpleFixedRule's check made universal").
- * - **`Poison` becomes [`CancelFlag`]**, defined here (the original's
- *   lived in `runtime/db.rs`). Same substance (an `Arc<AtomicBool>`
- *   checked cooperatively); it is the integration point where the ratified
- *   budget/deadline design (story #3) attaches when the runtime lands.
+ * - **`Poison` becomes the cancel lifecycle** ([`CancelAuthority`] +
+ *   [`CancelFlag`] + consuming [`Cancelled`]), defined here (the original's
+ *   lived in `runtime/db.rs`). The budget/deadline path shares the same
+ *   poll handle; cancellation is a typestate, not a free `AtomicBool`.
  * - **The `graph` crate is replaced** by the inline CSR in
  *   `fixed_rule/graph.rs` (see the decision record there), and the graph
  *   builders return errors by straightforward `Result` flow instead of
@@ -72,8 +72,8 @@
 //!   relations through the [`StoredInputSource`] seam when the runtime
 //!   tier lands.
 //! - [`FixedRuleOutput`], the arity-branded writer `run` fills.
-//! - [`CancelFlag`], the cooperative cancellation check every long-running
-//!   algorithm polls.
+//! - [`CancelAuthority`] / [`CancelFlag`] / [`Cancelled`], the cooperative
+//!   cancellation lifecycle every long-running algorithm polls.
 //! - [`DEFAULT_FIXED_RULES`], the registry of the built-ins declared in
 //!   `algos/` (graph algorithms) and `utilities/`.
 //! - [`SimpleFixedRule`], the reduced-boilerplate wrapper for user-defined
@@ -123,51 +123,98 @@ pub(crate) mod utilities;
 pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 
 // ─────────────────────────────────────────────────────────────────────────
-// Cancellation
+// Cancellation lifecycle
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Private shared cell. Never an API-level `AtomicBool` — cancellation is
+/// minted only through [`CancelAuthority::arm`].
+struct CancelCell(AtomicBool);
+
+/// Typestate proof that cancellation was requested (via
+/// [`CancelAuthority::cancel`]) or observed (via [`CancelFlag::check`]).
+///
+/// Consuming [`CancelAuthority::cancel`] is the only door that requests
+/// stop; a free `AtomicBool` flag is not part of the surface.
 #[derive(Debug, Error, Diagnostic)]
 #[error("Running query is killed before completion")]
 #[diagnostic(code(eval::killed))]
 #[diagnostic(help("A query may be killed by timeout, or explicit command"))]
-pub(crate) struct QueryCancelledError;
+pub struct Cancelled;
 
-/// Cooperative cancellation: a shared flag that long-running fixed rules
-/// (and, once the runtime lands, the whole evaluator) poll via
-/// [`Self::check`], which refuses with a typed error once the flag is set.
+/// Authority to request cancellation. Paired with [`CancelFlag`] by
+/// [`Self::arm`]. [`Self::cancel`] consumes the authority and yields
+/// [`Cancelled`] — one authority, one request.
+pub struct CancelAuthority {
+    cell: Arc<CancelCell>,
+}
+
+impl CancelAuthority {
+    /// Arm a paired authority + poll handle that share one cancel cell.
+    pub fn arm() -> (Self, CancelFlag) {
+        let cell = Arc::new(CancelCell(AtomicBool::new(false)));
+        (
+            Self {
+                cell: Arc::clone(&cell),
+            },
+            CancelFlag { cell },
+        )
+    }
+
+    /// Spend this authority: request cancellation and return the
+    /// [`Cancelled`] proof. Every subsequent [`CancelFlag::check`] on the
+    /// paired poll handle refuses.
+    pub fn cancel(self) -> Cancelled {
+        self.cell.0.store(true, Ordering::Relaxed);
+        Cancelled
+    }
+}
+
+/// Cooperative poll handle for long-running fixed rules (and the budget
+/// interrupt path). Clone into algorithms; cannot request cancel — that
+/// is [`CancelAuthority`]'s job (species pair).
 ///
-/// This is the CozoDB original's `Poison` (`runtime/db.rs`), re-homed to
-/// the payload tier because it is self-contained and every algorithm needs
-/// it now. It is also the designated integration point for story #3's
-/// ratified budget design: the runtime's kill switch, query timeouts, and
-/// the deadline half of `Budget` all act by setting this flag, so a rule
-/// that honors `check` honors all of them for free.
-#[derive(Clone, Default)]
-pub struct CancelFlag(pub(crate) Arc<AtomicBool>);
+/// This is the CozoDB original's `Poison` (`runtime/db.rs`), re-homed here
+/// and joined to the budget lifecycle: the session arms one
+/// [`CancelAuthority`], clones the [`CancelFlag`] into fixed rules /
+/// search / [`Budget`], and spends the authority to kill.
+#[derive(Clone)]
+pub struct CancelFlag {
+    cell: Arc<CancelCell>,
+}
+
+impl Default for CancelFlag {
+    /// Inert poll handle: never observes cancellation (no authority is
+    /// retained). Prefer [`CancelAuthority::arm`] when cancel must be
+    /// requestable.
+    fn default() -> Self {
+        Self::inert()
+    }
+}
 
 impl std::fmt::Debug for CancelFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CancelFlag({})", self.0.load(Ordering::Relaxed))
+        write!(f, "CancelFlag({})", self.cell.0.load(Ordering::Relaxed))
     }
 }
 
 impl CancelFlag {
-    /// Refuses with a typed error if cancellation has been requested.
+    /// Inert poll handle that never observes cancellation.
+    pub fn inert() -> Self {
+        Self {
+            cell: Arc::new(CancelCell(AtomicBool::new(false))),
+        }
+    }
+
+    /// Refuses with [`Cancelled`] if cancellation has been requested.
     /// Poll this at least once per unit of unbounded work (per node
     /// visited, per edge relaxed) — a loop that never checks is a loop
     /// that cannot be killed.
     #[inline(always)]
     pub fn check(&self) -> Result<()> {
-        if self.0.load(Ordering::Relaxed) {
-            bail!(QueryCancelledError)
+        if self.cell.0.load(Ordering::Relaxed) {
+            bail!(Cancelled)
         }
         Ok(())
-    }
-
-    /// Request cancellation: every subsequent `check` on any clone of this
-    /// flag refuses.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
     }
 }
 
@@ -1516,12 +1563,12 @@ mod tests {
         assert!(err.to_string().contains("not available"), "{err}");
     }
 
-    /// Cancellation is honored mid-run: a pre-set flag makes a graph
-    /// traversal return the typed refusal instead of completing.
+    /// Cancellation is honored mid-run: a spent [`CancelAuthority`] makes a
+    /// graph traversal return the typed refusal instead of completing.
     #[test]
     fn cancellation_is_honored_mid_run() {
-        let cancel = CancelFlag::default();
-        cancel.cancel();
+        let (auth, cancel) = CancelAuthority::arm();
+        let _ = auth.cancel();
         // A graph with an edge, so BFS enters its per-edge loop where the
         // flag is polled.
         let res = run_fixed_rule(
