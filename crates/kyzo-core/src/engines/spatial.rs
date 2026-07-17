@@ -244,18 +244,18 @@ pub(crate) struct CoordNotNumber {
 // ---------------------------------------------------------------------------
 
 /// A coordinate ADMITTED to the index: finite, `lat ∈ [-90,90]`,
-/// `lon ∈ [-180,180]`. **This constructor is the NaN/range guard** — there is no
-/// other way to build a `GeoPoint`, so an ill-formed coordinate is
-/// unrepresentable past [`admit`](Self::admit) (the `IndexVec::admit` pattern).
+/// `lon ∈ [-180,180]`. Fields are private; [`admit`](Self::admit) is the sole
+/// constructor — NaN / out-of-range cannot be forged by struct literal or field
+/// write outside this module (the `IndexVec::admit` pattern).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GeoPoint {
-    pub(crate) lat: f64,
-    pub(crate) lon: f64,
+    lat: f64,
+    lon: f64,
 }
 
 impl GeoPoint {
     /// Admit a coordinate, or refuse it typed: [`NonFiniteCoord`] or
-    /// [`GeoCoordOutOfRange`].
+    /// [`GeoCoordOutOfRange`]. The only way to construct a [`GeoPoint`].
     pub(crate) fn admit(lat: f64, lon: f64) -> Result<Self> {
         if !lat.is_finite() {
             bail!(NonFiniteCoord { what: "lat" });
@@ -276,6 +276,16 @@ impl GeoPoint {
             });
         }
         Ok(GeoPoint { lat, lon })
+    }
+
+    /// Admitted latitude.
+    pub(crate) fn lat(&self) -> f64 {
+        self.lat
+    }
+
+    /// Admitted longitude.
+    pub(crate) fn lon(&self) -> f64 {
+        self.lon
     }
 
     /// The point's quantized cell (`q_lat`, `q_lon`), each in `[0, 2³²)`.
@@ -469,7 +479,10 @@ pub(crate) fn spatial_put<T: WriteTx>(
     }
     let point = extract_point(tuple, manifest)?;
     let key = posting_key(&point, base_key_len, tuple);
-    let val = vec![DataValue::from(point.lat), DataValue::from(point.lon)];
+    let val = vec![
+        DataValue::from(point.lat()),
+        DataValue::from(point.lon()),
+    ];
     let key_bytes = idx.encode_key_for_store(key.as_slice(), SourceSpan::default())?;
     let val_bytes = idx.encode_val_only_for_store(&val, SourceSpan::default())?;
     tx.put(&key_bytes, &val_bytes)
@@ -504,20 +517,22 @@ pub(crate) fn spatial_del<T: WriteTx>(
 // ---------------------------------------------------------------------------
 
 /// A non-wrapping lat/lon query box, both corners admitted and ordered
-/// (`lat_lo ≤ lat_hi`, `lon_lo ≤ lon_hi`). A box crossing the antimeridian is
-/// refused at admission ([`AntimeridianBoxRefused`]).
+/// (`lat_lo ≤ lat_hi`, `lon_lo ≤ lon_hi`). Fields are private; [`admit`](Self::admit)
+/// is the sole constructor. A box crossing the antimeridian is refused at
+/// admission ([`AntimeridianBoxRefused`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct BoundingBox {
-    pub(crate) lat_lo: f64,
-    pub(crate) lat_hi: f64,
-    pub(crate) lon_lo: f64,
-    pub(crate) lon_hi: f64,
+    lat_lo: f64,
+    lat_hi: f64,
+    lon_lo: f64,
+    lon_hi: f64,
 }
 
 impl BoundingBox {
     /// Admit a query box, or refuse it typed. Both corners go through
     /// [`GeoPoint::admit`]; `lat_lo ≤ lat_hi` and `lon_lo ≤ lon_hi` are required
     /// (a `lon_lo > lon_hi` box would wrap the antimeridian and is refused).
+    /// The only way to construct a [`BoundingBox`].
     pub(crate) fn admit(lat_lo: f64, lon_lo: f64, lat_hi: f64, lon_hi: f64) -> Result<Self> {
         GeoPoint::admit(lat_lo, lon_lo)?;
         GeoPoint::admit(lat_hi, lon_hi)?;
@@ -536,6 +551,26 @@ impl BoundingBox {
             lon_lo,
             lon_hi,
         })
+    }
+
+    /// Admitted lower latitude bound.
+    pub(crate) fn lat_lo(&self) -> f64 {
+        self.lat_lo
+    }
+
+    /// Admitted upper latitude bound.
+    pub(crate) fn lat_hi(&self) -> f64 {
+        self.lat_hi
+    }
+
+    /// Admitted lower longitude bound.
+    pub(crate) fn lon_lo(&self) -> f64 {
+        self.lon_lo
+    }
+
+    /// Admitted upper longitude bound.
+    pub(crate) fn lon_hi(&self) -> f64 {
+        self.lon_hi
     }
 
     /// Whether an exact point lies within this box (inclusive). The precise
@@ -801,10 +836,10 @@ struct RingBox {
 }
 
 fn ring_box(p: &GeoPoint, half: f64) -> Result<RingBox> {
-    let raw_lat_lo = p.lat - half;
-    let raw_lat_hi = p.lat + half;
-    let raw_lon_lo = p.lon - half;
-    let raw_lon_hi = p.lon + half;
+    let raw_lat_lo = p.lat() - half;
+    let raw_lat_hi = p.lat() + half;
+    let raw_lon_lo = p.lon() - half;
+    let raw_lon_hi = p.lon() + half;
 
     let at_south = raw_lat_lo <= LAT_MIN;
     let at_north = raw_lat_hi >= LAT_MAX;
@@ -838,17 +873,17 @@ fn inner_radius(p: &GeoPoint, ring: &RingBox) -> f64 {
     let mut r = f64::INFINITY;
     // Latitude edges are exact meridian arcs.
     if !ring.at_south {
-        r = r.min((p.lat - b.lat_lo) * DEG_TO_RAD);
+        r = r.min((p.lat() - b.lat_lo()) * DEG_TO_RAD);
     }
     if !ring.at_north {
-        r = r.min((b.lat_hi - p.lat) * DEG_TO_RAD);
+        r = r.min((b.lat_hi() - p.lat()) * DEG_TO_RAD);
     }
     // Longitude edges: cross-track distance to the meridian great circle is a
     // safe under-estimate of the distance to the meridian segment.
     if !ring.full_lon {
-        let cos_lat = f64::cos(p.lat * DEG_TO_RAD);
-        let x_lo = f64::asin(f64::sin((p.lon - b.lon_lo) * DEG_TO_RAD) * cos_lat);
-        let x_hi = f64::asin(f64::sin((b.lon_hi - p.lon) * DEG_TO_RAD) * cos_lat);
+        let cos_lat = f64::cos(p.lat() * DEG_TO_RAD);
+        let x_lo = f64::asin(f64::sin((p.lon() - b.lon_lo()) * DEG_TO_RAD) * cos_lat);
+        let x_hi = f64::asin(f64::sin((b.lon_hi() - p.lon()) * DEG_TO_RAD) * cos_lat);
         r = r.min(x_lo).min(x_hi);
     }
     r
@@ -905,7 +940,7 @@ pub(crate) fn spatial_knn(
             if !seen.insert(posting.src_key.clone()) {
                 continue; // already scored in an inner ring
             }
-            let dist = angular_distance(query.lat, query.lon, posting.lat, posting.lon);
+            let dist = angular_distance(query.lat(), query.lon(), posting.lat, posting.lon);
             best.push(Candidate {
                 dist: OrderedFloat(dist),
                 src_key: posting.src_key,
@@ -1129,7 +1164,7 @@ mod tests {
     fn naive_knn(points: &[(i64, f64, f64)], q: &GeoPoint, k: usize) -> Vec<i64> {
         let mut scored: Vec<(f64, i64)> = points
             .iter()
-            .map(|(id, lat, lon)| (angular_distance(q.lat, q.lon, *lat, *lon), *id))
+            .map(|(id, lat, lon)| (angular_distance(q.lat(), q.lon(), *lat, *lon), *id))
             .collect();
         scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
         scored.into_iter().take(k).map(|(_, id)| id).collect()
