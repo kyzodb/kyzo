@@ -647,72 +647,124 @@ const CANARY_LAYER: i64 = 1;
 /// | Canary | `[1, Null × (2·base_key_len + 4)]`        | `[Int bottom_layer, Bytes key, false]` |
 ///
 /// where `id…` is `tuple_key…, Int field, Int sub` (`-1` = whole field).
-/// Content hash of a stored vector (HNSW change-detection payload).
+/// SHA-256 content hash of a stored vector (HNSW change-detection payload).
+/// Field is private — mint only via [`Self::from_sha256_digest`] or
+/// [`Self::from_stored`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
-pub(crate) struct VecContentHash(pub(crate) Vec<u8>);
+pub(crate) struct VecContentHash(Vec<u8>);
+
+const SHA256_DIGEST_LEN: usize = 32;
 
 const _: () = assert!(std::mem::size_of::<VecContentHash>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<VecContentHash>() == std::mem::align_of::<Vec<u8>>());
 
+impl VecContentHash {
+    /// Mint from the [`IndexVec::content_hash`] door (always 32 bytes).
+    fn from_sha256_digest(bytes: Vec<u8>) -> Self {
+        debug_assert_eq!(bytes.len(), SHA256_DIGEST_LEN);
+        Self(bytes)
+    }
+
+    /// Stored node-row hash bytes (wire decode); length must be exactly 32.
+    fn from_stored(
+        bytes: Vec<u8>,
+        index_name: &str,
+        tuple: &[DataValue],
+    ) -> Result<Self> {
+        if bytes.len() != SHA256_DIGEST_LEN {
+            bail!(IndexRowCorrupt::new(
+                index_name,
+                tuple,
+                IndexCorruptReason::HnswNodeHashWrongLength {
+                    found: bytes.len(),
+                },
+            ));
+        }
+        Ok(Self(bytes))
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl std::ops::Deref for VecContentHash {
     type Target = [u8];
-    fn deref(&self) -> &[u8] { &self.0 }
-}
-impl std::ops::DerefMut for VecContentHash {
-    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 impl AsRef<[u8]> for VecContentHash {
-    fn as_ref(&self) -> &[u8] { &self.0 }
-}
-impl From<Vec<u8>> for VecContentHash {
-    fn from(v: Vec<u8>) -> Self { Self(v) }
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 
 
 /// Canary entry key bytes for an HNSW index row.
+/// Mint only via [`Self::from_encoded`] (encode-door bytes).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(transparent)]
-pub(crate) struct HnswEntryKey(pub(crate) Vec<u8>);
+pub(crate) struct HnswEntryKey(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<HnswEntryKey>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<HnswEntryKey>() == std::mem::align_of::<Vec<u8>>());
 
+impl HnswEntryKey {
+    /// Entry key from bytes already produced by [`RelationHandle::encode_key_for_store`].
+    fn from_encoded(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl std::ops::Deref for HnswEntryKey {
     type Target = [u8];
-    fn deref(&self) -> &[u8] { &self.0 }
-}
-impl std::ops::DerefMut for HnswEntryKey {
-    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 impl AsRef<[u8]> for HnswEntryKey {
-    fn as_ref(&self) -> &[u8] { &self.0 }
-}
-impl From<Vec<u8>> for HnswEntryKey {
-    fn from(v: Vec<u8>) -> Self { Self(v) }
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 
 
-/// Ranked-hit key bytes during HNSW search.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Ranked-hit key bytes during HNSW search (layer-0 node key encoding).
+/// Mint only via [`Self::from_encoded`] (encode-door bytes).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 #[repr(transparent)]
-pub(crate) struct HnswHitKey(pub(crate) Vec<u8>);
+pub(crate) struct HnswHitKey(Vec<u8>);
 
 const _: () = assert!(std::mem::size_of::<HnswHitKey>() == std::mem::size_of::<Vec<u8>>());
 const _: () = assert!(std::mem::align_of::<HnswHitKey>() == std::mem::align_of::<Vec<u8>>());
 
+impl HnswHitKey {
+    /// Hit-order key from bytes already produced by [`RelationHandle::encode_key_for_store`].
+    fn from_encoded(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl std::ops::Deref for HnswHitKey {
     type Target = [u8];
-    fn deref(&self) -> &[u8] { &self.0 }
-}
-impl std::ops::DerefMut for HnswHitKey {
-    fn deref_mut(&mut self) -> &mut [u8] { &mut self.0 }
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 impl AsRef<[u8]> for HnswHitKey {
-    fn as_ref(&self) -> &[u8] { &self.0 }
-}
-impl From<Vec<u8>> for HnswHitKey {
-    fn from(v: Vec<u8>) -> Self { Self(v) }
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
 }
 
 
@@ -812,7 +864,7 @@ impl HnswRow {
                 degree, vec_hash, ..
             } => Tuple::from_vec(vec![
                 DataValue::from(*degree as i64),
-                DataValue::Bytes(vec_hash.0.clone()),
+                DataValue::Bytes(vec_hash.as_bytes().to_vec()),
                 DataValue::from(false),
             ]),
             HnswRow::Edge {
@@ -824,10 +876,10 @@ impl HnswRow {
             ]),
             HnswRow::Canary {
                 bottom_layer,
-                entry_key: HnswEntryKey(entry_key),
+                entry_key,
             } => Tuple::from_vec(vec![
                 DataValue::from(*bottom_layer),
-                DataValue::Bytes(entry_key.clone()),
+                DataValue::Bytes(entry_key.as_bytes().to_vec()),
                 DataValue::from(false),
             ]),
         }
@@ -898,7 +950,7 @@ impl HnswRow {
             };
             return Ok(HnswRow::Canary {
                 bottom_layer,
-                entry_key: HnswEntryKey(entry_key.clone()),
+                entry_key: HnswEntryKey::from_encoded(entry_key.clone()),
             });
         }
         if layer > 0 {
@@ -964,7 +1016,7 @@ impl HnswRow {
                 layer,
                 at: fr,
                 degree: degree as usize,
-                vec_hash: VecContentHash(vec_hash.clone()),
+                vec_hash: VecContentHash::from_stored(vec_hash.clone(), index_name, tuple)?,
             })
         } else {
             let dist = tuple[2 * kl + 5].get_float().ok_or_else(|| {
@@ -1061,10 +1113,10 @@ impl IndexVec {
     /// Content hash of the admitted vector (change detection on re-put):
     /// SHA-256 over the vector's canonical value encoding — the one byte
     /// form, hashed by a pinned algorithm.
-    fn content_hash(&self) -> Vec<u8> {
+    fn content_hash(&self) -> VecContentHash {
         use sha2::Digest;
         let bytes = encode_owned(&DataValue::Vector(self.0.clone()));
-        sha2::Sha256::digest(bytes.as_bytes()).to_vec()
+        VecContentHash::from_sha256_digest(sha2::Sha256::digest(bytes.as_bytes()).to_vec())
     }
 
     /// The distance between two admitted vectors under `metric`. Total: a
@@ -1520,7 +1572,7 @@ fn put_fresh_at_levels(
     tx: &mut impl WriteTx,
     idx: &RelationHandle,
     base_key_len: usize,
-    vec_hash: &[u8],
+    vec_hash: VecContentHash,
     at: &VectorId,
     bottom_layer: i64,
     top_layer: i64,
@@ -1535,7 +1587,7 @@ fn put_fresh_at_levels(
         .to_vec();
     HnswRow::Canary {
         bottom_layer,
-        entry_key: HnswEntryKey(entry_key),
+        entry_key: HnswEntryKey::from_encoded(entry_key),
     }
     .write(tx, idx, base_key_len)?;
     for layer in bottom_layer..=top_layer {
@@ -1543,7 +1595,7 @@ fn put_fresh_at_levels(
             layer,
             at: at.clone(),
             degree: 0,
-            vec_hash: VecContentHash(vec_hash.to_vec()),
+            vec_hash: vec_hash.clone(),
         }
         .write(tx, idx, base_key_len)?;
     }
@@ -1773,7 +1825,7 @@ fn put_vector<T: WriteTx>(
         ..
     }) = read_node_row(tx, base, idx, 0, at)?
     {
-        if stored_hash.as_ref() == vec_hash {
+        if stored_hash == vec_hash {
             return Ok(());
         }
         remove_vec(tx, base, idx, at)?;
@@ -1782,7 +1834,7 @@ fn put_vector<T: WriteTx>(
     let Some((bottom_layer, ep_id)) = entry_point(tx, base, idx)? else {
         // The first vector in the index.
         let layer = manifest.random_level(at);
-        return put_fresh_at_levels(tx, idx, base_key_len, &vec_hash, at, layer, 0);
+        return put_fresh_at_levels(tx, idx, base_key_len, vec_hash.clone(), at, layer, 0);
     };
 
     cache.ensure(tx, base, &ep_id)?;
@@ -1798,7 +1850,7 @@ fn put_vector<T: WriteTx>(
             tx,
             idx,
             base_key_len,
-            &vec_hash,
+            vec_hash.clone(),
             at,
             target_layer,
             bottom_layer - 1,
@@ -1832,7 +1884,7 @@ fn put_vector<T: WriteTx>(
             layer,
             at: at.clone(),
             degree: selected.len(),
-            vec_hash: VecContentHash(vec_hash.clone()),
+            vec_hash: vec_hash.clone(),
         }
         .write(tx, idx, base_key_len)?;
 
@@ -1968,7 +2020,7 @@ fn remove_vec<T: WriteTx>(
                 let val = idx.encode_val_only_for_store(
                     HnswRow::Canary {
                         bottom_layer,
-                        entry_key: HnswEntryKey(entry_key),
+                        entry_key: HnswEntryKey::from_encoded(entry_key),
                     }
                     .val_tuple()
                     .as_slice(),
@@ -2485,11 +2537,12 @@ impl PartialOrd for Ranked {
 /// The `(distance, encoded-key)` total order over a vector's identity — the
 /// tie-break key. The layer-0 node key is a stable, memcmp-ordered encoding of
 /// the `VectorId`.
-fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<Vec<u8>> {
-    Ok(idx
-        .encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?
-        .as_bytes()
-        .to_vec())
+fn id_order_key(idx: &RelationHandle, id: &VectorId) -> Result<HnswHitKey> {
+    Ok(HnswHitKey::from_encoded(
+        idx.encode_key_for_store(node_key(0, id).as_slice(), SourceSpan::default())?
+            .as_bytes()
+            .to_vec(),
+    ))
 }
 
 /// Keep the `k` smallest `Ranked` in a bounded max-heap (the max is the worst
@@ -2745,7 +2798,7 @@ fn scan_filtered(
                 params.k,
                 Ranked {
                     dist: OrderedFloat(d),
-                    key: HnswHitKey(key),
+                    key,
                     tuple,
                 },
             );
@@ -2789,7 +2842,7 @@ fn graph_search_layer0(
                     ef2,
                     Ranked {
                         dist: OrderedFloat(d),
-                        key: HnswHitKey(key),
+                        key,
                         tuple,
                     },
                 );
@@ -2832,7 +2885,7 @@ fn graph_search_layer0(
                     ef2,
                     Ranked {
                         dist: OrderedFloat(nd),
-                        key: HnswHitKey(key),
+                        key,
                         tuple,
                     },
                 );
@@ -4042,7 +4095,7 @@ mod tests {
                 layer: -2,
                 at: at.clone(),
                 degree: 3,
-                vec_hash: vec![1, 2, 3].into(),
+                vec_hash: VecContentHash::from_sha256_digest(vec![1u8; 32]),
             },
             HnswRow::Edge {
                 layer: 0,
@@ -4053,7 +4106,7 @@ mod tests {
             },
             HnswRow::Canary {
                 bottom_layer: -3,
-                entry_key: vec![9, 9].into(),
+                entry_key: HnswEntryKey::from_encoded(vec![9, 9]),
             },
         ];
         for row in rows {
@@ -4068,7 +4121,7 @@ mod tests {
             layer: 0,
             at: at.clone(),
             degree: 0,
-            vec_hash: vec![].into(),
+            vec_hash: VecContentHash::from_sha256_digest(vec![0u8; 32]),
         };
         let k = node.key_tuple(kl);
         assert_eq!(k.len(), 2 * kl + 5);
@@ -4080,7 +4133,7 @@ mod tests {
         );
         let c = HnswRow::Canary {
             bottom_layer: 0,
-            entry_key: vec![].into(),
+            entry_key: HnswEntryKey::from_encoded(vec![]),
         }
         .key_tuple(kl);
         assert_eq!(c[0], DataValue::from(CANARY_LAYER));

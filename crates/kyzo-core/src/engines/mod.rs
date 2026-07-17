@@ -123,6 +123,7 @@ pub(crate) enum IndexCorruptReason {
     HnswIgnoreLinkNotBool,
     HnswNodeDegreeNegative,
     HnswNodeHashNotBytes,
+    HnswNodeHashWrongLength { found: usize },
     HnswEdgeDistanceNotNumber,
     HnswEdgeHashNotNull,
     HnswFieldBeyondArity { field: usize },
@@ -202,6 +203,10 @@ impl fmt::Display for IndexCorruptReason {
             Self::HnswIgnoreLinkNotBool => write!(f, "ignore_link is not a boolean"),
             Self::HnswNodeDegreeNegative => write!(f, "node degree is negative"),
             Self::HnswNodeHashNotBytes => write!(f, "node vector hash is not bytes"),
+            Self::HnswNodeHashWrongLength { found } => write!(
+                f,
+                "node vector hash is {found} bytes, expected 32 (SHA-256)"
+            ),
             Self::HnswEdgeDistanceNotNumber => write!(f, "edge distance is not a number"),
             Self::HnswEdgeHashNotNull => write!(f, "edge hash slot is not Null"),
             Self::HnswFieldBeyondArity { field } => {
