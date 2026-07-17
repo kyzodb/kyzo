@@ -198,6 +198,7 @@ use crate::query::levels::EpochStore;
 use crate::query::semiring::{Derivation, DerivationGraph};
 use crate::query::temp_store::{
     AdmissionSink, HeadPos, MeetAggrStore, RegularTempStore, TempStore, TupleInIter,
+    collect_materialized,
 };
 
 /// One head position's aggregation slot — the shape carried through
@@ -2014,12 +2015,9 @@ mod tests {
             if self.idb.contains(rel) {
                 let store = store_of(stores, &muggle(rel))?;
                 Ok(if use_delta {
-                    store
-                        .delta_all_iter()
-                        .map(TupleInIter::into_tuple)
-                        .collect()
+                    collect_materialized(store.delta_all_iter())
                 } else {
-                    store.all_iter().map(TupleInIter::into_tuple).collect()
+                    collect_materialized(store.all_iter())
                 })
             } else {
                 Ok(self
@@ -2193,10 +2191,9 @@ mod tests {
                 .iter()
                 .map(|rel| -> Result<BTreeSet<Tuple>> {
                     if self.idb.contains(rel) {
-                        Ok(store_of(stores, &muggle(rel))?
-                            .all_iter()
-                            .map(TupleInIter::into_tuple)
-                            .collect())
+                        Ok(collect_materialized(
+                            store_of(stores, &muggle(rel))?.all_iter(),
+                        ))
                     } else {
                         Ok(self.facts.get(rel).cloned().unwrap_or_default())
                     }
@@ -2450,11 +2447,7 @@ mod tests {
             budget,
             None,
         )?;
-        Ok(outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect())
+        Ok(collect_materialized(outcome.store.all_iter()))
     }
 
     /// Relation arities derived from the MODEL alone (rule heads and
@@ -3468,11 +3461,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = outcome
-                    .store
-                    .all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect();
+                let rows = collect_materialized(outcome.store.all_iter());
                 let witnesses = table
                     .entries()
                     .iter()
@@ -3528,11 +3517,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = outcome
-                    .store
-                    .all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect();
+                let rows = collect_materialized(outcome.store.all_iter());
                 let witnesses = table
                     .entries()
                     .iter()
@@ -4433,17 +4418,9 @@ mod tests {
         )
         .expect("evaluates");
         assert!(outcome.limited, "the limiter engaged");
-        let returned: Vec<Tuple> = outcome
-            .store
-            .early_returned_iter()
-            .map(TupleInIter::into_tuple)
-            .collect();
+        let returned: Vec<Tuple> = collect_materialized(outcome.store.early_returned_iter());
         assert_eq!(returned.len(), 2, "limit rows, offset excluded");
-        let taken: Vec<Tuple> = outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect();
+        let taken: Vec<Tuple> = collect_materialized(outcome.store.all_iter());
         assert_eq!(taken.len(), 3, "take = limit + offset rows produced");
         for row in taken {
             assert!(
@@ -4526,10 +4503,8 @@ mod tests {
         )
         .expect("evaluates");
         assert!(outcome.limited, "the limiter engaged");
-        let rows: BTreeSet<Tuple> = outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
+        let rows: BTreeSet<Tuple> = collect_materialized(outcome.store.all_iter())
+            .into_iter()
             .collect();
         for row in &rows {
             assert!(oracle_closure.contains(row), "every row is a real answer");
@@ -4909,11 +4884,7 @@ mod tests {
                     Some(&mut table),
                 )
                 .expect("evaluates");
-                let rows = outcome
-                    .store
-                    .all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect();
+                let rows = collect_materialized(outcome.store.all_iter());
                 let witnesses = table
                     .entries()
                     .iter()

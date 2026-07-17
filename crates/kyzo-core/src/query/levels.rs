@@ -21,7 +21,8 @@ use crate::data::value::{
     ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
 };
 use crate::query::temp_store::{
-    AdmissionSink, Admitted, LimiterSkip, MeetAggrStore, MeetLayout, TempStore, TupleInIter,
+    AdmissionSink, Admitted, LimiterSkip, MeetAggrStore, MeetLayout, OwnBareKey, TempStore,
+    TupleInIter,
 };
 
 #[derive(Debug, Error, Diagnostic)]
@@ -532,7 +533,7 @@ impl EpochStore {
                 levels
                     .iter()
                     .rev()
-                    .any(|l| l.find(group.as_ref()).is_some())
+                    .any(|l| l.find(group.as_ref().as_bytes()).is_some())
             }
         }
     }
@@ -566,14 +567,14 @@ impl EpochStore {
                     let existing = levels
                         .iter()
                         .rev()
-                        .find_map(|l| l.find(&row_bytes).map(|i| l.row_flags_at(i)));
+                        .find_map(|l| l.find(row_bytes.as_ref().as_bytes()).map(|i| l.row_flags_at(i)));
                     match existing {
                         None => {
                             if S::RECORDING {
-                                sink.admit(TupleInIter::new_bytes(&row_bytes, skip));
+                                sink.admit(TupleInIter::new_bytes(row_bytes.as_bytes(), skip));
                             }
                             level.push(
-                                row_bytes,
+                                row_bytes.into(),
                                 RowFlags {
                                     skip,
                                     refresh: FlagRefresh::Admitted,
@@ -585,7 +586,7 @@ impl EpochStore {
                             // Re-derivation refreshing the limiter flag:
                             // shadows the old row, admitted nowhere.
                             level.push(
-                                row_bytes,
+                                row_bytes.into(),
                                 RowFlags {
                                     skip,
                                     refresh: FlagRefresh::Refresh,
@@ -609,7 +610,7 @@ impl EpochStore {
                 let mut level = MeetLevel::default();
                 let mut admitted = 0usize;
                 for (group, incoming) in new.by_group {
-                    let folded = match levels.iter().rev().find_map(|l| l.find(&group)) {
+                    let folded = match levels.iter().rev().find_map(|l| l.find(group.as_ref().as_bytes())) {
                         None => Some(incoming),
                         Some((_, target)) => {
                             let mut probe = target.clone();
@@ -625,7 +626,7 @@ impl EpochStore {
                             let row = spec.layout.interleave(&group, vals.as_slice());
                             sink.admit(TupleInIter::owned(row, LimiterSkip::Include));
                         }
-                        level.groups.push((group, vals));
+                        level.groups.push((group.into(), vals));
                         admitted += 1;
                     }
                 }
@@ -1014,7 +1015,7 @@ fn meet_ranged<'s>(
                 }
                 let (k, v) = winner.expect("INVARIANT(meet_merge_winner): win_idx drained a group");
                 Some(TupleInIter::new_meet_suffix(
-                    k,
+                    k.as_ref(),
                     v.as_slice(),
                     LimiterSkip::Include,
                 ))
@@ -1030,7 +1031,12 @@ fn meet_ranged<'s>(
                 let mut rows: Vec<Tuple> = l
                     .groups
                     .iter()
-                    .map(|(k, v)| spec.layout.interleave(k, v.as_slice()))
+                    .map(|(k, v)| {
+                        spec.layout.interleave(
+                            OwnBareKey::from_encoded(k.to_vec()).as_ref(),
+                            v.as_slice(),
+                        )
+                    })
                     .collect();
                 rows.sort();
                 rows
@@ -1042,7 +1048,7 @@ fn meet_ranged<'s>(
             let newer: Vec<&'s MeetLevel> = all.iter().skip(idx + 1).copied().collect();
             rows.into_iter().filter_map(move |row| {
                 let group = spec.layout.borrow_key(row.as_slice());
-                let owned_by_newer = newer.iter().any(|nl| nl.find(&group).is_some());
+                let owned_by_newer = newer.iter().any(|nl| nl.find(group.as_ref().as_bytes()).is_some());
                 if owned_by_newer {
                     None
                 } else {

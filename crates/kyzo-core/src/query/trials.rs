@@ -85,7 +85,7 @@ use crate::query::laws::{
     resolve, resolve_relation, unify,
 };
 use crate::query::levels::EpochStore;
-use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::query::temp_store::{RegularTempStore, TupleInIter, collect_materialized};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — the splitmix64 of storage/sim.rs, transcribed so the campaign
@@ -200,12 +200,9 @@ impl ModelBody {
                 .get(&muggle(rel))
                 .expect("harness: IDB store present");
             if use_delta {
-                store
-                    .delta_all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect()
+                collect_materialized(store.delta_all_iter())
             } else {
-                store.all_iter().map(TupleInIter::into_tuple).collect()
+                collect_materialized(store.all_iter())
             }
         } else {
             self.facts
@@ -319,12 +316,12 @@ impl FixedRuleEval for ModelFixed {
             .iter()
             .map(|rel| {
                 if self.idb.contains(rel) {
-                    stores
-                        .get(&muggle(rel))
-                        .expect("harness: fixed input store present")
-                        .all_iter()
-                        .map(TupleInIter::into_tuple)
-                        .collect()
+                    collect_materialized(
+                        stores
+                            .get(&muggle(rel))
+                            .expect("harness: fixed input store present")
+                            .all_iter(),
+                    )
                 } else {
                     self.facts.get(rel).cloned().unwrap_or_default()
                 }
@@ -589,11 +586,7 @@ fn real_eval(
         budget,
         None,
     )?;
-    Ok(outcome
-        .store
-        .all_iter()
-        .map(TupleInIter::into_tuple)
-        .collect())
+    Ok(collect_materialized(outcome.store.all_iter()))
 }
 
 fn generous_budget() -> Budget {
@@ -1051,11 +1044,7 @@ fn eval_fingerprint(g: &Generated, threads: usize) -> (BTreeSet<Tuple>, Vec<Stri
             Some(&mut table),
         )
         .expect("evaluates");
-        let rows = outcome
-            .store
-            .all_iter()
-            .map(TupleInIter::into_tuple)
-            .collect();
+        let rows = collect_materialized(outcome.store.all_iter());
         (rows, render_witnesses(&table))
     })
 }
@@ -1467,11 +1456,7 @@ fn run_with_witnesses(
         Some(&mut table),
     )
     .expect("evaluates");
-    let rows = outcome
-        .store
-        .all_iter()
-        .map(TupleInIter::into_tuple)
-        .collect();
+    let rows = collect_materialized(outcome.store.all_iter());
     (
         rows,
         index_witnesses(&table),

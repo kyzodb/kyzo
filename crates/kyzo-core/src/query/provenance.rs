@@ -61,7 +61,7 @@ use crate::query::semiring::{
     SemiringOverflow, SolverBudget, TropicalAnn, as_cost_map, extract_min_cost_proof, solve,
     verify_proof,
 };
-use crate::query::temp_store::{RegularTempStore, TupleInIter};
+use crate::query::temp_store::{RegularTempStore, TupleInIter, collect_materialized};
 
 // ════════════════════════════════════════════════════════════════════════
 // Seeded RNG — splitmix64, one u64 seed and nothing else (replayable).
@@ -168,12 +168,9 @@ impl ModelBody {
                 .get(&muggle(rel))
                 .expect("harness: IDB store present");
             if use_delta {
-                store
-                    .delta_all_iter()
-                    .map(TupleInIter::into_tuple)
-                    .collect()
+                collect_materialized(store.delta_all_iter())
             } else {
-                store.all_iter().map(TupleInIter::into_tuple).collect()
+                collect_materialized(store.all_iter())
             }
         } else {
             self.facts
@@ -546,7 +543,10 @@ fn run_pipeline(
     let mut rows: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
     for rel in idb_of(model) {
         let store = stores.get(&muggle(rel)).expect("store retained");
-        rows.insert(rel, store.all_iter().map(TupleInIter::into_tuple).collect());
+        rows.insert(
+            rel,
+            collect_materialized(store.all_iter()),
+        );
     }
     Ok(PipelineOutput { rows, graph })
 }

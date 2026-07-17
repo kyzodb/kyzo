@@ -61,8 +61,8 @@
 //!
 //! - [`RegularTempStore`]: a set of tuples (plus a per-tuple [`LimiterSkip`]
 //!   disposition — named Include/PastLimit, never a bare `bool` (P093) — for
-//!   early-returned entry rules). Own-byte decode sites are
-//!   `INVARIANT(temp_store_own_bytes)` at the mint seal (P094).
+//!   early-returned entry rules). Own-byte keys are [`OwnBareKey`]
+//!   sealed at the encode door (P094); foreign bytes are unrepresentable.
 //! - [`MeetAggrStore`]: grouped tuples folded through meet (semilattice)
 //!   aggregations as they arrive; recursion through such aggregations is
 //!   sound because the fold is idempotent, associative, and monotone in
@@ -95,6 +95,7 @@
 //! Only the seam lives here. Witness construction and ceiling checks land
 //! with eval's port.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -106,6 +107,62 @@ use crate::data::aggr::{Aggregation, MeetAccum, MeetAggr};
 use crate::data::program::HeadAggrSlot;
 use crate::data::value::DataValue;
 use crate::data::value::{Tuple, decode_tuple_bare, encode_tuple_bare};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Own-bytes row keys (P094)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Bare-encoded row bytes minted only via [`Self::encode`] or
+/// [`Self::from_encoded`]. Foreign slices are not admitted — decode is
+/// infallible by type because only the encode door constructs this type.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OwnBareKey(Box<[u8]>);
+
+impl Debug for OwnBareKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("OwnBareKey").field(&self.0).finish()
+    }
+}
+
+impl OwnBareKey {
+    /// Mint from a value slice through the bare encode door.
+    pub(crate) fn encode(values: &[DataValue]) -> Box<Self> {
+        Self::from_encoded(encode_tuple_bare(values))
+    }
+
+    /// Mint from bytes already produced by the bare tuple encode door.
+    pub(crate) fn from_encoded(bytes: Vec<u8>) -> Box<Self> {
+        Box::new(Self(bytes.into_boxed_slice()))
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Infallible: this value exists only because the encode door minted it.
+    pub(crate) fn decode_tuple(&self) -> Tuple {
+        decode_tuple_bare(self.as_bytes())
+            .unwrap_or_else(|_| unreachable!("OwnBareKey minted at encode door"))
+    }
+}
+
+impl From<Box<OwnBareKey>> for Box<[u8]> {
+    fn from(key: Box<OwnBareKey>) -> Self {
+        key.0
+    }
+}
+
+impl AsRef<[u8]> for OwnBareKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Borrow<[u8]> for OwnBareKey {
+    fn borrow(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // The admission seam
@@ -190,7 +247,7 @@ impl LimiterSkip {
 /// representation-only, not a semantic change.
 #[derive(Default, Debug)]
 pub struct RegularTempStore {
-    pub(crate) inner: BTreeMap<Box<[u8]>, LimiterSkip>,
+    pub(crate) inner: BTreeMap<Box<OwnBareKey>, LimiterSkip>,
 }
 
 /// The value-part placeholder for a [`TupleInIter::Values`] whose whole
@@ -210,9 +267,9 @@ impl RegularTempStore {
     /// Tests if a key already exists in the store. A slice probe: the
     /// eval seam dedups batch-resident rows without minting them.
     pub fn exists(&self, key: &[DataValue]) -> bool {
-        self.inner.contains_key(encode_tuple_bare(key).as_slice())
+        let probe = OwnBareKey::encode(key);
+        self.inner.contains_key(probe.as_ref())
     }
-
     /// The number of distinct tuples materialized so far. On the plain and
     /// normal-aggregation paths the out-store holds only genuinely-new,
     /// deduped tuples (the caller filters each derivation against the running
@@ -234,14 +291,12 @@ impl RegularTempStore {
 
     /// Add a tuple to the store.
     pub fn put(&mut self, tuple: Tuple) {
-        self.inner.insert(
-            encode_tuple_bare(tuple.as_slice()).into_boxed_slice(),
-            LimiterSkip::Include,
-        );
+        self.inner
+            .insert(OwnBareKey::encode(tuple.as_slice()), LimiterSkip::Include);
     }
     pub(crate) fn put_with_skip(&mut self, tuple: Tuple) {
         self.inner.insert(
-            encode_tuple_bare(tuple.as_slice()).into_boxed_slice(),
+            OwnBareKey::encode(tuple.as_slice()),
             LimiterSkip::PastLimit,
         );
     }
@@ -358,26 +413,22 @@ impl MeetLayout {
     /// (row is `DataValue`s, not bytes) — the zero-alloc suffix borrow the
     /// previous `Cow`-returning form had is traded for a smaller resident
     /// key, one encode per fold instead of zero.
-    pub(crate) fn borrow_key(&self, row: &[DataValue]) -> Vec<u8> {
+    pub(crate) fn borrow_key(&self, row: &[DataValue]) -> Box<OwnBareKey> {
         if self.is_suffix() {
-            encode_tuple_bare(&row[..self.key_positions.len()])
+            OwnBareKey::encode(&row[..self.key_positions.len()])
         } else {
-            encode_tuple_bare(self.project_key(row).as_slice())
+            OwnBareKey::encode(self.project_key(row).as_slice())
         }
     }
 
-    /// Rebuild the logical head tuple from a group key's bytes and its
-    /// folded meet values — the inverse of the two projections (the key
-    /// decodes back through [`decode_tuple_bare`]; the fold values were
-    /// never bytes, per this module's doc). Every position is either a key
-    /// or a value position (they partition `0..arity`), so no `Null`
-    /// placeholder survives. [`MeetAccum::Empty`] materializes as
+    /// Rebuild the logical head tuple from a group key and its folded meet
+    /// values — the inverse of the two projections. Every position is
+    /// either a key or a value position (they partition `0..arity`), so no
+    /// `Null` placeholder survives. [`MeetAccum::Empty`] materializes as
     /// [`DataValue::Null`] (result meaning "no input"), distinct from the
     /// in-fold Empty state.
-    pub(crate) fn interleave(&self, key: &[u8], vals: &[MeetAccum]) -> Tuple {
-        let key = decode_tuple_bare(key).expect(
-            "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-        );
+    pub(crate) fn interleave(&self, key: &OwnBareKey, vals: &[MeetAccum]) -> Tuple {
+        let key = key.decode_tuple();
         let mut row = Tuple::from_vec(vec![DataValue::Null; self.arity]);
         for (slot, p) in self.key_positions.iter().enumerate() {
             row[p.get()] = key[slot].clone();
@@ -413,7 +464,7 @@ pub(crate) struct MeetAggrStore {
     /// merge barrier so admissions stay schedule-independent. Accumulators
     /// are [`MeetAccum`] — `Empty | Value(v)` — so a domain `Null` is never
     /// the empty sentinel.
-    pub(crate) by_group: BTreeMap<Box<[u8]>, Vec<MeetAccum>>,
+    pub(crate) by_group: BTreeMap<Box<OwnBareKey>, Vec<MeetAccum>>,
     /// The meet operations, one per aggregated head position, in head
     /// order, resolved at construction. (The original stored `Option`s and
     /// unwrapped per row.)
@@ -458,7 +509,7 @@ impl MeetAggrStore {
     #[cfg(test)]
     pub(crate) fn exists(&self, key: &[DataValue]) -> bool {
         let group_key = self.layout.borrow_key(key);
-        self.by_group.contains_key(group_key.as_slice())
+        self.by_group.contains_key(group_key.as_ref())
     }
     /// Fold `tuple` into `self` (the epoch's fresh out-store) exactly as
     /// [`Self::meet_put`], and report whether *this fold made the group newly
@@ -492,17 +543,17 @@ impl MeetAggrStore {
         let group_key = self.layout.borrow_key(tuple);
         // Admissibility BEFORE this fold: a group absent from the out-store
         // contributes nothing to the barrier yet, so it is not admissible.
-        let was_admissible = match self.by_group.get(group_key.as_slice()) {
-            Some(vals) => total.would_admit(&group_key, vals.as_slice())?,
+        let was_admissible = match self.by_group.get(group_key.as_ref()) {
+            Some(vals) => total.would_admit(group_key.as_ref().as_bytes(), vals.as_slice())?,
             None => false,
         };
         self.meet_put(tuple)?;
         // After folding, the group is certainly resident in the out-store.
         let now_vals = self
             .by_group
-            .get(group_key.as_slice())
+            .get(group_key.as_ref())
             .expect("meet_put inserts or updates the group");
-        let now_admissible = total.would_admit(&group_key, now_vals.as_slice())?;
+        let now_admissible = total.would_admit(group_key.as_ref().as_bytes(), now_vals.as_slice())?;
         Ok(now_admissible && !was_admissible)
     }
     /// Build a meet store from a rule head's aggregation spec: one entry
@@ -555,7 +606,7 @@ impl MeetAggrStore {
         // doc), and fold incoming values straight from `tuple` by position
         // so no `incoming` tuple is built either way.
         let key = self.layout.borrow_key(tuple);
-        match self.by_group.get_mut(key.as_slice()) {
+        match self.by_group.get_mut(key.as_ref()) {
             Some(vals) => {
                 let mut changed = false;
                 for (i, (_aggr, op)) in self.meets.iter().enumerate() {
@@ -579,7 +630,7 @@ impl MeetAggrStore {
                     );
                     op.update(&mut vals[i], &incoming)?;
                 }
-                self.by_group.insert(key.into_boxed_slice(), vals);
+                self.by_group.insert(key, vals);
                 Ok(true)
             }
         }
@@ -594,8 +645,8 @@ impl MeetAggrStore {
             "seed_identity requires an empty meet store"
         );
         let vals: Vec<MeetAccum> = self.meets.iter().map(|(_, op)| op.init_val()).collect();
-        let key = encode_tuple_bare(&[]);
-        self.by_group.insert(key.into_boxed_slice(), vals);
+        let key = OwnBareKey::encode(&[]);
+        self.by_group.insert(key, vals);
         Ok(true)
     }
 }
@@ -635,11 +686,8 @@ impl TempStore {}
 /// store produced the row and which layout (suffix or interleaved) it
 /// used. The consequence: `get`/`into_tuple`/iteration now return OWNED
 /// `DataValue`s, never `&'a DataValue` — a byte-backed key has nothing to
-/// reference; decoding produces a value, not a borrow. Checked against
-/// every non-test consumer in the tree: all but one already only used
-/// `.into_tuple()` (whose signature is unchanged), and the one exception
-/// (`query/ra/temp.rs`'s filter-less join arm) already had a
-/// materialize-first fallback one branch away for the filtered case.
+/// reference; decoding produces a value, not a borrow. Byte-backed rows
+/// were sealed at an encode door before reaching this view.
 #[derive(Clone, Debug)]
 pub(crate) enum TupleInIter<'a> {
     /// A regular store's row: memcmp bytes (chunk 1's bare codec), whole
@@ -712,9 +760,7 @@ impl TupleInIter<'_> {
                 "INVARIANT(compiled_head_position): idx is a head position of this store's arity",
             ),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_tuple_bare(key).expect(
-                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-                );
+                let key = decode_sealed_row(key);
                 key.get(idx)
                     .cloned()
                     .or_else(|| val.get(idx - key.len()).map(|a| a.to_value()))
@@ -744,13 +790,9 @@ impl TupleInIter<'_> {
     }
     pub(crate) fn into_tuple(self) -> Tuple {
         match self {
-            TupleInIter::Bytes { key, .. } => decode_tuple_bare(key).expect(
-                "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-            ),
+            TupleInIter::Bytes { key, .. } => decode_sealed_row(key),
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let mut key = decode_tuple_bare(key).expect(
-                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-                );
+                let mut key = decode_sealed_row(key);
                 key.extend(val.iter().map(|a| a.to_value()));
                 key
             }
@@ -799,9 +841,7 @@ impl TupleInIter<'_> {
                 (*key).cmp(probe.as_slice())
             }
             TupleInIter::MeetSuffix { key, val, .. } => {
-                let key = decode_tuple_bare(key).expect(
-                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-                );
+                let key = decode_sealed_row(key);
                 key.iter()
                     .cloned()
                     .chain(val.iter().map(|a| a.to_value()))
@@ -813,6 +853,11 @@ impl TupleInIter<'_> {
     }
 }
 
+/// Decode row bytes sealed at an encode door (temp-store mint or level append).
+fn decode_sealed_row(bytes: &[u8]) -> Tuple {
+    decode_tuple_bare(bytes).unwrap_or_else(|_| unreachable!("row bytes sealed at encode door"))
+}
+
 /// The `idx`-th self-delimiting value in `bytes`, walking from the start
 /// (bare-encoded rows carry no per-column offset table: one contiguous,
 /// self-delimiting region is the whole point). `None` if fewer than
@@ -820,11 +865,23 @@ impl TupleInIter<'_> {
 fn bare_nth(bytes: &[u8], idx: usize) -> Option<DataValue> {
     let mut remaining = bytes;
     for _ in 0..idx {
-        let (_, next) = DataValue::decode_from_key(remaining).ok()?;
+        let (_, next) = DataValue::decode_from_key(remaining)
+            .unwrap_or_else(|_| unreachable!("row bytes sealed at encode door"));
         remaining = next;
     }
-    let (val, _) = DataValue::decode_from_key(remaining).ok()?;
+    if remaining.is_empty() {
+        return None;
+    }
+    let (val, _) = DataValue::decode_from_key(remaining)
+        .unwrap_or_else(|_| unreachable!("row bytes sealed at encode door"));
     Some(val)
+}
+
+/// Materialize every view in a store scan.
+pub(crate) fn collect_materialized<'a>(
+    iter: impl IntoIterator<Item = TupleInIter<'a>>,
+) -> Vec<Tuple> {
+    iter.into_iter().map(TupleInIter::into_tuple).collect()
 }
 
 impl<'a> IntoIterator for TupleInIter<'a> {
@@ -915,9 +972,9 @@ impl Iterator for TupleInIterIterator<'_> {
                 if remaining.is_empty() {
                     return None;
                 }
-                let (val, next) = DataValue::decode_from_key(remaining).expect(
-                    "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-                );
+                let (val, next) = DataValue::decode_from_key(remaining).unwrap_or_else(|_| {
+                    unreachable!("row bytes sealed at encode door")
+                });
                 *remaining = next;
                 Some(val)
             }
@@ -927,9 +984,9 @@ impl Iterator for TupleInIterIterator<'_> {
                 val_idx,
             } => {
                 if !key_remaining.is_empty() {
-                    let (v, next) = DataValue::decode_from_key(key_remaining).expect(
-                        "INVARIANT(temp_store_own_bytes): key bytes were minted by encode_tuple_bare in this store",
-                    );
+                    let (v, next) = DataValue::decode_from_key(key_remaining).unwrap_or_else(|_| {
+                        unreachable!("row bytes sealed at encode door")
+                    });
                     *key_remaining = next;
                     return Some(v);
                 }
@@ -1349,7 +1406,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            layout.interleave(&encode_tuple_bare(key.as_slice()), vals.as_slice()),
+            layout.interleave(&OwnBareKey::encode(key.as_slice()), vals.as_slice()),
             row,
             "interleave is the exact inverse of the two projections"
         );
@@ -1495,7 +1552,13 @@ mod tests {
         let mut by_group: BTreeMap<Box<[u8]>, Tuple> = BTreeMap::new();
         for level in levels.iter() {
             for (k, v) in &level.groups {
-                by_group.insert(k.clone(), spec.layout.interleave(k, v.as_slice()));
+                by_group.insert(
+                    k.clone(),
+                    spec.layout.interleave(
+                        OwnBareKey::from_encoded(k.to_vec()).as_ref(),
+                        v.as_slice(),
+                    ),
+                );
             }
         }
         let mut derived: Vec<Tuple> = by_group.into_values().collect();
