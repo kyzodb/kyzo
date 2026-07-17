@@ -54,7 +54,7 @@
 
 use std::cmp::Ordering;
 
-use super::admission::Admission;
+use super::admission::{Admission, Denial};
 use super::arena::Arena;
 use super::canonical::CanonicalBytes;
 use super::code::{Code, StampedCode};
@@ -114,9 +114,13 @@ impl Minted {
 impl Value {
     /// Mint the physical word for a canonical value. Inline values are
     /// self-contained; out-of-line values intern through the arena, and
-    /// the [`Minted::Wide`] arm carries the context stamp the caller's
+    /// the [`Minted`] stamp arm carries the context stamp the caller's
     /// container must hold — the word itself cannot.
-    pub fn mint(cb: &CanonicalBytes, arena: &mut Arena) -> Minted {
+    ///
+    /// Wide path refuses with [`Denial::ExtentOverflow`] when the arena
+    /// cannot admit another distinct value or the canonical bytes exceed
+    /// `u32` span space — never a process abort.
+    pub fn mint(cb: &CanonicalBytes, arena: &mut Arena) -> Result<Minted, Denial> {
         let canonical = cb.as_bytes();
         debug_assert!(
             !canonical.is_empty(),
@@ -128,19 +132,19 @@ impl Value {
         if payload.len() <= INLINE_MAX {
             bytes[1] = payload.len() as u8;
             bytes[2..2 + payload.len()].copy_from_slice(payload);
-            Minted {
+            Ok(Minted {
                 value: Value { bytes },
                 stamp: None,
-            }
+            })
         } else {
-            let sc = arena.intern(canonical);
+            let sc = arena.intern(canonical)?;
             bytes[1] = LEN_OUT_OF_LINE;
             bytes[2..6].copy_from_slice(&cb.prefix4());
             bytes[6..10].copy_from_slice(&sc.code().raw().to_be_bytes());
-            Minted {
+            Ok(Minted {
                 value: Value { bytes },
                 stamp: Some(sc),
-            }
+            })
         }
     }
 
@@ -274,13 +278,13 @@ mod tests {
         let mut arena = Arena::new();
         // Canonical payload for a clean string of n chars is n + 2
         // (terminator), so 12 chars = 14 payload bytes = last inline size.
-        let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena);
+        let inline_edge = Value::mint(&strd("abcdefghijkl"), &mut arena).expect("mint");
         assert!(inline_edge.is_inline());
-        let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena);
+        let outline_edge = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
         assert!(!outline_edge.is_inline());
         // Minting twice produces the identical word (deterministic
         // residency AND deterministic code via arena dedup).
-        let again = Value::mint(&strd("abcdefghijklm"), &mut arena);
+        let again = Value::mint(&strd("abcdefghijklm"), &mut arena).expect("mint");
         // Nest brand under one live frame; project durable Admission for
         // same_word (coexisting-arena API).
         let ok = arena.frame().with_nested_ctx(|nest| {
@@ -299,7 +303,9 @@ mod tests {
         use super::super::wide::validity::{Validity, ValidityTs};
         let mut arena = Arena::new();
         let inline =
-            |cb: &CanonicalBytes, arena: &mut Arena| -> bool { Value::mint(cb, arena).is_inline() };
+            |cb: &CanonicalBytes, arena: &mut Arena| -> bool {
+                Value::mint(cb, arena).expect("mint").is_inline()
+            };
         // Always inline: Null, Bool, every Num (payload <= 13), Validity
         // (payload 9), empty/half-bounded intervals (payload <= 11).
         assert!(inline(&encode(Datum::Null), &mut arena));
@@ -356,7 +362,7 @@ mod tests {
             Datum::Str("a\u{0}b"),
         ] {
             let cb = encode(d);
-            let m = Value::mint(&cb, &mut arena);
+            let m = Value::mint(&cb, &mut arena).expect("mint");
             let v = m.value();
             assert!(v.is_inline(), "small value went out of line");
             assert!(m.stamp().is_none());
@@ -370,7 +376,7 @@ mod tests {
         let mut arena = Arena::new();
         let big: Vec<Datum> = (0..40).map(|_| Datum::Num(Num::int(7))).collect();
         let cb = encode(Datum::List(&big));
-        let m = Value::mint(&cb, &mut arena);
+        let m = Value::mint(&cb, &mut arena).expect("mint");
         let v = m.value();
         assert!(!v.is_inline());
         let sc = m.stamp().expect("outline mints a stamp");
@@ -404,7 +410,7 @@ mod tests {
         ];
         let words: Vec<(Value, CanonicalBytes)> = corpus
             .into_iter()
-            .map(|cb| (Value::mint(&cb, &mut arena).value(), cb))
+            .map(|cb| (Value::mint(&cb, &mut arena).expect("mint").value(), cb))
             .collect();
         for (va, ca) in &words {
             for (vb, cb) in &words {
@@ -439,8 +445,8 @@ mod tests {
         let big_y = encode(Datum::Str("xxxxxxxxxxxxxxxxxxxy"));
         // Same prefix, different values, DIFFERENT arenas: both get code
         // 0, producing identical words — the trap the unproven API told.
-        let va = Value::mint(&big_x, &mut arena_a).value();
-        let vb = Value::mint(&big_y, &mut arena_b).value();
+        let va = Value::mint(&big_x, &mut arena_a).expect("mint").value();
+        let vb = Value::mint(&big_y, &mut arena_b).expect("mint").value();
         assert_eq!(va.try_cmp_storage(&vb), None, "storage cmp refuses it");
         let fa = arena_a.frame();
         let fb = arena_b.frame();
@@ -457,7 +463,7 @@ mod tests {
             "cross-arena prove_shared must refuse — no token, no same_word"
         );
         // Under one arena, identical minting yields same_word.
-        let again = Value::mint(&big_x, &mut arena_a).value();
+        let again = Value::mint(&big_x, &mut arena_a).expect("mint").value();
         let ctx = Admission::from_observer(&arena_a.frame());
         assert!(va.same_word(&again, &ctx));
     }

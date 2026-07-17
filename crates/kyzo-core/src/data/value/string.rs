@@ -28,6 +28,7 @@
 
 use std::borrow::Cow;
 
+use super::admission::Denial;
 use super::arena::Arena;
 use super::canonical::{Datum, decode_terminated, encode};
 use super::cell::Value;
@@ -71,14 +72,19 @@ impl MintedStr {
 impl GermanStr {
     /// Mint a string value (canonical-encodes, then follows the cell's
     /// residency law). The stamp rides inside [`MintedStr`] for the
-    /// container to carry.
-    pub fn from_str(s: &str, arena: &mut Arena) -> MintedStr {
-        MintedStr::new(Value::mint(&encode(Datum::Str(s)), arena))
+    /// container to carry. Propagates [`Denial::ExtentOverflow`] from the
+    /// wide mint path.
+    pub fn from_str(s: &str, arena: &mut Arena) -> Result<MintedStr, Denial> {
+        Ok(MintedStr::new(Value::mint(&encode(Datum::Str(s)), arena)?))
     }
 
-    /// Mint a bytes value.
-    pub fn from_bytes(b: &[u8], arena: &mut Arena) -> MintedStr {
-        MintedStr::new(Value::mint(&encode(Datum::Bytes(b)), arena))
+    /// Mint a bytes value. Propagates [`Denial::ExtentOverflow`] from the
+    /// wide mint path.
+    pub fn from_bytes(b: &[u8], arena: &mut Arena) -> Result<MintedStr, Denial> {
+        Ok(MintedStr::new(Value::mint(
+            &encode(Datum::Bytes(b)),
+            arena,
+        )?))
     }
 
     /// Claim an existing word as a string kind; `None` if it is not one.
@@ -135,7 +141,7 @@ mod tests {
     #[test]
     fn short_strings_are_fully_inline_words() {
         let mut arena = Arena::new();
-        let m = GermanStr::from_str("hello", &mut arena);
+        let m = GermanStr::from_str("hello", &mut arena).expect("mint");
         assert!(m.stamp().is_none());
         let s = m.value();
         assert!(s.value().is_inline());
@@ -146,7 +152,7 @@ mod tests {
     #[test]
     fn nul_bearing_strings_unescape_through_the_grammar() {
         let mut arena = Arena::new();
-        let s = GermanStr::from_str("a\u{0}b", &mut arena).value();
+        let s = GermanStr::from_str("a\u{0}b", &mut arena).expect("mint").value();
         let got = s.inline_str().expect("inline");
         assert_eq!(got, "a\u{0}b");
         assert!(matches!(got, Cow::Owned(_)));
@@ -155,7 +161,7 @@ mod tests {
     #[test]
     fn long_strings_go_out_of_line_with_the_stamp_beside_them() {
         let mut arena = Arena::new();
-        let m = GermanStr::from_str("a string well past the inline max", &mut arena);
+        let m = GermanStr::from_str("a string well past the inline max", &mut arena).expect("mint");
         let s = m.value();
         assert!(!s.value().is_inline());
         assert!(
@@ -171,7 +177,9 @@ mod tests {
     #[test]
     fn bytes_kind_is_typed_and_str_accessor_refuses_it() {
         let mut arena = Arena::new();
-        let b = GermanStr::from_bytes(&[0xFF, 0x00], &mut arena).value();
+        let b = GermanStr::from_bytes(&[0xFF, 0x00], &mut arena)
+            .expect("mint")
+            .value();
         assert!(b.is_bytes());
         assert!(b.inline_str().is_none());
         assert_eq!(
@@ -179,7 +187,9 @@ mod tests {
             Cow::<[u8]>::Owned(vec![0xFF, 0x00])
         );
         // And a non-string word cannot be claimed.
-        let n = Value::mint(&encode(Datum::Null), &mut arena).value();
+        let n = Value::mint(&encode(Datum::Null), &mut arena)
+            .expect("mint")
+            .value();
         assert!(GermanStr::from_value(n).is_none());
     }
 }

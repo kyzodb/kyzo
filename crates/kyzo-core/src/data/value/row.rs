@@ -125,8 +125,10 @@ impl Rows {
         // key is lawful (no partial tuples on refusal).
         let splits = split_key(bytes, self.arity.get()).map_err(PushError::Decode)?;
         for (lo, hi) in splits {
-            let sc = arena.intern(&bytes[lo..hi]);
-            self.codes.push(sc);
+            let sc = arena
+                .intern(&bytes[lo..hi])
+                .map_err(PushError::Denial)?;
+            self.codes.push(sc).map_err(PushError::Denial)?;
         }
         Ok(())
     }
@@ -233,6 +235,8 @@ pub enum PushError {
         container: super::arena::Epoch,
         arena: super::arena::Epoch,
     },
+    /// Intern or domain absorb refused (capacity / stamp / extent).
+    Denial(Denial),
 }
 
 /// Split a key into exactly `arity` lawful canonical encodings, refusing
@@ -560,7 +564,7 @@ mod tests {
     use super::*;
 
     fn stamp_of(arena: &mut Arena, d: Datum<'_>) -> StampedCode {
-        arena.intern(encode(d).as_bytes())
+        arena.intern(encode(d).as_bytes()).expect("intern")
     }
 
     // ------------------------------------------------------------------

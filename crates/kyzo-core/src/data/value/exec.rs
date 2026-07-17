@@ -341,7 +341,9 @@ mod tests {
 
     /// Intern a value's canonical bytes, returning its stamped code.
     fn intern(arena: &mut Arena, v: i64) -> super::super::code::StampedCode {
-        arena.intern(encode_owned(&DataValue::from(v)).as_bytes())
+        arena
+            .intern(encode_owned(&DataValue::from(v)).as_bytes())
+            .expect("intern")
     }
 
     /// Build a 2-arity Rows of (a, b) pairs in `arena`.

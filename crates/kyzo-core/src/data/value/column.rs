@@ -550,7 +550,7 @@ mod tests {
 
     fn intern_num(arena: &mut Arena, n: i64) -> StampedCode {
         let cb = encode(Datum::Num(Num::int(n)));
-        match Value::mint(&cb, arena).stamp() {
+        match Value::mint(&cb, arena).expect("mint").stamp() {
             None => arena_intern_direct(arena, &cb),
             Some(stamp) => stamp,
         }
@@ -563,11 +563,11 @@ mod tests {
         arena: &mut Arena,
         cb: &super::super::canonical::CanonicalBytes,
     ) -> StampedCode {
-        arena.intern(cb.as_bytes())
+        arena.intern(cb.as_bytes()).expect("intern")
     }
 
     fn str_datum_stamp(arena: &mut Arena, s: &str) -> StampedCode {
-        arena.intern(encode(Datum::Str(s)).as_bytes())
+        arena.intern(encode(Datum::Str(s)).as_bytes()).expect("intern")
     }
 
     // ------------------------------------------------------------------
@@ -595,7 +595,7 @@ mod tests {
         let mut a = Arena::new();
         let mut b = Arena::new();
         let sa = intern_num(&mut a, 1);
-        b.intern(b"x");
+        b.intern(b"x").expect("intern");
         let fb = b.frame();
         let mut col = CodeColumn::new_in(&fb);
         assert!(
@@ -813,9 +813,9 @@ mod tests {
         let mut col = WordColumn::new_in(&arena.frame());
         let small = encode(Datum::Str("hi"));
         let big = encode(Datum::Str("a string well past the inline max"));
-        col.push(Value::mint(&small, &mut arena))
+        col.push(Value::mint(&small, &mut arena).expect("mint"))
             .expect("lawful push");
-        col.push(Value::mint(&big, &mut arena))
+        col.push(Value::mint(&big, &mut arena).expect("mint"))
             .expect("lawful push");
         {
             let f = arena.frame();
@@ -840,7 +840,7 @@ mod tests {
     fn word_column_write_door_refuses_stale_wide_words() {
         let mut arena = Arena::new();
         let big = encode(Datum::Str("a string well past the inline max"));
-        let minted = Value::mint(&big, &mut arena);
+        let minted = Value::mint(&big, &mut arena).expect("mint");
         arena.seal();
         let mut col = WordColumn::new_in(&arena.frame());
         assert!(

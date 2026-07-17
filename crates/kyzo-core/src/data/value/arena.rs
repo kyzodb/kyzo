@@ -528,7 +528,9 @@ pub enum Denial {
     EmptyProjection,
     /// Tuple width does not match the container / sink arity.
     ArityMismatch { expected: usize, got: usize },
-    /// Domain extent would wrap past `u32::MAX`.
+    /// A `u32` extent would wrap past `u32::MAX`: domain absorb growth,
+    /// arena distinct-value capacity (`len == u32::MAX`), or a value's
+    /// byte length exceeding the heap span encoding space.
     ExtentOverflow,
     /// Epoch remap produced a code past `u32::MAX` (checked add overflow).
     CodeRemapOverflow,
@@ -1550,18 +1552,16 @@ impl Arena {
     /// are not the value plane's production currency. The value layer's
     /// door is `Value::mint`, which spends a `CanonicalBytes` witness.
     ///
-    /// # Panics
-    ///
-    /// Panics at capacity (`u32::MAX` distinct values).
-    pub(super) fn intern(&mut self, value: &[u8]) -> StampedCode {
-        assert!(
-            self.len() < u32::MAX as usize,
-            "arena is full: u32::MAX distinct values"
-        );
-        assert!(
-            value.len() <= u32::MAX as usize,
-            "value exceeds u32 span space"
-        );
+    /// Refuses with [`Denial::ExtentOverflow`] when the arena already holds
+    /// `u32::MAX` distinct values, or when `value.len()` exceeds the `u32`
+    /// heap-span encoding space — never a process abort.
+    pub(super) fn intern(&mut self, value: &[u8]) -> Result<StampedCode, Denial> {
+        if self.len() >= u32::MAX as usize {
+            return Err(Denial::ExtentOverflow);
+        }
+        if value.len() > u32::MAX as usize {
+            return Err(Denial::ExtentOverflow);
+        }
         let np = prefix4(value);
         // Sealed lookup: global sealed rank accumulates across the
         // disjoint runs; an exact hit in one run plus lower bounds in the
@@ -1595,7 +1595,12 @@ impl Arena {
                 }
             }
         };
-        StampedCode::mint(code, self.epoch, self.id, StampMintAuthority(()))
+        Ok(StampedCode::mint(
+            code,
+            self.epoch,
+            self.id,
+            StampMintAuthority(()),
+        ))
     }
 
     /// Seal the epoch: drain the delta into the runs (with geometric
@@ -1721,6 +1726,13 @@ mod tests {
     /// minting authority; production stamps come from intern/apply).
     fn stamp(c: usize, epoch: Epoch, arena: ArenaId) -> StampedCode {
         StampedCode::mint(Code(c as u32), epoch, arena, StampMintAuthority(()))
+    }
+
+    /// Test-plane intern — capacity/span [`Denial`] is unreachable at
+    /// test sizes; production callers propagate [`Result`].
+    #[track_caller]
+    fn must_intern(arena: &mut Arena, b: &[u8]) -> StampedCode {
+        Arena::intern(arena, b).expect("test intern within capacity")
     }
 
     // ------------------------------------------------------------------
@@ -1913,7 +1925,7 @@ mod tests {
         for (i, op) in ops.iter().enumerate() {
             match op {
                 Op::Intern(b) => {
-                    let sc = arena.intern(b);
+                    let sc = must_intern(&mut arena, b);
                     assert_eq!(sc.code().raw(), naive.intern(b), "op {i}: code diverged");
                     assert_eq!(sc.epoch(), arena.epoch(), "op {i}: stamp epoch wrong");
                     {
@@ -1926,7 +1938,7 @@ mod tests {
                     }
                     // Dedup: immediate re-intern is a hit, no growth.
                     let n = arena.len();
-                    assert_eq!(arena.intern(b), sc, "op {i}: dedup");
+                    assert_eq!(must_intern(&mut arena, b), sc, "op {i}: dedup");
                     assert_eq!(arena.len(), n, "op {i}: dedup grew arena");
                 }
                 Op::Seal => {
@@ -2113,11 +2125,11 @@ mod tests {
     #[test]
     fn stale_stamp_is_refused_not_misread() {
         let mut arena = Arena::new();
-        let sc_b = arena.intern(b"b");
+        let sc_b = must_intern(&mut arena, b"b");
         let remap = arena.seal();
         // Post-seal: intern something smaller so the old code's rank is
         // genuinely wrong if smuggled.
-        arena.intern(b"a");
+        must_intern(&mut arena, b"a");
         let f = arena.frame();
         assert!(
             !f.admits(sc_b),
@@ -2131,9 +2143,9 @@ mod tests {
     #[test]
     fn remap_refuses_wrong_epoch_input() {
         let mut arena = Arena::new();
-        arena.intern(b"x");
+        must_intern(&mut arena, b"x");
         let r1 = arena.seal();
-        let sc_new = arena.intern(b"y"); // epoch 1
+        let sc_new = must_intern(&mut arena, b"y"); // epoch 1
         assert!(
             matches!(
                 r1.apply(sc_new),
@@ -2146,7 +2158,7 @@ mod tests {
     #[test]
     fn admits_is_exact_including_bounds() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"x");
+        let sc = must_intern(&mut arena, b"x");
         let f = arena.frame();
         assert!(f.admits(sc));
         // A forged in-epoch stamp beyond the frame's length is NOT
@@ -2162,8 +2174,8 @@ mod tests {
     fn cross_arena_stamp_refuses_in_frame_spend() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = a.intern(b"alpha");
-        b.intern(b"beta");
+        let sa = must_intern(&mut a, b"alpha");
+        must_intern(&mut b, b"beta");
         assert!(
             matches!(
                 b.frame().resolve(sa),
@@ -2181,7 +2193,7 @@ mod tests {
     #[test]
     fn bulk_spend_authority_open_pass_is_consume_on_spend() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"x");
+        let sc = must_intern(&mut arena, b"x");
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         let pass = auth.open_pass(&f);
@@ -2195,7 +2207,7 @@ mod tests {
     #[test]
     fn bulk_spend_authority_resolve_raw_is_consume_on_spend() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"y");
+        let sc = must_intern(&mut arena, b"y");
         let f = arena.frame();
         let auth = BulkSpendAuthority::after_domain_admission();
         assert_eq!(
@@ -2208,8 +2220,8 @@ mod tests {
     #[test]
     fn nested_ctx_brands_handle_identity_under_one_frame() {
         let mut arena = Arena::new();
-        let a = arena.intern(b"a");
-        let b = arena.intern(b"b");
+        let a = must_intern(&mut arena, b"a");
+        let b = must_intern(&mut arena, b"b");
         let f = arena.frame();
         f.with_nested_ctx(|ctx| {
             assert!(ctx.same_handle(a.code(), a.code()));
@@ -2226,7 +2238,7 @@ mod tests {
         });
         // Snapshot nest is the same shape.
         let mut arena = Arena::new();
-        let sc = arena.intern(b"x");
+        let sc = must_intern(&mut arena, b"x");
         let snap = arena.snapshot();
         snap.with_nested_ctx(|ctx| {
             assert!(ctx.same_handle(sc.code(), sc.code()));
@@ -2236,7 +2248,7 @@ mod tests {
     #[test]
     fn stale_stamp_refuses_in_frame_spend() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"x");
+        let sc = must_intern(&mut arena, b"x");
         arena.seal();
         assert!(
             matches!(
@@ -2250,7 +2262,7 @@ mod tests {
     #[test]
     fn snapshot_refuses_wrong_epoch_stamp() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"x");
+        let sc = must_intern(&mut arena, b"x");
         let _remap = arena.seal();
         let snap = arena.snapshot();
         assert!(
@@ -2265,9 +2277,9 @@ mod tests {
     #[test]
     fn snapshot_refuses_codes_past_its_cut() {
         let mut arena = Arena::new();
-        arena.intern(b"x");
+        must_intern(&mut arena, b"x");
         let snap = arena.snapshot();
-        let later = arena.intern(b"y"); // same epoch, after the cut
+        let later = must_intern(&mut arena, b"y"); // same epoch, after the cut
         assert!(
             matches!(
                 snap.resolve(later),
@@ -2286,8 +2298,8 @@ mod tests {
     fn cross_arena_stamps_are_refused_by_frames() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = a.intern(b"alpha");
-        let sb = b.intern(b"beta");
+        let sa = must_intern(&mut a, b"alpha");
+        let sb = must_intern(&mut b, b"beta");
         assert_eq!(a.epoch(), b.epoch(), "both at epoch 0: the dangerous case");
         let fb = b.frame();
         assert!(
@@ -2305,8 +2317,8 @@ mod tests {
     fn cross_arena_stamp_refuses_in_snapshots() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        let sa = a.intern(b"alpha");
-        b.intern(b"beta");
+        let sa = must_intern(&mut a, b"alpha");
+        must_intern(&mut b, b"beta");
         assert!(
             matches!(
                 b.snapshot().resolve(sa),
@@ -2320,8 +2332,8 @@ mod tests {
     fn cross_arena_stamp_refuses_in_remaps() {
         let mut a = Arena::new();
         let mut b = Arena::new();
-        a.intern(b"alpha");
-        let sb = b.intern(b"beta");
+        must_intern(&mut a, b"alpha");
+        let sb = must_intern(&mut b, b"beta");
         let remap = a.seal();
         assert!(
             matches!(
@@ -2340,11 +2352,11 @@ mod tests {
     #[test]
     fn same_epoch_observers_agree_on_shared_codes() {
         let mut arena = Arena::new();
-        arena.intern(b"m");
+        must_intern(&mut arena, b"m");
         arena.seal();
-        let a = arena.intern(b"zz");
+        let a = must_intern(&mut arena, b"zz");
         let early = arena.snapshot();
-        let b = arena.intern(b"aa");
+        let b = must_intern(&mut arena, b"aa");
         let late = arena.snapshot();
         // Codes visible to both answer identically in both.
         assert_eq!(
@@ -2368,15 +2380,15 @@ mod tests {
     #[test]
     fn tail_codes_are_arrival_stable_within_an_epoch() {
         let mut arena = Arena::new();
-        arena.intern(b"m");
+        must_intern(&mut arena, b"m");
         arena.seal();
-        let c_z = arena.intern(b"z");
-        let c_a = arena.intern(b"a"); // smaller than everything sealed
-        let c_q = arena.intern(b"q");
+        let c_z = must_intern(&mut arena, b"z");
+        let c_a = must_intern(&mut arena, b"a"); // smaller than everything sealed
+        let c_q = must_intern(&mut arena, b"q");
         // Interning smaller values did not move earlier stamps.
-        assert_eq!(arena.intern(b"z"), c_z);
-        assert_eq!(arena.intern(b"a"), c_a);
-        assert_eq!(arena.intern(b"q"), c_q);
+        assert_eq!(must_intern(&mut arena, b"z"), c_z);
+        assert_eq!(must_intern(&mut arena, b"a"), c_a);
+        assert_eq!(must_intern(&mut arena, b"q"), c_q);
         // Tail codes are consecutive arrivals above the sealed range.
         assert_eq!(c_z.code().raw(), 1);
         assert_eq!(c_a.code().raw(), 2);
@@ -2394,14 +2406,14 @@ mod tests {
         let mut arena = Arena::new();
         let mut held: Vec<(StampedCode, Vec<u8>)> = Vec::new();
         for v in [b"delta".as_slice(), b"alpha", b"omega"] {
-            held.push((arena.intern(v), v.to_vec()));
+            held.push((must_intern(&mut arena, v), v.to_vec()));
         }
         let r1 = arena.seal();
         for (sc, _) in held.iter_mut() {
             *sc = r1.apply(*sc).expect("lawful");
         }
         for v in [b"aaaa".as_slice(), b"zzzz"] {
-            held.push((arena.intern(v), v.to_vec()));
+            held.push((must_intern(&mut arena, v), v.to_vec()));
         }
         let r2 = arena.seal();
         let f = arena.frame();
@@ -2465,8 +2477,8 @@ mod tests {
             v
         };
         for &(a, b) in &pairs {
-            let ca = arena.intern(&enc(a)).code().raw();
-            let cb = arena.intern(&enc(b)).code().raw();
+            let ca = must_intern(&mut arena, &enc(a)).code().raw();
+            let cb = must_intern(&mut arena, &enc(b)).code().raw();
             codes.entry((ca, cb)).or_insert(false);
         }
         let code_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -2481,10 +2493,10 @@ mod tests {
     fn observer_cmp_derefs_only_on_prefix_tie() {
         let mut arena = Arena::new();
         // Delta (unsealed) codes: comparison must go prefix-first.
-        let a = arena.intern(b"AAAA-tail-1"); // distinct prefix
-        let b = arena.intern(b"BBBB-tail-2"); // distinct prefix
-        let c = arena.intern(b"SAME-tail-x"); // shared prefix with d
-        let d = arena.intern(b"SAME-tail-y");
+        let a = must_intern(&mut arena, b"AAAA-tail-1"); // distinct prefix
+        let b = must_intern(&mut arena, b"BBBB-tail-2"); // distinct prefix
+        let c = must_intern(&mut arena, b"SAME-tail-x"); // shared prefix with d
+        let d = must_intern(&mut arena, b"SAME-tail-y");
         let f = arena.frame();
 
         let base = arena.compare_derefs();
@@ -2522,10 +2534,10 @@ mod tests {
         // byte compare) plus distinct ones.
         let mut interned = Vec::new();
         for i in 0..500u32 {
-            interned.push(arena.intern(format!("SAME-{i:08}").as_bytes()));
+            interned.push(must_intern(&mut arena, format!("SAME-{i:08}").as_bytes()));
         }
         for i in 0..500u32 {
-            interned.push(arena.intern(&i.to_be_bytes()));
+            interned.push(must_intern(&mut arena, &i.to_be_bytes()));
         }
         let remap = arena.seal();
         let codes: Vec<_> = interned
@@ -2565,7 +2577,7 @@ mod tests {
         for i in 0..2000u32 {
             let mut v = i.to_be_bytes().to_vec();
             v.extend_from_slice(b"-payload-tail");
-            arena.intern(&v);
+            must_intern(&mut arena, &v);
         }
         arena.seal();
         assert_eq!(
@@ -2579,14 +2591,14 @@ mod tests {
         let before = arena.compare_derefs();
         let mut v = 7u32.to_be_bytes().to_vec();
         v.extend_from_slice(b"-payload-tail");
-        arena.intern(&v);
+        must_intern(&mut arena, &v);
         assert!(
             arena.compare_derefs() > before,
             "equality tie never counted"
         );
         let before = arena.compare_derefs();
-        arena.intern(b"same-prefix-AAAA");
-        arena.intern(b"same-prefix-BBBB");
+        must_intern(&mut arena, b"same-prefix-AAAA");
+        must_intern(&mut arena, b"same-prefix-BBBB");
         assert!(
             arena.compare_derefs() > before,
             "shared-prefix tie never counted"
@@ -2604,7 +2616,7 @@ mod tests {
         let mut live: Vec<(StampedCode, usize)> = Vec::new();
         let mut pinned: Option<(Snapshot, Vec<Vec<u8>>)> = None;
         for (i, v) in values.iter().enumerate() {
-            let sc = arena.intern(v);
+            let sc = must_intern(&mut arena, v);
             live.push((sc, i));
             if (i + 1) % seal_every == 0 {
                 let remap = arena.seal();
@@ -2711,7 +2723,7 @@ mod tests {
     #[test]
     fn empty_seal_advances_epoch_and_is_identity() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"x");
+        let sc = must_intern(&mut arena, b"x");
         let r1 = arena.seal();
         assert_eq!(r1.tail_len(), 1);
         let crossed = r1.apply(sc).expect("lawful");
@@ -2731,7 +2743,7 @@ mod tests {
     #[test]
     fn empty_string_is_a_value_across_epochs() {
         let mut arena = Arena::new();
-        let sc = arena.intern(b"");
+        let sc = must_intern(&mut arena, b"");
         assert_eq!(sc.code().raw(), 0);
         let remap = arena.seal();
         let crossed = remap.apply(sc).expect("lawful");
@@ -2757,11 +2769,11 @@ mod tests {
         let mut held = Vec::new();
         for len in lens {
             let v: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
-            held.push((arena.intern(&v), v));
+            held.push((must_intern(&mut arena, &v), v));
         }
         // Fill across many shared chunks too.
         for i in 0..40_000u32 {
-            arena.intern(format!("filler-{i}").as_bytes());
+            must_intern(&mut arena, format!("filler-{i}").as_bytes());
         }
         {
             let f = arena.frame();
@@ -2784,10 +2796,10 @@ mod tests {
     fn snapshot_survives_writer_progress_and_chunk_freezes() {
         let mut arena = Arena::new();
         for i in 0..5_000u32 {
-            arena.intern(format!("v-{i:05}").as_bytes());
+            must_intern(&mut arena, format!("v-{i:05}").as_bytes());
         }
         arena.seal();
-        arena.intern(b"tail-one");
+        must_intern(&mut arena, b"tail-one");
         let snap = arena.snapshot();
         let world: Vec<Vec<u8>> = (0..snap.len())
             .map(|c| {
@@ -2800,7 +2812,7 @@ mod tests {
         // rollovers, cascades.
         for round in 0..3 {
             for i in 0..5_000u32 {
-                arena.intern(format!("post-{round}-{i}").as_bytes());
+                must_intern(&mut arena, format!("post-{round}-{i}").as_bytes());
             }
             arena.seal();
         }
@@ -2817,7 +2829,7 @@ mod tests {
     #[test]
     fn forged_in_epoch_stamp_beyond_len_refuses_typed() {
         let mut arena = Arena::new();
-        arena.intern(b"x");
+        must_intern(&mut arena, b"x");
         let f = arena.frame();
         // A forged in-epoch stamp beyond len is a visibility refusal —
         // same vocabulary as cut overflow, never a process abort.
