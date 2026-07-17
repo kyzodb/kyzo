@@ -991,6 +991,38 @@ impl NamedRows {
         })
     }
 
+    /// One-cell `status: OK` — header/row widths match by construction (P082).
+    pub(crate) fn status_ok() -> Self {
+        Self {
+            headers: vec!["status".to_string()],
+            rows: vec![Tuple::from_vec(vec![DataValue::from("OK")])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
+    /// `::verify` directive result — three columns by construction (P082).
+    pub(crate) fn verify_status_row(
+        status: impl Into<DataValue>,
+        summary: impl Into<DataValue>,
+        detail: impl Into<DataValue>,
+    ) -> Self {
+        Self {
+            headers: vec![
+                "status".to_string(),
+                "summary".to_string(),
+                "detail".to_string(),
+            ],
+            rows: vec![Tuple::from_vec(vec![
+                status.into(),
+                summary.into(),
+                detail.into(),
+            ])],
+            next: None,
+            _seal: NamedRowsSeal,
+        }
+    }
+
     /// Alias of [`Self::try_new`] — typed refuse, never panic (P082).
     pub fn new(
         headers: Vec<String>,
@@ -1438,6 +1470,26 @@ pub(crate) struct NodeNotFoundError {
     pub(crate) missing: DataValue,
     #[label]
     pub(crate) span: SourceSpan,
+}
+
+/// Typed refusal when a fixed-rule internal proof fails — sealed options
+/// or buffered state the rule already constructed, never a user-input shape
+/// error (those are refused earlier at option/input boundaries).
+#[derive(Debug, Error, Diagnostic)]
+#[error("Fixed-rule invariant violated: {invariant}")]
+#[diagnostic(code(algo::fixed_rule_invariant_violation))]
+#[diagnostic(help(
+    "The fixed rule reached an internal state its proofs rule out — \
+     likely a bug in option sealing or the algorithm"
+))]
+pub(crate) struct FixedRuleInvariantError {
+    invariant: &'static str,
+}
+
+impl FixedRuleInvariantError {
+    pub(crate) fn refuse(invariant: &'static str) -> miette::Report {
+        Self { invariant }.into()
+    }
 }
 
 /// Typed refusal when a graph algorithm's internal proof fails — corrupt

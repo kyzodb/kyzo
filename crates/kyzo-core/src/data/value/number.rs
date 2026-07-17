@@ -199,16 +199,11 @@ impl Num {
                         out.extend_from_slice(&EXP_INF.to_be_bytes());
                         out.extend_from_slice(&[0xFF; 9]);
                     }
-                    Magnitude::Finite { e, frac72 } => {
-                        // E ∈ [-1073, 1024] ⇒ E+EXP_OFFSET ∈ [7, 2104] ⊂ u16
-                        // and strictly below the Inf sentinel. Prove the
-                        // range, then try_into — never truncate in release.
-                        let biased = e.checked_add(EXP_OFFSET).expect("INVARIANT(num_exp_bias): finite E fits i32+EXP_OFFSET");
-                        debug_assert!((7..=2104).contains(&biased));
-                        let off = u16::try_from(biased)
-                            .expect("INVARIANT(num_exp_u16): finite biased exponent fits u16");
-                        debug_assert!(off < EXP_INF);
-                        out.extend_from_slice(&off.to_be_bytes());
+                    Magnitude::Finite { exp_key, frac72 } => {
+                        // exp_key was proven at Magnitude construction
+                        // (E ∈ [-1073, 1024] ⇒ biased ∈ [7, 2104] ⊂ u16).
+                        debug_assert!(exp_key < EXP_INF);
+                        out.extend_from_slice(&exp_key.to_be_bytes());
                         let fb = frac72.to_be_bytes(); // 16 bytes; the low 9 hold the 72-bit field
                         out.extend_from_slice(&fb[7..16]);
                     }
@@ -346,7 +341,7 @@ impl Num {
                 let bl = 64 - m.leading_zeros();
                 let e = bl as i32;
                 let frac72 = (m as u128) << (72 - bl);
-                (neg, Magnitude::Finite { e, frac72 })
+                (neg, Magnitude::finite(e, frac72))
             }
             Repr::Float(v) => {
                 debug_assert!(v != 0.0 && !v.is_nan());
@@ -362,13 +357,13 @@ impl Num {
                     let sig53 = (1u64 << 52) | frac52;
                     let e = expf - 1023 + 1;
                     let frac72 = (sig53 as u128) << 19;
-                    (neg, Magnitude::Finite { e, frac72 })
+                    (neg, Magnitude::finite(e, frac72))
                 } else {
                     // Subnormal: frac52 × 2^-1074.
                     let bl = 64 - frac52.leading_zeros();
                     let e = bl as i32 - 1074;
                     let frac72 = (frac52 as u128) << (72 - bl);
-                    (neg, Magnitude::Finite { e, frac72 })
+                    (neg, Magnitude::finite(e, frac72))
                 }
             }
         }
@@ -398,8 +393,24 @@ impl Num {
 }
 
 enum Magnitude {
-    Finite { e: i32, frac72: u128 },
+    /// Biased exponent already in key form: `E + EXP_OFFSET` as `u16`.
+    /// Constructed only via [`Magnitude::finite`], which proves the range
+    /// so [`Num::encode_key`] never re-checks with expect.
+    Finite { exp_key: u16, frac72: u128 },
     Inf,
+}
+
+impl Magnitude {
+    /// Finite magnitude door: `e ∈ [-1073, 1024]` from int/float bit math
+    /// ⇒ biased exponent fits `u16` and sits strictly below [`EXP_INF`].
+    fn finite(e: i32, frac72: u128) -> Self {
+        let biased = e.wrapping_add(EXP_OFFSET);
+        debug_assert!((7..=2104).contains(&biased));
+        Magnitude::Finite {
+            exp_key: biased as u16,
+            frac72,
+        }
+    }
 }
 
 impl PartialEq for Num {
@@ -435,8 +446,14 @@ impl Ord for Num {
                     (Magnitude::Inf, Magnitude::Finite { .. }) => Ordering::Greater,
                     (Magnitude::Finite { .. }, Magnitude::Inf) => Ordering::Less,
                     (
-                        Magnitude::Finite { e: ea, frac72: fa },
-                        Magnitude::Finite { e: eb, frac72: fb },
+                        Magnitude::Finite {
+                            exp_key: ea,
+                            frac72: fa,
+                        },
+                        Magnitude::Finite {
+                            exp_key: eb,
+                            frac72: fb,
+                        },
                     ) => ea.cmp(&eb).then(fa.cmp(&fb)),
                 };
                 let real = if neg { mag.reverse() } else { mag };

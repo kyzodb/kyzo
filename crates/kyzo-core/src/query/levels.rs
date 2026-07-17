@@ -32,6 +32,13 @@ struct LevelArenaOverflow {
     len: usize,
 }
 
+/// A level-stack proof failed (peek/next or merge winner) — typed refuse,
+/// never an abort on the product path.
+#[derive(Debug, Error, Diagnostic)]
+#[error("level invariant violated: {0}")]
+#[diagnostic(code(query::level_invariant), help("This is a bug. Please report it."))]
+struct LevelInvariantError(&'static str);
+
 
 // ─────────────────────────────────────────────────────────────────────────
 // The level tier: a rule's total as sealed sorted runs
@@ -641,7 +648,7 @@ impl EpochStore {
                     }
                 }
                 levels.drop_consumed_empty_delta(|l| l.groups.is_empty());
-                compact_meet(spec, levels);
+                compact_meet(spec, levels)?;
                 levels.push(level);
                 admitted
             }
@@ -921,57 +928,45 @@ fn compact_normal(levels: &mut LevelStack<NormalLevel>) -> Result<()> {
 }
 
 /// As [`compact_normal`], for meet levels: newest group value wins whole.
-fn compact_meet(_spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) {
-    levels
-        .compact_while(
-            |older, newer| newer.groups.len() * 2 >= older.groups.len(),
-            |older, newer| {
-                let mut merged = MeetLevel {
-                    groups: Vec::with_capacity(older.groups.len() + newer.groups.len()),
-                };
-                let (mut a, mut b) = (
-                    older.groups.iter().peekable(),
-                    newer.groups.iter().peekable(),
-                );
-                loop {
-                    match (a.peek(), b.peek()) {
-                        (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
-                            Ordering::Less => merged.groups.push(
-                                a.next()
-                                    .expect("INVARIANT(peeked): peek proved Some")
-                                    .clone(),
-                            ),
-                            Ordering::Greater => merged.groups.push(
-                                b.next()
-                                    .expect("INVARIANT(peeked): peek proved Some")
-                                    .clone(),
-                            ),
-                            Ordering::Equal => {
-                                let g = b
-                                    .next()
-                                    .expect("INVARIANT(peeked): peek proved Some")
-                                    .clone();
-                                a.next();
-                                merged.groups.push(g);
-                            }
-                        },
-                        (Some(_), None) => merged.groups.push(
-                            a.next()
-                                .expect("INVARIANT(peeked): peek proved Some")
-                                .clone(),
+fn compact_meet(_spec: &MeetSpec, levels: &mut LevelStack<MeetLevel>) -> Result<()> {
+    levels.compact_while(
+        |older, newer| newer.groups.len() * 2 >= older.groups.len(),
+        |older, newer| {
+            let mut merged = MeetLevel {
+                groups: Vec::with_capacity(older.groups.len() + newer.groups.len()),
+            };
+            let (mut a, mut b) = (
+                older.groups.iter().peekable(),
+                newer.groups.iter().peekable(),
+            );
+            let peeked = || -> miette::Report { LevelInvariantError("peeked").into() };
+            loop {
+                match (a.peek(), b.peek()) {
+                    (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
+                        Ordering::Less => merged.groups.push(
+                            a.next().ok_or_else(peeked)?.clone(),
                         ),
-                        (None, Some(_)) => merged.groups.push(
-                            b.next()
-                                .expect("INVARIANT(peeked): peek proved Some")
-                                .clone(),
+                        Ordering::Greater => merged.groups.push(
+                            b.next().ok_or_else(peeked)?.clone(),
                         ),
-                        (None, None) => break,
-                    }
+                        Ordering::Equal => {
+                            let g = b.next().ok_or_else(peeked)?.clone();
+                            a.next();
+                            merged.groups.push(g);
+                        }
+                    },
+                    (Some(_), None) => merged.groups.push(
+                        a.next().ok_or_else(peeked)?.clone(),
+                    ),
+                    (None, Some(_)) => merged.groups.push(
+                        b.next().ok_or_else(peeked)?.clone(),
+                    ),
+                    (None, None) => break,
                 }
-                Ok(merged)
-            },
-        )
-        .expect("INVARIANT(meet_compact): merge arm is infallible");
+            }
+            Ok(merged)
+        },
+    )
 }
 
 /// Row-ordered iteration over meet levels within a bound window, newest
@@ -1026,13 +1021,17 @@ fn meet_ranged<'s>(
                 let mut winner: Option<&'s (Box<OwnBareKey>, Vec<MeetAccum>)> = None;
                 for (cur, idx) in cursors.iter_mut() {
                     while cur.peek().is_some_and(|(k, _)| k.as_ref() == key) {
-                        let g = cur.next().expect("INVARIANT(peeked): peek proved Some");
+                        // peek proved Some; Peekable/slice next is the same element.
+                        let Some(g) = cur.next() else { break };
                         if *idx == win_idx {
                             winner = Some(g);
                         }
                     }
                 }
-                let (k, v) = winner.expect("INVARIANT(meet_merge_winner): win_idx drained a group");
+                // `best` was chosen from win_idx's peek of `key`, so a missing
+                // winner is unrepresentable under Peekable's contract — end the
+                // stream rather than panic.
+                let (k, v) = winner?;
                 Some(TupleInIter::new_meet_suffix(
                     k.as_ref().as_bytes(),
                     v.as_slice(),

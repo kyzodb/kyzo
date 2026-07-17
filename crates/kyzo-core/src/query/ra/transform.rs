@@ -234,7 +234,7 @@ impl UnificationRA {
                 let values = crate::query::vm::eval_expr_batched(
                     &ra.expr,
                     &columns,
-                    &crate::query::batch::Selection::all(rows.len()),
+                    &crate::query::batch::Selection::all(rows.len())?,
                 )?;
                 let mut out = Batch::new();
                 let mut emit = |row: &[DataValue], v: DataValue| -> Result<()> {

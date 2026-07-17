@@ -41,12 +41,12 @@ use crate::data::expr::{BindingPos, Decision, Expr};
 use crate::data::value::DataValue;
 use crate::query::batch::{ColumnBatch, ErrorMin, Selection};
 
-/// Selection indexes are `u32`; refuse (never truncate) past `u32::MAX`.
-/// Batches are already bounded by [`Selection::all`]'s checked construction.
+/// Selection indexes are `u32`; [`Selection::iter`] widens stored ids to
+/// `usize`. Narrowing is total — overflow is refused at [`Selection::all`].
+#[inline]
 fn row_sel(row: usize) -> u32 {
-    u32::try_from(row).unwrap_or_else(|_| {
-        panic!("INVARIANT(batch_row_u32): row index {row} exceeds u32::MAX")
-    })
+    debug_assert!(u32::try_from(row).is_ok());
+    row as u32
 }
 
 /// A column of values ALIGNED TO A SELECTION: `values[i]` is the result
@@ -348,7 +348,7 @@ mod tests {
             .map(crate::data::value::Tuple::from_vec)
             .collect();
         let batch = ColumnBatch::from_rows(owned_rows, width).expect("test rows uniform width");
-        let sel = Selection::all(rows.len());
+        let sel = Selection::all(rows.len()).expect("test batch fits u32");
         let batched = eval_expr_batched(expr, &batch, &sel);
         // Row oracle: first error in row order wins; otherwise all values.
         let mut oracle_vals = vec![];

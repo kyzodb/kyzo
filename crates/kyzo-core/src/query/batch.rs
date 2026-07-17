@@ -82,16 +82,22 @@ impl BatchColumn {
     }
 }
 
+/// Batch height exceeds `u32::MAX` — selection indexes are `u32`.
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("batch beyond u32 rows ({n})")]
+#[diagnostic(code(query::batch_row_u32))]
+pub(crate) struct BatchRowU32Overflow {
+    pub(crate) n: usize,
+}
+
 /// A sorted set of live row indices.
 #[derive(Clone)]
 pub(crate) struct Selection(Vec<u32>);
 
 impl Selection {
-    pub(crate) fn all(n: usize) -> Selection {
-        let n = u32::try_from(n).unwrap_or_else(|_| {
-            panic!("INVARIANT(batch_row_u32): batch beyond u32 rows ({n})")
-        });
-        Selection((0..n).collect())
+    pub(crate) fn all(n: usize) -> Result<Selection> {
+        let n = u32::try_from(n).map_err(|_| BatchRowU32Overflow { n })?;
+        Ok(Selection((0..n).collect()))
     }
 
     /// From ascending row ids (debug-asserted: sortedness is the caller's
@@ -173,7 +179,7 @@ mod tests {
         let sel = Selection::from_sorted(vec![1]);
         assert_eq!(sel.iter().collect::<Vec<_>>(), vec![1usize]);
         assert!(!sel.is_empty());
-        assert_eq!(Selection::all(2).len(), 2);
+        assert_eq!(Selection::all(2).expect("fits u32").len(), 2);
     }
 
     #[test]

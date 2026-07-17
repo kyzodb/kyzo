@@ -148,10 +148,13 @@ impl TokenizerConfig {
     }
 
     /// Default stage used by staged FTS/LSH builders before an override —
-    /// `Simple` is always an admitted name.
+    /// `Simple` is always an admitted name; constructed directly so the
+    /// known-stage proof is unrepresentable as failure.
     pub fn simple() -> TokenizerConfig {
-        // INVARIANT(known_stage_simple): "Simple" is in `is_known_stage_name`.
-        TokenizerConfig::admit("Simple", vec![]).expect("INVARIANT(known_stage_simple)")
+        TokenizerConfig {
+            name: SmartString::from("Simple"),
+            args: vec![],
+        }
     }
 
     pub fn name(&self) -> &str {

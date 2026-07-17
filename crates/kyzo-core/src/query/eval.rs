@@ -403,8 +403,9 @@ impl Budget {
 
 /// How many derivations may pass between interrupt checks inside a rule's
 /// iteration. Small enough that no scan is unkillable for long; large
-/// enough that the check does not dominate the loop.
-const INTERRUPT_STRIDE: u32 = 64;
+/// enough that the check does not dominate the loop. NonZero by construction
+/// — wrap-through-zero is unrepresentable.
+const INTERRUPT_STRIDE: std::num::NonZeroU32 = std::num::NonZeroU32::new(64).unwrap();
 
 /// Proven mid-epoch interrupt stride counter: starts at [`INTERRUPT_STRIDE`]
 /// and resets there after each poll. [`NonZeroU32`] makes wrap-through-zero
@@ -414,10 +415,7 @@ struct InterruptCountdown(std::num::NonZeroU32);
 
 impl InterruptCountdown {
     fn fresh() -> Self {
-        Self(
-            std::num::NonZeroU32::new(INTERRUPT_STRIDE)
-                .expect("INVARIANT(interrupt_countdown): INTERRUPT_STRIDE is nonzero"),
-        )
+        Self(INTERRUPT_STRIDE)
     }
 
     /// Count one derivation. Returns `true` when the stride elapsed and the

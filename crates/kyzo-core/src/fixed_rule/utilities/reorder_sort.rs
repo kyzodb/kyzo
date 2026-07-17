@@ -8,9 +8,8 @@
 /*
  * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
  * (MPL-2.0): `Expr::Apply`'s op is now `&'static Op` (the original held
- * an `Arc`), so the `OP_LIST` matches deref accordingly; the
- * `val.last()` in the ranking loop is `INVARIANT(reorder_sort_key)`
- * (every buffered tuple ends with its sort key, pushed above); output
+ * an `Arc`), so the `OP_LIST` matches deref accordingly; every buffered
+ * tuple ends with its sort key (`reorder_sort_key`); output
  * rows flow through the arity-checked writer.
  */
 
@@ -104,11 +103,10 @@ impl FixedRule for ReorderSort {
         let mut last: Option<&DataValue> = None;
         let take_plus_skip = take.saturating_add(skip);
         for val in &buffer {
-            // INVARIANT(reorder_sort_key): every buffered tuple ends with
-            // the sort key pushed above, so it is non-empty.
-            let sorter = val
-                .last()
-                .expect("INVARIANT(reorder_sort_key): buffered tuple has sort key");
+            // Every buffered tuple ends with the sort key pushed above.
+            let sorter = val.last().ok_or_else(|| {
+                crate::fixed_rule::FixedRuleInvariantError::refuse("reorder_sort_key")
+            })?;
 
             if last == Some(sorter) {
                 count += 1;

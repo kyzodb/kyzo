@@ -119,11 +119,6 @@ impl VerifyOutcome {
     /// [`Db::verify_script`]/[`Db::verify_input_program`] return as a typed
     /// Rust value. One row, `["status", "summary", "detail"]`.
     pub(crate) fn into_named_rows(self) -> crate::fixed_rule::NamedRows {
-        let headers = vec![
-            "status".to_string(),
-            "summary".to_string(),
-            "detail".to_string(),
-        ];
         let (status, summary, detail) = match self {
             VerifyOutcome::Match { row_count } => {
                 ("match", format!("{row_count} row(s) agree"), String::new())
@@ -144,16 +139,8 @@ impl VerifyOutcome {
             VerifyOutcome::Unsupported { reason } => ("unsupported", reason, String::new()),
             VerifyOutcome::OracleRefused { reason } => ("oracle_refused", reason, String::new()),
         };
-        // INVARIANT(verify_named_rows): three headers, one width-3 row.
-        crate::fixed_rule::NamedRows::try_new(
-            headers,
-            vec![Tuple::from_vec(vec![
-                crate::data::value::DataValue::from(status),
-                crate::data::value::DataValue::from(summary),
-                crate::data::value::DataValue::from(detail),
-            ])],
-        )
-        .expect("INVARIANT(verify_named_rows): status/summary/detail row matches headers")
+        // Three headers, one width-3 row — by construction.
+        crate::fixed_rule::NamedRows::verify_status_row(status, summary, detail)
     }
 }
 

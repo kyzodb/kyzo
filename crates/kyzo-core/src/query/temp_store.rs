@@ -123,6 +123,12 @@ pub(crate) struct OwnBareKey(Box<[u8]>);
 #[diagnostic(code(query::temp_store_corrupt))]
 pub(crate) struct TempStoreCorruptRefuse(#[source] DecodeError);
 
+/// `meet_put` must leave the folded group resident — typed refuse if not.
+#[derive(Debug, Error, Diagnostic)]
+#[error("meet_put did not leave the group resident")]
+#[diagnostic(code(query::meet_put_resident), help("This is a bug. Please report it."))]
+struct MeetPutResidentInvariant;
+
 #[derive(Debug, Error, Diagnostic)]
 pub(crate) enum TempStoreAccessRefuse {
     #[error(transparent)]
@@ -558,7 +564,7 @@ impl MeetAggrStore {
         let now_vals = self
             .by_group
             .get(group_key.as_ref())
-            .expect("meet_put inserts or updates the group");
+            .ok_or(MeetPutResidentInvariant)?;
         let now_admissible = total.would_admit(group_key.as_ref().as_bytes(), now_vals.as_slice())?;
         Ok(now_admissible && !was_admissible)
     }
@@ -1586,7 +1592,12 @@ mod tests {
     /// (newest owner wins per group key).
     fn rev_assert_scan_from_groups(store: &EpochStore) {
         let LevelKind::Meet { spec, levels } = &store.kind else {
-            panic!("expected meet stores")
+            // #[cfg(test)] helper — wrong kind is a test bug, not a product path.
+            assert!(
+                false,
+                "rev_assert_scan_from_groups: expected meet EpochStore"
+            );
+            return;
         };
         let mut by_group: BTreeMap<Box<OwnBareKey>, Tuple> = BTreeMap::new();
         for level in levels.iter() {

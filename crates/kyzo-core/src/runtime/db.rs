@@ -919,13 +919,9 @@ fn materialize(rows: Vec<Tuple>, head: &[Symbol]) -> Result<NamedRows> {
 }
 
 /// A one-cell `status: OK` result for ops that report success, not rows.
+/// Width match is by construction via [`NamedRows::status_ok`].
 pub(crate) fn status_ok() -> NamedRows {
-    // INVARIANT(status_ok): one header, one width-1 row.
-    NamedRows::try_new(
-        vec!["status".to_string()],
-        vec![Tuple::from_vec(vec![DataValue::from("OK")])],
-    )
-    .expect("INVARIANT(status_ok): status/OK shape")
+    NamedRows::status_ok()
 }
 
 /// Build the `:returning` result from what the mutation collected. The

@@ -76,15 +76,14 @@ impl FixedRule for CsvReader {
         });
         let types_opts = typing.coerce(types_opts, TERMINAL_VALIDITY.timestamp())?;
         let mut types = vec![];
-        // INVARIANT(csv_types_list): `coerce` to `[String]` proved the outer
-        // list and the element strings.
-        let type_slice = types_opts
-            .get_slice()
-            .expect("INVARIANT(csv_types_list): coerce proved a list");
+        // `coerce` to `[String]` proved the outer list and the element strings.
+        let type_slice = types_opts.get_slice().ok_or_else(|| {
+            crate::fixed_rule::FixedRuleInvariantError::refuse("csv_types_list")
+        })?;
         for type_str in type_slice {
-            let type_str = type_str
-                .get_str()
-                .expect("INVARIANT(csv_types_list): coerce proved string elements");
+            let type_str = type_str.get_str().ok_or_else(|| {
+                crate::fixed_rule::FixedRuleInvariantError::refuse("csv_types_list")
+            })?;
             let typ = parse_type(type_str).map_err(|e| WrongFixedRuleOptionError {
                 name: Symbol::new("types", payload.span()),
                 span: payload.span(),

@@ -209,7 +209,7 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
     let sel = crate::query::vm::eval_pred_batched(
         pred,
         &columns,
-        &crate::query::batch::Selection::all(n_rows),
+        &crate::query::batch::Selection::all(n_rows)?,
     )?;
     let mut out = Batch::new();
     for r in sel.iter() {
