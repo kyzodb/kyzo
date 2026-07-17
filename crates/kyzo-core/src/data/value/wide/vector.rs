@@ -113,10 +113,10 @@ impl Vector {
         Some(Vector { dim, components })
     }
 
-    /// Admit door for lengths already known to fit `u32` (ordinary vectors).
-    /// Panics only if the component count exceeds `u32::MAX` — prefer
-    /// [`try_new`] at hostile boundaries.
-    pub fn new(components: Vec<f64>) -> Vector {
+    /// In-crate admit for lengths already known to fit `u32`.
+    /// Hostile / public boundaries use [`try_new`] — this door is not public
+    /// so a panicking escape cannot be reached from the crate root API.
+    pub(crate) fn new(components: Vec<f64>) -> Vector {
         Self::try_new(components).expect("vector dimension exceeds u32")
     }
 
