@@ -12,13 +12,38 @@ use std::cmp::Ordering;
 
 use crate::engines::text::tokenizer::{Token, TokenStream};
 
-/// Struct representing pre-tokenized text
-#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize, Eq, PartialEq)]
+/// Pre-tokenized text: original string plus token list proven to cohere.
+///
+/// Fields are private; [`Self::admit`] is the only mint besides serde
+/// (which routes through admit).
+#[derive(Debug, Clone, serde_derive::Serialize, Eq, PartialEq)]
 pub(crate) struct PreTokenizedString {
-    /// Original text
-    pub(crate) text: String,
-    /// Tokens derived from the text
-    pub(crate) tokens: Vec<Token>,
+    text: String,
+    tokens: Vec<Token>,
+}
+
+impl PreTokenizedString {
+    /// Mint when every token's offsets lie in `text` and each token's
+    /// `text` equals the corresponding substring.
+    pub(crate) fn admit(text: String, tokens: Vec<Token>) -> Option<Self> {
+        let len = text.len();
+        for token in &tokens {
+            let from = token.offset_from();
+            let to = token.offset_to();
+            if to > len || text.get(from..to) != Some(token.text.as_str()) {
+                return None;
+            }
+        }
+        Some(PreTokenizedString { text, tokens })
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub(crate) fn tokens(&self) -> &[Token] {
+        &self.tokens
+    }
 }
 
 impl Ord for PreTokenizedString {
@@ -30,6 +55,25 @@ impl Ord for PreTokenizedString {
 impl PartialOrd for PreTokenizedString {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PreTokenizedString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde_derive::Deserialize)]
+        struct Raw {
+            text: String,
+            tokens: Vec<Token>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        PreTokenizedString::admit(raw.text, raw.tokens).ok_or_else(|| {
+            serde::de::Error::custom(
+                "pre-tokenized text: token offsets or text incoherent with parent text",
+            )
+        })
     }
 }
 
@@ -79,20 +123,39 @@ mod tests {
 
     #[test]
     fn test_tokenized_stream() {
-        let tok_text = PreTokenizedString {
-            text: String::from("A a"),
-            tokens: vec![
+        let tok_text = PreTokenizedString::admit(
+            String::from("A a"),
+            vec![
                 Token::new(0, 1, 0, String::from("A"), 1).expect("lawful"),
                 Token::new(2, 3, 1, String::from("a"), 1).expect("lawful"),
             ],
-        };
+        )
+        .expect("lawful");
 
         let mut token_stream = PreTokenizedStream::from(tok_text.clone());
 
-        for expected_token in tok_text.tokens {
+        for expected_token in tok_text.tokens() {
             assert!(token_stream.advance());
-            assert_eq!(token_stream.token(), &expected_token);
+            assert_eq!(token_stream.token(), expected_token);
         }
         assert!(!token_stream.advance());
+    }
+
+    #[test]
+    fn admit_refuses_incoherent_token_text() {
+        assert!(PreTokenizedString::admit(
+            String::from("hello"),
+            vec![Token::new(0, 5, 0, String::from("world"), 1).expect("lawful"),],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn admit_refuses_offsets_past_text() {
+        assert!(PreTokenizedString::admit(
+            String::from("hi"),
+            vec![Token::new(0, 10, 0, String::from("hi"), 1).expect("lawful"),],
+        )
+        .is_none());
     }
 }
