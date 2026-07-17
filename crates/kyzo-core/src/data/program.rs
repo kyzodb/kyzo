@@ -1013,8 +1013,9 @@ impl Unification {
 /// `entry_name` keeps the real source span of the `?` the user wrote.
 ///
 /// Catalog durability serializes the sealed program graph (spans/trivia
-/// skipped); decode never re-parses source text.
-#[derive(Debug, Clone, serde_derive::Serialize, serde_derive::Deserialize)]
+/// skipped); decode never re-parses source text and admits only through
+/// [`InputProgram::new`].
+#[derive(Debug, Clone, serde_derive::Serialize)]
 pub(crate) struct InputProgram {
     /// The `?` symbol as written, with its real span.
     entry_name: Symbol,
@@ -1042,6 +1043,30 @@ pub(crate) struct InputProgram {
     pub(crate) leading_trivia: Vec<Comment>,
     #[serde(skip)]
     pub(crate) trailing_trivia: Vec<Comment>,
+}
+
+/// Wire layout for catalog decode — same field names as [`InputProgram`]
+/// serializes, but decode must not mint the struct directly.
+#[derive(serde_derive::Deserialize)]
+struct InputProgramWire {
+    entry_name: Symbol,
+    entry: InputInlineRulesOrFixed,
+    rules: BTreeMap<Symbol, InputInlineRulesOrFixed>,
+    out_opts: QueryOutOptions,
+    disable_magic_rewrite: bool,
+}
+
+impl<'de> serde::Deserialize<'de> for InputProgram {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let wire = InputProgramWire::deserialize(deserializer)?;
+        let mut rules = wire.rules;
+        rules.insert(wire.entry_name, wire.entry);
+        InputProgram::new(rules, wire.out_opts, wire.disable_magic_rewrite)
+            .map_err(D::Error::custom)
+    }
 }
 
 /// Every rule clause in `ruleset` (one per [`InputInlineRule`] if it's a

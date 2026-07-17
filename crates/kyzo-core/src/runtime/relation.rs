@@ -83,7 +83,8 @@
 //! - **Triggers** and **constraints** persist sealed [`InputProgram`]
 //!   substance on the catalog wire (msgpack). Admit doors
 //!   ([`Trigger::parse`], [`ConstraintRef::parse`]) lift script text at
-//!   create/set time; catalog decode never calls `parse_script`.
+//!   create/set time; catalog decode never calls `parse_script` and admits
+//!   each stored program only through [`InputProgram::new`].
 //! - **Index manifests** (HNSW / FTS / LSH) are operator-tier substances
 //!   that have landed: [`IndexKind::Hnsw`]/`Fts`/`Lsh` carry their real
 //!   manifest payloads (`runtime/mutate.rs`'s `::hnsw|fts|lsh create`
@@ -350,8 +351,8 @@ pub(crate) const TEMPORAL_POSTING_LEADING_COLUMN: &str = "_posting_valid";
 /// relations carry the same constraint.
 ///
 /// The catalog stores `{ name, program }` — sealed substance is the store
-/// form. Decode deserializes the program graph; it does not call
-/// `parse_script`.
+/// form. Decode admits the program through [`InputProgram::new`]; it does
+/// not call `parse_script`.
 #[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 pub(crate) struct ConstraintRef {
     name: SmartString<LazyCompact>,
@@ -474,8 +475,8 @@ pub(crate) enum Residency {
 /// substance is independent of the `cur_vld` it was parsed under.
 /// `set_relation_triggers` still admits through [`Trigger::parse`] with
 /// [`DEFAULT_FIXED_RULES`] and a sentinel instant so session-custom fixed
-/// rules cannot enter the durable catalog. Decode deserializes the sealed
-/// program; it does not call `parse_script`.
+/// rules cannot enter the durable catalog. Decode admits the sealed program
+/// through [`InputProgram::new`]; it does not call `parse_script`.
 #[derive(Clone, serde_derive::Serialize, serde_derive::Deserialize)]
 #[serde(transparent)]
 pub(crate) struct Trigger {
@@ -547,7 +548,7 @@ pub(crate) struct RelationHandle {
     pub(crate) metadata: StoredRelationMetadata,
     /// Triggers run on put/rm/replace, held as sealed [`Trigger`] substances
     /// (see that type). The catalog stores [`InputProgram`] bodies; decode
-    /// does not re-parse source.
+    /// admits through [`InputProgram::new`] and does not re-parse source.
     #[serde(default)]
     pub(crate) put_triggers: Vec<Trigger>,
     #[serde(default)]
@@ -562,8 +563,8 @@ pub(crate) struct RelationHandle {
     /// Integrity constraints whose bodies read this relation, held as
     /// sealed [`ConstraintRef`] substances (see that type). Sorted by name
     /// (`::constraint create` maintains the ordering; names are globally
-    /// unique). The catalog stores `{ name, program }`; decode does not
-    /// re-parse source.
+    /// unique). The catalog stores `{ name, program }`; decode admits
+    /// programs through [`InputProgram::new`] and does not re-parse source.
     pub(crate) constraints: Vec<ConstraintRef>,
     /// What this keyspace's rows are — see [`KeyspaceKind`]. Decides
     /// whether reads resolve bitemporally (facts) or exactly (algorithm
@@ -1563,8 +1564,8 @@ pub(crate) fn set_access_level(
 /// Parse a list of trigger sources into [`Trigger`] substances at the store
 /// boundary. Uses [`DEFAULT_FIXED_RULES`] + the sentinel instant so a source
 /// referencing a session-custom fixed rule is refused HERE — the durable
-/// catalog cannot carry it. Catalog decode deserializes sealed programs and
-/// never re-parses these sources.
+/// catalog cannot carry it. Catalog decode admits sealed programs through
+/// [`InputProgram::new`] and never re-parses these sources.
 fn parse_triggers(sources: &[String]) -> Result<Vec<Trigger>> {
     sources
         .iter()

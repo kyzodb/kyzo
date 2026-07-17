@@ -282,8 +282,9 @@ impl FormatVersion {
     /// refuse-to-open rather than a silent misread.
     ///
     /// v6: catalog constraints and triggers persist sealed InputProgram
-    /// substance (msgpack), not re-parseable source strings. A v5 catalog
-    /// row that stored `source` text is unreadable under v6's decoder.
+    /// substance (msgpack), not re-parseable source strings; decode admits
+    /// each program through `InputProgram::new`. A v5 catalog row that
+    /// stored `source` text is unreadable under v6's decoder.
     pub const CURRENT: FormatVersion = FormatVersion(6);
 
     /// The stored representation: ASCII decimal.
