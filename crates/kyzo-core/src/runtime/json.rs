@@ -81,9 +81,14 @@ impl<S: Storage> Db<S> {
         match self.run_script(payload, params) {
             Ok(rows) => {
                 let mut envelope = rows.into_json();
-                let map: &mut Map<String, JsonValue> = envelope
-                    .as_object_mut()
-                    .expect("into_json always renders an object");
+                // `NamedRows::into_json` is defined to emit an object envelope;
+                // refuse typed if that law ever breaks — never `.expect`.
+                let Some(map) = envelope.as_object_mut() else {
+                    return format_error_as_json(
+                        miette::miette!("NamedRows JSON envelope was not an object"),
+                        Some(payload),
+                    );
+                };
                 map.insert("ok".to_string(), json!(true));
                 #[cfg(not(target_arch = "wasm32"))]
                 map.insert("took".to_string(), json!(start.elapsed().as_secs_f64()));

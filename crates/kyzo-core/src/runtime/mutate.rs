@@ -33,8 +33,8 @@
  *   temporal posting indices directly, manifest kinds (HNSW/FTS/LSH)
  *   through `apply_manifest_index`'s per-engine put/del hooks.
  * - Law 5: the original's `rmp_serde::from_slice(..).unwrap()` on the old
- *   value in `update_in_relation` is a fallible decode; `unreachable!()`
- *   on collected tuples is a typed invariant error.
+ *   value in `update_in_relation` is a fallible decode; index backfill
+ *   splits Plain vs manifest kinds without `unreachable!`.
  * - `Db::run_query` returns `NamedRows` alone (no cleanup ranges), so the
  *   trigger-recursion call sites here simplify accordingly.
  */
@@ -1665,11 +1665,18 @@ impl<T: WriteTx> SessionTx<T> {
         // scan borrows the store the puts need mutably, so each round
         // materializes at most BACKFILL_BATCH rows and resumes from the
         // strict successor of the last key (memcmp order: key ++ 0x00).
-        let plain = matches!(&index_ref.kind, IndexKind::Plain { .. });
-        let ctx = if plain {
-            None
-        } else {
-            Some(self.manifest_index_ctx(&base, &index_ref)?)
+        // Split on IndexKind once: Plain carries its mapper; every other
+        // kind builds a manifest ctx. No `unreachable!` residual.
+        let plain_mapper = match &index_ref.kind {
+            IndexKind::Plain { mapper } => Some(mapper),
+            IndexKind::Temporal
+            | IndexKind::Hnsw(_)
+            | IndexKind::Fts(_)
+            | IndexKind::Lsh { .. } => None,
+        };
+        let ctx = match plain_mapper {
+            Some(_) => None,
+            None => Some(self.manifest_index_ctx(&base, &index_ref)?),
         };
         let stamp = self.system_stamp_routed(base.residency());
         let upper = (base.id.raw() + 1).to_be_bytes();
@@ -1703,14 +1710,11 @@ impl<T: WriteTx> SessionTx<T> {
             succ.push(0xFF);
             lower = succ;
             for row in &batch {
-                match &ctx {
-                    Some(ctx) => {
+                match (&ctx, plain_mapper) {
+                    (Some(ctx), _) => {
                         self.apply_manifest_index(&base, ctx, Some(row.as_slice()), None)?
                     }
-                    None => {
-                        let IndexKind::Plain { mapper } = &index_ref.kind else {
-                            unreachable!("ctx is None only for plain indexes")
-                        };
+                    (None, Some(mapper)) => {
                         let idx_handle = self.get_relation(&index_ref.relation_name(&base.name))?;
                         // Backfill re-mints "now" for both coordinates —
                         // it indexes the base's CURRENT rows (`as_of`
@@ -1726,6 +1730,11 @@ impl<T: WriteTx> SessionTx<T> {
                             stamp,
                             stamp,
                         )?;
+                    }
+                    (None, None) => {
+                        bail!(miette::miette!(
+                            "index backfill: plain mapper missing for Plain kind"
+                        ))
                     }
                 }
             }
