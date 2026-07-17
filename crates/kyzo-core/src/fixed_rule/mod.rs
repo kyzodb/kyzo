@@ -85,9 +85,8 @@
 //! warn rather than hide behind a blanket.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use itertools::Itertools;
 use miette::{Diagnostic, Result, bail, ensure};
@@ -131,15 +130,17 @@ pub(crate) type TupleIter<'a> = Box<dyn Iterator<Item = Result<Tuple>> + 'a>;
 // Cancellation lifecycle
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Private shared cell. Never an API-level `AtomicBool` — cancellation is
-/// minted only through [`CancelAuthority::arm`].
-struct CancelCell(AtomicBool);
+/// Private shared cancel publish cell: a one-shot latch (`OnceLock`), not
+/// an `AtomicBool` stop-bit. Cancellation is minted only through
+/// [`CancelAuthority::arm`] / [`CancelAuthority::cancel`].
+struct CancelCell(OnceLock<()>);
 
 /// Typestate proof that cancellation was requested (via
 /// [`CancelAuthority::cancel`]) or observed (via [`CancelFlag::check`]).
 ///
 /// Consuming [`CancelAuthority::cancel`] is the only door that requests
-/// stop; a free `AtomicBool` flag is not part of the surface.
+/// stop; shared mutable `AtomicBool` lifecycle bits are not part of the
+/// surface (S337-08 / P114).
 #[derive(Debug, Error, Diagnostic)]
 #[error("Running query is killed before completion")]
 #[diagnostic(code(eval::killed))]
@@ -156,7 +157,7 @@ pub struct CancelAuthority {
 impl CancelAuthority {
     /// Arm a paired authority + poll handle that share one cancel cell.
     pub fn arm() -> (Self, CancelFlag) {
-        let cell = Arc::new(CancelCell(AtomicBool::new(false)));
+        let cell = Arc::new(CancelCell(OnceLock::new()));
         (
             Self {
                 cell: Arc::clone(&cell),
@@ -165,11 +166,12 @@ impl CancelAuthority {
         )
     }
 
-    /// Spend this authority: request cancellation and return the
+    /// Spend this authority: publish cancellation and return the
     /// [`Cancelled`] proof. Every subsequent [`CancelFlag::check`] on the
-    /// paired poll handle refuses.
+    /// paired poll handle refuses. `OnceLock` publish is the synchronization
+    /// edge (no `Relaxed` `AtomicBool`).
     pub fn cancel(self) -> Cancelled {
-        self.cell.0.store(true, Ordering::Relaxed);
+        let _ = self.cell.0.set(());
         Cancelled
     }
 }
@@ -198,7 +200,7 @@ impl Default for CancelFlag {
 
 impl std::fmt::Debug for CancelFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CancelFlag({})", self.cell.0.load(Ordering::Relaxed))
+        write!(f, "CancelFlag({})", self.cell.0.get().is_some())
     }
 }
 
@@ -206,7 +208,7 @@ impl CancelFlag {
     /// Inert poll handle that never observes cancellation.
     pub fn inert() -> Self {
         Self {
-            cell: Arc::new(CancelCell(AtomicBool::new(false))),
+            cell: Arc::new(CancelCell(OnceLock::new())),
         }
     }
 
@@ -216,7 +218,7 @@ impl CancelFlag {
     /// that cannot be killed.
     #[inline(always)]
     pub fn check(&self) -> Result<()> {
-        if self.cell.0.load(Ordering::Relaxed) {
+        if self.cell.0.get().is_some() {
             bail!(Cancelled)
         }
         Ok(())
