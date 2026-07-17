@@ -88,8 +88,8 @@ pub(crate) struct FtsNear {
 /// [`FtsExpr::or`]; [`FtsExpr::flatten`] never emits empty And/Or either
 /// (collapses to [`FtsExpr::empty_node`]).
 ///
-/// The parser still builds `FtsExpr::And(Vec)` directly (off-allowlist);
-/// type-level wrapping of the enum variants waits on that migration.
+/// Parser and engine mint only via [`FtsExpr::and`] / [`FtsExpr::or`] /
+/// [`NonEmptyFtsExprs::admit`] — empty And/Or cannot be written down.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct NonEmptyFtsExprs {
     children: Vec<FtsExpr>,
@@ -106,6 +106,22 @@ impl NonEmptyFtsExprs {
 
     pub(crate) fn into_vec(self) -> Vec<FtsExpr> {
         self.children
+    }
+
+    pub(crate) fn as_slice(&self) -> &[FtsExpr] {
+        &self.children
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.children.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &FtsExpr> {
+        self.children.iter()
+    }
+
+    pub(crate) fn push(&mut self, e: FtsExpr) {
+        self.children.push(e);
     }
 }
 
@@ -131,8 +147,8 @@ impl NonEmptyFtsExprs {
 pub(crate) enum FtsExpr {
     Literal(FtsLiteral),
     Near(FtsNear),
-    And(Vec<FtsExpr>),
-    Or(Vec<FtsExpr>),
+    And(NonEmptyFtsExprs),
+    Or(NonEmptyFtsExprs),
     Not(Box<FtsExpr>, Box<FtsExpr>),
 }
 
@@ -146,7 +162,7 @@ impl FtsExpr {
     /// Conjunction door: refuses empty children (returns [`Self::empty_node`]).
     pub(crate) fn and(children: Vec<FtsExpr>) -> Self {
         match NonEmptyFtsExprs::admit(children) {
-            Some(n) => FtsExpr::And(n.into_vec()),
+            Some(n) => FtsExpr::And(n),
             None => Self::empty_node(),
         }
     }
@@ -154,7 +170,7 @@ impl FtsExpr {
     /// Disjunction door: refuses empty children (returns [`Self::empty_node`]).
     pub(crate) fn or(children: Vec<FtsExpr>) -> Self {
         match NonEmptyFtsExprs::admit(children) {
-            Some(n) => FtsExpr::Or(n.into_vec()),
+            Some(n) => FtsExpr::Or(n),
             None => Self::empty_node(),
         }
     }
@@ -171,10 +187,8 @@ impl FtsExpr {
         match self {
             FtsExpr::Literal(l) => l.booster == 0. || l.value.is_empty(),
             FtsExpr::Near(FtsNear { literals, .. }) => literals.is_empty(),
-            // Empty And/Or is refused by flatten/and/or; a lingering empty
-            // vec from the parser is still treated as empty.
-            FtsExpr::And(v) => v.is_empty(),
-            FtsExpr::Or(v) => v.is_empty(),
+            // NonEmptyFtsExprs is never empty by construction.
+            FtsExpr::And(_) | FtsExpr::Or(_) => false,
             FtsExpr::Not(lhs, _) => lhs.is_empty(),
         }
     }
@@ -185,9 +199,9 @@ impl FtsExpr {
         match self {
             FtsExpr::And(exprs) => {
                 let mut flattened = vec![];
-                for e in exprs {
+                for e in exprs.into_vec() {
                     match e.flatten() {
-                        FtsExpr::And(es) => flattened.extend(es),
+                        FtsExpr::And(es) => flattened.extend(es.into_vec()),
                         e @ FtsExpr::Literal(_) | e @ FtsExpr::Near(_) | e @ FtsExpr::Or(_) | e @ FtsExpr::Not(..) => {
                             if !e.is_empty() {
                                 flattened.push(e)
@@ -198,14 +212,14 @@ impl FtsExpr {
                 match flattened.len() {
                     0 => Self::empty_node(),
                     1 => flattened.remove(0),
-                    _ => FtsExpr::And(flattened),
+                    _ => FtsExpr::and(flattened),
                 }
             }
             FtsExpr::Or(exprs) => {
                 let mut flattened = vec![];
-                for e in exprs {
+                for e in exprs.into_vec() {
                     match e.flatten() {
-                        FtsExpr::Or(es) => flattened.extend(es),
+                        FtsExpr::Or(es) => flattened.extend(es.into_vec()),
                         e @ FtsExpr::Literal(_) | e @ FtsExpr::Near(_) | e @ FtsExpr::And(_) | e @ FtsExpr::Not(..) => {
                             if !e.is_empty() {
                                 flattened.push(e)
@@ -216,7 +230,7 @@ impl FtsExpr {
                 match flattened.len() {
                     0 => Self::empty_node(),
                     1 => flattened.remove(0),
-                    _ => FtsExpr::Or(flattened),
+                    _ => FtsExpr::or(flattened),
                 }
             }
             FtsExpr::Not(lhs, rhs) => {
@@ -256,12 +270,14 @@ impl FtsExpr {
             }
             FtsExpr::And(exprs) => FtsExpr::and(
                 exprs
+                    .into_vec()
                     .into_iter()
                     .map(|e| e.do_tokenize(tokenizer))
                     .collect(),
             ),
             FtsExpr::Or(exprs) => FtsExpr::or(
                 exprs
+                    .into_vec()
                     .into_iter()
                     .map(|e| e.do_tokenize(tokenizer))
                     .collect(),
@@ -300,9 +316,8 @@ mod tests {
         assert!(
             FtsExpr::Literal(FtsLiteral::new("hello".into(), false, 0.0.into())).is_empty()
         );
-        // Parser-era empty vec still reads as empty; flatten/and/or refuse it.
-        assert!(FtsExpr::And(vec![]).is_empty());
-        assert!(FtsExpr::Or(vec![]).is_empty());
+        // Empty And/Or unrepresentable; doors yield empty_node.
+        assert!(NonEmptyFtsExprs::admit(vec![]).is_none());
         assert!(FtsExpr::and(vec![]).is_empty());
         assert!(FtsExpr::or(vec![]).is_empty());
         assert!(
@@ -317,7 +332,7 @@ mod tests {
         assert!(!FtsExpr::Not(Box::new(lit("x")), Box::new(lit(""))).is_empty());
         // But And/Or containing only empties are NOT empty until flattened:
         // is_empty is shallow by design; flatten is the normalizer.
-        let shallow = FtsExpr::And(vec![lit("")]);
+        let shallow = FtsExpr::and(vec![lit("")]);
         assert!(!shallow.is_empty());
         assert!(shallow.flatten().is_empty());
     }
@@ -325,25 +340,25 @@ mod tests {
     #[test]
     fn flatten_collapses_nesting_and_drops_empties() {
         // And(And(a,b), c) → And(a,b,c)
-        let e = FtsExpr::And(vec![FtsExpr::And(vec![lit("a"), lit("b")]), lit("c")]);
+        let e = FtsExpr::and(vec![FtsExpr::and(vec![lit("a"), lit("b")]), lit("c")]);
         match e.flatten() {
             FtsExpr::And(v) => assert_eq!(v.len(), 3),
             other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),
         }
         // Or(Or(a,b), Or(c,d)) → Or(a,b,c,d)
-        let e = FtsExpr::Or(vec![
-            FtsExpr::Or(vec![lit("a"), lit("b")]),
-            FtsExpr::Or(vec![lit("c"), lit("d")]),
+        let e = FtsExpr::or(vec![
+            FtsExpr::or(vec![lit("a"), lit("b")]),
+            FtsExpr::or(vec![lit("c"), lit("d")]),
         ]);
         match e.flatten() {
             FtsExpr::Or(v) => assert_eq!(v.len(), 4),
             other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::And(_) | other @ FtsExpr::Not(..) => panic!("expected Or, got {other:?}"),
         }
         // Single-survivor collapse: And(a, "") → a
-        let e = FtsExpr::And(vec![lit("a"), lit("")]);
+        let e = FtsExpr::and(vec![lit("a"), lit("")]);
         assert_eq!(e.flatten(), lit("a"));
         // All-empty collapse: Or("", "") → empty_node (never empty Or)
-        let e = FtsExpr::Or(vec![lit(""), lit("")]);
+        let e = FtsExpr::or(vec![lit(""), lit("")]);
         let flat = e.flatten();
         assert!(flat.is_empty());
         assert!(matches!(flat, FtsExpr::Literal(_)));
@@ -351,7 +366,7 @@ mod tests {
         let e = FtsExpr::Not(Box::new(lit("keep")), Box::new(lit("")));
         assert_eq!(e.flatten(), lit("keep"));
         // Deep mixed nesting terminates and normalizes.
-        let e = FtsExpr::And(vec![FtsExpr::And(vec![FtsExpr::And(vec![FtsExpr::Or(
+        let e = FtsExpr::and(vec![FtsExpr::and(vec![FtsExpr::and(vec![FtsExpr::Or(
             vec![lit("x")],
         )])])]);
         assert_eq!(e.flatten(), lit("x"));
@@ -380,7 +395,7 @@ mod tests {
         assert_eq!(lit("Running").tokenize(&an), lit("run"));
         // A literal that tokenizes to nothing flattens away inside And.
         let stop = analyzer("Simple", &[("Stopwords", vec![DataValue::from("en")])]);
-        let e = FtsExpr::And(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
+        let e = FtsExpr::and(vec![lit("the"), lit("crafty fox")]).tokenize(&stop);
         match &e {
             FtsExpr::And(v) => assert_eq!(v.len(), 2, "'the' must vanish: {v:?}"),
             other @ FtsExpr::Literal(_) | other @ FtsExpr::Near(_) | other @ FtsExpr::Or(_) | other @ FtsExpr::Not(..) => panic!("expected And, got {other:?}"),

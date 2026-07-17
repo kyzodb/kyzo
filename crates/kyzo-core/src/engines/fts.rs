@@ -491,12 +491,9 @@ fn eval_ast(
             res
         }
         FtsExpr::And(children) => {
+            // NonEmptyFtsExprs: at least one child.
             let mut iter = children.iter();
-            // An empty conjunction matches nothing (the parser's flatten drops
-            // empties; the engine still never unwraps an AST it did not build).
-            let Some(first) = iter.next() else {
-                return Ok(FxHashMap::default());
-            };
+            let first = iter.next().expect("NonEmptyFtsExprs");
             let mut res = eval_ast(tx, first, idx, base_key_len, score_kind, n_total)?;
             for child in iter {
                 let next = eval_ast(tx, child, idx, base_key_len, score_kind, n_total)?;
@@ -509,7 +506,7 @@ fn eval_ast(
         }
         FtsExpr::Or(children) => {
             let mut res: FxHashMap<Tuple, f64> = FxHashMap::default();
-            for child in children {
+            for child in children.iter() {
                 let next = eval_ast(tx, child, idx, base_key_len, score_kind, n_total)?;
                 for (k, v) in next {
                     res.entry(k)

@@ -82,8 +82,8 @@ mod tests {
         let tok_text = PreTokenizedString {
             text: String::from("A a"),
             tokens: vec![
-                Token::new(0, 1, 0, String::from("A"), 1),
-                Token::new(2, 3, 1, String::from("a"), 1),
+                Token::new(0, 1, 0, String::from("A"), 1).expect("lawful"),
+                Token::new(2, 3, 1, String::from("a"), 1).expect("lawful"),
             ],
         };
 

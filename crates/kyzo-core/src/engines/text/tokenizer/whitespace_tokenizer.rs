@@ -51,7 +51,7 @@ impl<'a> TokenStream for WhitespaceTokenStream<'a> {
         while let Some((offset_from, c)) = self.chars.next() {
             if !c.is_ascii_whitespace() {
                 let offset_to = self.search_token_end();
-                self.token.set_offsets(offset_from, offset_to);
+                let _ = self.token.set_offsets(offset_from, offset_to);
                 self.token.text.push_str(&self.text[offset_from..offset_to]);
                 return true;
             }

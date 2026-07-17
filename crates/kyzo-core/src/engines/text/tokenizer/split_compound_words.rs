@@ -127,13 +127,16 @@ impl<'a> SplitCompoundWordsTokenStream<'a> {
                 let (head, tail) = text.split_at(*pos);
 
                 text = head;
-                self.parts.push(Token::new(
-                    token.offset_from(),
-                    token.offset_to(),
-                    token.position,
-                    tail.to_owned(),
-                    token.position_length,
-                ));
+                self.parts.push(
+                    Token::new(
+                        token.offset_from(),
+                        token.offset_to(),
+                        token.position,
+                        tail.to_owned(),
+                        token.position_length,
+                    )
+                    .expect("parent token offsets already proven"),
+                );
             }
         }
     }
