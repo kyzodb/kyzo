@@ -57,8 +57,9 @@ use crate::query::laws::{
 };
 use crate::query::levels::EpochStore;
 use crate::query::semiring::{
-    Annotation, Cost, Derivation, DerivationGraph, ProofNode, ProvenanceLimitExceeded, Semiring,
-    SemiringOverflow, SolverBudget, as_cost_map, extract_min_cost_proof, solve, verify_proof,
+    AnnAlgebra, BooleanAnn, Cost, Derivation, DerivationGraph, ProofNode, ProvenanceLimitExceeded,
+    SemiringOverflow, SolverBudget, TropicalAnn, as_cost_map, extract_min_cost_proof, solve,
+    verify_proof,
 };
 use crate::query::temp_store::{RegularTempStore, TupleInIter};
 
@@ -952,24 +953,23 @@ fn random_cost(rng: &mut Rng) -> Cost {
     }
 }
 
-fn assert_axioms(semiring: Semiring, a: &Annotation, b: &Annotation, c: &Annotation) {
-    let t =
-        |x: &Annotation, y: &Annotation| semiring.times(x, y).expect("no overflow in axiom trial");
-    let p = |x: &Annotation, y: &Annotation| semiring.plus(x, y);
-    let zero = semiring.zero();
-    let one = semiring.one();
+fn assert_axioms<A: AnnAlgebra>(a: A, b: A, c: A) {
+    let t = |x: A, y: A| x.times(y).expect("no overflow in axiom trial");
+    let p = |x: A, y: A| x.plus(y);
+    let zero = A::zero();
+    let one = A::one();
     // ⊕: associative, commutative, identity, idempotent.
-    assert_eq!(p(&p(a, b), c), p(a, &p(b, c)), "⊕ associativity");
+    assert_eq!(p(p(a, b), c), p(a, p(b, c)), "⊕ associativity");
     assert_eq!(p(a, b), p(b, a), "⊕ commutativity");
-    assert_eq!(p(a, &zero), a.clone(), "⊕ identity");
-    assert_eq!(p(a, a), a.clone(), "⊕ idempotency (solver contract)");
+    assert_eq!(p(a, zero), a, "⊕ identity");
+    assert_eq!(p(a, a), a, "⊕ idempotency (solver contract)");
     // ⊗: associative, commutative, identity, annihilator.
-    assert_eq!(t(&t(a, b), c), t(a, &t(b, c)), "⊗ associativity");
+    assert_eq!(t(t(a, b), c), t(a, t(b, c)), "⊗ associativity");
     assert_eq!(t(a, b), t(b, a), "⊗ commutativity");
-    assert_eq!(t(a, &one), a.clone(), "⊗ identity");
-    assert_eq!(t(a, &zero), zero.clone(), "⊗ annihilator");
+    assert_eq!(t(a, one), a, "⊗ identity");
+    assert_eq!(t(a, zero), zero, "⊗ annihilator");
     // Distributivity.
-    assert_eq!(t(a, &p(b, c)), p(&t(a, b), &t(a, c)), "distributivity");
+    assert_eq!(t(a, p(b, c)), p(t(a, b), t(a, c)), "distributivity");
 }
 
 #[test]
@@ -977,29 +977,26 @@ fn semiring_axioms_hold_on_randomized_values() {
     let mut rng = Rng::new(0x5EED_u64 ^ 0x51_3141);
     for _ in 0..2000 {
         let (a, b, c) = (
-            Annotation::Boolean(rng.chance(1, 2)),
-            Annotation::Boolean(rng.chance(1, 2)),
-            Annotation::Boolean(rng.chance(1, 2)),
+            BooleanAnn::new(rng.chance(1, 2)),
+            BooleanAnn::new(rng.chance(1, 2)),
+            BooleanAnn::new(rng.chance(1, 2)),
         );
-        assert_axioms(Semiring::Boolean, &a, &b, &c);
+        assert_axioms(a, b, c);
     }
     for _ in 0..2000 {
         let (a, b, c) = (
-            Annotation::Tropical(random_cost(&mut rng)),
-            Annotation::Tropical(random_cost(&mut rng)),
-            Annotation::Tropical(random_cost(&mut rng)),
+            TropicalAnn::new(random_cost(&mut rng)),
+            TropicalAnn::new(random_cost(&mut rng)),
+            TropicalAnn::new(random_cost(&mut rng)),
         );
-        assert_axioms(Semiring::Tropical, &a, &b, &c);
+        assert_axioms(a, b, c);
     }
 }
 
 #[test]
 fn tropical_overflow_is_a_typed_refusal() {
-    let err = Semiring::Tropical
-        .times(
-            &Annotation::Tropical(Cost::Finite(u64::MAX)),
-            &Annotation::Tropical(Cost::Finite(1)),
-        )
+    let err = TropicalAnn::new(Cost::Finite(u64::MAX))
+        .times(TropicalAnn::new(Cost::Finite(1)))
         .expect_err("must refuse");
     assert_eq!(
         err,
@@ -1010,13 +1007,10 @@ fn tropical_overflow_is_a_typed_refusal() {
     );
     // Infinity absorbs without overflow: ∞ ⊗ MAX is lawful.
     assert_eq!(
-        Semiring::Tropical
-            .times(
-                &Annotation::Tropical(Cost::Infinite),
-                &Annotation::Tropical(Cost::Finite(u64::MAX)),
-            )
+        TropicalAnn::new(Cost::Infinite)
+            .times(TropicalAnn::new(Cost::Finite(u64::MAX)))
             .unwrap(),
-        Annotation::Tropical(Cost::Infinite)
+        TropicalAnn::new(Cost::Infinite)
     );
     // And the solver surfaces the refusal typed, not stringly.
     let graph: DerivationGraph<u32> = DerivationGraph {
@@ -1036,7 +1030,7 @@ fn tropical_overflow_is_a_typed_refusal() {
             },
         ],
     };
-    let err = solve(Semiring::Tropical, &graph, &generous_solver()).expect_err("must refuse");
+    let err = solve::<TropicalAnn, _>(&graph, &generous_solver()).expect_err("must refuse");
     let refusal: &SemiringOverflow = err.downcast_ref().expect("typed SemiringOverflow");
     assert_eq!(refusal.right, u64::MAX);
 }
@@ -1054,7 +1048,8 @@ fn boolean_annotation_matches_naive_eval_byte_identical() {
         let oracle = naive_eval(&model).expect("oracle accepts the positive fragment");
         let out = run_pipeline(&model, "path", 2, generous_ceiling(), &unit_weight)
             .expect("pipeline runs");
-        let ann = solve(Semiring::Boolean, &out.graph, &generous_solver()).expect("solver runs");
+        let ann =
+            solve::<BooleanAnn, _>(&out.graph, &generous_solver()).expect("solver runs");
         for rel in idb_of(&model) {
             let oracle_rows = oracle.get(rel).cloned().unwrap_or_default();
             let engine_rows = &out.rows[rel];
@@ -1069,7 +1064,7 @@ fn boolean_annotation_matches_naive_eval_byte_identical() {
             for row in engine_rows {
                 assert_eq!(
                     ann.get(&rule_node(rel, row)),
-                    Some(&Annotation::Boolean(true)),
+                    Some(&BooleanAnn::new(true)),
                     "seed {seed}: '{rel}' row {row:?} not boolean-derivable"
                 );
             }
@@ -1080,7 +1075,7 @@ fn boolean_annotation_matches_naive_eval_byte_identical() {
                 {
                     assert_eq!(
                         *value,
-                        Annotation::Boolean(oracle_rows.contains(tuple)),
+                        BooleanAnn::new(oracle_rows.contains(tuple)),
                         "seed {seed}: '{rel}' node {tuple:?} annotation disagrees with the oracle"
                     );
                 }
@@ -1110,9 +1105,8 @@ fn check_tropical_against_reference(seed: u64, unit: bool) {
     let out =
         run_pipeline(&model, "path", 2, generous_ceiling(), &weight_fn).expect("pipeline runs");
     let costs = as_cost_map(
-        &solve(Semiring::Tropical, &out.graph, &generous_solver()).expect("solver runs"),
-    )
-    .expect("tropical annotations");
+        &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("solver runs"),
+    );
     for rel in idb_of(&model) {
         for row in &out.rows[rel] {
             let want = reference
@@ -1207,9 +1201,8 @@ fn certificate_fixture() -> CertificateFixture {
     // takes ownership of `weights` (the checker re-derives weights from it).
     drop(weight_fn);
     let costs = as_cost_map(
-        &solve(Semiring::Tropical, &out.graph, &generous_solver()).expect("solver runs"),
-    )
-    .expect("tropical annotations");
+        &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("solver runs"),
+    );
     // The most expensive derivable path row: the deepest certificate.
     let target = out.rows["path"]
         .iter()
@@ -1338,11 +1331,10 @@ fn provenance_fingerprint(seed: u64, threads: usize) -> String {
         let out =
             run_pipeline(&model, "path", 2, generous_ceiling(), &weight_fn).expect("pipeline runs");
         let bool_ann =
-            solve(Semiring::Boolean, &out.graph, &generous_solver()).expect("boolean solves");
+            solve::<BooleanAnn, _>(&out.graph, &generous_solver()).expect("boolean solves");
         let costs = as_cost_map(
-            &solve(Semiring::Tropical, &out.graph, &generous_solver()).expect("tropical solves"),
-        )
-        .expect("tropical annotations");
+            &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("tropical solves"),
+        );
         let proof = out.rows["path"].iter().next().map(|row| {
             extract_min_cost_proof(&out.graph, &costs, &rule_node("path", row))
                 .expect("certificate extracts")
@@ -1426,9 +1418,8 @@ fn aggregation_boundary_collapses_to_ground_facts() {
         "the reader's fixpoint equals the oracle"
     );
     let costs = as_cost_map(
-        &solve(Semiring::Tropical, &out.graph, &generous_solver()).expect("solver runs"),
-    )
-    .expect("tropical annotations");
+        &solve::<TropicalAnn, _>(&out.graph, &generous_solver()).expect("solver runs"),
+    );
     assert!(!out.rows["m"].is_empty());
     for row in &out.rows["m"] {
         // The meet store's tuples enter the graph as ground facts…
@@ -1578,8 +1569,7 @@ fn solver_pass_ceiling_is_a_typed_refusal() {
         facts: BTreeSet::from([0u32]),
         derivations: chain,
     };
-    let err = solve(
-        Semiring::Tropical,
+    let err = solve::<TropicalAnn, _>(
         &graph,
         &SolverBudget::new(NonZeroU32::new(2).unwrap()),
     )
@@ -1590,14 +1580,12 @@ fn solver_pass_ceiling_is_a_typed_refusal() {
     assert_eq!(refusal.ceiling, 2);
     // With enough passes the same graph solves exactly.
     let costs = as_cost_map(
-        &solve(
-            Semiring::Tropical,
+        &solve::<TropicalAnn, _>(
             &graph,
             &SolverBudget::new(NonZeroU32::new(6).unwrap()),
         )
         .expect("solves"),
-    )
-    .expect("tropical annotations");
+    );
     for i in 0..=5u32 {
         assert_eq!(costs[&i], Cost::Finite(u64::from(i)));
     }

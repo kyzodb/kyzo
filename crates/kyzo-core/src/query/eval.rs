@@ -693,6 +693,23 @@ pub(crate) trait FixedRuleEval: Send + Sync {
 // The evaluable program tier
 // ─────────────────────────────────────────────────────────────────────────
 
+/// A proven index into a rule head — minted only from
+/// `aggr.iter().enumerate()` at [`EvalRuleSet`] construction. Bare `usize`
+/// head positions are not admitted on the Meet path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct HeadPos(usize);
+
+impl HeadPos {
+    /// Door used when the enumerate index is already a head position.
+    pub(crate) fn from_index(i: usize) -> Self {
+        Self(i)
+    }
+
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
+}
+
 /// How a rule set's head aggregates — the classification that picks its
 /// store and its evaluation schedule. (Distinct from
 /// `data::aggr::AggrKind`, which classifies one *aggregation*; this
@@ -714,7 +731,7 @@ pub(crate) enum HeadAggrKind {
     /// head order) travel with the variant — eval's copy of the store's
     /// [`MeetLayout`] key positions, used to key per-group provenance
     /// witnesses.
-    Meet { key_positions: Vec<usize> },
+    Meet { key_positions: Vec<HeadPos> },
 }
 
 /// The rules of one head, ready to evaluate. Construction proves what the
@@ -766,7 +783,7 @@ impl<R> EvalRuleSet<R> {
                     .iter()
                     .enumerate()
                     .filter(|(_, a)| a.is_none())
-                    .map(|(i, _)| i)
+                    .map(|(i, _)| HeadPos::from_index(i))
                     .collect(),
             },
         };
@@ -779,13 +796,6 @@ impl<R> EvalRuleSet<R> {
 
     fn arity(&self) -> usize {
         self.aggr.len()
-    }
-
-    fn meet_key_positions(&self) -> Option<&[usize]> {
-        match &self.kind {
-            HeadAggrKind::Meet { key_positions } => Some(key_positions.as_slice()),
-            HeadAggrKind::None | HeadAggrKind::Normal => None,
-        }
     }
 }
 
@@ -944,7 +954,7 @@ type PendingWitnesses = BTreeMap<Tuple, (usize, Vec<Tuple>)>;
 struct WitnessBinder<'a> {
     store: &'a MagicSymbol,
     pending: &'a PendingWitnesses,
-    key_positions: Option<&'a [usize]>,
+    key_positions: Option<&'a [HeadPos]>,
     table: &'a mut WitnessTable,
 }
 
@@ -1156,7 +1166,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                             )
                         }
                     }
-                    HeadAggrKind::Meet { .. } => {
+                    HeadAggrKind::Meet { key_positions } => {
                         if epoch == 0 {
                             initial_meet_eval(
                                 name,
@@ -1165,6 +1175,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                                 budget,
                                 epoch_baseline,
                                 recording,
+                                key_positions,
                             )?
                         } else {
                             incremental_meet_eval(
@@ -1174,6 +1185,7 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
                                 budget,
                                 epoch_baseline,
                                 recording,
+                                key_positions,
                             )?
                         }
                     }
@@ -1248,7 +1260,10 @@ fn evaluate_stratum<R: RuleBody, F: FixedRuleEval>(
             let admitted = match witnesses.as_deref_mut() {
                 Some(table) => {
                     let key_positions = match defs.get(&name) {
-                        Some(EvalDefinition::Rules(rule_set)) => rule_set.meet_key_positions(),
+                        Some(EvalDefinition::Rules(rule_set)) => match &rule_set.kind {
+                            HeadAggrKind::Meet { key_positions } => Some(key_positions.as_slice()),
+                            HeadAggrKind::None | HeadAggrKind::Normal => None,
+                        },
                         _ => None,
                     };
                     let mut binder = WitnessBinder {
@@ -1470,8 +1485,8 @@ pub(crate) fn provenance_graph<R: RuleBody, F: FixedRuleEval>(
 /// positions are listed. For a meet head this is the grouping key — eval's
 /// mirror of the store's [`MeetAggrStore`] layout projection, so the two
 /// agree on a group's identity whatever positions the meet columns occupy.
-fn project_positions(row: &[DataValue], positions: &[usize]) -> Tuple {
-    positions.iter().map(|i| row[*i].clone()).collect()
+fn project_positions(row: &[DataValue], positions: &[HeadPos]) -> Tuple {
+    positions.iter().map(|p| row[p.get()].clone()).collect()
 }
 
 /// Epoch 0 for a plain (non-aggregating) rule set. Returns
@@ -1629,12 +1644,10 @@ fn initial_meet_eval<R: RuleBody>(
     budget: &Budget,
     baseline: u64,
     recording: bool,
+    key_positions: &[HeadPos],
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
     let mut out = MeetAggrStore::new(rule_set.aggr.clone())?;
     let mut pending = PendingWitnesses::new();
-    let key_positions = rule_set
-        .meet_key_positions()
-        .expect("initial_meet_eval only runs for Meet heads");
     let mut ticker = budget.ticker(baseline, rule_symb);
     for (rule_n, body) in rule_set.bodies.iter().enumerate() {
         body.for_each_derivation(stores, None, recording, &mut |item, premises| {
@@ -1674,12 +1687,10 @@ fn incremental_meet_eval<R: RuleBody>(
     budget: &Budget,
     baseline: u64,
     recording: bool,
+    key_positions: &[HeadPos],
 ) -> Result<(bool, TempStore, PendingWitnesses)> {
     let mut out = MeetAggrStore::new(rule_set.aggr.clone())?;
     let mut pending = PendingWitnesses::new();
-    let key_positions = rule_set
-        .meet_key_positions()
-        .expect("incremental_meet_eval only runs for Meet heads");
     let mut ticker = budget.ticker(baseline, rule_symb);
     // The rule's running total, against which a re-derivation counts as
     // in-flight ONLY if the barrier would actually admit it. This is the
@@ -4661,7 +4672,7 @@ mod tests {
         assert_eq!(
             rule_set.kind,
             HeadAggrKind::Meet {
-                key_positions: vec![1]
+                key_positions: vec![HeadPos::from_index(1)]
             },
             "the grouping position is position 1, wherever the meet column sits"
         );

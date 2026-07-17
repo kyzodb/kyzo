@@ -568,7 +568,7 @@ mod segment_gate_tests {
         let mut out = Vec::new();
         for b in ra.iter_batched(tx, segments).unwrap() {
             let b = b.unwrap();
-            out.extend((0..b.len()).map(|i| b.row(i).to_vec()));
+            out.extend((0..b.len()).map(|i| b.row(i).expect("i < batch.len()").to_vec()));
         }
         out
     }

@@ -23,10 +23,10 @@
 //!
 //! Exactly the two **idempotent** semirings whose fixpoints are finite:
 //!
-//! - [`Boolean`] — existence. Its support must equal the engine's set
+//! - [`BooleanAnn`] — existence. Its support must equal the engine's set
 //!   semantics (the evaluator's own fixpoint), proven by differential
 //!   against the sealed oracle (`query/provenance.rs`).
-//! - [`Tropical`] — min-plus over [`Cost`]: the cheapest derivation, where
+//! - [`TropicalAnn`] — min-plus over [`Cost`]: the cheapest derivation, where
 //!   a derivation tree's cost is the sum of its rule-application weights
 //!   (unit weights make it the number of rule firings). Weights are
 //!   [`NonZeroU64`], which is what makes certificate extraction
@@ -38,10 +38,10 @@
 //! relation has infinitely many derivation trees). They are a different
 //! fixpoint with their own annotation store, out of this split's scope —
 //! see the capability design's PA3 boundary. Nothing here silently
-//! degrades into them: [`Semiring`] is a sealed exhaustively-matched
-//! enum of exactly the two lawful algebras, and the solver is armed with
-//! a pass ceiling ([`SolverBudget`]) so a non-stabilizing annotation
-//! chain refuses (typed) instead of hanging.
+//! degrades into them: annotations are sealed products
+//! ([`BooleanAnn`] / [`TropicalAnn`]) so a kind mismatch does not compile,
+//! and the solver is armed with a pass ceiling ([`SolverBudget`]) so a
+//! non-stabilizing annotation chain refuses (typed) instead of hanging.
 //!
 //! ## Two-phase evaluation, and why it is sound
 //!
@@ -135,6 +135,8 @@ pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 ///
 /// Exactly the two **idempotent** algebras whose fixpoints are finite.
 /// Counting/polynomial are refused at this door — they are not variants.
+/// Each variant's annotation is a sealed product type
+/// ([`BooleanAnn`] / [`TropicalAnn`]): kind mismatch does not compile.
 ///
 /// Laws (asserted on randomized values by the axiom tests in
 /// `query/provenance.rs`):
@@ -146,9 +148,9 @@ pub(crate) struct ProvenanceInvariantError(pub(crate) &'static str);
 ///
 /// **Solver contract beyond the axioms**: `⊕` is idempotent (`a ⊕ a = a`)
 /// and every `⊕`-chain stabilizes after finitely many strict changes —
-/// true of [`Semiring::Boolean`] (one flip) and [`Semiring::Tropical`]
-/// (a strictly decreasing `u64` chain is finite). The solver's pass
-/// ceiling turns any non-stabilizing chain into a typed refusal.
+/// true of [`BooleanAnn`] (one flip) and [`TropicalAnn`] (a strictly
+/// decreasing `u64` chain is finite). The solver's pass ceiling turns any
+/// non-stabilizing chain into a typed refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Semiring {
     /// `({⊥,⊤}, ∨, ∧, ⊥, ⊤)`: does a derivation exist. Support equals the
@@ -169,98 +171,94 @@ pub(crate) enum Cost {
     Infinite,
 }
 
-/// One annotation in the provenance algebra. Discriminant matches
-/// [`Semiring`]; cross-kind ops are an invariant violation (unreachable
-/// when the solver stays on one [`Semiring`] for a whole fixpoint).
+/// The algebra operations every sealed annotation product exposes. The
+/// associated value *is* the annotation — there is no independent
+/// `Annotation` enum that can disagree with its [`Semiring`].
+pub(crate) trait AnnAlgebra: Copy + Clone + PartialEq + Eq + Ord + Debug + Sized {
+    fn zero() -> Self;
+    fn one() -> Self;
+    fn plus(self, other: Self) -> Self;
+    fn times(self, other: Self) -> Result<Self, SemiringOverflow>;
+    fn lift_weight(weight: NonZeroU64) -> Self;
+}
+
+/// Sealed product: [`Semiring::Boolean`] × existence bit. Ops are total
+/// on this type alone — a tropical value cannot be passed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Annotation {
-    Boolean(bool),
-    Tropical(Cost),
-}
+pub(crate) struct BooleanAnn(bool);
 
-impl Annotation {
-    pub(crate) fn as_bool(self) -> Option<bool> {
-        match self {
-            Annotation::Boolean(b) => Some(b),
-            Annotation::Tropical(_) => None,
-        }
+impl BooleanAnn {
+    pub(crate) fn new(present: bool) -> Self {
+        Self(present)
     }
 
-    pub(crate) fn as_cost(self) -> Option<Cost> {
-        match self {
-            Annotation::Tropical(c) => Some(c),
-            Annotation::Boolean(_) => None,
-        }
+    pub(crate) fn get(self) -> bool {
+        self.0
     }
 }
 
-impl Semiring {
-    /// The additive identity: "no derivation".
-    pub(crate) fn zero(self) -> Annotation {
-        match self {
-            Semiring::Boolean => Annotation::Boolean(false),
-            Semiring::Tropical => Annotation::Tropical(Cost::Infinite),
+impl AnnAlgebra for BooleanAnn {
+    fn zero() -> Self {
+        Self(false)
+    }
+
+    fn one() -> Self {
+        Self(true)
+    }
+
+    fn plus(self, other: Self) -> Self {
+        Self(self.0 || other.0)
+    }
+
+    fn times(self, other: Self) -> Result<Self, SemiringOverflow> {
+        Ok(Self(self.0 && other.0))
+    }
+
+    fn lift_weight(_weight: NonZeroU64) -> Self {
+        Self(true)
+    }
+}
+
+/// Sealed product: [`Semiring::Tropical`] × [`Cost`]. Ops are total on
+/// this type alone — a boolean value cannot be passed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TropicalAnn(Cost);
+
+impl TropicalAnn {
+    pub(crate) fn new(cost: Cost) -> Self {
+        Self(cost)
+    }
+
+    pub(crate) fn cost(self) -> Cost {
+        self.0
+    }
+}
+
+impl AnnAlgebra for TropicalAnn {
+    fn zero() -> Self {
+        Self(Cost::Infinite)
+    }
+
+    fn one() -> Self {
+        Self(Cost::Finite(0))
+    }
+
+    fn plus(self, other: Self) -> Self {
+        Self(self.0.min(other.0))
+    }
+
+    fn times(self, other: Self) -> Result<Self, SemiringOverflow> {
+        match (self.0, other.0) {
+            (Cost::Infinite, _) | (_, Cost::Infinite) => Ok(Self(Cost::Infinite)),
+            (Cost::Finite(l), Cost::Finite(r)) => l
+                .checked_add(r)
+                .map(|s| Self(Cost::Finite(s)))
+                .ok_or(SemiringOverflow { left: l, right: r }),
         }
     }
 
-    /// The multiplicative identity: "a ground fact".
-    pub(crate) fn one(self) -> Annotation {
-        match self {
-            Semiring::Boolean => Annotation::Boolean(true),
-            Semiring::Tropical => Annotation::Tropical(Cost::Finite(0)),
-        }
-    }
-
-    /// `⊕`: combine alternative derivations. Total for each shipped
-    /// algebra (`∨` / `min`).
-    pub(crate) fn plus(self, a: &Annotation, b: &Annotation) -> Annotation {
-        match (self, a, b) {
-            (Semiring::Boolean, Annotation::Boolean(x), Annotation::Boolean(y)) => {
-                Annotation::Boolean(*x || *y)
-            }
-            (Semiring::Tropical, Annotation::Tropical(x), Annotation::Tropical(y)) => {
-                Annotation::Tropical(*x.min(y))
-            }
-            _ => unreachable!("semiring/annotation kind mismatch in ⊕"),
-        }
-    }
-
-    /// `⊗`: combine jointly-used premises. [`Semiring::Tropical`] refuses
-    /// (typed) on `u64` overflow.
-    pub(crate) fn times(
-        self,
-        a: &Annotation,
-        b: &Annotation,
-    ) -> Result<Annotation, SemiringOverflow> {
-        match (self, a, b) {
-            (Semiring::Boolean, Annotation::Boolean(x), Annotation::Boolean(y)) => {
-                Ok(Annotation::Boolean(*x && *y))
-            }
-            (Semiring::Tropical, Annotation::Tropical(x), Annotation::Tropical(y)) => {
-                match (x, y) {
-                    (Cost::Infinite, _) | (_, Cost::Infinite) => {
-                        Ok(Annotation::Tropical(Cost::Infinite))
-                    }
-                    (Cost::Finite(l), Cost::Finite(r)) => l
-                        .checked_add(*r)
-                        .map(|s| Annotation::Tropical(Cost::Finite(s)))
-                        .ok_or(SemiringOverflow {
-                            left: *l,
-                            right: *r,
-                        }),
-                }
-            }
-            _ => unreachable!("semiring/annotation kind mismatch in ⊗"),
-        }
-    }
-
-    /// Lift one rule application's weight: [`Semiring::Boolean`] ignores
-    /// it (`1`); [`Semiring::Tropical`] charges it.
-    pub(crate) fn lift_weight(self, weight: NonZeroU64) -> Annotation {
-        match self {
-            Semiring::Boolean => Annotation::Boolean(true),
-            Semiring::Tropical => Annotation::Tropical(Cost::Finite(weight.get())),
-        }
+    fn lift_weight(weight: NonZeroU64) -> Self {
+        Self(Cost::Finite(weight.get()))
     }
 }
 
@@ -372,22 +370,25 @@ impl SolverBudget {
 /// `ann(head) = ⊕ over derivations of (weight ⊗ ⊗ premises)`, with ground
 /// facts at `1` and everything else starting at `0`.
 ///
+/// `A` is the sealed product ([`BooleanAnn`] / [`TropicalAnn`]) — the
+/// algebra is fixed by the type parameter, so a kind mismatch cannot
+/// arise at the ops boundary.
+///
 /// Deterministic by construction: the pass order is the derivation list's
 /// order and the map is a `BTreeMap`; no iteration order depends on a
 /// hash or a thread schedule.
-pub(crate) fn solve<K: Ord + Clone + Debug>(
-    semiring: Semiring,
+pub(crate) fn solve<A: AnnAlgebra, K: Ord + Clone + Debug>(
     graph: &DerivationGraph<K>,
     budget: &SolverBudget,
-) -> Result<BTreeMap<K, Annotation>> {
-    let mut ann: BTreeMap<K, Annotation> = graph
+) -> Result<BTreeMap<K, A>> {
+    let mut ann: BTreeMap<K, A> = graph
         .nodes()
         .into_iter()
         .map(|n| {
             let v = if graph.facts.contains(&n) {
-                semiring.one()
+                A::one()
             } else {
-                semiring.zero()
+                A::zero()
             };
             (n, v)
         })
@@ -397,17 +398,17 @@ pub(crate) fn solve<K: Ord + Clone + Debug>(
     for _pass in 0..ceiling {
         let mut changed = false;
         for d in &graph.derivations {
-            let mut v = semiring.lift_weight(d.weight);
+            let mut v = A::lift_weight(d.weight);
             for p in &d.premises {
                 let pv = ann.get(p).ok_or(ProvenanceInvariantError(
                     "a premise vanished from the node set",
                 ))?;
-                v = semiring.times(&v, pv)?;
+                v = v.times(*pv)?;
             }
             let old = ann.get(&d.head).ok_or(ProvenanceInvariantError(
                 "a head vanished from the node set",
             ))?;
-            let new = semiring.plus(old, &v);
+            let new = old.plus(v);
             if new != *old {
                 ann.insert(d.head.clone(), new);
                 changed = true;
@@ -425,18 +426,10 @@ pub(crate) fn solve<K: Ord + Clone + Debug>(
     .into())
 }
 
-/// Project a tropical annotation map to [`Cost`] values. Boolean maps
-/// refuse (invariant): certificate extraction is tropical-only.
-pub(crate) fn as_cost_map<K: Ord + Clone>(
-    ann: &BTreeMap<K, Annotation>,
-) -> Result<BTreeMap<K, Cost>> {
-    ann.iter()
-        .map(|(k, v)| {
-            v.as_cost()
-                .map(|c| (k.clone(), c))
-                .ok_or_else(|| ProvenanceInvariantError("expected tropical annotations").into())
-        })
-        .collect()
+/// Project a tropical annotation map to [`Cost`] values. The input type
+/// proves the map is tropical — no runtime kind check.
+pub(crate) fn as_cost_map<K: Ord + Clone>(ann: &BTreeMap<K, TropicalAnn>) -> BTreeMap<K, Cost> {
+    ann.iter().map(|(k, v)| (k.clone(), v.cost())).collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────

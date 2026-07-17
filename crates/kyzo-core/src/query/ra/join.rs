@@ -206,7 +206,10 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
                 }
                 let left_row = {
                     let (b, idx) = self.cur.as_ref().unwrap();
-                    b.row(*idx)
+                    match b.row(*idx) {
+                        Ok(r) => r,
+                        Err(e) => return Some(Err(e.into())),
+                    }
                 };
                 match (self.probe)(left_row) {
                     Ok(it) => self.active = Some(it),
@@ -215,7 +218,10 @@ impl<'a> Iterator for PrefixProbeBatchJoin<'a> {
             }
 
             let (b, idx) = self.cur.as_ref().unwrap();
-            let left_row = b.row(*idx);
+            let left_row = match b.row(*idx) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e.into())),
+            };
             let mut exhausted = false;
             let active = self.active.as_mut().unwrap();
             while out.len() < BATCH_ROWS {
@@ -639,7 +645,10 @@ impl MaterializedBatchJoin<'_> {
                 self.left_batch = None;
                 continue;
             }
-            let left = batch.row(self.left_row);
+            let left = match batch.row(self.left_row) {
+                Ok(r) => r,
+                Err(e) => return Err(e.into()),
+            };
             if self.run_idx == usize::MAX {
                 // New left row: binary-search the run start by comparing
                 // stored join columns against the projected left row — no

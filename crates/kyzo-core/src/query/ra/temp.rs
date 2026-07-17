@@ -244,13 +244,19 @@ impl<'a> Iterator for TempStorePrefixBatchJoin<'a> {
                 }
                 let left_row = {
                     let (b, idx) = self.cur.as_ref().unwrap();
-                    b.row(*idx)
+                    match b.row(*idx) {
+                        Ok(r) => r,
+                        Err(e) => return Some(Err(e.into())),
+                    }
                 };
                 self.active = Some(self.probe(left_row));
             }
 
             let (b, idx) = self.cur.as_ref().unwrap();
-            let left_row = b.row(*idx);
+            let left_row = match b.row(*idx) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e.into())),
+            };
             let active = self.active.as_mut().unwrap();
             let mut exhausted = false;
             while out.len() < BATCH_ROWS {

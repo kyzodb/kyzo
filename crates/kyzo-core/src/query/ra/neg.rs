@@ -314,7 +314,7 @@ impl NegJoin {
                 for batch in v.iter_batched(tx)? {
                     let batch = batch?;
                     for i in 0..batch.len() {
-                        let row = batch.row(i);
+                        let row = batch.row(i).expect("i < batch.len()");
                         let to_join: Box<[DataValue]> =
                             right_join_indices.iter().map(|i| row[*i].clone()).collect();
                         right_join_vals.insert(to_join);
@@ -332,7 +332,7 @@ impl NegJoin {
                 for batch in v.iter_batched(tx)? {
                     let batch = batch?;
                     for i in 0..batch.len() {
-                        let row = batch.row(i);
+                        let row = batch.row(i).expect("i < batch.len()");
                         let to_join: Box<[DataValue]> =
                             right_join_indices.iter().map(|i| row[*i].clone()).collect();
                         right_join_vals.insert(to_join);
@@ -386,7 +386,7 @@ impl NegBatchFilter<'_> {
                 }
             };
             for i in 0..batch.len() {
-                let row = batch.row(i);
+                let row = batch.row(i).expect("i < batch.len()");
                 match (self.has_match)(row) {
                     Ok(true) => {}
                     Ok(false) => {

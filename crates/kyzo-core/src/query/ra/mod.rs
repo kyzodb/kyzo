@@ -1003,7 +1003,7 @@ mod tests {
                     Err(e) => return Some(Err(e)),
                     Ok(b) => {
                         current = (0..b.len())
-                            .map(|i| b.row(i).to_vec())
+                            .map(|i| b.row(i).expect("i < batch.len()").to_vec())
                             .map(Tuple::from_vec)
                             .collect();
                         idx = 0;

@@ -269,7 +269,10 @@ impl SearchBatches<'_> {
                 let Some(batch) = &self.parent_batch else {
                     unreachable!("hits in flight imply a parent batch")
                 };
-                let row = batch.row(self.parent_row).to_vec();
+                let row = match batch.row(self.parent_row) {
+                    Ok(r) => r.to_vec(),
+                    Err(e) => return Err(e.into()),
+                };
                 while self.hit_idx < self.hits.len() {
                     let hit: Vec<DataValue> =
                         self.hits.hit_cells(self.hit_idx).cloned().collect();
@@ -314,7 +317,10 @@ impl SearchBatches<'_> {
             let Some(batch) = &self.parent_batch else {
                 break;
             };
-            let row = batch.row(self.parent_row);
+            let row = match batch.row(self.parent_row) {
+                Ok(r) => r,
+                Err(e) => return Err(e.into()),
+            };
             match (self.search)(row) {
                 Ok(hits) => {
                     self.hits = hits;

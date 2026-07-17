@@ -15,13 +15,24 @@
 //! lives here is the CURRENCY HANDLING every batched operator shares.
 
 use fjall::Slice;
-use miette::Result;
+use miette::{Diagnostic, Result};
+use thiserror::Error;
 
 use crate::data::expr::Expr;
 use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 
 pub(crate) const BATCH_ROWS: usize = 1024;
+
+/// A [`Batch::row`] index outside `0..len`. Typed refuse — OOB is not a
+/// process abort.
+#[derive(Debug, Error, Diagnostic, PartialEq, Eq)]
+#[error("batch row {index} out of range (len {len})")]
+#[diagnostic(code(batch::row_out_of_range))]
+pub(crate) struct BatchRowOutOfRange {
+    pub(crate) index: usize,
+    pub(crate) len: usize,
+}
 
 /// A run of rows flowing through the vectorized (batched) execution path.
 ///
@@ -73,32 +84,52 @@ impl Batch {
         }
     }
 
-    /// The slice of row `i` — the allocation-free view filters and
-    /// projections evaluate against.
-    pub(crate) fn row(&self, i: usize) -> &[DataValue] {
+    /// Row `i` when `i < len`, else a typed refuse. Proven in-range
+    /// iterators use [`Self::iter_rows`] so they never hit the refuse.
+    pub(crate) fn row(&self, i: usize) -> Result<&[DataValue], BatchRowOutOfRange> {
+        if i >= self.offsets.len() {
+            return Err(BatchRowOutOfRange {
+                index: i,
+                len: self.offsets.len(),
+            });
+        }
+        Ok(self.row_at(i))
+    }
+
+    /// Infallible view for an index already proven `< len` (e.g. by
+    /// iterating `0..self.len()`).
+    fn row_at(&self, i: usize) -> &[DataValue] {
         let start = if i == 0 { 0 } else { self.offsets[i - 1] };
         &self.values[start..self.offsets[i]]
     }
 
     /// Iterate rows as slices, in stream order.
     pub(crate) fn iter_rows(&self) -> impl Iterator<Item = &[DataValue]> {
-        (0..self.offsets.len()).map(|i| self.row(i))
+        (0..self.offsets.len()).map(|i| self.row_at(i))
     }
 
-    /// Append a row by extending `values` in place through `fill`; the row
-    /// is whatever `fill` pushed. `fill` writes directly into the shared
-    /// arena and must not push anything unless it fully succeeds, so a
-    /// failed decode never leaves torn bytes behind for the next row.
+    /// Append a row by extending `values` in place through `fill`.
+    /// Transactional: on `fill` error the arena is rolled back to its
+    /// pre-call length and no offset is committed — a torn decode cannot
+    /// leave the batch misaligned.
     pub(crate) fn push_with(
         &mut self,
         fill: impl FnOnce(&mut Vec<DataValue>) -> Result<()>,
     ) -> Result<()> {
-        fill(&mut self.values)?;
-        self.offsets.push(self.values.len());
-        Ok(())
+        let mark = self.values.len();
+        match fill(&mut self.values) {
+            Ok(()) => {
+                self.offsets.push(self.values.len());
+                Ok(())
+            }
+            Err(e) => {
+                self.values.truncate(mark);
+                Err(e)
+            }
+        }
     }
 
-    /// Drop the most recently pushed row (a filtered-out decode).
+    /// Drop the most recently pushed row (a filtered-out successful push).
     pub(crate) fn pop(&mut self) {
         if let Some(end) = self.offsets.pop() {
             let start = self.offsets.last().copied().unwrap_or(0);
@@ -182,8 +213,9 @@ pub(crate) fn refine_batch(pred: &Option<Expr>, batch: Batch) -> Result<Batch> {
     )?;
     let mut out = Batch::new();
     for r in sel.iter() {
+        let row = batch.row(r)?;
         out.push_with(|buf| {
-            buf.extend_from_slice(batch.row(r));
+            buf.extend_from_slice(row);
             Ok(())
         })?;
     }
@@ -284,18 +316,16 @@ impl<I: Iterator<Item = Result<(Slice, Slice)>>> Iterator for BatchScanFilter<I>
                             // `Tuple` first — inline, no heap allocation for
                             // the common arity-<=3 row — then its values
                             // are copied once into the batch's shared flat
-                            // arena. Nothing is appended to `buf` unless
-                            // both decode steps succeed, so a torn row
-                            // never lands in the arena at all.
+                            // arena. `push_with` is transactional: a failed
+                            // decode rolls the arena back, so a torn row
+                            // never lands.
                             let mut row = Tuple::new();
                             decode_key_into(&k, &mut row)?;
                             extend_tuple_from_v(&mut row, &v)?;
                             buf.extend(row);
                             Ok(())
                         }) {
-                            // The decode failed mid-push: drop the torn row
-                            // and hold the error behind the refined prefix.
-                            batch.pop();
+                            // Decode refused; nothing was committed.
                             self.pending_err = Some(e);
                             break;
                         }
