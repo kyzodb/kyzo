@@ -15,7 +15,7 @@ syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 walkdir = "2"
-toml = "0.8"
+toml = "1.1"
 serde = { version = "1", features = ["derive"] }
 # The authority-graph verb's committed artifacts (story #322: ported from
 # scripts/authority-graph.py) and its allowlist/baseline inputs.
