@@ -1665,8 +1665,8 @@ impl Arena {
     /// Refuses with [`Denial::ExtentOverflow`] when a cascade merge would
     /// exceed the `u32` position space, or when the epoch counter would
     /// wrap; refuses with [`Denial::BookkeepingBroken`] when a delta value
-    /// is already present in sealed runs (dedup invariant) — never a
-    /// process abort.
+    /// is already present in sealed runs (dedup invariant), or when the
+    /// geometric merge cannot obtain two runs — never a process abort.
     pub fn seal(&mut self) -> Result<EpochRemap, Denial> {
         let from = self.epoch;
         let from_sealed_len = self.sealed_len as u32;
@@ -1714,8 +1714,8 @@ impl Arena {
                 if prev > 2 * last {
                     break;
                 }
-                let b = self.runs.pop().expect("len checked");
-                let a = self.runs.pop().expect("len checked");
+                let b = self.runs.pop().ok_or(Denial::BookkeepingBroken)?;
+                let a = self.runs.pop().ok_or(Denial::BookkeepingBroken)?;
                 let merged = Run::merge(&a, &b, &self.heap)?;
                 self.runs.push(Arc::new(merged));
             }
