@@ -711,20 +711,9 @@ impl VecContentHash {
         Ok(Self(bytes))
     }
 
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
     fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl std::ops::Deref for VecContentHash {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        self.as_bytes()
-    }
-}
-impl AsRef<[u8]> for VecContentHash {
-    fn as_ref(&self) -> &[u8] {
-        self.as_bytes()
     }
 }
 
@@ -764,20 +753,9 @@ impl HnswEntryKey {
         Ok(Self(bytes))
     }
 
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
     fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl std::ops::Deref for HnswEntryKey {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        self.as_bytes()
-    }
-}
-impl AsRef<[u8]> for HnswEntryKey {
-    fn as_ref(&self) -> &[u8] {
-        self.as_bytes()
     }
 }
 
@@ -797,20 +775,9 @@ impl HnswHitKey {
         Self(key.0)
     }
 
+    /// Named peel — no Deref/AsRef<[u8]> silent coerce.
     fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl std::ops::Deref for HnswHitKey {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        self.as_bytes()
-    }
-}
-impl AsRef<[u8]> for HnswHitKey {
-    fn as_ref(&self) -> &[u8] {
-        self.as_bytes()
     }
 }
 
