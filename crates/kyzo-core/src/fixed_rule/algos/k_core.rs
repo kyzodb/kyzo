@@ -218,7 +218,9 @@ mod tests {
     fn naive_coreness(
         nodes: &BTreeSet<String>,
         adj: &BTreeMap<String, BTreeSet<String>>,
-    ) -> BTreeMap<String, u32> {
+    ) -> Result<BTreeMap<String, u32>> {
+        use crate::fixed_rule::GraphAlgorithmInvariantError;
+
         let mut deg: BTreeMap<String, i64> = nodes
             .iter()
             .map(|v| (v.clone(), adj.get(v).map_or(0, |a| a.len() as i64)))
@@ -227,12 +229,11 @@ mod tests {
         let mut core: BTreeMap<String, u32> = BTreeMap::new();
         let mut k = 0u32;
         while removed.len() < nodes.len() {
-            // INVARIANT(k_core_remaining): loop condition proves a live node.
             let v = nodes
                 .iter()
                 .filter(|v| !removed.contains(*v))
                 .min_by_key(|v| (deg[*v], (*v).clone()))
-                .expect("INVARIANT(k_core_remaining): unremoved node exists")
+                .ok_or_else(|| GraphAlgorithmInvariantError::refuse("k_core_remaining"))?
                 .clone();
             k = k.max(deg[&v].max(0) as u32);
             core.insert(v.clone(), k);
@@ -240,14 +241,15 @@ mod tests {
             if let Some(nbrs) = adj.get(&v) {
                 for u in nbrs {
                     if !removed.contains(u) {
-                        // INVARIANT(k_core_deg): adjacency keys are in `deg`.
-                        *deg.get_mut(u)
-                            .expect("INVARIANT(k_core_deg): neighbor has degree") -= 1;
+                        let d = deg
+                            .get_mut(u)
+                            .ok_or_else(|| GraphAlgorithmInvariantError::refuse("k_core_deg"))?;
+                        *d -= 1;
                     }
                 }
             }
         }
-        core
+        Ok(core)
     }
 
     /// Build the undirected simple adjacency (keyed by node name) from an
@@ -320,7 +322,7 @@ mod tests {
             ("a", "h"), // pendant ⇒ h core 1
         ];
         let (nodes, adj) = adjacency(&edges);
-        let expected = naive_coreness(&nodes, &adj);
+        let expected = naive_coreness(&nodes, &adj).unwrap();
         assert_eq!(run(&edges), expected);
     }
 
