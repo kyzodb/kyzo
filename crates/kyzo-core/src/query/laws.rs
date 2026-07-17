@@ -146,8 +146,12 @@
 // target-split (used in one target, dead in another), so #[expect] cannot be satisfied uniformly.
 #![allow(dead_code)]
 
+use std::borrow::Borrow;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+use std::sync::Arc;
 
 use miette::{Diagnostic, Result};
 use thiserror::Error;
@@ -159,12 +163,96 @@ use crate::data::value::DataValue;
 use crate::data::value::Tuple;
 use crate::query::eval::Budget;
 
-pub(crate) type Rel = &'static str;
+/// Oracle relation / variable name. Content-eq `Arc<str>`: corpus sites
+/// mint from `'static` literals via [`From`]; the verify→oracle seam mints
+/// from runtime [`Symbol`](crate::data::symb::Symbol) text with
+/// [`Name::owned`] — no process-global leak-intern table (P115).
+#[derive(Clone, Debug)]
+pub(crate) struct Name(Arc<str>);
+
+impl Name {
+    /// Runtime / owned seam: verify and any non-static bridge.
+    pub(crate) fn owned(s: impl AsRef<str>) -> Self {
+        Self(Arc::from(s.as_ref()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl From<&'static str> for Name {
+    fn from(s: &'static str) -> Self {
+        Self(Arc::from(s))
+    }
+}
+
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+impl Eq for Name {}
+impl PartialOrd for Name {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Name {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+impl Deref for Name {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl AsRef<str> for Name {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl Borrow<str> for Name {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl PartialEq<str> for Name {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+impl PartialEq<&str> for Name {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+pub(crate) type Rel = Name;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Term {
-    Var(&'static str),
+    Var(Name),
     Const(DataValue),
+}
+
+impl Term {
+    /// Variable term from a static corpus name or an owned runtime name.
+    pub(crate) fn var(name: impl Into<Name>) -> Self {
+        Term::Var(name.into())
+    }
 }
 
 /// A bitemporal read coordinate, mirroring `data::value::AsOf`'s `(sys,
@@ -595,27 +683,27 @@ impl Literal {
     /// field on `Literal` fans out from here instead of from every file's
     /// own hand-written struct literal (the lesson of story #62's
     /// compiler-forced fallout across five files).
-    pub(crate) fn pos(rel: Rel, args: Vec<Term>) -> Self {
+    pub(crate) fn pos(rel: impl Into<Rel>, args: Vec<Term>) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
             polarity: Polarity::Positive,
             as_of: None,
         }
     }
     /// A negated body literal, current/untimed.
-    pub(crate) fn neg(rel: Rel, args: Vec<Term>) -> Self {
+    pub(crate) fn neg(rel: impl Into<Rel>, args: Vec<Term>) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
             polarity: Polarity::Negative,
             as_of: None,
         }
     }
     /// A positive body literal at its own bitemporal coordinate.
-    pub(crate) fn pos_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
+    pub(crate) fn pos_at(rel: impl Into<Rel>, args: Vec<Term>, at: AsOf) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
             polarity: Polarity::Positive,
             as_of: Some(at),
@@ -629,9 +717,9 @@ impl Literal {
     /// stored events and `at` alone, exactly as safe to negate as a read
     /// of `Program::facts`. See the module doc's "the time-travel negation
     /// lift" section for the full argument and its generative proof.
-    pub(crate) fn neg_at(rel: Rel, args: Vec<Term>, at: AsOf) -> Self {
+    pub(crate) fn neg_at(rel: impl Into<Rel>, args: Vec<Term>, at: AsOf) -> Self {
         Literal {
-            rel,
+            rel: rel.into(),
             args,
             polarity: Polarity::Negative,
             as_of: Some(at),
@@ -654,10 +742,14 @@ pub(crate) struct Rule {
 
 impl Rule {
     /// A rule with no aggregations.
-    pub(crate) fn plain(head_rel: Rel, head_args: Vec<Term>, body: Vec<Literal>) -> Self {
+    pub(crate) fn plain(
+        head_rel: impl Into<Rel>,
+        head_args: Vec<Term>,
+        body: Vec<Literal>,
+    ) -> Self {
         let aggr = (0..head_args.len()).map(|_| HeadAggrSlot::Plain).collect();
         Self {
-            head_rel,
+            head_rel: head_rel.into(),
             head_args,
             aggr,
             body,
@@ -666,13 +758,13 @@ impl Rule {
 
     /// A rule with per-position head aggregations.
     pub(crate) fn aggregated(
-        head_rel: Rel,
+        head_rel: impl Into<Rel>,
         head_args: Vec<Term>,
         aggr: Vec<HeadAggr>,
         body: Vec<Literal>,
     ) -> Self {
         Self {
-            head_rel,
+            head_rel: head_rel.into(),
             head_args,
             aggr,
             body,
@@ -733,18 +825,20 @@ impl Program {
 pub(crate) enum Rejection {
     /// A head variable is not bound by any positive body literal, or a
     /// negated literal uses a variable no positive literal binds.
-    Unsafe(&'static str),
+    Unsafe(Rel),
     /// A stratum-forcing dependency (negation, non-meet aggregation, a
     /// read of a meet-aggregated or fixed relation) occurs inside a
-    /// recursive cycle.
-    Unstratifiable(&'static str),
+    /// recursive cycle. May carry a blamed relation or a static diagnostic
+    /// token (`"incremental …".into()`).
+    Unstratifiable(Rel),
     /// The program shape is ill-formed: an aggregation vector whose length
     /// differs from the head's, rules of one head disagreeing on their
     /// aggregation signature (upstream refuses this at parse as
     /// `parser::head_aggr_mismatch`), a fixed head that is also a rule
     /// head, duplicated, or seeded with facts, facts under an aggregated
-    /// head, or a relation used at two different arities.
-    Malformed(&'static str),
+    /// head, or a relation used at two different arities. Blamed relation
+    /// or static diagnostic token via [`Name::from`].
+    Malformed(Rel),
     /// An aggregation failed at evaluation time (e.g. a type error inside
     /// a fold); carried as a value, never a panic.
     AggrError(String),
@@ -756,11 +850,11 @@ pub(crate) enum Rejection {
     BudgetExceeded(String),
 }
 
-fn literal_vars(l: &Literal) -> HashSet<&'static str> {
+fn literal_vars(l: &Literal) -> HashSet<&str> {
     l.args
         .iter()
         .filter_map(|t| match t {
-            Term::Var(v) => Some(*v),
+            Term::Var(v) => Some(v.as_str()),
             Term::Const(_) => None,
         })
         .collect()
@@ -777,14 +871,14 @@ pub(crate) fn check_safety(program: &Program) -> Result<(), Rejection> {
             .collect();
         for t in &rule.head_args {
             if let Term::Var(v) = t
-                && !positive_vars.contains(v)
+                && !positive_vars.contains(v.as_str())
             {
-                return Err(Rejection::Unsafe(rule.head_rel));
+                return Err(Rejection::Unsafe(rule.head_rel.clone()));
             }
         }
         for l in rule.body.iter().filter(|l| l.is_negated()) {
             if !literal_vars(l).is_subset(&positive_vars) {
-                return Err(Rejection::Unsafe(rule.head_rel));
+                return Err(Rejection::Unsafe(rule.head_rel.clone()));
             }
         }
     }
@@ -815,7 +909,10 @@ pub(crate) struct HeadClass {
 pub(crate) fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
     let mut per_head: HashMap<Rel, Vec<&Rule>> = HashMap::new();
     for rule in &program.rules {
-        per_head.entry(rule.head_rel).or_default().push(rule);
+        per_head
+            .entry(rule.head_rel.clone())
+            .or_default()
+            .push(rule);
     }
     per_head
         .into_iter()
@@ -846,14 +943,14 @@ pub(crate) fn head_classes(program: &Program) -> HashMap<Rel, HeadClass> {
 /// - a fixed rule forces a stratum on every input.
 fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
     let classes = head_classes(program);
-    let fixed_heads: HashSet<Rel> = program.fixed.iter().map(|f| f.head_rel).collect();
-    let is_meet = |rel: Rel| classes.get(rel).is_some_and(|c| c.is_meet);
+    let fixed_heads: HashSet<Rel> = program.fixed.iter().map(|f| f.head_rel.clone()).collect();
+    let is_meet = |rel: &Rel| classes.get(rel).is_some_and(|c| c.is_meet);
     let mut edges = Vec::new();
     for rule in &program.rules {
-        let head = rule.head_rel;
+        let head = rule.head_rel.clone();
         let class = classes[&head];
         for lit in &rule.body {
-            let dep = lit.rel;
+            let dep = lit.rel.clone();
             let forcing = if class.has_aggr {
                 if class.is_meet && dep == head {
                     // The one legal aggregation inside recursion: a meet
@@ -863,14 +960,14 @@ fn dependency_edges(program: &Program) -> Vec<(Rel, Rel, bool)> {
                     true
                 }
             } else {
-                lit.is_negated() || fixed_heads.contains(dep) || is_meet(dep)
+                lit.is_negated() || fixed_heads.contains(&dep) || is_meet(&dep)
             };
-            edges.push((head, dep, forcing));
+            edges.push((head.clone(), dep, forcing));
         }
     }
     for f in &program.fixed {
         for dep in &f.inputs {
-            edges.push((f.head_rel, *dep, true));
+            edges.push((f.head_rel.clone(), dep.clone(), true));
         }
     }
     edges
@@ -886,24 +983,27 @@ pub(crate) fn check_stratifiable(program: &Program) -> Result<(), Rejection> {
     let edges = dependency_edges(program);
     let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        adjacency.entry(*head).or_default().insert(*dep);
+        adjacency
+            .entry(head.clone())
+            .or_default()
+            .insert(dep.clone());
     }
-    let reaches = |from: Rel, to: Rel| -> bool {
+    let reaches = |from: &Rel, to: &Rel| -> bool {
         let mut seen = HashSet::new();
-        let mut stack = vec![from];
+        let mut stack = vec![from.clone()];
         while let Some(r) = stack.pop() {
-            if r == to {
+            if r == *to {
                 return true;
             }
-            if seen.insert(r) {
-                stack.extend(adjacency.get(r).into_iter().flatten().copied());
+            if seen.insert(r.clone()) {
+                stack.extend(adjacency.get(&r).into_iter().flatten().cloned());
             }
         }
         false
     };
     for (head, dep, forcing) in &edges {
         if *forcing && reaches(dep, head) {
-            return Err(Rejection::Unstratifiable(head));
+            return Err(Rejection::Unstratifiable(head.clone()));
         }
     }
     Ok(())
@@ -935,7 +1035,7 @@ enum NameIntroduction {
 
 impl NameIntroduction {
     /// The name being introduced — checked against `Program::histories`.
-    fn name(&self) -> Rel {
+    fn name(&self) -> &Rel {
         match self {
             NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r,
             NameIntroduction::FixedInput { input, .. } => input,
@@ -945,8 +1045,8 @@ impl NameIntroduction {
     /// collides with a historical relation.
     fn report(&self) -> Rel {
         match self {
-            NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r,
-            NameIntroduction::FixedInput { head, .. } => head,
+            NameIntroduction::RuleHead(r) | NameIntroduction::FixedHead(r) => r.clone(),
+            NameIntroduction::FixedInput { head, .. } => head.clone(),
         }
     }
 }
@@ -961,14 +1061,14 @@ impl NameIntroduction {
 fn name_introductions(program: &Program) -> Vec<NameIntroduction> {
     let mut out = Vec::new();
     for rule in &program.rules {
-        out.push(NameIntroduction::RuleHead(rule.head_rel));
+        out.push(NameIntroduction::RuleHead(rule.head_rel.clone()));
     }
     for f in &program.fixed {
-        out.push(NameIntroduction::FixedHead(f.head_rel));
-        for &input in &f.inputs {
+        out.push(NameIntroduction::FixedHead(f.head_rel.clone()));
+        for input in &f.inputs {
             out.push(NameIntroduction::FixedInput {
-                head: f.head_rel,
-                input,
+                head: f.head_rel.clone(),
+                input: input.clone(),
             });
         }
     }
@@ -997,11 +1097,11 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     let mut signatures: BTreeMap<Rel, &[HeadAggr]> = BTreeMap::new();
     for rule in &program.rules {
         if rule.aggr.len() != rule.head_args.len() {
-            return Err(Rejection::Malformed(rule.head_rel));
+            return Err(Rejection::Malformed(rule.head_rel.clone()));
         }
-        match signatures.entry(rule.head_rel) {
+        match signatures.entry(rule.head_rel.clone()) {
             Entry::Occupied(prev) if *prev.get() != rule.aggr.as_slice() => {
-                return Err(Rejection::Malformed(rule.head_rel));
+                return Err(Rejection::Malformed(rule.head_rel.clone()));
             }
             Entry::Occupied(_) => {}
             Entry::Vacant(e) => {
@@ -1011,17 +1111,17 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     }
     let mut fixed_heads = HashSet::new();
     for f in &program.fixed {
-        if !fixed_heads.insert(f.head_rel) || program.facts.contains_key(f.head_rel) {
-            return Err(Rejection::Malformed(f.head_rel));
+        if !fixed_heads.insert(f.head_rel.clone()) || program.facts.contains_key(&f.head_rel) {
+            return Err(Rejection::Malformed(f.head_rel.clone()));
         }
     }
     for rule in &program.rules {
-        if fixed_heads.contains(rule.head_rel) {
-            return Err(Rejection::Malformed(rule.head_rel));
+        if fixed_heads.contains(&rule.head_rel) {
+            return Err(Rejection::Malformed(rule.head_rel.clone()));
         }
     }
     for (rel, class) in head_classes(program) {
-        if class.has_aggr && program.facts.contains_key(rel) {
+        if class.has_aggr && program.facts.contains_key(&rel) {
             return Err(Rejection::Malformed(rel));
         }
     }
@@ -1030,7 +1130,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // only through the one evaluator that reads either.
     for rel in program.histories.keys() {
         if program.facts.contains_key(rel) {
-            return Err(Rejection::Malformed(rel));
+            return Err(Rejection::Malformed(rel.clone()));
         }
     }
     // ONE law, checked from ONE walk (`name_introductions`): a historical
@@ -1058,7 +1158,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
         let key_arity = history.first().map(|e| e.key().len());
         for e in history {
             if Some(e.key().len()) != key_arity {
-                return Err(Rejection::Malformed(rel));
+                return Err(Rejection::Malformed(rel.clone()));
             }
         }
         let payload_arity = history
@@ -1066,7 +1166,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
             .find_map(|e| e.payload().map(|p| p.len()));
         for e in history.iter().filter_map(Event::payload) {
             if Some(e.len()) != payload_arity {
-                return Err(Rejection::Malformed(rel));
+                return Err(Rejection::Malformed(rel.clone()));
             }
         }
     }
@@ -1075,8 +1175,8 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // fact/derived (IDB) relation has no leaf to resolve it against.
     for rule in &program.rules {
         for lit in &rule.body {
-            if lit.as_of.is_some() && !program.histories.contains_key(lit.rel) {
-                return Err(Rejection::Malformed(lit.rel));
+            if lit.as_of.is_some() && !program.histories.contains_key(&lit.rel) {
+                return Err(Rejection::Malformed(lit.rel.clone()));
             }
         }
     }
@@ -1088,7 +1188,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     // can be neither rule heads nor fact relations, checked above).
     let mut arities: HashMap<Rel, usize> = HashMap::new();
     let mut check_arity = |rel: Rel, arity: usize| -> Result<(), Rejection> {
-        match arities.get(rel) {
+        match arities.get(&rel) {
             Some(known) if *known != arity => Err(Rejection::Malformed(rel)),
             Some(_) => Ok(()),
             None => {
@@ -1099,7 +1199,7 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
     };
     for (rel, tuples) in &program.facts {
         for t in tuples {
-            check_arity(rel, t.len())?;
+            check_arity(rel.clone(), t.len())?;
         }
     }
     for (rel, history) in &program.histories {
@@ -1109,13 +1209,13 @@ pub(crate) fn check_wellformed(program: &Program) -> Result<(), Rejection> {
                 .iter()
                 .find_map(|e| e.payload().map(|p| p.len())),
         ) {
-            check_arity(rel, k + v)?;
+            check_arity(rel.clone(), k + v)?;
         }
     }
     for rule in &program.rules {
-        check_arity(rule.head_rel, rule.head_args.len())?;
+        check_arity(rule.head_rel.clone(), rule.head_args.len())?;
         for l in &rule.body {
-            check_arity(l.rel, l.args.len())?;
+            check_arity(l.rel.clone(), l.args.len())?;
         }
     }
     Ok(())
@@ -1130,18 +1230,17 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
     let rels: HashSet<Rel> = program
         .rules
         .iter()
-        .flat_map(|r| std::iter::once(r.head_rel).chain(r.body.iter().map(|l| l.rel)))
-        .chain(program.facts.keys().copied())
-        .chain(program.histories.keys().copied())
-        .chain(
-            program
-                .fixed
-                .iter()
-                .flat_map(|f| std::iter::once(f.head_rel).chain(f.inputs.iter().copied())),
-        )
+        .flat_map(|r| {
+            std::iter::once(r.head_rel.clone()).chain(r.body.iter().map(|l| l.rel.clone()))
+        })
+        .chain(program.facts.keys().cloned())
+        .chain(program.histories.keys().cloned())
+        .chain(program.fixed.iter().flat_map(|f| {
+            std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())
+        }))
         .collect();
     for r in &rels {
-        s.insert(r, 0);
+        s.insert(r.clone(), 0);
     }
     // Bellman-Ford over ≤ |rels| levels: any simple dependency path has
     // fewer than |rels| edges, so |rels| passes settle every level and one
@@ -1152,7 +1251,7 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
         for (head, dep, forcing) in &edges {
             let need = s[dep] + usize::from(*forcing);
             if s[head] < need {
-                s.insert(*head, need);
+                s.insert(head.clone(), need);
                 changed = true;
             }
         }
@@ -1168,7 +1267,7 @@ fn strata(program: &Program) -> HashMap<Rel, usize> {
 /// happened to alias `BTreeMap` instead of `HashMap` — never load-bearing,
 /// since a `Bindings` map is only ever probed by key here or in either
 /// consumer, never iterated as a whole).
-pub(crate) type Bindings = HashMap<&'static str, DataValue>;
+pub(crate) type Bindings = HashMap<Name, DataValue>;
 
 /// Shared reference-tier helper (issue #89): plain Datalog unification of
 /// one literal's argument list against one candidate tuple, extending
@@ -1188,11 +1287,11 @@ pub(crate) fn unify(args: &[Term], tuple: &[DataValue], bound: &Bindings) -> Opt
                     return None;
                 }
             }
-            Term::Var(name) => match out.get(name) {
+            Term::Var(name) => match out.get(name.as_str()) {
                 Some(existing) if existing != v => return None,
                 Some(_) => {}
                 None => {
-                    out.insert(name, v.clone());
+                    out.insert(name.clone(), v.clone());
                 }
             },
         }
@@ -1206,7 +1305,7 @@ pub(crate) fn ground(args: &[Term], bound: &Bindings) -> Tuple {
     args.iter()
         .map(|t| match t {
             Term::Const(c) => c.clone(),
-            Term::Var(v) => bound[v].clone(),
+            Term::Var(v) => bound[v.as_str()].clone(),
         })
         .collect()
 }
@@ -1226,9 +1325,9 @@ fn literal_rows(
     lit: &Literal,
     default_as_of: AsOf,
 ) -> BTreeSet<Tuple> {
-    match program.histories.get(lit.rel) {
+    match program.histories.get(&lit.rel) {
         Some(history) => resolve_relation(history, lit.as_of.unwrap_or(default_as_of)),
-        None => db.get(lit.rel).cloned().unwrap_or_default(),
+        None => db.get(&lit.rel).cloned().unwrap_or_default(),
     }
 }
 
@@ -1390,9 +1489,9 @@ impl MeetState {
             if let Some((aggr, _)) = a.as_aggregated() {
                 // Total by classification (`is_meet` heads only), never a
                 // panic: a non-meet form here is a malformed program.
-                let op = aggr
-                    .meet_op()
-                    .ok_or(Rejection::Malformed("non-meet aggregation on a meet head"))?;
+                let op = aggr.meet_op().ok_or(Rejection::Malformed(
+                    "non-meet aggregation on a meet head".into(),
+                ))?;
                 val_positions.push(i);
                 ops.push(op);
             }
@@ -1580,14 +1679,14 @@ fn naive_eval_at_impl(
         for f in program
             .fixed
             .iter()
-            .filter(|f| strata_of[f.head_rel] == stratum)
+            .filter(|f| strata_of[&f.head_rel] == stratum)
         {
             let inputs: Vec<BTreeSet<Tuple>> = f
                 .inputs
                 .iter()
                 .map(|r| db.get(r).cloned().unwrap_or_default())
                 .collect();
-            db.insert(f.head_rel, (f.eval)(&inputs));
+            db.insert(f.head_rel.clone(), (f.eval)(&inputs));
         }
 
         // Normal-aggregation heads run once, next: stratification forces
@@ -1596,8 +1695,8 @@ fn naive_eval_at_impl(
         let normal_heads: BTreeSet<Rel> = program
             .rules
             .iter()
-            .filter(|r| strata_of[r.head_rel] == stratum)
-            .map(|r| r.head_rel)
+            .filter(|r| strata_of[&r.head_rel] == stratum)
+            .map(|r| r.head_rel.clone())
             .filter(|rel| {
                 let c = classes[rel];
                 c.has_aggr && !c.is_meet
@@ -1610,19 +1709,17 @@ fn naive_eval_at_impl(
                 .filter(|r| r.head_rel == *head)
                 .collect();
             let out = eval_normal_aggr_head(&head_rules, program, &db, default_as_of)?;
-            db.insert(head, out);
+            db.insert(head.clone(), out);
         }
 
         // Meet-aggregation heads of this stratum accumulate during the
         // fixpoint below; plain heads insert as ever.
         let mut meets: BTreeMap<Rel, MeetState> = BTreeMap::new();
-        for rule in program
-            .rules
-            .iter()
-            .filter(|r| strata_of[r.head_rel] == stratum && classes[r.head_rel].is_meet)
-        {
-            if !meets.contains_key(rule.head_rel) {
-                meets.insert(rule.head_rel, MeetState::new(&rule.aggr)?);
+        for rule in program.rules.iter().filter(|r| {
+            strata_of[&r.head_rel] == stratum && classes[&r.head_rel].is_meet
+        }) {
+            if !meets.contains_key(&rule.head_rel) {
+                meets.insert(rule.head_rel.clone(), MeetState::new(&rule.aggr)?);
             }
         }
         // Law 3's embodiment: over finite data with no invented values the
@@ -1639,19 +1736,17 @@ fn naive_eval_at_impl(
                 check_oracle_budget(b, &db, rounds)?;
             }
             let mut changed = false;
-            for rule in program
-                .rules
-                .iter()
-                .filter(|r| strata_of[r.head_rel] == stratum && !normal_heads.contains(r.head_rel))
-            {
+            for rule in program.rules.iter().filter(|r| {
+                strata_of[&r.head_rel] == stratum && !normal_heads.contains(&r.head_rel)
+            }) {
                 let rows = derived_rows(rule, program, &db, default_as_of);
-                if let Some(state) = meets.get_mut(rule.head_rel) {
+                if let Some(state) = meets.get_mut(&rule.head_rel) {
                     for row in &rows {
                         changed |= state.meet_row(row)?;
                     }
                 } else {
                     for row in rows {
-                        changed |= db.entry(rule.head_rel).or_default().insert(row);
+                        changed |= db.entry(rule.head_rel.clone()).or_default().insert(row);
                     }
                 }
             }
@@ -1680,7 +1775,7 @@ fn naive_eval_at_impl(
             // Republish the accumulated meet relations so the next round's
             // derivations (the recursive reads) see this round's meets.
             for (head, state) in &meets {
-                db.insert(head, state.materialize());
+                db.insert(head.clone(), state.materialize());
             }
             if !changed {
                 break;
@@ -1804,28 +1899,22 @@ fn edb_relations(program: &Program) -> BTreeSet<Rel> {
     let idb: BTreeSet<Rel> = program
         .rules
         .iter()
-        .map(|r| r.head_rel)
-        .chain(program.fixed.iter().map(|f| f.head_rel))
+        .map(|r| r.head_rel.clone())
+        .chain(program.fixed.iter().map(|f| f.head_rel.clone()))
         .collect();
     let mentioned: BTreeSet<Rel> = program
         .facts
         .keys()
-        .copied()
-        .chain(program.histories.keys().copied())
-        .chain(
-            program
-                .rules
-                .iter()
-                .flat_map(|r| std::iter::once(r.head_rel).chain(r.body.iter().map(|l| l.rel))),
-        )
-        .chain(
-            program
-                .fixed
-                .iter()
-                .flat_map(|f| std::iter::once(f.head_rel).chain(f.inputs.iter().copied())),
-        )
+        .cloned()
+        .chain(program.histories.keys().cloned())
+        .chain(program.rules.iter().flat_map(|r| {
+            std::iter::once(r.head_rel.clone()).chain(r.body.iter().map(|l| l.rel.clone()))
+        }))
+        .chain(program.fixed.iter().flat_map(|f| {
+            std::iter::once(f.head_rel.clone()).chain(f.inputs.iter().cloned())
+        }))
         .collect();
-    mentioned.difference(&idb).copied().collect()
+    mentioned.difference(&idb).cloned().collect()
 }
 
 /// A full topological order over EVERY dependency edge (not just the
@@ -1837,20 +1926,23 @@ fn topological_order(program: &Program) -> Vec<Rel> {
     let edges = dependency_edges(program);
     let mut all_rels: BTreeSet<Rel> = edb_relations(program);
     for rule in &program.rules {
-        all_rels.insert(rule.head_rel);
+        all_rels.insert(rule.head_rel.clone());
         for lit in &rule.body {
-            all_rels.insert(lit.rel);
+            all_rels.insert(lit.rel.clone());
         }
     }
     for f in &program.fixed {
-        all_rels.insert(f.head_rel);
+        all_rels.insert(f.head_rel.clone());
         for input in &f.inputs {
-            all_rels.insert(*input);
+            all_rels.insert(input.clone());
         }
     }
     let mut depends_on: HashMap<Rel, HashSet<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        depends_on.entry(*head).or_default().insert(*dep);
+        depends_on
+            .entry(head.clone())
+            .or_default()
+            .insert(dep.clone());
     }
     // Kahn's algorithm over "depends_on": a relation is ready once every
     // relation it depends on has already been placed.
@@ -1858,7 +1950,7 @@ fn topological_order(program: &Program) -> Vec<Rel> {
     let mut order = Vec::with_capacity(all_rels.len());
     while placed.len() < all_rels.len() {
         let mut progressed = false;
-        for &rel in &all_rels {
+        for rel in &all_rels {
             if placed.contains(rel) {
                 continue;
             }
@@ -1866,8 +1958,8 @@ fn topological_order(program: &Program) -> Vec<Rel> {
                 .get(rel)
                 .is_none_or(|deps| deps.iter().all(|d| placed.contains(d)));
             if ready {
-                order.push(rel);
-                placed.insert(rel);
+                order.push(rel.clone());
+                placed.insert(rel.clone());
                 progressed = true;
             }
         }
@@ -1889,22 +1981,25 @@ fn has_any_cycle(program: &Program) -> bool {
     let edges = dependency_edges(program);
     let mut adjacency: HashMap<Rel, HashSet<Rel>> = HashMap::new();
     for (head, dep, _) in &edges {
-        adjacency.entry(*head).or_default().insert(*dep);
+        adjacency
+            .entry(head.clone())
+            .or_default()
+            .insert(dep.clone());
     }
-    let reaches = |from: Rel, to: Rel| -> bool {
+    let reaches = |from: &Rel, to: &Rel| -> bool {
         let mut seen = HashSet::new();
-        let mut stack = vec![from];
+        let mut stack = vec![from.clone()];
         while let Some(r) = stack.pop() {
-            if r == to {
+            if r == *to {
                 return true;
             }
-            if seen.insert(r) {
-                stack.extend(adjacency.get(r).into_iter().flatten().copied());
+            if seen.insert(r.clone()) {
+                stack.extend(adjacency.get(&r).into_iter().flatten().cloned());
             }
         }
         false
     };
-    edges.iter().any(|(head, dep, _)| reaches(*dep, *head))
+    edges.iter().any(|(head, dep, _)| reaches(dep, head))
 }
 
 /// Every grounded head tuple ONE rule could possibly have gained or lost
@@ -1930,7 +2025,7 @@ fn collect_candidates(
         .body
         .iter()
         .enumerate()
-        .filter(|(_, l)| rel_deltas.get(l.rel).is_some_and(|d| !d.is_empty()))
+        .filter(|(_, l)| rel_deltas.get(&l.rel).is_some_and(|d| !d.is_empty()))
         .map(|(i, _)| i)
         .collect();
     if varying.is_empty() {
@@ -1972,7 +2067,7 @@ fn contribute_candidates_subset(
     let mut frontier: Vec<Bindings> = vec![Bindings::new()];
     for &pos in subset {
         let lit = &rule.body[pos];
-        let deltas = &rel_deltas[lit.rel];
+        let deltas = &rel_deltas[&lit.rel];
         let mut next = Vec::new();
         for bound in &frontier {
             for fact in deltas {
@@ -2134,7 +2229,7 @@ fn eval_one_group(
                     }
                 }
                 Term::Var(name) => {
-                    seed.insert(name, group_key[slot].clone());
+                    seed.insert(name.clone(), group_key[slot].clone());
                 }
             }
         }
@@ -2283,7 +2378,8 @@ pub(crate) fn incremental_eval(
         return Err(Rejection::Unstratifiable(
             "incremental maintenance refuses any recursive dependency, not just the \
              stratification-illegal ones — retraction through recursion is DRed territory, \
-             out of this story's scope",
+             out of this story's scope"
+                .into(),
         ));
     }
     let classes = head_classes(program);
@@ -2296,7 +2392,8 @@ pub(crate) fn incremental_eval(
         // actually changed. A typed refusal, not a wrong answer.
         return Err(Rejection::Malformed(
             "incremental maintenance does not cover fixed rules (opaque graph algorithms) — \
-             refused, not silently wrong; recompute this program in full instead",
+             refused, not silently wrong; recompute this program in full instead"
+                .into(),
         ));
     }
 
@@ -2307,8 +2404,8 @@ pub(crate) fn incremental_eval(
     let mut new_total: BTreeMap<Rel, BTreeSet<Tuple>> = BTreeMap::new();
 
     for rel in order {
-        let old_rows = old_total.get(rel).cloned().unwrap_or_default();
-        let (delta, new_rows) = if edb.contains(rel) {
+        let old_rows = old_total.get(&rel).cloned().unwrap_or_default();
+        let (delta, new_rows) = if edb.contains(&rel) {
             // A redundant patch entry (asserting a fact already present,
             // retracting one already absent) is a no-op on the SET, even
             // though it's a real byte written to the log — recompute's
@@ -2318,7 +2415,7 @@ pub(crate) fn incremental_eval(
             // `Plus` for an already-present fact showed up as a phantom
             // EDB delta with nothing on the recompute side to match).
             let filtered: BTreeSet<SignedFact> = edb_patch
-                .get(rel)
+                .get(&rel)
                 .into_iter()
                 .flatten()
                 .filter(|fact| match fact {
@@ -2341,7 +2438,7 @@ pub(crate) fn incremental_eval(
             (filtered, new_rows)
         } else {
             let rules: Vec<&Rule> = program.rules.iter().filter(|r| r.head_rel == rel).collect();
-            let delta = if classes[rel].has_aggr {
+            let delta = if classes[&rel].has_aggr {
                 eval_aggregating_head_incremental(
                     &rules,
                     program,
@@ -2393,7 +2490,7 @@ pub(crate) fn incremental_eval(
             }
             (delta, new_rows)
         };
-        new_total.insert(rel, new_rows);
+        new_total.insert(rel.clone(), new_rows);
         rel_deltas.insert(rel, delta);
     }
     Ok(rel_deltas)
@@ -2402,7 +2499,7 @@ pub(crate) fn incremental_eval(
 /// The corpus of programs the compiler must refuse — shared between the
 /// reference checker's self-tests and (as they land) the real compiler's.
 pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
-    fn lit(rel: Rel, args: Vec<Term>, negated: bool) -> Literal {
+    fn lit(rel: impl Into<Rel>, args: Vec<Term>, negated: bool) -> Literal {
         if negated {
             Literal::neg(rel, args)
         } else {
@@ -2416,8 +2513,8 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
             args: vec![],
         }
     }
-    let x = || Term::Var("X");
-    let y = || Term::Var("Y");
+    let x = || Term::var("X");
+    let y = || Term::var("Y");
     vec![
         (
             "direct self-negation: p(X) :- d(X), not p(X)",
@@ -2502,9 +2599,9 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
             Program {
                 rules: vec![Rule::aggregated(
                     "q",
-                    vec![x(), y(), Term::Var("Z")],
+                    vec![x(), y(), Term::var("Z")],
                     vec![HeadAggrSlot::Plain, named("min"), named("count")],
-                    vec![lit("q", vec![x(), y(), Term::Var("Z")], false)],
+                    vec![lit("q", vec![x(), y(), Term::var("Z")], false)],
                 )],
                 ..Program::default()
             },
@@ -2533,8 +2630,8 @@ pub(crate) fn unstratifiable_corpus() -> Vec<(&'static str, Program)> {
                     vec![lit("f", vec![x()], false)],
                 )],
                 fixed: vec![FixedRule {
-                    head_rel: "f",
-                    inputs: vec!["r"],
+                    head_rel: "f".into(),
+                    inputs: vec!["r".into()],
                     eval: |_| BTreeSet::new(),
                 }],
                 ..Program::default()

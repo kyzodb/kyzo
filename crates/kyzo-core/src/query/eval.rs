@@ -76,24 +76,24 @@
  *      empty rule sets, so the signature accessor is structurally total.
  *
  * Documented deviations from the original, beyond the ratified ones:
- *   D1. Limiter skip-flags are recorded only for the entry rule
- *       (`should_check_limit`); the original's incremental path called
- *       `should_skip_next` for every rule, flagging tuples in non-entry
- *       stores. Those flags were dead (only the entry store's flags are
- *       read) but misleading; the initial path already gated them.
+ *   D1. Limiter skip dispositions (`LimiterSkip`) are recorded only for
+ *       the entry rule (`should_check_limit`); the original's incremental
+ *       path called `should_skip_next` for every rule, flagging tuples in
+ *       non-entry stores. Those flags were dead (only the entry store's
+ *       flags are read) but misleading; the initial path already gated them.
+ *       The pre-runtime `NoStoredInputs` placeholder is gone (P090) — fixed
+ *       rules read stored inputs through `SessionView`, never that seam.
  *   D2. The incremental limiter path deduplicates against the epoch's own
  *       out-store (`!out.exists(&item)`) exactly as the original's initial
  *       path did. The original's incremental path did not, so a tuple
  *       re-derived twice within one epoch double-counted toward `:limit`
  *       and could early-stop the entry rule short of the requested rows.
- *   D3. An all-meet head whose aggregated positions are not a suffix is
- *       refused at [`EvalRuleSet::new`] with a typed error. The original
- *       silently demoted that shape to a *normal* aggregation and froze it
- *       after epoch 0, dropping recursive derivations (see the oracle's
- *       divergence note in `query/laws.rs`). Full oracle parity (evaluating
- *       such heads inside recursion) requires `MeetAggrStore` to grow
- *       positional grouping; until then the shape is a loud refusal, never
- *       a wrong answer.
+ *   D3. RETIRED. An all-meet head whose aggregated positions are not a
+ *       suffix used to be refused at [`EvalRuleSet::new`]. The landed
+ *       [`HeadAggrKind::Meet`] carries grouping [`HeadPos`]s wherever they
+ *       sit, and [`MeetAggrStore`]/[`MeetLayout`] group positionally —
+ *       the shape the original silently demoted (wrong answers) now
+ *       constructs and evaluates. Comments are not a second law (P096).
  *   D4. Delta iteration walks the rule's own `contained_rules()` keys
  *       instead of the whole store map filtered by `contained_rules` — the
  *       same set in the same canonical (BTreeMap) order, with a typed error
@@ -406,28 +406,32 @@ impl Budget {
 const INTERRUPT_STRIDE: u32 = 64;
 
 /// Proven mid-epoch interrupt stride counter: starts at [`INTERRUPT_STRIDE`]
-/// and resets there after each poll. Checked decrement — never an unnamed
-/// wrapping `u32` countdown.
+/// and resets there after each poll. [`NonZeroU32`] makes wrap-through-zero
+/// unrepresentable — never an unnamed wrapping `u32` countdown (P097).
 #[derive(Debug, Clone, Copy)]
-struct InterruptCountdown(u32);
+struct InterruptCountdown(std::num::NonZeroU32);
 
 impl InterruptCountdown {
     fn fresh() -> Self {
-        Self(INTERRUPT_STRIDE)
+        Self(
+            std::num::NonZeroU32::new(INTERRUPT_STRIDE)
+                .expect("INVARIANT(interrupt_countdown): INTERRUPT_STRIDE is nonzero"),
+        )
     }
 
     /// Count one derivation. Returns `true` when the stride elapsed and the
     /// interrupt/spend guard must run.
     fn tick(&mut self) -> bool {
-        self.0 = self
-            .0
-            .checked_sub(1)
-            .expect("INVARIANT(interrupt_countdown): fresh/reset always leaves a positive count");
-        if self.0 == 0 {
-            *self = Self::fresh();
-            true
-        } else {
-            false
+        match std::num::NonZeroU32::new(self.0.get() - 1) {
+            None => {
+                // Was 1: stride elapsed.
+                *self = Self::fresh();
+                true
+            }
+            Some(next) => {
+                self.0 = next;
+                false
+            }
         }
     }
 }

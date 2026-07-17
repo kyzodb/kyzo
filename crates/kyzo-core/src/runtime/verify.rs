@@ -14,14 +14,11 @@
 //!
 //! ## Scope of this cut, stated plainly
 //!
-//! The oracle (`query/laws.rs::Program`) was built exclusively for
-//! hand-written test programs: its relation names and variable names are
-//! `&'static str`. A live, parsed KyzoScript program's names are runtime
-//! strings, so [`OracleNameBridge`] leaks each DISTINCT name once
-//! (deduplicated by content) to bridge the two — bounded by the catalog's
-//! vocabulary, not by verify-call volume, and it changes nothing in
-//! `laws.rs` itself (a sealed file; this is an adapter living entirely on
-//! this side of the seam).
+//! The oracle (`query/laws.rs::Program`) names relations and variables as
+//! content-eq [`laws::Name`] (`Arc<str>`). A live, parsed KyzoScript
+//! program's names are runtime [`Symbol`]s; translation mints each name
+//! through [`laws::Name::owned`] — a typed proof bridge with no
+//! process-global leak-intern table (P115).
 //!
 //! The translator covers plain relational Datalog: rule/relation
 //! applications (positive and negated), recursion, per-head-position
@@ -70,8 +67,7 @@
 //! escape this check, exactly as a `range_skip_scan_tuple` bug could escape
 //! the current-state check above it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::{Mutex, OnceLock};
+use std::collections::{BTreeMap, BTreeSet};
 
 use miette::Result;
 
@@ -160,43 +156,10 @@ impl VerifyOutcome {
     }
 }
 
-/// Typed verify→oracle name bridge: the sole mint of `&'static str`
-/// `laws::{Rel, Term}` names from runtime [`Symbol`]s.
-///
-/// Replaces a bare `OnceLock<HashSet<&str>>` seam. Growth is still bounded
-/// by the distinct name vocabulary ever verified (leak for process life);
-/// the honest end state is `laws.rs` owning `Cow<'static, str>` / `Symbol`
-/// so this bridge disappears — until then the type is the proof that every
-/// runtime→oracle name crosses one door.
-struct OracleNameBridge {
-    by_content: Mutex<HashMap<Box<str>, &'static str>>,
-}
-
-impl OracleNameBridge {
-    fn global() -> &'static Self {
-        static BRIDGE: OnceLock<OracleNameBridge> = OnceLock::new();
-        BRIDGE.get_or_init(|| Self {
-            by_content: Mutex::new(HashMap::new()),
-        })
-    }
-
-    /// Leak-intern `s` into a genuine `&'static str`, deduplicated by content.
-    fn intern(&'static self, s: &str) -> &'static str {
-        let mut guard = self
-            .by_content
-            .lock()
-            .expect("INVARIANT(oracle_name_bridge): mutex not poisoned");
-        if let Some(existing) = guard.get(s) {
-            return existing;
-        }
-        let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
-        guard.insert(Box::from(s), leaked);
-        leaked
-    }
-}
-
-fn intern(s: &str) -> &'static str {
-    OracleNameBridge::global().intern(s)
+/// Mint an oracle [`laws::Name`] from a runtime symbol — the sole
+/// verify→oracle name door (P115). Owned `Arc<str>`; no leak-intern set.
+fn oracle_name(sym: &Symbol) -> laws::Name {
+    laws::Name::owned(sym.name.as_str())
 }
 
 /// A construct this cut's translator refuses to carry to the oracle —
@@ -220,7 +183,7 @@ struct Translated {
 }
 
 fn translate_term(sym: &Symbol) -> laws::Term {
-    laws::Term::Var(intern(sym.name.as_str()))
+    laws::Term::var(oracle_name(sym))
 }
 
 /// The real bitemporal `AsOf` (`ValidityTs::from_raw(_)`, descending) into
@@ -243,23 +206,23 @@ fn translate_atom(
 
     match atom {
         NormalFormAtom::Rule(a) => Ok(laws::Literal::pos(
-            intern(a.name.name.as_str()),
+            oracle_name(&a.name),
             a.args.iter().map(translate_term).collect(),
         )),
         NormalFormAtom::NegatedRule(a) => Ok(laws::Literal::neg(
-            intern(a.name.name.as_str()),
+            oracle_name(&a.name),
             a.args.iter().map(translate_term).collect(),
         )),
         NormalFormAtom::Relation(a) => {
-            let rel = intern(a.name.name.as_str());
+            let rel = oracle_name(&a.name);
             let args: Vec<laws::Term> = a.args.iter().map(translate_term).collect();
             match &a.validity {
                 None => {
-                    edb_names.insert(rel);
+                    edb_names.insert(rel.clone());
                     Ok(laws::Literal::pos(rel, args))
                 }
                 Some(ValidityClause::At(as_of)) => {
-                    historical_names.insert(rel);
+                    historical_names.insert(rel.clone());
                     Ok(laws::Literal::pos_at(rel, args, to_oracle_asof(*as_of)))
                 }
                 Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
@@ -274,15 +237,15 @@ fn translate_atom(
             }
         }
         NormalFormAtom::NegatedRelation(a) => {
-            let rel = intern(a.name.name.as_str());
+            let rel = oracle_name(&a.name);
             let args: Vec<laws::Term> = a.args.iter().map(translate_term).collect();
             match &a.validity {
                 None => {
-                    edb_names.insert(rel);
+                    edb_names.insert(rel.clone());
                     Ok(laws::Literal::neg(rel, args))
                 }
                 Some(ValidityClause::At(as_of)) => {
-                    historical_names.insert(rel);
+                    historical_names.insert(rel.clone());
                     Ok(laws::Literal::neg_at(rel, args, to_oracle_asof(*as_of)))
                 }
                 Some(ValidityClause::Spans { .. } | ValidityClause::Delta { .. }) => {
@@ -349,7 +312,7 @@ fn translate_def(
         NormalFormRulesOrFixed::Rules { rules: inline } => {
             for r in inline {
                 rules.push(translate_inline_rule(
-                    name_rel,
+                    name_rel.clone(),
                     r,
                     edb_names,
                     historical_names,
@@ -372,13 +335,13 @@ fn translate(program: &crate::data::program::NormalFormProgram) -> Result<Transl
     let mut historical_names = BTreeSet::new();
 
     for (name, def) in program.rules() {
-        let rel = intern(name.name.as_str());
+        let rel = oracle_name(name);
         translate_def(rel, def, &mut rules, &mut edb_names, &mut historical_names)
             .map_err(|Unsupported(reason)| miette::miette!("{reason}"))?;
     }
-    let entry_rel = intern(program.entry_name().name.as_str());
+    let entry_rel = oracle_name(program.entry_name());
     translate_def(
-        entry_rel,
+        entry_rel.clone(),
         program.entry(),
         &mut rules,
         &mut edb_names,
@@ -417,8 +380,8 @@ fn scan_edb_facts(
 ) -> Result<BTreeMap<laws::Rel, BTreeSet<Tuple>>> {
     let as_of = AsOf::current(cur_vld);
     let mut facts = BTreeMap::new();
-    for &rel in edb_names {
-        let handle = get_relation(tx, rel)?;
+    for rel in edb_names {
+        let handle = get_relation(tx, rel.as_str())?;
         let arity = handle.arity();
         let bindings: Vec<Symbol> = (0..arity)
             .map(|i| Symbol::new(format!("_verify_{i}"), crate::data::span::SourceSpan(0, 0)))
@@ -436,7 +399,7 @@ fn scan_edb_facts(
                 rows.insert(row);
             }
         }
-        facts.insert(rel, rows);
+        facts.insert(rel.clone(), rows);
     }
     Ok(facts)
 }
@@ -455,8 +418,8 @@ fn scan_full_histories(
     use crate::query::ra::temporal::{decode_raw_version, relation_keyspace_bounds};
 
     let mut histories = BTreeMap::new();
-    for &rel in historical_names {
-        let handle = get_relation(tx, rel)?;
+    for rel in historical_names {
+        let handle = get_relation(tx, rel.as_str())?;
         let key_len = handle.metadata.keys.len();
         let (lower, upper) = relation_keyspace_bounds(&handle);
         let mut events = Vec::new();
@@ -479,7 +442,7 @@ fn scan_full_histories(
             .map_err(|e| miette::miette!("{e}"))?;
             events.push(event);
         }
-        histories.insert(rel, events);
+        histories.insert(rel.clone(), events);
     }
     Ok(histories)
 }
@@ -643,7 +606,7 @@ impl<S: Storage> Db<S> {
         let budget = oracle_budget(options)?;
         match laws::naive_eval_at_budgeted(&oracle_program, laws::AsOf::current(), &budget) {
             Ok(db) => {
-                let oracle = db.get(translated.entry_rel).cloned().unwrap_or_default();
+                let oracle = db.get(&translated.entry_rel).cloned().unwrap_or_default();
                 if oracle == production {
                     Ok(VerifyOutcome::Match {
                         row_count: production.len(),

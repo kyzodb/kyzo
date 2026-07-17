@@ -60,7 +60,9 @@
 //! The three stores:
 //!
 //! - [`RegularTempStore`]: a set of tuples (plus a per-tuple [`LimiterSkip`]
-//!   disposition for early-returned entry rules).
+//!   disposition — named Include/PastLimit, never a bare `bool` (P093) — for
+//!   early-returned entry rules). Own-byte decode sites are
+//!   `INVARIANT(temp_store_own_bytes)` at the mint seal (P094).
 //! - [`MeetAggrStore`]: grouped tuples folded through meet (semilattice)
 //!   aggregations as they arrive; recursion through such aggregations is
 //!   sound because the fold is idempotent, associative, and monotone in

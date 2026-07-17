@@ -118,8 +118,9 @@ impl AsRef<[u8]> for LevelBoundKey {
 
 
 /// Per-row skip/refresh flags for a sealed normal level. Limiter disposition
-/// is [`LimiterSkip`]; refresh is a named field — never an anonymous
-/// `(bool, bool)` soup.
+/// is [`LimiterSkip`] (P093); compiled-position / peeked-iterator expects
+/// are `INVARIANT(...)` at the seal (P095). Refresh is a named field —
+/// never an anonymous `(bool, bool)` soup.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RowFlags {
     pub(crate) skip: LimiterSkip,
