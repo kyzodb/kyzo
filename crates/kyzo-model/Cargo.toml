@@ -1,0 +1,13 @@
+[package]
+name = "kyzo-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish = false
+description = "KyzoDB shared vocabulary seat (parse, format, value kinds). Empty scaffold until relocate fills it."
+
+[lints]
+workspace = true

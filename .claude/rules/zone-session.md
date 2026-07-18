@@ -26,6 +26,9 @@ observers, operations, the verify summons.
 - Relation triggers and their semantics are ours; post-commit external
   NOTIFICATION delivery is a publish-on-commit to the fabric (NATS), never an
   outbound delivery mechanism built in this zone.
+- CompositionId is client-rooted; OperationKey + OperationOutcome is the one
+  idempotency organ — Engine-minted CompositionId is Unconstructible.
+- Catalog generations are the one meaning-clock for projection freshness.
 
 ## Forbidden
 

@@ -1,0 +1,1427 @@
+{
+  "version": 1,
+  "purpose": "Executable construct/file seating for remaining migrated kill paths. Script appends only; never overwrite dest content.",
+  "mode_default": "append",
+  "authority": [
+    "docs/deprecated/deprecated-migrated.md",
+    ".claude/skills/deprecated-construct-map/SKILL.md"
+  ],
+  "stats": {
+    "remaining_migrated_sources": 95,
+    "entries": 95,
+    "whole": 79,
+    "scatter": 16,
+    "skill_only_no_census_prose": 7,
+    "hand_overrides": 3
+  },
+  "entries": [
+    {
+      "source": "crates/kyzo-bin/src/server/changes.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-bin/src/server/feeds.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#crates/kyzo-bin/src/server/changes.rs",
+      "l1": "preserve-and-move \u2192 `server/feeds.rs` (merging with\n  standing.rs per the map's one-feeds-door line).\n  NATS boundary (per architecture-map \"the fabric boundary\"): the SSE DELIVERY is\n  offloaded to NATS/JetStream \u2014 the host door shrinks to a guarantee-preserving shim\n  over the fabric, not an SSE fan-out it owns; only the panic-safe/lossy-by-disconnect\n  discipline survives as the shim's contract.",
+      "census_key": "crates/kyzo-bin/src/server/changes.rs"
+    },
+    {
+      "source": "crates/kyzo-bin/src/server/standing.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-bin/src/server/feeds.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#crates/kyzo-bin/src/server/standing.rs",
+      "l1": "preserve-and-move \u2192 `server/feeds.rs` beside changes.rs.\n  NATS boundary (per architecture-map \"the fabric boundary\"): the 150 ms poll and the\n  SSE delivery are offloaded to the NATS fabric; once the record-event log publishes to\n  JetStream, this door consumes the fabric rather than polling or owning delivery \u2014 which\n  resolves the L2 \"Watch\" note below in the fabric's favor.",
+      "census_key": "crates/kyzo-bin/src/server/standing.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/capacity.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/session/capacity.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/aggr.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/model/program/aggregate.rs",
+          "mode": "append",
+          "prose": "NOT a 1:1 move \u2014 the file welds declaration to implementation.\n  The meaning half (names, the meet-vs-normal kind as data \u2014 what\n  stratify rules on and the oracle implements independently)"
+        },
+        {
+          "constructs": [
+            "NumAccum"
+          ],
+          "dest": "crates/kyzo-core/src/exec/fold/aggr.rs",
+          "mode": "append",
+          "prose": "(seat exists). The fold objects, factories\n  and `NumAccum`"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/aggr.rs",
+      "l1": "NOT a 1:1 move \u2014 the file welds declaration to implementation.\n  The meaning half (names, the meet-vs-normal kind as data \u2014 what\n  stratify rules on and the oracle implements independently) \u2192\n  `model/program/aggregate.rs` (seat exists). The fold objects, factories\n  and `NumAccum` \u2192 `exec/fold/aggr.rs` (seat exists). Tests move with\n  their halves; the flag-contract battery goes with exec.",
+      "census_key": "data/aggr.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/relation.rs",
+      "mode": "append",
+      "kind": "scatter",
+      "parts": [
+        {
+          "constructs": [
+            "StoredRelationMetadata"
+          ],
+          "dest": "crates/kyzo-core/src/model/schema/relation.rs",
+          "mode": "append"
+        },
+        {
+          "constructs": [
+            "NullableColType",
+            "ColType",
+            "ColumnDef",
+            "VecElementType",
+            "coerce"
+          ],
+          "dest": "crates/kyzo-core/src/model/schema/column.rs",
+          "mode": "append"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/relation.rs",
+      "l1": "\u2192 `model/schema/`, split as the map draws it:\n  `StoredRelationMetadata` + column-compat checks \u2192 `relation.rs`;\n  `NullableColType`/`ColType`/`ColumnDef`/`VecElementType` + `coerce` \u2192\n  `column.rs`.",
+      "census_key": "data/relation.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/sketch/aggr.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fold/sketch/aggr.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/sketch/",
+      "l1": "preserve-and-move whole \u2192 `exec/fold/sketch/` (seats exist:\n  hll.rs, count_min.rs, tdigest.rs; aggr wrappers fold into\n  `exec/fold/aggr.rs`'s registry at the cut). This subtree is the house\n  standard realized.",
+      "census_key": "data/sketch/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/sketch/count_min.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fold/sketch/count_min.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/sketch/",
+      "l1": "preserve-and-move whole \u2192 `exec/fold/sketch/` (seats exist:\n  hll.rs, count_min.rs, tdigest.rs; aggr wrappers fold into\n  `exec/fold/aggr.rs`'s registry at the cut). This subtree is the house\n  standard realized.",
+      "census_key": "data/sketch/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/sketch/hll.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fold/sketch/hll.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/sketch/",
+      "l1": "preserve-and-move whole \u2192 `exec/fold/sketch/` (seats exist:\n  hll.rs, count_min.rs, tdigest.rs; aggr wrappers fold into\n  `exec/fold/aggr.rs`'s registry at the cut). This subtree is the house\n  standard realized.",
+      "census_key": "data/sketch/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/sketch/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fold/sketch/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/sketch/",
+      "l1": "preserve-and-move whole \u2192 `exec/fold/sketch/` (seats exist:\n  hll.rs, count_min.rs, tdigest.rs; aggr wrappers fold into\n  `exec/fold/aggr.rs`'s registry at the cut). This subtree is the house\n  standard realized.",
+      "census_key": "data/sketch/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/sketch/tdigest.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fold/sketch/tdigest.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/sketch/",
+      "l1": "preserve-and-move whole \u2192 `exec/fold/sketch/` (seats exist:\n  hll.rs, count_min.rs, tdigest.rs; aggr wrappers fold into\n  `exec/fold/aggr.rs`'s registry at the cut). This subtree is the house\n  standard realized.",
+      "census_key": "data/sketch/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/admission.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/admission.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/arity.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/arity.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/bytes_qty.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/bytes_qty.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/canonical.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/canonical.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/cell.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/cell.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/exec.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "Side",
+            "ExecRows"
+          ],
+          "dest": "crates/kyzo-core/src/exec/currency/admitted.rs",
+          "mode": "append",
+          "prose": "two seats, both existing: `Side` + `ExecRows` and its doors"
+        },
+        {
+          "constructs": [
+            "ExecDedup"
+          ],
+          "dest": "crates/kyzo-core/src/exec/fixpoint/delta_store.rs",
+          "mode": "append",
+          "prose": "(\"admitted rows under a proven domain \u2014\n  unforgeable\" is this type's exact description); `ExecDedup`"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/exec.rs",
+      "l1": "two seats, both existing: `Side` + `ExecRows` and its doors \u2192\n  `exec/currency/admitted.rs` (\"admitted rows under a proven domain \u2014\n  unforgeable\" is this type's exact description); `ExecDedup` \u2192\n  `exec/fixpoint/delta_store.rs` (\"working memory keyed on packed-code\n  identity\" \u2014 this type IS that seed). Tests split with their types; the\n  foundational-guarantee test spans both and lands with the fixpoint,\n  which is the law it protects.",
+      "census_key": "data/value/exec.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/number.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/number.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/prefix.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/prefix.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/proofs.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/proofs.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/row.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "Rows",
+            "AdmittedRows",
+            "PushError"
+          ],
+          "dest": "crates/kyzo-core/src/exec/currency/row.rs",
+          "mode": "append",
+          "prose": "two destinations. The execution half \u2014 `Rows`, `AdmittedRows`,\n  `PushError`, `split_key` \u2014"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/row.rs",
+      "l1": "two destinations. The execution half \u2014 `Rows`, `AdmittedRows`,\n  `PushError`, `split_key` \u2014 \u2192 `exec/currency/row.rs` (seat exists:\n  \"interned tuple rows; cell views only at boundaries\" is this type).\n  The written half \u2014 `EncodedKey` + layout consts, `RelationId`,\n  `TupleT`, `encode_key_with_suffix`, the scan-key builders and sentinel\n  law \u2014 is the storage keyspace law, and the store zone (which owns key\n  laws: `store/time.rs` is the precedent) has no named file for it.\n  NEW-SEAT proposal (operator ratification required): `store/keys.rs` \u2014\n  storage key layout v1: the relation-id keyspace with its cap, the\n  relation-prefixed canonical tuple form, the validity tails, and the\n  scan-bound sentinel law; consumed by `exec/op/stored.rs`. The\n  schema-tier RelationId serde (see the json.rs",
+      "census_key": "data/value/row.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/search_hits.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/search_hits.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/string.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/string.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/tag.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/tag.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/ core",
+      "l1": "\u2192 `model/value/` (seats exist: tag.rs, canonical.rs, cell.rs,\n  number.rs, string.rs, prefix.rs, proofs.rs). ONE cut to draw at the\n  crate wall: `Value::mint` and the string mints take `&mut Arena` \u2014 the\n  word layout, tag/prefix/inline laws, and `try_cmp_storage` are model;\n  the out-of-line mint path IS the currency door (the `CanonicalBytes`\n  witness is what crosses). Arrival check: no execution import rides\n  along.",
+      "census_key": "data/value/ core"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/collection.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/collection.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/interval.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/interval.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/json.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/json.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/regex.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/regex.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/uuid.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/uuid.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/validity.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/validity.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/data/value/wide/vector.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/model/value/kind/vector.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#data/value/wide/",
+      "l1": "preserve-and-move each file whole \u2192 `model/value/kind/` (seats\n  exist for all seven: collection.rs, json.rs, uuid.rs, regex.rs,\n  vector.rs, interval.rs, validity.rs); mod.rs's doctrine paragraph\n  becomes the kind/ module root. All are already model-law pure values.\n  One seam to name at the cut: regex.rs's `CompiledRegexV1` +\n  `compile` bring the `regex`/`regex_syntax` crates (pure Rust) into the\n  model tree and its match methods ARE evaluation \u2014 kept with the type\n  because a witness minte",
+      "census_key": "data/value/wide/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/fts.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/fts.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/fts.rs",
+      "l1": "preserve-and-move whole \u2192 `project/text/` (seat exists: \"full\n  text: inverted index, analyzers, tokenizers (owned)\") as the subtree's\n  index/search file; the analyzer plumbing it consumes arrives from\n  `engines/text/` (its own entries). Lifecycle wiring (`::fts\n  create/drop`) rewires to `session/` when the tree lands.",
+      "census_key": "engines/fts.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/gazetteer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/gazetteer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/gazetteer.rs",
+      "l1": "preserve-and-move whole. The compiled automaton is a resident\n  rebuildable structure whose source relation stays the truth \u2014 the\n  project/ zone's exact kind (\"rebuildable speed, never truth\") \u2014 but no\n  tree line names it. NEW-SEAT proposal (operator ratification\n  required): `project/gazetteer.rs` \u2014 dictionary entity tagging: the\n  compiled leftmost-longest automaton over a surface-forms relation.\n  The exposure seam the module doc names (a `GazetteerTag` fixed rule)\n  lands in `rules/` and C",
+      "census_key": "engines/gazetteer.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/hnsw.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/vector/hnsw.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/hnsw.rs",
+      "l1": "preserve-and-move whole \u2192 `project/vector/` (seat exists:\n  \"dense proximity: graph index, quantized search, filtering\"). The\n  filter harness moves with it as its test module (see the absorbed\n  entry). Lifecycle (`::hnsw create/drop`) rewires to `session/`;\n  quantized search (RaBitQ line, #122) lands BESIDE it in the same\n  subtree, not inside this file.",
+      "census_key": "engines/hnsw.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/lsh.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/dedup/lsh.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/lsh.rs",
+      "l1": "preserve-and-move whole \u2192 `project/dedup/` (seat exists:\n  \"MinHash-LSH near-duplicate signatures\"). Lifecycle wiring (`::lsh\n  create/drop`) rewires to `session/`; the recorded `FtsIndexConfig`\n  dedup obligation (duplicated between `parse/sys.rs` and the fts tier\n  \u2014 one concept, one name) lands with that lifecycle move.",
+      "census_key": "engines/lsh.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/contract.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/mod.rs",
+      "l1": "the module tree dissolves into `project/` (each engine to its\n  own subtree \u2014 see their entries); the one owned concept \u2014\n  `IndexRowCorrupt` + `index_rows` \u2014 \u2192 `project/contract.rs` (seat\n  exists): its help text (\"the index can be dropped and re-created from\n  its base relation\") IS the projection law that file states, and every\n  projection read consumes scans through this boundary.",
+      "census_key": "engines/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/projection.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/projection.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/segments.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "Watermark"
+          ],
+          "dest": "crates/kyzo-core/src/project/residency.rs",
+          "mode": "append",
+          "prose": "two seats, both existing. The validity discipline \u2014\n  `Watermark`, `witness_after_snapshot`, `bump_before_commit`,\n  `should_build` + miss map \u2014"
+        },
+        {
+          "constructs": [
+            "Segment",
+            "SegmentEngine",
+            "Segments"
+          ],
+          "dest": "crates/kyzo-core/src/project/current.rs",
+          "mode": "append",
+          "prose": "(\"the\n  rebuild/validity discipline (generations, invalidation)\": this IS\n  that discipline's first realization, and every other projection needs\n  it). The segment structure and its cache/serving \u2014\n  `Segment`/`SegmentEngine`'s segments ma"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/segments.rs",
+      "l1": "two seats, both existing. The validity discipline \u2014\n  `Watermark`, `witness_after_snapshot`, `bump_before_commit`,\n  `should_build` + miss map \u2014 \u2192 `project/residency.rs` (\"the\n  rebuild/validity discipline (generations, invalidation)\": this IS\n  that discipline's first realization, and every other projection needs\n  it). The segment structure and its cache/serving \u2014\n  `Segment`/`SegmentEngine`'s segments map/`Segments`\n  context/`checked_row_end` \u2014 \u2192 `project/current.rs`. Tests split with\n  their halves; the #82 regression battery travels with the gate.",
+      "census_key": "engines/segments.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/sparse.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/sparse/sparse.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/sparse.rs",
+      "l1": "preserve-and-move whole \u2192 `project/sparse/` (seat exists:\n  \"sparse-vector inverted lists\"). The hostile battery joins it as its\n  named hostile section (see the absorbed entry). The maintenance seam\n  (del-before-put from the mutation tier) rewires to `session/admit.rs`'s\n  write path when the tree lands.",
+      "census_key": "engines/sparse.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/spatial.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/spatial/spatial.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/spatial.rs",
+      "l1": "preserve-and-move whole \u2192 `project/spatial/` (seat exists:\n  \"the space-filling-curve access path\"). Companion RA/lifecycle wiring\n  lands in `exec/op/search.rs` and `session/` as its own staged patch \u2014\n  the file already names that seam.",
+      "census_key": "engines/spatial.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/README.md",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/README.md",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/ast.rs",
+      "mode": "append",
+      "kind": "scatter",
+      "parts": [
+        {
+          "constructs": [
+            "FtsExpr",
+            "FtsLiteral",
+            "FtsNear",
+            "flatten",
+            "is_empty"
+          ],
+          "dest": "crates/kyzo-model/src/parse/search.rs",
+          "mode": "append"
+        },
+        {
+          "constructs": [
+            "tokenize"
+          ],
+          "dest": "crates/kyzo-core/src/project/text/ast.rs",
+          "mode": "append"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/ast.rs",
+      "l1": "SPLIT, compelled by the crate wall (correction found at\n  parse/fts.rs's read): `model/parse/search.rs` owns the FTS\n  mini-language and must NAME the AST it produces, and kyzo-model\n  cannot depend on the engine \u2014 so the pure-data half (`FtsExpr`/\n  `FtsLiteral`/`FtsNear` + flatten/is_empty + the depth invariant) \u2192\n  `kyzo-model` beside `parse/search.rs`, while the analyzer-coupled\n  `tokenize` rewrite stays engine-side in `project/text/` as an\n  extension over the model type.",
+      "census_key": "engines/text/ast.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/cangjie/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/cangjie/",
+      "l1": "preserve-and-move whole \u2192 `project/text/` as its vendored\n  CJK-segmentation subtree, MIT headers intact. Standing obligation\n  (the target-state ruling on the foreign body): this lineage is\n  carried only until it is OWNED \u2014 documented and typed to house law \u2014\n  or replaced; the move is not an adoption.",
+      "census_key": "engines/text/cangjie/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/cangjie/options.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/options.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/cangjie/",
+      "l1": "preserve-and-move whole \u2192 `project/text/` as its vendored\n  CJK-segmentation subtree, MIT headers intact. Standing obligation\n  (the target-state ruling on the foreign body): this lineage is\n  carried only until it is OWNED \u2014 documented and typed to house law \u2014\n  or replaced; the move is not an adoption.",
+      "census_key": "engines/text/cangjie/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/cangjie/stream.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/stream.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/cangjie/",
+      "l1": "preserve-and-move whole \u2192 `project/text/` as its vendored\n  CJK-segmentation subtree, MIT headers intact. Standing obligation\n  (the target-state ruling on the foreign body): this lineage is\n  carried only until it is OWNED \u2014 documented and typed to house law \u2014\n  or replaced; the move is not an adoption.",
+      "census_key": "engines/text/cangjie/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/cangjie/tokenizer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/tokenizer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/cangjie/",
+      "l1": "preserve-and-move whole \u2192 `project/text/` as its vendored\n  CJK-segmentation subtree, MIT headers intact. Standing obligation\n  (the target-state ruling on the foreign body): this lineage is\n  carried only until it is OWNED \u2014 documented and typed to house law \u2014\n  or replaced; the move is not an adoption.",
+      "census_key": "engines/text/cangjie/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/mod.rs",
+      "l1": "preserve-and-move whole \u2192 `project/text/` as the subtree's\n  config/lifecycle seam; `validate` is what `session/`'s `::fts\n  create` calls; the `TokenizerCache` full-index-name keying contract\n  (recorded in fts.rs and lsh.rs) lives here.",
+      "census_key": "engines/text/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/alphanum_only.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/alphanum_only.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/ascii_folding_filter.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/ascii_folding_filter.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/empty_tokenizer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/empty_tokenizer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/lower_caser.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/lower_caser.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/ngram_tokenizer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/ngram_tokenizer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/raw_tokenizer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/raw_tokenizer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/remove_long.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/remove_long.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/simple_tokenizer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/simple_tokenizer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/split_compound_words.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/split_compound_words.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/stemmer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/stemmer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/stop_word_filter/gen_stopwords.py",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/gen_stopwords.py/gen_stopwords.py",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/stop_word_filter/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/stop_word_filter/stopwords.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/stopwords.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/tokenized_string.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/tokenized_string.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/tokenizer_impl.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/tokenizer_impl.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/engines/text/tokenizer/whitespace_tokenizer.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/project/text/whitespace_tokenizer.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#engines/text/tokenizer/",
+      "l1": "preserve-and-move whole \u2192 `project/text/`'s tokenizer subtree,\n  MIT attribution intact, under the same own-or-replace foreign-body\n  obligation as cangjie/. The hostile sweep is OWNED KyzoDB law and\n  moves as the subtree's gate.",
+      "census_key": "engines/text/tokenizer/"
+    },
+    {
+      "source": "crates/kyzo-core/src/fixed_rule/algos/all_pairs_shortest_path.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/rules/algo/all_pairs_shortest_path.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#fixed_rule/algos/all_pairs_shortest_path.rs",
+      "l1": "preserve-and-move whole \u2192 `rules/algo/` (the map's\n  \"centralities\" line \u2014 one file for the APSP-derived pair, or split\n  per rule at the operator's preference; `dijkstra_cost_only` stays\n  beside its consumers). The `#[ignore]`d timing rig is a rule-#11\n  ledger item \u2014 it graduates to the bench lane on migration\n  (measurement rig, not a test).",
+      "census_key": "fixed_rule/algos/all_pairs_shortest_path.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/fixed_rule/algos/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/rules/algo/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#fixed_rule/algos/mod.rs",
+      "l1": "structural glue \u2014 dies with the directory when algos/\n  becomes the map's `rules/algo/` (\"one algorithm per file, named for\n  the algorithm\"); the re-export surface re-forms as that module's\n  root, feeding the registry at rules/contract.rs.",
+      "census_key": "fixed_rule/algos/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/fixed_rule/mod.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "FixedRule",
+            "FixedRuleOutput",
+            "OutputSpendGuard",
+            "CancelFlag",
+            "SimpleFixedRule"
+          ],
+          "dest": "crates/kyzo-core/src/rules/contract.rs",
+          "mode": "append",
+          "prose": "NAMED SPLIT inside `rules/`: the contract substance \u2014\n  `FixedRule` trait, payload + input-relation surface, the option\n  extractors, `FixedRuleOutput` + `OutputSpendGuard`, `CancelFlag`,\n  handle/registry/errors, `SimpleFixedRule`, the tes"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/rules/graph_view.rs",
+          "mode": "append",
+          "prose": "(\"what a\n  fixed rule promises\"); the graph-builder half \u2014 `intern_edges`,\n  `checked_node_id`, the two `as_directed_*` builders, NotAnEdge/\n  BadEdgeWeight and the builder tests"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#fixed_rule/mod.rs",
+      "l1": "NAMED SPLIT inside `rules/`: the contract substance \u2014\n  `FixedRule` trait, payload + input-relation surface, the option\n  extractors, `FixedRuleOutput` + `OutputSpendGuard`, `CancelFlag`,\n  handle/registry/errors, `SimpleFixedRule`, the tests_support\n  harness and the trait-level tests \u2192 `rules/contract.rs` (\"what a\n  fixed rule promises\"); the graph-builder half \u2014 `intern_edges`,\n  `checked_node_id`, the two `as_directed_*` builders, NotAnEdge/\n  BadEdgeWeight and the builder tests \u2192 `rules/graph_view.rs` beside\n  the CSR they build. The two declared seams land as their own notes\n  say: `TupleIter` to the tuple tier's iterator species,\n  `NamedRows` (+to_arrow_ipc) to the session tier's public result\n  type with the encoder call at the envelope boundary. `CancelFlag`\n  is engine-wide canc",
+      "census_key": "fixed_rule/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/fixed_rule/parallel.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/rules/contract.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#fixed_rule/parallel.rs",
+      "l1": "preserve-and-move \u2192 `rules/contract.rs` as the determinism\n  law's tooling (the contract line \"what a fixed rule promises:\n  determinism\" is exactly what this function enforces under\n  fan-out); a standalone `rules/parallel.rs` is the lawful\n  alternative if the operator prefers the file kept whole \u2014 zones\n  are stable, files grow.",
+      "census_key": "fixed_rule/parallel.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/fixed_rule/utilities/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/rules/io/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#fixed_rule/utilities/mod.rs",
+      "l1": "structural glue \u2014 dies with the directory; the readers and\n  constant land in `rules/io/`, reorder_sort in `rules/algo/`.",
+      "census_key": "fixed_rule/utilities/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/format/tests.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-model/src/format/tests.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/batch.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/expr/batch.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/batch.rs",
+      "l1": "refactor-and-move \u2192 `exec/expr/` as the columnar evaluator's\n  batch vocabulary. The DataValue-cloning internals are the declared\n  #120 replacement target (the execution currency's `CodeColumn`/\n  `AdmittedWords` are the successors); `ErrorMin` and `Selection`'s\n  contracts survive the swap unchanged.",
+      "census_key": "query/batch.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/batch_ops.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/op/batch_ops.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/batch_ops.rs",
+      "l1": "refactor-and-move \u2192 `exec/op/` as the operator tier's shared\n  batch substrate. Same #120 seam class as query/batch.rs: the\n  DataValue arena is the declared replacement target for the packed\n  execution currency; the ORDER and ERROR-IDENTITY laws survive the\n  swap verbatim.",
+      "census_key": "query/batch_ops.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/eval.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/exec/fixpoint/eval.rs",
+          "mode": "append",
+          "prose": "preserve-and-move with a NAMED SPLIT inside exec/: the\n  fixpoint engine (Budget, InterruptTicker, the seam traits, the\n  evaluable tier, the limiter, evaluate_stratum and the four eval\n  functions)"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/exec/provenance/eval.rs",
+          "mode": "append",
+          "prose": "(\"the loop: recursion over\n  admitted currency\" \u2014 Admitted IS that currency); the parallel-epoch\n  dispatch and merge-barrier determinism machinery align with\n  `exec/fixpoint/parallel.rs` (\"deterministic sharded parallelism\");\n  the proven"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/eval.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT inside exec/: the\n  fixpoint engine (Budget, InterruptTicker, the seam traits, the\n  evaluable tier, the limiter, evaluate_stratum and the four eval\n  functions) \u2192 `exec/fixpoint/eval.rs` (\"the loop: recursion over\n  admitted currency\" \u2014 Admitted IS that currency); the parallel-epoch\n  dispatch and merge-barrier determinism machinery align with\n  `exec/fixpoint/parallel.rs` (\"deterministic sharded parallelism\");\n  the provenance constructs (Witness/WitnessTable/WitnessBinder/\n  PendingWitnesses/provenance_graph/ProvNode/PremiseSource) \u2192\n  `exec/provenance/` (\"derivations that explain themselves\"). The\n  differential/determinism test batteries migrate with their zone as\n  module tests; kyzo-trials grows public-surface twins per the\n  sibling entries.",
+      "census_key": "query/eval.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/laws.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-oracle/src/eval.rs",
+          "mode": "append",
+          "prose": "preserve-and-move with a NAMED SPLIT into kyzo-oracle (THE\n  REFERENCE SEMANTICS \u2014 \"deliberately slow, small enough to\n  hostile-review line by line... the crate wall makes independence\n  physics\"): the program model + checkers + naive eval"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-oracle/src/temporal.rs",
+          "mode": "append",
+          "prose": "; the temporal vocabulary (AsOf, Event,\n  resolve*, derive_intervals, diff/compose, Axis/Interval/OPEN_END)"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/laws.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT into kyzo-oracle (THE\n  REFERENCE SEMANTICS \u2014 \"deliberately slow, small enough to\n  hostile-review line by line... the crate wall makes independence\n  physics\"): the program model + checkers + naive evaluator \u2192\n  `crates/kyzo-oracle/src/eval.rs`; the temporal vocabulary (AsOf, Event,\n  resolve*, derive_intervals, diff/compose, Axis/Interval/OPEN_END) \u2192\n  `crates/kyzo-oracle/src/temporal.rs`; the story-#61 incremental reference \u2192\n  NEW-SEAT `crates/kyzo-oracle/src/incremental.rs` (operator ratification;\n  alternatively folds into eval.rs \u2014 the react/incremental.rs\n  production twin needs its judge either way); the shared\n  unstratifiable_corpus rides with eval.rs as the judge's contract\n  surface (lib.rs). ARRIVAL QUESTIONS FOR THE OPERATOR, both created",
+      "census_key": "query/laws.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/levels.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fixpoint/delta_store.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/levels.rs",
+      "l1": "refactor-and-move \u2192 `exec/fixpoint/delta_store.rs` (the\n  seat's line \"working memory keyed on packed-code identity\"): this\n  file is the values-v1 INCUMBENT and data/value/exec.rs's `ExecDedup`\n  is the packed-code SEED \u2014 #120 merges them at this seat, keeping the\n  level/shadow/compaction discipline and swapping the row\n  representation beneath it.",
+      "census_key": "query/levels.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/mod.rs",
+      "l1": "the laws doc \u2192 `exec/`'s module root as its constitution;\n  the declarations dissolve into the target tree (each module's\n  liveness note travels to its file). The trials/laws/gauntlet/dst\n  declarations re-home with their files to kyzo-trials per those\n  entries.",
+      "census_key": "query/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/normalize.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/exec/plan/normalize.rs",
+          "mode": "append",
+          "prose": "SPLIT along its own three-part structure: the normalizer"
+        },
+        {
+          "constructs": [
+            "SessionView"
+          ],
+          "dest": "crates/kyzo-core/src/session/normalize.rs",
+          "mode": "append",
+          "prose": "(the NNF/DNF/well-ordering passes feed compile.rs; the\n  file's own landing note names this re-homing); `SessionView`"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/normalize.rs",
+      "l1": "SPLIT along its own three-part structure: the normalizer \u2192\n  `exec/plan/` (the NNF/DNF/well-ordering passes feed compile.rs; the\n  file's own landing note names this re-homing); `SessionView` \u2192\n  `session/` (it IS the session's read surface, serving plan and\n  rules); `SessionFixedRule` \u2192 the `rules/contract.rs` boundary\n  (where a fixed rule's payload, branding, and cancellation are the\n  contract's substance).",
+      "census_key": "query/normalize.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/provenance.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-trials/src/provenance.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/provenance.rs",
+      "l1": "preserve-and-move \u2192 `crates/kyzo-trials/src/provenance.rs`\n  (NEW-SEAT, operator ratification required: the trials tree has no\n  provenance lane, and this battery is exactly the map's definition of\n  a campaign \u2014 an attack on a public claim, the telos's \"explain\",\n  rerunnable by strangers). REWIRE at the crate wall, same shape as\n  dst_query.rs: the harness drives pub(crate) seams\n  (stratified_evaluate_with_stores, provenance_graph, RuleBody) \u2014\n  provenance is a product claim, so its graph/sol",
+      "census_key": "query/provenance.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/ra/mod.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/op/mod.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/ra/mod.rs",
+      "l1": "preserve-and-move \u2192 `exec/op/` as the zone's spine (op/mod.rs:\n  the RelAlgebra tree, its total constructors, the typed invariants,\n  the batched dispatch, and the explain Debug substrate \u2014 structural\n  glue the map's file list implies; zones are stable, files grow). The\n  submodule re-exports realign to the map's names: fixed.rs \u2192\n  op/literal.rs (\"unit and literal-block relations\"), temp.rs \u2192\n  op/delta.rs (\"fixpoint total/delta scans\"), the rest map one-to-one\n  (join/neg/stored/search/tempor",
+      "census_key": "query/ra/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/ra/stored.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/op/stored.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/ra/stored.rs",
+      "l1": "preserve-and-move whole \u2192 `exec/op/stored.rs` (seat exists:\n  \"canonical scans, current and time-travel\"); the segment-gate\n  battery travels to `project/current.rs`'s regression suite per the\n  segments.rs entry (it proves the gate at its consumer).",
+      "census_key": "query/ra/stored.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/search.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/plan/search.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/search.rs",
+      "l1": "preserve-and-move whole \u2192 `exec/plan/` as the search-atom\n  resolution (plan-time vocabulary + the catalog-proof step, reached\n  through the session's handle closure exactly as today); the\n  operator that runs it is exec/op/search.rs (its entry above).",
+      "census_key": "query/search.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/semiring.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/provenance/semiring.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/semiring.rs",
+      "l1": "preserve-and-move whole \u2192 `exec/provenance/semiring.rs` (the\n  seat's own line: \"annotation algebra: the idempotent pair +\n  certificates\"). The counted tier's future home\n  (`exec/provenance/counted.rs`) is the PA3 boundary's named\n  destination \u2014 a NEW fixpoint, never a widening of this one.",
+      "census_key": "query/semiring.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/temp_store.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/exec/fixpoint/delta_store.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/temp_store.rs",
+      "l1": "preserve-and-move \u2192 `exec/fixpoint/delta_store.rs` (seat\n  exists: \"working memory keyed on packed-code identity\"), merging\n  with query/levels.rs and ExecDedup per the #120 execution-currency\n  seam already recorded at levels.rs's entry: this file's byte-keyed\n  stores ARE the values-based v1 the packed-u32 code columns swap\n  behind \u2014 the store shapes, MeetLayout proof, admission seam, and\n  TupleInIter consumer surface survive; the KEY representation is what\n  #120 replaces. `Admitted`/`Admis",
+      "census_key": "query/temp_store.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/time_travel_script_laws.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-trials/src/time_travel.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/time_travel_script_laws.rs",
+      "l1": "preserve-and-move whole \u2192 `crates/kyzo-trials/time_travel.rs` (seat\n  exists: \"the temporal law and trial batteries\") as its\n  language-surface half; it already runs everything through\n  `Db::run_script`, so the crate wall costs nothing.",
+      "census_key": "query/time_travel_script_laws.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/time_travel_trials.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-trials/src/time_travel.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/time_travel_trials.rs",
+      "l1": "preserve-and-move \u2192 `crates/kyzo-trials/src/time_travel.rs` (seat\n  exists: \"the temporal law and trial batteries\"). Same crate-wall\n  rewire as dst_query.rs: the harness drives pub(crate) compile/eval\n  seams and must speak the public surface (or real KyzoScript) on\n  arrival; the oracle side already lives across the wall\n  (kyzo-oracle's temporal.rs). EXCEPTION: the textual-parse coverage\n  (the four clause parses, the three keyword-boundary refusals, and\n  the two grammar-structural refusals)",
+      "census_key": "query/time_travel_trials.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/query/trials.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-trials/src/gauntlet.rs",
+          "mode": "append",
+          "prose": "preserve-and-move with a NAMED SPLIT across the trials\n  lanes: the generator + Capability 1"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-trials/src/time_travel.rs",
+          "mode": "append",
+          "prose": "(generated-program hunting) with its determinism assertions feeding\n  `determinism.rs`'s lane; Capability 2 \u2192 the proposed\n  `crates/kyzo-trials/src/provenance.rs` (NEW-SEAT, shared with\n  query/provenance.rs's entry); Capabilities 3\u20134"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#query/trials.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT across the trials\n  lanes: the generator + Capability 1 \u2192 `crates/kyzo-trials/src/gauntlet.rs`\n  (generated-program hunting) with its determinism assertions feeding\n  `determinism.rs`'s lane; Capability 2 \u2192 the proposed\n  `crates/kyzo-trials/src/provenance.rs` (NEW-SEAT, shared with\n  query/provenance.rs's entry); Capabilities 3\u20134 \u2192\n  `crates/kyzo-trials/src/time_travel.rs` beside time_travel_trials.rs's\n  material. Same crate-wall rewire as its siblings (pub(crate) eval\n  seams \u2192 public surface or a sanctioned deeper seam; the oracle side\n  is already kyzo-oracle vocabulary). OPERATOR-VISIBLE STANDING ITEM:\n  the module's own stated open gap \u2014 no end-to-end demand-rewriter\n  differential \u2014 is scheduled at the session tier (runtime/db.rs\n  wave); the mi",
+      "census_key": "query/trials.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/runtime/db.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/session/jobs.rs",
+          "mode": "append",
+          "prose": "(\"the entrypoint: script string to result rows\");\n  the sys-op dispatch splits by op family \u2014 jobs (::running/::kill,\n  today's stubs/refusals)"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/session/ops.rs",
+          "mode": "append",
+          "prose": ", operator surface\n  (Compact, MerkleRoot, the index DDL dispatch)"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#runtime/db.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT inside session/: the\n  entrypoint (Db, run_script*, execute_single, compile_and_eval,\n  finalize_rows, build_budget, the SessionTx core and routing) \u2192\n  `session/db.rs` (\"the entrypoint: script string to result rows\");\n  the sys-op dispatch splits by op family \u2014 jobs (::running/::kill,\n  today's stubs/refusals) \u2192 `session/jobs.rs`, operator surface\n  (Compact, MerkleRoot, the index DDL dispatch) \u2192 `session/ops.rs`,\n  catalog ops route through session/catalog.rs, Verify through\n  session/verify.rs. The eval.rs entry's carried D3 obligation is\n  DISCHARGED here: fixed rules share the budget's kill flag as\n  CancelFlag with no Poison revival. The trials.rs entry's standing\n  demand-rewriter gap is PARTIALLY discharged by obligations 11\u201312\n  (an end-to-end ",
+      "census_key": "runtime/db.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/runtime/generation.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/session/generation.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    },
+    {
+      "source": "crates/kyzo-core/src/runtime/mutate.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/session/admit.rs",
+          "mode": "append",
+          "prose": "preserve-and-move with a NAMED SPLIT inside session/: the\n  mutation pipeline (execute_relation and its op family, extractors,\n  triggers, make_const_rule, update_indices and the scan-shaped write\n  seam)"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/session/ops.rs",
+          "mode": "append",
+          "prose": "(\"the write admission path: mutation\n  enters here only\" \u2014 the zone law's ALL-writes-one-path clause is\n  this file); the index LIFECYCLE (attach_and_backfill, the five\n  ::create ops, remove_index, IndexCtx)"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#runtime/mutate.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT inside session/: the\n  mutation pipeline (execute_relation and its op family, extractors,\n  triggers, make_const_rule, update_indices and the scan-shaped write\n  seam) \u2192 `session/admit.rs` (\"the write admission path: mutation\n  enters here only\" \u2014 the zone law's ALL-writes-one-path clause is\n  this file); the index LIFECYCLE (attach_and_backfill, the five\n  ::create ops, remove_index, IndexCtx) \u2192 `session/ops.rs` (\"operator\n  surface\"), with the per-engine put/del hooks remaining project/\n  zone vocabulary the ops call through. The temporal-index write\n  seam's cross-module test contract (ra/temporal.rs drives it)\n  survives the move as an admit-path pub(crate).",
+      "census_key": "runtime/mutate.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/runtime/pinned_handle.hex",
+      "kind": "whole",
+      "dest": "crates/kyzo-core/src/session/pinned_handle.hex",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    },
+    {
+      "source": "crates/kyzo-core/src/runtime/relation.rs",
+      "mode": "append",
+      "kind": "scatter",
+      "parts": [
+        {
+          "constructs": [
+            "SystemKey",
+            "RelationHandle"
+          ],
+          "dest": "crates/kyzo-core/src/session/catalog.rs",
+          "mode": "append"
+        },
+        {
+          "constructs": [
+            "AccessLevel",
+            "InsufficientAccessLevel"
+          ],
+          "dest": "crates/kyzo-core/src/session/access.rs",
+          "mode": "append"
+        },
+        {
+          "constructs": [
+            "IndexPositionUse"
+          ],
+          "dest": "crates/kyzo-core/src/exec/plan/compile.rs",
+          "mode": "append"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#runtime/relation.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT inside session/: the\n  catalog (SystemKey, RelationHandle, the sealed serialization\n  boundary, all catalog operations, the wire-format law) \u2192\n  `session/catalog.rs` (\"the store's knowledge of its relations;\n  coherent multi-row moves\"); `AccessLevel`/`InsufficientAccessLevel`\n  \u2192 `session/access.rs` (\"per-relation protection tiers\");\n  `IndexPositionUse` relocates to `exec/plan/compile.rs` exactly as\n  its own provisional-home note promises; the handle's bitemporal\n  scan surface consumes store/skip_walk.rs's one walk on arrival\n  (the temporal.rs entry's unfreeze obligation lands HERE: this file\n  is where keyspace bounds and the raw multi-version scan gain their\n  official accessors). `IndexKind`'s manifests remain the projection\n  zones' vocabulary,",
+      "census_key": "runtime/relation.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/storage/mod.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/store/contract.rs",
+          "mode": "append",
+          "prose": "preserve-and-move with a NAMED SPLIT inside store/: the\n  contract prose, Storage trait, FormatVersion, SystemClock, and the\n  seal"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/store/tx.rs",
+          "mode": "append",
+          "prose": "(\"the storage contract: ordered scans,\n  SSI, consuming commits\"); ReadTx/WriteTx and ConflictError"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#storage/mod.rs",
+      "l1": "preserve-and-move with a NAMED SPLIT inside store/: the\n  contract prose, Storage trait, FormatVersion, SystemClock, and the\n  seal \u2192 `store/contract.rs` (\"the storage contract: ordered scans,\n  SSI, consuming commits\"); ReadTx/WriteTx and ConflictError \u2192\n  `store/tx.rs` (\"transactions: snapshot isolation, typed\n  conflicts\"); the module decls are structural glue dying with the\n  directory; conformance/crash_matrix/sim/tests migrate to their\n  trials/crashfs seats per their own entries.",
+      "census_key": "storage/mod.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/storage/tests.rs",
+      "kind": "scatter",
+      "mode": "append",
+      "parts": [
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/store/fjall.rs",
+          "mode": "append",
+          "prose": "NAMED SPLIT \u2014 one tier-wide test file the target decomposes\n  beside its subjects. The encoding-law battery (corpus, laws 1\u20133,\n  byte-flip, signed-zero, shared-boundary) \u2192 kyzo-model beside\n  `model/value/canonical.rs` (it tests the codec, "
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/store/backup.rs",
+          "mode": "append",
+          "prose": "+ `store/contract.rs` module tests. The backup\n  battery incl. both floor pins"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-core/src/store/verify_walk.rs",
+          "mode": "append",
+          "prose": ". The verify pair"
+        },
+        {
+          "constructs": [
+            "*SEE_L1*"
+          ],
+          "dest": "crates/kyzo-trials/src/crash.rs",
+          "mode": "append",
+          "prose": "(note: they drive Db to build a REAL\n  cataloged fixture \u2014 on the split that fixture builds through the\n  session crate's public surface). The time-travel-vs-oracle arm and\n  MIN-ts pins \u2192 per-backend module tests beside their cursors (the\n"
+        }
+      ],
+      "authority": "docs/deprecated/deprecated-migrated.md#storage/tests.rs",
+      "l1": "NAMED SPLIT \u2014 one tier-wide test file the target decomposes\n  beside its subjects. The encoding-law battery (corpus, laws 1\u20133,\n  byte-flip, signed-zero, shared-boundary) \u2192 kyzo-model beside\n  `model/value/canonical.rs` (it tests the codec, not the store; the\n  corpus doubles as fuzz-seed material for crates/kyzo-trials/fuzz.rs). The\n  fjall-specific pins (inverted-range poisoning, options/stats,\n  format-version stamps incl. the v4 boundary, clock/watermark\n  batteries, the snapshot-then-mint reproducer, the RAM-floor pin) \u2192\n  `store/fjall.rs` + `store/contract.rs` module tests. The backup\n  battery incl. both floor pins \u2192 `store/backup.rs`. The verify pair\n  \u2192 `store/verify_walk.rs` (note: they drive Db to build a REAL\n  cataloged fixture \u2014 on the split that fixture builds through the\n  s",
+      "census_key": "storage/tests.rs"
+    },
+    {
+      "source": "crates/kyzo-core/src/typestate.rs",
+      "kind": "whole",
+      "dest": "crates/kyzo-model/src/typestate.rs",
+      "mode": "append",
+      "constructs": [
+        "*"
+      ],
+      "authority": ".claude/skills/deprecated-construct-map/SKILL.md"
+    }
+  ],
+  "dest_fan_in": {
+    "crates/kyzo-bin/src/server/feeds.rs": [
+      "crates/kyzo-bin/src/server/changes.rs",
+      "crates/kyzo-bin/src/server/standing.rs"
+    ],
+    "crates/kyzo-core/src/exec/fixpoint/delta_store.rs": [
+      "crates/kyzo-core/src/data/value/exec.rs",
+      "crates/kyzo-core/src/query/levels.rs",
+      "crates/kyzo-core/src/query/temp_store.rs"
+    ],
+    "crates/kyzo-core/src/project/text/mod.rs": [
+      "crates/kyzo-core/src/engines/text/cangjie/mod.rs",
+      "crates/kyzo-core/src/engines/text/mod.rs",
+      "crates/kyzo-core/src/engines/text/tokenizer/mod.rs",
+      "crates/kyzo-core/src/engines/text/tokenizer/stop_word_filter/mod.rs"
+    ],
+    "crates/kyzo-core/src/rules/contract.rs": [
+      "crates/kyzo-core/src/fixed_rule/mod.rs",
+      "crates/kyzo-core/src/fixed_rule/parallel.rs"
+    ],
+    "crates/kyzo-trials/src/time_travel.rs": [
+      "crates/kyzo-core/src/query/time_travel_script_laws.rs",
+      "crates/kyzo-core/src/query/time_travel_trials.rs",
+      "crates/kyzo-core/src/query/trials.rs"
+    ],
+    "crates/kyzo-core/src/session/ops.rs": [
+      "crates/kyzo-core/src/runtime/db.rs",
+      "crates/kyzo-core/src/runtime/mutate.rs"
+    ]
+  }
+}

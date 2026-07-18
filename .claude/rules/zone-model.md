@@ -2,6 +2,8 @@
 paths:
   - "crates/kyzo-model/**/*.rs"
   - "crates/kyzo-model/**/*.pest"
+  - "crates/kyzo-core/src/model/**/*.rs"
+  - "crates/kyzo-core/src/model/**/*.pest"
 ---
 
 # Zone: Model — the shared vocabulary
@@ -43,6 +45,14 @@ exists: values, schemas, programs, the parse lift, the wire envelopes.
   distinct typed variant, byte-distinct and round-trip-distinct from every
   finite instant. No sentinel value ever carries meaning, and no sentinel
   leaks through a public API.
+- `capacity::admit` is the one allocation-admission seam for input-declared
+  sizes — no site invents its own `.min(available)` reserve cap.
+- Staged builders use typestate markers so missing required fields fail to
+  compile; sealed products have private constructors.
+- Program tiers (Input / Normal / Stratified / Magic) are meaning-as-data here;
+  evaluation of those tiers is exec/oracle only.
+- CanonicalTranscript encoding checklist + golden vectors own sealed artifact
+  bytes that are not value-plane (grants, certificates, seals).
 
 ## Forbidden
 

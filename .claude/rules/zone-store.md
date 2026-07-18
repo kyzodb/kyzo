@@ -37,6 +37,14 @@ The one substrate: ordered keys, transactions, time in the key, crash safety.
 - The store owns the portable dump/load FORMAT only; replication is
   NATS/JetStream replay of the ordered write log against engine determinism —
   provably-equal replicas, never a replicator written in this zone.
+- Commit door is SweepDoor: IntentOrdinal orders contenders (may gap);
+  CommitOrdinal is dense history assigned only at the durable event.
+- WriteAuthority signs; IncarnationId separates write-session nonce space;
+  NonceLease is pipelined (durable before ciphertext).
+- Sealed artifacts use one CanonicalTranscript; AdmissionCertificate /
+  AcceptedReplica verify — never reshape origin-cut meaning.
+- ObjectDurabilityClass is a product under dominance; Repair/Downgrade typed.
+- Claim tags: Unconstructible / Refused / Unexposed — never soft folklore.
 
 ## Forbidden
 
@@ -47,3 +55,5 @@ The one substrate: ordered keys, transactions, time in the key, crash safety.
 - C/C++ anywhere in the dependency tree.
 - Nondeterministic iteration or timing-dependent behavior on any path that
   affects committed state.
+- Minting history at admission; encrypting under a volatile NonceLease;
+  in-place reinterpretation of a certified replica record.

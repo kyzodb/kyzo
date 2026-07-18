@@ -43,9 +43,13 @@ graph TD
 
     d_data -->|migrates to| model
     d_query -->|migrates to| exec
+    d_query -->|migrates to| react
+    d_query -->|migrates to| trials
+    d_query -->|migrates to| oracle
     d_storage -->|migrates to| store
-    d_runtime -->|migrates to| exec
-    d_engines -->|migrates to| exec
+    d_storage -->|migrates to| trials
+    d_runtime -->|migrates to| session
+    d_engines -->|migrates to| project
     d_parse -->|migrates to| model
     d_format -->|migrates to| model
     d_fixed_rule -->|migrates to| rules

@@ -38,5 +38,7 @@ One machine that turns proven programs into answers, deterministically.
 - Canonical encoding in a hot loop (the counter law gates this).
 - Allocation in the per-row hot path.
 - A second batch container, expression evaluator, or dedup identity.
+- Host `dyn CustomOp` / foreign expression registration — sealed stdlib only;
+  host-minted expression meaning is Unconstructible.
 - Reaching into projections' internals — candidates come through the search
   operator seam.

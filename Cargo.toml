@@ -11,7 +11,19 @@ resolver = "3"
 # preserved) as workspace members. [patch.crates-io] below routes every consumer
 # (kyzo-core's `fjall` dep and fjall's own internal `lsm-tree` edge) onto this
 # tree. This is the fork the story owns; the engine edits land here.
-members = ["crates/kyzo-core", "crates/kyzo-bin", "crates/xtask", "crates/kyzo-crashfs", "crates/kyzo-lsp", "crates/kyzo-arrow-interop", "vendor/fjall", "vendor/lsm-tree"]
+members = [
+    "crates/kyzo-core",
+    "crates/kyzo-bin",
+    "crates/kyzo-model",
+    "crates/kyzo-trials",
+    "crates/kyzo-oracle",
+    "crates/xtask",
+    "crates/kyzo-crashfs",
+    "crates/kyzo-lsp",
+    "crates/kyzo-arrow-interop",
+    "vendor/fjall",
+    "vendor/lsm-tree",
+]
 
 [workspace.package]
 version = "0.8.2"

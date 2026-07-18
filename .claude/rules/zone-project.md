@@ -39,3 +39,7 @@ Rebuildable speed over canonical truth. Never truth itself.
   batteries live in the module's test submodule; campaigns live in trials.
 - Un-owned foreign code: every file in this zone carries our module doc and
   our type discipline, vendored lineage or not.
+- Dual-seating Gazetteer (or any projection kind) in `rules/` — rules invoke
+  through the typed view; the rebuildable index lives only here.
+- In-place reinterpretation of an AcceptedReplica — LocalProjection is a
+  rebuildable cache over the origin certificate, never Record meaning.
