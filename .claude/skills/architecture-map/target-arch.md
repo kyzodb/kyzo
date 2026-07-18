@@ -50,7 +50,7 @@ Format: `path` — description
 `crates/kyzo-core/src/exec/op/delta.rs` — emits or consumes differential deltas for incremental/fixpoint work
 `crates/kyzo-core/src/exec/op/join.rs` — relational join of two inputs under declared keys
 `crates/kyzo-core/src/exec/op/literal.rs` — materializes an in-memory literal relation as an operator input
-`crates/kyzo-core/src/exec/op/mod.rs` — relational operator set the plan interprets
+`crates/kyzo-core/src/exec/op/mod.rs` — RelAlgebra spine: total constructors, typed invariants, batched dispatch, explain substrate; sibling op files are the operators
 `crates/kyzo-core/src/exec/op/neg.rs` — stratified negation against a positive relation
 `crates/kyzo-core/src/exec/op/search.rs` — drives projection/search indexes (vector, FTS, spatial, …) from the plan
 `crates/kyzo-core/src/exec/op/stored.rs` — ordered scan of a stored relation through the store contract
@@ -281,7 +281,9 @@ Format: `path` — description
 `crates/kyzo-trials/src/lib.rs` — long-running trial campaigns outside ordinary unit tests
 `crates/kyzo-trials/src/provenance.rs` — campaign: provenance annotations stay consistent with derivation
 `crates/kyzo-trials/src/serializability.rs` — campaign: concurrent txs obey serializability expectations
-`crates/kyzo-trials/src/time_travel.rs` — campaign: as-of queries match oracle temporal answers
+`crates/kyzo-trials/src/time_travel/mod.rs` — temporal trial lane: script-surface and full-path batteries, split by kind of proof
+`crates/kyzo-trials/src/time_travel/path.rs` — campaign: as-of through compile→RA→eval vs naive oracle (full path)
+`crates/kyzo-trials/src/time_travel/script.rs` — campaign: as-of through Db::run_script + real `@` KyzoScript (language surface)
 `crates/xtask/src/allowlist.rs` — which paths each mechanical gate is allowed to touch
 `crates/xtask/src/checks/agreement_registry.rs` — gate: agreement/registry invariants hold in the tree
 `crates/xtask/src/checks/allocation_admission.rs` — gate: allocations cross an admission boundary, not ad hoc

@@ -1,1 +1,45 @@
-//! mod.rs
+//! One algorithm per file, named for the algorithm.
+
+pub(crate) mod all_pairs_shortest_path;
+pub(crate) mod astar;
+pub(crate) mod bfs;
+pub(crate) mod cliques;
+pub(crate) mod degree_centrality;
+pub(crate) mod dfs;
+pub(crate) mod dijkstra;
+pub(crate) mod k_core;
+pub(crate) mod kruskal;
+pub(crate) mod label_propagation;
+pub(crate) mod louvain;
+pub(crate) mod max_flow;
+pub(crate) mod pagerank;
+pub(crate) mod prim;
+pub(crate) mod random_walk;
+pub(crate) mod reorder_sort;
+pub(crate) mod scc;
+pub(crate) mod shortest_path_bfs;
+pub(crate) mod top_sort;
+pub(crate) mod triangles;
+pub(crate) mod yen;
+
+pub(crate) use all_pairs_shortest_path::{BetweennessCentrality, ClosenessCentrality};
+pub(crate) use astar::ShortestPathAStar;
+pub(crate) use bfs::Bfs;
+pub(crate) use cliques::MaximalCliques;
+pub(crate) use degree_centrality::DegreeCentrality;
+pub(crate) use dfs::Dfs;
+pub(crate) use dijkstra::ShortestPathDijkstra;
+pub(crate) use k_core::KCoreDecomposition;
+pub(crate) use kruskal::MinimumSpanningForestKruskal;
+pub(crate) use label_propagation::LabelPropagation;
+pub(crate) use louvain::CommunityDetectionLouvain;
+pub(crate) use max_flow::MaxFlow;
+pub(crate) use pagerank::PageRank;
+pub(crate) use prim::MinimumSpanningTreePrim;
+pub(crate) use random_walk::RandomWalk;
+pub(crate) use reorder_sort::ReorderSort;
+pub(crate) use scc::StronglyConnectedComponent;
+pub(crate) use shortest_path_bfs::ShortestPathBFS;
+pub(crate) use top_sort::TopSort;
+pub(crate) use triangles::ClusteringCoefficients;
+pub(crate) use yen::KShortestPathYen;

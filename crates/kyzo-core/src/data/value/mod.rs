@@ -63,7 +63,6 @@ pub mod row;
 pub(crate) mod search_hits;
 pub mod string;
 pub mod tag;
-pub mod wide;
 
 pub use admission::{Admission, Denial};
 pub use arity::Arity;
@@ -75,14 +74,16 @@ pub use row::{
 };
 pub(crate) use search_hits::SearchHits;
 pub use tag::Tag;
-pub use wide::interval::{Bound, Interval};
-pub use wide::json::{Json, JsonNum, JsonObj};
-pub use wide::regex::{CompiledRegexV1, RegexFlags, RegexSource};
-pub use wide::validity::{
+// Kind faces seated at model/value/kind (wide/ cut). Re-export until data/
+// dissolves — no second copy under data/value.
+pub use crate::model::value::kind::interval::{Bound, Interval};
+pub use crate::model::value::kind::json::{Json, JsonNum, JsonObj};
+pub use crate::model::value::kind::regex::{CompiledRegexV1, RegexFlags, RegexSource};
+pub use crate::model::value::kind::validity::{
     AsOf, MAX_VALIDITY_TS, StoredValiditySlot, TERMINAL_VALIDITY, Validity, ValiditySeekBound,
     ValiditySlot, ValidityTs,
 };
-pub use wide::{Vector, VectorComponent, VectorDimension};
+pub use crate::model::value::kind::{Vector, VectorComponent, VectorDimension};
 
 /// The engine-facing UUID value (16 bytes; identity and order are the
 /// bytes, per the uuid face's law). Field is private — construction and

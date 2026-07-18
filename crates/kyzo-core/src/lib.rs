@@ -259,6 +259,10 @@
 
 pub(crate) mod capacity;
 pub(crate) mod data;
+// Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
+pub(crate) mod exec;
+pub(crate) mod model;
+pub(crate) mod rules;
 // Engines production host doors: `runtime/mutate.rs` (fts/hnsw/lsh create/drop),
 // `query/search.rs` (`RelationIndexSearch::search_relation`),
 // `engines::admit_relation_search_hits` → `SearchHits::admit_decoded`.
@@ -329,7 +333,7 @@ pub use runtime::callback::{CallbackEvent, CallbackOp};
 pub use runtime::db::{Db, ScriptOptions};
 pub use runtime::verify::VerifyOutcome;
 
-pub use query::ra::temporal::SignedFact;
+pub use exec::op::temporal::SignedFact;
 pub use query::standing::StandingQuery;
 
 // Sealed doors deleted (bench_api / fuzz_api / lsp_api). Tooling speaks the

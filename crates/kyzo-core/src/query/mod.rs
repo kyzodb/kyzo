@@ -88,25 +88,12 @@ mod dst_query;
 #[cfg(test)]
 mod trials;
 
-// Time-travel trials (story #3, item C.10): the README's as-of claims proven
-// through the full compile→RA→eval path against the naive as-of oracle.
-// Test-only; adds no lib code.
-#[cfg(test)]
-mod time_travel_trials;
-
-// Time-travel LANGUAGE-surface laws (story #4): the same as-of claim, proven
-// through the actual public surface — `Db::run_script` parsing real
-// KyzoScript `@` clauses — rather than hand-built magic-program ASTs.
-// Test-only; adds no lib code.
-#[cfg(test)]
-mod time_travel_script_laws;
+// Time-travel batteries moved to kyzo-trials::time_travel::{script,path}.
 
 // Production host door: `runtime/db.rs::compile_and_eval` runs
 // `stratified_magic_compile` and `bind_for_eval` on every query (P112).
 pub(crate) mod compile;
-// Production host door: `compile`'s plans and `eval`'s loop drive every
-// `ra` operator (`runtime/db.rs::compile_and_eval`).
-pub(crate) mod ra;
+// RA spine seated at exec/op (query/ra/ cut).
 
 // Production host door: `runtime/db.rs::compile_and_eval` runs
 // `stratified_evaluate` on every query. Provenance-graph plumbing with no

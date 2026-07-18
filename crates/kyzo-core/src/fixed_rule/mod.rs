@@ -102,15 +102,15 @@ use crate::data::span::SourceSpan;
 use crate::data::symb::Symbol;
 use crate::data::value::Tuple;
 use crate::data::value::{AsOf, DataValue};
-use crate::fixed_rule::algos::*;
 use crate::fixed_rule::graph::{DirectedCsrGraph, GraphTooLargeError};
 use crate::fixed_rule::utilities::*;
 use crate::query::eval::{BudgetDimension, LimitExceeded};
 use crate::query::levels::EpochStore;
 use crate::query::temp_store::{RegularTempStore, TupleInIter};
 use crate::data::value::data_value_any;
+use crate::rules::algo::*;
 
-pub(crate) mod algos;
+// algos/ cut — algorithms seated at rules/algo.
 pub(crate) mod graph;
 pub(crate) mod parallel;
 pub(crate) mod rng;
@@ -2141,10 +2141,16 @@ mod tests {
     /// fails just this one assertion if the guard is ever removed.
     #[test]
     fn nullary_node_relation_refuses_not_panics_across_algos() {
-        use crate::fixed_rule::algos::{
-            Bfs, DegreeCentrality, Dfs, KShortestPathYen, MaxFlow, MinimumSpanningTreePrim,
-            RandomWalk, ShortestPathAStar, ShortestPathDijkstra, StronglyConnectedComponent,
-        };
+        use crate::rules::algo::astar::ShortestPathAStar;
+        use crate::rules::algo::bfs::Bfs;
+        use crate::rules::algo::degree_centrality::DegreeCentrality;
+        use crate::rules::algo::dfs::Dfs;
+        use crate::rules::algo::dijkstra::ShortestPathDijkstra;
+        use crate::rules::algo::max_flow::MaxFlow;
+        use crate::rules::algo::prim::MinimumSpanningTreePrim;
+        use crate::rules::algo::random_walk::RandomWalk;
+        use crate::rules::algo::scc::StronglyConnectedComponent;
+        use crate::rules::algo::yen::KShortestPathYen;
 
         fn e(a: &str, b: &str, w: f64) -> Tuple {
             Tuple::from_vec(vec![s(a), s(b), DataValue::from(w)])
