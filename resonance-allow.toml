@@ -220,9 +220,6 @@ citation = "REAL, SAME-FILE duplication with no independence rationale to protec
 
 [[copy_detector]]
 members = [
-  "crates/kyzo-core/src/bench_api.rs::collect_on",
-  "crates/kyzo-core/src/bench_api.rs::run_on",
-  "crates/kyzo-core/src/bench_api.rs::transitive_closure",
   "crates/kyzo-core/src/data/expr.rs::collect_bindings",
   "crates/kyzo-core/src/data/expr.rs::do_binding_indices",
   "crates/kyzo-core/src/data/expr.rs::do_get_variables",

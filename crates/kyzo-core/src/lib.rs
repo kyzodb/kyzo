@@ -332,22 +332,5 @@ pub use runtime::verify::VerifyOutcome;
 pub use query::ra::temporal::SignedFact;
 pub use query::standing::StandingQuery;
 
-// A curated, opaque façade over the crate-internal query pipeline
-// (compile → bind → semi-naive eval), for the RA-layer criterion benches.
-// Gated behind the `bench-internals` feature so it never touches the normal
-// public surface. Everything it exposes is an opaque handle or a primitive;
-// no crate-internal type crosses the boundary.
-#[cfg(feature = "bench-internals")]
-pub mod bench_api;
-
-// A one-function façade over the crate-internal parse tier, for the
-// KyzoScript fuzz target. Gated behind the `fuzz-internals` feature so it
-// never touches the normal public surface.
-#[cfg(feature = "fuzz-internals")]
-pub mod fuzz_api;
-
-// A one-function façade over the crate-internal parse tier, for kyzo-lsp's
-// diagnostics-on-type (story #92). Unlike `bench_api`/`fuzz_api`, this is
-// always compiled: live diagnostics are a first-class product surface, not
-// a dev-tooling concern behind a feature flag.
-pub mod lsp_api;
+// Sealed doors deleted (bench_api / fuzz_api / lsp_api). Tooling speaks the
+// sealed contract or goes red — bespoke façades were contract debt.

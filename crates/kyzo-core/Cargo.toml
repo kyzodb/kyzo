@@ -86,16 +86,6 @@ flatbuffers = { version = "25.12.19", default-features = false, features = ["std
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1"
 
-[features]
-# Exposes `bench_api`, an opaque façade over the internal query pipeline for
-# the RA-layer criterion benches (benches/ra_exec.rs). Not part of the public
-# surface; enabled only by `cargo bench`/`cargo test` invocations that name it.
-bench-internals = []
-# Exposes `fuzz_api::fuzz_parse_script`, a one-function façade over the
-# internal parse tier for the KyzoScript fuzz target (`fuzz/`). Not part of
-# the public surface; enabled only by the fuzz crate.
-fuzz-internals = []
-
 [dev-dependencies]
 tempfile = "3"
 proptest = "1"
@@ -123,23 +113,6 @@ harness = false
 [[bench]]
 name = "ra_exec"
 harness = false
-required-features = ["bench-internals"]
-
-[[example]]
-name = "ra_profile"
-required-features = ["bench-internals"]
-
-[[example]]
-name = "ra_determinism"
-required-features = ["bench-internals"]
-
-[[example]]
-name = "fixpoint_mem_profile"
-required-features = ["bench-internals"]
-
-[[example]]
-name = "bulk_ingest_profile"
-required-features = ["bench-internals"]
 
 [lints]
 workspace = true

@@ -17,11 +17,9 @@ use std::process::Command;
 
 use crate::proc::{ProcessFailure, run_step};
 
-/// The one package every other first-party crate's clippy config differs
-/// from: kyzo-core (package name `kyzo`) alone carries the
-/// bench-internals/fuzz-internals feature configuration and is clippy'd
-/// under both, same as the condemned justfile's `clippy` recipe did by
-/// hand. Any OTHER first-party package is covered by `first_party_packages`
+/// kyzo-core (package name `kyzo`) plus the other first-party packages.
+/// The old bench-internals/fuzz-internals dual clippy pass died with the
+/// sealed doors. Any OTHER first-party package is covered by `first_party_packages`
 /// alone — this name does not gate whether a new crate is covered, only
 /// whether it gets a second, feature-gated clippy pass.
 const CORE_PACKAGE: &str = "kyzo";
@@ -105,10 +103,6 @@ fn clippy_cmd(packages: &[&str], features: &[&str]) -> Command {
 /// config once, together.
 pub fn clippy() -> Result<(), ProcessFailure> {
     run_step("clippy", clippy_cmd(&[CORE_PACKAGE], &[]))?;
-    run_step(
-        "clippy",
-        clippy_cmd(&[CORE_PACKAGE], &["bench-internals", "fuzz-internals"]),
-    )?;
     run_step("clippy", clippy_cmd(OTHER_PACKAGES, &[]))
 }
 
@@ -189,19 +183,11 @@ pub fn test() -> Result<(), ProcessFailure> {
     run_step("test", cmd)
 }
 
-/// The bench-internals/fuzz-internals feature configuration's own lib tests.
+/// Former bench-internals/fuzz-internals lib tests. Sealed doors are gone;
+/// this step is a no-op so the gate does not keep a ghost feature alive.
 pub fn test_features() -> Result<(), ProcessFailure> {
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "test",
-        "-p",
-        CORE_PACKAGE,
-        "--release",
-        "--features",
-        "bench-internals,fuzz-internals",
-        "--lib",
-    ]);
-    run_step("test-features", cmd)
+    println!("test-features: skipped — sealed doors deleted (bench_api/fuzz_api)");
+    Ok(())
 }
 
 /// The whole first-party test suite repeated under the `release-checked`
@@ -227,21 +213,13 @@ pub fn test_release_checked() -> Result<(), ProcessFailure> {
     run_step("test-release-checked", cmd)
 }
 
-/// The bench-internals/fuzz-internals feature configuration's lib tests,
-/// under the `release-checked` profile.
+/// Former bench-internals/fuzz-internals lib tests under release-checked.
+/// Sealed doors are gone; no-op (see `test_features`).
 pub fn test_features_release_checked() -> Result<(), ProcessFailure> {
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "test",
-        "-p",
-        CORE_PACKAGE,
-        "--profile",
-        "release-checked",
-        "--features",
-        "bench-internals,fuzz-internals",
-        "--lib",
-    ]);
-    run_step("test-features-release-checked", cmd)
+    println!(
+        "test-features-release-checked: skipped — sealed doors deleted (bench_api/fuzz_api)"
+    );
+    Ok(())
 }
 
 /// Run the freshly-built binary IN the container: `cargo xtask run -- <args>`.

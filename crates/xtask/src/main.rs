@@ -111,11 +111,11 @@ enum Verb {
     },
     /// The full first-party test suite.
     Test,
-    /// The bench-internals/fuzz-internals feature configuration's tests.
+    /// Former sealed-door feature tests (no-op; doors deleted).
     TestFeatures,
     /// The whole test suite under the `release-checked` profile (overflow-checks live).
     TestReleaseChecked,
-    /// The bench-internals/fuzz-internals feature tests under the `release-checked` profile.
+    /// Former sealed-door feature tests under release-checked (no-op; doors deleted).
     TestFeaturesReleaseChecked,
     /// Run the freshly-built binary in the container.
     Run {

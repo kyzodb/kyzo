@@ -97,7 +97,6 @@ jobs:
       # which are #118's story, not this gate's. `--no-deps` keeps the
       # vendored dependency trees themselves out of scope too.
       - run: cargo clippy -p kyzo --release --all-targets --no-deps -- -D warnings
-      - run: cargo clippy -p kyzo --release --all-targets --no-deps --features bench-internals,fuzz-internals -- -D warnings
       - run: cargo clippy -p kyzo-bin -p kyzo-crashfs -p kyzo-lsp -p kyzo-arrow-interop --release --all-targets --no-deps -- -D warnings
 
   build-test:
@@ -325,7 +324,6 @@ jobs:
       # `overflow-checks` toggle in `[profile.release]` is the fuzzing safety
       # net only; this step is the correctness mechanism.
       - run: cargo test --workspace --exclude fjall --exclude lsm-tree --exclude xtask --profile release-checked
-      - run: cargo test -p kyzo --profile release-checked --features bench-internals,fuzz-internals --lib
 
   # ---------- No silent skips ----------
 
