@@ -94,7 +94,7 @@ Halt when an environment value has no declared type to land in. Report the value
 
 ### Definition
 
-A host (`zone-bin`'s CLI/REPL/HTTP surface, `zone-wasm`'s envelope) consumes the engine's one sealed public contract only — a typed request in, a typed result or typed error out — and renders/routes through that envelope. It never reaches into engine internals, and never carries state of its own the engine can't account for.
+A host (`zone-bin`'s CLI/REPL/NATS-adapter marshal surfaces, `zone-wasm`'s envelope) consumes the engine's one sealed public contract only — a typed request in, a typed result or typed error out — and renders/routes through that envelope. It never reaches into engine internals, and never carries state of its own the engine can't account for. HTTP/gRPC is not a host pillar: at most an optional thin white-label skin over the same envelope; NATS is carriage for the Kyzo-controlled interface, not a sloppy bolt-on and not a second brain.
 
 ### Required Form
 

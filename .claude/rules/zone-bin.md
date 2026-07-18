@@ -3,9 +3,14 @@ paths:
   - "crates/kyzo-bin/**/*.rs"
 ---
 
-# Zone: Host, Native — the CLI, REPL, and HTTP server
+# Zone: Host, Native — CLI, REPL, and marshal-only network adapters
 
 A way to reach the engine. Never a place engine meaning lives.
+
+Max purity: one sealed typed door. Hosts only marshal. Network carriage is the Kyzo
+envelope over the fabric (NATS subject grammar / request-reply). HTTP/gRPC as a
+second public product protocol is deleted — optional thin white-label skin may wrap
+the same envelope for a density; it never invents verbs, authz, or meaning.
 
 ## Required
 
@@ -13,13 +18,14 @@ A way to reach the engine. Never a place engine meaning lives.
   through the envelope vocabulary.
 - No panic escapes a request handler or REPL command: every failure renders
   as a typed error to the caller with the engine's reason and span intact.
-- Every route passes the auth gate; the route table is enumerable and each
-  route is deliberate.
-- Streaming surfaces (SSE feeds, standing queries) preserve the engine's
-  delivery guarantees — the host never reorders, dedups, or drops. Subscribe
-  surfaces carry only the guarantee-preserving shape; delivery, fan-out, and
-  durable resume are the fabric's (NATS/JetStream), never a second delivery
-  mechanism built here.
+  Panic containment is at the typed envelope on every host — not incidental to
+  one transport.
+- Every entry path passes the auth/capability gate; the surface is enumerable
+  and each path is deliberate.
+- Streaming and subscribe surfaces preserve the engine's delivery guarantees —
+  the host never reorders, dedups, or drops. Delivery, fan-out, and durable
+  resume are the fabric's (NATS/JetStream), never a second delivery mechanism
+  built here.
 
 ## Forbidden
 
@@ -30,3 +36,5 @@ A way to reach the engine. Never a place engine meaning lives.
 - `unwrap`/`expect` on any request path.
 - State of its own that the engine cannot account for (caches of results,
   shadow catalogs).
+- Treating HTTP/REST/gRPC as architecture or a second meaning door beside the
+  sealed envelope / NATS carriage.
