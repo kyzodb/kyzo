@@ -90,20 +90,11 @@ mutation-proven holes, kind-agreement, collect-limit) — closed)
   `model/program/aggregate.rs` (seat exists). The fold objects, factories
   and `NumAccum` → `exec/fold/aggr.rs` (seat exists). Tests move with
   their halves; the flag-contract battery goes with exec.
-- **L2:** gold, preserve through the cut: `AggrKind`'s unrepresentable
-  kind/impl disagreement (rebuild the proof at the new seam); the
-  changed-flag contract with the fixed upstream inversions (the flag
-  gates delta propagation — a false "unchanged" is a premature fixpoint);
-  exact-`Num`-order min/max; `NumAccum` exact-Int sum/product; the whole
-  test battery incl. F1/F2. Condemned: `choice_rand` folds UNSEEDED
-  `rand::rng()` — nondeterminism in the answer path with no
-  determinism-as-data field on `Aggregation` to even declare it; it takes
-  the `rules/rng.rs` seeded discipline or is refused — it does not
-  migrate as-is. Watch: `Null` doubles as "no value yet" in the meet
-  accumulators (min/max document null-skipping; intersection silently
-  conflates a real Null row with its identity) — destination law wants a
-  typed Option-shaped accumulator. NEW-SEAT: none needed.
-
+- **L2:**
+  - **gold:** `AggrKind`'s unrepresentable kind/impl disagreement (rebuild the proof at the new seam); the changed-flag contract with the fixed upstream inversions (the flag gates delta propagation — a false "unchanged" is a premature fixpoint); exact-`Num`-order min/max; `NumAccum` exact-Int sum/product; the whole test battery incl. F1/F2.
+  - **Condemned:** `choice_rand` folds UNSEEDED `rand::rng()` — nondeterminism in the answer path with no determinism-as-data field on `Aggregation` to even declare it; it takes the `rules/rng.rs` seeded discipline or is refused — it does not migrate as-is.
+  - **Watch:** `Null` doubles as "no value yet" in the meet accumulators (min/max document null-skipping; intersection silently conflates a real Null row with its identity) — destination law wants a typed Option-shaped accumulator.
+  - **NEW-SEAT:** none needed.
 ## data/relation.rs (501 lines; inventory: fork header, module doc
 (coerce as contract-at-the-boundary), `VecElementType`,
 `NullableColType` + Display, `ColType` (11 kinds), `ColumnDef`,
@@ -115,19 +106,11 @@ Validity{value,ASSERT-RETRACT-~strings,pair}/Json-recursive) — closed)
   `StoredRelationMetadata` + column-compat checks → `relation.rs`;
   `NullableColType`/`ColType`/`ColumnDef`/`VecElementType` + `coerce` →
   `column.rs`.
-- **L2:** gold: `coerce` is parse-don't-validate stated as law ("fallible
-  parsing, not validation — downstream never re-checks what coercion
-  proved"); the byte conventions (base64 vectors little-endian BY
-  DEFINITION, exact element count or refuse — replacing upstream's
-  unsafe native-endian pointer cast); F32-as-precision-constraint
-  semantics (declared width, values stay f64-canonical, F32 claim
-  checked f32-exact with NaN exempt); the reserved-tick refusals
-  (`i64::MAX`/`MIN` validity refuse at coercion); validity coercion
-  floors shared with `str2vld` so coercion and parse agree on the
-  containing microsecond. Note for the successor doc:
-  `compatible_with_col` treats nullable `Any?` as a wildcard — a
-  deliberate subtlety, state it, don't rediscover it.
-
+- **L2:**
+  - **gold:** `coerce` is parse-don't-validate stated as law ("fallible parsing, not validation — downstream never re-checks what coercion proved"); the byte conventions (base64 vectors little-endian BY DEFINITION, exact element count or refuse — replacing upstream's unsafe native-endian pointer cast); F32-as-precision-constraint semantics (declared width, values stay f64-canonical, F32 claim checked f32-exact with NaN exempt); the reserved-tick refusals (`i64::MAX`/`MIN` validity refuse at coercion); validity coercion floors shared with `str2vld` so coercion and parse agree on the containing microsecond. Note for the successor doc: `compatible_with_col` treats nullable `Any?` as a wildcard — a deliberate subtlety, state it, don't rediscover it.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## data/value/exec.rs (510 lines; inventory: module doc (the two-form law
 made operational: durable = canonical bytes only at boundaries, execution
 = raw codes under a proven Domain; the narrow door: admitted rows in,
@@ -155,21 +138,11 @@ lookup never a hash-order iteration; cross-arena join panic) — closed)
   identity" — this type IS that seed). Tests split with their types; the
   foundational-guarantee test spans both and lands with the fixpoint,
   which is the law it protects.
-- **L2:** gold, preserve verbatim: the zero-canonical-encode-in-fixpoint
-  law as an EXECUTABLE test (the arena's own counters prove zero
-  intern/zero deref — verify-never-assert realized); the narrow-door
-  construction (private field, no from_raw; forge vectors proven absent
-  in proofs.rs); the value-oracle differential and the determinism pin
-  (schedule-independence is a stated engine law); both @authority blocks
-  migrate intact. Arrival notes: when #120 lands the production RA join
-  (`exec/op/join.rs`), `join_project`'s naive HashMap probe becomes the
-  law-grade ORACLE the verify battery differentials against — the engine
-  arriving must not delete the oracle. Watch for the destination doc: an
-  empty `out` projection yields `arity.max(1)` with zero codes, so a
-  zero-column projection (semijoin/count shape) silently reports zero
-  rows however many matches occurred — the door has no
-  match-count-without-columns form yet.
-
+- **L2:**
+  - **gold:** the zero-canonical-encode-in-fixpoint law as an EXECUTABLE test (the arena's own counters prove zero intern/zero deref — verify-never-assert realized); the narrow-door construction (private field, no from_raw; forge vectors proven absent in proofs.rs); the value-oracle differential and the determinism pin (schedule-independence is a stated engine law); both @authority blocks migrate intact. Arrival notes: when #120 lands the production RA join (`exec/op/join.rs`), `join_project`'s naive HashMap probe becomes the law-grade ORACLE the verify battery differentials against — the engine arriving must not delete the oracle. Watch for the destination doc: an empty `out` projection yields `arity.max(1)` with zero codes, so a zero-column projection (semijoin/count shape) silently reports zero rows however many matches occurred — the door has no match-count-without-columns form yet.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## data/value/row.rs (820 lines; inventory: module doc (the code-lifetime
 law — codes never persist across a seal, the durable form is canonical
 bytes, held by TYPE SURFACE: `Rows` has no serialization surface,
@@ -210,27 +183,11 @@ closed)
   scan-bound sentinel law; consumed by `exec/op/stored.rs`. The
   schema-tier RelationId serde (see the json.rs entry) must agree with
   `raw_encode` — one layout, stated once.
-- **L2:** gold, preserve verbatim: the code-lifetime law held by type
-  surface, not convention ("you cannot write codes down; you cannot
-  smuggle execution currency out of stored bytes"); the fixpoint
-  choreography as a LAW TEST with the borrow checker as its enforcement
-  mechanism; the deliberate refusal asymmetry (stamp doors PANIC —
-  programmer error; the bytes door returns typed `PushError` — stored
-  bytes are data, "storage ingestion is a refusal surface, not a panic
-  surface"); validate-then-intern so refusal leaves no partial tuple;
-  the vacuity guard in the durability test (a test that proves itself
-  non-vacuous is house standard); `RelationId::CAP`'s 0xFF-headroom
-  rationale (every assignable prefix stays below the sentinel byte every
-  storage consumer assumes). Finding for the destination law: EncodedKey
-  is ONE type holding TWO shapes with no discriminant — the bare written
-  tuple (encode_row/from_values/from_stored, no prefix; split_key is
-  lawful only here) and the relation-prefixed storage key
-  (encode_key_with_suffix, TupleT), on which `from_stored`'s arity split
-  would REFUSE because the 8-byte prefix is not a canonical encoding.
-  The split at migration resolves it (bare form with the currency,
-  prefixed form in store/keys.rs as its own type) — do not carry the
-  conflation across.
-
+- **L2:**
+  - **gold:** the code-lifetime law held by type surface, not convention ("you cannot write codes down; you cannot smuggle execution currency out of stored bytes"); the fixpoint choreography as a LAW TEST with the borrow checker as its enforcement mechanism; the deliberate refusal asymmetry (stamp doors PANIC — programmer error; the bytes door returns typed `PushError` — stored bytes are data, "storage ingestion is a refusal surface, not a panic surface"); validate-then-intern so refusal leaves no partial tuple; the vacuity guard in the durability test (a test that proves itself non-vacuous is house standard); `RelationId::CAP`'s 0xFF-headroom rationale (every assignable prefix stays below the sentinel byte every storage consumer assumes). Finding for the destination law: EncodedKey is ONE type holding TWO shapes with no discriminant — the bare written tuple (encode_row/from_values/from_stored, no prefix; split_key is lawful only here) and the relation-prefixed storage key (encode_key_with_suffix, TupleT), on which `from_stored`'s arity split would REFUSE because the 8-byte prefix is not a canonical encoding. The split at migration resolves it (bare form with the currency, prefixed form in store/keys.rs as its own type) — do not carry the conflation across.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## data/value/wide/ (mod.rs 21, collection.rs 43, uuid.rs 14, vector.rs
 38, json.rs 161, regex.rs 241, validity.rs 207, interval.rs 415 — each
 read whole; inventories: mod (the faces doctrine: identity law before
@@ -271,24 +228,11 @@ law — exactly one of 13 relations over an exhaustive grid) — closed)
   map's own line seats the kind "under one execution contract"; if the
   operator rules model must stay evaluation-free, the witness and mint
   move to `exec/stdlib/text.rs` behind a plane-internal authority token.
-- **L2:** gold, preserve verbatim: refusal-over-repair everywhere
-  (non-canonical Set bytes, duplicate JSON keys, non-finite JSON
-  numbers, reserved regex flag bits, empty-denoting interval bytes all
-  REFUSE typed at a door — unlawful values cannot be written down); the
-  order-by-shape doctrine in validity (`Reverse` in the fields makes the
-  derived Ord unmisreadable); the JSON hash law (FNV-1a trailing,
-  accelerator-never-equality-authority, decode verifies, algorithm
-  pinned against independent vectors); regex's
-  decode-does-not-re-parse ruling ("a decode-side re-check against an
-  evolving parser would turn parser drift into format drift");
-  interval's discrete-grid identity (closed normal form, one empty
-  value, finite `i64::MAX` DISTINCT from unbounded — with the
-  sentinel-free round-trip test) and the Allen partition law test; the
-  no-unicode-normalization choice stated as deliberate. Cosmetic defect
-  to fix on migration: interval.rs's boundary-topology doc block has a
-  stray inline `///` (before `has_start`) fusing two doc paragraphs into
-  one line.
-
+- **L2:**
+  - **gold:** refusal-over-repair everywhere (non-canonical Set bytes, duplicate JSON keys, non-finite JSON numbers, reserved regex flag bits, empty-denoting interval bytes all REFUSE typed at a door — unlawful values cannot be written down); the order-by-shape doctrine in validity (`Reverse` in the fields makes the derived Ord unmisreadable); the JSON hash law (FNV-1a trailing, accelerator-never-equality-authority, decode verifies, algorithm pinned against independent vectors); regex's decode-does-not-re-parse ruling ("a decode-side re-check against an evolving parser would turn parser drift into format drift"); interval's discrete-grid identity (closed normal form, one empty value, finite `i64::MAX` DISTINCT from unbounded — with the sentinel-free round-trip test) and the Allen partition law test; the no-unicode-normalization choice stated as deliberate. Cosmetic defect to fix on migration: interval.rs's boundary-topology doc block has a stray inline `///` (before `has_start`) fusing two doc paragraphs into one line.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## engines/mod.rs (115 lines; inventory: module doc (one shared concept:
 the index-read corruption doctrine), the eight module declarations with
 their per-engine liveness notes (fts/hnsw/lsh live through the db.rs
@@ -304,15 +248,11 @@ storage/IO errors pass through unchanged) — closed)
   exists): its help text ("the index can be dropped and re-created from
   its base relation") IS the projection law that file states, and every
   projection read consumes scans through this boundary.
-- **L2:** gold: corruption-is-an-error-never-a-panic extended to every
-  index read path, defined ONCE because all engines name it; the
-  downcast discipline separating codec corruption from storage/IO
-  errors (a raw `DecodeError` cannot leak out of an engine as its
-  contract). Condemned with the tree: the per-module `#[allow(dead_code)]`
-  liveness ledger — in the target, each projection lands with its
-  surface or doesn't land; the mod-file-as-status-board pattern dies
-  with the monolith crate layout.
-
+- **L2:**
+  - **gold:** corruption-is-an-error-never-a-panic extended to every index read path, defined ONCE because all engines name it; the downcast discipline separating codec corruption from storage/IO errors (a raw `DecodeError` cannot leak out of an engine as its contract).
+  - **Condemned:** the per-module `#[allow(dead_code)]` liveness ledger — in the target, each projection lands with its surface or doesn't land; the mod-file-as-status-board pattern dies with the monolith crate layout.
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## engines/segments.rs (486 lines; inventory: module doc (rebuildable
 index never a second truth; validity TYPED not sequenced — the
 bump-before-commit / witness-after-snapshot pairing, adopted after a
@@ -344,20 +284,11 @@ empty segment; the u32 boundary) — closed)
   `Segment`/`SegmentEngine`'s segments map/`Segments`
   context/`checked_row_end` — → `project/current.rs`. Tests split with
   their halves; the #82 regression battery travels with the gate.
-- **L2:** gold, preserve verbatim: soundness by SIGNATURE, not calling
-  convention (the enforcement-ladder ruling — same mechanism as the
-  storage layer's `stamp_after_snapshot`); witness equality as the
-  entire serving criterion; declining-is-always-sound (the u32 decline
-  and the gate decline are one doctrine: a projection is optional
-  speed, the fallback pays no more than the build would have); the
-  miss map's never-a-source-of-truth claim proven by a loss test;
-  Arc-held orphans serving mid-scan readers to completion. Arrival
-  notes: `Segments::OFF` threading is door plumbing the #120 operator
-  wiring replaces (see bench_api's entry); the process-local watermark
-  is sound ONLY while segments are memory-only — if projections ever
-  persist, the generation vocabulary must become durable
-  (residency.rs's business, name it there on day one).
-
+- **L2:**
+  - **gold:** soundness by SIGNATURE, not calling convention (the enforcement-ladder ruling — same mechanism as the storage layer's `stamp_after_snapshot`); witness equality as the entire serving criterion; declining-is-always-sound (the u32 decline and the gate decline are one doctrine: a projection is optional speed, the fallback pays no more than the build would have); the miss map's never-a-source-of-truth claim proven by a loss test; Arc-held orphans serving mid-scan readers to completion. Arrival notes: `Segments::OFF` threading is door plumbing the #120 operator wiring replaces (see bench_api's entry); the process-local watermark is sound ONLY while segments are memory-only — if projections ever persist, the generation vocabulary must become durable (residency.rs's business, name it there on day one).
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## engines/text/ast.rs (367 lines; inventory: dual MPL header (the
 permanent home of the FTS query AST; bounds-checked `remove(0)`
 replacing unwraps on the user-text path), module doc, `FtsLiteral`
@@ -380,12 +311,11 @@ stopword-vanishing and Near distance preservation) — closed)
   `kyzo-model` beside `parse/search.rs`, while the analyzer-coupled
   `tokenize` rewrite stays engine-side in `project/text/` as an
   extension over the model type.
-- **L2:** gold, preserve verbatim: the depth-invariant doc (the
-  sharpest derived-Drop stack-safety analysis in the tree — bounding
-  at the parser is proven STRONGER than an iterative rewrite);
-  prefix-literals-pass-whole as a meaning argument; shallow-is_empty
-  with flatten-as-normalizer stated as a design pair.
-
+- **L2:**
+  - **gold:** the depth-invariant doc (the sharpest derived-Drop stack-safety analysis in the tree — bounding at the parser is proven STRONGER than an iterative rewrite); prefix-literals-pass-whole as a meaning argument; shallow-is_empty with flatten-as-normalizer stated as a design pair.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/mod.rs (186 lines; inventory: THE ENGINE LAWS module doc —
 seven laws, each with its enforcement site named (answer correctness
 via the deliberately-unoptimized oracle in laws.rs, itself
@@ -403,10 +333,11 @@ discipline executed in prose — closed)
   liveness note travels to its file). The trials/laws/gauntlet/dst
   declarations re-home with their files to kyzo-trials per those
   entries.
-- **L2:** gold, preserve verbatim: the seven laws with enforcement
-  sites (the engine's contract stated where its parts are declared);
-  per-attribute justification and the removed-once-proven notes.
-
+- **L2:**
+  - **gold:** the seven laws with enforcement sites (the engine's contract stated where its parts are declared); per-attribute justification and the removed-once-proven notes.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/normalize.rs (757 lines; inventory: header (THREE PARTS, each
 with its own landing note: the normalizer — faithful ports of
 upstream logical.rs NNF→DNF and reorder.rs well-ordering, "nothing
@@ -441,11 +372,11 @@ row-amplifying algorithm refuses mid-run") — closed)
   rules); `SessionFixedRule` → the `rules/contract.rs` boundary
   (where a fixed rule's payload, branding, and cancellation are the
   contract's substance).
-- **L2:** gold: parts that know their own destinations; the
-  catalog-boundary ruling for search atoms; brand-with-manifest-arity;
-  the global-admission budget arming; superseded code deleted and its
-  deletion recorded. Nothing condemned.
-
+- **L2:**
+  - **gold:** parts that know their own destinations; the catalog-boundary ruling for search atoms; brand-with-manifest-arity; the global-admission budget arming; superseded code deleted and its deletion recorded. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/ra/mod.rs (2024 lines; inventory: dual fork header with FIVE
 story-#3 transformations (storage access through the kernel's ReadTx
 species — "the operator tree itself is transaction-free data"; the
@@ -519,20 +450,11 @@ not outrank an earlier predicate poison) — closed)
   (join/neg/stored/search/temporal/transform). `BatchFilter` travels
   to op/transform.rs with its kin. `StoredRowTooShortError` stays
   beside the stored scans that raise it.
-- **L2:** gold, preserve verbatim: the Law-5 audit as a PERMANENT
-  header artifact (every upstream abort accounted for, including the
-  retired-without-successor ruling); constructural-over-runtime
-  refusals (join RHS, NegRight) as the house pattern; the positional
-  delta discipline doc with the self-join rewrite; the
-  no-row-at-a-time-fallback ruling (one machine, oracle-judged); the
-  never-empty-batch contract; judged-against-hand-computed-oracles
-  discipline named inside the tests themselves; the mutation-campaign
-  pin with its survivor lineage. Rule-#11 ledger (pre-existing): the
-  `#[ignore]`d cost probe is a measurement rig — bench lane on
-  migration; its measured numbers already satisfy rule #19's
-  perf-claims-close-on-a-reproducer standard and move with it.
-  Nothing condemned.
-
+- **L2:**
+  - **gold:** the Law-5 audit as a PERMANENT header artifact (every upstream abort accounted for, including the retired-without-successor ruling); constructural-over-runtime refusals (join RHS, NegRight) as the house pattern; the positional delta discipline doc with the self-join rewrite; the no-row-at-a-time-fallback ruling (one machine, oracle-judged); the never-empty-batch contract; judged-against-hand-computed-oracles discipline named inside the tests themselves; the mutation-campaign pin with its survivor lineage. Rule-#11 ledger (pre-existing): the `#[ignore]`d cost probe is a measurement rig — bench lane on migration; its measured numbers already satisfy rule #19's perf-claims-close-on-a-reproducer standard and move with it. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/time_travel_trials.rs (2526 lines; inventory: dual fork header
 (story #3 item C.10 — the README's as-of claims proven through the FULL
 query path, compile → RA → semi-naive eval, over a real FjallStorage;
@@ -610,17 +532,11 @@ fix's mutant) — closed)
   the two grammar-structural refusals) tests the GRAMMAR, not the
   engine — it travels to kyzo-model's parse-tier tests with
   kyzoscript.pest, not to trials.
-- **L2:** gold, preserve verbatim: sabotaged-oracle mutation-proofing
-  (the harness proves its own eyes work — both directions); the
-  from-scratch bridge whose sabotaged forms are verified against
-  their own counterparts; boundary semantics pinned WITH their
-  encoding-level traceability; named degenerate pins beside seeded
-  campaigns (readable failures); the real-stamps-vs-synthetic-index
-  distinction between the two history writers, with its reasoning;
-  definitional-over-implemented for ruling item 3; the
-  production-twin compose differential kept separate from the
-  oracle's. Nothing condemned.
-
+- **L2:**
+  - **gold:** sabotaged-oracle mutation-proofing (the harness proves its own eyes work — both directions); the from-scratch bridge whose sabotaged forms are verified against their own counterparts; boundary semantics pinned WITH their encoding-level traceability; named degenerate pins beside seeded campaigns (readable failures); the real-stamps-vs-synthetic-index distinction between the two history writers, with its reasoning; definitional-over-implemented for ruling item 3; the production-twin compose differential kept separate from the oracle's. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/trials.rs (2964 lines; inventory: MPL header, module doc (two
 README claims under "The engine keeps its word" demonstrated AT SCALE
 against the sealed oracle; test-only over the pub(crate) eval seams;
@@ -708,18 +624,11 @@ is and is not proven) — closed)
   differential — is scheduled at the session tier (runtime/db.rs
   wave); the migration must carry that obligation forward, not lose
   it in the move.
-- **L2:** gold, preserve verbatim: the stated-boundary discipline
-  (open gaps named in the doc, never smuggled); generator dimensions
-  justified by the exact mutant each discriminates (cross_join's
-  masking argument); hand-mutant pairs that prove the CAMPAIGN's own
-  eyes (a weakened generator shown blind, the real one shown to
-  catch); the counted comparative claim over a boolean where the
-  boolean would overclaim; the epistemics sections stating what each
-  oracle-vs-oracle check does and does not prove; model-derived
-  arities against vacuous passes; the real-landed-ops fold rule for
-  references; fixed-order generator vocabularies for seed
-  reproducibility. Nothing condemned.
-
+- **L2:**
+  - **gold:** the stated-boundary discipline (open gaps named in the doc, never smuggled); generator dimensions justified by the exact mutant each discriminates (cross_join's masking argument); hand-mutant pairs that prove the CAMPAIGN's own eyes (a weakened generator shown blind, the real one shown to catch); the counted comparative claim over a boolean where the boolean would overclaim; the epistemics sections stating what each oracle-vs-oracle check does and does not prove; model-derived arities against vacuous passes; the real-landed-ops fold rule for references; fixed-order generator vocabularies for seed reproducibility. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/eval.rs (5015 lines; inventory: dual fork header with FIVE
 story-#3 transformations (BUDGET IS A REQUIRED PARAMETER — the
 original's only controls were a Poison flag set by a sleeper thread
@@ -854,25 +763,11 @@ refuses any deriving program while 2 suffices) — closed)
   differential/determinism test batteries migrate with their zone as
   module tests; kyzo-trials grows public-surface twins per the
   sibling entries.
-- **L2:** gold, preserve verbatim: the determinism law with its four
-  supports stated as an invariant system (barrier-only checks named
-  as a determinism REQUIREMENT, not a style choice); the
-  non-perturbation theorem WITH its refutation history and the
-  landed counterexample-as-differential; the boundedness law tied to
-  the incident it forecloses; N1's do-not-strip warning on the
-  load-bearing dedup; refusals as first-class deterministic outputs
-  (byte-identical across threads, exact spends, honest admitted-not-
-  materialized accounting); mutants killed by LITERALS where a
-  symbol-relative bound would move with the mutant; the honest
-  generator-gap list cross-referenced to fixed pins; the traced
-  limiter semantics (D2/N2) preserved as documented behavior rather
-  than silently "fixed". Nothing condemned. Carried obligations:
-  D3's full retirement is complete (the tests prove construct AND
-  answer); the story-#80 pub(crate) widenings (epoch_ceiling,
-  check_interrupt) are the sanctioned oracle seam — the kyzo-oracle
-  split must give the oracle its own budget vocabulary or keep this
-  seam deliberate.
-
+- **L2:**
+  - **gold:** the determinism law with its four supports stated as an invariant system (barrier-only checks named as a determinism REQUIREMENT, not a style choice); the non-perturbation theorem WITH its refutation history and the landed counterexample-as-differential; the boundedness law tied to the incident it forecloses; N1's do-not-strip warning on the load-bearing dedup; refusals as first-class deterministic outputs (byte-identical across threads, exact spends, honest admitted-not- materialized accounting); mutants killed by LITERALS where a symbol-relative bound would move with the mutant; the honest generator-gap list cross-referenced to fixed pins; the traced limiter semantics (D2/N2) preserved as documented behavior rather than silently "fixed". Nothing condemned. Carried obligations: D3's full retirement is complete (the tests prove construct AND answer); the story-#80 pub(crate) widenings (epoch_ceiling, check_interrupt) are the sanctioned oracle seam — the kyzo-oracle split must give the oracle its own budget vocabulary or keep this seam deliberate.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## query/laws.rs (5058 lines; inventory: MPL header, module doc (THE
 REFERENCE SEMANTICS as executable law — "deliberately naive... written
 to be OBVIOUSLY correct"; the oracle is judge, never production; the
@@ -1003,19 +898,11 @@ refusals; the 4-shape × 80-seed campaign) — closed)
   superseded by #80's production ::verify consumer — the target
   formulation is the map's own ("the judge's contract: same question,
   independent answer"), not test-only.
-- **L2:** gold, preserve verbatim: obviously-correct-by-inspection as
-  the design criterion (optimizing the oracle is a defect); the three
-  upstream divergences recorded WITH their directions; the lift's
-  structural never-gap argument and its deleted-check ruling; the
-  one-seam constructor discipline with its five-file-fallout lesson;
-  the #89 sharing-soundness argument paired with the one
-  deliberately-independent copy; the terminal-tick reservation making
-  the zero-width interval unrepresentable; the exact-correspondence
-  doc PROVEN by the kernel cross-check; additive-budgeting so the true
-  answer stays the oracle's claim; the multiset-vs-set lineage; review
-  findings landed as paired positive/negative pins; loud-failure
-  regressions over silent ones. Nothing condemned.
-
+- **L2:**
+  - **gold:** obviously-correct-by-inspection as the design criterion (optimizing the oracle is a defect); the three upstream divergences recorded WITH their directions; the lift's structural never-gap argument and its deleted-check ruling; the one-seam constructor discipline with its five-file-fallout lesson; the #89 sharing-soundness argument paired with the one deliberately-independent copy; the terminal-tick reservation making the zero-width interval unrepresentable; the exact-correspondence doc PROVEN by the kernel cross-check; additive-budgeting so the true answer stays the oracle's claim; the multiset-vs-set lineage; review findings landed as paired positive/negative pins; loud-failure regressions over silent ones. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## runtime/relation.rs (2070 lines; inventory: dual fork header with TEN
 named re-architectures (the system keyspace TYPED — `SystemKey` a
 closed enum, "no fourth shape can appear by accident", with the
@@ -1103,18 +990,11 @@ starting") — closed)
   is where keyspace bounds and the raw multi-version scan gain their
   official accessors). `IndexKind`'s manifests remain the projection
   zones' vocabulary, referenced by the catalog.
-- **L2:** gold, preserve verbatim: knowledge-not-authority; the
-  closed SystemKey with the STORAGE_VERSION merge record; the sealed
-  one-door serialization boundary WITH its compile-time absence
-  proof (the house pattern for two-format discipline); Ord-IS-the-
-  semantics on the access ladder; uniqueness-is-isolation's-theorem;
-  the deleted-amend_key_prefix provenance argument; migration records
-  written where the format changed; the pinned-bytes conversation-
-  starter; refused-rather-than-routed seams; the deliberately
-  ungated access setter with its reason. Nothing condemned. The two
-  fixes-on-port are silent-wrong-answer classes upstream shipped —
-  keep their pins forever.
-
+- **L2:**
+  - **gold:** knowledge-not-authority; the closed SystemKey with the STORAGE_VERSION merge record; the sealed one-door serialization boundary WITH its compile-time absence proof (the house pattern for two-format discipline); Ord-IS-the- semantics on the access ladder; uniqueness-is-isolation's-theorem; the deleted-amend_key_prefix provenance argument; migration records written where the format changed; the pinned-bytes conversation- starter; refused-rather-than-routed seams; the deliberately ungated access setter with its reason. Nothing condemned. The two fixes-on-port are silent-wrong-answer classes upstream shipped — keep their pins forever.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## runtime/mutate.rs (2741 lines; inventory: dual fork header with six
 re-architectures (mutation on `SessionTx<T: WriteTx>` — "running it
 against a read session does not compile"; the CLEANUPS MACHINERY GONE
@@ -1209,20 +1089,11 @@ puts per mutation kind, 0 dels ever) — closed)
   zone vocabulary the ops call through. The temporal-index write
   seam's cross-module test contract (ra/temporal.rs drives it)
   survives the move as an admit-path pub(crate).
-- **L2:** gold, preserve verbatim: the unconditional SSI probe with
-  its lost-update argument (deleting it is a silent-wrong-answer
-  class); the snapshot-monotone valid-default reasoning; resolved-at-
-  this-write's-own-valid discipline on all three mutation kinds;
-  retraction-is-revision; the bounded cascade as typed whole-abort;
-  the temporal single-fire ruling WITH its no-byte-test-can-guard-it
-  epistemics and the count-oracle guard; backfill-equals-incremental
-  as the rebuildability law; the meaning-anchored byte fingerprint
-  pattern; refusal-at-first-touch manifest contexts; coverage-gap
-  pins named by the branch that never ran. Nothing condemned.
-  Carried obligations: the Phase C parsed-substances FLAG; the
-  unparsed `::temporal index create` surface (the tests' own
-  documented gap) — both operator-visible.
-
+- **L2:**
+  - **gold:** the unconditional SSI probe with its lost-update argument (deleting it is a silent-wrong-answer class); the snapshot-monotone valid-default reasoning; resolved-at- this-write's-own-valid discipline on all three mutation kinds; retraction-is-revision; the bounded cascade as typed whole-abort; the temporal single-fire ruling WITH its no-byte-test-can-guard-it epistemics and the count-oracle guard; backfill-equals-incremental as the rebuildability law; the meaning-anchored byte fingerprint pattern; refusal-at-first-touch manifest contexts; coverage-gap pins named by the branch that never ran. Nothing condemned. Carried obligations: the Phase C parsed-substances FLAG; the unparsed `::temporal index create` surface (the tests' own documented gap) — both operator-visible.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## runtime/db.rs (3076 lines; inventory: dual fork header with six
 re-architectures (session SPECIES — "the read/write distinction is a
 type, not a convention", the session owns its transaction and is Send;
@@ -1323,18 +1194,11 @@ tests that DO demonstrate it) — closed)
   (an end-to-end demand differential now exists at this seam); the
   remaining breadth (a generative corpus through the public path)
   stays open and named.
-- **L2:** gold, preserve verbatim: the stale-comment mea culpa as
-  standing doctrine (rule #20 in its own words); the 50M ceiling's
-  evidence-backed justification (rule #19 exemplary — a default
-  defended by recorded benchmarks and a rejected alternative); the
-  ordered commit ceremony (bumps before, evictions after, callbacks
-  after durable); the one-kill-flag design; the one-machine ruling
-  with its measurement; the retired-id funnel; discriminating-
-  history pins over agreeable fixtures; honest reconstruction
-  disclosures in tests. Nothing condemned. The `#[allow
-  (clippy::collapsible_if)]` toolchain-drift note is a dated
-  workaround — re-check on the next toolchain bump.
-
+- **L2:**
+  - **gold:** the stale-comment mea culpa as standing doctrine (rule #20 in its own words); the 50M ceiling's evidence-backed justification (rule #19 exemplary — a default defended by recorded benchmarks and a rejected alternative); the ordered commit ceremony (bumps before, evictions after, callbacks after durable); the one-kill-flag design; the one-machine ruling with its measurement; the retired-id funnel; discriminating- history pins over agreeable fixtures; honest reconstruction disclosures in tests. Nothing condemned. The `#[allow (clippy::collapsible_if)]` toolchain-drift note is a dated workaround — re-check on the next toolchain bump.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## storage/mod.rs (549 lines; inventory: MPL header, module doc (THE
 STORAGE CONTRACT — "written for that machine... not for any historical
 backend's shape"; the two-species genus with consuming commit — "a
@@ -1387,14 +1251,11 @@ error reports the durability shortfall, not a rollback") — closed)
   conflicts"); the module decls are structural glue dying with the
   directory; conformance/crash_matrix/sim/tests migrate to their
   trials/crashfs seats per their own entries.
-- **L2:** gold, preserve verbatim: the sealed-history discipline
-  (every contract change recorded WITH its ruling and industry
-  context); the snapshot-then-mint proof and its unrepresentable-by-
-  signature enforcement; the concurrency economics as caller-facing
-  contract prose; the bump-anyway format ruling; honest durability
-  semantics on fsync failure; degenerate-range laws stated at the
-  trait. Nothing condemned.
-
+- **L2:**
+  - **gold:** the sealed-history discipline (every contract change recorded WITH its ruling and industry context); the snapshot-then-mint proof and its unrepresentable-by- signature enforcement; the concurrency economics as caller-facing contract prose; the bump-anyway format ruling; honest durability semantics on fsync failure; degenerate-range laws stated at the trait. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## storage/tests.rs (3313 lines; inventory: dual MPL header, module doc
 (THE LAWS-NOT-SCENARIOS DOCTRINE — "each is a universal property
 quantified over all values, because the failure modes that matter here
@@ -1528,24 +1389,11 @@ pinning an exact host-dependent value") — closed)
   migration these per-backend copies die in favor of the kit call,
   keeping only what the kit deliberately excludes (the per-backend
   pins above).
-- **L2:** gold, preserve verbatim: laws-not-scenarios with the
-  invisible-to-examples argument; exhaustive-pairwise order checking;
-  generators justified by the exact mutant/bug shape they catch (the
-  shared-boundary arm, the byte-flip harness, the hardening
-  sentinel's positional-plan kill, the retry-liveness mutant); scope
-  honesty on what a test does NOT simulate (the abort-vs-power-cut
-  paragraph); independently-re-parsed artifacts (the dump-file
-  concurrency pin reads bytes, not the writer's own values);
-  commit-order-observed campaign dispatch with per-branch assertions
-  (write skew's serial-outcomes check, the lost-phantom order match);
-  sabotage-verify with a legitimate control; the
-  abandoned-mint-raises-floor ruling; real-fixture-over-raw-puts for
-  catalog-aware verification; walk-continues-past-the-wound;
-  re-pinned-KNOWINGLY contract history in the test doc; sane-band
-  assertions over host-pinned values. The one condemned class is the
-  superseded kit-source duplicates named in L1; everything else
-  crosses.
-
+- **L2:**
+  - **gold:** laws-not-scenarios with the invisible-to-examples argument; exhaustive-pairwise order checking; generators justified by the exact mutant/bug shape they catch (the shared-boundary arm, the byte-flip harness, the hardening sentinel's positional-plan kill, the retry-liveness mutant); scope honesty on what a test does NOT simulate (the abort-vs-power-cut paragraph); independently-re-parsed artifacts (the dump-file concurrency pin reads bytes, not the writer's own values); commit-order-observed campaign dispatch with per-branch assertions (write skew's serial-outcomes check, the lost-phantom order match); sabotage-verify with a legitimate control; the abandoned-mint-raises-floor ruling; real-fixture-over-raw-puts for catalog-aware verification; walk-continues-past-the-wound; re-pinned-KNOWINGLY contract history in the test doc; sane-band assertions over host-pinned values. The one condemned class is the superseded kit-source duplicates named in L1; everything else crosses.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## fixed_rule/mod.rs (1965 lines; inventory: dual fork header with the
 load-bearing changes list (the STORED-INPUT SEAM — the original payload
 held a live &SessionTx; `StoredInputSource` abstracts it, SessionView
@@ -1641,20 +1489,11 @@ arrow-ipc wiring tests — closed)
   (name/arity), the live impl attaching at the engine boundary; the
   registry stays engine-side and the LSP arrival question
   (deprecated-sealed lsp_api entry) hangs on the same vocabulary cut.
-- **L2:** gold, preserve verbatim: the arity brand as a universal
-  contract ("refused at the first wrong row instead of feeding
-  mis-shaped tuples into downstream joins"); the OutputSpendGuard's
-  hole analysis and its determinism/boundedness laws (the mid-epoch
-  guard doctrine extended to the one place it didn't reach); the
-  checked-at-the-intern-site fix with its reserved-sentinel cap and
-  factored-for-testability honesty; the systemic-finding test's
-  design discipline (every case complete except the guard under
-  test — failure isolation built into the fixture); the
-  superseded-placeholder-kept-for-its-regression pattern; the
-  cancellation polling doctrine; dead code identified-and-dropped in
-  the header ledger; seams declared with named landing sites so "this
-  draft must not reshape a landed file". Nothing condemned.
-
+- **L2:**
+  - **gold:** the arity brand as a universal contract ("refused at the first wrong row instead of feeding mis-shaped tuples into downstream joins"); the OutputSpendGuard's hole analysis and its determinism/boundedness laws (the mid-epoch guard doctrine extended to the one place it didn't reach); the checked-at-the-intern-site fix with its reserved-sentinel cap and factored-for-testability honesty; the systemic-finding test's design discipline (every case complete except the guard under test — failure isolation built into the fixture); the superseded-placeholder-kept-for-its-regression pattern; the cancellation polling doctrine; dead code identified-and-dropped in the header ledger; seams declared with named landing sites so "this draft must not reshape a landed file". Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## fixed_rule/algos/mod.rs (61 lines; inventory: dual header (the
 `graph-algo` feature gate gone — "the ported algorithms are
 dependency-free pure Rust and always compiled"), module doc (the
@@ -1665,9 +1504,11 @@ module decls and their 20 re-exports — closed)
   becomes the map's `rules/algo/` ("one algorithm per file, named for
   the algorithm"); the re-export surface re-forms as that module's
   root, feeding the registry at rules/contract.rs.
-- **L2:** nothing condemned beyond the glue itself; the taxonomy
-  paragraph makes a good algo/ module-root doc.
-
+- **L2:**
+  - **gold:** nothing condemned beyond the glue itself; the taxonomy paragraph makes a good algo/ module-root doc.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## fixed_rule/algos/all_pairs_shortest_path.rs (431 lines; inventory:
 dual header (SEAM(parallelism) closed for the per-start Dijkstra
 fan-out with the determinism accounting: order-preserving map AND
@@ -1693,20 +1534,21 @@ unnormalized-over-ordered-pairs semantics stated) — closed)
   beside its consumers). The `#[ignore]`d timing rig is a rule-#11
   ledger item — it graduates to the bench lane on migration
   (measurement rig, not a test).
-- **L2:** gold: the parallel/sequential boundary drawn exactly at
-  the float fold and argued at both the seam and the test;
-  semantics-as-implemented stated in the oracle docs (unnormalized
-  betweenness, closeness's exact formula — the destination doc
-  should carry both so users don't assume NetworkX normalization).
-  Nothing condemned beyond the rig's lane change.
-
+- **L2:**
+  - **gold:** the parallel/sequential boundary drawn exactly at the float fold and argued at both the seam and the test; semantics-as-implemented stated in the oracle docs (unnormalized betweenness, closeness's exact formula — the destination doc should carry both so users don't assume NetworkX normalization). Nothing condemned beyond the rig's lane change.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## fixed_rule/utilities/mod.rs (24 lines; inventory: dual header ("module
 docs added; contents unchanged"), module doc, four decls + re-exports —
 closed)
 - **L1:** structural glue — dies with the directory; the readers and
   constant land in `rules/io/`, reorder_sort in `rules/algo/`.
-- **L2:** nothing beyond the glue.
-
+- **L2:**
+  - **gold:** nothing beyond the glue.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## crates/kyzo-core/tests/ — the story-#88 external public-surface suite
 The fourteen files below are EXTERNAL integration crates: by construction
 of where they live, they reach only the public `kyzo::` façade — the exact
@@ -1755,16 +1597,11 @@ can refuse comes back as Ok(Err(_))") — closed)
 - **L1:** NAMED SPLIT per the map: the route table + state + startup
   stay as server/ root; changes.rs + standing.rs merge → server/
   feeds.rs; pages.rs → server/console.rs; the rest keep seats.
-- **L2:** gold, preserve verbatim: the dropped-not-stubbed ledger
-  (each upstream feature's absence argued from a contract, with the
-  fix's real seat named); the per-route body-limit DoS fix; the
-  C-dependency exclusion verified not asserted. Zone-law NOTE:
-  server_main's startup unwraps/panics (bind parse, listener, token
-  file write) are process-entry failures, not request paths — lawful
-  under the zone's no-panic-escapes-a-HANDLER clause, but the map's
-  "malformed config is a typed refusal" line wants the bind/port
-  parse lifted to a typed refusal on arrival. Nothing condemned.
-
+- **L2:**
+  - **gold:** the dropped-not-stubbed ledger (each upstream feature's absence argued from a contract, with the fix's real seat named); the per-route body-limit DoS fix; the C-dependency exclusion verified not asserted. Zone-law NOTE: server_main's startup unwraps/panics (bind parse, listener, token file write) are process-entry failures, not request paths — lawful under the zone's no-panic-escapes-a-HANDLER clause, but the map's "malformed config is a typed refusal" line wants the bind/port parse lifted to a typed refusal on arrival. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A
 ## crates/kyzo-lsp/src/main.rs (837 lines; inventory: header, module doc (story
 #92 — "the delivery of story #73's designed diagnostics, live in the
 editor instead of only after a real run"; every didOpen/didChange
@@ -1837,18 +1674,8 @@ stale squiggles; shutdown/exit; unhandled methods ignored; `publish`
   read-only introspection contract the LSP may consume) or the
   catalog features move out of the LSP — the operator must rule; the
   census records, it does not choose.
-- **L2:** gold, preserve verbatim: real-protocol-shapes over
-  hand-rolled ones with the transport-only exception argued; the
-  UTF-16 position law with its which-diagnostics-break rationale;
-  clamp-never-crash and None-never-guess as the server's posture
-  everywhere; the mid-keystroke argument for lexical navigation (a
-  design choice argued from the user's experience of brokenness);
-  worse-failure-mode reasoning on dbPath; drift-honest hand copies
-  with their blast radius stated (weakened hint, never a
-  misreport). Watch items for the split: the AGGREGATIONS/KEYWORDS
-  consts become model vocabulary when the fixed-rule/aggregation
-  name cut lands (three hand-kept lists — parse's, the LSP's, the
-  grammar's keywords — one concept each); zone-lsp's
-  formatter clause is honored today only by absence — when
-  formatting lands it must call kyzo-model's format.rs, never a
-  local one. Nothing condemned.
+- **L2:**
+  - **gold:** real-protocol-shapes over hand-rolled ones with the transport-only exception argued; the UTF-16 position law with its which-diagnostics-break rationale; clamp-never-crash and None-never-guess as the server's posture everywhere; the mid-keystroke argument for lexical navigation (a design choice argued from the user's experience of brokenness); worse-failure-mode reasoning on dbPath; drift-honest hand copies with their blast radius stated (weakened hint, never a misreport). Watch items for the split: the AGGREGATIONS/KEYWORDS consts become model vocabulary when the fixed-rule/aggregation name cut lands (three hand-kept lists — parse's, the LSP's, the grammar's keywords — one concept each); zone-lsp's formatter clause is honored today only by absence — when formatting lands it must call kyzo-model's format.rs, never a local one. Nothing condemned.
+  - **Condemned:** N/A
+  - **Watch:** N/A
+  - **NEW-SEAT:** N/A

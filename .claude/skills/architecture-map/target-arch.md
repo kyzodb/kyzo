@@ -6,307 +6,307 @@ Built from: deprecated L1 targets ∪ tree files that are not census sources.
 
 Format: `path` — description
 
-`crates/kyzo-arrow-interop/src/lib.rs` —
-`crates/kyzo-arrow-interop/tests/decode_kyzo_stream.rs` —
-`crates/kyzo-bin/src/bulk.rs` —
-`crates/kyzo-bin/src/engine.rs` —
-`crates/kyzo-bin/src/main.rs` —
-`crates/kyzo-bin/src/repl/commands.rs` —
-`crates/kyzo-bin/src/repl/editor.rs` —
-`crates/kyzo-bin/src/repl/fetch.rs` —
-`crates/kyzo-bin/src/repl/mod.rs` —
-`crates/kyzo-bin/src/repl/render.rs` —
-`crates/kyzo-bin/src/server/auth.rs` —
-`crates/kyzo-bin/src/server/bulk.rs` —
-`crates/kyzo-bin/src/server/console.rs` —
-`crates/kyzo-bin/src/server/feeds.rs` —
-`crates/kyzo-bin/src/server/query.rs` —
-`crates/kyzo-bin/src/server/rules.rs` —
-`crates/kyzo-bin/tests/repl_smoke.rs` —
-`crates/kyzo-core/benches/bench_api.rs` —
-`crates/kyzo-core/benches/db_scan.rs` —
-`crates/kyzo-core/benches/ra_exec.rs` —
-`crates/kyzo-core/benches/storage.rs` —
-`crates/kyzo-core/benches/string_eq.rs` —
-`crates/kyzo-core/examples/language_tour.rs` —
-`crates/kyzo-core/src/exec/currency/admitted.rs` —
-`crates/kyzo-core/src/exec/currency/arena.rs` —
-`crates/kyzo-core/src/exec/currency/code.rs` —
-`crates/kyzo-core/src/exec/currency/column.rs` —
-`crates/kyzo-core/src/exec/currency/row.rs` —
-`crates/kyzo-core/src/exec/expr/batch.rs` —
-`crates/kyzo-core/src/exec/expr/eval.rs` —
-`crates/kyzo-core/src/exec/fixpoint/delta_store.rs` —
-`crates/kyzo-core/src/exec/fixpoint/eval.rs` —
-`crates/kyzo-core/src/exec/fixpoint/parallel.rs` —
-`crates/kyzo-core/src/exec/fold/aggr.rs` —
-`crates/kyzo-core/src/exec/fold/sketch/aggr.rs` —
-`crates/kyzo-core/src/exec/fold/sketch/count_min.rs` —
-`crates/kyzo-core/src/exec/fold/sketch/hll.rs` —
-`crates/kyzo-core/src/exec/fold/sketch/mod.rs` —
-`crates/kyzo-core/src/exec/fold/sketch/tdigest.rs` —
-`crates/kyzo-core/src/exec/mod.rs` —
-`crates/kyzo-core/src/exec/op/batch_ops.rs` —
-`crates/kyzo-core/src/exec/op/delta.rs` —
-`crates/kyzo-core/src/exec/op/join.rs` —
-`crates/kyzo-core/src/exec/op/literal.rs` —
-`crates/kyzo-core/src/exec/op/mod.rs` —
-`crates/kyzo-core/src/exec/op/neg.rs` —
-`crates/kyzo-core/src/exec/op/search.rs` —
-`crates/kyzo-core/src/exec/op/stored.rs` —
-`crates/kyzo-core/src/exec/op/temporal.rs` —
-`crates/kyzo-core/src/exec/op/transform.rs` —
-`crates/kyzo-core/src/exec/plan/compile.rs` —
-`crates/kyzo-core/src/exec/plan/expr.rs` —
-`crates/kyzo-core/src/exec/plan/graph.rs` —
-`crates/kyzo-core/src/exec/plan/magic.rs` —
-`crates/kyzo-core/src/exec/plan/normalize.rs` —
-`crates/kyzo-core/src/exec/plan/program.rs` —
-`crates/kyzo-core/src/exec/plan/search.rs` —
-`crates/kyzo-core/src/exec/plan/stratify.rs` —
-`crates/kyzo-core/src/exec/provenance/counted.rs` —
-`crates/kyzo-core/src/exec/provenance/eval.rs` —
-`crates/kyzo-core/src/exec/provenance/semiring.rs` —
-`crates/kyzo-core/src/exec/sort.rs` —
-`crates/kyzo-core/src/exec/stdlib/expr.rs` —
-`crates/kyzo-core/src/exec/stdlib/exprs.rs` —
-`crates/kyzo-core/src/exec/stdlib/functions.rs` —
-`crates/kyzo-core/src/exec/stdlib/mod.rs` —
-`crates/kyzo-core/src/exec/stdlib/text.rs` —
-`crates/kyzo-core/src/format/tests.rs` —
-`crates/kyzo-core/src/lib.rs` —
-`crates/kyzo-core/src/project/contract.rs` —
-`crates/kyzo-core/src/project/current.rs` —
-`crates/kyzo-core/src/project/dedup/lsh.rs` —
-`crates/kyzo-core/src/project/gazetteer.rs` —
-`crates/kyzo-core/src/project/mod.rs` —
-`crates/kyzo-core/src/project/projection.rs` —
-`crates/kyzo-core/src/project/residency.rs` —
-`crates/kyzo-core/src/project/sparse/sparse.rs` —
-`crates/kyzo-core/src/project/sparse/sparse_hostile.rs` —
-`crates/kyzo-core/src/project/spatial/spatial.rs` —
-`crates/kyzo-core/src/project/text/README.md` —
-`crates/kyzo-core/src/project/text/alphanum_only.rs` —
-`crates/kyzo-core/src/project/text/ascii_folding_filter.rs` —
-`crates/kyzo-core/src/project/text/ast.rs` —
-`crates/kyzo-core/src/project/text/cangjie/mod.rs` —
-`crates/kyzo-core/src/project/text/cangjie/options.rs` —
-`crates/kyzo-core/src/project/text/cangjie/stream.rs` —
-`crates/kyzo-core/src/project/text/cangjie/tokenizer.rs` —
-`crates/kyzo-core/src/project/text/empty_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/fts.rs` —
-`crates/kyzo-core/src/project/text/lower_caser.rs` —
-`crates/kyzo-core/src/project/text/mod.rs` —
-`crates/kyzo-core/src/project/text/ngram_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/options.rs` —
-`crates/kyzo-core/src/project/text/raw_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/remove_long.rs` —
-`crates/kyzo-core/src/project/text/simple_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/split_compound_words.rs` —
-`crates/kyzo-core/src/project/text/stemmer.rs` —
-`crates/kyzo-core/src/project/text/stop_word_filter/gen_stopwords.py` —
-`crates/kyzo-core/src/project/text/stop_word_filter/mod.rs` —
-`crates/kyzo-core/src/project/text/stop_word_filter/stopwords.rs` —
-`crates/kyzo-core/src/project/text/stream.rs` —
-`crates/kyzo-core/src/project/text/tokenized_string.rs` —
-`crates/kyzo-core/src/project/text/tokenizer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/alphanum_only.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/ascii_folding_filter.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/empty_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/lower_caser.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/mod.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/ngram_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/raw_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/remove_long.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/simple_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/split_compound_words.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/stemmer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/stop_word_filter/gen_stopwords.py` —
-`crates/kyzo-core/src/project/text/tokenizer/stop_word_filter/mod.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/stop_word_filter/stopwords.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/tokenized_string.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/tokenizer_impl.rs` —
-`crates/kyzo-core/src/project/text/tokenizer/whitespace_tokenizer.rs` —
-`crates/kyzo-core/src/project/text/tokenizer_impl.rs` —
-`crates/kyzo-core/src/project/text/whitespace_tokenizer.rs` —
-`crates/kyzo-core/src/project/vector/hnsw.rs` —
-`crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs` —
-`crates/kyzo-core/src/react/incremental.rs` —
-`crates/kyzo-core/src/react/standing.rs` —
-`crates/kyzo-core/src/rules/algo/all_pairs_shortest_path.rs` —
-`crates/kyzo-core/src/rules/algo/astar.rs` —
-`crates/kyzo-core/src/rules/algo/bfs.rs` —
-`crates/kyzo-core/src/rules/algo/cliques.rs` —
-`crates/kyzo-core/src/rules/algo/degree_centrality.rs` —
-`crates/kyzo-core/src/rules/algo/dfs.rs` —
-`crates/kyzo-core/src/rules/algo/dijkstra.rs` —
-`crates/kyzo-core/src/rules/algo/k_core.rs` —
-`crates/kyzo-core/src/rules/algo/kruskal.rs` —
-`crates/kyzo-core/src/rules/algo/label_propagation.rs` —
-`crates/kyzo-core/src/rules/algo/louvain.rs` —
-`crates/kyzo-core/src/rules/algo/max_flow.rs` —
-`crates/kyzo-core/src/rules/algo/mod.rs` —
-`crates/kyzo-core/src/rules/algo/pagerank.rs` —
-`crates/kyzo-core/src/rules/algo/prim.rs` —
-`crates/kyzo-core/src/rules/algo/random_walk.rs` —
-`crates/kyzo-core/src/rules/algo/reorder_sort.rs` —
-`crates/kyzo-core/src/rules/algo/scc.rs` —
-`crates/kyzo-core/src/rules/algo/shortest_path_bfs.rs` —
-`crates/kyzo-core/src/rules/algo/top_sort.rs` —
-`crates/kyzo-core/src/rules/algo/triangles.rs` —
-`crates/kyzo-core/src/rules/algo/yen.rs` —
-`crates/kyzo-core/src/rules/contract.rs` —
-`crates/kyzo-core/src/rules/gazetteer.rs` —
-`crates/kyzo-core/src/rules/graph_view.rs` —
-`crates/kyzo-core/src/rules/io/constant.rs` —
-`crates/kyzo-core/src/rules/io/csv.rs` —
-`crates/kyzo-core/src/rules/io/jlines.rs` —
-`crates/kyzo-core/src/rules/io/mod.rs` —
-`crates/kyzo-core/src/rules/mod.rs` —
-`crates/kyzo-core/src/rules/parallel.rs` —
-`crates/kyzo-core/src/rules/rng.rs` —
-`crates/kyzo-core/src/session/access.rs` —
-`crates/kyzo-core/src/session/admit.rs` —
-`crates/kyzo-core/src/session/capacity.rs` —
-`crates/kyzo-core/src/session/catalog.rs` —
-`crates/kyzo-core/src/session/constraint.rs` —
-`crates/kyzo-core/src/session/db.rs` —
-`crates/kyzo-core/src/session/fts.rs` —
-`crates/kyzo-core/src/session/generation.rs` —
-`crates/kyzo-core/src/session/hnsw.rs` —
-`crates/kyzo-core/src/session/jobs.rs` —
-`crates/kyzo-core/src/session/json.rs` —
-`crates/kyzo-core/src/session/lsh.rs` —
-`crates/kyzo-core/src/session/mod.rs` —
-`crates/kyzo-core/src/session/normalize.rs` —
-`crates/kyzo-core/src/session/observe.rs` —
-`crates/kyzo-core/src/session/ops.rs` —
-`crates/kyzo-core/src/session/pinned_handle.hex` —
-`crates/kyzo-core/src/session/spatial.rs` —
-`crates/kyzo-core/src/session/verify.rs` —
-`crates/kyzo-core/src/store/backup.rs` —
-`crates/kyzo-core/src/store/contract.rs` —
-`crates/kyzo-core/src/store/fjall.rs` —
-`crates/kyzo-core/src/store/keys.rs` —
-`crates/kyzo-core/src/store/merkle.rs` —
-`crates/kyzo-core/src/store/retry.rs` —
-`crates/kyzo-core/src/store/scratch.rs` —
-`crates/kyzo-core/src/store/skip_walk.rs` —
-`crates/kyzo-core/src/store/time.rs` —
-`crates/kyzo-core/src/store/tx.rs` —
-`crates/kyzo-core/src/store/verify_walk.rs` —
-`crates/kyzo-core/tests/adversarial_robustness.rs` —
-`crates/kyzo-core/tests/aggregation.rs` —
-`crates/kyzo-core/tests/arity_compile_fail.rs` —
-`crates/kyzo-core/tests/common/mod.rs` —
-`crates/kyzo-core/tests/compile_fail/arity_zero_refused.rs` —
-`crates/kyzo-core/tests/compile_fail/commit_failure_downcast_ref_refused.rs` —
-`crates/kyzo-core/tests/compile_fail/projection_query_on_builder.rs` —
-`crates/kyzo-core/tests/compile_fail/projection_query_on_stale.rs` —
-`crates/kyzo-core/tests/compile_fail/storage_key_rejects_tuple_key.rs` —
-`crates/kyzo-core/tests/compile_fail/validity_raw_i64_refused.rs` —
-`crates/kyzo-core/tests/compile_fail/write_tx_use_after_abort.rs` —
-`crates/kyzo-core/tests/compile_fail/write_tx_use_after_commit.rs` —
-`crates/kyzo-core/tests/data_types.rs` —
-`crates/kyzo-core/tests/errors_and_refusals.rs` —
-`crates/kyzo-core/tests/key_shape_compile_fail.rs` —
-`crates/kyzo-core/tests/projection_compile_fail.rs` —
-`crates/kyzo-core/tests/public_api_surface.rs` —
-`crates/kyzo-core/tests/recursion_and_negation.rs` —
-`crates/kyzo-core/tests/relational_core.rs` —
-`crates/kyzo-core/tests/standing_queries.rs` —
-`crates/kyzo-core/tests/storage_allocation_law.rs` —
-`crates/kyzo-core/tests/system_ops.rs` —
-`crates/kyzo-core/tests/time_travel.rs` —
-`crates/kyzo-core/tests/unified_scenario.rs` —
-`crates/kyzo-core/tests/validity_compile_fail.rs` —
-`crates/kyzo-core/tests/vector_and_fts.rs` —
-`crates/kyzo-core/tests/write_tx_compile_fail.rs` —
-`crates/kyzo-crashfs/src/fault.rs` —
-`crates/kyzo-crashfs/src/harness.rs` —
-`crates/kyzo-crashfs/src/lib.rs` —
-`crates/kyzo-crashfs/src/passthrough.rs` —
-`crates/kyzo-crashfs/src/sim.rs` —
-`crates/kyzo-crashfs/tests/standalone_mount.rs` —
-`crates/kyzo-lsp/src/translate.rs` —
-`crates/kyzo-model/src/envelope/arrow.rs` —
-`crates/kyzo-model/src/format.rs` —
-`crates/kyzo-model/src/format/tests.rs` —
-`crates/kyzo-model/src/lib.rs` —
-`crates/kyzo-model/src/parse/expr.rs` —
-`crates/kyzo-model/src/parse/grammar.pest` —
-`crates/kyzo-model/src/parse/mod.rs` —
-`crates/kyzo-model/src/parse/query.rs` —
-`crates/kyzo-model/src/parse/schema.rs` —
-`crates/kyzo-model/src/parse/script.rs` —
-`crates/kyzo-model/src/parse/search.rs` —
-`crates/kyzo-model/src/parse/sys.rs` —
-`crates/kyzo-model/src/program/aggregate.rs` —
-`crates/kyzo-model/src/program/expr.rs` —
-`crates/kyzo-model/src/program/span.rs` —
-`crates/kyzo-model/src/program/symbol.rs` —
-`crates/kyzo-model/src/schema/column.rs` —
-`crates/kyzo-model/src/schema/relation.rs` —
-`crates/kyzo-model/src/typestate.rs` —
-`crates/kyzo-model/src/value/admission.rs` —
-`crates/kyzo-model/src/value/arity.rs` —
-`crates/kyzo-model/src/value/bytes_qty.rs` —
-`crates/kyzo-model/src/value/canonical.rs` —
-`crates/kyzo-model/src/value/cell.rs` —
-`crates/kyzo-model/src/value/kind/collection.rs` —
-`crates/kyzo-model/src/value/kind/interval.rs` —
-`crates/kyzo-model/src/value/kind/json.rs` —
-`crates/kyzo-model/src/value/kind/mod.rs` —
-`crates/kyzo-model/src/value/kind/regex.rs` —
-`crates/kyzo-model/src/value/kind/uuid.rs` —
-`crates/kyzo-model/src/value/kind/validity.rs` —
-`crates/kyzo-model/src/value/kind/vector.rs` —
-`crates/kyzo-model/src/value/mod.rs` —
-`crates/kyzo-model/src/value/number.rs` —
-`crates/kyzo-model/src/value/prefix.rs` —
-`crates/kyzo-model/src/value/proofs.rs` —
-`crates/kyzo-model/src/value/search_hits.rs` —
-`crates/kyzo-model/src/value/string.rs` —
-`crates/kyzo-model/src/value/tag.rs` —
-`crates/kyzo-oracle/src/eval.rs` —
-`crates/kyzo-oracle/src/incremental.rs` —
-`crates/kyzo-oracle/src/lib.rs` —
-`crates/kyzo-oracle/src/temporal.rs` —
-`crates/kyzo-trials/src/conformance.rs` —
-`crates/kyzo-trials/src/crash.rs` —
-`crates/kyzo-trials/src/determinism.rs` —
-`crates/kyzo-trials/src/dst.rs` —
-`crates/kyzo-trials/src/fuzz.rs` —
-`crates/kyzo-trials/src/gauntlet.rs` —
-`crates/kyzo-trials/src/lib.rs` —
-`crates/kyzo-trials/src/provenance.rs` —
-`crates/kyzo-trials/src/serializability.rs` —
-`crates/kyzo-trials/src/time_travel.rs` —
-`crates/xtask/src/allowlist.rs` —
-`crates/xtask/src/checks/agreement_registry.rs` —
-`crates/xtask/src/checks/allocation_admission.rs` —
-`crates/xtask/src/checks/authority_graph.rs` —
-`crates/xtask/src/checks/boundary_closure.rs` —
-`crates/xtask/src/checks/build_script_sandbox.rs` —
-`crates/xtask/src/checks/copy_detector.rs` —
-`crates/xtask/src/checks/dead_code_ratchet.rs` —
-`crates/xtask/src/checks/derive_bypass.rs` —
-`crates/xtask/src/checks/mod.rs` —
-`crates/xtask/src/checks/panic_lint.rs` —
-`crates/xtask/src/checks/pure_rust.rs` —
-`crates/xtask/src/checks/unchecked_arith.rs` —
-`crates/xtask/src/checks/unsafe_check.rs` —
-`crates/xtask/src/fsutil.rs` —
-`crates/xtask/src/gate.rs` —
-`crates/xtask/src/main.rs` —
-`crates/xtask/src/proc.rs` —
-`crates/xtask/src/resonance.rs` —
-`crates/xtask/src/synutil.rs` —
-`crates/xtask/src/verbs.rs` —
-`fuzz/fuzz_targets/compare_prefixed_slice.rs` —
-`fuzz/fuzz_targets/data_block.rs` —
-`fuzz/fuzz_targets/fact_payload_decode.rs` —
-`fuzz/fuzz_targets/index_block.rs` —
-`fuzz/fuzz_targets/kyzoscript_parser.rs` —
-`fuzz/fuzz_targets/memcmp_codec.rs` —
-`fuzz/fuzz_targets/table_read.rs` —
+`crates/kyzo-arrow-interop/src/lib.rs` — foreign Arrow bytes lifted into Kyzo wire values at the interop boundary
+`crates/kyzo-arrow-interop/tests/decode_kyzo_stream.rs` — proves the Arrow decode door refuses garbage and round-trips lawful streams
+`crates/kyzo-bin/src/bulk.rs` — native host path that streams bulk facts into the engine without a query script
+`crates/kyzo-bin/src/engine.rs` — process-local capability that opens and holds a live Db for the binary hosts
+`crates/kyzo-bin/src/main.rs` — composition root that wires config into REPL or HTTP and never imports engine internals past the sealed door
+`crates/kyzo-bin/src/repl/commands.rs` — maps typed REPL verbs onto sealed engine calls
+`crates/kyzo-bin/src/repl/editor.rs` — interactive line editing and history for the console host
+`crates/kyzo-bin/src/repl/fetch.rs` — pulls remote script or data payloads into the REPL session
+`crates/kyzo-bin/src/repl/mod.rs` — owns the interactive console host loop
+`crates/kyzo-bin/src/repl/render.rs` — turns engine NamedRows into human-readable console output
+`crates/kyzo-bin/src/server/auth.rs` — authenticates HTTP callers before any engine admission
+`crates/kyzo-bin/src/server/bulk.rs` — HTTP door for bulk fact ingest
+`crates/kyzo-bin/src/server/console.rs` — browser/console HTTP surface over the same sealed engine
+`crates/kyzo-bin/src/server/feeds.rs` — HTTP door for change feeds and standing-query subscriptions
+`crates/kyzo-bin/src/server/query.rs` — HTTP door that admits KyzoScript and returns rows
+`crates/kyzo-bin/src/server/rules.rs` — HTTP door that invokes fixed rules with typed inputs
+`crates/kyzo-bin/tests/repl_smoke.rs` — end-to-end smoke that the REPL host can start and answer one script
+`crates/kyzo-core/benches/bench_api.rs` — shared harness so permanent benches talk to the engine the same way
+`crates/kyzo-core/benches/db_scan.rs` — measures ordered substrate scan cost under realistic keys
+`crates/kyzo-core/benches/ra_exec.rs` — measures relational operator / plan execution throughput
+`crates/kyzo-core/benches/storage.rs` — measures fjall put/get/commit cost in isolation
+`crates/kyzo-core/benches/string_eq.rs` — measures string equality where binary order must stay semantic order
+`crates/kyzo-core/examples/language_tour.rs` — teaching script that walks KyzoScript surface features against a live Db
+`crates/kyzo-core/src/exec/currency/admitted.rs` — epoch-scoped rows that have passed admission and may be read by operators
+`crates/kyzo-core/src/exec/currency/arena.rs` — bump arena that owns short-lived exec allocations for one evaluation epoch
+`crates/kyzo-core/src/exec/currency/code.rs` — interned symbols/codes valid only inside the current evaluation epoch
+`crates/kyzo-core/src/exec/currency/column.rs` — columnar batch currency operators consume during evaluation
+`crates/kyzo-core/src/exec/currency/row.rs` — row currency operators exchange during evaluation
+`crates/kyzo-core/src/exec/expr/batch.rs` — vectorized expression evaluation over columnar batches
+`crates/kyzo-core/src/exec/expr/eval.rs` — scalar expression evaluation against bound variables
+`crates/kyzo-core/src/exec/fixpoint/delta_store.rs` — delta relation store that feeds stratified fixpoint rounds
+`crates/kyzo-core/src/exec/fixpoint/eval.rs` — stratified Datalog fixpoint engine
+`crates/kyzo-core/src/exec/fixpoint/parallel.rs` — parallel scheduling of independent fixpoint strata / work
+`crates/kyzo-core/src/exec/fold/aggr.rs` — aggregation folds that reduce bags of values to declared aggregates
+`crates/kyzo-core/src/exec/fold/sketch/aggr.rs` — approximate aggregation via sketch folds
+`crates/kyzo-core/src/exec/fold/sketch/count_min.rs` — Count-Min frequency sketch fold
+`crates/kyzo-core/src/exec/fold/sketch/hll.rs` — HyperLogLog cardinality sketch fold
+`crates/kyzo-core/src/exec/fold/sketch/mod.rs` — sketch-fold family used when exact aggregates are refused
+`crates/kyzo-core/src/exec/fold/sketch/tdigest.rs` — t-digest quantile sketch fold
+`crates/kyzo-core/src/exec/mod.rs` — evaluation zone: plans, operators, fixpoint, provenance — never persistence
+`crates/kyzo-core/src/exec/op/batch_ops.rs` — batch-oriented relational primitives shared by operators
+`crates/kyzo-core/src/exec/op/delta.rs` — emits or consumes differential deltas for incremental/fixpoint work
+`crates/kyzo-core/src/exec/op/join.rs` — relational join of two inputs under declared keys
+`crates/kyzo-core/src/exec/op/literal.rs` — materializes an in-memory literal relation as an operator input
+`crates/kyzo-core/src/exec/op/mod.rs` — relational operator set the plan interprets
+`crates/kyzo-core/src/exec/op/neg.rs` — stratified negation against a positive relation
+`crates/kyzo-core/src/exec/op/search.rs` — drives projection/search indexes (vector, FTS, spatial, …) from the plan
+`crates/kyzo-core/src/exec/op/stored.rs` — ordered scan of a stored relation through the store contract
+`crates/kyzo-core/src/exec/op/temporal.rs` — time-travel / validity-window scan of stored facts
+`crates/kyzo-core/src/exec/op/transform.rs` — project, filter, and reshape operators on intermediate rows
+`crates/kyzo-core/src/exec/plan/compile.rs` — lowers normalized program IR into an executable plan
+`crates/kyzo-core/src/exec/plan/expr.rs` — plan-level expression nodes bound into operators
+`crates/kyzo-core/src/exec/plan/graph.rs` — dependency graph of plan nodes for scheduling and strata
+`crates/kyzo-core/src/exec/plan/magic.rs` — magic-set rewriting that specializes recursive rules to queries
+`crates/kyzo-core/src/exec/plan/normalize.rs` — canonicalizes program IR before compile
+`crates/kyzo-core/src/exec/plan/program.rs` — program IR shapes the planner consumes
+`crates/kyzo-core/src/exec/plan/search.rs` — plans index-backed search atoms into search operators
+`crates/kyzo-core/src/exec/plan/stratify.rs` — computes negation/aggregate strata and refuses illegal cycles
+`crates/kyzo-core/src/exec/provenance/counted.rs` — multiplicity-tracking provenance annotations on derived facts
+`crates/kyzo-core/src/exec/provenance/eval.rs` — evaluates provenance alongside ordinary derivation
+`crates/kyzo-core/src/exec/provenance/semiring.rs` — semiring algebra that defines how provenance combines
+`crates/kyzo-core/src/exec/sort.rs` — orders result rows under the one law’s semantic order
+`crates/kyzo-core/src/exec/stdlib/expr.rs` — built-in expression forms callable from KyzoScript
+`crates/kyzo-core/src/exec/stdlib/exprs.rs` — registry of built-in expression implementations
+`crates/kyzo-core/src/exec/stdlib/functions.rs` — built-in function implementations bound into eval
+`crates/kyzo-core/src/exec/stdlib/mod.rs` — standard library of evaluable builtins
+`crates/kyzo-core/src/exec/stdlib/text.rs` — text-oriented builtins (split, match, …) over string values
+`crates/kyzo-core/src/format/tests.rs` — locks encode/decode round-trips where binary order equals semantic order
+`crates/kyzo-core/src/lib.rs` — sealed public door of the engine crate; hosts import only what this re-exports
+`crates/kyzo-core/src/project/contract.rs` — trait boundary every rebuildable projection must satisfy
+`crates/kyzo-core/src/project/current.rs` — which projection build is live for readers right now
+`crates/kyzo-core/src/project/dedup/lsh.rs` — LSH projection that finds near-duplicate documents/rows
+`crates/kyzo-core/src/project/gazetteer.rs` — entity gazetteer projection for name lookup
+`crates/kyzo-core/src/project/mod.rs` — projection zone: rebuildable indexes derived from stored facts
+`crates/kyzo-core/src/project/projection.rs` — lifecycle of building, sealing, and querying a projection
+`crates/kyzo-core/src/project/residency.rs` — which projection pages/segments are resident in memory
+`crates/kyzo-core/src/project/sparse/sparse.rs` — sparse vector index projection
+`crates/kyzo-core/src/project/sparse/sparse_hostile.rs` — adversarial sparse-index cases that must not corrupt order or recall
+`crates/kyzo-core/src/project/spatial/spatial.rs` — geospatial index projection over stored geometries
+`crates/kyzo-core/src/project/text/README.md` — design notes for the FTS analyzer / tokenizer tree
+`crates/kyzo-core/src/project/text/alphanum_only.rs` — drops non-alphanumeric tokens from the FTS stream
+`crates/kyzo-core/src/project/text/ascii_folding_filter.rs` — folds accented characters into ASCII for FTS
+`crates/kyzo-core/src/project/text/ast.rs` — structured FTS query tree before it hits the index
+`crates/kyzo-core/src/project/text/cangjie/mod.rs` — Chinese Cangjie analyzer family
+`crates/kyzo-core/src/project/text/cangjie/options.rs` — configuration for Cangjie tokenization
+`crates/kyzo-core/src/project/text/cangjie/stream.rs` — Cangjie token stream producer
+`crates/kyzo-core/src/project/text/cangjie/tokenizer.rs` — Cangjie tokenizer for Chinese text
+`crates/kyzo-core/src/project/text/empty_tokenizer.rs` — tokenizer that emits no tokens (pipeline edge case)
+`crates/kyzo-core/src/project/text/fts.rs` — full-text inverted index projection and query
+`crates/kyzo-core/src/project/text/lower_caser.rs` — lowercases tokens before indexing/query
+`crates/kyzo-core/src/project/text/mod.rs` — text analysis and FTS projection subtree
+`crates/kyzo-core/src/project/text/ngram_tokenizer.rs` — breaks text into overlapping character n-grams
+`crates/kyzo-core/src/project/text/options.rs` — FTS index and analyzer options
+`crates/kyzo-core/src/project/text/raw_tokenizer.rs` — passes the whole string through as one token
+`crates/kyzo-core/src/project/text/remove_long.rs` — drops tokens longer than a configured limit
+`crates/kyzo-core/src/project/text/simple_tokenizer.rs` — whitespace/punctuation simple split for FTS
+`crates/kyzo-core/src/project/text/split_compound_words.rs` — splits compound words into FTS subtokens
+`crates/kyzo-core/src/project/text/stemmer.rs` — reduces tokens to stems for FTS recall
+`crates/kyzo-core/src/project/text/stop_word_filter/gen_stopwords.py` — generates language stopword tables checked into the tree
+`crates/kyzo-core/src/project/text/stop_word_filter/mod.rs` — filters stopwords out of the FTS token stream
+`crates/kyzo-core/src/project/text/stop_word_filter/stopwords.rs` — per-language stopword tables
+`crates/kyzo-core/src/project/text/stream.rs` — token-stream trait the analyzer pipeline implements
+`crates/kyzo-core/src/project/text/tokenized_string.rs` — string already broken into tokens for indexing
+`crates/kyzo-core/src/project/text/tokenizer.rs` — tokenizer trait and dispatch into concrete analyzers
+`crates/kyzo-core/src/project/text/tokenizer/alphanum_only.rs` — alphanumeric-only filter in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/ascii_folding_filter.rs` — ASCII folding in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/empty_tokenizer.rs` — empty tokenizer in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/lower_caser.rs` — lowercase filter in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/mod.rs` — nested tokenizer implementations (target layout may collapse with text/)
+`crates/kyzo-core/src/project/text/tokenizer/ngram_tokenizer.rs` — n-gram tokenizer in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/raw_tokenizer.rs` — raw tokenizer in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/remove_long.rs` — long-token filter in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/simple_tokenizer.rs` — simple tokenizer in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/split_compound_words.rs` — compound splitter in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/stemmer.rs` — stemmer in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer/stop_word_filter/gen_stopwords.py` — stopword generator under tokenizer/
+`crates/kyzo-core/src/project/text/tokenizer/stop_word_filter/mod.rs` — stopword filter under tokenizer/
+`crates/kyzo-core/src/project/text/tokenizer/stop_word_filter/stopwords.rs` — stopword tables under tokenizer/
+`crates/kyzo-core/src/project/text/tokenizer/tokenized_string.rs` — tokenized string under tokenizer/
+`crates/kyzo-core/src/project/text/tokenizer/tokenizer_impl.rs` — shared tokenizer implementation details
+`crates/kyzo-core/src/project/text/tokenizer/whitespace_tokenizer.rs` — whitespace-only tokenizer in the tokenizer subtree
+`crates/kyzo-core/src/project/text/tokenizer_impl.rs` — shared tokenizer implementation details at text/
+`crates/kyzo-core/src/project/text/whitespace_tokenizer.rs` — whitespace-only tokenizer at text/
+`crates/kyzo-core/src/project/vector/hnsw.rs` — HNSW dense vector ANN projection
+`crates/kyzo-core/src/project/vector/hnsw_filter_harness.rs` — harness for filtered HNSW search correctness under predicates
+`crates/kyzo-core/src/react/incremental.rs` — maintains derived relations as stored facts change, without full recompute
+`crates/kyzo-core/src/react/standing.rs` — registers and fires standing queries when matching mutations arrive
+`crates/kyzo-core/src/rules/algo/all_pairs_shortest_path.rs` — fixed rule: all-pairs shortest paths over a graph view
+`crates/kyzo-core/src/rules/algo/astar.rs` — fixed rule: A* shortest path with a declared heuristic
+`crates/kyzo-core/src/rules/algo/bfs.rs` — fixed rule: breadth-first traversal from declared seeds
+`crates/kyzo-core/src/rules/algo/cliques.rs` — fixed rule: enumerates cliques in a graph view
+`crates/kyzo-core/src/rules/algo/degree_centrality.rs` — fixed rule: degree centrality scores
+`crates/kyzo-core/src/rules/algo/dfs.rs` — fixed rule: depth-first traversal from declared seeds
+`crates/kyzo-core/src/rules/algo/dijkstra.rs` — fixed rule: Dijkstra shortest paths with edge weights
+`crates/kyzo-core/src/rules/algo/k_core.rs` — fixed rule: k-core decomposition
+`crates/kyzo-core/src/rules/algo/kruskal.rs` — fixed rule: Kruskal minimum spanning tree
+`crates/kyzo-core/src/rules/algo/label_propagation.rs` — fixed rule: community labels via label propagation
+`crates/kyzo-core/src/rules/algo/louvain.rs` — fixed rule: Louvain community detection
+`crates/kyzo-core/src/rules/algo/max_flow.rs` — fixed rule: maximum flow between source and sink
+`crates/kyzo-core/src/rules/algo/mod.rs` — graph algorithm fixed rules invoked from KyzoScript
+`crates/kyzo-core/src/rules/algo/pagerank.rs` — fixed rule: PageRank scores on a graph view
+`crates/kyzo-core/src/rules/algo/prim.rs` — fixed rule: Prim minimum spanning tree
+`crates/kyzo-core/src/rules/algo/random_walk.rs` — fixed rule: random walks on a graph view
+`crates/kyzo-core/src/rules/algo/reorder_sort.rs` — fixed rule: reorders/sorts relation rows under declared keys
+`crates/kyzo-core/src/rules/algo/scc.rs` — fixed rule: strongly connected components
+`crates/kyzo-core/src/rules/algo/shortest_path_bfs.rs` — fixed rule: unweighted shortest paths via BFS
+`crates/kyzo-core/src/rules/algo/top_sort.rs` — fixed rule: topological order of a DAG view
+`crates/kyzo-core/src/rules/algo/triangles.rs` — fixed rule: triangle counting on a graph view
+`crates/kyzo-core/src/rules/algo/yen.rs` — fixed rule: Yen’s k-shortest loopless paths
+`crates/kyzo-core/src/rules/contract.rs` — FixedRule trait: typed inputs, named outputs, deterministic run
+`crates/kyzo-core/src/rules/gazetteer.rs` — fixed rule that queries the gazetteer projection
+`crates/kyzo-core/src/rules/graph_view.rs` — adapts stored edge/vertex relations into the graph algorithms’ view
+`crates/kyzo-core/src/rules/io/constant.rs` — fixed rule that emits a declared constant table
+`crates/kyzo-core/src/rules/io/csv.rs` — fixed rule that reads/writes CSV at the IO boundary
+`crates/kyzo-core/src/rules/io/jlines.rs` — fixed rule that reads/writes JSON Lines at the IO boundary
+`crates/kyzo-core/src/rules/io/mod.rs` — IO fixed rules that cross into foreign file formats
+`crates/kyzo-core/src/rules/mod.rs` — fixed-rule zone: deterministic algorithms and IO rules callable from scripts
+`crates/kyzo-core/src/rules/parallel.rs` — runs fixed-rule work across threads where the contract allows
+`crates/kyzo-core/src/rules/rng.rs` — fixed rule that supplies controlled randomness under an explicit seed
+`crates/kyzo-core/src/session/access.rs` — who may read or write which relations in this session
+`crates/kyzo-core/src/session/admit.rs` — admits external requests into typed engine work or refuses with reason
+`crates/kyzo-core/src/session/capacity.rs` — enforces memory/row/time budgets on a live session
+`crates/kyzo-core/src/session/catalog.rs` — named relations, schemas, and metadata visible to the session
+`crates/kyzo-core/src/session/constraint.rs` — integrity constraints checked on mutate/commit
+`crates/kyzo-core/src/session/db.rs` — primary Db capability handle: open, query, mutate, close
+`crates/kyzo-core/src/session/fts.rs` — session door that builds/queries the FTS projection
+`crates/kyzo-core/src/session/generation.rs` — generation/epoch counters that invalidate stale handles
+`crates/kyzo-core/src/session/hnsw.rs` — session door that builds/queries the HNSW projection
+`crates/kyzo-core/src/session/jobs.rs` — background jobs owned by the session (rebuilds, feeds, …)
+`crates/kyzo-core/src/session/json.rs` — JSON helpers at the session boundary for host-facing payloads
+`crates/kyzo-core/src/session/lsh.rs` — session door that builds/queries the LSH dedup projection
+`crates/kyzo-core/src/session/mod.rs` — session zone: live handles, admission, catalog — not evaluation itself
+`crates/kyzo-core/src/session/normalize.rs` — normalizes host inputs into model types before admission
+`crates/kyzo-core/src/session/observe.rs` — observation/metrics hooks on session activity
+`crates/kyzo-core/src/session/ops.rs` — system and catalog operations exposed on the live Db
+`crates/kyzo-core/src/session/pinned_handle.hex` — golden bytes for pinned handle layout / stability checks
+`crates/kyzo-core/src/session/spatial.rs` — session door that builds/queries the spatial projection
+`crates/kyzo-core/src/session/verify.rs` — session door that runs store integrity verification
+`crates/kyzo-core/src/store/backup.rs` — backup and restore of the ordered substrate
+`crates/kyzo-core/src/store/contract.rs` — store trait: ordered put/get/scan/commit the rest of the engine depends on
+`crates/kyzo-core/src/store/fjall.rs` — fjall-backed implementation of the store contract
+`crates/kyzo-core/src/store/keys.rs` — key layout so binary order of stored keys matches semantic order
+`crates/kyzo-core/src/store/merkle.rs` — merkle proofs over stored ranges for integrity
+`crates/kyzo-core/src/store/retry.rs` — retry policy for transient store IO failures
+`crates/kyzo-core/src/store/scratch.rs` — ephemeral scratch space for evaluation that must not leak into durable state
+`crates/kyzo-core/src/store/skip_walk.rs` — skip-list style walk over ordered keys
+`crates/kyzo-core/src/store/time.rs` — validity timestamps and temporal addressing in the store
+`crates/kyzo-core/src/store/tx.rs` — write transactions with commit/abort over the substrate
+`crates/kyzo-core/src/store/verify_walk.rs` — full ordered walk used by integrity verification
+`crates/kyzo-core/tests/adversarial_robustness.rs` — public-surface cases that try to break order, admission, or safety
+`crates/kyzo-core/tests/aggregation.rs` — public-surface aggregation behavior through the sealed API
+`crates/kyzo-core/tests/arity_compile_fail.rs` — trybuild suite: illegal arities must not compile
+`crates/kyzo-core/tests/common/mod.rs` — shared fixtures and helpers for integration tests
+`crates/kyzo-core/tests/compile_fail/arity_zero_refused.rs` — zero-arity constructs must be a compile error
+`crates/kyzo-core/tests/compile_fail/commit_failure_downcast_ref_refused.rs` — commit failures must not be downcast via ref escapes
+`crates/kyzo-core/tests/compile_fail/projection_query_on_builder.rs` — unfinished projection builders must not accept queries
+`crates/kyzo-core/tests/compile_fail/projection_query_on_stale.rs` — stale projection handles must not accept queries
+`crates/kyzo-core/tests/compile_fail/storage_key_rejects_tuple_key.rs` — raw tuples must not be usable as storage keys
+`crates/kyzo-core/tests/compile_fail/validity_raw_i64_refused.rs` — bare i64 must not stand in for Validity
+`crates/kyzo-core/tests/compile_fail/write_tx_use_after_abort.rs` — write tx must be unusable after abort
+`crates/kyzo-core/tests/compile_fail/write_tx_use_after_commit.rs` — write tx must be unusable after commit
+`crates/kyzo-core/tests/data_types.rs` — public-surface coverage of value kinds and typing
+`crates/kyzo-core/tests/errors_and_refusals.rs` — public-surface typed refusals and error shapes
+`crates/kyzo-core/tests/key_shape_compile_fail.rs` — trybuild suite: illegal key shapes must not compile
+`crates/kyzo-core/tests/projection_compile_fail.rs` — trybuild suite: projection lifecycle violations must not compile
+`crates/kyzo-core/tests/public_api_surface.rs` — locks what the sealed door exports and how it behaves
+`crates/kyzo-core/tests/recursion_and_negation.rs` — public-surface recursive rules and stratified negation
+`crates/kyzo-core/tests/relational_core.rs` — public-surface joins, filters, and core relational queries
+`crates/kyzo-core/tests/standing_queries.rs` — public-surface standing query registration and fire
+`crates/kyzo-core/tests/storage_allocation_law.rs` — enforces allocation/admission law at the storage boundary
+`crates/kyzo-core/tests/system_ops.rs` — public-surface system/catalog operations
+`crates/kyzo-core/tests/time_travel.rs` — public-surface as-of / validity window queries
+`crates/kyzo-core/tests/unified_scenario.rs` — multi-feature scenario through the sealed API
+`crates/kyzo-core/tests/validity_compile_fail.rs` — trybuild suite: Validity mistypes must not compile
+`crates/kyzo-core/tests/vector_and_fts.rs` — public-surface vector ANN and full-text search
+`crates/kyzo-core/tests/write_tx_compile_fail.rs` — trybuild suite: write-tx lifecycle violations must not compile
+`crates/kyzo-crashfs/src/fault.rs` — injectable faults (crash, delay, corrupt) under the fake FS
+`crates/kyzo-crashfs/src/harness.rs` — mounts crashfs and drives crash campaigns against a Db
+`crates/kyzo-crashfs/src/lib.rs` — fault-injecting filesystem crate used by durability trials
+`crates/kyzo-crashfs/src/passthrough.rs` — passthrough FS layer that can interpose faults on real IO
+`crates/kyzo-crashfs/src/sim.rs` — in-process simulated FS for deterministic crash testing
+`crates/kyzo-crashfs/tests/standalone_mount.rs` — proves crashfs can mount and serve without the full trials stack
+`crates/kyzo-lsp/src/translate.rs` — maps LSP requests/responses onto sealed engine parse and query doors
+`crates/kyzo-model/src/envelope/arrow.rs` — Arrow-shaped wire envelope for values crossing process boundaries
+`crates/kyzo-model/src/format.rs` — canonical encode/decode: bytes whose order is semantic order
+`crates/kyzo-model/src/format/tests.rs` — property and round-trip tests for the one-law encoding
+`crates/kyzo-model/src/lib.rs` — vocabulary crate root: types and parse, no engine state
+`crates/kyzo-model/src/parse/expr.rs` — lifts KyzoScript expression syntax into program IR
+`crates/kyzo-model/src/parse/grammar.pest` — pest grammar that owns KyzoScript surface syntax
+`crates/kyzo-model/src/parse/mod.rs` — parse zone: text → typed IR with spans and refusals
+`crates/kyzo-model/src/parse/query.rs` — lifts query/rule syntax into program IR
+`crates/kyzo-model/src/parse/schema.rs` — lifts schema declaration syntax into schema types
+`crates/kyzo-model/src/parse/script.rs` — lifts multi-statement scripts into program IR
+`crates/kyzo-model/src/parse/search.rs` — lifts search-atom syntax (vector/FTS/…) into program IR
+`crates/kyzo-model/src/parse/sys.rs` — lifts system-op syntax into typed system requests
+`crates/kyzo-model/src/program/aggregate.rs` — aggregate declaration shapes in program IR
+`crates/kyzo-model/src/program/expr.rs` — expression AST used after parse and before exec
+`crates/kyzo-model/src/program/span.rs` — source spans carried on every IR node for refusals
+`crates/kyzo-model/src/program/symbol.rs` — interned/program symbols naming relations and variables
+`crates/kyzo-model/src/schema/column.rs` — column name and type in a relation schema
+`crates/kyzo-model/src/schema/relation.rs` — relation schema: keys, values, constraints as vocabulary
+`crates/kyzo-model/src/typestate.rs` — Unset/Set builders so incomplete construction cannot be sealed
+`crates/kyzo-model/src/value/admission.rs` — rules for admitting raw inputs into lawful values
+`crates/kyzo-model/src/value/arity.rs` — arity as a first-class constrained count
+`crates/kyzo-model/src/value/bytes_qty.rs` — byte-quantity newtype (sizes/limits), not a bare usize
+`crates/kyzo-model/src/value/canonical.rs` — canonicalization so equal values share one byte form
+`crates/kyzo-model/src/value/cell.rs` — single stored/query cell holding one tagged value
+`crates/kyzo-model/src/value/kind/collection.rs` — list/set/map-like value kinds and their order
+`crates/kyzo-model/src/value/kind/interval.rs` — interval value kind (bounds as variants, not sentinels)
+`crates/kyzo-model/src/value/kind/json.rs` — JSON document value kind
+`crates/kyzo-model/src/value/kind/mod.rs` — sum of specialized value kinds under Tag
+`crates/kyzo-model/src/value/kind/regex.rs` — regex value kind
+`crates/kyzo-model/src/value/kind/uuid.rs` — UUID value kind
+`crates/kyzo-model/src/value/kind/validity.rs` — temporal validity value kind
+`crates/kyzo-model/src/value/kind/vector.rs` — dense/sparse vector value kinds
+`crates/kyzo-model/src/value/mod.rs` — domain value vocabulary the one law binds
+`crates/kyzo-model/src/value/number.rs` — numeric value kinds with total order-safe encoding
+`crates/kyzo-model/src/value/prefix.rs` — byte prefixes that keep cross-kind order coherent
+`crates/kyzo-model/src/value/proofs.rs` — executable proofs that Ord and encode agree
+`crates/kyzo-model/src/value/search_hits.rs` — search-result hit values returned from projections
+`crates/kyzo-model/src/value/string.rs` — string value kind under Tag
+`crates/kyzo-model/src/value/tag.rs` — single cross-kind discriminant that owns type order
+`crates/kyzo-oracle/src/eval.rs` — independent reference evaluator for conformance against the engine
+`crates/kyzo-oracle/src/incremental.rs` — reference incremental semantics for standing/delta campaigns
+`crates/kyzo-oracle/src/lib.rs` — oracle crate: reference semantics, not the production engine
+`crates/kyzo-oracle/src/temporal.rs` — reference temporal/as-of semantics for time-travel campaigns
+`crates/kyzo-trials/src/conformance.rs` — campaign: engine answers must match the oracle
+`crates/kyzo-trials/src/crash.rs` — campaign: crash/restart must not lose committed facts
+`crates/kyzo-trials/src/determinism.rs` — campaign: same inputs must yield the same ordered answers
+`crates/kyzo-trials/src/dst.rs` — campaign: deterministic simulation of schedules and faults
+`crates/kyzo-trials/src/fuzz.rs` — campaign: fuzzed scripts/bytes must not panic or corrupt
+`crates/kyzo-trials/src/gauntlet.rs` — campaign: hostile multi-feature query gauntlet
+`crates/kyzo-trials/src/lib.rs` — long-running trial campaigns outside ordinary unit tests
+`crates/kyzo-trials/src/provenance.rs` — campaign: provenance annotations stay consistent with derivation
+`crates/kyzo-trials/src/serializability.rs` — campaign: concurrent txs obey serializability expectations
+`crates/kyzo-trials/src/time_travel.rs` — campaign: as-of queries match oracle temporal answers
+`crates/xtask/src/allowlist.rs` — which paths each mechanical gate is allowed to touch
+`crates/xtask/src/checks/agreement_registry.rs` — gate: agreement/registry invariants hold in the tree
+`crates/xtask/src/checks/allocation_admission.rs` — gate: allocations cross an admission boundary, not ad hoc
+`crates/xtask/src/checks/authority_graph.rs` — gate: module authority edges match the ruled graph
+`crates/xtask/src/checks/boundary_closure.rs` — gate: host/engine boundary does not leak internals
+`crates/xtask/src/checks/build_script_sandbox.rs` — gate: build scripts stay sandboxed
+`crates/xtask/src/checks/copy_detector.rs` — gate: forbids duplicated logic that should be one seat
+`crates/xtask/src/checks/dead_code_ratchet.rs` — gate: dead code may only shrink, never grow silently
+`crates/xtask/src/checks/derive_bypass.rs` — gate: forbids Ord/Hash derives that bypass the one law
+`crates/xtask/src/checks/mod.rs` — mechanical law checks run by the gate
+`crates/xtask/src/checks/panic_lint.rs` — gate: forbids panic/unwrap on reachable engine paths
+`crates/xtask/src/checks/pure_rust.rs` — gate: forbids non-Rust / forbidden dependency shapes
+`crates/xtask/src/checks/unchecked_arith.rs` — gate: forbids unchecked arithmetic in engine code
+`crates/xtask/src/checks/unsafe_check.rs` — gate: audits or forbids unsafe in ruled regions
+`crates/xtask/src/fsutil.rs` — filesystem helpers for walking and rewriting the tree in gates
+`crates/xtask/src/gate.rs` — orchestrates the full cargo xtask gate (merge witness, not Plan DoD)
+`crates/xtask/src/main.rs` — xtask binary entry: dispatches gate verbs
+`crates/xtask/src/proc.rs` — spawns and collects subprocesses for gate commands
+`crates/xtask/src/resonance.rs` — resonance runner that keeps mechanical checks in agreement
+`crates/xtask/src/synutil.rs` — syn-based AST helpers for source gates
+`crates/xtask/src/verbs.rs` — named xtask verbs the operator/CI invoke
+`fuzz/fuzz_targets/compare_prefixed_slice.rs` — fuzzes prefixed-slice compare under the one law
+`fuzz/fuzz_targets/data_block.rs` — fuzzes data-block encode/decode
+`fuzz/fuzz_targets/fact_payload_decode.rs` — fuzzes fact payload decode for refusals and no-panic
+`fuzz/fuzz_targets/index_block.rs` — fuzzes index-block encode/decode
+`fuzz/fuzz_targets/kyzoscript_parser.rs` — fuzzes KyzoScript parse for refusals and no-panic
+`fuzz/fuzz_targets/memcmp_codec.rs` — fuzzes memcmp codec against semantic order
+`fuzz/fuzz_targets/table_read.rs` — fuzzes table read paths over crafted bytes
