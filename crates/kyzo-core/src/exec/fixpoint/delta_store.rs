@@ -1,17 +1,106 @@
 /*
- * Copyright 2026, The KyzoDB Authors.
- * KyzoDB is a fork of CozoDB (Copyright 2022, The Cozo Project Authors).
+ * Copyright 2022, The Cozo Project Authors.
  *
  * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
  * If a copy of the MPL was not distributed with this file,
  * You can obtain one at https://mozilla.org/MPL/2.0/.
  */
+/*
+ * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
+ * (MPL-2.0): the meet operations of a [`MeetAggrStore`] are resolved once,
+ * at construction, into live `MeetAggrObj`s (the original stored
+ * `Option<Box<dyn MeetAggrObj>>` on every `Aggregation` and unwrapped it
+ * per row); handing a normal-only aggregation to a meet store is a
+ * constructor error, not a downstream panic. `merge_in` is the **admission
+ * seam**: it takes an [`AdmissionSink`] (with `()` as the zero-cost
+ * off-state) and returns the [`Admitted`] count, per the ratified
+ * provenance and budget designs (story #3) — the seam only, no provenance
+ * or accounting logic lives here. The kind-mismatch `unreachable!` in
+ * `EpochStore::merge_in` is a typed internal error; the meet range scan
+ * compares slices through `DataValue`'s total order instead of
+ * `partial_cmp(..).unwrap()`. `either::{Left, Right}` becomes
+ * `itertools::Either` (the workspace carries no direct `either`
+ * dependency). The ported meet forms take no arguments (see `data/aggr.rs`),
+ * so the argument lists in the constructor spec are carried for eval's
+ * interface and ignored here. A `MeetAggrStore` groups by the head's
+ * non-aggregated positions **wherever they sit** (a constructed
+ * `MeetLayout` proof) — full oracle positional-meet parity
+ * (`query/laws.rs`). Fold/delta authority is solely `by_group`; head-tuple
+ * order for joins is derived via [`MeetLayout::interleave`] at scan time
+ * (P036 — no `by_row` twin). The delta propagation in `MeetAggrStore`
+ * rides the *corrected* `MeetAggrObj::update` changed-flag contract — the
+ * original's inverted `and`/`or` flags could announce "unchanged" on
+ * exactly the update that changed a value and reach a premature fixpoint;
+ * the store-level regression is pinned by a test below. The original file
+ * had no unit tests; all tests here are new.
+ */
+
+//! The delta stores: the engine's working memory during the fixpoint.
+//!
+//! Every rule of a magic program evaluates into one of these stores, and
+//! the total/delta discipline of [`EpochStore`] **is** semi-naive
+//! evaluation:
+//!
+//! - `total` holds every tuple the rule has derived in any epoch so far;
+//! - `delta` holds exactly the tuples that are *new as of the latest
+//!   epoch's merge* — a new key for a regular store, a new group or a
+//!   changed meet value for a meet store.
+//!
+//! Each epoch, eval joins at least one body atom of every recursive rule
+//! against a `delta` instead of a `total` (see `query/eval.rs` and the
+//! delta-driven iterators in `query/ra.rs`), merges each rule's freshly
+//! derived tuples back in with [`EpochStore::merge_in`], and stops when no
+//! store has a delta ([`EpochStore::has_delta`] is false for all). Because
+//! a tuple enters `delta` exactly when it first enters `total`, and a
+//! derivation whose premises are all old was already produced in an
+//! earlier epoch, the iteration reaches **the same fixpoint as naive
+//! evaluation** — that equivalence is the semi-naive law, and empty deltas
+//! everywhere are the termination certificate.
+//!
+//! The three stores:
+//!
+//! - [`RegularTempStore`]: a set of tuples (plus a per-tuple [`LimiterSkip`]
+//!   disposition — named Include/PastLimit, never a bare `bool` (P093) — for
+//!   early-returned entry rules). Own-byte keys are [`OwnBareKey`]
+//!   sealed at the encode door (P094); foreign bytes are unrepresentable.
+//! - [`MeetAggrStore`]: grouped tuples folded through meet (semilattice)
+//!   aggregations as they arrive; recursion through such aggregations is
+//!   sound because the fold is idempotent, associative, and monotone in
+//!   its lattice (see `data/aggr.rs`). Its delta is driven by the
+//!   `MeetAggrObj::update` changed flag.
+//! - [`EpochStore`]: the total/delta pair, one per rule, keyed by
+//!   `MagicSymbol` in eval's store map and dropped per `StoreLifetimes`
+//!   (`data/program.rs`) when no later stratum reads them.
+//!
+//! # The admission seam (provenance & budget, story #3)
+//!
+//! A tuple is **admitted** when it first enters a store's `total`: a
+//! vacant-key insert, a whole-store fast-path swap into an empty total, or
+//! a meet update that changed a group's value. Admission happens only
+//! inside `merge_in`, at the epoch barrier, where eval merges the epoch's
+//! out-stores sequentially and each merge walks the incoming store in
+//! canonical key order — so the sequence of admissions is
+//! schedule-independent. That makes this the deterministic point where
+//! both ratified designs attach:
+//!
+//! - **Provenance**: first-witness recording binds a witness to each
+//!   admitted tuple. `merge_in` takes an [`AdmissionSink`] which observes
+//!   every admission in canonical order; `()` is the recording-off state
+//!   and compiles to nothing.
+//! - **Budget**: derived-tuple accounting counts admissions. `merge_in`
+//!   returns [`Admitted`], the count of derivations admitted by that
+//!   merge; eval sums these per epoch and checks the ceiling at the epoch
+//!   barrier, where the total is deterministic.
+//!
+//! Only the seam lives here. Witness construction and ceiling checks land
+//! with eval's port.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 
 use itertools::{Either, Itertools};
-use miette::{Diagnostic, Result, bail};
+use miette::{Diagnostic, Result, bail, ensure, miette};
 use thiserror::Error;
 
 use kyzo_model::program::aggregate::Aggregation;
@@ -19,8 +108,10 @@ use crate::exec::fold::aggr::{MeetAccum, MeetAggr};
 use kyzo_model::program::rule::HeadAggrSlot;
 use kyzo_model::value::DataValue;
 use kyzo_model::value::{
-    ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len, encode_tuple_bare,
+    DecodeError, ScanBound, Tuple, bare_bounds_lower, bare_bounds_upper, bare_prefix_len,
+    decode_tuple_bare, encode_tuple_bare,
 };
+
 #[derive(Debug, Error, Diagnostic)]
 #[error("level arena overflow: flattened byte length {len} exceeds u32::MAX")]
 #[diagnostic(code(query::level_arena_overflow))]
@@ -1134,117 +1225,6 @@ mod tests {
         assert_eq!(store.all_iter().unwrap().count(), 10);
     }
 }
-/*
- * Copyright 2022, The Cozo Project Authors.
- *
- * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
- * If a copy of the MPL was not distributed with this file,
- * You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-/*
- * Copyright 2026, The KyzoDB Authors. Modified from the CozoDB original
- * (MPL-2.0): the meet operations of a [`MeetAggrStore`] are resolved once,
- * at construction, into live `MeetAggrObj`s (the original stored
- * `Option<Box<dyn MeetAggrObj>>` on every `Aggregation` and unwrapped it
- * per row); handing a normal-only aggregation to a meet store is a
- * constructor error, not a downstream panic. `merge_in` is the **admission
- * seam**: it takes an [`AdmissionSink`] (with `()` as the zero-cost
- * off-state) and returns the [`Admitted`] count, per the ratified
- * provenance and budget designs (story #3) — the seam only, no provenance
- * or accounting logic lives here. The kind-mismatch `unreachable!` in
- * `EpochStore::merge_in` is a typed internal error; the meet range scan
- * compares slices through `DataValue`'s total order instead of
- * `partial_cmp(..).unwrap()`. `either::{Left, Right}` becomes
- * `itertools::Either` (the workspace carries no direct `either`
- * dependency). The ported meet forms take no arguments (see `data/aggr.rs`),
- * so the argument lists in the constructor spec are carried for eval's
- * interface and ignored here. A `MeetAggrStore` groups by the head's
- * non-aggregated positions **wherever they sit** (a constructed
- * `MeetLayout` proof) — full oracle positional-meet parity
- * (`query/laws.rs`). Fold/delta authority is solely `by_group`; head-tuple
- * order for joins is derived via [`MeetLayout::interleave`] at scan time
- * (P036 — no `by_row` twin). The delta propagation in `MeetAggrStore`
- * rides the *corrected* `MeetAggrObj::update` changed-flag contract — the
- * original's inverted `and`/`or` flags could announce "unchanged" on
- * exactly the update that changed a value and reach a premature fixpoint;
- * the store-level regression is pinned by a test below. The original file
- * had no unit tests; all tests here are new.
- */
-
-//! The delta stores: the engine's working memory during the fixpoint.
-//!
-//! Every rule of a magic program evaluates into one of these stores, and
-//! the total/delta discipline of [`EpochStore`] **is** semi-naive
-//! evaluation:
-//!
-//! - `total` holds every tuple the rule has derived in any epoch so far;
-//! - `delta` holds exactly the tuples that are *new as of the latest
-//!   epoch's merge* — a new key for a regular store, a new group or a
-//!   changed meet value for a meet store.
-//!
-//! Each epoch, eval joins at least one body atom of every recursive rule
-//! against a `delta` instead of a `total` (see `query/eval.rs` and the
-//! delta-driven iterators in `query/ra.rs`), merges each rule's freshly
-//! derived tuples back in with [`EpochStore::merge_in`], and stops when no
-//! store has a delta ([`EpochStore::has_delta`] is false for all). Because
-//! a tuple enters `delta` exactly when it first enters `total`, and a
-//! derivation whose premises are all old was already produced in an
-//! earlier epoch, the iteration reaches **the same fixpoint as naive
-//! evaluation** — that equivalence is the semi-naive law, and empty deltas
-//! everywhere are the termination certificate.
-//!
-//! The three stores:
-//!
-//! - [`RegularTempStore`]: a set of tuples (plus a per-tuple [`LimiterSkip`]
-//!   disposition — named Include/PastLimit, never a bare `bool` (P093) — for
-//!   early-returned entry rules). Own-byte keys are [`OwnBareKey`]
-//!   sealed at the encode door (P094); foreign bytes are unrepresentable.
-//! - [`MeetAggrStore`]: grouped tuples folded through meet (semilattice)
-//!   aggregations as they arrive; recursion through such aggregations is
-//!   sound because the fold is idempotent, associative, and monotone in
-//!   its lattice (see `data/aggr.rs`). Its delta is driven by the
-//!   `MeetAggrObj::update` changed flag.
-//! - [`EpochStore`]: the total/delta pair, one per rule, keyed by
-//!   `MagicSymbol` in eval's store map and dropped per `StoreLifetimes`
-//!   (`data/program.rs`) when no later stratum reads them.
-//!
-//! # The admission seam (provenance & budget, story #3)
-//!
-//! A tuple is **admitted** when it first enters a store's `total`: a
-//! vacant-key insert, a whole-store fast-path swap into an empty total, or
-//! a meet update that changed a group's value. Admission happens only
-//! inside `merge_in`, at the epoch barrier, where eval merges the epoch's
-//! out-stores sequentially and each merge walks the incoming store in
-//! canonical key order — so the sequence of admissions is
-//! schedule-independent. That makes this the deterministic point where
-//! both ratified designs attach:
-//!
-//! - **Provenance**: first-witness recording binds a witness to each
-//!   admitted tuple. `merge_in` takes an [`AdmissionSink`] which observes
-//!   every admission in canonical order; `()` is the recording-off state
-//!   and compiles to nothing.
-//! - **Budget**: derived-tuple accounting counts admissions. `merge_in`
-//!   returns [`Admitted`], the count of derivations admitted by that
-//!   merge; eval sums these per epoch and checks the ceiling at the epoch
-//!   barrier, where the total is deterministic.
-//!
-//! Only the seam lives here. Witness construction and ceiling checks land
-//! with eval's port.
-
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-
-use itertools::Itertools;
-use miette::{Diagnostic, Result, ensure, miette};
-use thiserror::Error;
-
-use kyzo_model::program::aggregate::Aggregation;
-use crate::exec::fold::aggr::{MeetAccum, MeetAggr};
-use kyzo_model::program::rule::HeadAggrSlot;
-use kyzo_model::value::DataValue;
-use kyzo_model::value::{DecodeError, Tuple, decode_tuple_bare, encode_tuple_bare};
-
 // ─────────────────────────────────────────────────────────────────────────
 // Own-bytes row keys (P094)
 // ─────────────────────────────────────────────────────────────────────────
