@@ -148,9 +148,9 @@ pub fn footprints_overlap(a: &Footprint, b: &Footprint) -> bool {
 /// Adjudicate a candidate Fenced footprint against already-live shapes (§36).
 ///
 /// Overlapping Fenced refuse at the door. Optimistic live shapes do not block.
-pub fn adjudicate_fenced_overlap(
+pub fn adjudicate_fenced_overlap<'a>(
     candidate: &FencedFootprint,
-    live: impl Iterator<Item = &AskShape>,
+    live: impl Iterator<Item = &'a AskShape>,
 ) -> Result<(), FootprintRefuse> {
     for shape in live {
         if let AskShape::Fenced(other) = shape {

@@ -115,7 +115,7 @@ use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
 use crate::data::json::NamedRows;
-use crate::data::relation::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
+use kyzo_model::schema::{CompatibleInputSchema, RelationWriteShape, StoredRelationMetadata};
 use crate::rules::contract::{DEFAULT_FIXED_RULES, FixedRule};
 use kyzo_model::program::{InputProgram, InputRelationHandle};
 use crate::parse::parse_script;
@@ -1708,7 +1708,7 @@ mod tests {
     use serde::Serialize;
 
     use super::*;
-    use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+    use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
     use kyzo_model::value::ValidityTs;
     use kyzo_model::value::decode_tuple_from_key;
     use crate::store::fjall::new_fjall_storage;
@@ -2132,7 +2132,7 @@ mod tests {
     /// prove constructs whole or refuses whole.
     #[test]
     fn prove_compatible_input_checks_input_dependents_whole() {
-        use crate::data::relation::RelationWriteShape::{Put, RemoveOrUpdate};
+        use kyzo_model::schema::RelationWriteShape::{Put, RemoveOrUpdate};
 
         let stored = RelationHandle::new_from_input(
             simple_input("s"),

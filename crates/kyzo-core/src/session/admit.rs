@@ -40,7 +40,7 @@ use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
 use crate::data::json::NamedRows;
-use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use crate::rules::contract::{FixedRule, FixedRuleHandle};
 use crate::rules::io::constant::Constant;
 use kyzo_model::program::expr::Expr;
@@ -262,6 +262,7 @@ pub(crate) fn refuse_if_authority_recovered(
     }
 }
 
+#[derive(Debug, Error, Diagnostic)]
 #[error("Assertion failure for {key:?} of {relation}: {notice}")]
 #[diagnostic(code(transact::assertion_failure))]
 pub(crate) struct TransactAssertionFailure {
@@ -1541,6 +1542,7 @@ pub(crate) fn make_const_rule(
 }
 
 
+#[cfg(test)]
 mod bulk_write_tests {
     use std::collections::BTreeMap;
 

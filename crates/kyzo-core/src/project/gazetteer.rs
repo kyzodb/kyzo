@@ -106,7 +106,7 @@ use smartstring::{LazyCompact, SmartString};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::value::DataValue;
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
 use crate::session::catalog::RelationHandle;

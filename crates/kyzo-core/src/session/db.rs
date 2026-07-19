@@ -85,7 +85,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use crate::data::json::NamedRows;
-use crate::data::relation::StoredRelationMetadata;
+use kyzo_model::schema::StoredRelationMetadata;
 use crate::rules::contract::{
     CancelAuthority, CancelFlag, DEFAULT_FIXED_RULES, FixedRule, StoredInputSource,
 };

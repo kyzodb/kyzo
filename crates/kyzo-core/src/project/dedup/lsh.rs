@@ -116,7 +116,7 @@ use smartstring::{LazyCompact, SmartString};
 use twox_hash::XxHash32;
 
 use kyzo_model::program::expr::{BindingPos, Expr};
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, Tuple, append_canonical};
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};

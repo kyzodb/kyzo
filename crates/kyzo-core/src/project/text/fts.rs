@@ -106,7 +106,7 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::program::expr::{BindingPos, Expr};
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, LARGEST_UTF_CHAR, ScanBound, Tuple};
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};
@@ -739,7 +739,7 @@ fn fts_search_body(
     // `params.k` is caller-controlled and unbounded; admit it through the one
     // allocation seam, bounded by the real (already-materialized) candidate
     // count, so an absurd `k` can never abort the allocator.
-    let mut ret = Vec::with_capacity(crate::capacity::admit(params.k, result.len()));
+    let mut ret = Vec::with_capacity(crate::session::capacity::admit(params.k, result.len()));
     for (doc_key, score) in result {
         // Checked BEFORE pushing: `k == 0` (or any k already met) must
         // yield zero more rows, not "one past the limit" — pushing first

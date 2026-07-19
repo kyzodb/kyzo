@@ -111,7 +111,7 @@ use rustc_hash::FxHashSet;
 use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::value::{DataValue, ScanBound, Tuple};
 use crate::project::contract::{IndexCorruptReason, IndexRowCorrupt};

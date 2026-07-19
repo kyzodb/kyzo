@@ -84,7 +84,7 @@ use miette::Result;
 use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
-use crate::store::{Aborted, CommitFailure, Committed, ReadTx, WriteTx};
+use crate::store::{Aborted, CommitFailure, ReadTx, WriteTx};
 use kyzo_model::data_value_any;
 
 /// One session's temp keyspace: an ordered map with the kernel's
@@ -251,14 +251,14 @@ impl WriteTx for TempTx {
     /// method exists because the species contract requires it; consuming
     /// Open here would only ever be called by generic code that is about
     /// to drop the store anyway.
-    fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
+    fn commit(mut self) -> std::result::Result<(), CommitFailure> {
         let _ = self.map.take().expect("TempTx commit after spend");
-        Ok(Committed)
+        Ok(())
     }
 
-    fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
+    fn commit_durable(mut self) -> std::result::Result<(), CommitFailure> {
         let _ = self.map.take().expect("TempTx commit_durable after spend");
-        Ok(Committed)
+        Ok(())
     }
 
     fn abort(mut self) -> Aborted {

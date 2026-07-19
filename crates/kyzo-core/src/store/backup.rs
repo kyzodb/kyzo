@@ -433,7 +433,7 @@ mod pins {
     use kyzo_model::value::{DataValue, RelationId, StorageKey, Tuple, ValiditySlot, ValidityTs};
 
     use crate::store::time::ClaimPolarity;
-    use crate::data::relation::StoredRelationMetadata;
+    use kyzo_model::schema::StoredRelationMetadata;
     use crate::session::access::AccessLevel;
     use crate::session::catalog::{KeyspaceKind, RelationHandle, SystemKey};
     use crate::store::backup::{DumpClockFloorViolation, dump_storage};

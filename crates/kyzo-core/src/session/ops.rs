@@ -26,7 +26,7 @@ use thiserror::Error;
 
 use crate::store::time::ClaimPolarity;
 use crate::data::json::NamedRows;
-use crate::data::relation::{ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::program::expr::Expr;
 use crate::session::catalog::{
     IndexKind, IndexRef, KeyspaceKind, RelationHandle, Residency, TEMPORAL_POSTING_LEADING_COLUMN,
@@ -450,7 +450,7 @@ impl<T: WriteTx> SessionTx<T> {
         cols: &[Symbol],
     ) -> Result<NamedRows> {
         let base = self.get_relation(rel)?;
-        let all_cols: Vec<&crate::data::relation::ColumnDef> = base
+        let all_cols: Vec<&kyzo_model::schema::ColumnDef> = base
             .metadata
             .keys
             .iter()
@@ -482,7 +482,7 @@ impl<T: WriteTx> SessionTx<T> {
                 mapper.push(key_pos);
             }
         }
-        let metadata = crate::data::relation::StoredRelationMetadata {
+        let metadata = kyzo_model::schema::StoredRelationMetadata {
             keys: mapper.iter().map(|&i| all_cols[i].clone()).collect(),
             non_keys: vec![],
         };
@@ -503,15 +503,15 @@ impl<T: WriteTx> SessionTx<T> {
     pub(crate) fn create_temporal_index(&mut self, rel: &str, idx_name: &str) -> Result<NamedRows> {
         let base = self.get_relation(rel)?;
         let mut keys = Vec::with_capacity(1 + base.metadata.keys.len());
-        keys.push(crate::data::relation::ColumnDef {
+        keys.push(kyzo_model::schema::ColumnDef {
             name: SmartString::from(crate::session::catalog::TEMPORAL_POSTING_LEADING_COLUMN),
-            typing: crate::data::relation::NullableColType::required(
-                crate::data::relation::ColType::Validity,
+            typing: kyzo_model::schema::NullableColType::required(
+                kyzo_model::schema::ColType::Validity,
             ),
             default_gen: None,
         });
         keys.extend(base.metadata.keys.iter().cloned());
-        let metadata = crate::data::relation::StoredRelationMetadata {
+        let metadata = kyzo_model::schema::StoredRelationMetadata {
             keys,
             non_keys: vec![],
         };
@@ -802,7 +802,7 @@ mod temporal_index_tests {
 
     use super::*;
     use kyzo_model::program::InputRelationHandle;
-    use crate::data::relation::ColType;
+    use kyzo_model::schema::ColType;
     use crate::session::catalog::Catalog;
     use crate::session::db::{Engine, ScriptOptions};
     use crate::store::{ReadTx, Storage};

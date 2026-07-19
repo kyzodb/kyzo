@@ -257,7 +257,6 @@
 // references.
 #![allow(clippy::mutable_key_type)]
 
-pub(crate) mod capacity;
 pub(crate) mod data;
 // Target-zone seats landing mid-cut (ideal map: kyzo-model / exec / rules).
 pub(crate) mod exec;
@@ -268,18 +267,25 @@ pub(crate) mod rules;
 // (`RelationIndexSearch::search_relation`),
 // `project::contract::admit_relation_search_hits` → `SearchHits::admit_decoded`.
 pub(crate) mod project;
-// Formatter host doors: `format::format_program` /
-// `format_program_with_comments` (P112). Exercised by the in-module
-// property suite and by parse's comment-meaning guardrail; kyzo-lsp
-// format-document will call the same doors. No module-level
-// `allow(dead_code)` — unused helpers warn honestly until that call site.
-pub(crate) mod format;
-// Parse production consumer landed (`session/db.rs` via `parse_script`)
-// for query and system genera. `Script::Imperative` is a typed refusal at
-// execution (`ImperativeNotWired`); its AST is still constructed by the
-// parser and exercised in-file — no module-level `allow(dead_code)` (P112).
-// Mid-cut: `parse/` dir is already gone; leave the decl until a later peel
-// removes remaining `crate::parse` call sites (not required by this cut).
+// Formatter host door (`format::format_program` / `format_program_with_comments`,
+// P112) was relocated toward kyzo-model (`crates/kyzo-model/src/format.rs`,
+// commit 18c5880) but never finished landing there (no `mod format;` in
+// kyzo-model's own lib.rs, no real body — a 12-line stub) and kyzo-core's
+// orphaned property-test file (`format/tests.rs`, testing a `super::` surface
+// that no longer existed) was deleted rather than left dangling. Nothing in
+// the tree calls `crate::format::` today. Whoever lands the formatter picks
+// the real seat (kyzo-model, pure data in/out) and re-adds the `mod` decl then.
+//
+// Parse zone (`Script`, `parse_script`, `parse_expressions`, `parse_type`,
+// grammar) seated in kyzo-model (`crates/kyzo-model/src/parse/`, commit
+// 23ef615 "Seat kyzo-model parse zone"); this crate's own `parse` module is
+// a thin bridge (`parse/mod.rs`) that re-exports kyzo-model's parse zone
+// wholesale so existing `crate::parse::X` call sites keep resolving, plus
+// `crate::parse::sys` (`SysOp` and its engine-typed config payloads —
+// `HnswIndexConfig`, `FtsIndexConfig`, `MinHashLshConfig`, …): session-zone
+// typed lift over kyzo-model's syntax-only `Script::Sys { span }`, not
+// parse-zone pure data (parse "never imports the engine" — kyzo-model's own
+// `parse/mod.rs` doc), so it stays seated in kyzo-core.
 pub(crate) mod parse;
 // React: standing-query lifecycle + incremental maintenance (relocated
 // from the former query zone).
@@ -295,7 +301,10 @@ pub(crate) mod session;
 /// Ordered substrate: contract, transactions, fjall adapter, backup, walks,
 /// and the 07 storage-Spec seats. Module tree lives in `store/mod.rs`.
 pub(crate) mod store;
-pub(crate) mod typestate;
+// `typestate` (staged-builder markers) moved to kyzo-model verbatim
+// (`crates/kyzo-model/src/typestate.rs`, commit 18c5880) and nothing in
+// this crate calls `crate::typestate::` — the decl pointed at a directory
+// that no longer exists here, with zero real call sites to rewire.
 
 // Trial (issue #34): single-node SSI serializability checker. Test-only,
 // touches no engine source — consumes the public `Storage`/`Db` surface

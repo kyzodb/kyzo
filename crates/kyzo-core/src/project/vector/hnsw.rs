@@ -214,8 +214,8 @@ use smartstring::{LazyCompact, SmartString};
 use thiserror::Error;
 
 use kyzo_model::program::expr::Expr;
-use crate::data::relation::VecElementType;
-use crate::data::relation::{
+use kyzo_model::schema::VecElementType;
+use kyzo_model::schema::{
     ColLen, ColType, ColumnDef, NullableColType, StoredRelationMetadata,
 };
 use kyzo_model::SourceSpan;
@@ -737,28 +737,34 @@ const _: () = assert!(std::mem::align_of::<HnswEntryKey>() == std::mem::align_of
 
 impl HnswEntryKey {
     /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
+    /// [`StorageKey`] exposes no owning byte accessor (only
+    /// [`StorageKey::as_bytes`], borrowed) — an explicit named copy, not a
+    /// silent `Deref`/`AsRef<[u8]>` coerce.
     fn from_storage_key(key: StorageKey) -> Self {
-        Self(key.0)
+        Self(key.as_bytes().to_vec())
     }
 
     /// Wire decode of the canary entry-key payload: prove relation-prefix +
-    /// canonical column encodings (encode-door inverse), then mint only via
-    /// [`Self::from_storage_key`].
+    /// canonical column encodings (encode-door inverse), then mint directly
+    /// from the validated bytes — [`StorageKey`] itself exposes no public
+    /// raw-bytes constructor (by design: only `TupleT::encode_as_key` /
+    /// `encode_key_with_suffix` may mint one), so the decode direction never
+    /// routes through it.
     fn from_stored(
         bytes: Vec<u8>,
         index_name: &str,
         tuple: &[DataValue],
     ) -> Result<Self> {
-        let key = Self::claim_storage_key(bytes, index_name, tuple)?;
-        Ok(Self::from_storage_key(key))
+        let bytes = Self::claim_storage_key(bytes, index_name, tuple)?;
+        Ok(Self(bytes))
     }
 
-    /// Admit foreign bytes only when they decode as a lawful [`StorageKey`].
+    /// Admit foreign bytes only when they decode as a lawful storage key.
     fn claim_storage_key(
         bytes: Vec<u8>,
         index_name: &str,
         tuple: &[DataValue],
-    ) -> Result<StorageKey> {
+    ) -> Result<Vec<u8>> {
         match RelationId::raw_decode(&bytes) {
             Ok(_) => {}
             Err(DecodeError::Truncated) => {
@@ -781,7 +787,7 @@ impl HnswEntryKey {
         decode_tuple_from_key(&bytes, 0).map_err(|err| {
             IndexRowCorrupt::new(index_name, tuple, IndexCorruptReason::DecodeFailed(err))
         })?;
-        Ok(StorageKey(bytes))
+        Ok(bytes)
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.
@@ -802,8 +808,11 @@ const _: () = assert!(std::mem::align_of::<HnswHitKey>() == std::mem::align_of::
 
 impl HnswHitKey {
     /// Encode door: bytes already sealed by [`RelationHandle::encode_key_for_store`].
+    /// [`StorageKey`] exposes no owning byte accessor (only
+    /// [`StorageKey::as_bytes`], borrowed) — an explicit named copy, not a
+    /// silent `Deref`/`AsRef<[u8]>` coerce.
     fn from_storage_key(key: StorageKey) -> Self {
-        Self(key.0)
+        Self(key.as_bytes().to_vec())
     }
 
     /// Named peel — no Deref/AsRef<[u8]> silent coerce.

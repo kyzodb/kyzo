@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use kyzo_model::program::expr::Expr;
 use kyzo_model::program::InputRelationHandle;
-use crate::data::relation::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
+use kyzo_model::schema::{ColType, ColumnDef, NullableColType, StoredRelationMetadata};
 use kyzo_model::SourceSpan;
 use kyzo_model::program::symbol::Symbol;
 use kyzo_model::value::DataValue;

@@ -62,7 +62,7 @@ use kyzo_model::value::Tuple;
 use kyzo_model::value::{AsOf, ValidityTs};
 use crate::store::skip_walk::{OpenSkipCursor, SkipCursor, SkipWalk};
 use crate::store::{
-    Aborted, BackendIoError, CommitFailure, CommitIo, Committed, ConflictError, FormatVersion,
+    Aborted, BackendIoError, CommitFailure, CommitIo, ConflictError, FormatVersion,
     ReadTx, Storage, SystemClock, WriteTx,
 };
 
@@ -958,7 +958,7 @@ impl WriteTx for FjallWriteTx {
         }
     }
 
-    fn commit(mut self) -> std::result::Result<Committed, CommitFailure> {
+    fn commit(mut self) -> std::result::Result<(), CommitFailure> {
         let tx = self
             .tx
             .take()
@@ -966,12 +966,12 @@ impl WriteTx for FjallWriteTx {
         match tx.commit().map_err(|e| {
             CommitFailure::Io(CommitIo::FjallCommit(BackendIoError::from_error(e)))
         })? {
-            Ok(()) => Ok(Committed),
+            Ok(()) => Ok(()),
             Err(Conflict) => Err(CommitFailure::Conflict(ConflictError)),
         }
     }
 
-    fn commit_durable(mut self) -> std::result::Result<Committed, CommitFailure> {
+    fn commit_durable(mut self) -> std::result::Result<(), CommitFailure> {
         let db = self.db.clone();
         let tx = self
             .tx
@@ -985,7 +985,7 @@ impl WriteTx for FjallWriteTx {
         }
         db.persist(fjall::PersistMode::SyncAll)
             .map_err(|e| CommitFailure::Io(CommitIo::FjallSync(BackendIoError::from_error(e))))?;
-        Ok(Committed)
+        Ok(())
     }
 
     fn abort(mut self) -> Aborted {

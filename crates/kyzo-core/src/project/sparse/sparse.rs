@@ -536,7 +536,7 @@ fn sparse_search_body(
     // `params.k` is caller-controlled and unbounded; admit it through the one
     // allocation seam, bounded by the real (already-materialized) candidate
     // count, so an absurd `k` can never abort the allocator.
-    let mut ret = Vec::with_capacity(crate::capacity::admit(params.k, result.len()));
+    let mut ret = Vec::with_capacity(crate::session::capacity::admit(params.k, result.len()));
     for (doc_key, score) in result {
         // Checked BEFORE pushing: `k == 0` (or any k already met) must
         // yield zero more rows, not "one past the limit" — pushing first
