@@ -1337,15 +1337,16 @@ pub mod storage_campaign_lanes {
     use std::collections::BTreeSet;
 
     use kyzo_core::store::{
-        BackendContract, CheckpointSealParts, CommitOrdinal, ConfirmedCopies, ConsistencyClass,
-        CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm, FailureDomains,
-        FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL, GenesisParams,
-        Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification, IntentOrdinal,
-        LocalProjection, MintDomain, NonceLeaseFloors, ObjectDurabilityClass, ObjectRefuse,
-        OpenOrdinal, OperationKey, OperationOutcome, PriorMaterialization, RecoveryGrant, Regions,
-        ReplicaCustody, ReplicaKey, ReplicaRefuse, SealRefuse, SizeClass, SnapshotFork,
-        StableCommitCap, StagingTtl, StoreRefuse, SweepDoor, SweepRefuse, SweepSession, genesis,
-        materialize, nonce,
+        BackendContract, CanonicalTranscript, CheckpointSealParts, CommitOrdinal, ConfirmedCopies,
+        ConsistencyClass, CryptoDomain, DomainCounter, Downgrade, Entropy, EntropyArm,
+        FailureDomains, FailureLattice, FenceEpoch, ForkGrant, FormatVersion, GENESIS_PRIOR_SEAL,
+        GenesisParams, Grant, GrantId, IdempotencyMemo, IncarnationId, IntegrityVerification,
+        IntentOrdinal, LocalProjection, MintDomain, NonceLeaseFloors, ObjectDurabilityClass,
+        ObjectRefuse, OpenOrdinal, OperationKey, OperationOutcome, PriorMaterialization,
+        RecoveryGrant, Regions, ReplicaCustody, ReplicaKey, ReplicaRefuse, SealRefuse,
+        SealedArtifactKind, SizeClass, SnapshotFork, StableCommitCap, StagingTtl, StoreRefuse,
+        SweepDoor, SweepRefuse, SweepSession, TranscriptRefuse, encode_golden_fixture, genesis,
+        materialize, nonce, parse_golden_hex,
     };
 
     fn genesis_params(identity_seed: [u8; 32], snapshot_fork: bool) -> GenesisParams {
@@ -2038,10 +2039,115 @@ pub mod storage_campaign_lanes {
     }
 
     /// §59 — CanonicalTranscript.
+    ///
+    /// Vectors under `kyzo-core/src/store/golden/` are the authority — the
+    /// implementation must match them, never the reverse.
     #[test]
     #[ignore = "red until seats green: transcript mutation campaign"]
-    fn transcript_mutation_campaign() {
-        unimplemented!("transcript mutation campaign: assert against in-repo golden vectors; unknown version refuses");
+    fn transcript_mutation() {
+        const GOLDENS: &[(SealedArtifactKind, &str)] = &[
+            (
+                SealedArtifactKind::CheckpointSeal,
+                include_str!("../../kyzo-core/src/store/golden/checkpoint_seal.vec"),
+            ),
+            (
+                SealedArtifactKind::AdmissionCertificate,
+                include_str!("../../kyzo-core/src/store/golden/admission_certificate.vec"),
+            ),
+            (
+                SealedArtifactKind::ForkGrant,
+                include_str!("../../kyzo-core/src/store/golden/fork_grant.vec"),
+            ),
+            (
+                SealedArtifactKind::RecoveryGrant,
+                include_str!("../../kyzo-core/src/store/golden/recovery_grant.vec"),
+            ),
+            (
+                SealedArtifactKind::MergeProofHeader,
+                include_str!("../../kyzo-core/src/store/golden/merge_proof_header.vec"),
+            ),
+            (
+                SealedArtifactKind::AuditKeyLeaf,
+                include_str!("../../kyzo-core/src/store/golden/audit_key_leaf.vec"),
+            ),
+            (
+                SealedArtifactKind::WalHeader,
+                include_str!("../../kyzo-core/src/store/golden/wal_header.vec"),
+            ),
+        ];
+
+        for &(kind, golden_file) in GOLDENS {
+            let expected = parse_golden_hex(golden_file).expect("golden vector parses");
+            let encoded = encode_golden_fixture(kind).expect("fixture encodes");
+            assert_eq!(
+                encoded.as_bytes(),
+                expected.as_slice(),
+                "implementation must match golden vector for {kind:?} — vectors are authority"
+            );
+            let parsed =
+                CanonicalTranscript::parse(&expected).expect("golden sealed bytes must parse");
+            assert_eq!(
+                parsed.as_bytes(),
+                expected.as_slice(),
+                "parse round-trip must preserve golden bytes for {kind:?}"
+            );
+        }
+
+        // Unknown FormatVersion refuses — no silent decode.
+        let mut unknown = Vec::new();
+        unknown.extend_from_slice(b"KTX1");
+        unknown.push(3);
+        unknown.extend_from_slice(b"999");
+        unknown.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            CanonicalTranscript::parse(&unknown),
+            Err(TranscriptRefuse::UnknownVersion)
+        );
+
+        // Mutation campaign: corrupt golden bits → refuse / mismatch vs authority.
+        let golden = parse_golden_hex(GOLDENS[0].1).expect("checkpoint golden");
+        let mut flipped = golden.clone();
+        let idx = flipped.len() / 2;
+        flipped[idx] ^= 0xFF;
+        assert_ne!(
+            flipped.as_slice(),
+            golden.as_slice(),
+            "mutated vector must diverge from golden authority"
+        );
+        assert_ne!(
+            flipped.as_slice(),
+            encode_golden_fixture(SealedArtifactKind::CheckpointSeal)
+                .expect("fixture")
+                .as_bytes(),
+            "mutated vector must fail verify against encoder (authority mismatch)"
+        );
+        match CanonicalTranscript::parse(&flipped) {
+            Err(
+                TranscriptRefuse::Corrupt
+                | TranscriptRefuse::UnknownVersion
+                | TranscriptRefuse::FieldOrderViolated
+                | TranscriptRefuse::LengthBoundExceeded
+                | TranscriptRefuse::FieldBoundExceeded
+                | TranscriptRefuse::DuplicateMapKey
+                | TranscriptRefuse::MapOrderViolated
+                | TranscriptRefuse::RecursionLimitExceeded,
+            ) => {}
+            Ok(parsed) => {
+                assert_ne!(
+                    parsed.as_bytes(),
+                    golden.as_slice(),
+                    "structurally-valid mutation must still mismatch golden authority"
+                );
+            }
+        }
+
+        let mut magic_corrupt = golden.clone();
+        magic_corrupt[0] ^= 0x01;
+        assert_eq!(
+            CanonicalTranscript::parse(&magic_corrupt),
+            Err(TranscriptRefuse::Corrupt),
+            "magic-byte mutation must refuse Corrupt"
+        );
     }
 
     /// §69/§70 — five-delivery custody.
