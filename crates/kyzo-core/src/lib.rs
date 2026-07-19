@@ -309,6 +309,14 @@ pub(crate) mod store {
     pub(crate) mod scratch;
     pub(crate) mod keys;
     pub(crate) mod time;
+    /// Identity + open capability + genesis (07 seat).
+    pub(crate) mod open;
+    /// WriteAuthority + incarnation + RecoveryMatrix + address fence (07 seat).
+    pub(crate) mod authority;
+    /// FenceEpoch + CryptoDomain + EpochGrant advance (07 seat).
+    pub(crate) mod epoch;
+    /// ForkGrant / RecoveryGrant + pure materialize (07 seat).
+    pub(crate) mod grants;
     // Sim instrument lives at kyzo-crashfs (seat); path-included here so the
     // sealed Storage trait can admit it as the contract's own test double.
     #[cfg(any(test, feature = "bench-internals"))]
@@ -321,6 +329,22 @@ pub(crate) mod store {
     pub use tx::{
         Aborted, BackendIoError, CommitCorruption, CommitFailure, CommitIo, Committed,
         ConflictError, ReadTx, Slice, WriteTx,
+    };
+    pub use open::{
+        EntropyArm, GenesisParams, GenesisSealed, GenesisSealedView, SizeClass, StagingTtl,
+        StableCommitCapArm, StoreId, StoreOpen, StoreOpenVerb, genesis, open_with_capability,
+    };
+    pub use authority::{
+        AddressFence, AddressFenceRefuse, AddressFenceTable, Entropy, IncarnationId,
+        IncarnationMintCap, OpenOrdinal, RecoveryMatrix, RecoveryPublicKey, WriteAuthority,
+    };
+    pub use epoch::{
+        CryptoDomain, EpochAdvanceCommitted, EpochGrant, FenceEpoch, IntentClear, advance,
+        advance_recovery,
+    };
+    pub use grants::{
+        AncestorReadGrant, ForkGrant, Grant, GrantId, MaterializedGrant, PriorMaterialization,
+        RecoveryGrant, materialize,
     };
 }
 pub(crate) mod typestate;
@@ -345,6 +369,11 @@ pub use store::fjall::{
 pub use store::retry::retry_on_conflict;
 pub use store::verify_walk::{CorruptEntry, VerifyReport, verify_storage};
 pub use store::{Aborted, CommitFailure, Committed, ConflictError, FormatVersion, ReadTx, Storage, WriteTx};
+// 07 identity + authority seats — host genesis injection (kyzo-bin engine.rs).
+pub use store::{
+    CryptoDomain, EntropyArm, FenceEpoch, GenesisParams, GenesisSealed, GenesisSealedView,
+    SizeClass, StagingTtl, StableCommitCapArm, StoreId, StoreOpen, WriteAuthority, genesis,
+};
 
 /// Build→seal→query projection machine (story #305). Public so compile-fail
 /// proofs and later kind parameterizations share one crate-root door.
